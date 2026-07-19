@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Models (downloaded at runtime)
+models/
+*.pt
+*.onnx
+*.mlpackage
+*.engine
+
+# Video captures
+captures/
+recordings/
+
+# Claude worktrees
+.claude/worktrees/
+
+# iOS
+ios/AmberDrone/build/
+ios/AmberDrone/*.xcworkspace
+ios/AmberDrone/Pods/
