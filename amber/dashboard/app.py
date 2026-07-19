@@ -20,6 +20,7 @@ from flask_socketio import SocketIO, emit
 
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
+from amber.recorder import SessionRecorder
 
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
@@ -50,6 +51,8 @@ _state = {
     "fps": 0,
     "persons_detected": 0,
     "search_active": False,
+    "recorder": None,
+    "battery_warned": False,
 }
 
 
@@ -255,6 +258,10 @@ def _frame_loop():
         _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
         frame_b64 = base64.b64encode(buffer).decode("utf-8")
 
+        # Record frame if recording
+        if _state["recorder"] and _state["recorder"].is_recording:
+            _state["recorder"].write_frame(annotated)
+
         telemetry = {}
         if _state["drone"]:
             s = _state["drone"].state
@@ -265,6 +272,21 @@ def _frame_loop():
                 "flight_time": s.flight_time,
                 "is_flying": s.is_flying,
             }
+
+            # Battery warnings
+            if s.battery > 0 and s.is_flying:
+                if s.battery <= 10 and not _state.get("battery_critical"):
+                    _state["battery_critical"] = True
+                    socketio.emit("battery_critical", {"battery": s.battery})
+                    # Auto-land at critical battery
+                    try:
+                        _state["drone"].land()
+                    except Exception:
+                        pass
+                elif s.battery <= 20 and not _state.get("battery_warned"):
+                    _state["battery_warned"] = True
+                    socketio.emit("battery_warning", {"battery": s.battery})
+
         _state["drone_telemetry"] = telemetry
 
         socketio.emit("frame", {
@@ -274,6 +296,7 @@ def _frame_loop():
             "match": match_idx is not None,
             "match_score": round(match_score, 3),
             "telemetry": telemetry,
+            "recording": _state["recorder"].is_recording if _state["recorder"] else False,
         })
 
         time.sleep(0.05)
@@ -423,6 +446,23 @@ def on_stop_search():
     _state["search_active"] = False
     if _state["drone"]:
         _state["drone"].hover()
+
+
+@socketio.on("start_recording")
+def on_start_recording():
+    """Start recording the session."""
+    if _state["recorder"] is None:
+        _state["recorder"] = SessionRecorder()
+    path = _state["recorder"].start()
+    emit("recording_started", {"path": path})
+
+
+@socketio.on("stop_recording")
+def on_stop_recording():
+    """Stop recording."""
+    if _state["recorder"]:
+        path = _state["recorder"].stop()
+        emit("recording_stopped", {"path": path})
 
 
 def run_dashboard(source="webcam", target_path=None, port=5555):

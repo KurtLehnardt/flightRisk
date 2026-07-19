@@ -283,6 +283,15 @@
                 <div id="search-status" style="font-size:12px;color:#888;margin-top:8px;"></div>
             </div>
 
+            <!-- Recording -->
+            <div class="panel">
+                <div class="panel-title">Session Recording</div>
+                <div style="display:flex;gap:6px;">
+                    <button id="rec-btn" class="ctrl-btn danger" style="flex:1" onclick="toggleRecording()">&#9679; REC</button>
+                </div>
+                <div id="rec-status" style="font-size:11px;color:#888;margin-top:6px;"></div>
+            </div>
+
             <!-- Match Log -->
             <div class="panel" style="flex:1;">
                 <div class="panel-title">Match Log <span id="match-count" style="color:#ff6b35;"></span></div>
@@ -493,6 +502,46 @@
         function stopSearch() {
             socket.emit('stop_search');
         }
+
+        // --- Recording ---
+        let isRecording = false;
+        function toggleRecording() {
+            if (isRecording) {
+                socket.emit('stop_recording');
+            } else {
+                socket.emit('start_recording');
+            }
+        }
+
+        socket.on('recording_started', (data) => {
+            isRecording = true;
+            document.getElementById('rec-btn').textContent = '■ STOP REC';
+            document.getElementById('rec-btn').style.background = '#c62828';
+            document.getElementById('rec-btn').style.color = 'white';
+            document.getElementById('rec-status').textContent = 'Recording...';
+            showToast('Recording started');
+        });
+
+        socket.on('recording_stopped', (data) => {
+            isRecording = false;
+            document.getElementById('rec-btn').textContent = '● REC';
+            document.getElementById('rec-btn').style.background = '';
+            document.getElementById('rec-btn').style.color = '';
+            document.getElementById('rec-status').textContent = 'Saved: ' + (data.path || '');
+            showToast('Recording saved');
+        });
+
+        // --- Battery warnings ---
+        socket.on('battery_warning', (data) => {
+            showToast('⚠ LOW BATTERY: ' + data.battery + '%');
+            playAlertSound();
+        });
+
+        socket.on('battery_critical', (data) => {
+            showToast('🔴 CRITICAL BATTERY: ' + data.battery + '% — AUTO-LANDING');
+            playAlertSound();
+            playAlertSound();
+        });
 
         // Request notification permission on load
         if ('Notification' in window && Notification.permission === 'default') {
