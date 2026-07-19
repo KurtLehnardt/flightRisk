@@ -8,3 +8,5 @@ requests>=2.32
 Pillow>=10.4
 torchreid>=0.2.5
 ollama>=0.4
+insightface>=0.7
+onnxruntime>=1.18

@@ -20,6 +20,7 @@ from flask_socketio import SocketIO, emit
 
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
+from amber.vision.scorer import MatchScorer
 from amber.recorder import SessionRecorder
 
 # Match screenshots directory
@@ -39,6 +40,8 @@ _state = {
     "drone": None,
     "detector": None,
     "reid": None,
+    "face": None,
+    "scorer": None,
     "reasoning": None,
     "source": None,
     "cap": None,
@@ -66,6 +69,16 @@ def _init_pipeline(source="webcam", target_path=None):
     if _state["reid"] is None:
         _state["reid"] = PersonReID(match_threshold=0.55)
 
+    if _state["face"] is None:
+        try:
+            from amber.vision.face import FaceRecognizer
+            _state["face"] = FaceRecognizer(match_threshold=0.45)
+        except Exception as e:
+            print(f"[dashboard] InsightFace not available: {e}")
+
+    if _state["scorer"] is None:
+        _state["scorer"] = MatchScorer()
+
     if _state["reasoning"] is None:
         try:
             from amber.reasoning.agent import AmberAgent
@@ -79,6 +92,9 @@ def _init_pipeline(source="webcam", target_path=None):
         img = cv2.imread(target_path)
         _, buf = cv2.imencode(".jpg", img)
         _state["target_photo"] = base64.b64encode(buf).decode("utf-8")
+        # Also set face recognition target
+        if _state["face"]:
+            _state["face"].set_target_from_file(target_path)
 
     _state["source"] = source
     if source == "tello":
@@ -150,10 +166,35 @@ def _frame_loop():
         # ReID matching (photo-based)
         match_idx = None
         match_score = 0.0
+        reid_score = 0.0
+        face_score = 0.0
         has_target = _state["target_photo"] is not None
 
         if _state["reid"] and has_target and detections:
-            match_idx, match_score = _state["reid"].find_match(detections)
+            match_idx, reid_score = _state["reid"].find_match(detections)
+
+        # Face recognition matching
+        face_match_idx = None
+        if _state["face"] and _state["face"].has_target and detections:
+            face_match_idx, face_score = _state["face"].find_match(detections)
+
+        # Use face match if ReID didn't find one
+        if match_idx is None and face_match_idx is not None:
+            match_idx = face_match_idx
+        # If both matched, prefer the one with higher score
+        elif match_idx is not None and face_match_idx is not None:
+            if face_score > reid_score:
+                match_idx = face_match_idx
+
+        # Combined score via multi-feature scorer
+        if match_idx is not None and _state["scorer"]:
+            # Get per-detection scores for the matched index
+            det_reid = _state["reid"].compare(detections[match_idx]["crop"]) if has_target else 0.0
+            det_face = _state["face"].compare(detections[match_idx]["crop"]) if (_state["face"] and _state["face"].has_target) else 0.0
+            scored = _state["scorer"].score(reid_score=det_reid, face_score=det_face)
+            match_score = scored["combined_score"]
+        elif match_idx is not None:
+            match_score = max(reid_score, face_score)
 
         # Description-based matching via Gemma 4 (when no photo but description exists)
         description_match = False
@@ -202,7 +243,7 @@ def _frame_loop():
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, crop, match_score, result)
 
-        # Photo-based ReID + Gemma 4 reasoning
+        # Photo-based ReID + Face + Gemma 4 reasoning
         if (
             match_idx is not None
             and not description_match
@@ -214,6 +255,17 @@ def _frame_loop():
             candidate_crop = detections[match_idx]["crop"]
             result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
             last_reasoning_time = time.time()
+
+            # Re-score with all three signals
+            if _state["scorer"]:
+                det_reid = _state["reid"].compare(candidate_crop) if has_target else 0.0
+                det_face = _state["face"].compare(candidate_crop) if (_state["face"] and _state["face"].has_target) else 0.0
+                scored = _state["scorer"].score(
+                    reid_score=det_reid,
+                    face_score=det_face,
+                    reasoning_result=result,
+                )
+                match_score = scored["combined_score"]
 
             snapshot_b64 = None
             if candidate_crop is not None and candidate_crop.size > 0:
@@ -228,6 +280,8 @@ def _frame_loop():
                 "reasoning": result["reasoning"],
                 "snapshot": snapshot_b64,
                 "type": "photo",
+                "face_score": round(face_score, 3),
+                "reid_score": round(reid_score, 3),
             }
             _state["match_history"].append(match_entry)
             _state["match_history"] = _state["match_history"][-50:]
@@ -319,6 +373,7 @@ def status():
         "has_target": _state["target_photo"] is not None,
         "has_description": _state["target_description"] is not None,
         "has_reasoning": _state["reasoning"] is not None,
+        "has_face": _state["face"] is not None and _state["face"].has_target if _state["face"] else False,
         "match_history": _state["match_history"][-10:],
         "telemetry": _state["drone_telemetry"],
     })
@@ -346,7 +401,11 @@ def on_set_target(data):
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
         cv2.imwrite(str(path), img)
         _state["target_photo_path"] = str(path)
-        emit("target_set", {"success": True})
+        # Set face recognition target
+        face_ok = False
+        if _state["face"]:
+            face_ok = _state["face"].set_target(img)
+        emit("target_set", {"success": True, "face_detected": face_ok})
 
 
 @socketio.on("set_description")
