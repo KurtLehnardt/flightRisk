@@ -37,3 +37,8 @@ recordings/
 ios/AmberDrone/build/
 ios/AmberDrone/*.xcworkspace
 ios/AmberDrone/Pods/
+
+# Eval data images (keep manifests)
+eval_data/**/*.jpg
+eval_data/**/*.png
+!eval_data/sample/labels.json
