@@ -165,6 +165,38 @@
 
         .no-video { color: #555; font-size: 14px; }
 
+        /* Past Sessions */
+        .sessions-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; user-select: none;
+        }
+        .sessions-toggle .arrow {
+            font-size: 10px; color: #888; transition: transform 0.2s;
+        }
+        .sessions-toggle .arrow.open { transform: rotate(90deg); }
+        .sessions-list { max-height: 300px; overflow-y: auto; }
+        .session-item {
+            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
+            margin-bottom: 6px; border-left: 3px solid #555; font-size: 12px;
+            cursor: pointer; transition: border-color 0.15s;
+        }
+        .session-item:hover { border-left-color: #ff6b35; }
+        .session-item .sess-date { color: #888; }
+        .session-item .sess-source { color: #00e5ff; font-weight: 600; }
+        .session-item .sess-matches { color: #ff6b35; font-weight: 600; }
+        .session-detail {
+            display: none; margin-top: 6px; padding: 6px 8px;
+            background: #161616; border-radius: 4px; font-size: 11px;
+        }
+        .session-detail.open { display: block; }
+        .session-match-item {
+            padding: 4px 0; border-bottom: 1px solid #222;
+        }
+        .session-match-item:last-child { border-bottom: none; }
+        .session-match-item .sm-type { color: #ff6b35; text-transform: uppercase; font-weight: 600; }
+        .session-match-item .sm-score { color: #00e5ff; }
+        .session-match-item .sm-reasoning { color: #777; font-style: italic; margin-top: 2px; }
+
         /* Toast */
         .toast {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -297,6 +329,72 @@
                 <div class="panel-title">Match Log <span id="match-count" style="color:#ff6b35;"></span></div>
                 <div id="match-log" class="match-log">
                     <div style="color:#555;font-size:12px;">No matches yet...</div>
+                </div>
+            </div>
+
+            <!-- Observability -->
+            <div class="panel">
+                <div class="panel-title" style="cursor:pointer;user-select:none;" onclick="toggleObsPanel()">
+                    Observability <span id="obs-toggle" style="float:right;color:#555;">&#9660;</span>
+                </div>
+                <div id="obs-panel" style="display:none;">
+                    <div class="telemetry-grid" style="grid-template-columns:1fr 1fr 1fr;">
+                        <div class="telem-item">
+                            <div id="obs-frames" class="telem-value" style="font-size:16px;">0</div>
+                            <div class="telem-label">Frames</div>
+                        </div>
+                        <div class="telem-item">
+                            <div id="obs-persons" class="telem-value" style="font-size:16px;">0</div>
+                            <div class="telem-label">Persons</div>
+                        </div>
+                        <div class="telem-item">
+                            <div id="obs-errors" class="telem-value" style="font-size:16px;color:#f44336;">0</div>
+                            <div class="telem-label">Errors</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:8px;font-size:12px;color:#aaa;">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Matches (total)</span>
+                            <span id="obs-matches-total" style="color:#00e5ff;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>ReID</span>
+                            <span id="obs-matches-reid" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>Face</span>
+                            <span id="obs-matches-face" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>Description</span>
+                            <span id="obs-matches-desc" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Face detection rate</span>
+                            <span id="obs-face-rate" style="color:#00e5ff;font-family:'SF Mono',monospace;">--</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Reasoning calls</span>
+                            <span id="obs-reasoning" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span>Avg reasoning latency</span>
+                            <span id="obs-reasoning-lat" style="color:#888;font-family:'SF Mono',monospace;">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Past Sessions -->
+            <div class="panel">
+                <div class="sessions-toggle" onclick="toggleSessions()">
+                    <div class="panel-title" style="margin-bottom:0;">Past Sessions</div>
+                    <span id="sessions-arrow" class="arrow">&#9654;</span>
+                </div>
+                <div id="sessions-container" style="display:none;margin-top:10px;">
+                    <div id="sessions-list" class="sessions-list">
+                        <div style="color:#555;font-size:12px;">Loading...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -543,10 +641,125 @@
             playAlertSound();
         });
 
+        // --- Observability panel ---
+        function toggleObsPanel() {
+            const panel = document.getElementById('obs-panel');
+            const toggle = document.getElementById('obs-toggle');
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                toggle.innerHTML = '&#9650;';
+            } else {
+                panel.style.display = 'none';
+                toggle.innerHTML = '&#9660;';
+            }
+        }
+
+        socket.on('metrics_update', (data) => {
+            document.getElementById('obs-frames').textContent = data.frames_processed || 0;
+            document.getElementById('obs-persons').textContent = data.persons_detected || 0;
+            document.getElementById('obs-errors').textContent = data.pipeline_errors || 0;
+            document.getElementById('obs-matches-total').textContent = data.matches_total || 0;
+            if (data.matches) {
+                document.getElementById('obs-matches-reid').textContent = data.matches.reid || 0;
+                document.getElementById('obs-matches-face').textContent = data.matches.face || 0;
+                document.getElementById('obs-matches-desc').textContent = data.matches.description || 0;
+            }
+            if (data.face_detection) {
+                const rate = data.face_detection.rate_pct;
+                document.getElementById('obs-face-rate').textContent = rate > 0 ? rate.toFixed(1) + '%' : '--';
+            }
+            if (data.reasoning) {
+                document.getElementById('obs-reasoning').textContent = data.reasoning.calls || 0;
+                const avgLat = data.reasoning.avg_latency_ms;
+                document.getElementById('obs-reasoning-lat').textContent = avgLat > 0 ? avgLat.toFixed(0) + 'ms' : '--';
+            }
+        });
+
         // Request notification permission on load
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission();
         }
+
+        // --- Past Sessions ---
+        let sessionsOpen = false;
+        function toggleSessions() {
+            sessionsOpen = !sessionsOpen;
+            const container = document.getElementById('sessions-container');
+            const arrow = document.getElementById('sessions-arrow');
+            if (sessionsOpen) {
+                container.style.display = 'block';
+                arrow.classList.add('open');
+                loadSessions();
+            } else {
+                container.style.display = 'none';
+                arrow.classList.remove('open');
+            }
+        }
+
+        function loadSessions() {
+            fetch('/api/sessions')
+                .then(r => r.json())
+                .then(sessions => {
+                    const list = document.getElementById('sessions-list');
+                    if (!sessions.length) {
+                        list.innerHTML = '<div style="color:#555;font-size:12px;">No past sessions</div>';
+                        return;
+                    }
+                    list.innerHTML = '';
+                    sessions.forEach(s => {
+                        const item = document.createElement('div');
+                        item.className = 'session-item';
+                        const date = s.started_at ? s.started_at.replace('T', ' ') : 'Unknown';
+                        const matches = s.total_matches || 0;
+                        item.innerHTML = `
+                            <span class="sess-date">${date}</span>
+                            <span class="sess-source">${s.source || 'unknown'}</span>
+                            <span class="sess-matches">${matches} match${matches !== 1 ? 'es' : ''}</span>
+                            <div class="session-detail" id="detail-${s.id}"></div>
+                        `;
+                        item.onclick = () => toggleSessionDetail(s.id);
+                        list.appendChild(item);
+                    });
+                })
+                .catch(() => {
+                    document.getElementById('sessions-list').innerHTML =
+                        '<div style="color:#555;font-size:12px;">Failed to load sessions</div>';
+                });
+        }
+
+        function toggleSessionDetail(sessionId) {
+            const detail = document.getElementById('detail-' + sessionId);
+            if (!detail) return;
+            if (detail.classList.contains('open')) {
+                detail.classList.remove('open');
+                return;
+            }
+            detail.innerHTML = '<div style="color:#555;">Loading...</div>';
+            detail.classList.add('open');
+            fetch('/api/sessions/' + sessionId)
+                .then(r => r.json())
+                .then(data => {
+                    const matches = data.matches || [];
+                    if (!matches.length) {
+                        detail.innerHTML = '<div style="color:#555;">No matches in this session</div>';
+                        return;
+                    }
+                    detail.innerHTML = matches.map(m => `
+                        <div class="session-match-item">
+                            <span class="sm-type">${m.match_type}</span>
+                            <span class="sm-score">Score: ${(m.combined_score || 0).toFixed(3)}</span>
+                            ${m.gemma_confidence ? ' | Gemma: ' + m.gemma_confidence : ''}
+                            ${m.reasoning ? '<div class="sm-reasoning">' + m.reasoning + '</div>' : ''}
+                        </div>
+                    `).join('');
+                })
+                .catch(() => {
+                    detail.innerHTML = '<div style="color:#555;">Failed to load details</div>';
+                });
+        }
+
+        // Load sessions on page load (for the collapsed state data pre-fetch)
+        fetch('/api/sessions').catch(() => {});
     </script>
 </body>
 </html>
