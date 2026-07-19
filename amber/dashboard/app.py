@@ -25,6 +25,12 @@ from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
 
+try:
+    from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
+    _HAS_TELEMETRY = True
+except ImportError:
+    _HAS_TELEMETRY = False
+
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
 CAPTURES_DIR.mkdir(exist_ok=True)
@@ -36,6 +42,13 @@ app = Flask(
 )
 app.config["SECRET_KEY"] = "amber-drone-2026"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Flask auto-instrumentation (optional)
+try:
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    FlaskInstrumentor().instrument_app(app)
+except ImportError:
+    pass
 
 # Global state
 _state = {
@@ -62,6 +75,8 @@ _state = {
     "metrics": None,
     "db": None,
     "session_id": None,
+    "tracer": None,
+    "otel_metrics": None,
 }
 
 
@@ -111,7 +126,15 @@ def _init_pipeline(source="webcam", target_path=None):
     # Initialize session persistence
     if _state["db"] is None:
         _state["db"] = SessionDB()
-        print("[dashboard] Session database initialized.")
+        log.info("session_db_initialized")
+
+    # OpenTelemetry
+    if _HAS_TELEMETRY:
+        otel_enabled = init_telemetry()
+        if otel_enabled:
+            _state["tracer"] = get_tracer()
+            _state["otel_metrics"] = AmberMetrics(get_meter())
+            log.info("opentelemetry_enabled")
 
     _state["source"] = source
     if source == "tello":
@@ -175,7 +198,12 @@ def _frame_loop():
     log = _state["logger"]
     metrics = _state["metrics"]
 
+    tracer = _state.get("tracer")
+    otel_m = _state.get("otel_metrics")
+
     while _state["running"]:
+        frame_start = time.time()
+
         frame = None
         if _state["drone"]:
             frame = _state["drone"].get_frame()
@@ -215,6 +243,8 @@ def _frame_loop():
                 metrics.record_face_check(face_match_idx is not None)
             if log:
                 log.face_result(success=face_match_idx is not None, score=face_score)
+            if otel_m:
+                otel_m.record_face_check(found=face_score > 0)
 
         # Use face match if ReID didn't find one
         if match_idx is None and face_match_idx is not None:
@@ -261,6 +291,8 @@ def _frame_loop():
                     )
                     reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
                     last_reasoning_time = time.time()
+                    if otel_m:
+                        otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
 
                     if metrics:
                         metrics.record_reasoning(reasoning_elapsed_ms)
@@ -294,6 +326,8 @@ def _frame_loop():
                         _state["match_history"] = _state["match_history"][-50:]
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, crop, match_score, result)
+                        if otel_m:
+                            otel_m.record_match(match_score, match_type="description")
 
                         # Persist to DB
                         if _state["db"] and _state["session_id"]:
@@ -320,6 +354,8 @@ def _frame_loop():
             result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
             reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
             last_reasoning_time = time.time()
+            if otel_m:
+                otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
 
             if metrics:
                 metrics.record_reasoning(reasoning_elapsed_ms)
@@ -364,6 +400,8 @@ def _frame_loop():
             _state["match_history"] = _state["match_history"][-50:]
             socketio.emit("match_alert", match_entry)
             _save_match_snapshot(frame, candidate_crop, match_score, result)
+            if otel_m:
+                otel_m.record_match(match_score, match_type="photo")
 
             # Persist to DB
             if _state["db"] and _state["session_id"]:
@@ -434,6 +472,13 @@ def _frame_loop():
                     socketio.emit("battery_warning", {"battery": s.battery})
 
         _state["drone_telemetry"] = telemetry
+
+        # OTel frame-level metrics
+        if otel_m:
+            frame_duration = (time.time() - frame_start) * 1000
+            otel_m.record_frame(frame_duration, len(detections), _state["fps"])
+            if telemetry.get("battery"):
+                otel_m.record_battery(telemetry["battery"])
 
         socketio.emit("frame", {
             "image": frame_b64,
