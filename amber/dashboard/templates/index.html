@@ -332,6 +332,59 @@
                 </div>
             </div>
 
+            <!-- Observability -->
+            <div class="panel">
+                <div class="panel-title" style="cursor:pointer;user-select:none;" onclick="toggleObsPanel()">
+                    Observability <span id="obs-toggle" style="float:right;color:#555;">&#9660;</span>
+                </div>
+                <div id="obs-panel" style="display:none;">
+                    <div class="telemetry-grid" style="grid-template-columns:1fr 1fr 1fr;">
+                        <div class="telem-item">
+                            <div id="obs-frames" class="telem-value" style="font-size:16px;">0</div>
+                            <div class="telem-label">Frames</div>
+                        </div>
+                        <div class="telem-item">
+                            <div id="obs-persons" class="telem-value" style="font-size:16px;">0</div>
+                            <div class="telem-label">Persons</div>
+                        </div>
+                        <div class="telem-item">
+                            <div id="obs-errors" class="telem-value" style="font-size:16px;color:#f44336;">0</div>
+                            <div class="telem-label">Errors</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:8px;font-size:12px;color:#aaa;">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Matches (total)</span>
+                            <span id="obs-matches-total" style="color:#00e5ff;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>ReID</span>
+                            <span id="obs-matches-reid" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>Face</span>
+                            <span id="obs-matches-face" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
+                            <span>Description</span>
+                            <span id="obs-matches-desc" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Face detection rate</span>
+                            <span id="obs-face-rate" style="color:#00e5ff;font-family:'SF Mono',monospace;">--</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                            <span>Reasoning calls</span>
+                            <span id="obs-reasoning" style="color:#888;font-family:'SF Mono',monospace;">0</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;">
+                            <span>Avg reasoning latency</span>
+                            <span id="obs-reasoning-lat" style="color:#888;font-family:'SF Mono',monospace;">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Past Sessions -->
             <div class="panel">
                 <div class="sessions-toggle" onclick="toggleSessions()">
@@ -586,6 +639,40 @@
             showToast('🔴 CRITICAL BATTERY: ' + data.battery + '% — AUTO-LANDING');
             playAlertSound();
             playAlertSound();
+        });
+
+        // --- Observability panel ---
+        function toggleObsPanel() {
+            const panel = document.getElementById('obs-panel');
+            const toggle = document.getElementById('obs-toggle');
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+                toggle.innerHTML = '&#9650;';
+            } else {
+                panel.style.display = 'none';
+                toggle.innerHTML = '&#9660;';
+            }
+        }
+
+        socket.on('metrics_update', (data) => {
+            document.getElementById('obs-frames').textContent = data.frames_processed || 0;
+            document.getElementById('obs-persons').textContent = data.persons_detected || 0;
+            document.getElementById('obs-errors').textContent = data.pipeline_errors || 0;
+            document.getElementById('obs-matches-total').textContent = data.matches_total || 0;
+            if (data.matches) {
+                document.getElementById('obs-matches-reid').textContent = data.matches.reid || 0;
+                document.getElementById('obs-matches-face').textContent = data.matches.face || 0;
+                document.getElementById('obs-matches-desc').textContent = data.matches.description || 0;
+            }
+            if (data.face_detection) {
+                const rate = data.face_detection.rate_pct;
+                document.getElementById('obs-face-rate').textContent = rate > 0 ? rate.toFixed(1) + '%' : '--';
+            }
+            if (data.reasoning) {
+                document.getElementById('obs-reasoning').textContent = data.reasoning.calls || 0;
+                const avgLat = data.reasoning.avg_latency_ms;
+                document.getElementById('obs-reasoning-lat').textContent = avgLat > 0 ? avgLat.toFixed(0) + 'ms' : '--';
+            }
         });
 
         // Request notification permission on load
