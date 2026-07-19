@@ -22,6 +22,14 @@ from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
 from amber.vision.scorer import MatchScorer
 from amber.recorder import SessionRecorder
+from amber.observability import StructuredLogger, MetricsCollector
+from amber.persistence import SessionDB
+
+try:
+    from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
+    _HAS_TELEMETRY = True
+except ImportError:
+    _HAS_TELEMETRY = False
 
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
@@ -34,6 +42,13 @@ app = Flask(
 )
 app.config["SECRET_KEY"] = "amber-drone-2026"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Flask auto-instrumentation (optional)
+try:
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    FlaskInstrumentor().instrument_app(app)
+except ImportError:
+    pass
 
 # Global state
 _state = {
@@ -56,12 +71,24 @@ _state = {
     "search_active": False,
     "recorder": None,
     "battery_warned": False,
+    "logger": None,
+    "metrics": None,
+    "db": None,
+    "session_id": None,
+    "tracer": None,
+    "otel_metrics": None,
 }
 
 
 def _init_pipeline(source="webcam", target_path=None):
     """Initialize the detection pipeline."""
-    print("[dashboard] Initializing pipeline...")
+    if _state["logger"] is None:
+        _state["logger"] = StructuredLogger(component="dashboard")
+    if _state["metrics"] is None:
+        _state["metrics"] = MetricsCollector()
+
+    log = _state["logger"]
+    log.info("pipeline_init", source=source, target_path=target_path)
 
     if _state["detector"] is None:
         _state["detector"] = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
@@ -74,7 +101,7 @@ def _init_pipeline(source="webcam", target_path=None):
             from amber.vision.face import FaceRecognizer
             _state["face"] = FaceRecognizer(match_threshold=0.45)
         except Exception as e:
-            print(f"[dashboard] InsightFace not available: {e}")
+            log.warning("insightface_unavailable", error=str(e))
 
     if _state["scorer"] is None:
         _state["scorer"] = MatchScorer()
@@ -84,7 +111,7 @@ def _init_pipeline(source="webcam", target_path=None):
             from amber.reasoning.agent import AmberAgent
             _state["reasoning"] = AmberAgent(model="gemma4:latest")
         except Exception as e:
-            print(f"[dashboard] Gemma 4 not available: {e}")
+            log.warning("gemma4_unavailable", error=str(e))
 
     if target_path and os.path.exists(target_path):
         _state["reid"].set_target_from_file(target_path)
@@ -96,6 +123,19 @@ def _init_pipeline(source="webcam", target_path=None):
         if _state["face"]:
             _state["face"].set_target_from_file(target_path)
 
+    # Initialize session persistence
+    if _state["db"] is None:
+        _state["db"] = SessionDB()
+        log.info("session_db_initialized")
+
+    # OpenTelemetry
+    if _HAS_TELEMETRY:
+        otel_enabled = init_telemetry()
+        if otel_enabled:
+            _state["tracer"] = get_tracer()
+            _state["otel_metrics"] = AmberMetrics(get_meter())
+            log.info("opentelemetry_enabled")
+
     _state["source"] = source
     if source == "tello":
         from amber.drone.tello import TelloController
@@ -103,7 +143,7 @@ def _init_pipeline(source="webcam", target_path=None):
         if drone.connect():
             _state["drone"] = drone
         else:
-            print("[dashboard] Tello connection failed, falling back to webcam")
+            log.warning("tello_connection_failed", fallback="webcam")
             _state["source"] = "webcam"
             _state["cap"] = cv2.VideoCapture(0)
     elif source == "webcam":
@@ -111,7 +151,14 @@ def _init_pipeline(source="webcam", target_path=None):
     else:
         _state["cap"] = cv2.VideoCapture(source)
 
-    print("[dashboard] Pipeline ready.")
+    # Create a new search session
+    _state["session_id"] = _state["db"].create_session(
+        source=_state["source"],
+        target_photo_path=_state.get("target_photo_path"),
+        target_description=_state.get("target_description"),
+    )
+
+    log.info("pipeline_ready", source=_state["source"], session_id=_state["session_id"])
 
 
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
@@ -136,7 +183,8 @@ def _save_match_snapshot(frame, crop, match_score, reasoning_result):
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"[captures] Saved match snapshot: {frame_path.name}")
+    if _state["logger"]:
+        _state["logger"].info("snapshot_saved", file=frame_path.name, score=match_score)
 
 
 def _frame_loop():
@@ -144,9 +192,18 @@ def _frame_loop():
     frame_count = 0
     fps_start = time.time()
     last_reasoning_time = 0
+    last_metrics_emit = 0
     REASONING_INTERVAL = 5
+    METRICS_INTERVAL = 10
+    log = _state["logger"]
+    metrics = _state["metrics"]
+
+    tracer = _state.get("tracer")
+    otel_m = _state.get("otel_metrics")
 
     while _state["running"]:
+        frame_start = time.time()
+
         frame = None
         if _state["drone"]:
             frame = _state["drone"].get_frame()
@@ -163,6 +220,11 @@ def _frame_loop():
         detections = _state["detector"].detect(frame)
         _state["persons_detected"] = len(detections)
 
+        # Metrics: frame and detection counts
+        if metrics:
+            metrics.inc_frames()
+            metrics.inc_persons(len(detections))
+
         # ReID matching (photo-based)
         match_idx = None
         match_score = 0.0
@@ -177,6 +239,12 @@ def _frame_loop():
         face_match_idx = None
         if _state["face"] and _state["face"].has_target and detections:
             face_match_idx, face_score = _state["face"].find_match(detections)
+            if metrics:
+                metrics.record_face_check(face_match_idx is not None)
+            if log:
+                log.face_result(success=face_match_idx is not None, score=face_score)
+            if otel_m:
+                otel_m.record_face_check(found=face_score > 0)
 
         # Use face match if ReID didn't find one
         if match_idx is None and face_match_idx is not None:
@@ -193,6 +261,8 @@ def _frame_loop():
             det_face = _state["face"].compare(detections[match_idx]["crop"]) if (_state["face"] and _state["face"].has_target) else 0.0
             scored = _state["scorer"].score(reid_score=det_reid, face_score=det_face)
             match_score = scored["combined_score"]
+            if log:
+                log.scoring(combined=match_score, reid=det_reid, face=det_face)
         elif match_idx is not None:
             match_score = max(reid_score, face_score)
 
@@ -215,15 +285,29 @@ def _frame_loop():
             if best_candidate is not None:
                 crop = detections[best_candidate]["crop"]
                 if crop is not None and crop.size > 0:
+                    reasoning_start = time.time()
                     result = _state["reasoning"].match_description(
                         crop, _state["target_description"]
                     )
+                    reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
                     last_reasoning_time = time.time()
+                    if otel_m:
+                        otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
+
+                    if metrics:
+                        metrics.record_reasoning(reasoning_elapsed_ms)
+                    if log:
+                        log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
 
                     if result.get("match"):
                         match_idx = best_candidate
                         match_score = 0.8  # synthetic score for description match
                         description_match = True
+
+                        if metrics:
+                            metrics.record_match("description", match_score)
+                        if log:
+                            log.match(score=match_score, match_type="description")
 
                         snapshot_b64 = None
                         _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -242,6 +326,19 @@ def _frame_loop():
                         _state["match_history"] = _state["match_history"][-50:]
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, crop, match_score, result)
+                        if otel_m:
+                            otel_m.record_match(match_score, match_type="description")
+
+                        # Persist to DB
+                        if _state["db"] and _state["session_id"]:
+                            _state["db"].add_match(
+                                session_id=_state["session_id"],
+                                match_type="description",
+                                combined_score=match_score,
+                                gemma_match=True,
+                                gemma_confidence=result.get("confidence", "medium"),
+                                reasoning=result.get("reasoning", "Description match"),
+                            )
 
         # Photo-based ReID + Face + Gemma 4 reasoning
         if (
@@ -253,8 +350,17 @@ def _frame_loop():
         ):
             ref_img = cv2.imread(_state["target_photo_path"])
             candidate_crop = detections[match_idx]["crop"]
+            reasoning_start = time.time()
             result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
+            reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
             last_reasoning_time = time.time()
+            if otel_m:
+                otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
+
+            if metrics:
+                metrics.record_reasoning(reasoning_elapsed_ms)
+            if log:
+                log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
 
             # Re-score with all three signals
             if _state["scorer"]:
@@ -272,6 +378,13 @@ def _frame_loop():
                 _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
 
+            # Track photo-based match in metrics
+            match_type = "face" if (face_score > reid_score and face_match_idx is not None) else "reid"
+            if metrics:
+                metrics.record_match(match_type, match_score)
+            if log:
+                log.match(score=match_score, match_type=match_type)
+
             match_entry = {
                 "time": time.strftime("%H:%M:%S"),
                 "score": round(match_score, 3),
@@ -287,6 +400,21 @@ def _frame_loop():
             _state["match_history"] = _state["match_history"][-50:]
             socketio.emit("match_alert", match_entry)
             _save_match_snapshot(frame, candidate_crop, match_score, result)
+            if otel_m:
+                otel_m.record_match(match_score, match_type="photo")
+
+            # Persist to DB
+            if _state["db"] and _state["session_id"]:
+                _state["db"].add_match(
+                    session_id=_state["session_id"],
+                    match_type="photo",
+                    reid_score=reid_score,
+                    face_score=face_score,
+                    combined_score=match_score,
+                    gemma_match=result["match"],
+                    gemma_confidence=result["confidence"],
+                    reasoning=result["reasoning"],
+                )
 
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
@@ -329,6 +457,8 @@ def _frame_loop():
 
             # Battery warnings
             if s.battery > 0 and s.is_flying:
+                if log:
+                    log.battery(level=s.battery, is_flying=s.is_flying)
                 if s.battery <= 10 and not _state.get("battery_critical"):
                     _state["battery_critical"] = True
                     socketio.emit("battery_critical", {"battery": s.battery})
@@ -343,6 +473,13 @@ def _frame_loop():
 
         _state["drone_telemetry"] = telemetry
 
+        # OTel frame-level metrics
+        if otel_m:
+            frame_duration = (time.time() - frame_start) * 1000
+            otel_m.record_frame(frame_duration, len(detections), _state["fps"])
+            if telemetry.get("battery"):
+                otel_m.record_battery(telemetry["battery"])
+
         socketio.emit("frame", {
             "image": frame_b64,
             "fps": _state["fps"],
@@ -353,6 +490,12 @@ def _frame_loop():
             "recording": _state["recorder"].is_recording if _state["recorder"] else False,
         })
 
+        # Emit metrics update every 10 seconds
+        now = time.time()
+        if metrics and now - last_metrics_emit >= METRICS_INTERVAL:
+            last_metrics_emit = now
+            socketio.emit("metrics_update", metrics.snapshot())
+
         time.sleep(0.05)
 
 
@@ -361,6 +504,13 @@ def _frame_loop():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/metrics")
+def metrics_endpoint():
+    if _state["metrics"]:
+        return jsonify(_state["metrics"].snapshot())
+    return jsonify({})
 
 
 @app.route("/api/status")
@@ -377,6 +527,38 @@ def status():
         "match_history": _state["match_history"][-10:],
         "telemetry": _state["drone_telemetry"],
     })
+
+
+@app.route("/api/sessions")
+def api_sessions():
+    """Return recent search sessions."""
+    db = _state.get("db")
+    if not db:
+        return jsonify([])
+    limit = request.args.get("limit", 20, type=int)
+    return jsonify(db.get_recent_sessions(limit=limit))
+
+
+@app.route("/api/sessions/<session_id>")
+def api_session_detail(session_id):
+    """Return a single session with its matches."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({"error": "no database"}), 500
+    session = db.get_session(session_id)
+    if not session:
+        return jsonify({"error": "not found"}), 404
+    session["matches"] = db.get_session_matches(session_id)
+    return jsonify(session)
+
+
+@app.route("/api/match-stats")
+def api_match_stats():
+    """Return aggregate match statistics."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({})
+    return jsonify(db.get_match_stats())
 
 
 # --- WebSocket Events ---
@@ -414,7 +596,8 @@ def on_set_description(data):
     desc = data.get("description", "").strip()
     if desc:
         _state["target_description"] = desc
-        print(f"[dashboard] Target description set: {desc}")
+        if _state["logger"]:
+            _state["logger"].info("target_description_set", description=desc)
         emit("description_set", {"description": desc})
 
 
@@ -425,7 +608,8 @@ def on_set_threshold(data):
     threshold = max(0.1, min(0.99, float(threshold)))
     if _state["reid"]:
         _state["reid"].match_threshold = threshold
-        print(f"[dashboard] Match threshold set to {threshold:.2f}")
+        if _state["logger"]:
+            _state["logger"].info("threshold_updated", threshold=threshold)
     emit("threshold_updated", {"threshold": threshold})
 
 
@@ -456,6 +640,8 @@ def on_drone_command(data):
     action = commands.get(cmd)
     if action:
         action()
+    if _state["logger"]:
+        _state["logger"].drone_command(command=cmd)
     emit("command_ack", {"command": cmd})
 
 
@@ -532,5 +718,6 @@ def run_dashboard(source="webcam", target_path=None, port=5555):
     frame_thread = threading.Thread(target=_frame_loop, daemon=True)
     frame_thread.start()
 
-    print(f"\n  Amber Drone Dashboard: http://localhost:{port}\n")
+    if _state["logger"]:
+        _state["logger"].info("dashboard_started", url=f"http://localhost:{port}")
     socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
