@@ -165,6 +165,38 @@
 
         .no-video { color: #555; font-size: 14px; }
 
+        /* Past Sessions */
+        .sessions-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            cursor: pointer; user-select: none;
+        }
+        .sessions-toggle .arrow {
+            font-size: 10px; color: #888; transition: transform 0.2s;
+        }
+        .sessions-toggle .arrow.open { transform: rotate(90deg); }
+        .sessions-list { max-height: 300px; overflow-y: auto; }
+        .session-item {
+            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
+            margin-bottom: 6px; border-left: 3px solid #555; font-size: 12px;
+            cursor: pointer; transition: border-color 0.15s;
+        }
+        .session-item:hover { border-left-color: #ff6b35; }
+        .session-item .sess-date { color: #888; }
+        .session-item .sess-source { color: #00e5ff; font-weight: 600; }
+        .session-item .sess-matches { color: #ff6b35; font-weight: 600; }
+        .session-detail {
+            display: none; margin-top: 6px; padding: 6px 8px;
+            background: #161616; border-radius: 4px; font-size: 11px;
+        }
+        .session-detail.open { display: block; }
+        .session-match-item {
+            padding: 4px 0; border-bottom: 1px solid #222;
+        }
+        .session-match-item:last-child { border-bottom: none; }
+        .session-match-item .sm-type { color: #ff6b35; text-transform: uppercase; font-weight: 600; }
+        .session-match-item .sm-score { color: #00e5ff; }
+        .session-match-item .sm-reasoning { color: #777; font-style: italic; margin-top: 2px; }
+
         /* Toast */
         .toast {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -349,6 +381,19 @@
                             <span>Avg reasoning latency</span>
                             <span id="obs-reasoning-lat" style="color:#888;font-family:'SF Mono',monospace;">--</span>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Past Sessions -->
+            <div class="panel">
+                <div class="sessions-toggle" onclick="toggleSessions()">
+                    <div class="panel-title" style="margin-bottom:0;">Past Sessions</div>
+                    <span id="sessions-arrow" class="arrow">&#9654;</span>
+                </div>
+                <div id="sessions-container" style="display:none;margin-top:10px;">
+                    <div id="sessions-list" class="sessions-list">
+                        <div style="color:#555;font-size:12px;">Loading...</div>
                     </div>
                 </div>
             </div>
@@ -634,6 +679,87 @@
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission();
         }
+
+        // --- Past Sessions ---
+        let sessionsOpen = false;
+        function toggleSessions() {
+            sessionsOpen = !sessionsOpen;
+            const container = document.getElementById('sessions-container');
+            const arrow = document.getElementById('sessions-arrow');
+            if (sessionsOpen) {
+                container.style.display = 'block';
+                arrow.classList.add('open');
+                loadSessions();
+            } else {
+                container.style.display = 'none';
+                arrow.classList.remove('open');
+            }
+        }
+
+        function loadSessions() {
+            fetch('/api/sessions')
+                .then(r => r.json())
+                .then(sessions => {
+                    const list = document.getElementById('sessions-list');
+                    if (!sessions.length) {
+                        list.innerHTML = '<div style="color:#555;font-size:12px;">No past sessions</div>';
+                        return;
+                    }
+                    list.innerHTML = '';
+                    sessions.forEach(s => {
+                        const item = document.createElement('div');
+                        item.className = 'session-item';
+                        const date = s.started_at ? s.started_at.replace('T', ' ') : 'Unknown';
+                        const matches = s.total_matches || 0;
+                        item.innerHTML = `
+                            <span class="sess-date">${date}</span>
+                            <span class="sess-source">${s.source || 'unknown'}</span>
+                            <span class="sess-matches">${matches} match${matches !== 1 ? 'es' : ''}</span>
+                            <div class="session-detail" id="detail-${s.id}"></div>
+                        `;
+                        item.onclick = () => toggleSessionDetail(s.id);
+                        list.appendChild(item);
+                    });
+                })
+                .catch(() => {
+                    document.getElementById('sessions-list').innerHTML =
+                        '<div style="color:#555;font-size:12px;">Failed to load sessions</div>';
+                });
+        }
+
+        function toggleSessionDetail(sessionId) {
+            const detail = document.getElementById('detail-' + sessionId);
+            if (!detail) return;
+            if (detail.classList.contains('open')) {
+                detail.classList.remove('open');
+                return;
+            }
+            detail.innerHTML = '<div style="color:#555;">Loading...</div>';
+            detail.classList.add('open');
+            fetch('/api/sessions/' + sessionId)
+                .then(r => r.json())
+                .then(data => {
+                    const matches = data.matches || [];
+                    if (!matches.length) {
+                        detail.innerHTML = '<div style="color:#555;">No matches in this session</div>';
+                        return;
+                    }
+                    detail.innerHTML = matches.map(m => `
+                        <div class="session-match-item">
+                            <span class="sm-type">${m.match_type}</span>
+                            <span class="sm-score">Score: ${(m.combined_score || 0).toFixed(3)}</span>
+                            ${m.gemma_confidence ? ' | Gemma: ' + m.gemma_confidence : ''}
+                            ${m.reasoning ? '<div class="sm-reasoning">' + m.reasoning + '</div>' : ''}
+                        </div>
+                    `).join('');
+                })
+                .catch(() => {
+                    detail.innerHTML = '<div style="color:#555;">Failed to load details</div>';
+                });
+        }
+
+        // Load sessions on page load (for the collapsed state data pre-fetch)
+        fetch('/api/sessions').catch(() => {});
     </script>
 </body>
 </html>

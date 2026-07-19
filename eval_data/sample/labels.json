@@ -1,0 +1,20 @@
+{
+  "name": "Sample Evaluation Dataset",
+  "description": "Placeholder — replace with real test images",
+  "pairs": [
+    {
+      "reference": "reference.jpg",
+      "candidate": "candidate_match.jpg",
+      "is_match": true,
+      "match_type": "same_person",
+      "notes": "Same person, same clothing"
+    },
+    {
+      "reference": "reference.jpg",
+      "candidate": "candidate_nomatch.jpg",
+      "is_match": false,
+      "match_type": "different_person",
+      "notes": "Different person"
+    }
+  ]
+}

@@ -23,6 +23,7 @@ from amber.vision.reid import PersonReID
 from amber.vision.scorer import MatchScorer
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
+from amber.persistence import SessionDB
 
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
@@ -59,6 +60,8 @@ _state = {
     "battery_warned": False,
     "logger": None,
     "metrics": None,
+    "db": None,
+    "session_id": None,
 }
 
 
@@ -105,6 +108,11 @@ def _init_pipeline(source="webcam", target_path=None):
         if _state["face"]:
             _state["face"].set_target_from_file(target_path)
 
+    # Initialize session persistence
+    if _state["db"] is None:
+        _state["db"] = SessionDB()
+        print("[dashboard] Session database initialized.")
+
     _state["source"] = source
     if source == "tello":
         from amber.drone.tello import TelloController
@@ -120,7 +128,14 @@ def _init_pipeline(source="webcam", target_path=None):
     else:
         _state["cap"] = cv2.VideoCapture(source)
 
-    log.info("pipeline_ready", source=_state["source"])
+    # Create a new search session
+    _state["session_id"] = _state["db"].create_session(
+        source=_state["source"],
+        target_photo_path=_state.get("target_photo_path"),
+        target_description=_state.get("target_description"),
+    )
+
+    log.info("pipeline_ready", source=_state["source"], session_id=_state["session_id"])
 
 
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
@@ -280,6 +295,17 @@ def _frame_loop():
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, crop, match_score, result)
 
+                        # Persist to DB
+                        if _state["db"] and _state["session_id"]:
+                            _state["db"].add_match(
+                                session_id=_state["session_id"],
+                                match_type="description",
+                                combined_score=match_score,
+                                gemma_match=True,
+                                gemma_confidence=result.get("confidence", "medium"),
+                                reasoning=result.get("reasoning", "Description match"),
+                            )
+
         # Photo-based ReID + Face + Gemma 4 reasoning
         if (
             match_idx is not None
@@ -338,6 +364,19 @@ def _frame_loop():
             _state["match_history"] = _state["match_history"][-50:]
             socketio.emit("match_alert", match_entry)
             _save_match_snapshot(frame, candidate_crop, match_score, result)
+
+            # Persist to DB
+            if _state["db"] and _state["session_id"]:
+                _state["db"].add_match(
+                    session_id=_state["session_id"],
+                    match_type="photo",
+                    reid_score=reid_score,
+                    face_score=face_score,
+                    combined_score=match_score,
+                    gemma_match=result["match"],
+                    gemma_confidence=result["confidence"],
+                    reasoning=result["reasoning"],
+                )
 
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
@@ -443,6 +482,38 @@ def status():
         "match_history": _state["match_history"][-10:],
         "telemetry": _state["drone_telemetry"],
     })
+
+
+@app.route("/api/sessions")
+def api_sessions():
+    """Return recent search sessions."""
+    db = _state.get("db")
+    if not db:
+        return jsonify([])
+    limit = request.args.get("limit", 20, type=int)
+    return jsonify(db.get_recent_sessions(limit=limit))
+
+
+@app.route("/api/sessions/<session_id>")
+def api_session_detail(session_id):
+    """Return a single session with its matches."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({"error": "no database"}), 500
+    session = db.get_session(session_id)
+    if not session:
+        return jsonify({"error": "not found"}), 404
+    session["matches"] = db.get_session_matches(session_id)
+    return jsonify(session)
+
+
+@app.route("/api/match-stats")
+def api_match_stats():
+    """Return aggregate match statistics."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({})
+    return jsonify(db.get_match_stats())
 
 
 # --- WebSocket Events ---

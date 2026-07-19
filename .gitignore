@@ -30,6 +30,9 @@ models/
 captures/
 recordings/
 
+# Session database
+amber_sessions.db
+
 # Claude worktrees
 .claude/worktrees/
 
@@ -37,3 +40,8 @@ recordings/
 ios/AmberDrone/build/
 ios/AmberDrone/*.xcworkspace
 ios/AmberDrone/Pods/
+
+# Eval data images (keep manifests)
+eval_data/**/*.jpg
+eval_data/**/*.png
+!eval_data/sample/labels.json
