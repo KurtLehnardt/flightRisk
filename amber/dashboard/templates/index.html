@@ -22,17 +22,12 @@
             justify-content: space-between;
             border-bottom: 2px solid #ff6b35;
         }
-        .header h1 {
-            font-size: 22px;
-            color: #ff6b35;
-            font-weight: 700;
-        }
+        .header h1 { font-size: 22px; color: #ff6b35; font-weight: 700; }
         .header h1 span { color: #e0e0e0; font-weight: 300; }
+        .header-right { display: flex; align-items: center; gap: 12px; }
         .status-badge {
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 600;
+            padding: 4px 12px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
         }
         .status-live { background: #00c853; color: #000; }
         .status-offline { background: #555; color: #aaa; }
@@ -40,156 +35,104 @@
         /* Main Layout */
         .main {
             display: grid;
-            grid-template-columns: 1fr 320px;
-            grid-template-rows: auto 1fr;
+            grid-template-columns: 1fr 340px;
             gap: 0;
             height: calc(100vh - 52px);
         }
 
         /* Video Feed */
         .video-panel {
-            position: relative;
-            background: #111;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            position: relative; background: #111;
+            display: flex; align-items: center; justify-content: center;
             overflow: hidden;
         }
-        #video-feed {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-        }
+        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
         .video-overlay {
-            position: absolute;
-            top: 12px;
-            left: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+            position: absolute; top: 12px; left: 12px;
+            display: flex; flex-direction: column; gap: 4px;
         }
         .video-stat {
-            background: rgba(0,0,0,0.7);
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 13px;
-            font-family: 'SF Mono', monospace;
+            background: rgba(0,0,0,0.7); padding: 3px 8px;
+            border-radius: 4px; font-size: 13px; font-family: 'SF Mono', monospace;
         }
 
         /* Alert Banner */
         .alert-banner {
-            display: none;
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            background: rgba(220, 20, 20, 0.95);
-            color: white;
-            padding: 12px 20px;
-            font-size: 18px;
-            font-weight: 700;
-            text-align: center;
-            animation: pulse 1s infinite;
-            z-index: 10;
+            display: none; position: absolute; top: 0; left: 0; right: 0;
+            background: rgba(220, 20, 20, 0.95); color: white;
+            padding: 14px 20px; font-size: 20px; font-weight: 700;
+            text-align: center; z-index: 10;
+            animation: pulse 0.8s infinite;
         }
         .alert-banner.active { display: block; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
 
         /* Right Sidebar */
         .sidebar {
-            background: #141414;
-            border-left: 1px solid #333;
-            display: flex;
-            flex-direction: column;
-            overflow-y: auto;
+            background: #141414; border-left: 1px solid #333;
+            display: flex; flex-direction: column; overflow-y: auto;
         }
-
-        .panel {
-            padding: 16px;
-            border-bottom: 1px solid #2a2a2a;
-        }
+        .panel { padding: 14px 16px; border-bottom: 1px solid #2a2a2a; }
         .panel-title {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            color: #888;
-            margin-bottom: 10px;
+            font-size: 11px; text-transform: uppercase;
+            letter-spacing: 1.5px; color: #888; margin-bottom: 10px;
         }
 
-        /* Target Photo */
-        .target-area {
-            text-align: center;
-        }
+        /* Target Photo + Description */
+        .target-area { display: flex; gap: 12px; align-items: flex-start; }
         #target-preview {
-            width: 120px;
-            height: 120px;
-            object-fit: cover;
-            border-radius: 8px;
-            border: 2px solid #ff6b35;
-            display: none;
+            width: 100px; height: 100px; object-fit: cover;
+            border-radius: 8px; border: 2px solid #ff6b35; display: none; flex-shrink: 0;
         }
         .target-placeholder {
-            width: 120px;
-            height: 120px;
-            border: 2px dashed #555;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #666;
-            font-size: 12px;
-            cursor: pointer;
-            margin: 0 auto;
+            width: 100px; height: 100px; border: 2px dashed #555;
+            border-radius: 8px; display: flex; align-items: center;
+            justify-content: center; color: #666; font-size: 11px;
+            cursor: pointer; text-align: center; flex-shrink: 0;
         }
         .target-placeholder:hover { border-color: #ff6b35; color: #ff6b35; }
         #target-upload { display: none; }
+        .target-desc {
+            flex: 1; display: flex; flex-direction: column; gap: 6px;
+        }
+        #target-description {
+            width: 100%; padding: 8px; background: #1e1e1e; border: 1px solid #333;
+            color: #e0e0e0; border-radius: 6px; font-size: 12px; resize: vertical;
+            min-height: 60px; font-family: inherit;
+        }
+        #target-description::placeholder { color: #555; }
+        .desc-btn {
+            padding: 6px 10px; background: #ff6b35; border: none;
+            color: white; border-radius: 4px; cursor: pointer;
+            font-size: 11px; font-weight: 600;
+        }
+        .desc-btn:hover { background: #e5592e; }
+
+        /* Threshold slider */
+        .threshold-row {
+            display: flex; align-items: center; gap: 8px; margin-top: 8px;
+        }
+        .threshold-row label { font-size: 11px; color: #888; white-space: nowrap; }
+        .threshold-row input[type=range] { flex: 1; }
+        .threshold-row .val { font-size: 12px; color: #00e5ff; font-family: 'SF Mono', monospace; min-width: 32px; }
 
         /* Telemetry */
-        .telemetry-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-        }
-        .telem-item {
-            background: #1e1e1e;
-            padding: 8px;
-            border-radius: 6px;
-            text-align: center;
-        }
+        .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .telem-item { background: #1e1e1e; padding: 8px; border-radius: 6px; text-align: center; }
         .telem-value {
-            font-size: 20px;
-            font-weight: 700;
-            color: #00e5ff;
+            font-size: 20px; font-weight: 700; color: #00e5ff;
             font-family: 'SF Mono', monospace;
         }
-        .telem-label {
-            font-size: 10px;
-            color: #888;
-            text-transform: uppercase;
-            margin-top: 2px;
-        }
+        .telem-label { font-size: 10px; color: #888; text-transform: uppercase; margin-top: 2px; }
         .telem-value.warning { color: #ff9800; }
         .telem-value.critical { color: #f44336; }
 
         /* Controls */
-        .controls-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 6px;
-        }
+        .controls-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
         .ctrl-btn {
-            padding: 10px 4px;
-            border: 1px solid #333;
-            background: #1e1e1e;
-            color: #e0e0e0;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 600;
-            transition: all 0.15s;
+            padding: 10px 4px; border: 1px solid #333; background: #1e1e1e;
+            color: #e0e0e0; border-radius: 6px; cursor: pointer;
+            font-size: 12px; font-weight: 600; transition: all 0.15s;
         }
         .ctrl-btn:hover { background: #2a2a2a; border-color: #555; }
         .ctrl-btn:active { background: #333; }
@@ -201,45 +144,43 @@
         .ctrl-btn.primary:hover { background: #ff6b35; color: white; }
 
         /* Match Log */
-        .match-log {
-            max-height: 200px;
-            overflow-y: auto;
-        }
+        .match-log { max-height: 250px; overflow-y: auto; }
         .match-entry {
-            background: #1e1e1e;
-            padding: 8px;
-            border-radius: 6px;
-            margin-bottom: 6px;
-            border-left: 3px solid #ff6b35;
-            font-size: 12px;
+            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
+            margin-bottom: 6px; border-left: 3px solid #ff6b35; font-size: 12px;
         }
         .match-entry .time { color: #888; }
         .match-entry .score { color: #00e5ff; font-weight: 700; }
         .match-entry .reasoning { color: #aaa; margin-top: 4px; font-style: italic; }
         .match-entry.confirmed { border-left-color: #00c853; }
+        .match-entry .snapshot {
+            margin-top: 6px; max-width: 100%; border-radius: 4px;
+        }
 
-        /* Search Controls */
+        /* Search */
         .search-select {
-            width: 100%;
-            padding: 8px;
-            background: #1e1e1e;
-            border: 1px solid #333;
-            color: #e0e0e0;
-            border-radius: 6px;
-            margin-bottom: 8px;
+            width: 100%; padding: 8px; background: #1e1e1e;
+            border: 1px solid #333; color: #e0e0e0; border-radius: 6px; margin-bottom: 8px;
         }
 
-        /* No video state */
-        .no-video {
-            color: #555;
-            font-size: 14px;
+        .no-video { color: #555; font-size: 14px; }
+
+        /* Toast */
+        .toast {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: #333; color: white; padding: 10px 20px; border-radius: 8px;
+            font-size: 14px; z-index: 100; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
+        .toast.active { display: block; animation: fadeInUp 0.3s; }
+        @keyframes fadeInUp { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>AMBER <span>DRONE</span></h1>
-        <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+        <div class="header-right">
+            <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+        </div>
     </div>
 
     <div class="main">
@@ -259,15 +200,26 @@
 
         <!-- Sidebar -->
         <div class="sidebar">
-            <!-- Target Photo -->
+            <!-- Target Photo + Description -->
             <div class="panel">
                 <div class="panel-title">Target Child</div>
                 <div class="target-area">
-                    <img id="target-preview">
-                    <div id="target-placeholder" class="target-placeholder" onclick="document.getElementById('target-upload').click()">
-                        Click to upload<br>child's photo
+                    <div>
+                        <img id="target-preview">
+                        <div id="target-placeholder" class="target-placeholder" onclick="document.getElementById('target-upload').click()">
+                            Upload<br>photo
+                        </div>
+                        <input type="file" id="target-upload" accept="image/*">
                     </div>
-                    <input type="file" id="target-upload" accept="image/*">
+                    <div class="target-desc">
+                        <textarea id="target-description" placeholder="Or describe: red jacket, blue backpack, brown hair, ~8 years old..."></textarea>
+                        <button class="desc-btn" onclick="setDescription()">Set Description</button>
+                    </div>
+                </div>
+                <div class="threshold-row">
+                    <label>Match threshold:</label>
+                    <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
+                    <span id="threshold-val" class="val">0.55</span>
                 </div>
             </div>
 
@@ -298,15 +250,15 @@
             <div class="panel">
                 <div class="panel-title">Flight Controls</div>
                 <div class="controls-grid">
-                    <button class="ctrl-btn" onclick="sendCmd('ccw')">↺ Yaw</button>
-                    <button class="ctrl-btn" onclick="sendCmd('forward')">↑ Fwd</button>
-                    <button class="ctrl-btn" onclick="sendCmd('cw')">↻ Yaw</button>
-                    <button class="ctrl-btn" onclick="sendCmd('left')">← Left</button>
-                    <button class="ctrl-btn" onclick="sendCmd('hover')">■ Stop</button>
-                    <button class="ctrl-btn" onclick="sendCmd('right')">→ Right</button>
-                    <button class="ctrl-btn" onclick="sendCmd('up')">⬆ Up</button>
-                    <button class="ctrl-btn" onclick="sendCmd('back')">↓ Back</button>
-                    <button class="ctrl-btn" onclick="sendCmd('down')">⬇ Down</button>
+                    <button class="ctrl-btn" onclick="sendCmd('ccw')">&#8634; Yaw</button>
+                    <button class="ctrl-btn" onclick="sendCmd('forward')">&#8593; Fwd</button>
+                    <button class="ctrl-btn" onclick="sendCmd('cw')">&#8635; Yaw</button>
+                    <button class="ctrl-btn" onclick="sendCmd('left')">&#8592; Left</button>
+                    <button class="ctrl-btn" onclick="sendCmd('hover')">&#9632; Stop</button>
+                    <button class="ctrl-btn" onclick="sendCmd('right')">&#8594; Right</button>
+                    <button class="ctrl-btn" onclick="sendCmd('up')">&#11014; Up</button>
+                    <button class="ctrl-btn" onclick="sendCmd('back')">&#8595; Back</button>
+                    <button class="ctrl-btn" onclick="sendCmd('down')">&#11015; Down</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:8px;">
                     <button class="ctrl-btn success" style="flex:1" onclick="sendCmd('takeoff')">TAKEOFF</button>
@@ -318,9 +270,11 @@
             <div class="panel">
                 <div class="panel-title">Autonomous Search</div>
                 <select id="search-pattern" class="search-select">
-                    <option value="expanding_square">Expanding Square</option>
-                    <option value="lawnmower">Lawnmower</option>
-                    <option value="spiral">Spiral</option>
+                    <option value="expanding_square">Expanding Square (SS) — from LKP</option>
+                    <option value="sector">Sector / Radial (VS) — pie slices</option>
+                    <option value="parallel_track">Parallel Track (PS) — lawnmower</option>
+                    <option value="track_line">Track Line (TS) — follow path</option>
+                    <option value="spiral">Spiral — outward from center</option>
                 </select>
                 <div style="display:flex;gap:6px;">
                     <button class="ctrl-btn primary" style="flex:1" onclick="startSearch()">START SEARCH</button>
@@ -331,13 +285,37 @@
 
             <!-- Match Log -->
             <div class="panel" style="flex:1;">
-                <div class="panel-title">Match Log</div>
+                <div class="panel-title">Match Log <span id="match-count" style="color:#ff6b35;"></span></div>
                 <div id="match-log" class="match-log">
                     <div style="color:#555;font-size:12px;">No matches yet...</div>
                 </div>
             </div>
         </div>
     </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- Audio alert (generated programmatically) -->
+    <script>
+        // Generate alert beep using Web Audio API
+        let audioCtx = null;
+        function playAlertSound() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // Three ascending beeps
+            [0, 150, 300].forEach((delay, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = 800 + (i * 200);  // 800, 1000, 1200 Hz
+                osc.type = 'sine';
+                gain.gain.value = 0.3;
+                const t = audioCtx.currentTime + delay / 1000;
+                osc.start(t);
+                osc.stop(t + 0.12);
+            });
+        }
+    </script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script>
@@ -347,10 +325,19 @@
         const alertBanner = document.getElementById('alert-banner');
         const statusBadge = document.getElementById('status-badge');
         let alertTimeout = null;
+        let matchCount = 0;
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('active');
+            setTimeout(() => t.classList.remove('active'), 2500);
+        }
 
         socket.on('connect', () => {
             statusBadge.textContent = 'LIVE';
             statusBadge.className = 'status-badge status-live';
+            showToast('Connected to Amber Drone');
         });
 
         socket.on('disconnect', () => {
@@ -363,7 +350,6 @@
             videoFeed.style.display = 'block';
             noVideo.style.display = 'none';
 
-            // HUD
             document.getElementById('hud-fps').textContent = 'FPS: ' + data.fps;
             document.getElementById('hud-persons').textContent = 'Persons: ' + data.persons;
             document.getElementById('telem-fps').textContent = data.fps;
@@ -376,7 +362,6 @@
                 document.getElementById('hud-match').style.display = 'none';
             }
 
-            // Telemetry
             if (data.telemetry && data.telemetry.battery !== undefined) {
                 const bat = data.telemetry.battery;
                 const batEl = document.getElementById('telem-battery');
@@ -385,7 +370,6 @@
                 document.getElementById('telem-height').textContent = data.telemetry.height + 'cm';
             }
 
-            // Alert
             if (data.match) {
                 alertBanner.classList.add('active');
                 clearTimeout(alertTimeout);
@@ -400,17 +384,54 @@
             document.getElementById('target-placeholder').style.display = 'none';
         });
 
+        socket.on('target_set', () => {
+            showToast('Target photo set');
+        });
+
+        socket.on('description_set', (data) => {
+            showToast('Description set: ' + data.description);
+        });
+
+        socket.on('threshold_updated', (data) => {
+            // silent
+        });
+
         socket.on('match_alert', (data) => {
+            matchCount++;
+            document.getElementById('match-count').textContent = '(' + matchCount + ')';
+
+            // Audio alert
+            playAlertSound();
+
+            // Browser notification
+            if (Notification.permission === 'granted') {
+                new Notification('Amber Drone — Match Found!', {
+                    body: `Score: ${data.score} | Gemma: ${data.gemma_confidence}\n${data.reasoning}`,
+                    icon: '🚨',
+                    requireInteraction: true
+                });
+            }
+
             const log = document.getElementById('match-log');
+            // Remove "no matches" placeholder
+            if (matchCount === 1) log.innerHTML = '';
+
             const isConfirmed = data.gemma_match;
             const entry = document.createElement('div');
             entry.className = 'match-entry' + (isConfirmed ? ' confirmed' : '');
+
+            let snapshotHtml = '';
+            if (data.snapshot) {
+                snapshotHtml = `<img class="snapshot" src="data:image/jpeg;base64,${data.snapshot}">`;
+            }
+
             entry.innerHTML = `
                 <span class="time">${data.time}</span> —
                 Score: <span class="score">${data.score}</span>
                 | Gemma: ${data.gemma_confidence}
-                ${isConfirmed ? ' ✓ CONFIRMED' : ''}
+                ${isConfirmed ? ' &#10003; CONFIRMED' : ''}
                 <div class="reasoning">${data.reasoning}</div>
+                ${snapshotHtml}
             `;
             log.insertBefore(entry, log.firstChild);
         });
@@ -422,22 +443,21 @@
 
         socket.on('search_complete', () => {
             document.getElementById('search-status').textContent = 'Search complete.';
+            showToast('Search pattern complete');
         });
 
         socket.on('error', (data) => {
-            console.error('Error:', data.message);
+            showToast('Error: ' + data.message);
         });
 
-        // Target photo upload
+        // --- Target photo upload ---
         document.getElementById('target-upload').addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = (ev) => {
                 const b64 = ev.target.result.split(',')[1];
                 socket.emit('set_target', { image: b64 });
-
                 const preview = document.getElementById('target-preview');
                 preview.src = ev.target.result;
                 preview.style.display = 'block';
@@ -446,6 +466,21 @@
             reader.readAsDataURL(file);
         });
 
+        // --- Text description ---
+        function setDescription() {
+            const desc = document.getElementById('target-description').value.trim();
+            if (!desc) return;
+            socket.emit('set_description', { description: desc });
+        }
+
+        // --- Threshold ---
+        function updateThreshold(val) {
+            const thresh = val / 100;
+            document.getElementById('threshold-val').textContent = thresh.toFixed(2);
+            socket.emit('set_threshold', { threshold: thresh });
+        }
+
+        // --- Drone commands ---
         function sendCmd(command) {
             socket.emit('drone_command', { command: command, distance: 30, degrees: 45 });
         }
@@ -457,6 +492,11 @@
 
         function stopSearch() {
             socket.emit('stop_search');
+        }
+
+        // Request notification permission on load
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
         }
     </script>
 </body>

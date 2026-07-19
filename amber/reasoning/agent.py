@@ -149,6 +149,45 @@ class AmberAgent:
         except Exception as e:
             return f"Error: {e}"
 
+    def match_description(
+        self, image: np.ndarray, description: str
+    ) -> dict[str, Any]:
+        """Check if a detected person matches a text description.
+
+        Used when no reference photo is available — the parent describes
+        the child and Gemma 4 compares against each detection.
+        """
+        if not self._available:
+            return {"match": False, "confidence": "unavailable", "reasoning": "Model not loaded"}
+
+        b64 = self._image_to_base64(image)
+        prompt = (
+            "You are helping find a lost child. "
+            f"The child's description: {description}\n\n"
+            "Look at this image of a person detected by a drone camera. "
+            "Does this person match the description above?\n\n"
+            "Consider: clothing color/type, hair color/style, approximate age, "
+            "build, backpack/accessories, and any distinguishing features.\n\n"
+            "Respond in this exact format:\n"
+            "MATCH: yes or no\n"
+            "CONFIDENCE: high, medium, or low\n"
+            "REASONING: one sentence explaining why"
+        )
+
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": prompt,
+                    "images": [b64],
+                }],
+            )
+            text = response.message.content.strip()
+            return self._parse_match_response(text)
+        except Exception as e:
+            return {"match": False, "confidence": "error", "reasoning": str(e)}
+
     def _parse_match_response(self, text: str) -> dict[str, Any]:
         """Parse the structured response from analyze_match."""
         result = {"match": False, "confidence": "unknown", "reasoning": text}

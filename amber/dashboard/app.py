@@ -21,6 +21,10 @@ from flask_socketio import SocketIO, emit
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
 
+# Match screenshots directory
+CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
+CAPTURES_DIR.mkdir(exist_ok=True)
+
 app = Flask(
     __name__,
     template_folder=str(Path(__file__).parent / "templates"),
@@ -35,11 +39,12 @@ _state = {
     "detector": None,
     "reid": None,
     "reasoning": None,
-    "source": None,  # 'tello', 'webcam', or video path
-    "cap": None,  # cv2.VideoCapture for webcam/video
+    "source": None,
+    "cap": None,
     "running": False,
     "target_photo": None,
     "target_photo_path": None,
+    "target_description": None,
     "match_history": [],
     "drone_telemetry": {},
     "fps": 0,
@@ -52,15 +57,12 @@ def _init_pipeline(source="webcam", target_path=None):
     """Initialize the detection pipeline."""
     print("[dashboard] Initializing pipeline...")
 
-    # Detector
     if _state["detector"] is None:
         _state["detector"] = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
 
-    # ReID
     if _state["reid"] is None:
         _state["reid"] = PersonReID(match_threshold=0.55)
 
-    # Reasoning (optional)
     if _state["reasoning"] is None:
         try:
             from amber.reasoning.agent import AmberAgent
@@ -68,7 +70,6 @@ def _init_pipeline(source="webcam", target_path=None):
         except Exception as e:
             print(f"[dashboard] Gemma 4 not available: {e}")
 
-    # Target photo
     if target_path and os.path.exists(target_path):
         _state["reid"].set_target_from_file(target_path)
         _state["target_photo_path"] = target_path
@@ -76,7 +77,6 @@ def _init_pipeline(source="webcam", target_path=None):
         _, buf = cv2.imencode(".jpg", img)
         _state["target_photo"] = base64.b64encode(buf).decode("utf-8")
 
-    # Video source
     _state["source"] = source
     if source == "tello":
         from amber.drone.tello import TelloController
@@ -95,6 +95,31 @@ def _init_pipeline(source="webcam", target_path=None):
     print("[dashboard] Pipeline ready.")
 
 
+def _save_match_snapshot(frame, crop, match_score, reasoning_result):
+    """Save a match screenshot and crop to disk."""
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    frame_path = CAPTURES_DIR / f"match_{ts}_frame.jpg"
+    crop_path = CAPTURES_DIR / f"match_{ts}_crop.jpg"
+
+    cv2.imwrite(str(frame_path), frame)
+    if crop is not None and crop.size > 0:
+        cv2.imwrite(str(crop_path), crop)
+
+    # Save metadata
+    meta_path = CAPTURES_DIR / f"match_{ts}_meta.json"
+    meta = {
+        "timestamp": ts,
+        "score": match_score,
+        "reasoning": reasoning_result,
+        "frame_file": frame_path.name,
+        "crop_file": crop_path.name,
+    }
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"[captures] Saved match snapshot: {frame_path.name}")
+
+
 def _frame_loop():
     """Main frame processing loop — runs in a background thread."""
     frame_count = 0
@@ -103,7 +128,6 @@ def _frame_loop():
     REASONING_INTERVAL = 5
 
     while _state["running"]:
-        # Get frame
         frame = None
         if _state["drone"]:
             frame = _state["drone"].get_frame()
@@ -117,53 +141,109 @@ def _frame_loop():
             time.sleep(0.01)
             continue
 
-        # Detect persons
         detections = _state["detector"].detect(frame)
         _state["persons_detected"] = len(detections)
 
-        # ReID matching
+        # ReID matching (photo-based)
         match_idx = None
         match_score = 0.0
-        if _state["reid"] and _state["target_photo"] and detections:
+        has_target = _state["target_photo"] is not None
+
+        if _state["reid"] and has_target and detections:
             match_idx, match_score = _state["reid"].find_match(detections)
 
-            # Gemma 4 reasoning on matches
-            if (
-                match_idx is not None
-                and _state["reasoning"]
-                and time.time() - last_reasoning_time > REASONING_INTERVAL
-            ):
-                ref_img = cv2.imread(_state["target_photo_path"])
-                candidate_crop = detections[match_idx]["crop"]
-                result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
-                last_reasoning_time = time.time()
+        # Description-based matching via Gemma 4 (when no photo but description exists)
+        description_match = False
+        if (
+            match_idx is None
+            and _state["target_description"]
+            and _state["reasoning"]
+            and detections
+            and time.time() - last_reasoning_time > REASONING_INTERVAL
+        ):
+            # Ask Gemma 4 to check each detected person against description
+            best_candidate = None
+            if len(detections) > 0:
+                # Pick the largest detection (most prominent person)
+                areas = [(d["bbox"][2]-d["bbox"][0]) * (d["bbox"][3]-d["bbox"][1]) for d in detections]
+                best_candidate = int(np.argmax(areas))
 
-                match_entry = {
-                    "time": time.strftime("%H:%M:%S"),
-                    "score": round(match_score, 3),
-                    "gemma_match": result["match"],
-                    "gemma_confidence": result["confidence"],
-                    "reasoning": result["reasoning"],
-                }
-                _state["match_history"].append(match_entry)
-                # Keep last 50 matches
-                _state["match_history"] = _state["match_history"][-50:]
+            if best_candidate is not None:
+                crop = detections[best_candidate]["crop"]
+                if crop is not None and crop.size > 0:
+                    result = _state["reasoning"].match_description(
+                        crop, _state["target_description"]
+                    )
+                    last_reasoning_time = time.time()
 
-                socketio.emit("match_alert", match_entry)
+                    if result.get("match"):
+                        match_idx = best_candidate
+                        match_score = 0.8  # synthetic score for description match
+                        description_match = True
+
+                        snapshot_b64 = None
+                        _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+
+                        match_entry = {
+                            "time": time.strftime("%H:%M:%S"),
+                            "score": round(match_score, 3),
+                            "gemma_match": True,
+                            "gemma_confidence": result.get("confidence", "medium"),
+                            "reasoning": result.get("reasoning", "Description match"),
+                            "snapshot": snapshot_b64,
+                            "type": "description",
+                        }
+                        _state["match_history"].append(match_entry)
+                        _state["match_history"] = _state["match_history"][-50:]
+                        socketio.emit("match_alert", match_entry)
+                        _save_match_snapshot(frame, crop, match_score, result)
+
+        # Photo-based ReID + Gemma 4 reasoning
+        if (
+            match_idx is not None
+            and not description_match
+            and _state["reasoning"]
+            and _state["target_photo_path"]
+            and time.time() - last_reasoning_time > REASONING_INTERVAL
+        ):
+            ref_img = cv2.imread(_state["target_photo_path"])
+            candidate_crop = detections[match_idx]["crop"]
+            result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
+            last_reasoning_time = time.time()
+
+            snapshot_b64 = None
+            if candidate_crop is not None and candidate_crop.size > 0:
+                _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+
+            match_entry = {
+                "time": time.strftime("%H:%M:%S"),
+                "score": round(match_score, 3),
+                "gemma_match": result["match"],
+                "gemma_confidence": result["confidence"],
+                "reasoning": result["reasoning"],
+                "snapshot": snapshot_b64,
+                "type": "photo",
+            }
+            _state["match_history"].append(match_entry)
+            _state["match_history"] = _state["match_history"][-50:]
+            socketio.emit("match_alert", match_entry)
+            _save_match_snapshot(frame, candidate_crop, match_score, result)
 
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
 
-        # Alert banner
         if match_idx is not None:
             h, w = annotated.shape[:2]
             cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
+            label = "CHILD FOUND" if not description_match else "DESCRIPTION MATCH"
             cv2.putText(
-                annotated, f"CHILD FOUND — Score: {match_score:.2f}",
+                annotated, f"{label} — Score: {match_score:.2f}",
                 (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2,
             )
 
-        # FPS calculation
+        # FPS
         frame_count += 1
         elapsed = time.time() - fps_start
         if elapsed >= 1.0:
@@ -171,11 +251,10 @@ def _frame_loop():
             frame_count = 0
             fps_start = time.time()
 
-        # Encode frame and emit via WebSocket
+        # Encode and emit
         _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
         frame_b64 = base64.b64encode(buffer).decode("utf-8")
 
-        # Drone telemetry
         telemetry = {}
         if _state["drone"]:
             s = _state["drone"].state
@@ -197,7 +276,6 @@ def _frame_loop():
             "telemetry": telemetry,
         })
 
-        # Throttle to ~20 FPS for WebSocket
         time.sleep(0.05)
 
 
@@ -216,6 +294,7 @@ def status():
         "fps": _state["fps"],
         "persons_detected": _state["persons_detected"],
         "has_target": _state["target_photo"] is not None,
+        "has_description": _state["target_description"] is not None,
         "has_reasoning": _state["reasoning"] is not None,
         "match_history": _state["match_history"][-10:],
         "telemetry": _state["drone_telemetry"],
@@ -241,11 +320,31 @@ def on_set_target(data):
     if img is not None:
         _state["reid"].set_target(img)
         _state["target_photo"] = data["image"]
-        # Save to disk
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
         cv2.imwrite(str(path), img)
         _state["target_photo_path"] = str(path)
         emit("target_set", {"success": True})
+
+
+@socketio.on("set_description")
+def on_set_description(data):
+    """Set a text description of the child to find."""
+    desc = data.get("description", "").strip()
+    if desc:
+        _state["target_description"] = desc
+        print(f"[dashboard] Target description set: {desc}")
+        emit("description_set", {"description": desc})
+
+
+@socketio.on("set_threshold")
+def on_set_threshold(data):
+    """Update the ReID match threshold."""
+    threshold = data.get("threshold", 0.55)
+    threshold = max(0.1, min(0.99, float(threshold)))
+    if _state["reid"]:
+        _state["reid"].match_threshold = threshold
+        print(f"[dashboard] Match threshold set to {threshold:.2f}")
+    emit("threshold_updated", {"threshold": threshold})
 
 
 @socketio.on("drone_command")
@@ -258,29 +357,23 @@ def on_drone_command(data):
     cmd = data.get("command")
     drone = _state["drone"]
 
-    if cmd == "takeoff":
-        drone.takeoff()
-    elif cmd == "land":
-        drone.land()
-    elif cmd == "up":
-        drone.move("up", data.get("distance", 30))
-    elif cmd == "down":
-        drone.move("down", data.get("distance", 30))
-    elif cmd == "forward":
-        drone.move("forward", data.get("distance", 30))
-    elif cmd == "back":
-        drone.move("back", data.get("distance", 30))
-    elif cmd == "left":
-        drone.move("left", data.get("distance", 30))
-    elif cmd == "right":
-        drone.move("right", data.get("distance", 30))
-    elif cmd == "cw":
-        drone.rotate(data.get("degrees", 45))
-    elif cmd == "ccw":
-        drone.rotate(-data.get("degrees", 45))
-    elif cmd == "hover":
-        drone.hover()
+    commands = {
+        "takeoff": lambda: drone.takeoff(),
+        "land": lambda: drone.land(),
+        "hover": lambda: drone.hover(),
+        "up": lambda: drone.move("up", data.get("distance", 30)),
+        "down": lambda: drone.move("down", data.get("distance", 30)),
+        "forward": lambda: drone.move("forward", data.get("distance", 30)),
+        "back": lambda: drone.move("back", data.get("distance", 30)),
+        "left": lambda: drone.move("left", data.get("distance", 30)),
+        "right": lambda: drone.move("right", data.get("distance", 30)),
+        "cw": lambda: drone.rotate(data.get("degrees", 45)),
+        "ccw": lambda: drone.rotate(-data.get("degrees", 45)),
+    }
 
+    action = commands.get(cmd)
+    if action:
+        action()
     emit("command_ack", {"command": cmd})
 
 
@@ -337,7 +430,6 @@ def run_dashboard(source="webcam", target_path=None, port=5555):
     _init_pipeline(source=source, target_path=target_path)
     _state["running"] = True
 
-    # Start frame processing in background
     frame_thread = threading.Thread(target=_frame_loop, daemon=True)
     frame_thread.start()
 
