@@ -5,7 +5,7 @@ periodically on cropped detections, NOT every frame.
 
 Usage:
     1. Install Ollama: https://ollama.com
-    2. Pull Gemma 4: `ollama pull gemma4:4b`
+    2. Pull Gemma 4: `ollama pull gemma4`
     3. Start Ollama (runs automatically on macOS)
 """
 
@@ -26,14 +26,14 @@ except ImportError:
 class AmberAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
 
-    def __init__(self, model: str = "gemma4:4b"):
+    def __init__(self, model: str = "gemma4:latest"):
         """Initialize the reasoning agent.
 
         Args:
             model: Ollama model name. Options:
-                   - 'gemma4:4b' — fast, fits easily in RAM alongside YOLO
-                   - 'gemma4:12b' — more accurate, needs ~8GB
-                   - 'gemma4:27b' — best quality, needs ~18GB
+                   - 'gemma4:latest' — 12B, 9.6GB, good balance
+                   - 'gemma4:e2b' — smallest with vision, 7.2GB
+                   - 'gemma4:26b-mlx' — best quality, ~18GB, MLX optimized
         """
         if not HAS_OLLAMA:
             raise RuntimeError("pip install ollama && brew install ollama")

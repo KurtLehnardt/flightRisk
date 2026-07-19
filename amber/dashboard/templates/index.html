@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amber Drone — Lost Child Finder</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid #ff6b35;
+        }
+        .header h1 {
+            font-size: 22px;
+            color: #ff6b35;
+            font-weight: 700;
+        }
+        .header h1 span { color: #e0e0e0; font-weight: 300; }
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-live { background: #00c853; color: #000; }
+        .status-offline { background: #555; color: #aaa; }
+
+        /* Main Layout */
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            grid-template-rows: auto 1fr;
+            gap: 0;
+            height: calc(100vh - 52px);
+        }
+
+        /* Video Feed */
+        .video-panel {
+            position: relative;
+            background: #111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #video-feed {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .video-overlay {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .video-stat {
+            background: rgba(0,0,0,0.7);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'SF Mono', monospace;
+        }
+
+        /* Alert Banner */
+        .alert-banner {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(220, 20, 20, 0.95);
+            color: white;
+            padding: 12px 20px;
+            font-size: 18px;
+            font-weight: 700;
+            text-align: center;
+            animation: pulse 1s infinite;
+            z-index: 10;
+        }
+        .alert-banner.active { display: block; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        /* Right Sidebar */
+        .sidebar {
+            background: #141414;
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .panel {
+            padding: 16px;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .panel-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #888;
+            margin-bottom: 10px;
+        }
+
+        /* Target Photo */
+        .target-area {
+            text-align: center;
+        }
+        #target-preview {
+            width: 120px;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid #ff6b35;
+            display: none;
+        }
+        .target-placeholder {
+            width: 120px;
+            height: 120px;
+            border: 2px dashed #555;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 12px;
+            cursor: pointer;
+            margin: 0 auto;
+        }
+        .target-placeholder:hover { border-color: #ff6b35; color: #ff6b35; }
+        #target-upload { display: none; }
+
+        /* Telemetry */
+        .telemetry-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .telem-item {
+            background: #1e1e1e;
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .telem-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #00e5ff;
+            font-family: 'SF Mono', monospace;
+        }
+        .telem-label {
+            font-size: 10px;
+            color: #888;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+        .telem-value.warning { color: #ff9800; }
+        .telem-value.critical { color: #f44336; }
+
+        /* Controls */
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+        .ctrl-btn {
+            padding: 10px 4px;
+            border: 1px solid #333;
+            background: #1e1e1e;
+            color: #e0e0e0;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.15s;
+        }
+        .ctrl-btn:hover { background: #2a2a2a; border-color: #555; }
+        .ctrl-btn:active { background: #333; }
+        .ctrl-btn.danger { border-color: #c62828; color: #ef5350; }
+        .ctrl-btn.danger:hover { background: #c62828; color: white; }
+        .ctrl-btn.success { border-color: #2e7d32; color: #66bb6a; }
+        .ctrl-btn.success:hover { background: #2e7d32; color: white; }
+        .ctrl-btn.primary { border-color: #ff6b35; color: #ff6b35; }
+        .ctrl-btn.primary:hover { background: #ff6b35; color: white; }
+
+        /* Match Log */
+        .match-log {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .match-entry {
+            background: #1e1e1e;
+            padding: 8px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            border-left: 3px solid #ff6b35;
+            font-size: 12px;
+        }
+        .match-entry .time { color: #888; }
+        .match-entry .score { color: #00e5ff; font-weight: 700; }
+        .match-entry .reasoning { color: #aaa; margin-top: 4px; font-style: italic; }
+        .match-entry.confirmed { border-left-color: #00c853; }
+
+        /* Search Controls */
+        .search-select {
+            width: 100%;
+            padding: 8px;
+            background: #1e1e1e;
+            border: 1px solid #333;
+            color: #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+
+        /* No video state */
+        .no-video {
+            color: #555;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>AMBER <span>DRONE</span></h1>
+        <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+    </div>
+
+    <div class="main">
+        <!-- Video Feed -->
+        <div class="video-panel">
+            <div id="alert-banner" class="alert-banner">
+                CHILD FOUND — Match Detected
+            </div>
+            <img id="video-feed" alt="Drone Feed">
+            <p id="no-video" class="no-video">Connecting to video feed...</p>
+            <div class="video-overlay">
+                <span id="hud-fps" class="video-stat">FPS: --</span>
+                <span id="hud-persons" class="video-stat">Persons: 0</span>
+                <span id="hud-match" class="video-stat" style="display:none">Match: --</span>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Target Photo -->
+            <div class="panel">
+                <div class="panel-title">Target Child</div>
+                <div class="target-area">
+                    <img id="target-preview">
+                    <div id="target-placeholder" class="target-placeholder" onclick="document.getElementById('target-upload').click()">
+                        Click to upload<br>child's photo
+                    </div>
+                    <input type="file" id="target-upload" accept="image/*">
+                </div>
+            </div>
+
+            <!-- Telemetry -->
+            <div class="panel">
+                <div class="panel-title">Telemetry</div>
+                <div class="telemetry-grid">
+                    <div class="telem-item">
+                        <div id="telem-battery" class="telem-value">--%</div>
+                        <div class="telem-label">Battery</div>
+                    </div>
+                    <div class="telem-item">
+                        <div id="telem-height" class="telem-value">--cm</div>
+                        <div class="telem-label">Height</div>
+                    </div>
+                    <div class="telem-item">
+                        <div id="telem-fps" class="telem-value">--</div>
+                        <div class="telem-label">FPS</div>
+                    </div>
+                    <div class="telem-item">
+                        <div id="telem-persons" class="telem-value">0</div>
+                        <div class="telem-label">Detected</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flight Controls -->
+            <div class="panel">
+                <div class="panel-title">Flight Controls</div>
+                <div class="controls-grid">
+                    <button class="ctrl-btn" onclick="sendCmd('ccw')">↺ Yaw</button>
+                    <button class="ctrl-btn" onclick="sendCmd('forward')">↑ Fwd</button>
+                    <button class="ctrl-btn" onclick="sendCmd('cw')">↻ Yaw</button>
+                    <button class="ctrl-btn" onclick="sendCmd('left')">← Left</button>
+                    <button class="ctrl-btn" onclick="sendCmd('hover')">■ Stop</button>
+                    <button class="ctrl-btn" onclick="sendCmd('right')">→ Right</button>
+                    <button class="ctrl-btn" onclick="sendCmd('up')">⬆ Up</button>
+                    <button class="ctrl-btn" onclick="sendCmd('back')">↓ Back</button>
+                    <button class="ctrl-btn" onclick="sendCmd('down')">⬇ Down</button>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:8px;">
+                    <button class="ctrl-btn success" style="flex:1" onclick="sendCmd('takeoff')">TAKEOFF</button>
+                    <button class="ctrl-btn danger" style="flex:1" onclick="sendCmd('land')">LAND</button>
+                </div>
+            </div>
+
+            <!-- Search Pattern -->
+            <div class="panel">
+                <div class="panel-title">Autonomous Search</div>
+                <select id="search-pattern" class="search-select">
+                    <option value="expanding_square">Expanding Square</option>
+                    <option value="lawnmower">Lawnmower</option>
+                    <option value="spiral">Spiral</option>
+                </select>
+                <div style="display:flex;gap:6px;">
+                    <button class="ctrl-btn primary" style="flex:1" onclick="startSearch()">START SEARCH</button>
+                    <button class="ctrl-btn danger" style="flex:1" onclick="stopSearch()">STOP</button>
+                </div>
+                <div id="search-status" style="font-size:12px;color:#888;margin-top:8px;"></div>
+            </div>
+
+            <!-- Match Log -->
+            <div class="panel" style="flex:1;">
+                <div class="panel-title">Match Log</div>
+                <div id="match-log" class="match-log">
+                    <div style="color:#555;font-size:12px;">No matches yet...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        const videoFeed = document.getElementById('video-feed');
+        const noVideo = document.getElementById('no-video');
+        const alertBanner = document.getElementById('alert-banner');
+        const statusBadge = document.getElementById('status-badge');
+        let alertTimeout = null;
+
+        socket.on('connect', () => {
+            statusBadge.textContent = 'LIVE';
+            statusBadge.className = 'status-badge status-live';
+        });
+
+        socket.on('disconnect', () => {
+            statusBadge.textContent = 'OFFLINE';
+            statusBadge.className = 'status-badge status-offline';
+        });
+
+        socket.on('frame', (data) => {
+            videoFeed.src = 'data:image/jpeg;base64,' + data.image;
+            videoFeed.style.display = 'block';
+            noVideo.style.display = 'none';
+
+            // HUD
+            document.getElementById('hud-fps').textContent = 'FPS: ' + data.fps;
+            document.getElementById('hud-persons').textContent = 'Persons: ' + data.persons;
+            document.getElementById('telem-fps').textContent = data.fps;
+            document.getElementById('telem-persons').textContent = data.persons;
+
+            if (data.match) {
+                document.getElementById('hud-match').style.display = 'block';
+                document.getElementById('hud-match').textContent = 'Match: ' + data.match_score;
+            } else {
+                document.getElementById('hud-match').style.display = 'none';
+            }
+
+            // Telemetry
+            if (data.telemetry && data.telemetry.battery !== undefined) {
+                const bat = data.telemetry.battery;
+                const batEl = document.getElementById('telem-battery');
+                batEl.textContent = bat + '%';
+                batEl.className = 'telem-value' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
+                document.getElementById('telem-height').textContent = data.telemetry.height + 'cm';
+            }
+
+            // Alert
+            if (data.match) {
+                alertBanner.classList.add('active');
+                clearTimeout(alertTimeout);
+                alertTimeout = setTimeout(() => alertBanner.classList.remove('active'), 3000);
+            }
+        });
+
+        socket.on('target_photo', (data) => {
+            const preview = document.getElementById('target-preview');
+            preview.src = 'data:image/jpeg;base64,' + data.image;
+            preview.style.display = 'block';
+            document.getElementById('target-placeholder').style.display = 'none';
+        });
+
+        socket.on('match_alert', (data) => {
+            const log = document.getElementById('match-log');
+            const isConfirmed = data.gemma_match;
+            const entry = document.createElement('div');
+            entry.className = 'match-entry' + (isConfirmed ? ' confirmed' : '');
+            entry.innerHTML = `
+                <span class="time">${data.time}</span> —
+                Score: <span class="score">${data.score}</span>
+                | Gemma: ${data.gemma_confidence}
+                ${isConfirmed ? ' ✓ CONFIRMED' : ''}
+                <div class="reasoning">${data.reasoning}</div>
+            `;
+            log.insertBefore(entry, log.firstChild);
+        });
+
+        socket.on('search_progress', (data) => {
+            document.getElementById('search-status').textContent =
+                `Waypoint ${data.waypoint}/${data.total}: ${data.action}`;
+        });
+
+        socket.on('search_complete', () => {
+            document.getElementById('search-status').textContent = 'Search complete.';
+        });
+
+        socket.on('error', (data) => {
+            console.error('Error:', data.message);
+        });
+
+        // Target photo upload
+        document.getElementById('target-upload').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const b64 = ev.target.result.split(',')[1];
+                socket.emit('set_target', { image: b64 });
+
+                const preview = document.getElementById('target-preview');
+                preview.src = ev.target.result;
+                preview.style.display = 'block';
+                document.getElementById('target-placeholder').style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function sendCmd(command) {
+            socket.emit('drone_command', { command: command, distance: 30, degrees: 45 });
+        }
+
+        function startSearch() {
+            const pattern = document.getElementById('search-pattern').value;
+            socket.emit('start_search', { pattern: pattern });
+        }
+
+        function stopSearch() {
+            socket.emit('stop_search');
+        }
+    </script>
+</body>
+</html>

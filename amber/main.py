@@ -54,7 +54,7 @@ def run_pipeline(
     reasoning_agent = None
     try:
         from amber.reasoning.agent import AmberAgent
-        reasoning_agent = AmberAgent(model="gemma4:4b")
+        reasoning_agent = AmberAgent(model="gemma4:latest")
     except Exception as e:
         print(f"[reasoning] Gemma 4 not available ({e}). Running without LLM reasoning.")
 
@@ -190,6 +190,8 @@ def main():
     parser.add_argument("--video", "-v", type=str, help="Path to a test video file")
     parser.add_argument("--threshold", type=float, default=0.55, help="ReID match threshold (0-1)")
     parser.add_argument("--no-window", action="store_true", help="Run headless (no OpenCV window)")
+    parser.add_argument("--dashboard", action="store_true", help="Launch web dashboard instead of OpenCV window")
+    parser.add_argument("--port", type=int, default=5555, help="Dashboard port (default: 5555)")
 
     args = parser.parse_args()
 
@@ -200,12 +202,16 @@ def main():
     else:
         source = "tello"
 
-    run_pipeline(
-        source=source,
-        target_photo=args.target,
-        match_threshold=args.threshold,
-        show_window=not args.no_window,
-    )
+    if args.dashboard:
+        from amber.dashboard.app import run_dashboard
+        run_dashboard(source=source, target_path=args.target, port=args.port)
+    else:
+        run_pipeline(
+            source=source,
+            target_photo=args.target,
+            match_threshold=args.threshold,
+            show_window=not args.no_window,
+        )
 
 
 if __name__ == "__main__":

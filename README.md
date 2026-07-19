@@ -26,13 +26,20 @@ pip install -r requirements.txt
 
 # Install Ollama + Gemma 4 (optional, for LLM reasoning)
 brew install ollama
-ollama pull gemma4:4b
+ollama pull gemma4
 
-# Test with webcam (no drone needed)
+# Test with webcam (no drone needed) — OpenCV window
 python -m amber --webcam --target photo_of_child.jpg
+
+# Test with web dashboard (recommended)
+python -m amber --webcam --dashboard --target photo_of_child.jpg
+# Open http://localhost:5555
 
 # Run with Tello drone
 python -m amber --target photo_of_child.jpg
+
+# Run with Tello drone + web dashboard
+python -m amber --dashboard --target photo_of_child.jpg
 ```
 
 ## Keyboard Controls (OpenCV window)
