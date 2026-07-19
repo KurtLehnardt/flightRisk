@@ -23,6 +23,12 @@ from amber.vision.reid import PersonReID
 from amber.vision.scorer import MatchScorer
 from amber.recorder import SessionRecorder
 
+try:
+    from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
+    _HAS_TELEMETRY = True
+except ImportError:
+    _HAS_TELEMETRY = False
+
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
 CAPTURES_DIR.mkdir(exist_ok=True)
@@ -34,6 +40,13 @@ app = Flask(
 )
 app.config["SECRET_KEY"] = "amber-drone-2026"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Flask auto-instrumentation (optional)
+try:
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    FlaskInstrumentor().instrument_app(app)
+except ImportError:
+    pass
 
 # Global state
 _state = {
@@ -56,6 +69,8 @@ _state = {
     "search_active": False,
     "recorder": None,
     "battery_warned": False,
+    "tracer": None,
+    "otel_metrics": None,
 }
 
 
@@ -95,6 +110,14 @@ def _init_pipeline(source="webcam", target_path=None):
         # Also set face recognition target
         if _state["face"]:
             _state["face"].set_target_from_file(target_path)
+
+    # OpenTelemetry
+    if _HAS_TELEMETRY:
+        otel_enabled = init_telemetry()
+        if otel_enabled:
+            _state["tracer"] = get_tracer()
+            _state["otel_metrics"] = AmberMetrics(get_meter())
+            print("[dashboard] OpenTelemetry enabled")
 
     _state["source"] = source
     if source == "tello":
@@ -146,7 +169,12 @@ def _frame_loop():
     last_reasoning_time = 0
     REASONING_INTERVAL = 5
 
+    tracer = _state.get("tracer")
+    otel_m = _state.get("otel_metrics")
+
     while _state["running"]:
+        frame_start = time.time()
+
         frame = None
         if _state["drone"]:
             frame = _state["drone"].get_frame()
@@ -177,6 +205,8 @@ def _frame_loop():
         face_match_idx = None
         if _state["face"] and _state["face"].has_target and detections:
             face_match_idx, face_score = _state["face"].find_match(detections)
+            if otel_m:
+                otel_m.record_face_check(found=face_score > 0)
 
         # Use face match if ReID didn't find one
         if match_idx is None and face_match_idx is not None:
@@ -215,10 +245,13 @@ def _frame_loop():
             if best_candidate is not None:
                 crop = detections[best_candidate]["crop"]
                 if crop is not None and crop.size > 0:
+                    reasoning_start = time.time()
                     result = _state["reasoning"].match_description(
                         crop, _state["target_description"]
                     )
                     last_reasoning_time = time.time()
+                    if otel_m:
+                        otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
 
                     if result.get("match"):
                         match_idx = best_candidate
@@ -242,6 +275,8 @@ def _frame_loop():
                         _state["match_history"] = _state["match_history"][-50:]
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, crop, match_score, result)
+                        if otel_m:
+                            otel_m.record_match(match_score, match_type="description")
 
         # Photo-based ReID + Face + Gemma 4 reasoning
         if (
@@ -253,8 +288,11 @@ def _frame_loop():
         ):
             ref_img = cv2.imread(_state["target_photo_path"])
             candidate_crop = detections[match_idx]["crop"]
+            reasoning_start = time.time()
             result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
             last_reasoning_time = time.time()
+            if otel_m:
+                otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
 
             # Re-score with all three signals
             if _state["scorer"]:
@@ -287,6 +325,8 @@ def _frame_loop():
             _state["match_history"] = _state["match_history"][-50:]
             socketio.emit("match_alert", match_entry)
             _save_match_snapshot(frame, candidate_crop, match_score, result)
+            if otel_m:
+                otel_m.record_match(match_score, match_type="photo")
 
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
@@ -342,6 +382,13 @@ def _frame_loop():
                     socketio.emit("battery_warning", {"battery": s.battery})
 
         _state["drone_telemetry"] = telemetry
+
+        # OTel frame-level metrics
+        if otel_m:
+            frame_duration = (time.time() - frame_start) * 1000
+            otel_m.record_frame(frame_duration, len(detections), _state["fps"])
+            if telemetry.get("battery"):
+                otel_m.record_battery(telemetry["battery"])
 
         socketio.emit("frame", {
             "image": frame_b64,
