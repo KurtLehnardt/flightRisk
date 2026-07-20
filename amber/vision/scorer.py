@@ -130,6 +130,23 @@ class MatchScorer:
             "signals_used": num_signals,
         }
 
+    def alert_level(self, score_result: dict) -> str:
+        """Determine alert level from score result.
+
+        Returns: 'confirmed_match', 'possible_match', 'weak_signal', or 'no_match'
+        """
+        score = score_result.get("combined_score", 0)
+        signals = score_result.get("signals_used", 0)
+        conf = score_result.get("confidence_level", "low")
+
+        if score >= 0.70 and signals >= 2 and conf == "high":
+            return "confirmed_match"
+        elif score >= self.match_threshold and conf in ("medium", "high"):
+            return "possible_match"
+        elif score >= self.match_threshold * 0.7:
+            return "weak_signal"
+        return "no_match"
+
     def _reasoning_to_score(self, result: dict | None) -> float:
         """Convert LLM reasoning result to a numeric score."""
         if result is None:
