@@ -244,6 +244,24 @@
         .session-match-item .sm-score { color: #00e5ff; }
         .session-match-item .sm-reasoning { color: #777; font-style: italic; margin-top: 2px; }
 
+        /* Feedback buttons */
+        .feedback-btns {
+            display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;
+        }
+        .fb-btn {
+            width: 24px; height: 24px; border: 1px solid #444; border-radius: 4px;
+            cursor: pointer; font-size: 13px; line-height: 22px; text-align: center;
+            background: #1e1e1e; transition: all 0.15s; padding: 0;
+        }
+        .fb-btn:hover { border-color: #888; }
+        .fb-btn.confirm { color: #66bb6a; }
+        .fb-btn.confirm:hover { background: #2e7d32; color: white; border-color: #2e7d32; }
+        .fb-btn.confirm.chosen { background: #2e7d32; color: white; border-color: #2e7d32; }
+        .fb-btn.reject { color: #ef5350; }
+        .fb-btn.reject:hover { background: #c62828; color: white; border-color: #c62828; }
+        .fb-btn.reject.chosen { background: #c62828; color: white; border-color: #c62828; }
+        .fb-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+
         /* Toast */
         .toast {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -373,7 +391,10 @@
 
             <!-- Match Log -->
             <div class="panel" style="flex:1;">
-                <div class="panel-title">Match Log <span id="match-count" style="color:#ff6b35;"></span></div>
+                <div class="panel-title">
+                    Match Log <span id="match-count" style="color:#ff6b35;"></span>
+                    <span id="feedback-stats" style="float:right;font-size:10px;color:#888;letter-spacing:0;text-transform:none;"></span>
+                </div>
                 <div id="match-log" class="match-log">
                     <div style="color:#555;font-size:12px;">No matches yet...</div>
                 </div>
@@ -623,6 +644,8 @@
             // Remove "no matches" placeholder
             if (matchCount === 1) log.innerHTML = '';
 
+            const isConfirmed = data.gemma_match;
+            const matchId = data.match_id;
             const entry = document.createElement('div');
             let entryClass = 'match-entry';
             if (alertLevel === 'confirmed_match') entryClass += ' alert-confirmed';
@@ -641,12 +664,22 @@
                 snapshotHtml = `<img class="snapshot" src="data:image/jpeg;base64,${data.snapshot}">`;
             }
 
+            let feedbackHtml = '';
+            if (matchId) {
+                feedbackHtml = `
+                    <span class="feedback-btns" id="fb-${matchId}">
+                        <button class="fb-btn confirm" title="Confirm match" onclick="submitFeedback(${matchId},'confirmed',this)">&#10003;</button>
+                        <button class="fb-btn reject" title="Reject match" onclick="submitFeedback(${matchId},'rejected',this)">&#10007;</button>
+                    </span>`;
+            }
+
             entry.innerHTML = `
                 <span class="alert-badge ${badgeClass}"></span>
                 <span class="time">${data.time}</span> —
                 Score: <span class="score">${data.score}</span>
                 | Gemma: ${data.gemma_confidence}
                 | <strong>${alertLabel}</strong>
+                ${feedbackHtml}
                 <div class="reasoning">${data.reasoning}</div>
                 ${snapshotHtml}
             `;
@@ -913,6 +946,54 @@
                     detail.innerHTML = '<div style="color:#555;">Failed to load details</div>';
                 });
         }
+
+        // --- Match Feedback ---
+        function submitFeedback(matchId, feedback, btnEl) {
+            const container = document.getElementById('fb-' + matchId);
+            if (!container) return;
+            const buttons = container.querySelectorAll('.fb-btn');
+            buttons.forEach(b => b.disabled = true);
+            btnEl.classList.add('chosen');
+
+            fetch('/api/matches/' + matchId + '/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ feedback: feedback })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    showToast(feedback === 'confirmed' ? 'Match confirmed' : 'Match rejected');
+                    refreshFeedbackStats();
+                } else {
+                    showToast('Feedback error: ' + (data.error || 'unknown'));
+                    buttons.forEach(b => b.disabled = false);
+                    btnEl.classList.remove('chosen');
+                }
+            })
+            .catch(() => {
+                showToast('Feedback request failed');
+                buttons.forEach(b => b.disabled = false);
+                btnEl.classList.remove('chosen');
+            });
+        }
+
+        function refreshFeedbackStats() {
+            fetch('/api/feedback-stats')
+                .then(r => r.json())
+                .then(data => {
+                    const el = document.getElementById('feedback-stats');
+                    const c = data.total_confirmed || 0;
+                    const r2 = data.total_rejected || 0;
+                    if (c + r2 > 0) {
+                        el.innerHTML = '<span style="color:#66bb6a;">' + c + '&#10003;</span> / <span style="color:#ef5350;">' + r2 + '&#10007;</span>';
+                    }
+                })
+                .catch(() => {});
+        }
+
+        // Load initial feedback stats
+        refreshFeedbackStats();
 
         // Load sessions on page load (for the collapsed state data pre-fetch)
         fetch('/api/sessions').catch(() => {});

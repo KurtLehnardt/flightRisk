@@ -45,6 +45,19 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 """
 
+_CREATE_MATCH_FEEDBACK = """
+CREATE TABLE IF NOT EXISTS match_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    feedback TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    notes TEXT,
+    FOREIGN KEY (match_id) REFERENCES matches(id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+"""
+
 
 class SessionDB:
     """Thread-safe SQLite persistence for search sessions and matches."""
@@ -61,6 +74,7 @@ class SessionDB:
         with self._lock:
             self._conn.execute(_CREATE_SESSIONS)
             self._conn.execute(_CREATE_MATCHES)
+            self._conn.execute(_CREATE_MATCH_FEEDBACK)
             self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -138,11 +152,11 @@ class SessionDB:
         reasoning: str | None = None,
         snapshot_path: str | None = None,
         crop_path: str | None = None,
-    ):
-        """Record a single match event."""
+    ) -> int:
+        """Record a single match event. Returns the match ID."""
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
         with self._lock:
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """INSERT INTO matches
                    (session_id, timestamp, match_type, reid_score, face_score,
                     combined_score, gemma_match, gemma_confidence, reasoning,
@@ -156,6 +170,7 @@ class SessionDB:
                 ),
             )
             self._conn.commit()
+            return cursor.lastrowid
 
     def get_session_matches(self, session_id: str) -> list[dict]:
         """Return all matches for a given session."""
@@ -194,6 +209,112 @@ class SessionDB:
             "total_matches": total,
             "by_type": by_type,
         }
+
+    # ------------------------------------------------------------------
+    # Feedback
+    # ------------------------------------------------------------------
+
+    def add_feedback(
+        self,
+        match_id: int,
+        session_id: str,
+        feedback: str,
+        notes: str | None = None,
+    ):
+        """Record operator feedback ('confirmed' or 'rejected') for a match."""
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO match_feedback
+                   (match_id, session_id, feedback, timestamp, notes)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (match_id, session_id, feedback, timestamp, notes),
+            )
+            self._conn.commit()
+
+    def get_feedback_stats(self) -> dict:
+        """Aggregate feedback statistics with average scores."""
+        confirmed = self._conn.execute(
+            "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'confirmed'"
+        ).fetchone()[0]
+        rejected = self._conn.execute(
+            "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'rejected'"
+        ).fetchone()[0]
+        total = confirmed + rejected
+        confirmation_rate = round(confirmed / total, 4) if total > 0 else 0.0
+
+        avg_confirmed = self._conn.execute(
+            """SELECT AVG(m.combined_score) FROM match_feedback f
+               JOIN matches m ON f.match_id = m.id
+               WHERE f.feedback = 'confirmed'"""
+        ).fetchone()[0]
+
+        avg_rejected = self._conn.execute(
+            """SELECT AVG(m.combined_score) FROM match_feedback f
+               JOIN matches m ON f.match_id = m.id
+               WHERE f.feedback = 'rejected'"""
+        ).fetchone()[0]
+
+        return {
+            "total_confirmed": confirmed,
+            "total_rejected": rejected,
+            "confirmation_rate": confirmation_rate,
+            "avg_confirmed_score": round(avg_confirmed or 0, 4),
+            "avg_rejected_score": round(avg_rejected or 0, 4),
+        }
+
+    def get_confirmed_matches(self, limit: int = 100) -> list[dict]:
+        """Return confirmed matches with their scores."""
+        cur = self._conn.execute(
+            """SELECT m.*, f.timestamp AS feedback_time, f.notes
+               FROM match_feedback f
+               JOIN matches m ON f.match_id = m.id
+               WHERE f.feedback = 'confirmed'
+               ORDER BY f.timestamp DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def export_eval_dataset(self, output_path: str) -> int:
+        """Export feedback as a JSON evaluation dataset.
+
+        Each entry maps confirmed -> is_match=True, rejected -> is_match=False.
+        Returns the number of exported records.
+        """
+        cur = self._conn.execute(
+            """SELECT m.id, m.match_type, m.reid_score, m.face_score,
+                      m.combined_score, m.gemma_match, m.gemma_confidence,
+                      m.reasoning, m.snapshot_path, m.crop_path,
+                      f.feedback, f.notes AS feedback_notes
+               FROM match_feedback f
+               JOIN matches m ON f.match_id = m.id
+               ORDER BY f.timestamp ASC"""
+        )
+        rows = cur.fetchall()
+        dataset = []
+        for row in rows:
+            r = dict(row)
+            dataset.append({
+                "match_id": r["id"],
+                "match_type": r["match_type"],
+                "reid_score": r["reid_score"],
+                "face_score": r["face_score"],
+                "combined_score": r["combined_score"],
+                "gemma_match": bool(r["gemma_match"]),
+                "gemma_confidence": r["gemma_confidence"],
+                "reasoning": r["reasoning"],
+                "snapshot_path": r["snapshot_path"],
+                "crop_path": r["crop_path"],
+                "is_match": r["feedback"] == "confirmed",
+                "feedback_notes": r["feedback_notes"],
+            })
+
+        import json
+        with open(output_path, "w") as f:
+            json.dump(dataset, f, indent=2)
+
+        return len(dataset)
 
     # ------------------------------------------------------------------
     # Cleanup

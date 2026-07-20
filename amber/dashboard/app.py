@@ -334,16 +334,10 @@ def _frame_loop():
                             "type": "description",
                             "alert_level": desc_alert,
                         }
-                        _state["match_history"].append(match_entry)
-                        _state["match_history"] = _state["match_history"][-50:]
-                        socketio.emit("match_alert", match_entry)
-                        _save_match_snapshot(frame, crop, match_score, result)
-                        if otel_m:
-                            otel_m.record_match(match_score, match_type="description")
 
-                        # Persist to DB
+                        # Persist to DB and capture match_id
                         if _state["db"] and _state["session_id"]:
-                            _state["db"].add_match(
+                            match_id = _state["db"].add_match(
                                 session_id=_state["session_id"],
                                 match_type="description",
                                 combined_score=match_score,
@@ -351,6 +345,14 @@ def _frame_loop():
                                 gemma_confidence=result.get("confidence", "medium"),
                                 reasoning=result.get("reasoning", "Description match"),
                             )
+                            match_entry["match_id"] = match_id
+
+                        _state["match_history"].append(match_entry)
+                        _state["match_history"] = _state["match_history"][-50:]
+                        socketio.emit("match_alert", match_entry)
+                        _save_match_snapshot(frame, crop, match_score, result)
+                        if otel_m:
+                            otel_m.record_match(match_score, match_type="description")
 
         # Photo-based ReID + Face + Gemma 4 reasoning
         if (
@@ -410,16 +412,10 @@ def _frame_loop():
                 "reid_score": round(reid_score, 3),
                 "alert_level": current_alert_level,
             }
-            _state["match_history"].append(match_entry)
-            _state["match_history"] = _state["match_history"][-50:]
-            socketio.emit("match_alert", match_entry)
-            _save_match_snapshot(frame, candidate_crop, match_score, result)
-            if otel_m:
-                otel_m.record_match(match_score, match_type="photo")
 
-            # Persist to DB
+            # Persist to DB and capture match_id
             if _state["db"] and _state["session_id"]:
-                _state["db"].add_match(
+                match_id = _state["db"].add_match(
                     session_id=_state["session_id"],
                     match_type="photo",
                     reid_score=reid_score,
@@ -429,6 +425,14 @@ def _frame_loop():
                     gemma_confidence=result["confidence"],
                     reasoning=result["reasoning"],
                 )
+                match_entry["match_id"] = match_id
+
+            _state["match_history"].append(match_entry)
+            _state["match_history"] = _state["match_history"][-50:]
+            socketio.emit("match_alert", match_entry)
+            _save_match_snapshot(frame, candidate_crop, match_score, result)
+            if otel_m:
+                otel_m.record_match(match_score, match_type="photo")
 
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
@@ -579,6 +583,42 @@ def api_match_stats():
     if not db:
         return jsonify({})
     return jsonify(db.get_match_stats())
+
+
+@app.route("/api/matches/<int:match_id>/feedback", methods=["POST"])
+def api_match_feedback(match_id):
+    """Record operator feedback for a match."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({"error": "no database"}), 500
+    data = request.get_json(silent=True) or {}
+    feedback = data.get("feedback")
+    if feedback not in ("confirmed", "rejected"):
+        return jsonify({"error": "feedback must be 'confirmed' or 'rejected'"}), 400
+    session_id = _state.get("session_id", "unknown")
+    notes = data.get("notes")
+    db.add_feedback(match_id, session_id, feedback, notes)
+    return jsonify({"ok": True, "match_id": match_id, "feedback": feedback})
+
+
+@app.route("/api/feedback-stats")
+def api_feedback_stats():
+    """Return aggregate feedback statistics."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({})
+    return jsonify(db.get_feedback_stats())
+
+
+@app.route("/api/export-eval-dataset", methods=["POST"])
+def api_export_eval_dataset():
+    """Export feedback as evaluation dataset JSON."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({"error": "no database"}), 500
+    output_path = str(Path(__file__).parent.parent.parent / "eval_dataset.json")
+    count = db.export_eval_dataset(output_path)
+    return jsonify({"ok": True, "path": output_path, "count": count})
 
 
 @app.route("/api/threshold-suggestion")
