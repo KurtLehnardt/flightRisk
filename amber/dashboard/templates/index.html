@@ -65,7 +65,12 @@
             animation: pulse 0.8s infinite;
         }
         .alert-banner.active { display: block; }
+        .alert-banner.amber {
+            background: rgba(245, 166, 35, 0.95);
+            animation: pulse-amber 1.2s infinite;
+        }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+        @keyframes pulse-amber { 0%,100%{opacity:1} 50%{opacity:0.8} }
 
         /* Right Sidebar */
         .sidebar {
@@ -153,9 +158,51 @@
         .match-entry .score { color: #00e5ff; font-weight: 700; }
         .match-entry .reasoning { color: #aaa; margin-top: 4px; font-style: italic; }
         .match-entry.confirmed { border-left-color: #00c853; }
+        .match-entry.alert-confirmed { border-left-color: #f44336; }
+        .match-entry.alert-possible { border-left-color: #f5a623; }
+        .match-entry.alert-weak { border-left-color: #607d8b; }
         .match-entry .snapshot {
             margin-top: 6px; max-width: 100%; border-radius: 4px;
         }
+        .alert-badge {
+            display: inline-block; width: 8px; height: 8px;
+            border-radius: 50%; margin-right: 6px; vertical-align: middle;
+        }
+        .alert-badge.confirmed-match { background: #f44336; }
+        .alert-badge.possible-match { background: #f5a623; }
+        .alert-badge.weak-signal { background: #607d8b; }
+
+        /* Threshold Tuner */
+        .tuner-panel { margin-top: 8px; }
+        .tuner-btn {
+            padding: 6px 10px; background: #2a2a2a; border: 1px solid #444;
+            color: #e0e0e0; border-radius: 4px; cursor: pointer;
+            font-size: 11px; font-weight: 600; width: 100%;
+        }
+        .tuner-btn:hover { background: #333; border-color: #666; }
+        .tuner-result {
+            margin-top: 8px; padding: 8px; background: #1a1a1a;
+            border-radius: 6px; font-size: 11px; display: none;
+        }
+        .tuner-result.visible { display: block; }
+        .tuner-row {
+            display: flex; justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .tuner-row .label { color: #888; }
+        .tuner-row .value { color: #00e5ff; font-family: 'SF Mono', monospace; }
+        .tuner-row .value.high { color: #00c853; }
+        .tuner-row .value.medium { color: #f5a623; }
+        .tuner-row .value.low { color: #f44336; }
+        .tuner-row .value.insufficient_data { color: #888; }
+        .tuner-apply {
+            margin-top: 6px; padding: 5px 10px; background: #ff6b35;
+            border: none; color: white; border-radius: 4px;
+            cursor: pointer; font-size: 11px; font-weight: 600;
+            width: 100%; display: none;
+        }
+        .tuner-apply:hover { background: #e5592e; }
+        .tuner-apply.visible { display: block; }
 
         /* Search */
         .search-select {
@@ -406,6 +453,33 @@
                 </div>
             </div>
 
+            <!-- Threshold Tuner -->
+            <div class="panel">
+                <div class="panel-title">Threshold Tuner</div>
+                <div class="tuner-panel">
+                    <button class="tuner-btn" onclick="checkThreshold()">Check Threshold</button>
+                    <div id="tuner-result" class="tuner-result">
+                        <div class="tuner-row">
+                            <span class="label">Current threshold</span>
+                            <span id="tuner-current" class="value">--</span>
+                        </div>
+                        <div class="tuner-row">
+                            <span class="label">Suggested threshold</span>
+                            <span id="tuner-suggested" class="value">--</span>
+                        </div>
+                        <div class="tuner-row">
+                            <span class="label">Confidence</span>
+                            <span id="tuner-confidence" class="value">--</span>
+                        </div>
+                        <div class="tuner-row" style="flex-direction:column;">
+                            <span class="label">Reason</span>
+                            <span id="tuner-reason" style="color:#aaa;margin-top:2px;"></span>
+                        </div>
+                        <button id="tuner-apply" class="tuner-apply" onclick="applyThreshold()">Apply Suggested Threshold</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Past Sessions -->
             <div class="panel">
                 <div class="sessions-toggle" onclick="toggleSessions()">
@@ -442,6 +516,18 @@
                 osc.start(t);
                 osc.stop(t + 0.12);
             });
+        }
+        function playSoftBeep() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = 600;
+            osc.type = 'sine';
+            gain.gain.value = 0.15;
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + 0.15);
         }
     </script>
 
@@ -498,11 +584,7 @@
                 document.getElementById('telem-height').textContent = data.telemetry.height + 'cm';
             }
 
-            if (data.match) {
-                alertBanner.classList.add('active');
-                clearTimeout(alertTimeout);
-                alertTimeout = setTimeout(() => alertBanner.classList.remove('active'), 3000);
-            }
+            // Banner is now handled by match_alert with tiered alerts
         });
 
         socket.on('target_photo', (data) => {
@@ -528,17 +610,35 @@
             matchCount++;
             document.getElementById('match-count').textContent = '(' + matchCount + ')';
 
-            // Audio alert
-            playAlertSound();
+            const alertLevel = data.alert_level || 'possible_match';
 
-            // Browser notification
-            if (Notification.permission === 'granted') {
-                new Notification('Amber Drone — Match Found!', {
-                    body: `Score: ${data.score} | Gemma: ${data.gemma_confidence}\n${data.reasoning}`,
-                    icon: '🚨',
-                    requireInteraction: true
-                });
+            // Tiered audio and notification behavior
+            if (alertLevel === 'confirmed_match') {
+                // Red alert: 3-tone alarm + browser notification
+                playAlertSound();
+                if (Notification.permission === 'granted') {
+                    new Notification('Amber Drone — CHILD FOUND!', {
+                        body: `Score: ${data.score} | Gemma: ${data.gemma_confidence}\n${data.reasoning}`,
+                        requireInteraction: true
+                    });
+                }
+                // Red banner
+                alertBanner.textContent = 'CHILD FOUND — Match Detected';
+                alertBanner.classList.remove('amber');
+                alertBanner.classList.add('active');
+                clearTimeout(alertTimeout);
+                alertTimeout = setTimeout(() => alertBanner.classList.remove('active'), 5000);
+            } else if (alertLevel === 'possible_match') {
+                // Amber alert: single soft beep, amber banner, no browser notification
+                playSoftBeep();
+                alertBanner.textContent = 'POSSIBLE MATCH — VERIFY';
+                alertBanner.classList.add('amber', 'active');
+                clearTimeout(alertTimeout);
+                alertTimeout = setTimeout(() => {
+                    alertBanner.classList.remove('active', 'amber');
+                }, 3000);
             }
+            // weak_signal: no banner, no sound
 
             const log = document.getElementById('match-log');
             // Remove "no matches" placeholder
@@ -547,7 +647,17 @@
             const isConfirmed = data.gemma_match;
             const matchId = data.match_id;
             const entry = document.createElement('div');
-            entry.className = 'match-entry' + (isConfirmed ? ' confirmed' : '');
+            let entryClass = 'match-entry';
+            if (alertLevel === 'confirmed_match') entryClass += ' alert-confirmed';
+            else if (alertLevel === 'possible_match') entryClass += ' alert-possible';
+            else entryClass += ' alert-weak';
+            entry.className = entryClass;
+
+            // Badge color
+            const badgeClass = alertLevel.replace('_', '-');
+            const alertLabel = alertLevel === 'confirmed_match' ? 'CONFIRMED'
+                : alertLevel === 'possible_match' ? 'POSSIBLE'
+                : 'WEAK';
 
             let snapshotHtml = '';
             if (data.snapshot) {
@@ -564,10 +674,11 @@
             }
 
             entry.innerHTML = `
+                <span class="alert-badge ${badgeClass}"></span>
                 <span class="time">${data.time}</span> —
                 Score: <span class="score">${data.score}</span>
                 | Gemma: ${data.gemma_confidence}
-                ${isConfirmed ? ' &#10003; CONFIRMED' : ''}
+                | <strong>${alertLabel}</strong>
                 ${feedbackHtml}
                 <div class="reasoning">${data.reasoning}</div>
                 ${snapshotHtml}
@@ -710,6 +821,52 @@
         // Request notification permission on load
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission();
+        }
+
+        // --- Threshold Tuner ---
+        let tunerSuggested = null;
+        function checkThreshold() {
+            const resultEl = document.getElementById('tuner-result');
+            resultEl.classList.add('visible');
+            document.getElementById('tuner-reason').textContent = 'Analyzing...';
+
+            fetch('/api/threshold-suggestion')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('tuner-current').textContent = (data.current_threshold || 0).toFixed(3);
+                    document.getElementById('tuner-suggested').textContent = (data.suggested_threshold || 0).toFixed(3);
+
+                    const confEl = document.getElementById('tuner-confidence');
+                    confEl.textContent = data.confidence || '--';
+                    confEl.className = 'value ' + (data.confidence || '');
+
+                    document.getElementById('tuner-reason').textContent = data.reason || '';
+
+                    tunerSuggested = data.suggested_threshold;
+                    const applyBtn = document.getElementById('tuner-apply');
+                    if (data.confidence && data.confidence !== 'insufficient_data' &&
+                        data.suggested_threshold !== data.current_threshold) {
+                        applyBtn.classList.add('visible');
+                    } else {
+                        applyBtn.classList.remove('visible');
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('tuner-reason').textContent = 'Failed to fetch suggestion.';
+                });
+        }
+
+        function applyThreshold() {
+            if (tunerSuggested !== null) {
+                socket.emit('set_threshold', { threshold: tunerSuggested });
+                // Update slider to match
+                const sliderVal = Math.round(tunerSuggested * 100);
+                document.getElementById('threshold-slider').value = sliderVal;
+                document.getElementById('threshold-val').textContent = tunerSuggested.toFixed(2);
+                showToast('Threshold updated to ' + tunerSuggested.toFixed(3));
+                // Refresh the tuner display
+                checkThreshold();
+            }
         }
 
         // --- Past Sessions ---

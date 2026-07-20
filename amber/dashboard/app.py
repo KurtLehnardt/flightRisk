@@ -21,6 +21,7 @@ from flask_socketio import SocketIO, emit
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
 from amber.vision.scorer import MatchScorer
+from amber.vision.threshold_tuner import ThresholdTuner
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
@@ -255,12 +256,14 @@ def _frame_loop():
                 match_idx = face_match_idx
 
         # Combined score via multi-feature scorer
+        current_alert_level = "no_match"
         if match_idx is not None and _state["scorer"]:
             # Get per-detection scores for the matched index
             det_reid = _state["reid"].compare(detections[match_idx]["crop"]) if has_target else 0.0
             det_face = _state["face"].compare(detections[match_idx]["crop"]) if (_state["face"] and _state["face"].has_target) else 0.0
             scored = _state["scorer"].score(reid_score=det_reid, face_score=det_face)
             match_score = scored["combined_score"]
+            current_alert_level = _state["scorer"].alert_level(scored)
             if log:
                 log.scoring(combined=match_score, reid=det_reid, face=det_face)
         elif match_idx is not None:
@@ -313,6 +316,14 @@ def _frame_loop():
                         _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
                         snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
 
+                        # Determine alert level for description match
+                        desc_scored = {
+                            "combined_score": match_score,
+                            "signals_used": 1,
+                            "confidence_level": "medium" if result.get("confidence") in ("high", "medium") else "low",
+                        }
+                        desc_alert = _state["scorer"].alert_level(desc_scored) if _state["scorer"] else "possible_match"
+
                         match_entry = {
                             "time": time.strftime("%H:%M:%S"),
                             "score": round(match_score, 3),
@@ -321,6 +332,7 @@ def _frame_loop():
                             "reasoning": result.get("reasoning", "Description match"),
                             "snapshot": snapshot_b64,
                             "type": "description",
+                            "alert_level": desc_alert,
                         }
 
                         # Persist to DB and capture match_id
@@ -374,6 +386,7 @@ def _frame_loop():
                     reasoning_result=result,
                 )
                 match_score = scored["combined_score"]
+                current_alert_level = _state["scorer"].alert_level(scored)
 
             snapshot_b64 = None
             if candidate_crop is not None and candidate_crop.size > 0:
@@ -397,6 +410,7 @@ def _frame_loop():
                 "type": "photo",
                 "face_score": round(face_score, 3),
                 "reid_score": round(reid_score, 3),
+                "alert_level": current_alert_level,
             }
 
             # Persist to DB and capture match_id
@@ -423,10 +437,16 @@ def _frame_loop():
         # Annotate frame
         annotated = _state["detector"].annotate(frame, detections, match_idx)
 
-        if match_idx is not None:
+        if match_idx is not None and current_alert_level in ("confirmed_match", "possible_match"):
             h, w = annotated.shape[:2]
-            cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
-            label = "CHILD FOUND" if not description_match else "DESCRIPTION MATCH"
+            if current_alert_level == "confirmed_match":
+                # Red banner for confirmed match
+                cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
+                label = "CHILD FOUND"
+            else:
+                # Amber/yellow banner for possible match
+                cv2.rectangle(annotated, (0, 0), (w, 45), (0, 165, 255), -1)
+                label = "POSSIBLE MATCH"
             cv2.putText(
                 annotated, f"{label} — Score: {match_score:.2f}",
                 (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2,
@@ -601,6 +621,18 @@ def api_export_eval_dataset():
     return jsonify({"ok": True, "path": output_path, "count": count})
 
 
+@app.route("/api/threshold-suggestion")
+def api_threshold_suggestion():
+    """Analyze feedback and suggest an optimal match threshold."""
+    db = _state.get("db")
+    if not db:
+        return jsonify({"error": "no database"}), 500
+    scorer = _state.get("scorer")
+    current = scorer.match_threshold if scorer else 0.50
+    tuner = ThresholdTuner(db)
+    return jsonify(tuner.analyze(current_threshold=current))
+
+
 # --- WebSocket Events ---
 
 @socketio.on("connect")
@@ -648,8 +680,10 @@ def on_set_threshold(data):
     threshold = max(0.1, min(0.99, float(threshold)))
     if _state["reid"]:
         _state["reid"].match_threshold = threshold
-        if _state["logger"]:
-            _state["logger"].info("threshold_updated", threshold=threshold)
+    if _state["scorer"]:
+        _state["scorer"].match_threshold = threshold
+    if _state["logger"]:
+        _state["logger"].info("threshold_updated", threshold=threshold)
     emit("threshold_updated", {"threshold": threshold})
 
 
