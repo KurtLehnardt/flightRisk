@@ -113,6 +113,18 @@
         }
         .desc-btn:hover { background: #e5592e; }
 
+        /* Quality Feedback */
+        .quality-feedback { margin-top: 8px; }
+        .quality-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 10px;
+            font-size: 11px; font-weight: 700; color: #000;
+        }
+        .quality-issues {
+            margin: 6px 0 0 16px; padding: 0; font-size: 11px;
+            color: #bbb; list-style: disc;
+        }
+        .quality-issues li { margin-bottom: 2px; }
+
         /* Threshold slider */
         .threshold-row {
             display: flex; align-items: center; gap: 8px; margin-top: 8px;
@@ -313,6 +325,7 @@
                         <button class="desc-btn" onclick="setDescription()">Set Description</button>
                     </div>
                 </div>
+                <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
                 <div class="threshold-row">
                     <label>Match threshold:</label>
                     <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
@@ -594,8 +607,24 @@
             document.getElementById('target-placeholder').style.display = 'none';
         });
 
-        socket.on('target_set', () => {
+        socket.on('target_set', (data) => {
             showToast('Target photo set');
+            const qDiv = document.getElementById('quality-feedback');
+            if (data && data.quality) {
+                const q = data.quality;
+                const colors = { good: '#00c853', fair: '#f5a623', poor: '#f44336' };
+                const color = colors[q.grade] || '#888';
+                let html = '<span class="quality-badge" style="background:' + color + ';">' + q.grade.toUpperCase() + ' (' + q.overall_score.toFixed(2) + ')</span>';
+                if (q.issues && q.issues.length > 0) {
+                    html += '<ul class="quality-issues">';
+                    q.issues.forEach(issue => { html += '<li>' + issue + '</li>'; });
+                    html += '</ul>';
+                }
+                qDiv.innerHTML = html;
+                qDiv.style.display = 'block';
+            } else {
+                qDiv.style.display = 'none';
+            }
         });
 
         socket.on('description_set', (data) => {

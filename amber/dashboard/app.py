@@ -20,6 +20,7 @@ from flask_socketio import SocketIO, emit
 
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
+from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
 from amber.recorder import SessionRecorder
@@ -659,7 +660,20 @@ def on_set_target(data):
         face_ok = False
         if _state["face"]:
             face_ok = _state["face"].set_target(img)
-        emit("target_set", {"success": True, "face_detected": face_ok})
+        # Score input image quality
+        quality_scorer = ImageQualityScorer()
+        quality_report = quality_scorer.score(img)
+        emit("target_set", {
+            "success": True,
+            "face_detected": face_ok,
+            "quality": {
+                "overall_score": quality_report.overall_score,
+                "grade": quality_report.grade,
+                "issues": quality_report.issues,
+                "suggestions": quality_report.suggestions,
+                "dimensions": quality_report.dimensions,
+            },
+        })
 
 
 @socketio.on("set_description")
