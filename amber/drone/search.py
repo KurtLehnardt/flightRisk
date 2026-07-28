@@ -261,3 +261,44 @@ def get_pattern_description(pattern: PatternType) -> str:
         ),
     }
     return descriptions.get(pattern, "Unknown pattern")
+
+
+# --- Multi-drone zone splitting ---
+
+
+def split_parallel_track_zones(
+    num_zones: int,
+    width_cm: int = 400,
+    depth_cm: int = 400,
+    strip_width_cm: int = 150,
+) -> list[list[Waypoint]]:
+    """Split parallel track into N zones for multi-drone."""
+    if num_zones <= 1:
+        return [generate_parallel_track(width_cm, depth_cm, strip_width_cm)]
+    zone_width = width_cm // num_zones
+    zones = []
+    for i in range(num_zones):
+        offset = _split_long_move("right", zone_width * i) if i > 0 else []
+        pattern = generate_parallel_track(zone_width, depth_cm, strip_width_cm)
+        zones.append(offset + pattern)
+    return zones
+
+
+def split_sector_zones(
+    num_zones: int,
+    radius_cm: int = 300,
+    num_sectors: int = 6,
+) -> list[list[Waypoint]]:
+    """Split sector search across drones."""
+    if num_zones <= 1:
+        return [generate_sector(radius_cm, num_sectors)]
+    sectors_per_zone = max(1, num_sectors // num_zones)
+    zones = []
+    for i in range(num_zones):
+        count = min(sectors_per_zone, num_sectors - i * sectors_per_zone)
+        if count <= 0:
+            break
+        rotation = int((360 / num_sectors) * (i * sectors_per_zone))
+        prefix = [Waypoint("forward", 0, rotate_degrees=rotation)] if rotation > 0 else []
+        zones.append(prefix + generate_sector(radius_cm, count))
+    return zones

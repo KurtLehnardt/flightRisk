@@ -27,9 +27,10 @@ class DroneState:
 class TelloController:
     """Manages a single Tello drone connection and video stream."""
 
-    def __init__(self, name: str = "drone"):
+    def __init__(self, name: str = "drone", host: str = "192.168.10.1"):
         self.name = name
-        self.tello = Tello()
+        self.host = host
+        self.tello = Tello(host=host)
         self.state = DroneState()
         self._frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
