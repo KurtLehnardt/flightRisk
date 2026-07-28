@@ -11,6 +11,7 @@ Usage:
 
 import base64
 import io
+import os
 from typing import Any
 
 import cv2
@@ -39,6 +40,11 @@ class AmberAgent:
             raise RuntimeError("pip install ollama && brew install ollama")
 
         self.model = model
+        host = os.environ.get("OLLAMA_HOST")
+        if host:
+            self._client = ollama.Client(host=host)
+        else:
+            self._client = ollama.Client()
         self._available = self._check_model()
         if self._available:
             print(f"[reasoning] Gemma 4 ({model}) ready")
@@ -48,7 +54,7 @@ class AmberAgent:
     def _check_model(self) -> bool:
         """Check if the model is available in Ollama."""
         try:
-            models = ollama.list()
+            models = self._client.list()
             available = [m.model for m in models.models]
             return any(self.model in m for m in available)
         except Exception:
@@ -89,7 +95,7 @@ class AmberAgent:
         )
 
         try:
-            response = ollama.chat(
+            response = self._client.chat(
                 model=self.model,
                 messages=[{
                     "role": "user",
@@ -109,7 +115,7 @@ class AmberAgent:
 
         b64 = self._image_to_base64(image)
         try:
-            response = ollama.chat(
+            response = self._client.chat(
                 model=self.model,
                 messages=[{
                     "role": "user",
@@ -132,7 +138,7 @@ class AmberAgent:
 
         b64 = self._image_to_base64(image)
         try:
-            response = ollama.chat(
+            response = self._client.chat(
                 model=self.model,
                 messages=[{
                     "role": "user",
@@ -175,7 +181,7 @@ class AmberAgent:
         )
 
         try:
-            response = ollama.chat(
+            response = self._client.chat(
                 model=self.model,
                 messages=[{
                     "role": "user",

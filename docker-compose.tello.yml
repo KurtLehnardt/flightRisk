@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  amber:
+    network_mode: host
+    environment:
+      - AMBER_SOURCE=tello
+      - AMBER_OTEL_ENABLED=true
+      - OTEL_EXPORTER=otlp-grpc
+      - OTEL_ENDPOINT=http://localhost:4317
+      - OLLAMA_HOST=http://localhost:11434
