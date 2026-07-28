@@ -14,6 +14,8 @@ from amber.drone.search import (
     generate_spiral,
     get_search_pattern,
     get_pattern_description,
+    split_parallel_track_zones,
+    split_sector_zones,
 )
 
 VALID_DIRECTIONS = {"forward", "back", "left", "right", "up", "down"}
@@ -245,3 +247,43 @@ class TestGetPatternDescription:
     def test_parallel_track_description_contains_keyword(self):
         desc = get_pattern_description(PatternType.PARALLEL_TRACK)
         assert "lawnmower" in desc.lower() or "parallel" in desc.lower()
+
+
+class TestSplitParallelTrackZones:
+    """Tests for multi-drone parallel track zone splitting."""
+
+    def test_single_zone_returns_one_zone(self):
+        zones = split_parallel_track_zones(1)
+        assert len(zones) == 1
+        assert len(zones[0]) > 0
+
+    def test_two_zones_returns_two_zones(self):
+        zones = split_parallel_track_zones(2, width_cm=400, depth_cm=400)
+        assert len(zones) == 2
+        assert all(len(z) > 0 for z in zones)
+
+    def test_single_zone_matches_full_pattern(self):
+        zones = split_parallel_track_zones(1, width_cm=400, depth_cm=400, strip_width_cm=150)
+        full = generate_parallel_track(400, 400, 150)
+        assert len(zones[0]) == len(full)
+
+
+class TestSplitSectorZones:
+    """Tests for multi-drone sector zone splitting."""
+
+    def test_single_zone_returns_full_pattern(self):
+        zones = split_sector_zones(1)
+        full = generate_sector()
+        assert len(zones) == 1
+        assert len(zones[0]) == len(full)
+
+    def test_two_zones_returns_two_zones(self):
+        zones = split_sector_zones(2, num_sectors=6)
+        assert len(zones) == 2
+        assert all(len(z) > 0 for z in zones)
+
+    def test_more_zones_than_sectors_handles_gracefully(self):
+        zones = split_sector_zones(10, num_sectors=4)
+        # Should not produce more zones than sectors
+        assert len(zones) <= 4
+        assert all(len(z) > 0 for z in zones)

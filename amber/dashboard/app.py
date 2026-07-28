@@ -25,6 +25,7 @@ from amber.vision.threshold_tuner import ThresholdTuner
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
+from amber.drone.fleet import DroneFleet
 
 try:
     from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
@@ -53,7 +54,7 @@ except ImportError:
 
 # Global state
 _state = {
-    "drone": None,
+    "fleet": None,
     "detector": None,
     "reid": None,
     "face": None,
@@ -139,10 +140,9 @@ def _init_pipeline(source="webcam", target_path=None):
 
     _state["source"] = source
     if source == "tello":
-        from amber.drone.tello import TelloController
-        drone = TelloController()
-        if drone.connect():
-            _state["drone"] = drone
+        fleet = DroneFleet()
+        if fleet.register("drone-1"):
+            _state["fleet"] = fleet
         else:
             log.warning("tello_connection_failed", fallback="webcam")
             _state["source"] = "webcam"
@@ -206,8 +206,10 @@ def _frame_loop():
         frame_start = time.time()
 
         frame = None
-        if _state["drone"]:
-            frame = _state["drone"].get_frame()
+        fleet = _state.get("fleet")
+        drone = fleet.primary if fleet else None
+        if drone:
+            frame = drone.get_frame()
         elif _state["cap"] and _state["cap"].isOpened():
             ret, frame = _state["cap"].read()
             if not ret:
@@ -469,8 +471,8 @@ def _frame_loop():
             _state["recorder"].write_frame(annotated)
 
         telemetry = {}
-        if _state["drone"]:
-            s = _state["drone"].state
+        if drone:
+            s = drone.state
             telemetry = {
                 "battery": s.battery,
                 "height": s.height,
@@ -488,12 +490,16 @@ def _frame_loop():
                     socketio.emit("battery_critical", {"battery": s.battery})
                     # Auto-land at critical battery
                     try:
-                        _state["drone"].land()
+                        drone.land()
                     except Exception:
                         pass
                 elif s.battery <= 20 and not _state.get("battery_warned"):
                     _state["battery_warned"] = True
                     socketio.emit("battery_warning", {"battery": s.battery})
+
+            # Emit fleet telemetry when >1 drone
+            if fleet and fleet.count > 1:
+                socketio.emit("fleet_telemetry", fleet.get_all_telemetry())
 
         _state["drone_telemetry"] = telemetry
 
@@ -690,12 +696,17 @@ def on_set_threshold(data):
 @socketio.on("drone_command")
 def on_drone_command(data):
     """Send a command to the drone."""
-    if not _state["drone"]:
-        emit("error", {"message": "No drone connected"})
+    drone_id = data.get("drone_id")
+    fleet = _state.get("fleet")
+    if not fleet or not fleet.primary:
+        emit("error", {"message": "No drones connected"})
+        return
+    drone = fleet.get(drone_id) if drone_id else fleet.primary
+    if not drone:
+        emit("error", {"message": f"Drone '{drone_id}' not found"})
         return
 
     cmd = data.get("command")
-    drone = _state["drone"]
 
     commands = {
         "takeoff": lambda: drone.takeoff(),
@@ -722,7 +733,9 @@ def on_drone_command(data):
 @socketio.on("start_search")
 def on_start_search(data):
     """Start an autonomous search pattern."""
-    if not _state["drone"] or not _state["drone"].state.is_flying:
+    fleet = _state.get("fleet")
+    drone = fleet.primary if fleet else None
+    if not drone or not drone.state.is_flying:
         emit("error", {"message": "Drone must be flying to start search"})
         return
 
@@ -736,7 +749,6 @@ def on_start_search(data):
     emit("search_started", {"pattern": pattern_name, "waypoints": len(waypoints)})
 
     def _execute_search():
-        drone = _state["drone"]
         for i, wp in enumerate(waypoints):
             if not _state["search_active"]:
                 break
@@ -763,8 +775,9 @@ def on_start_search(data):
 @socketio.on("stop_search")
 def on_stop_search():
     _state["search_active"] = False
-    if _state["drone"]:
-        _state["drone"].hover()
+    fleet = _state.get("fleet")
+    if fleet and fleet.primary:
+        fleet.primary.hover()
 
 
 @socketio.on("start_recording")
@@ -782,6 +795,40 @@ def on_stop_recording():
     if _state["recorder"]:
         path = _state["recorder"].stop()
         emit("recording_stopped", {"path": path})
+
+
+@socketio.on("register_drone")
+def on_register_drone(data):
+    drone_id = data.get("drone_id", f"drone-{(_state.get('fleet').count if _state.get('fleet') else 0) + 1}")
+    host = data.get("host", "192.168.10.1")
+    fleet = _state.get("fleet")
+    if not fleet:
+        fleet = DroneFleet()
+        _state["fleet"] = fleet
+    success = fleet.register(drone_id, host)
+    emit("drone_registered", {"drone_id": drone_id, "success": success})
+    emit("fleet_status", {"drones": fleet.get_all_telemetry(), "count": fleet.count})
+
+
+@socketio.on("deregister_drone")
+def on_deregister_drone(data):
+    fleet = _state.get("fleet")
+    drone_id = data.get("drone_id")
+    if fleet and drone_id:
+        fleet.deregister(drone_id)
+    emit("fleet_status", {
+        "drones": fleet.get_all_telemetry() if fleet else {},
+        "count": fleet.count if fleet else 0
+    })
+
+
+@socketio.on("get_fleet_status")
+def on_get_fleet_status():
+    fleet = _state.get("fleet")
+    emit("fleet_status", {
+        "drones": fleet.get_all_telemetry() if fleet else {},
+        "count": fleet.count if fleet else 0
+    })
 
 
 def run_dashboard(source="webcam", target_path=None, port=5555):

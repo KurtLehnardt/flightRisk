@@ -204,6 +204,37 @@
         .tuner-apply:hover { background: #e5592e; }
         .tuner-apply.visible { display: block; }
 
+        /* Fleet */
+        .fleet-bar {
+            display: flex; gap: 6px; align-items: center; margin-bottom: 8px;
+        }
+        .fleet-select {
+            flex: 1; padding: 6px 8px; background: #1e1e1e;
+            border: 1px solid #333; color: #e0e0e0; border-radius: 6px; font-size: 12px;
+        }
+        .fleet-add-btn {
+            padding: 6px 10px; background: #2a2a2a; border: 1px solid #444;
+            color: #e0e0e0; border-radius: 6px; cursor: pointer;
+            font-size: 11px; font-weight: 600; white-space: nowrap;
+        }
+        .fleet-add-btn:hover { background: #333; border-color: #666; }
+        .fleet-panel {
+            display: none; margin-bottom: 8px;
+        }
+        .fleet-panel.visible { display: block; }
+        .fleet-drone-item {
+            background: #1e1e1e; padding: 6px 8px; border-radius: 4px;
+            margin-bottom: 4px; font-size: 11px; display: flex;
+            justify-content: space-between; align-items: center;
+        }
+        .fleet-drone-item .drone-name { color: #00e5ff; font-weight: 600; }
+        .fleet-drone-item .drone-bat { color: #888; font-family: 'SF Mono', monospace; }
+        .fleet-remove {
+            background: none; border: 1px solid #555; color: #ef5350;
+            border-radius: 3px; cursor: pointer; font-size: 10px; padding: 2px 6px;
+        }
+        .fleet-remove:hover { background: #c62828; color: white; border-color: #c62828; }
+
         /* Search */
         .search-select {
             width: 100%; padding: 8px; background: #1e1e1e;
@@ -346,6 +377,15 @@
             <!-- Flight Controls -->
             <div class="panel">
                 <div class="panel-title">Flight Controls</div>
+                <div class="fleet-bar">
+                    <select id="drone-selector" class="fleet-select">
+                        <option value="">Primary Drone</option>
+                    </select>
+                    <button class="fleet-add-btn" onclick="addDrone()">+ Add Drone</button>
+                </div>
+                <div id="fleet-panel" class="fleet-panel">
+                    <div id="fleet-drones"></div>
+                </div>
                 <div class="controls-grid">
                     <button class="ctrl-btn" onclick="sendCmd('ccw')">&#8634; Yaw</button>
                     <button class="ctrl-btn" onclick="sendCmd('forward')">&#8593; Fwd</button>
@@ -731,8 +771,16 @@
         }
 
         // --- Drone commands ---
+        function getSelectedDroneId() {
+            const sel = document.getElementById('drone-selector');
+            return sel.value || null;
+        }
+
         function sendCmd(command) {
-            socket.emit('drone_command', { command: command, distance: 30, degrees: 45 });
+            const droneId = getSelectedDroneId();
+            const payload = { command: command, distance: 30, degrees: 45 };
+            if (droneId) payload.drone_id = droneId;
+            socket.emit('drone_command', payload);
         }
 
         function startSearch() {
@@ -991,6 +1039,94 @@
                 })
                 .catch(() => {});
         }
+
+        // --- Fleet Management ---
+        function addDrone() {
+            const host = prompt('Enter drone IP address:', '192.168.10.1');
+            if (!host) return;
+            const droneId = prompt('Enter drone name:', 'drone-' + (document.getElementById('drone-selector').options.length));
+            if (!droneId) return;
+            socket.emit('register_drone', { drone_id: droneId, host: host });
+        }
+
+        function removeDrone(droneId) {
+            if (!confirm('Remove drone "' + droneId + '"?')) return;
+            socket.emit('deregister_drone', { drone_id: droneId });
+        }
+
+        socket.on('drone_registered', (data) => {
+            if (data.success) {
+                showToast('Drone "' + data.drone_id + '" registered');
+            } else {
+                showToast('Failed to register drone "' + data.drone_id + '"');
+            }
+        });
+
+        socket.on('fleet_status', (data) => {
+            updateFleetUI(data);
+        });
+
+        socket.on('fleet_telemetry', (data) => {
+            updateFleetTelemetry(data);
+        });
+
+        function updateFleetUI(data) {
+            const selector = document.getElementById('drone-selector');
+            const panel = document.getElementById('fleet-panel');
+            const container = document.getElementById('fleet-drones');
+            const currentVal = selector.value;
+
+            // Update selector
+            selector.innerHTML = '<option value="">Primary Drone</option>';
+            const drones = data.drones || {};
+            const droneIds = Object.keys(drones);
+
+            droneIds.forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = id;
+                selector.appendChild(opt);
+            });
+            if (currentVal && droneIds.includes(currentVal)) {
+                selector.value = currentVal;
+            }
+
+            // Show/hide fleet panel
+            if (data.count > 1) {
+                panel.classList.add('visible');
+                container.innerHTML = '';
+                droneIds.forEach(id => {
+                    const info = drones[id] || {};
+                    const item = document.createElement('div');
+                    item.className = 'fleet-drone-item';
+                    item.innerHTML = '<span class="drone-name">' + id + '</span>' +
+                        '<span class="drone-bat">Bat: ' + (info.battery || '--') + '%</span>' +
+                        '<button class="fleet-remove" onclick="removeDrone(\'' + id + '\')">X</button>';
+                    container.appendChild(item);
+                });
+            } else {
+                panel.classList.remove('visible');
+            }
+        }
+
+        function updateFleetTelemetry(data) {
+            const container = document.getElementById('fleet-drones');
+            if (!container) return;
+            const items = container.querySelectorAll('.fleet-drone-item');
+            items.forEach(item => {
+                const name = item.querySelector('.drone-name');
+                if (name && data[name.textContent]) {
+                    const info = data[name.textContent];
+                    const bat = item.querySelector('.drone-bat');
+                    if (bat) bat.textContent = 'Bat: ' + (info.battery || '--') + '%';
+                }
+            });
+        }
+
+        // Request fleet status on connect
+        socket.on('connect', () => {
+            socket.emit('get_fleet_status');
+        });
 
         // Load initial feedback stats
         refreshFeedbackStats();
