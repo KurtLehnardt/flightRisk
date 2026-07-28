@@ -36,6 +36,11 @@ class TestDashboardRoutes:
         from amber.dashboard.app import app
         assert app.config["SECRET_KEY"] is not None
 
+    def test_health_route_exists(self):
+        from amber.dashboard.app import app
+        rules = [rule.rule for rule in app.url_map.iter_rules()]
+        assert "/api/health" in rules
+
     def test_socketio_imported(self):
         from amber.dashboard.app import socketio
         assert socketio is not None

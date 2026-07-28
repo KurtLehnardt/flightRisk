@@ -113,6 +113,18 @@
         }
         .desc-btn:hover { background: #e5592e; }
 
+        /* Quality Feedback */
+        .quality-feedback { margin-top: 8px; }
+        .quality-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 10px;
+            font-size: 11px; font-weight: 700; color: #000;
+        }
+        .quality-issues {
+            margin: 6px 0 0 16px; padding: 0; font-size: 11px;
+            color: #bbb; list-style: disc;
+        }
+        .quality-issues li { margin-bottom: 2px; }
+
         /* Threshold slider */
         .threshold-row {
             display: flex; align-items: center; gap: 8px; margin-top: 8px;
@@ -293,6 +305,35 @@
         .fb-btn.reject.chosen { background: #c62828; color: white; border-color: #c62828; }
         .fb-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
+        /* Target History */
+        .target-version-item {
+            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
+            margin-bottom: 6px; border-left: 3px solid #555; font-size: 12px;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .target-version-item.active { border-left-color: #00c853; }
+        .target-version-item .tv-info { flex: 1; }
+        .target-version-item .tv-date { color: #888; }
+        .target-version-item .tv-operator { color: #00e5ff; font-weight: 600; }
+        .target-version-item .tv-quality {
+            display: inline-block; padding: 1px 6px; border-radius: 8px;
+            font-size: 10px; font-weight: 600; margin-left: 6px;
+        }
+        .tv-quality.good { background: #2e7d32; color: #c8e6c9; }
+        .tv-quality.fair { background: #e65100; color: #ffe0b2; }
+        .tv-quality.poor { background: #c62828; color: #ffcdd2; }
+        .target-version-item .tv-active-badge {
+            display: inline-block; padding: 1px 6px; border-radius: 8px;
+            background: #00c853; color: #000; font-size: 10px; font-weight: 700;
+            margin-left: 6px;
+        }
+        .tv-revert-btn {
+            padding: 4px 8px; background: #2a2a2a; border: 1px solid #444;
+            color: #e0e0e0; border-radius: 4px; cursor: pointer;
+            font-size: 10px; font-weight: 600; margin-left: 8px;
+        }
+        .tv-revert-btn:hover { background: #ff6b35; border-color: #ff6b35; color: white; }
+
         /* Toast */
         .toast {
             position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -344,6 +385,7 @@
                         <button class="desc-btn" onclick="setDescription()">Set Description</button>
                     </div>
                 </div>
+                <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
                 <div class="threshold-row">
                     <label>Match threshold:</label>
                     <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
@@ -520,6 +562,19 @@
                 </div>
             </div>
 
+            <!-- Target History -->
+            <div class="panel">
+                <div class="sessions-toggle" onclick="toggleTargetHistory()">
+                    <div class="panel-title" style="margin-bottom:0;">Target History</div>
+                    <span id="target-history-arrow" class="arrow">&#9654;</span>
+                </div>
+                <div id="target-history-container" style="display:none;margin-top:10px;">
+                    <div id="target-history-list" class="sessions-list">
+                        <div style="color:#555;font-size:12px;">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Past Sessions -->
             <div class="panel">
                 <div class="sessions-toggle" onclick="toggleSessions()">
@@ -634,9 +689,7 @@
             document.getElementById('target-placeholder').style.display = 'none';
         });
 
-        socket.on('target_set', () => {
-            showToast('Target photo set');
-        });
+        // target_set is handled in the Target History section below (includes quality display)
 
         socket.on('description_set', (data) => {
             showToast('Description set: ' + data.description);
@@ -916,6 +969,88 @@
                 checkThreshold();
             }
         }
+
+        // --- Target History ---
+        let targetHistoryOpen = false;
+        function toggleTargetHistory() {
+            targetHistoryOpen = !targetHistoryOpen;
+            const container = document.getElementById('target-history-container');
+            const arrow = document.getElementById('target-history-arrow');
+            if (targetHistoryOpen) {
+                container.style.display = 'block';
+                arrow.classList.add('open');
+                loadTargetHistory();
+            } else {
+                container.style.display = 'none';
+                arrow.classList.remove('open');
+            }
+        }
+
+        function loadTargetHistory() {
+            fetch('/api/target-history')
+                .then(r => r.json())
+                .then(versions => {
+                    const list = document.getElementById('target-history-list');
+                    if (!versions.length) {
+                        list.innerHTML = '<div style="color:#555;font-size:12px;">No target versions</div>';
+                        return;
+                    }
+                    list.innerHTML = '';
+                    versions.forEach(v => {
+                        const item = document.createElement('div');
+                        item.className = 'target-version-item' + (v.is_active ? ' active' : '');
+                        const date = v.timestamp ? v.timestamp.replace('T', ' ') : 'Unknown';
+                        let qualityHtml = '';
+                        if (v.quality_score !== null && v.quality_score !== undefined) {
+                            const qClass = v.quality_score >= 0.7 ? 'good' : v.quality_score >= 0.4 ? 'fair' : 'poor';
+                            qualityHtml = '<span class="tv-quality ' + qClass + '">' + v.quality_score.toFixed(2) + '</span>';
+                        }
+                        const activeBadge = v.is_active ? '<span class="tv-active-badge">ACTIVE</span>' : '';
+                        const revertBtn = v.is_active ? '' : '<button class="tv-revert-btn" onclick="revertTarget(' + v.id + ')">Revert</button>';
+                        item.innerHTML =
+                            '<div class="tv-info">' +
+                                '<span class="tv-date">' + date + '</span> ' +
+                                '<span class="tv-operator">' + (v.operator_id || 'default') + '</span>' +
+                                qualityHtml + activeBadge +
+                            '</div>' +
+                            revertBtn;
+                        list.appendChild(item);
+                    });
+                })
+                .catch(() => {
+                    document.getElementById('target-history-list').innerHTML =
+                        '<div style="color:#555;font-size:12px;">Failed to load target history</div>';
+                });
+        }
+
+        function revertTarget(versionId) {
+            socket.emit('revert_target', { version_id: versionId });
+        }
+
+        // Refresh target history and show quality after setting a new target
+        socket.on('target_set', (data) => {
+            showToast(data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set');
+            if (targetHistoryOpen) {
+                loadTargetHistory();
+            }
+            // Show quality feedback
+            const qDiv = document.getElementById('quality-feedback');
+            if (qDiv && data && data.quality) {
+                const q = data.quality;
+                const colors = { good: '#00c853', fair: '#f5a623', poor: '#f44336' };
+                const color = colors[q.grade] || '#888';
+                let html = '<span class="quality-badge" style="background:' + color + ';">' + q.grade.toUpperCase() + ' (' + q.overall_score.toFixed(2) + ')</span>';
+                if (q.issues && q.issues.length > 0) {
+                    html += '<ul class="quality-issues">';
+                    q.issues.forEach(issue => { html += '<li>' + issue + '</li>'; });
+                    html += '</ul>';
+                }
+                qDiv.innerHTML = html;
+                qDiv.style.display = 'block';
+            } else if (qDiv) {
+                qDiv.style.display = 'none';
+            }
+        });
 
         // --- Past Sessions ---
         let sessionsOpen = false;

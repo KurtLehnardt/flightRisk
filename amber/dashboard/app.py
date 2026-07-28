@@ -20,12 +20,14 @@ from flask_socketio import SocketIO, emit
 
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID
+from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
 from amber.drone.fleet import DroneFleet
+from amber.canon import TargetCanon
 
 try:
     from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
@@ -129,6 +131,11 @@ def _init_pipeline(source="webcam", target_path=None):
     if _state["db"] is None:
         _state["db"] = SessionDB()
         log.info("session_db_initialized")
+
+    # Initialize target canon
+    if _state.get("canon") is None:
+        _state["canon"] = TargetCanon()
+        log.info("target_canon_initialized")
 
     # OpenTelemetry
     if _HAS_TELEMETRY:
@@ -536,6 +543,21 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status": "healthy",
+        "version": "1.0.0",
+        "components": {
+            "detector": _state.get("detector") is not None,
+            "reid": _state.get("reid") is not None,
+            "face": _state.get("face") is not None,
+            "reasoning": _state.get("reasoning") is not None,
+            "db": _state.get("db") is not None,
+        }
+    })
+
+
 @app.route("/api/metrics")
 def metrics_endpoint():
     if _state["metrics"]:
@@ -627,6 +649,14 @@ def api_export_eval_dataset():
     return jsonify({"ok": True, "path": output_path, "count": count})
 
 
+@app.route("/api/target-history")
+def target_history():
+    canon = _state.get("canon")
+    if not canon:
+        return jsonify([])
+    return jsonify(canon.get_history())
+
+
 @app.route("/api/threshold-suggestion")
 def api_threshold_suggestion():
     """Analyze feedback and suggest an optimal match threshold."""
@@ -661,11 +691,47 @@ def on_set_target(data):
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
         cv2.imwrite(str(path), img)
         _state["target_photo_path"] = str(path)
+        # Store in target canon
+        if _state.get("canon"):
+            _state["canon"].set_target(img, operator_id=data.get("operator_id", "dashboard"))
         # Set face recognition target
         face_ok = False
         if _state["face"]:
             face_ok = _state["face"].set_target(img)
-        emit("target_set", {"success": True, "face_detected": face_ok})
+        # Score input image quality
+        quality_scorer = ImageQualityScorer()
+        quality_report = quality_scorer.score(img)
+        emit("target_set", {
+            "success": True,
+            "face_detected": face_ok,
+            "quality": {
+                "overall_score": quality_report.overall_score,
+                "grade": quality_report.grade,
+                "issues": quality_report.issues,
+                "suggestions": quality_report.suggestions,
+                "dimensions": quality_report.dimensions,
+            },
+        })
+
+
+@socketio.on("revert_target")
+def on_revert_target(data):
+    version_id = data.get("version_id")
+    canon = _state.get("canon")
+    if not canon or not version_id:
+        emit("error", {"message": "Cannot revert target"})
+        return
+    img = canon.revert_to(version_id)
+    if img is None:
+        emit("error", {"message": "Target version not found"})
+        return
+    _state["target_photo"] = img
+    if _state.get("reid"):
+        _state["reid"].set_target(img)
+    face_ok = False
+    if _state.get("face"):
+        face_ok = _state["face"].set_target(img)
+    emit("target_set", {"success": True, "face_detected": face_ok, "reverted_to": version_id})
 
 
 @socketio.on("set_description")
