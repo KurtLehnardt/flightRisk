@@ -530,6 +530,21 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status": "healthy",
+        "version": "1.0.0",
+        "components": {
+            "detector": _state.get("detector") is not None,
+            "reid": _state.get("reid") is not None,
+            "face": _state.get("face") is not None,
+            "reasoning": _state.get("reasoning") is not None,
+            "db": _state.get("db") is not None,
+        }
+    })
+
+
 @app.route("/api/metrics")
 def metrics_endpoint():
     if _state["metrics"]:

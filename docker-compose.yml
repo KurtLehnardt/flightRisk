@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  amber:
+    build: .
+    ports:
+      - "5555:5555"
+    environment:
+      - AMBER_OTEL_ENABLED=true
+      - OTEL_EXPORTER=otlp-grpc
+      - OTEL_ENDPOINT=http://jaeger:4317
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      - jaeger
+      - ollama
+    volumes:
+      - ./captures:/app/captures
+      - ./recordings:/app/recordings
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  ollama_data:
