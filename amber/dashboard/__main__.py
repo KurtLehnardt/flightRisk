@@ -3,13 +3,15 @@
 import argparse
 import os
 
-from amber.dashboard.app import run_dashboard
+from amber.dashboard.app import run_dashboard, SourceConfig
+
+_SOURCE_CHOICES = ("tello", "mavlink", "webcam", "file", "edge")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Amber Drone Dashboard")
     parser.add_argument(
-        "--source", choices=["tello", "mavlink", "webcam", "file", "edge"],
+        "--source", choices=_SOURCE_CHOICES,
         default=os.environ.get("AMBER_SOURCE", "webcam"),
         help="Video/drone source",
     )
@@ -36,15 +38,26 @@ def main():
     )
     args = parser.parse_args()
 
-    run_dashboard(
+    # argparse's `choices=` only validates values passed on the command
+    # line — it never checks a `default=` value, so a bad AMBER_SOURCE env
+    # var would otherwise sail through unnoticed. Validate explicitly.
+    if args.source not in _SOURCE_CHOICES:
+        parser.error(
+            f"argument --source: invalid choice: {args.source!r} "
+            f"(from AMBER_SOURCE env var) — choose from {', '.join(_SOURCE_CHOICES)}"
+        )
+
+    if args.source == "file" and not args.video:
+        parser.error("--video is required when --source=file")
+
+    source_config = SourceConfig(
         source=args.source,
-        target_path=args.target,
-        port=args.port,
         mavlink_address=args.mavlink_address,
         rtsp_url=args.rtsp_url,
         edge_ws=args.edge_ws,
         video_path=args.video,
     )
+    run_dashboard(source_config, target_path=args.target, port=args.port)
 
 
 if __name__ == "__main__":

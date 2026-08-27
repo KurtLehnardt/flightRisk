@@ -12,6 +12,7 @@ import os
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -38,6 +39,20 @@ try:
 except ImportError:
     _HAS_TELEMETRY = False
 
+@dataclass
+class SourceConfig:
+    """Video/telemetry source configuration.
+
+    Groups the source-selection parameters that used to be passed as five
+    separate args to `run_dashboard()` / `_init_pipeline()`.
+    """
+    source: str = "webcam"
+    mavlink_address: str = "udp://:14540"
+    rtsp_url: str | None = None
+    edge_ws: str = "ws://localhost:9000"
+    video_path: str | None = None
+
+
 # Match screenshots directory
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
 CAPTURES_DIR.mkdir(exist_ok=True)
@@ -61,12 +76,14 @@ except ImportError:
 # Global state
 _state = {
     "fleet": None,
+    "auto_connect_stop": None,
     "detector": None,
     "reid": None,
     "face": None,
     "scorer": None,
     "tracker": None,
     "reasoning": None,
+    "source_config": None,
     "source": None,
     "mavlink_address": None,
     "rtsp_url": None,
@@ -254,15 +271,14 @@ def _gemma_worker():
             _gemma_queue.task_done()
 
 
-def _init_pipeline(
-    source="webcam",
-    target_path=None,
-    mavlink_address="udp://:14540",
-    rtsp_url=None,
-    edge_ws="ws://localhost:9000",
-    video_path=None,
-):
+def _init_pipeline(source_config: SourceConfig, target_path=None):
     """Initialize the detection pipeline."""
+    source = source_config.source
+    mavlink_address = source_config.mavlink_address
+    rtsp_url = source_config.rtsp_url
+    edge_ws = source_config.edge_ws
+    video_path = source_config.video_path
+
     if _state["logger"] is None:
         _state["logger"] = StructuredLogger(component="dashboard")
     if _state["metrics"] is None:
@@ -347,33 +363,48 @@ def _init_pipeline(
             _state["otel_metrics"] = AmberMetrics(get_meter())
             log.info("opentelemetry_enabled")
 
+    _state["source_config"] = source_config
     _state["source"] = source
     _state["mavlink_address"] = mavlink_address
     _state["rtsp_url"] = rtsp_url
     _state["edge_ws"] = edge_ws
     _state["video_path"] = video_path
 
+    # Stop any auto-connect loop thread left running from a previous
+    # _init_pipeline() call (e.g. via restart_dashboard) before starting a
+    # new one. Without this, the old thread keeps polling in the
+    # background and can register/reconnect a stale drone concurrently
+    # with the new pipeline's own auto-connect loop.
+    old_stop = _state.get("auto_connect_stop")
+    if old_stop is not None:
+        old_stop.set()
+    stop_event = threading.Event()
+    _state["auto_connect_stop"] = stop_event
+
     if source == "tello":
         from amber.drone.tello import TelloController
         fleet = DroneFleet(factory=lambda n, h: TelloController(n, h))
         _state["fleet"] = fleet
         def _auto_connect_loop():
-            while _state.get("running", True):
+            while not stop_event.is_set() and _state.get("running", True):
                 primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
-                    time.sleep(3)
+                    if stop_event.wait(3):
+                        break
                     continue
                 # Drone missing or disconnected — clean up and retry
                 if "drone-1" in fleet.drone_ids:
                     log.info("tello_disconnected", hint="cleaning up for reconnect")
                     fleet.deregister("drone-1")
-                    time.sleep(2)  # let UDP sockets release
+                    if stop_event.wait(2):  # let UDP sockets release
+                        break
                 if fleet.register("drone-1"):
                     log.info("tello_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
                     log.info("tello_waiting", hint="retrying in 5s")
-                time.sleep(5)
+                if stop_event.wait(5):
+                    break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "mavlink":
         # Imported lazily so `mavsdk` is only required when actually used.
@@ -381,34 +412,55 @@ def _init_pipeline(
         fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
         _state["fleet"] = fleet
         def _auto_connect_loop():
-            while _state.get("running", True):
+            while not stop_event.is_set() and _state.get("running", True):
                 primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
-                    time.sleep(3)
+                    if stop_event.wait(3):
+                        break
                     continue
                 # Drone missing or disconnected — clean up and retry
                 if "drone-1" in fleet.drone_ids:
                     log.info("mavlink_disconnected", hint="cleaning up for reconnect")
                     fleet.deregister("drone-1")
-                    time.sleep(2)
+                    if stop_event.wait(2):
+                        break
                 if fleet.register("drone-1", host=mavlink_address):
                     log.info("mavlink_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
                     log.info("mavlink_waiting", hint="retrying in 5s")
-                time.sleep(5)
+                if stop_event.wait(5):
+                    break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "webcam":
         _state["fleet"] = None
         _state["cap"] = cv2.VideoCapture(0)
     elif source == "file":
         _state["fleet"] = None
-        _state["cap"] = cv2.VideoCapture(video_path) if video_path else None
+        if not video_path:
+            log.error(
+                "file_source_missing_video",
+                hint="--source=file requires a video path (--video); no frames will be produced",
+            )
+            _state["cap"] = None
+        elif not os.path.exists(video_path):
+            log.error(
+                "file_source_invalid_path",
+                video_path=video_path,
+                hint="video file not found; no frames will be produced",
+            )
+            _state["cap"] = None
+        else:
+            _state["cap"] = cv2.VideoCapture(video_path)
     elif source == "edge":
         # No local drone fleet or capture device — frames are expected to
         # arrive via the EdgeRunner/GroundStation WebSocket bridge
         # (amber/edge.py, amber/ground.py). Wiring the frame loop to
         # consume from `edge_ws` is tracked separately.
+        log.warning(
+            "edge_source_stub",
+            hint="Edge source mode is not yet fully implemented — dashboard will not show live video until edge transport is connected",
+        )
         _state["fleet"] = None
         _state["cap"] = None
     else:
@@ -1273,8 +1325,18 @@ def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(_state.get('fleet').count if _state.get('fleet') else 0) + 1}")
     host = data.get("host", "192.168.10.1")
     fleet = _state.get("fleet")
+    current_source = _state.get("source")
     if not fleet:
-        fleet = DroneFleet()
+        # Build a fleet whose backend matches the currently configured
+        # source, instead of always defaulting to Tello — a manual
+        # registration on a mavlink deployment must build a
+        # MavlinkController, not silently create a Tello-backed fleet.
+        if current_source == "mavlink":
+            from amber.drone.mavlink import MavlinkController
+            rtsp_url = _state.get("rtsp_url")
+            fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
+        else:
+            fleet = DroneFleet()
         _state["fleet"] = fleet
 
     # Check for duplicate host before attempting connection
@@ -1290,9 +1352,13 @@ def on_register_drone(data):
         success = fleet.register(drone_id, host)
         if success:
             socketio.emit("drone_registered", {"drone_id": drone_id, "success": True})
-            # Switch source to tello if we were on webcam fallback
-            if _state.get("source") != "tello":
-                _state["source"] = "tello"
+            # Switch source to a drone-backed source if we were on a
+            # non-drone fallback (webcam/file/edge/unset). Never stomp an
+            # already-correct drone source — unconditionally forcing
+            # "tello" here previously flipped mavlink deployments back to
+            # tello on every manual registration.
+            if _state.get("source") not in ("tello", "mavlink"):
+                _state["source"] = "mavlink" if current_source == "mavlink" else "tello"
                 cap = _state.get("cap")
                 if cap:
                     cap.release()
@@ -1350,36 +1416,32 @@ def on_restart_dashboard():
     fleet = _state.get("fleet")
     if fleet:
         fleet.disconnect_all()
-    _init_pipeline(
+    # Release any existing capture device before re-initializing — leaving
+    # it open leaks the webcam/video-file handle across restarts.
+    cap = _state.get("cap")
+    if cap:
+        cap.release()
+        _state["cap"] = None
+    source_config = _state.get("source_config") or SourceConfig(
         source=_state.get("source", "tello"),
-        target_path=_state.get("target_photo_path"),
         mavlink_address=_state.get("mavlink_address", "udp://:14540"),
         rtsp_url=_state.get("rtsp_url"),
         edge_ws=_state.get("edge_ws", "ws://localhost:9000"),
         video_path=_state.get("video_path"),
     )
+    _init_pipeline(source_config, target_path=_state.get("target_photo_path"))
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(
-    source="webcam",
-    target_path=None,
-    port=5555,
-    mavlink_address="udp://:14540",
-    rtsp_url=None,
-    edge_ws="ws://localhost:9000",
-    video_path=None,
-):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=5555):
     """Start the dashboard server.
 
     Args:
-        source: One of "tello", "mavlink", "webcam", "file", "edge".
+        source_config: Video/telemetry source configuration — see
+            `SourceConfig` (source mode, MAVLink address, RTSP URL, edge
+            WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
         port: Dashboard HTTP/WebSocket port.
-        mavlink_address: MAVSDK connection string, used when source="mavlink".
-        rtsp_url: RTSP camera URL for MAVLink drones (source="mavlink").
-        edge_ws: WebSocket URL for edge compute source (source="edge").
-        video_path: Path to a video file, used when source="file".
     """
     _state["running"] = True
     # Auto-load previous target photo if none specified
@@ -1387,14 +1449,7 @@ def run_dashboard(
         default_target = Path(__file__).parent.parent.parent / "target_reference.jpg"
         if default_target.exists():
             target_path = str(default_target)
-    _init_pipeline(
-        source=source,
-        target_path=target_path,
-        mavlink_address=mavlink_address,
-        rtsp_url=rtsp_url,
-        edge_ws=edge_ws,
-        video_path=video_path,
-    )
+    _init_pipeline(source_config, target_path=target_path)
 
     frame_thread = threading.Thread(target=_frame_loop, daemon=True)
     frame_thread.start()

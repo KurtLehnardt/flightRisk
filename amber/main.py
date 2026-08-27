@@ -203,8 +203,8 @@ def main():
         source = "tello"
 
     if args.dashboard:
-        from amber.dashboard.app import run_dashboard
-        run_dashboard(source=source, target_path=args.target, port=args.port)
+        from amber.dashboard.app import run_dashboard, SourceConfig
+        run_dashboard(SourceConfig(source=source), target_path=args.target, port=args.port)
     else:
         run_pipeline(
             source=source,
