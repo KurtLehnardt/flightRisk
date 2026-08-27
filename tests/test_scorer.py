@@ -114,13 +114,13 @@ class TestMatchScorerNoSignals:
 class TestMatchScorerReasoning:
     """Tests for reasoning result conversion."""
 
-    def test_reasoning_match_false_gives_zero(self):
+    def test_reasoning_match_false_gives_dampened_score(self):
         scorer = MatchScorer()
         result = scorer.score(
             reasoning_result={"match": False, "confidence": "high"},
         )
-        # match=False => reasoning_score=0.0 => no signal
-        assert result["combined_score"] == 0.0
+        # match=False with high confidence => dampened 0.10
+        assert result["combined_score"] == 0.1
         assert result["is_match"] is False
 
     def test_confidence_high_maps_to_090(self):
@@ -204,8 +204,8 @@ class TestMatchScorerConfidenceLevel:
 
     def test_low_confidence_below_thresholds(self):
         scorer = MatchScorer()
-        result = scorer.score(reid_score=0.3)
-        # combined = 0.3, 1 signal => low
+        result = scorer.score(reid_score=0.15)
+        # combined = 0.15, 1 signal => low
         assert result["confidence_level"] == "low"
 
     def test_medium_confidence_with_two_signals_at_045(self):

@@ -115,9 +115,9 @@ class MatchScorer:
 
         # Determine confidence level
         num_signals = len(weights)
-        if combined >= 0.75 and num_signals >= 2:
+        if combined >= 0.50 and num_signals >= 2:
             confidence_level = "high"
-        elif combined >= 0.55 or (combined >= 0.45 and num_signals >= 2):
+        elif combined >= 0.30 or (combined >= 0.25 and num_signals >= 2):
             confidence_level = "medium"
         else:
             confidence_level = "low"
@@ -139,26 +139,28 @@ class MatchScorer:
         signals = score_result.get("signals_used", 0)
         conf = score_result.get("confidence_level", "low")
 
-        if score >= 0.70 and signals >= 2 and conf == "high":
+        if score >= 0.50 and signals >= 2 and conf == "high":
             return "confirmed_match"
         elif score >= self.match_threshold and conf in ("medium", "high"):
             return "possible_match"
-        elif score >= self.match_threshold * 0.7:
+        elif score >= self.match_threshold * 0.5:
             return "weak_signal"
         return "no_match"
 
     def _reasoning_to_score(self, result: dict | None) -> float:
-        """Convert LLM reasoning result to a numeric score."""
+        """Convert LLM reasoning result to a numeric score.
+
+        A "no match" returns a neutral 0.3 rather than 0.0 to avoid
+        vetoing reliable signals (face embeddings, ReID) when the LLM
+        misjudges low-quality drone footage.
+        """
         if result is None:
             return 0.0
 
-        if not result.get("match", False):
-            return 0.0
-
         confidence = result.get("confidence", "unknown").lower()
-        scores = {
-            "high": 0.90,
-            "medium": 0.65,
-            "low": 0.40,
-        }
-        return scores.get(confidence, 0.50)
+        if result.get("match", False):
+            scores = {"high": 0.90, "medium": 0.65, "low": 0.40}
+            return scores.get(confidence, 0.50)
+        # No match — return a dampened score, not zero
+        scores = {"high": 0.10, "medium": 0.20, "low": 0.30}
+        return scores.get(confidence, 0.30)
