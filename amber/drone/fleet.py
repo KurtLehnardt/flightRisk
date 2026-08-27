@@ -13,28 +13,46 @@ class DroneFleet:
         self._drones: dict[str, TelloController] = {}
         self._lock = threading.Lock()
         self._primary_id: str | None = None
+        self._pending: set[str] = set()
+
+    def has_host(self, host: str) -> bool:
+        """Check if a drone is already registered at this host IP."""
+        with self._lock:
+            return any(ctrl.host == host for ctrl in self._drones.values())
 
     def register(self, drone_id: str, host: str = "192.168.10.1") -> bool:
         with self._lock:
-            if drone_id in self._drones:
+            if drone_id in self._drones or drone_id in self._pending:
                 return False
-            ctrl = TelloController(name=drone_id, host=host)
+            if any(ctrl.host == host for ctrl in self._drones.values()):
+                return False
+            self._pending.add(drone_id)
+        ctrl = TelloController(name=drone_id, host=host)
+        try:
             if ctrl.connect():
-                self._drones[drone_id] = ctrl
-                if self._primary_id is None:
-                    self._primary_id = drone_id
+                with self._lock:
+                    self._drones[drone_id] = ctrl
+                    if self._primary_id is None:
+                        self._primary_id = drone_id
                 return True
             return False
+        finally:
+            with self._lock:
+                self._pending.discard(drone_id)
 
     def deregister(self, drone_id: str) -> bool:
         with self._lock:
             if drone_id not in self._drones:
                 return False
-            self._drones[drone_id].disconnect()
-            del self._drones[drone_id]
+            ctrl = self._drones.pop(drone_id)
             if self._primary_id == drone_id:
                 self._primary_id = next(iter(self._drones), None)
-            return True
+        # Disconnect outside lock — may hang on dead drone
+        try:
+            ctrl.disconnect()
+        except Exception:
+            pass
+        return True
 
     def get(self, drone_id: str) -> TelloController | None:
         return self._drones.get(drone_id)
@@ -42,6 +60,13 @@ class DroneFleet:
     @property
     def primary(self) -> TelloController | None:
         return self._drones.get(self._primary_id) if self._primary_id else None
+
+    def set_primary(self, drone_id: str) -> bool:
+        with self._lock:
+            if drone_id not in self._drones:
+                return False
+            self._primary_id = drone_id
+            return True
 
     @property
     def count(self) -> int:
@@ -75,10 +100,11 @@ class DroneFleet:
 
     def disconnect_all(self):
         with self._lock:
-            for ctrl in self._drones.values():
-                try:
-                    ctrl.disconnect()
-                except Exception:
-                    pass
+            drones = list(self._drones.values())
             self._drones.clear()
             self._primary_id = None
+        for ctrl in drones:
+            try:
+                ctrl.disconnect()
+            except Exception:
+                pass
