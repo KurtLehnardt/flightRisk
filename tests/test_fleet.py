@@ -79,17 +79,34 @@ class TestGet:
         assert fleet.get("nope") is None
 
 
+class TestDuplicateHost:
+    def test_register_duplicate_host_returns_false(self, mock_tello_connect):
+        fleet = DroneFleet()
+        fleet.register("d1", host="192.168.10.1")
+        assert fleet.register("d2", host="192.168.10.1") is False
+        assert fleet.count == 1
+
+    def test_has_host_returns_true(self, mock_tello_connect):
+        fleet = DroneFleet()
+        fleet.register("d1", host="192.168.10.1")
+        assert fleet.has_host("192.168.10.1") is True
+
+    def test_has_host_returns_false(self, mock_tello_connect):
+        fleet = DroneFleet()
+        assert fleet.has_host("192.168.10.1") is False
+
+
 class TestPrimary:
     def test_primary_is_first_registered(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         assert fleet.primary.name == "d1"
 
     def test_primary_after_deregister_updates(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         fleet.deregister("d1")
         assert fleet.primary.name == "d2"
 
@@ -102,15 +119,15 @@ class TestProperties:
     def test_count_correct(self, mock_tello_connect):
         fleet = DroneFleet()
         assert fleet.count == 0
-        fleet.register("d1")
+        fleet.register("d1", host="192.168.10.1")
         assert fleet.count == 1
-        fleet.register("d2")
+        fleet.register("d2", host="192.168.10.2")
         assert fleet.count == 2
 
     def test_drone_ids_returns_list(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         ids = fleet.drone_ids
         assert "d1" in ids
         assert "d2" in ids
@@ -120,8 +137,8 @@ class TestProperties:
 class TestTelemetry:
     def test_get_all_telemetry_returns_dict(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         telemetry = fleet.get_all_telemetry()
         assert "d1" in telemetry
         assert "d2" in telemetry
@@ -132,8 +149,8 @@ class TestTelemetry:
 class TestBroadcast:
     def test_broadcast_command_calls_all(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         fleet.broadcast_command("hover")
         for did in fleet.drone_ids:
             fleet.get(did).hover.assert_called_once()
@@ -142,8 +159,8 @@ class TestBroadcast:
 class TestDisconnectAll:
     def test_disconnect_all_clears_fleet(self, mock_tello_connect):
         fleet = DroneFleet()
-        fleet.register("d1")
-        fleet.register("d2")
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
         fleet.disconnect_all()
         assert fleet.count == 0
         assert fleet.primary is None

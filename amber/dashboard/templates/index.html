@@ -3,550 +3,1644 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Amber Drone — Lost Child Finder</title>
+    <title>AMBER DRONE — Search & Rescue AI</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-            background: #0a0a0a;
-            color: #e0e0e0;
-            min-height: 100vh;
+        /* ========== DESIGN TOKENS ========== */
+        :root {
+            --bg-primary: #0A0F1A;
+            --bg-secondary: #0F172A;
+            --bg-card: #1E293B;
+            --bg-card-hover: #253349;
+            --border: #334155;
+            --border-light: #475569;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --amber: #FF6B35;
+            --amber-dark: #E5592E;
+            --amber-glow: rgba(255, 107, 53, 0.15);
+            --cyan: #0EA5E9;
+            --cyan-dim: #0284C7;
+            --green: #22C55E;
+            --green-bg: rgba(34, 197, 94, 0.1);
+            --red: #EF4444;
+            --red-bg: rgba(239, 68, 68, 0.1);
+            --red-glow: rgba(239, 68, 68, 0.3);
+            --yellow: #F59E0B;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+            --radius-card: 8px;
+            --radius-btn: 6px;
+            --radius-badge: 12px;
         }
 
-        /* Header */
+        /* ========== RESET & BASE ========== */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ========== HEADER ========== */
         .header {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            padding: 12px 24px;
+            height: 48px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            border-bottom: 2px solid #ff6b35;
+            padding: 0 20px;
+            position: relative;
+            z-index: 50;
         }
-        .header h1 { font-size: 22px; color: #ff6b35; font-weight: 700; }
-        .header h1 span { color: #e0e0e0; font-weight: 300; }
-        .header-right { display: flex; align-items: center; gap: 12px; }
-        .status-badge {
-            padding: 4px 12px; border-radius: 12px;
-            font-size: 12px; font-weight: 600;
+        .header-left {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
         }
-        .status-live { background: #00c853; color: #000; }
-        .status-offline { background: #555; color: #aaa; }
+        .logo {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 2px;
+        }
+        .logo-amber { color: var(--amber); }
+        .logo-drone { color: var(--text-primary); font-weight: 300; }
+        .logo-tagline {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .header-center {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+            transition: background 0.3s;
+        }
+        .status-dot.live {
+            background: var(--green);
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+            animation: pulse-dot 2s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.4); }
+            50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.8); }
+        }
+        .status-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .status-label.live { color: var(--green); }
 
-        /* Main Layout */
-        .main {
-            display: grid;
-            grid-template-columns: 1fr 340px;
-            gap: 0;
-            height: calc(100vh - 52px);
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .battery-widget {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .battery-shell {
+            width: 32px;
+            height: 14px;
+            border: 1.5px solid var(--text-muted);
+            border-radius: 3px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            padding: 2px;
+        }
+        .battery-shell::after {
+            content: '';
+            position: absolute;
+            right: -4px;
+            top: 3px;
+            width: 3px;
+            height: 6px;
+            background: var(--text-muted);
+            border-radius: 0 2px 2px 0;
+        }
+        .battery-fill {
+            height: 100%;
+            border-radius: 1px;
+            background: var(--green);
+            transition: width 0.5s, background 0.5s;
+            width: 100%;
+        }
+        .battery-fill.warning { background: var(--yellow); }
+        .battery-fill.critical { background: var(--red); animation: blink-critical 0.8s infinite; }
+        @keyframes blink-critical {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .battery-pct {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            min-width: 30px;
+        }
+        .temp-value {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
         }
 
-        /* Video Feed */
+        /* ========== MAIN LAYOUT ========== */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 48px);
+        }
+
+        /* ========== VIDEO PANEL ========== */
         .video-panel {
-            position: relative; background: #111;
-            display: flex; align-items: center; justify-content: center;
+            flex: 1;
+            background: #000;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             overflow: hidden;
         }
-        #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
-        .video-overlay {
-            position: absolute; top: 12px; left: 12px;
-            display: flex; flex-direction: column; gap: 4px;
-        }
-        .video-stat {
-            background: rgba(0,0,0,0.7); padding: 3px 8px;
-            border-radius: 4px; font-size: 13px; font-family: 'SF Mono', monospace;
+        #video-feed {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            display: none;
         }
 
-        /* Alert Banner */
-        .alert-banner {
-            display: none; position: absolute; top: 0; left: 0; right: 0;
-            background: rgba(220, 20, 20, 0.95); color: white;
-            padding: 14px 20px; font-size: 20px; font-weight: 700;
-            text-align: center; z-index: 10;
-            animation: pulse 0.8s infinite;
+        /* No-video placeholder with radar animation */
+        .video-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            color: var(--text-muted);
         }
-        .alert-banner.active { display: block; }
-        .alert-banner.amber {
-            background: rgba(245, 166, 35, 0.95);
-            animation: pulse-amber 1.2s infinite;
+        .radar-container {
+            width: 120px;
+            height: 120px;
+            position: relative;
         }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
-        @keyframes pulse-amber { 0%,100%{opacity:1} 50%{opacity:0.8} }
+        .radar-circle {
+            position: absolute;
+            border: 1px solid rgba(14, 165, 233, 0.15);
+            border-radius: 50%;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .radar-circle:nth-child(1) { width: 40px; height: 40px; }
+        .radar-circle:nth-child(2) { width: 70px; height: 70px; }
+        .radar-circle:nth-child(3) { width: 100px; height: 100px; }
+        .radar-sweep {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 50px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--cyan), transparent);
+            transform-origin: left center;
+            animation: sweep 3s linear infinite;
+        }
+        @keyframes sweep {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .radar-dot {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 4px; height: 4px;
+            background: var(--cyan);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 8px var(--cyan);
+        }
+        .placeholder-text {
+            font-size: 12px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            animation: pulse-text 2s ease-in-out infinite;
+        }
+        @keyframes pulse-text {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
 
-        /* Right Sidebar */
+        /* HUD overlay */
+        .hud-overlay {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 5;
+        }
+        .hud-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(10, 15, 26, 0.75);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(51, 65, 85, 0.4);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            width: fit-content;
+        }
+        .hud-pill .hud-val { color: var(--cyan); font-weight: 600; }
+        .hud-pill.match-active {
+            border-color: var(--amber);
+            box-shadow: 0 0 12px var(--amber-glow);
+        }
+        .hud-pill.match-active .hud-val { color: var(--amber); }
+
+        /* Recording indicator */
+        .rec-indicator {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--red);
+            letter-spacing: 1px;
+            z-index: 5;
+        }
+        .rec-indicator.active { display: flex; }
+        .rec-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+            animation: blink-critical 1s infinite;
+        }
+
+        /* Search progress bar on video */
+        .search-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.05);
+            z-index: 5;
+            display: none;
+        }
+        .search-bar.active { display: block; }
+        .search-bar-fill {
+            height: 100%;
+            background: var(--amber);
+            transition: width 0.5s ease;
+            box-shadow: 0 0 8px var(--amber-glow);
+        }
+
+        /* ========== SIDEBAR ========== */
         .sidebar {
-            background: #141414; border-left: 1px solid #333;
-            display: flex; flex-direction: column; overflow-y: auto;
-        }
-        .panel { padding: 14px 16px; border-bottom: 1px solid #2a2a2a; }
-        .panel-title {
-            font-size: 11px; text-transform: uppercase;
-            letter-spacing: 1.5px; color: #888; margin-bottom: 10px;
+            width: 320px;
+            min-width: 320px;
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        /* Target Photo + Description */
-        .target-area { display: flex; gap: 12px; align-items: flex-start; }
+        /* Tabs */
+        .tab-bar {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-primary);
+            flex-shrink: 0;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px 0;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            transition: all 150ms ease;
+            position: relative;
+        }
+        .tab-btn:hover { color: var(--text-secondary); }
+        .tab-btn.active {
+            color: var(--amber);
+            border-bottom-color: var(--amber);
+        }
+        .tab-badge {
+            position: absolute;
+            top: 4px;
+            right: calc(50% - 30px);
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px;
+            border-radius: 8px;
+            background: var(--red);
+            color: white;
+            font-size: 9px;
+            font-weight: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .tab-badge.visible { display: flex; }
+
+        .tab-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        .tab-pane {
+            display: none;
+            padding: 12px;
+        }
+        .tab-pane.active { display: block; }
+
+        /* Scrollbar */
+        .tab-content::-webkit-scrollbar { width: 4px; }
+        .tab-content::-webkit-scrollbar-track { background: transparent; }
+        .tab-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        /* ========== PANEL / SECTION STYLES ========== */
+        .panel-section {
+            backdrop-filter: blur(12px);
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(51, 65, 85, 0.5);
+            border-radius: var(--radius-card);
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .panel-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* ========== TARGET TAB ========== */
+        /* Telemetry compact grid (always visible at top of target tab) */
+        .telem-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .telem-cell {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-btn);
+            padding: 8px 4px;
+            text-align: center;
+        }
+        .telem-val {
+            font-family: var(--font-mono);
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--cyan);
+        }
+        .telem-val.warning { color: var(--yellow); }
+        .telem-val.critical { color: var(--red); }
+        .telem-lbl {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* Target upload */
+        .target-area {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+        .target-upload-zone {
+            width: 120px;
+            height: 120px;
+            border: 2px dashed var(--border);
+            border-radius: var(--radius-card);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 150ms ease;
+            flex-shrink: 0;
+            overflow: hidden;
+            position: relative;
+        }
+        .target-upload-zone:hover {
+            border-color: var(--amber);
+            background: var(--amber-glow);
+        }
+        .target-upload-zone .upload-icon {
+            font-size: 24px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .target-upload-zone .upload-text {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .target-upload-zone.has-image { border-style: solid; border-color: var(--amber); }
         #target-preview {
-            width: 100px; height: 100px; object-fit: cover;
-            border-radius: 8px; border: 2px solid #ff6b35; display: none; flex-shrink: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+            border-radius: 6px;
         }
-        .target-placeholder {
-            width: 100px; height: 100px; border: 2px dashed #555;
-            border-radius: 8px; display: flex; align-items: center;
-            justify-content: center; color: #666; font-size: 11px;
-            cursor: pointer; text-align: center; flex-shrink: 0;
-        }
-        .target-placeholder:hover { border-color: #ff6b35; color: #ff6b35; }
         #target-upload { display: none; }
-        .target-desc {
-            flex: 1; display: flex; flex-direction: column; gap: 6px;
+
+        .target-desc-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
         #target-description {
-            width: 100%; padding: 8px; background: #1e1e1e; border: 1px solid #333;
-            color: #e0e0e0; border-radius: 6px; font-size: 12px; resize: vertical;
-            min-height: 60px; font-family: inherit;
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: var(--radius-btn);
+            font-size: 12px;
+            resize: vertical;
+            min-height: 60px;
+            font-family: var(--font-sans);
+            transition: border-color 150ms ease;
         }
-        #target-description::placeholder { color: #555; }
-        .desc-btn {
-            padding: 6px 10px; background: #ff6b35; border: none;
-            color: white; border-radius: 4px; cursor: pointer;
-            font-size: 11px; font-weight: 600;
+        #target-description:focus {
+            outline: none;
+            border-color: var(--amber);
         }
-        .desc-btn:hover { background: #e5592e; }
+        #target-description::placeholder { color: var(--text-muted); }
 
-        /* Quality Feedback */
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 150ms ease;
+        }
+        .btn-amber {
+            background: var(--amber);
+            color: white;
+        }
+        .btn-amber:hover { background: var(--amber-dark); }
+        .btn-sm { padding: 5px 10px; font-size: 10px; }
+
+        /* Quality badge */
         .quality-feedback { margin-top: 8px; }
         .quality-badge {
-            display: inline-block; padding: 3px 10px; border-radius: 10px;
-            font-size: 11px; font-weight: 700; color: #000;
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: var(--radius-badge);
+            font-size: 11px;
+            font-weight: 700;
         }
+        .quality-badge.good { background: var(--green); color: #000; }
+        .quality-badge.fair { background: var(--yellow); color: #000; }
+        .quality-badge.poor { background: var(--red); color: #fff; }
         .quality-issues {
-            margin: 6px 0 0 16px; padding: 0; font-size: 11px;
-            color: #bbb; list-style: disc;
+            margin: 6px 0 0 16px;
+            padding: 0;
+            font-size: 11px;
+            color: var(--text-secondary);
+            list-style: disc;
         }
         .quality-issues li { margin-bottom: 2px; }
 
         /* Threshold slider */
-        .threshold-row {
-            display: flex; align-items: center; gap: 8px; margin-top: 8px;
+        .threshold-section {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
         }
-        .threshold-row label { font-size: 11px; color: #888; white-space: nowrap; }
-        .threshold-row input[type=range] { flex: 1; }
-        .threshold-row .val { font-size: 12px; color: #00e5ff; font-family: 'SF Mono', monospace; min-width: 32px; }
+        .threshold-section label {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        .threshold-section input[type=range] {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            outline: none;
+        }
+        .threshold-section input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--amber);
+            cursor: pointer;
+            box-shadow: 0 0 6px var(--amber-glow);
+        }
+        .threshold-val {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--cyan);
+            min-width: 32px;
+            font-weight: 600;
+        }
 
-        /* Telemetry */
-        .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .telem-item { background: #1e1e1e; padding: 8px; border-radius: 6px; text-align: center; }
-        .telem-value {
-            font-size: 20px; font-weight: 700; color: #00e5ff;
-            font-family: 'SF Mono', monospace;
-        }
-        .telem-label { font-size: 10px; color: #888; text-transform: uppercase; margin-top: 2px; }
-        .telem-value.warning { color: #ff9800; }
-        .telem-value.critical { color: #f44336; }
-
-        /* Controls */
-        .controls-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-        .ctrl-btn {
-            padding: 10px 4px; border: 1px solid #333; background: #1e1e1e;
-            color: #e0e0e0; border-radius: 6px; cursor: pointer;
-            font-size: 12px; font-weight: 600; transition: all 0.15s;
-        }
-        .ctrl-btn:hover { background: #2a2a2a; border-color: #555; }
-        .ctrl-btn:active { background: #333; }
-        .ctrl-btn.danger { border-color: #c62828; color: #ef5350; }
-        .ctrl-btn.danger:hover { background: #c62828; color: white; }
-        .ctrl-btn.success { border-color: #2e7d32; color: #66bb6a; }
-        .ctrl-btn.success:hover { background: #2e7d32; color: white; }
-        .ctrl-btn.primary { border-color: #ff6b35; color: #ff6b35; }
-        .ctrl-btn.primary:hover { background: #ff6b35; color: white; }
-
-        /* Match Log */
-        .match-log { max-height: 250px; overflow-y: auto; }
-        .match-entry {
-            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
-            margin-bottom: 6px; border-left: 3px solid #ff6b35; font-size: 12px;
-        }
-        .match-entry .time { color: #888; }
-        .match-entry .score { color: #00e5ff; font-weight: 700; }
-        .match-entry .reasoning { color: #aaa; margin-top: 4px; font-style: italic; }
-        .match-entry.confirmed { border-left-color: #00c853; }
-        .match-entry.alert-confirmed { border-left-color: #f44336; }
-        .match-entry.alert-possible { border-left-color: #f5a623; }
-        .match-entry.alert-weak { border-left-color: #607d8b; }
-        .match-entry .snapshot {
-            margin-top: 6px; max-width: 100%; border-radius: 4px;
-        }
-        .alert-badge {
-            display: inline-block; width: 8px; height: 8px;
-            border-radius: 50%; margin-right: 6px; vertical-align: middle;
-        }
-        .alert-badge.confirmed-match { background: #f44336; }
-        .alert-badge.possible-match { background: #f5a623; }
-        .alert-badge.weak-signal { background: #607d8b; }
-
-        /* Threshold Tuner */
-        .tuner-panel { margin-top: 8px; }
-        .tuner-btn {
-            padding: 6px 10px; background: #2a2a2a; border: 1px solid #444;
-            color: #e0e0e0; border-radius: 4px; cursor: pointer;
-            font-size: 11px; font-weight: 600; width: 100%;
-        }
-        .tuner-btn:hover { background: #333; border-color: #666; }
-        .tuner-result {
-            margin-top: 8px; padding: 8px; background: #1a1a1a;
-            border-radius: 6px; font-size: 11px; display: none;
-        }
-        .tuner-result.visible { display: block; }
-        .tuner-row {
-            display: flex; justify-content: space-between;
-            margin-bottom: 4px;
-        }
-        .tuner-row .label { color: #888; }
-        .tuner-row .value { color: #00e5ff; font-family: 'SF Mono', monospace; }
-        .tuner-row .value.high { color: #00c853; }
-        .tuner-row .value.medium { color: #f5a623; }
-        .tuner-row .value.low { color: #f44336; }
-        .tuner-row .value.insufficient_data { color: #888; }
-        .tuner-apply {
-            margin-top: 6px; padding: 5px 10px; background: #ff6b35;
-            border: none; color: white; border-radius: 4px;
-            cursor: pointer; font-size: 11px; font-weight: 600;
-            width: 100%; display: none;
-        }
-        .tuner-apply:hover { background: #e5592e; }
-        .tuner-apply.visible { display: block; }
-
-        /* Fleet */
+        /* ========== CONTROLS TAB ========== */
+        /* Fleet bar */
         .fleet-bar {
-            display: flex; gap: 6px; align-items: center; margin-bottom: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 10px;
         }
         .fleet-select {
-            flex: 1; padding: 6px 8px; background: #1e1e1e;
-            border: 1px solid #333; color: #e0e0e0; border-radius: 6px; font-size: 12px;
+            flex: 1;
+            padding: 7px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: var(--radius-btn);
+            font-size: 12px;
+            font-family: var(--font-sans);
         }
-        .fleet-add-btn {
-            padding: 6px 10px; background: #2a2a2a; border: 1px solid #444;
-            color: #e0e0e0; border-radius: 6px; cursor: pointer;
-            font-size: 11px; font-weight: 600; white-space: nowrap;
+        .btn-ghost {
+            padding: 7px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: all 150ms ease;
         }
-        .fleet-add-btn:hover { background: #333; border-color: #666; }
-        .fleet-panel {
-            display: none; margin-bottom: 8px;
+        .btn-ghost:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-light);
+            color: var(--text-primary);
         }
-        .fleet-panel.visible { display: block; }
+        .btn-danger { color: var(--red); }
+        .btn-danger:hover {
+            background: var(--red-bg);
+            border-color: var(--red);
+            color: var(--red);
+        }
+
+        .fleet-drone-list { margin-bottom: 8px; }
         .fleet-drone-item {
-            background: #1e1e1e; padding: 6px 8px; border-radius: 4px;
-            margin-bottom: 4px; font-size: 11px; display: flex;
-            justify-content: space-between; align-items: center;
+            background: var(--bg-card);
+            padding: 6px 10px;
+            border-radius: 4px;
+            margin-bottom: 4px;
+            font-size: 11px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .fleet-drone-item .drone-name { color: #00e5ff; font-weight: 600; }
-        .fleet-drone-item .drone-bat { color: #888; font-family: 'SF Mono', monospace; }
+        .fleet-drone-item .drone-name { color: var(--cyan); font-weight: 600; }
+        .fleet-drone-item .drone-bat { color: var(--text-muted); font-family: var(--font-mono); }
         .fleet-remove {
-            background: none; border: 1px solid #555; color: #ef5350;
-            border-radius: 3px; cursor: pointer; font-size: 10px; padding: 2px 6px;
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--red);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 6px;
+            transition: all 150ms ease;
         }
-        .fleet-remove:hover { background: #c62828; color: white; border-color: #c62828; }
+        .fleet-remove:hover { background: var(--red); color: white; border-color: var(--red); }
 
-        /* Search */
+        /* D-pad */
+        .dpad-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+        .dpad-btn {
+            min-height: 48px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            transition: all 150ms ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+        }
+        .dpad-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-light);
+            color: var(--text-primary);
+        }
+        .dpad-btn:active {
+            background: var(--border);
+            transform: scale(0.96);
+        }
+        .dpad-btn .dpad-icon { font-size: 16px; line-height: 1; }
+        .dpad-btn .dpad-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; }
+        .dpad-btn.stop-btn {
+            border-color: var(--amber);
+            color: var(--amber);
+        }
+        .dpad-btn.stop-btn:hover {
+            background: var(--amber);
+            color: white;
+        }
+
+        /* Takeoff / Land row */
+        .flight-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .btn-takeoff {
+            flex: 1;
+            min-height: 40px;
+            border: 1px solid var(--green);
+            background: var(--green-bg);
+            color: var(--green);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            transition: all 150ms ease;
+        }
+        .btn-takeoff:hover { background: var(--green); color: #000; }
+        .btn-land {
+            flex: 1;
+            min-height: 40px;
+            border: 1px solid var(--red);
+            background: var(--red-bg);
+            color: var(--red);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            transition: all 150ms ease;
+        }
+        .btn-land:hover { background: var(--red); color: #fff; }
+
+        /* Search pattern */
         .search-select {
-            width: 100%; padding: 8px; background: #1e1e1e;
-            border: 1px solid #333; color: #e0e0e0; border-radius: 6px; margin-bottom: 8px;
+            width: 100%;
+            padding: 8px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: var(--radius-btn);
+            font-size: 12px;
+            font-family: var(--font-sans);
+            margin-bottom: 8px;
+        }
+        .search-actions {
+            display: flex;
+            gap: 6px;
+        }
+        .btn-search-start {
+            flex: 1;
+            padding: 8px;
+            background: var(--amber-glow);
+            border: 1px solid var(--amber);
+            color: var(--amber);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            transition: all 150ms ease;
+        }
+        .btn-search-start:hover { background: var(--amber); color: #fff; }
+        .btn-search-stop {
+            flex: 1;
+            padding: 8px;
+            background: var(--red-bg);
+            border: 1px solid var(--red);
+            color: var(--red);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            transition: all 150ms ease;
+        }
+        .btn-search-stop:hover { background: var(--red); color: #fff; }
+        .search-status {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px;
+            font-family: var(--font-mono);
         }
 
-        .no-video { color: #555; font-size: 14px; }
+        /* Recording toggle */
+        .rec-toggle-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .rec-toggle-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 150ms ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 1;
+            justify-content: center;
+        }
+        .rec-toggle-btn:hover {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .rec-toggle-btn.recording {
+            border-color: var(--red);
+            background: var(--red-bg);
+            color: var(--red);
+            animation: rec-glow 1.5s ease-in-out infinite;
+        }
+        @keyframes rec-glow {
+            0%, 100% { box-shadow: none; }
+            50% { box-shadow: 0 0 12px var(--red-glow); }
+        }
+        .rec-status-text {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
 
-        /* Past Sessions */
-        .sessions-toggle {
-            display: flex; align-items: center; justify-content: space-between;
-            cursor: pointer; user-select: none;
+        /* ========== ALERTS TAB ========== */
+        .match-log { display: flex; flex-direction: column; gap: 6px; }
+        .match-entry {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 10px 12px;
+            border-radius: var(--radius-card);
+            border-left: 3px solid var(--text-muted);
+            font-size: 12px;
+            transition: all 150ms ease;
         }
-        .sessions-toggle .arrow {
-            font-size: 10px; color: #888; transition: transform 0.2s;
+        .match-entry:hover { background: var(--bg-card-hover); }
+        .match-entry.alert-confirmed {
+            border-left-color: var(--red);
+            background: var(--red-bg);
         }
-        .sessions-toggle .arrow.open { transform: rotate(90deg); }
-        .sessions-list { max-height: 300px; overflow-y: auto; }
-        .session-item {
-            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
-            margin-bottom: 6px; border-left: 3px solid #555; font-size: 12px;
-            cursor: pointer; transition: border-color 0.15s;
+        .match-entry.alert-possible {
+            border-left-color: var(--yellow);
         }
-        .session-item:hover { border-left-color: #ff6b35; }
-        .session-item .sess-date { color: #888; }
-        .session-item .sess-source { color: #00e5ff; font-weight: 600; }
-        .session-item .sess-matches { color: #ff6b35; font-weight: 600; }
-        .session-detail {
-            display: none; margin-top: 6px; padding: 6px 8px;
-            background: #161616; border-radius: 4px; font-size: 11px;
+        .match-entry.alert-weak {
+            border-left-color: var(--text-muted);
         }
-        .session-detail.open { display: block; }
-        .session-match-item {
-            padding: 4px 0; border-bottom: 1px solid #222;
+        .match-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
         }
-        .session-match-item:last-child { border-bottom: none; }
-        .session-match-item .sm-type { color: #ff6b35; text-transform: uppercase; font-weight: 600; }
-        .session-match-item .sm-score { color: #00e5ff; }
-        .session-match-item .sm-reasoning { color: #777; font-style: italic; margin-top: 2px; }
+        .alert-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .alert-dot.confirmed-match { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
+        .alert-dot.possible-match { background: var(--yellow); }
+        .alert-dot.weak-signal { background: var(--text-muted); }
+        .match-time { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+        .match-level {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        .match-level.confirmed { background: var(--red-bg); color: var(--red); }
+        .match-level.possible { background: rgba(245, 158, 11, 0.15); color: var(--yellow); }
+        .match-level.weak { background: rgba(100, 116, 139, 0.15); color: var(--text-muted); }
+        .match-scores {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .match-scores .score-val { color: var(--cyan); font-weight: 600; }
+        .match-reasoning {
+            color: var(--text-muted);
+            font-style: italic;
+            font-size: 11px;
+            line-height: 1.4;
+            margin-top: 4px;
+        }
+        .match-snapshot {
+            max-width: 100%;
+            border-radius: var(--radius-btn);
+            margin-top: 6px;
+            border: 1px solid var(--border);
+        }
 
         /* Feedback buttons */
         .feedback-btns {
-            display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle;
+            display: inline-flex;
+            gap: 4px;
+            margin-left: auto;
         }
         .fb-btn {
-            width: 24px; height: 24px; border: 1px solid #444; border-radius: 4px;
-            cursor: pointer; font-size: 13px; line-height: 22px; text-align: center;
-            background: #1e1e1e; transition: all 0.15s; padding: 0;
+            width: 26px;
+            height: 26px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-card);
+            transition: all 150ms ease;
+            padding: 0;
         }
-        .fb-btn:hover { border-color: #888; }
-        .fb-btn.confirm { color: #66bb6a; }
-        .fb-btn.confirm:hover { background: #2e7d32; color: white; border-color: #2e7d32; }
-        .fb-btn.confirm.chosen { background: #2e7d32; color: white; border-color: #2e7d32; }
-        .fb-btn.reject { color: #ef5350; }
-        .fb-btn.reject:hover { background: #c62828; color: white; border-color: #c62828; }
-        .fb-btn.reject.chosen { background: #c62828; color: white; border-color: #c62828; }
-        .fb-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+        .fb-btn.confirm { color: var(--green); }
+        .fb-btn.confirm:hover { background: var(--green); color: #000; border-color: var(--green); }
+        .fb-btn.confirm.chosen { background: var(--green); color: #000; border-color: var(--green); }
+        .fb-btn.reject { color: var(--red); }
+        .fb-btn.reject:hover { background: var(--red); color: #fff; border-color: var(--red); }
+        .fb-btn.reject.chosen { background: var(--red); color: #fff; border-color: var(--red); }
+        .fb-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
 
-        /* Target History */
+        .no-matches-placeholder {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+        .no-matches-placeholder .nm-icon {
+            font-size: 28px;
+            margin-bottom: 8px;
+            opacity: 0.4;
+        }
+        .no-matches-placeholder .nm-text {
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+        .feedback-stats {
+            font-size: 10px;
+            color: var(--text-muted);
+            letter-spacing: 0;
+            text-transform: none;
+        }
+
+        /* ========== FULL-SCREEN MATCH OVERLAY ========== */
+        .match-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(10, 15, 26, 0.85);
+            backdrop-filter: blur(20px);
+        }
+        .match-overlay.active { display: flex; }
+        .match-overlay-card {
+            background: var(--bg-secondary);
+            border: 2px solid var(--red);
+            border-radius: 16px;
+            padding: 32px 40px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 0 60px var(--red-glow), 0 0 120px rgba(239, 68, 68, 0.1);
+            animation: overlay-in 0.4s ease-out;
+        }
+        .match-overlay-card.possible {
+            border-color: var(--amber);
+            box-shadow: 0 0 60px var(--amber-glow), 0 0 120px rgba(255, 107, 53, 0.1);
+        }
+        @keyframes overlay-in {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .overlay-title {
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: 4px;
+            margin-bottom: 4px;
+            animation: glow-text 1.5s ease-in-out infinite;
+        }
+        .overlay-title.red { color: var(--red); }
+        .overlay-title.amber { color: var(--amber); }
+        @keyframes glow-text {
+            0%, 100% { text-shadow: 0 0 10px currentColor; }
+            50% { text-shadow: 0 0 30px currentColor, 0 0 60px currentColor; }
+        }
+        .overlay-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+        .overlay-snapshot {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: var(--radius-card);
+            border: 2px solid var(--border);
+            margin-bottom: 16px;
+        }
+        .overlay-score {
+            font-family: var(--font-mono);
+            font-size: 16px;
+            color: var(--cyan);
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .overlay-reasoning {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-style: italic;
+            line-height: 1.5;
+            margin-bottom: 20px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        .overlay-dismiss {
+            padding: 10px 32px;
+            border: 1px solid var(--border-light);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            transition: all 150ms ease;
+        }
+        .overlay-dismiss:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--text-secondary);
+        }
+        .overlay-timer {
+            margin-top: 12px;
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .overlay-timer-bar {
+            height: 100%;
+            background: var(--red);
+            transition: width linear;
+        }
+        .match-overlay-card.possible .overlay-timer-bar {
+            background: var(--amber);
+        }
+
+        /* ========== ADVANCED SECTION ========== */
+        .advanced-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border-top: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+            flex-shrink: 0;
+        }
+        .advanced-toggle:hover { background: var(--bg-secondary); }
+        .advanced-toggle-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-muted);
+        }
+        .advanced-toggle-arrow {
+            font-size: 10px;
+            color: var(--text-muted);
+            transition: transform 200ms ease;
+        }
+        .advanced-toggle-arrow.open { transform: rotate(180deg); }
+        .advanced-content {
+            display: none;
+            padding: 12px;
+            border-top: 1px solid var(--border);
+            overflow-y: auto;
+            max-height: 400px;
+            flex-shrink: 0;
+        }
+        .advanced-content.open { display: block; }
+
+        /* Observability grid */
+        .obs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .obs-cell {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-btn);
+            padding: 6px 4px;
+            text-align: center;
+        }
+        .obs-val {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--cyan);
+        }
+        .obs-val.error { color: var(--red); }
+        .obs-lbl {
+            font-size: 9px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .obs-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            font-size: 11px;
+        }
+        .obs-row-label { color: var(--text-muted); }
+        .obs-row-val {
+            color: var(--cyan);
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+        .obs-row-val.dim { color: var(--text-muted); }
+        .obs-row.indent { padding-left: 12px; }
+        .obs-row.indent .obs-row-val { color: var(--text-muted); }
+
+        /* Threshold Tuner */
+        .tuner-btn {
+            width: 100%;
+            padding: 7px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            transition: all 150ms ease;
+        }
+        .tuner-btn:hover { background: var(--bg-card-hover); border-color: var(--border-light); }
+        .tuner-result {
+            margin-top: 8px;
+            padding: 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-btn);
+            display: none;
+        }
+        .tuner-result.visible { display: block; }
+        .tuner-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+        .tuner-row .label { color: var(--text-muted); }
+        .tuner-row .value { color: var(--cyan); font-family: var(--font-mono); font-weight: 600; }
+        .tuner-row .value.high { color: var(--green); }
+        .tuner-row .value.medium { color: var(--yellow); }
+        .tuner-row .value.low { color: var(--red); }
+        .tuner-row .value.insufficient_data { color: var(--text-muted); }
+        .tuner-apply {
+            margin-top: 6px;
+            width: 100%;
+            padding: 6px;
+            background: var(--amber);
+            border: none;
+            color: white;
+            border-radius: var(--radius-btn);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            display: none;
+            transition: background 150ms ease;
+        }
+        .tuner-apply:hover { background: var(--amber-dark); }
+        .tuner-apply.visible { display: block; }
+
+        /* Target History & Past Sessions */
+        .collapsible-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+        .collapse-arrow {
+            font-size: 10px;
+            color: var(--text-muted);
+            transition: transform 200ms ease;
+        }
+        .collapse-arrow.open { transform: rotate(90deg); }
+        .collapse-content {
+            display: none;
+            margin-top: 8px;
+        }
+        .collapse-content.open { display: block; }
+
         .target-version-item {
-            background: #1e1e1e; padding: 8px 10px; border-radius: 6px;
-            margin-bottom: 6px; border-left: 3px solid #555; font-size: 12px;
-            display: flex; align-items: center; justify-content: space-between;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            border-radius: var(--radius-btn);
+            margin-bottom: 4px;
+            border-left: 3px solid var(--border);
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
-        .target-version-item.active { border-left-color: #00c853; }
-        .target-version-item .tv-info { flex: 1; }
-        .target-version-item .tv-date { color: #888; }
-        .target-version-item .tv-operator { color: #00e5ff; font-weight: 600; }
-        .target-version-item .tv-quality {
-            display: inline-block; padding: 1px 6px; border-radius: 8px;
-            font-size: 10px; font-weight: 600; margin-left: 6px;
+        .target-version-item.active { border-left-color: var(--green); }
+        .tv-info { flex: 1; }
+        .tv-date { color: var(--text-muted); }
+        .tv-operator { color: var(--cyan); font-weight: 600; }
+        .tv-quality {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 6px;
         }
-        .tv-quality.good { background: #2e7d32; color: #c8e6c9; }
-        .tv-quality.fair { background: #e65100; color: #ffe0b2; }
-        .tv-quality.poor { background: #c62828; color: #ffcdd2; }
-        .target-version-item .tv-active-badge {
-            display: inline-block; padding: 1px 6px; border-radius: 8px;
-            background: #00c853; color: #000; font-size: 10px; font-weight: 700;
+        .tv-quality.good { background: var(--green); color: #000; }
+        .tv-quality.fair { background: var(--yellow); color: #000; }
+        .tv-quality.poor { background: var(--red); color: #fff; }
+        .tv-active-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: var(--green);
+            color: #000;
+            font-size: 10px;
+            font-weight: 700;
             margin-left: 6px;
         }
         .tv-revert-btn {
-            padding: 4px 8px; background: #2a2a2a; border: 1px solid #444;
-            color: #e0e0e0; border-radius: 4px; cursor: pointer;
-            font-size: 10px; font-weight: 600; margin-left: 8px;
+            padding: 4px 8px;
+            background: var(--bg-card-hover);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+            transition: all 150ms ease;
         }
-        .tv-revert-btn:hover { background: #ff6b35; border-color: #ff6b35; color: white; }
+        .tv-revert-btn:hover { background: var(--amber); border-color: var(--amber); color: white; }
 
-        /* Toast */
-        .toast {
-            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-            background: #333; color: white; padding: 10px 20px; border-radius: 8px;
-            font-size: 14px; z-index: 100; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        .session-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            border-radius: var(--radius-btn);
+            margin-bottom: 4px;
+            border-left: 3px solid var(--border);
+            font-size: 12px;
+            cursor: pointer;
+            transition: border-color 150ms ease;
         }
-        .toast.active { display: block; animation: fadeInUp 0.3s; }
-        @keyframes fadeInUp { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+        .session-item:hover { border-left-color: var(--amber); }
+        .sess-date { color: var(--text-muted); }
+        .sess-source { color: var(--cyan); font-weight: 600; margin: 0 6px; }
+        .sess-matches { color: var(--amber); font-weight: 600; }
+        .session-detail {
+            display: none;
+            margin-top: 6px;
+            padding: 6px 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .session-detail.open { display: block; }
+        .session-match-item {
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .session-match-item:last-child { border-bottom: none; }
+        .sm-type { color: var(--amber); text-transform: uppercase; font-weight: 600; }
+        .sm-score { color: var(--cyan); }
+        .sm-reasoning { color: var(--text-muted); font-style: italic; margin-top: 2px; }
+
+        /* ========== TOAST ========== */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(0);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 10px 24px;
+            border-radius: var(--radius-card);
+            font-size: 13px;
+            z-index: 2000;
+            display: none;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(12px);
+        }
+        .toast.active {
+            display: block;
+            animation: toast-in 0.3s ease-out;
+        }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+
+        /* ========== RESPONSIVE ========== */
+        @media (max-width: 768px) {
+            .main-layout {
+                flex-direction: column;
+            }
+            .video-panel {
+                height: 40vh;
+                min-height: 200px;
+            }
+            .sidebar {
+                width: 100%;
+                min-width: unset;
+                flex: 1;
+            }
+            .header-center { display: none; }
+            .logo-tagline { display: none; }
+            .telem-grid { grid-template-columns: 1fr 1fr; }
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>AMBER <span>DRONE</span></h1>
+
+    <!-- ====== HEADER ====== -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-amber">AMBER</span>
+                <span class="logo-drone">DRONE</span>
+            </div>
+            <span class="logo-tagline">Search & Rescue AI</span>
+        </div>
+        <div class="header-center">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-label" class="status-label">OFFLINE</span>
+        </div>
         <div class="header-right">
-            <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+            <div class="battery-widget">
+                <div class="battery-shell">
+                    <div id="battery-fill" class="battery-fill" style="width: 0%"></div>
+                </div>
+                <span id="battery-pct" class="battery-pct">--%</span>
+            </div>
+            <span id="temp-val" class="temp-value"></span>
         </div>
-    </div>
+    </header>
 
-    <div class="main">
-        <!-- Video Feed -->
+    <!-- ====== MAIN LAYOUT ====== -->
+    <div class="main-layout">
+
+        <!-- VIDEO PANEL -->
         <div class="video-panel">
-            <div id="alert-banner" class="alert-banner">
-                CHILD FOUND — Match Detected
-            </div>
             <img id="video-feed" alt="Drone Feed">
-            <p id="no-video" class="no-video">Connecting to video feed...</p>
-            <div class="video-overlay">
-                <span id="hud-fps" class="video-stat">FPS: --</span>
-                <span id="hud-persons" class="video-stat">Persons: 0</span>
-                <span id="hud-match" class="video-stat" style="display:none">Match: --</span>
+
+            <div id="video-placeholder" class="video-placeholder">
+                <div class="radar-container">
+                    <div class="radar-circle"></div>
+                    <div class="radar-circle"></div>
+                    <div class="radar-circle"></div>
+                    <div class="radar-sweep"></div>
+                    <div class="radar-dot"></div>
+                </div>
+                <div class="placeholder-text">Connecting to video feed...</div>
+            </div>
+
+            <!-- HUD overlay -->
+            <div class="hud-overlay">
+                <div id="hud-fps" class="hud-pill">FPS <span class="hud-val">--</span></div>
+                <div id="hud-persons" class="hud-pill">DET <span class="hud-val">0</span></div>
+                <div id="hud-match" class="hud-pill" style="display:none">MATCH <span class="hud-val">--</span></div>
+            </div>
+
+            <!-- Recording indicator -->
+            <div id="rec-indicator" class="rec-indicator">
+                <div class="rec-dot"></div>
+                REC
+            </div>
+
+            <!-- Search progress bar -->
+            <div id="search-bar" class="search-bar">
+                <div id="search-bar-fill" class="search-bar-fill" style="width: 0%"></div>
             </div>
         </div>
 
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <!-- Target Photo + Description -->
-            <div class="panel">
-                <div class="panel-title">Target Child</div>
-                <div class="target-area">
-                    <div>
-                        <img id="target-preview">
-                        <div id="target-placeholder" class="target-placeholder" onclick="document.getElementById('target-upload').click()">
-                            Upload<br>photo
-                        </div>
-                        <input type="file" id="target-upload" accept="image/*">
-                    </div>
-                    <div class="target-desc">
-                        <textarea id="target-description" placeholder="Or describe: red jacket, blue backpack, brown hair, ~8 years old..."></textarea>
-                        <button class="desc-btn" onclick="setDescription()">Set Description</button>
-                    </div>
-                </div>
-                <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
-                <div class="threshold-row">
-                    <label>Match threshold:</label>
-                    <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
-                    <span id="threshold-val" class="val">0.55</span>
-                </div>
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <!-- Tab Bar -->
+            <div class="tab-bar">
+                <button class="tab-btn active" data-tab="target" onclick="switchTab('target')">Target</button>
+                <button class="tab-btn" data-tab="controls" onclick="switchTab('controls')">Controls</button>
+                <button class="tab-btn" data-tab="alerts" onclick="switchTab('alerts')">
+                    Alerts
+                    <span id="alert-tab-badge" class="tab-badge">0</span>
+                </button>
             </div>
 
-            <!-- Telemetry -->
-            <div class="panel">
-                <div class="panel-title">Telemetry</div>
-                <div class="telemetry-grid">
-                    <div class="telem-item">
-                        <div id="telem-battery" class="telem-value">--%</div>
-                        <div class="telem-label">Battery</div>
-                    </div>
-                    <div class="telem-item">
-                        <div id="telem-height" class="telem-value">--cm</div>
-                        <div class="telem-label">Height</div>
-                    </div>
-                    <div class="telem-item">
-                        <div id="telem-fps" class="telem-value">--</div>
-                        <div class="telem-label">FPS</div>
-                    </div>
-                    <div class="telem-item">
-                        <div id="telem-persons" class="telem-value">0</div>
-                        <div class="telem-label">Detected</div>
-                    </div>
-                </div>
-            </div>
+            <!-- Tab Content -->
+            <div class="tab-content">
 
-            <!-- Flight Controls -->
-            <div class="panel">
-                <div class="panel-title">Flight Controls</div>
-                <div class="fleet-bar">
-                    <select id="drone-selector" class="fleet-select">
-                        <option value="">Primary Drone</option>
-                    </select>
-                    <button class="fleet-add-btn" onclick="addDrone()">+ Add Drone</button>
-                </div>
-                <div id="fleet-panel" class="fleet-panel">
-                    <div id="fleet-drones"></div>
-                </div>
-                <div class="controls-grid">
-                    <button class="ctrl-btn" onclick="sendCmd('ccw')">&#8634; Yaw</button>
-                    <button class="ctrl-btn" onclick="sendCmd('forward')">&#8593; Fwd</button>
-                    <button class="ctrl-btn" onclick="sendCmd('cw')">&#8635; Yaw</button>
-                    <button class="ctrl-btn" onclick="sendCmd('left')">&#8592; Left</button>
-                    <button class="ctrl-btn" onclick="sendCmd('hover')">&#9632; Stop</button>
-                    <button class="ctrl-btn" onclick="sendCmd('right')">&#8594; Right</button>
-                    <button class="ctrl-btn" onclick="sendCmd('up')">&#11014; Up</button>
-                    <button class="ctrl-btn" onclick="sendCmd('back')">&#8595; Back</button>
-                    <button class="ctrl-btn" onclick="sendCmd('down')">&#11015; Down</button>
-                </div>
-                <div style="display:flex;gap:6px;margin-top:8px;">
-                    <button class="ctrl-btn success" style="flex:1" onclick="sendCmd('takeoff')">TAKEOFF</button>
-                    <button class="ctrl-btn danger" style="flex:1" onclick="sendCmd('land')">LAND</button>
-                </div>
-            </div>
+                <!-- TARGET TAB -->
+                <div id="tab-target" class="tab-pane active">
 
-            <!-- Search Pattern -->
-            <div class="panel">
-                <div class="panel-title">Autonomous Search</div>
-                <select id="search-pattern" class="search-select">
-                    <option value="expanding_square">Expanding Square (SS) — from LKP</option>
-                    <option value="sector">Sector / Radial (VS) — pie slices</option>
-                    <option value="parallel_track">Parallel Track (PS) — lawnmower</option>
-                    <option value="track_line">Track Line (TS) — follow path</option>
-                    <option value="spiral">Spiral — outward from center</option>
-                </select>
-                <div style="display:flex;gap:6px;">
-                    <button class="ctrl-btn primary" style="flex:1" onclick="startSearch()">START SEARCH</button>
-                    <button class="ctrl-btn danger" style="flex:1" onclick="stopSearch()">STOP</button>
-                </div>
-                <div id="search-status" style="font-size:12px;color:#888;margin-top:8px;"></div>
-            </div>
-
-            <!-- Recording -->
-            <div class="panel">
-                <div class="panel-title">Session Recording</div>
-                <div style="display:flex;gap:6px;">
-                    <button id="rec-btn" class="ctrl-btn danger" style="flex:1" onclick="toggleRecording()">&#9679; REC</button>
-                </div>
-                <div id="rec-status" style="font-size:11px;color:#888;margin-top:6px;"></div>
-            </div>
-
-            <!-- Match Log -->
-            <div class="panel" style="flex:1;">
-                <div class="panel-title">
-                    Match Log <span id="match-count" style="color:#ff6b35;"></span>
-                    <span id="feedback-stats" style="float:right;font-size:10px;color:#888;letter-spacing:0;text-transform:none;"></span>
-                </div>
-                <div id="match-log" class="match-log">
-                    <div style="color:#555;font-size:12px;">No matches yet...</div>
-                </div>
-            </div>
-
-            <!-- Observability -->
-            <div class="panel">
-                <div class="panel-title" style="cursor:pointer;user-select:none;" onclick="toggleObsPanel()">
-                    Observability <span id="obs-toggle" style="float:right;color:#555;">&#9660;</span>
-                </div>
-                <div id="obs-panel" style="display:none;">
-                    <div class="telemetry-grid" style="grid-template-columns:1fr 1fr 1fr;">
-                        <div class="telem-item">
-                            <div id="obs-frames" class="telem-value" style="font-size:16px;">0</div>
-                            <div class="telem-label">Frames</div>
+                    <!-- Telemetry compact -->
+                    <div class="telem-grid">
+                        <div class="telem-cell">
+                            <div id="telem-battery" class="telem-val">--</div>
+                            <div class="telem-lbl">Battery</div>
                         </div>
-                        <div class="telem-item">
-                            <div id="obs-persons" class="telem-value" style="font-size:16px;">0</div>
-                            <div class="telem-label">Persons</div>
+                        <div class="telem-cell">
+                            <div id="telem-height" class="telem-val">--</div>
+                            <div class="telem-lbl">Height</div>
                         </div>
-                        <div class="telem-item">
-                            <div id="obs-errors" class="telem-value" style="font-size:16px;color:#f44336;">0</div>
-                            <div class="telem-label">Errors</div>
+                        <div class="telem-cell">
+                            <div id="telem-fps" class="telem-val">--</div>
+                            <div class="telem-lbl">FPS</div>
+                        </div>
+                        <div class="telem-cell">
+                            <div id="telem-persons" class="telem-val">0</div>
+                            <div class="telem-lbl">Detected</div>
                         </div>
                     </div>
-                    <div style="margin-top:8px;font-size:12px;color:#aaa;">
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span>Matches (total)</span>
-                            <span id="obs-matches-total" style="color:#00e5ff;font-family:'SF Mono',monospace;">0</span>
+
+                    <!-- Target Photo + Description -->
+                    <div class="panel-section">
+                        <div class="panel-title">Target Child</div>
+                        <div class="target-area">
+                            <div id="target-upload-zone" class="target-upload-zone" onclick="document.getElementById('target-upload').click()">
+                                <img id="target-preview">
+                                <div id="upload-prompt">
+                                    <div class="upload-icon">&#9678;</div>
+                                    <div class="upload-text">Upload Photo</div>
+                                </div>
+                            </div>
+                            <input type="file" id="target-upload" accept="image/*">
+                            <div class="target-desc-area">
+                                <textarea id="target-description" placeholder="Or describe: red jacket, blue backpack, brown hair, ~8 years old..."></textarea>
+                                <button class="btn btn-amber btn-sm" onclick="setDescription()">Set Description</button>
+                            </div>
                         </div>
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
-                            <span>ReID</span>
-                            <span id="obs-matches-reid" style="color:#888;font-family:'SF Mono',monospace;">0</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
-                            <span>Face</span>
-                            <span id="obs-matches-face" style="color:#888;font-family:'SF Mono',monospace;">0</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;padding-left:10px;">
-                            <span>Description</span>
-                            <span id="obs-matches-desc" style="color:#888;font-family:'SF Mono',monospace;">0</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span>Face detection rate</span>
-                            <span id="obs-face-rate" style="color:#00e5ff;font-family:'SF Mono',monospace;">--</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                            <span>Reasoning calls</span>
-                            <span id="obs-reasoning" style="color:#888;font-family:'SF Mono',monospace;">0</span>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;">
-                            <span>Avg reasoning latency</span>
-                            <span id="obs-reasoning-lat" style="color:#888;font-family:'SF Mono',monospace;">--</span>
+                        <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
+                        <div class="threshold-section">
+                            <label>Threshold</label>
+                            <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
+                            <span id="threshold-val" class="threshold-val">0.55</span>
                         </div>
                     </div>
                 </div>
+
+                <!-- CONTROLS TAB -->
+                <div id="tab-controls" class="tab-pane">
+
+                    <!-- Fleet Selector -->
+                    <div class="panel-section">
+                        <div class="panel-title">Drone Fleet</div>
+                        <div class="fleet-bar">
+                            <select id="drone-selector" class="fleet-select">
+                                <option value="">Primary Drone</option>
+                            </select>
+                            <button class="btn-ghost" onclick="addDrone()">+ Add</button>
+                            <button class="btn-ghost" onclick="retryDrone()" title="Retry connecting primary drone">Retry</button>
+                            <button class="btn-ghost btn-danger" onclick="removeSelectedDrone()" title="Remove selected drone">Remove</button>
+                            <button class="btn-ghost btn-danger" onclick="removeAllDrones()" title="Disconnect all drones">Remove All</button>
+                            <button class="btn-ghost" onclick="setPrimaryDrone()" title="Set selected drone as primary">Set Primary</button>
+                            <button class="btn-ghost btn-danger" onclick="restartDashboard()" title="Restart dashboard and reconnect">Restart</button>
+                        </div>
+                        <div id="fleet-drone-list" class="fleet-drone-list"></div>
+                    </div>
+
+                    <!-- D-pad Flight Controls -->
+                    <div class="panel-section">
+                        <div class="panel-title">Flight Controls</div>
+                        <div class="dpad-grid">
+                            <button class="dpad-btn" onclick="sendCmd('ccw')">
+                                <span class="dpad-icon">&#8634;</span>
+                                <span class="dpad-label">Yaw L</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('forward')">
+                                <span class="dpad-icon">&#8593;</span>
+                                <span class="dpad-label">Fwd</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('cw')">
+                                <span class="dpad-icon">&#8635;</span>
+                                <span class="dpad-label">Yaw R</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('left')">
+                                <span class="dpad-icon">&#8592;</span>
+                                <span class="dpad-label">Left</span>
+                            </button>
+                            <button class="dpad-btn stop-btn" onclick="sendCmd('hover')">
+                                <span class="dpad-icon">&#9632;</span>
+                                <span class="dpad-label">Stop</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('right')">
+                                <span class="dpad-icon">&#8594;</span>
+                                <span class="dpad-label">Right</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('up')">
+                                <span class="dpad-icon">&#11014;</span>
+                                <span class="dpad-label">Up</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('back')">
+                                <span class="dpad-icon">&#8595;</span>
+                                <span class="dpad-label">Back</span>
+                            </button>
+                            <button class="dpad-btn" onclick="sendCmd('down')">
+                                <span class="dpad-icon">&#11015;</span>
+                                <span class="dpad-label">Down</span>
+                            </button>
+                        </div>
+                        <div class="flight-actions">
+                            <button class="btn-takeoff" onclick="sendCmd('takeoff')">TAKEOFF</button>
+                            <button class="btn-land" onclick="sendCmd('land')">LAND</button>
+                        </div>
+                    </div>
+
+                    <!-- Search Pattern -->
+                    <div class="panel-section">
+                        <div class="panel-title">Autonomous Search</div>
+                        <select id="search-pattern" class="search-select">
+                            <option value="expanding_square">Expanding Square (SS) -- from LKP</option>
+                            <option value="sector">Sector / Radial (VS) -- pie slices</option>
+                            <option value="parallel_track">Parallel Track (PS) -- lawnmower</option>
+                            <option value="track_line">Track Line (TS) -- follow path</option>
+                            <option value="spiral">Spiral -- outward from center</option>
+                        </select>
+                        <div class="search-actions">
+                            <button class="btn-search-start" onclick="startSearch()">START SEARCH</button>
+                            <button class="btn-search-stop" onclick="stopSearch()">STOP</button>
+                        </div>
+                        <div id="search-status" class="search-status"></div>
+                    </div>
+
+                    <!-- Recording -->
+                    <div class="panel-section">
+                        <div class="panel-title">Session Recording</div>
+                        <div class="rec-toggle-wrapper">
+                            <button id="rec-btn" class="rec-toggle-btn" onclick="toggleRecording()">
+                                <span id="rec-btn-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);"></span>
+                                <span id="rec-btn-text">REC</span>
+                            </button>
+                        </div>
+                        <div id="rec-status" class="rec-status-text"></div>
+                    </div>
+                </div>
+
+                <!-- ALERTS TAB -->
+                <div id="tab-alerts" class="tab-pane">
+                    <div class="panel-section" style="border:none; background:none; backdrop-filter:none; padding:0;">
+                        <div class="panel-title">
+                            <span>Match Log <span id="match-count" style="color:var(--amber);"></span></span>
+                            <span id="feedback-stats" class="feedback-stats"></span>
+                        </div>
+                        <div id="match-log" class="match-log">
+                            <div class="no-matches-placeholder">
+                                <div class="nm-icon">&#9673;</div>
+                                <div class="nm-text">No matches detected yet</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
-            <!-- Threshold Tuner -->
-            <div class="panel">
-                <div class="panel-title">Threshold Tuner</div>
-                <div class="tuner-panel">
-                    <button class="tuner-btn" onclick="checkThreshold()">Check Threshold</button>
+            <!-- Advanced Toggle (always at bottom) -->
+            <div class="advanced-toggle" onclick="toggleAdvanced()">
+                <span class="advanced-toggle-label">Advanced</span>
+                <span id="advanced-arrow" class="advanced-toggle-arrow">&#9650;</span>
+            </div>
+            <div id="advanced-content" class="advanced-content">
+
+                <!-- Observability -->
+                <div class="panel-section">
+                    <div class="panel-title">Observability</div>
+                    <div class="obs-grid">
+                        <div class="obs-cell">
+                            <div id="obs-frames" class="obs-val">0</div>
+                            <div class="obs-lbl">Frames</div>
+                        </div>
+                        <div class="obs-cell">
+                            <div id="obs-persons" class="obs-val">0</div>
+                            <div class="obs-lbl">Persons</div>
+                        </div>
+                        <div class="obs-cell">
+                            <div id="obs-errors" class="obs-val error">0</div>
+                            <div class="obs-lbl">Errors</div>
+                        </div>
+                    </div>
+                    <div class="obs-row">
+                        <span class="obs-row-label">Matches (total)</span>
+                        <span id="obs-matches-total" class="obs-row-val">0</span>
+                    </div>
+                    <div class="obs-row indent">
+                        <span class="obs-row-label">ReID</span>
+                        <span id="obs-matches-reid" class="obs-row-val dim">0</span>
+                    </div>
+                    <div class="obs-row indent">
+                        <span class="obs-row-label">Face</span>
+                        <span id="obs-matches-face" class="obs-row-val dim">0</span>
+                    </div>
+                    <div class="obs-row indent">
+                        <span class="obs-row-label">Description</span>
+                        <span id="obs-matches-desc" class="obs-row-val dim">0</span>
+                    </div>
+                    <div class="obs-row">
+                        <span class="obs-row-label">Face detection rate</span>
+                        <span id="obs-face-rate" class="obs-row-val">--</span>
+                    </div>
+                    <div class="obs-row">
+                        <span class="obs-row-label">Reasoning calls</span>
+                        <span id="obs-reasoning" class="obs-row-val dim">0</span>
+                    </div>
+                    <div class="obs-row">
+                        <span class="obs-row-label">Avg reasoning latency</span>
+                        <span id="obs-reasoning-lat" class="obs-row-val dim">--</span>
+                    </div>
+                </div>
+
+                <!-- Threshold Tuner -->
+                <div class="panel-section">
+                    <div class="panel-title">Threshold Tuner</div>
+                    <button class="tuner-btn" onclick="checkThreshold()">Analyze Threshold</button>
                     <div id="tuner-result" class="tuner-result">
                         <div class="tuner-row">
-                            <span class="label">Current threshold</span>
+                            <span class="label">Current</span>
                             <span id="tuner-current" class="value">--</span>
                         </div>
                         <div class="tuner-row">
-                            <span class="label">Suggested threshold</span>
+                            <span class="label">Suggested</span>
                             <span id="tuner-suggested" class="value">--</span>
                         </div>
                         <div class="tuner-row">
@@ -555,56 +1649,67 @@
                         </div>
                         <div class="tuner-row" style="flex-direction:column;">
                             <span class="label">Reason</span>
-                            <span id="tuner-reason" style="color:#aaa;margin-top:2px;"></span>
+                            <span id="tuner-reason" style="color:var(--text-secondary);margin-top:2px;font-size:11px;"></span>
                         </div>
-                        <button id="tuner-apply" class="tuner-apply" onclick="applyThreshold()">Apply Suggested Threshold</button>
+                        <button id="tuner-apply" class="tuner-apply" onclick="applyThreshold()">Apply Suggested</button>
+                    </div>
+                </div>
+
+                <!-- Target History -->
+                <div class="panel-section">
+                    <div class="collapsible-header" onclick="toggleTargetHistory()">
+                        <div class="panel-title" style="margin-bottom:0;">Target History</div>
+                        <span id="target-history-arrow" class="collapse-arrow">&#9654;</span>
+                    </div>
+                    <div id="target-history-container" class="collapse-content">
+                        <div id="target-history-list" style="color:var(--text-muted);font-size:12px;">Loading...</div>
+                    </div>
+                </div>
+
+                <!-- Past Sessions -->
+                <div class="panel-section">
+                    <div class="collapsible-header" onclick="toggleSessions()">
+                        <div class="panel-title" style="margin-bottom:0;">Past Sessions</div>
+                        <span id="sessions-arrow" class="collapse-arrow">&#9654;</span>
+                    </div>
+                    <div id="sessions-container" class="collapse-content">
+                        <div id="sessions-list" style="color:var(--text-muted);font-size:12px;">Loading...</div>
                     </div>
                 </div>
             </div>
+        </aside>
+    </div>
 
-            <!-- Target History -->
-            <div class="panel">
-                <div class="sessions-toggle" onclick="toggleTargetHistory()">
-                    <div class="panel-title" style="margin-bottom:0;">Target History</div>
-                    <span id="target-history-arrow" class="arrow">&#9654;</span>
-                </div>
-                <div id="target-history-container" style="display:none;margin-top:10px;">
-                    <div id="target-history-list" class="sessions-list">
-                        <div style="color:#555;font-size:12px;">Loading...</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Past Sessions -->
-            <div class="panel">
-                <div class="sessions-toggle" onclick="toggleSessions()">
-                    <div class="panel-title" style="margin-bottom:0;">Past Sessions</div>
-                    <span id="sessions-arrow" class="arrow">&#9654;</span>
-                </div>
-                <div id="sessions-container" style="display:none;margin-top:10px;">
-                    <div id="sessions-list" class="sessions-list">
-                        <div style="color:#555;font-size:12px;">Loading...</div>
-                    </div>
-                </div>
+    <!-- FULL-SCREEN MATCH OVERLAY -->
+    <div id="match-overlay" class="match-overlay">
+        <div id="match-overlay-card" class="match-overlay-card">
+            <div id="overlay-title" class="overlay-title red">CHILD FOUND</div>
+            <div id="overlay-subtitle" class="overlay-subtitle">Confirmed Match Detected</div>
+            <img id="overlay-snapshot" class="overlay-snapshot" style="display:none">
+            <div id="overlay-score" class="overlay-score"></div>
+            <div id="overlay-reasoning" class="overlay-reasoning"></div>
+            <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
+            <div class="overlay-timer">
+                <div id="overlay-timer-bar" class="overlay-timer-bar" style="width:100%"></div>
             </div>
         </div>
     </div>
 
+    <!-- TOAST -->
     <div id="toast" class="toast"></div>
 
-    <!-- Audio alert (generated programmatically) -->
+    <!-- ====== SCRIPTS ====== -->
     <script>
-        // Generate alert beep using Web Audio API
+        // Web Audio API alert sounds
         let audioCtx = null;
         function playAlertSound() {
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            // Three ascending beeps
             [0, 150, 300].forEach((delay, i) => {
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
-                osc.frequency.value = 800 + (i * 200);  // 800, 1000, 1200 Hz
+                osc.frequency.value = 800 + (i * 200);
                 osc.type = 'sine';
                 gain.gain.value = 0.3;
                 const t = audioCtx.currentTime + delay / 1000;
@@ -626,16 +1731,33 @@
         }
     </script>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/socket.io.min.js"></script>
     <script>
+        // ========== STATE ==========
         const socket = io();
-        const videoFeed = document.getElementById('video-feed');
-        const noVideo = document.getElementById('no-video');
-        const alertBanner = document.getElementById('alert-banner');
-        const statusBadge = document.getElementById('status-badge');
-        let alertTimeout = null;
         let matchCount = 0;
+        let isRecording = false;
+        let overlayTimeout = null;
+        let overlayTimerInterval = null;
+        let tunerSuggested = null;
+        let targetHistoryOpen = false;
+        let sessionsOpen = false;
+        let advancedOpen = false;
+        let searchTotal = 0;
 
+        // ========== DOM REFS ==========
+        const videoFeed = document.getElementById('video-feed');
+        const videoPlaceholder = document.getElementById('video-placeholder');
+
+        // ========== TABS ==========
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            document.querySelector(`.tab-btn[data-tab="${tabId}"]`).classList.add('active');
+            document.getElementById('tab-' + tabId).classList.add('active');
+        }
+
+        // ========== TOAST ==========
         function showToast(msg) {
             const t = document.getElementById('toast');
             t.textContent = msg;
@@ -643,157 +1765,115 @@
             setTimeout(() => t.classList.remove('active'), 2500);
         }
 
+        // ========== CONNECTION ==========
         socket.on('connect', () => {
-            statusBadge.textContent = 'LIVE';
-            statusBadge.className = 'status-badge status-live';
+            document.getElementById('status-dot').classList.add('live');
+            const lbl = document.getElementById('status-label');
+            lbl.textContent = 'LIVE';
+            lbl.classList.add('live');
             showToast('Connected to Amber Drone');
+            socket.emit('get_fleet_status');
         });
 
         socket.on('disconnect', () => {
-            statusBadge.textContent = 'OFFLINE';
-            statusBadge.className = 'status-badge status-offline';
+            document.getElementById('status-dot').classList.remove('live');
+            const lbl = document.getElementById('status-label');
+            lbl.textContent = 'OFFLINE';
+            lbl.classList.remove('live');
         });
 
+        socket.on('status', (data) => {
+            if (data.connected) {
+                document.getElementById('status-dot').classList.add('live');
+                const lbl = document.getElementById('status-label');
+                lbl.textContent = 'LIVE';
+                lbl.classList.add('live');
+            }
+        });
+
+        // ========== FRAME HANDLER ==========
         socket.on('frame', (data) => {
             videoFeed.src = 'data:image/jpeg;base64,' + data.image;
             videoFeed.style.display = 'block';
-            noVideo.style.display = 'none';
+            videoPlaceholder.style.display = 'none';
 
-            document.getElementById('hud-fps').textContent = 'FPS: ' + data.fps;
-            document.getElementById('hud-persons').textContent = 'Persons: ' + data.persons;
+            // HUD
+            document.getElementById('hud-fps').querySelector('.hud-val').textContent = data.fps;
+            document.getElementById('hud-persons').querySelector('.hud-val').textContent = data.persons;
             document.getElementById('telem-fps').textContent = data.fps;
             document.getElementById('telem-persons').textContent = data.persons;
 
             if (data.match) {
-                document.getElementById('hud-match').style.display = 'block';
-                document.getElementById('hud-match').textContent = 'Match: ' + data.match_score;
+                const hudMatch = document.getElementById('hud-match');
+                hudMatch.style.display = 'flex';
+                hudMatch.classList.add('match-active');
+                hudMatch.querySelector('.hud-val').textContent = data.match_score;
             } else {
                 document.getElementById('hud-match').style.display = 'none';
+                document.getElementById('hud-match').classList.remove('match-active');
             }
 
+            // Telemetry
             if (data.telemetry && data.telemetry.battery !== undefined) {
                 const bat = data.telemetry.battery;
-                const batEl = document.getElementById('telem-battery');
-                batEl.textContent = bat + '%';
-                batEl.className = 'telem-value' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
-                document.getElementById('telem-height').textContent = data.telemetry.height + 'cm';
+                updateBattery(bat);
+                document.getElementById('telem-height').textContent = (data.telemetry.height || 0) + 'cm';
+                if (data.telemetry.temperature) {
+                    document.getElementById('temp-val').textContent = data.telemetry.temperature + 'C';
+                }
             }
-
-            // Banner is now handled by match_alert with tiered alerts
         });
 
+        function updateBattery(bat) {
+            const batEl = document.getElementById('telem-battery');
+            batEl.textContent = bat + '%';
+            batEl.className = 'telem-val' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
+
+            document.getElementById('battery-pct').textContent = bat + '%';
+            const fill = document.getElementById('battery-fill');
+            fill.style.width = bat + '%';
+            fill.className = 'battery-fill' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
+        }
+
+        // ========== TARGET ==========
         socket.on('target_photo', (data) => {
             const preview = document.getElementById('target-preview');
             preview.src = 'data:image/jpeg;base64,' + data.image;
             preview.style.display = 'block';
-            document.getElementById('target-placeholder').style.display = 'none';
+            document.getElementById('upload-prompt').style.display = 'none';
+            document.getElementById('target-upload-zone').classList.add('has-image');
         });
 
-        // target_set is handled in the Target History section below (includes quality display)
+        socket.on('target_set', (data) => {
+            showToast(data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set');
+            if (targetHistoryOpen) loadTargetHistory();
+
+            const qDiv = document.getElementById('quality-feedback');
+            if (qDiv && data && data.quality) {
+                const q = data.quality;
+                const gradeClass = q.grade === 'good' ? 'good' : q.grade === 'fair' ? 'fair' : 'poor';
+                let html = '<span class="quality-badge ' + gradeClass + '">' + q.grade.toUpperCase() + ' (' + q.overall_score.toFixed(2) + ')</span>';
+                if (q.issues && q.issues.length > 0) {
+                    html += '<ul class="quality-issues">';
+                    q.issues.forEach(issue => { html += '<li>' + issue + '</li>'; });
+                    html += '</ul>';
+                }
+                qDiv.innerHTML = html;
+                qDiv.style.display = 'block';
+            } else if (qDiv) {
+                qDiv.style.display = 'none';
+            }
+        });
 
         socket.on('description_set', (data) => {
             showToast('Description set: ' + data.description);
         });
 
         socket.on('threshold_updated', (data) => {
-            // silent
+            // silent update
         });
 
-        socket.on('match_alert', (data) => {
-            matchCount++;
-            document.getElementById('match-count').textContent = '(' + matchCount + ')';
-
-            const alertLevel = data.alert_level || 'possible_match';
-
-            // Tiered audio and notification behavior
-            if (alertLevel === 'confirmed_match') {
-                // Red alert: 3-tone alarm + browser notification
-                playAlertSound();
-                if (Notification.permission === 'granted') {
-                    new Notification('Amber Drone — CHILD FOUND!', {
-                        body: `Score: ${data.score} | Gemma: ${data.gemma_confidence}\n${data.reasoning}`,
-                        requireInteraction: true
-                    });
-                }
-                // Red banner
-                alertBanner.textContent = 'CHILD FOUND — Match Detected';
-                alertBanner.classList.remove('amber');
-                alertBanner.classList.add('active');
-                clearTimeout(alertTimeout);
-                alertTimeout = setTimeout(() => alertBanner.classList.remove('active'), 5000);
-            } else if (alertLevel === 'possible_match') {
-                // Amber alert: single soft beep, amber banner, no browser notification
-                playSoftBeep();
-                alertBanner.textContent = 'POSSIBLE MATCH — VERIFY';
-                alertBanner.classList.add('amber', 'active');
-                clearTimeout(alertTimeout);
-                alertTimeout = setTimeout(() => {
-                    alertBanner.classList.remove('active', 'amber');
-                }, 3000);
-            }
-            // weak_signal: no banner, no sound
-
-            const log = document.getElementById('match-log');
-            // Remove "no matches" placeholder
-            if (matchCount === 1) log.innerHTML = '';
-
-            const isConfirmed = data.gemma_match;
-            const matchId = data.match_id;
-            const entry = document.createElement('div');
-            let entryClass = 'match-entry';
-            if (alertLevel === 'confirmed_match') entryClass += ' alert-confirmed';
-            else if (alertLevel === 'possible_match') entryClass += ' alert-possible';
-            else entryClass += ' alert-weak';
-            entry.className = entryClass;
-
-            // Badge color
-            const badgeClass = alertLevel.replace('_', '-');
-            const alertLabel = alertLevel === 'confirmed_match' ? 'CONFIRMED'
-                : alertLevel === 'possible_match' ? 'POSSIBLE'
-                : 'WEAK';
-
-            let snapshotHtml = '';
-            if (data.snapshot) {
-                snapshotHtml = `<img class="snapshot" src="data:image/jpeg;base64,${data.snapshot}">`;
-            }
-
-            let feedbackHtml = '';
-            if (matchId) {
-                feedbackHtml = `
-                    <span class="feedback-btns" id="fb-${matchId}">
-                        <button class="fb-btn confirm" title="Confirm match" onclick="submitFeedback(${matchId},'confirmed',this)">&#10003;</button>
-                        <button class="fb-btn reject" title="Reject match" onclick="submitFeedback(${matchId},'rejected',this)">&#10007;</button>
-                    </span>`;
-            }
-
-            entry.innerHTML = `
-                <span class="alert-badge ${badgeClass}"></span>
-                <span class="time">${data.time}</span> —
-                Score: <span class="score">${data.score}</span>
-                | Gemma: ${data.gemma_confidence}
-                | <strong>${alertLabel}</strong>
-                ${feedbackHtml}
-                <div class="reasoning">${data.reasoning}</div>
-                ${snapshotHtml}
-            `;
-            log.insertBefore(entry, log.firstChild);
-        });
-
-        socket.on('search_progress', (data) => {
-            document.getElementById('search-status').textContent =
-                `Waypoint ${data.waypoint}/${data.total}: ${data.action}`;
-        });
-
-        socket.on('search_complete', () => {
-            document.getElementById('search-status').textContent = 'Search complete.';
-            showToast('Search pattern complete');
-        });
-
-        socket.on('error', (data) => {
-            showToast('Error: ' + data.message);
-        });
-
-        // --- Target photo upload ---
+        // Target upload
         document.getElementById('target-upload').addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -804,26 +1884,157 @@
                 const preview = document.getElementById('target-preview');
                 preview.src = ev.target.result;
                 preview.style.display = 'block';
-                document.getElementById('target-placeholder').style.display = 'none';
+                document.getElementById('upload-prompt').style.display = 'none';
+                document.getElementById('target-upload-zone').classList.add('has-image');
             };
             reader.readAsDataURL(file);
         });
 
-        // --- Text description ---
         function setDescription() {
             const desc = document.getElementById('target-description').value.trim();
             if (!desc) return;
             socket.emit('set_description', { description: desc });
         }
 
-        // --- Threshold ---
         function updateThreshold(val) {
             const thresh = val / 100;
             document.getElementById('threshold-val').textContent = thresh.toFixed(2);
             socket.emit('set_threshold', { threshold: thresh });
         }
 
-        // --- Drone commands ---
+        // ========== MATCH ALERTS ==========
+        socket.on('match_alert', (data) => {
+            matchCount++;
+            document.getElementById('match-count').textContent = '(' + matchCount + ')';
+
+            // Update tab badge
+            const badge = document.getElementById('alert-tab-badge');
+            badge.textContent = matchCount;
+            badge.classList.add('visible');
+
+            const alertLevel = data.alert_level || 'possible_match';
+
+            // Full-screen overlay for confirmed / possible
+            if (alertLevel === 'confirmed_match') {
+                playAlertSound();
+                showMatchOverlay(data, 'confirmed', 8000);
+                if (Notification.permission === 'granted') {
+                    new Notification('AMBER DRONE -- CHILD FOUND', {
+                        body: 'Score: ' + data.score + ' | ' + data.reasoning,
+                        requireInteraction: true
+                    });
+                }
+            } else if (alertLevel === 'possible_match') {
+                playSoftBeep();
+                showMatchOverlay(data, 'possible', 4000);
+            }
+            // weak_signal: no overlay, no sound
+
+            // Add to log
+            const log = document.getElementById('match-log');
+            if (matchCount === 1) log.innerHTML = '';
+
+            const matchId = data.match_id;
+            const entry = document.createElement('div');
+            let entryClass = 'match-entry';
+            if (alertLevel === 'confirmed_match') entryClass += ' alert-confirmed';
+            else if (alertLevel === 'possible_match') entryClass += ' alert-possible';
+            else entryClass += ' alert-weak';
+            entry.className = entryClass;
+
+            const dotClass = alertLevel.replace('_', '-');
+            const levelLabel = alertLevel === 'confirmed_match' ? 'CONFIRMED'
+                : alertLevel === 'possible_match' ? 'POSSIBLE' : 'WEAK';
+            const levelClass = alertLevel === 'confirmed_match' ? 'confirmed'
+                : alertLevel === 'possible_match' ? 'possible' : 'weak';
+
+            let snapshotHtml = '';
+            if (data.snapshot) {
+                snapshotHtml = '<img class="match-snapshot" src="data:image/jpeg;base64,' + data.snapshot + '">';
+            }
+
+            let feedbackHtml = '';
+            if (matchId) {
+                feedbackHtml = '<span class="feedback-btns" id="fb-' + matchId + '">' +
+                    '<button class="fb-btn confirm" title="Confirm" onclick="submitFeedback(' + matchId + ',\'confirmed\',this)">&#10003;</button>' +
+                    '<button class="fb-btn reject" title="Reject" onclick="submitFeedback(' + matchId + ',\'rejected\',this)">&#10007;</button>' +
+                    '</span>';
+            }
+
+            entry.innerHTML =
+                '<div class="match-header">' +
+                    '<span class="alert-dot ' + dotClass + '"></span>' +
+                    '<span class="match-time">' + data.time + '</span>' +
+                    '<span class="match-level ' + levelClass + '">' + levelLabel + '</span>' +
+                    feedbackHtml +
+                '</div>' +
+                '<div class="match-scores">' +
+                    'Score: <span class="score-val">' + data.score + '</span>' +
+                    ' | Gemma: ' + (data.gemma_confidence || '--') +
+                    (data.face_score ? ' | Face: ' + data.face_score : '') +
+                    (data.reid_score ? ' | ReID: ' + data.reid_score : '') +
+                '</div>' +
+                '<div class="match-reasoning">' + (data.reasoning || '') + '</div>' +
+                snapshotHtml;
+
+            log.insertBefore(entry, log.firstChild);
+        });
+
+        // ========== FULL-SCREEN OVERLAY ==========
+        function showMatchOverlay(data, type, duration) {
+            const overlay = document.getElementById('match-overlay');
+            const card = document.getElementById('match-overlay-card');
+            const title = document.getElementById('overlay-title');
+            const subtitle = document.getElementById('overlay-subtitle');
+            const snapshot = document.getElementById('overlay-snapshot');
+            const score = document.getElementById('overlay-score');
+            const reasoning = document.getElementById('overlay-reasoning');
+            const timerBar = document.getElementById('overlay-timer-bar');
+
+            if (type === 'confirmed') {
+                title.textContent = 'CHILD FOUND';
+                title.className = 'overlay-title red';
+                subtitle.textContent = 'Confirmed Match Detected';
+                card.className = 'match-overlay-card';
+            } else {
+                title.textContent = 'POSSIBLE MATCH';
+                title.className = 'overlay-title amber';
+                subtitle.textContent = 'Verify Target Identity';
+                card.className = 'match-overlay-card possible';
+            }
+
+            if (data.snapshot) {
+                snapshot.src = 'data:image/jpeg;base64,' + data.snapshot;
+                snapshot.style.display = 'block';
+            } else {
+                snapshot.style.display = 'none';
+            }
+
+            score.textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | Gemma: ' + data.gemma_confidence : '');
+            reasoning.textContent = data.reasoning || '';
+
+            // Timer bar animation
+            timerBar.style.transition = 'none';
+            timerBar.style.width = '100%';
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    timerBar.style.transition = 'width ' + duration + 'ms linear';
+                    timerBar.style.width = '0%';
+                });
+            });
+
+            overlay.classList.add('active');
+
+            clearTimeout(overlayTimeout);
+            overlayTimeout = setTimeout(() => dismissOverlay(), duration);
+        }
+
+        function dismissOverlay() {
+            document.getElementById('match-overlay').classList.remove('active');
+            clearTimeout(overlayTimeout);
+        }
+
+        // ========== DRONE COMMANDS ==========
         function getSelectedDroneId() {
             const sel = document.getElementById('drone-selector');
             return sel.value || null;
@@ -839,14 +2050,34 @@
         function startSearch() {
             const pattern = document.getElementById('search-pattern').value;
             socket.emit('start_search', { pattern: pattern });
+            document.getElementById('search-bar').classList.add('active');
         }
 
         function stopSearch() {
             socket.emit('stop_search');
+            document.getElementById('search-bar').classList.remove('active');
+            document.getElementById('search-status').textContent = '';
         }
 
-        // --- Recording ---
-        let isRecording = false;
+        socket.on('search_progress', (data) => {
+            searchTotal = data.total || 1;
+            const pct = Math.round((data.waypoint / searchTotal) * 100);
+            document.getElementById('search-bar-fill').style.width = pct + '%';
+            document.getElementById('search-status').textContent =
+                'WP ' + data.waypoint + '/' + data.total + ': ' + data.action;
+            document.getElementById('search-bar').classList.add('active');
+        });
+
+        socket.on('search_complete', () => {
+            document.getElementById('search-status').textContent = 'Search complete.';
+            document.getElementById('search-bar-fill').style.width = '100%';
+            setTimeout(() => {
+                document.getElementById('search-bar').classList.remove('active');
+            }, 2000);
+            showToast('Search pattern complete');
+        });
+
+        // ========== RECORDING ==========
         function toggleRecording() {
             if (isRecording) {
                 socket.emit('stop_recording');
@@ -857,47 +2088,51 @@
 
         socket.on('recording_started', (data) => {
             isRecording = true;
-            document.getElementById('rec-btn').textContent = '■ STOP REC';
-            document.getElementById('rec-btn').style.background = '#c62828';
-            document.getElementById('rec-btn').style.color = 'white';
+            document.getElementById('rec-btn').classList.add('recording');
+            document.getElementById('rec-btn-text').textContent = 'STOP REC';
+            document.getElementById('rec-indicator').classList.add('active');
             document.getElementById('rec-status').textContent = 'Recording...';
             showToast('Recording started');
         });
 
         socket.on('recording_stopped', (data) => {
             isRecording = false;
-            document.getElementById('rec-btn').textContent = '● REC';
-            document.getElementById('rec-btn').style.background = '';
-            document.getElementById('rec-btn').style.color = '';
+            document.getElementById('rec-btn').classList.remove('recording');
+            document.getElementById('rec-btn-text').textContent = 'REC';
+            document.getElementById('rec-indicator').classList.remove('active');
             document.getElementById('rec-status').textContent = 'Saved: ' + (data.path || '');
             showToast('Recording saved');
         });
 
-        // --- Battery warnings ---
+        // ========== BATTERY WARNINGS ==========
         socket.on('battery_warning', (data) => {
-            showToast('⚠ LOW BATTERY: ' + data.battery + '%');
+            showToast('LOW BATTERY: ' + data.battery + '%');
             playAlertSound();
         });
 
         socket.on('battery_critical', (data) => {
-            showToast('🔴 CRITICAL BATTERY: ' + data.battery + '% — AUTO-LANDING');
+            showToast('CRITICAL BATTERY: ' + data.battery + '% -- AUTO-LANDING');
             playAlertSound();
             playAlertSound();
         });
 
-        // --- Observability panel ---
-        function toggleObsPanel() {
-            const panel = document.getElementById('obs-panel');
-            const toggle = document.getElementById('obs-toggle');
-            if (panel.style.display === 'none') {
-                panel.style.display = 'block';
-                toggle.innerHTML = '&#9650;';
-            } else {
-                panel.style.display = 'none';
-                toggle.innerHTML = '&#9660;';
-            }
-        }
+        // ========== OBSTACLE AVOIDANCE ==========
+        socket.on('obstacle_detected', (data) => {
+            const actionText = {
+                'go_left': 'Evading LEFT',
+                'go_right': 'Evading RIGHT',
+                'reverse': 'REVERSING',
+                'stop': 'STOPPING'
+            }[data.action] || data.action;
+            showToast('Obstacle detected — ' + actionText);
+        });
 
+        // ========== ERROR ==========
+        socket.on('error', (data) => {
+            showToast('Error: ' + data.message);
+        });
+
+        // ========== METRICS ==========
         socket.on('metrics_update', (data) => {
             document.getElementById('obs-frames').textContent = data.frames_processed || 0;
             document.getElementById('obs-persons').textContent = data.persons_detected || 0;
@@ -919,13 +2154,131 @@
             }
         });
 
-        // Request notification permission on load
-        if ('Notification' in window && Notification.permission === 'default') {
-            Notification.requestPermission();
+        // ========== FLEET ==========
+        function addDrone() {
+            const host = prompt('Enter drone IP address:', '192.168.10.1');
+            if (!host) return;
+            const droneId = prompt('Enter drone name:', 'drone-' + (document.getElementById('drone-selector').options.length));
+            if (!droneId) return;
+            socket.emit('register_drone', { drone_id: droneId, host: host });
         }
 
-        // --- Threshold Tuner ---
-        let tunerSuggested = null;
+        function retryDrone() {
+            socket.emit('register_drone', { drone_id: 'drone-1', host: '192.168.10.1' });
+        }
+
+        function removeDrone(droneId) {
+            if (!confirm('Remove drone "' + droneId + '"?')) return;
+            socket.emit('deregister_drone', { drone_id: droneId });
+        }
+
+        function removeSelectedDrone() {
+            const sel = document.getElementById('drone-selector');
+            const droneId = sel.value || 'drone-1';
+            if (!confirm('Remove drone "' + droneId + '"?')) return;
+            socket.emit('deregister_drone', { drone_id: droneId });
+        }
+
+        function removeAllDrones() {
+            if (!confirm('Disconnect all drones?')) return;
+            socket.emit('remove_all_drones');
+        }
+
+        function setPrimaryDrone() {
+            const sel = document.getElementById('drone-selector');
+            const droneId = sel.value;
+            if (!droneId) { showToast('Select a drone first'); return; }
+            socket.emit('set_primary_drone', { drone_id: droneId });
+        }
+
+        function restartDashboard() {
+            if (!confirm('Restart dashboard? All drones will disconnect and reconnect.')) return;
+            socket.emit('restart_dashboard');
+            setTimeout(() => { location.reload(); }, 3000);
+        }
+
+        socket.on('drone_registered', (data) => {
+            if (data.pending) {
+                showToast('Connecting to drone "' + data.drone_id + '"...');
+            } else if (data.success) {
+                showToast('Drone "' + data.drone_id + '" registered');
+            } else {
+                showToast('Failed: ' + (data.error || 'connection failed'));
+            }
+        });
+
+        socket.on('fleet_status', (data) => {
+            updateFleetUI(data);
+        });
+
+        socket.on('fleet_telemetry', (data) => {
+            updateFleetTelemetry(data);
+        });
+
+        function updateFleetUI(data) {
+            const selector = document.getElementById('drone-selector');
+            const container = document.getElementById('fleet-drone-list');
+            const currentVal = selector.value;
+
+            selector.innerHTML = '<option value="">Primary Drone</option>';
+            const drones = data.drones || {};
+            const droneIds = Object.keys(drones);
+
+            droneIds.forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = id;
+                selector.appendChild(opt);
+            });
+            if (currentVal && droneIds.includes(currentVal)) {
+                selector.value = currentVal;
+            }
+
+            if (data.count > 1) {
+                container.innerHTML = '';
+                droneIds.forEach(id => {
+                    const info = drones[id] || {};
+                    const item = document.createElement('div');
+                    item.className = 'fleet-drone-item';
+                    item.innerHTML = '<span class="drone-name">' + id + '</span>' +
+                        '<span class="drone-bat">Bat: ' + (info.battery || '--') + '%</span>' +
+                        '<button class="fleet-remove" onclick="removeDrone(\'' + id + '\')">X</button>';
+                    container.appendChild(item);
+                });
+            } else {
+                container.innerHTML = '';
+            }
+        }
+
+        function updateFleetTelemetry(data) {
+            const container = document.getElementById('fleet-drone-list');
+            if (!container) return;
+            const items = container.querySelectorAll('.fleet-drone-item');
+            items.forEach(item => {
+                const name = item.querySelector('.drone-name');
+                if (name && data[name.textContent]) {
+                    const info = data[name.textContent];
+                    const bat = item.querySelector('.drone-bat');
+                    if (bat) bat.textContent = 'Bat: ' + (info.battery || '--') + '%';
+                }
+            });
+        }
+
+        // ========== ADVANCED PANEL ==========
+        function toggleAdvanced() {
+            advancedOpen = !advancedOpen;
+            const content = document.getElementById('advanced-content');
+            const arrow = document.getElementById('advanced-arrow');
+            if (advancedOpen) {
+                content.classList.add('open');
+                arrow.classList.add('open');
+            } else {
+                content.classList.remove('open');
+                arrow.classList.remove('open');
+            }
+        }
+
+        // ========== THRESHOLD TUNER ==========
         function checkThreshold() {
             const resultEl = document.getElementById('tuner-result');
             resultEl.classList.add('visible');
@@ -960,28 +2313,25 @@
         function applyThreshold() {
             if (tunerSuggested !== null) {
                 socket.emit('set_threshold', { threshold: tunerSuggested });
-                // Update slider to match
                 const sliderVal = Math.round(tunerSuggested * 100);
                 document.getElementById('threshold-slider').value = sliderVal;
                 document.getElementById('threshold-val').textContent = tunerSuggested.toFixed(2);
                 showToast('Threshold updated to ' + tunerSuggested.toFixed(3));
-                // Refresh the tuner display
                 checkThreshold();
             }
         }
 
-        // --- Target History ---
-        let targetHistoryOpen = false;
+        // ========== TARGET HISTORY ==========
         function toggleTargetHistory() {
             targetHistoryOpen = !targetHistoryOpen;
             const container = document.getElementById('target-history-container');
             const arrow = document.getElementById('target-history-arrow');
             if (targetHistoryOpen) {
-                container.style.display = 'block';
+                container.classList.add('open');
                 arrow.classList.add('open');
                 loadTargetHistory();
             } else {
-                container.style.display = 'none';
+                container.classList.remove('open');
                 arrow.classList.remove('open');
             }
         }
@@ -992,7 +2342,7 @@
                 .then(versions => {
                     const list = document.getElementById('target-history-list');
                     if (!versions.length) {
-                        list.innerHTML = '<div style="color:#555;font-size:12px;">No target versions</div>';
+                        list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No target versions</div>';
                         return;
                     }
                     list.innerHTML = '';
@@ -1019,7 +2369,7 @@
                 })
                 .catch(() => {
                     document.getElementById('target-history-list').innerHTML =
-                        '<div style="color:#555;font-size:12px;">Failed to load target history</div>';
+                        '<div style="color:var(--text-muted);font-size:12px;">Failed to load target history</div>';
                 });
         }
 
@@ -1027,43 +2377,17 @@
             socket.emit('revert_target', { version_id: versionId });
         }
 
-        // Refresh target history and show quality after setting a new target
-        socket.on('target_set', (data) => {
-            showToast(data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set');
-            if (targetHistoryOpen) {
-                loadTargetHistory();
-            }
-            // Show quality feedback
-            const qDiv = document.getElementById('quality-feedback');
-            if (qDiv && data && data.quality) {
-                const q = data.quality;
-                const colors = { good: '#00c853', fair: '#f5a623', poor: '#f44336' };
-                const color = colors[q.grade] || '#888';
-                let html = '<span class="quality-badge" style="background:' + color + ';">' + q.grade.toUpperCase() + ' (' + q.overall_score.toFixed(2) + ')</span>';
-                if (q.issues && q.issues.length > 0) {
-                    html += '<ul class="quality-issues">';
-                    q.issues.forEach(issue => { html += '<li>' + issue + '</li>'; });
-                    html += '</ul>';
-                }
-                qDiv.innerHTML = html;
-                qDiv.style.display = 'block';
-            } else if (qDiv) {
-                qDiv.style.display = 'none';
-            }
-        });
-
-        // --- Past Sessions ---
-        let sessionsOpen = false;
+        // ========== PAST SESSIONS ==========
         function toggleSessions() {
             sessionsOpen = !sessionsOpen;
             const container = document.getElementById('sessions-container');
             const arrow = document.getElementById('sessions-arrow');
             if (sessionsOpen) {
-                container.style.display = 'block';
+                container.classList.add('open');
                 arrow.classList.add('open');
                 loadSessions();
             } else {
-                container.style.display = 'none';
+                container.classList.remove('open');
                 arrow.classList.remove('open');
             }
         }
@@ -1074,7 +2398,7 @@
                 .then(sessions => {
                     const list = document.getElementById('sessions-list');
                     if (!sessions.length) {
-                        list.innerHTML = '<div style="color:#555;font-size:12px;">No past sessions</div>';
+                        list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No past sessions</div>';
                         return;
                     }
                     list.innerHTML = '';
@@ -1083,19 +2407,18 @@
                         item.className = 'session-item';
                         const date = s.started_at ? s.started_at.replace('T', ' ') : 'Unknown';
                         const matches = s.total_matches || 0;
-                        item.innerHTML = `
-                            <span class="sess-date">${date}</span>
-                            <span class="sess-source">${s.source || 'unknown'}</span>
-                            <span class="sess-matches">${matches} match${matches !== 1 ? 'es' : ''}</span>
-                            <div class="session-detail" id="detail-${s.id}"></div>
-                        `;
+                        item.innerHTML =
+                            '<span class="sess-date">' + date + '</span>' +
+                            '<span class="sess-source">' + (s.source || 'unknown') + '</span>' +
+                            '<span class="sess-matches">' + matches + ' match' + (matches !== 1 ? 'es' : '') + '</span>' +
+                            '<div class="session-detail" id="detail-' + s.id + '"></div>';
                         item.onclick = () => toggleSessionDetail(s.id);
                         list.appendChild(item);
                     });
                 })
                 .catch(() => {
                     document.getElementById('sessions-list').innerHTML =
-                        '<div style="color:#555;font-size:12px;">Failed to load sessions</div>';
+                        '<div style="color:var(--text-muted);font-size:12px;">Failed to load sessions</div>';
                 });
         }
 
@@ -1106,31 +2429,31 @@
                 detail.classList.remove('open');
                 return;
             }
-            detail.innerHTML = '<div style="color:#555;">Loading...</div>';
+            detail.innerHTML = '<div style="color:var(--text-muted);">Loading...</div>';
             detail.classList.add('open');
             fetch('/api/sessions/' + sessionId)
                 .then(r => r.json())
                 .then(data => {
                     const matches = data.matches || [];
                     if (!matches.length) {
-                        detail.innerHTML = '<div style="color:#555;">No matches in this session</div>';
+                        detail.innerHTML = '<div style="color:var(--text-muted);">No matches in this session</div>';
                         return;
                     }
-                    detail.innerHTML = matches.map(m => `
-                        <div class="session-match-item">
-                            <span class="sm-type">${m.match_type}</span>
-                            <span class="sm-score">Score: ${(m.combined_score || 0).toFixed(3)}</span>
-                            ${m.gemma_confidence ? ' | Gemma: ' + m.gemma_confidence : ''}
-                            ${m.reasoning ? '<div class="sm-reasoning">' + m.reasoning + '</div>' : ''}
-                        </div>
-                    `).join('');
+                    detail.innerHTML = matches.map(m =>
+                        '<div class="session-match-item">' +
+                            '<span class="sm-type">' + m.match_type + '</span> ' +
+                            '<span class="sm-score">Score: ' + (m.combined_score || 0).toFixed(3) + '</span>' +
+                            (m.gemma_confidence ? ' | Gemma: ' + m.gemma_confidence : '') +
+                            (m.reasoning ? '<div class="sm-reasoning">' + m.reasoning + '</div>' : '') +
+                        '</div>'
+                    ).join('');
                 })
                 .catch(() => {
-                    detail.innerHTML = '<div style="color:#555;">Failed to load details</div>';
+                    detail.innerHTML = '<div style="color:var(--text-muted);">Failed to load details</div>';
                 });
         }
 
-        // --- Match Feedback ---
+        // ========== FEEDBACK ==========
         function submitFeedback(matchId, feedback, btnEl) {
             const container = document.getElementById('fb-' + matchId);
             if (!container) return;
@@ -1169,104 +2492,17 @@
                     const c = data.total_confirmed || 0;
                     const r2 = data.total_rejected || 0;
                     if (c + r2 > 0) {
-                        el.innerHTML = '<span style="color:#66bb6a;">' + c + '&#10003;</span> / <span style="color:#ef5350;">' + r2 + '&#10007;</span>';
+                        el.innerHTML = '<span style="color:var(--green);">' + c + ' &#10003;</span> / <span style="color:var(--red);">' + r2 + ' &#10007;</span>';
                     }
                 })
                 .catch(() => {});
         }
 
-        // --- Fleet Management ---
-        function addDrone() {
-            const host = prompt('Enter drone IP address:', '192.168.10.1');
-            if (!host) return;
-            const droneId = prompt('Enter drone name:', 'drone-' + (document.getElementById('drone-selector').options.length));
-            if (!droneId) return;
-            socket.emit('register_drone', { drone_id: droneId, host: host });
+        // ========== INIT ==========
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
         }
-
-        function removeDrone(droneId) {
-            if (!confirm('Remove drone "' + droneId + '"?')) return;
-            socket.emit('deregister_drone', { drone_id: droneId });
-        }
-
-        socket.on('drone_registered', (data) => {
-            if (data.success) {
-                showToast('Drone "' + data.drone_id + '" registered');
-            } else {
-                showToast('Failed to register drone "' + data.drone_id + '"');
-            }
-        });
-
-        socket.on('fleet_status', (data) => {
-            updateFleetUI(data);
-        });
-
-        socket.on('fleet_telemetry', (data) => {
-            updateFleetTelemetry(data);
-        });
-
-        function updateFleetUI(data) {
-            const selector = document.getElementById('drone-selector');
-            const panel = document.getElementById('fleet-panel');
-            const container = document.getElementById('fleet-drones');
-            const currentVal = selector.value;
-
-            // Update selector
-            selector.innerHTML = '<option value="">Primary Drone</option>';
-            const drones = data.drones || {};
-            const droneIds = Object.keys(drones);
-
-            droneIds.forEach(id => {
-                const opt = document.createElement('option');
-                opt.value = id;
-                opt.textContent = id;
-                selector.appendChild(opt);
-            });
-            if (currentVal && droneIds.includes(currentVal)) {
-                selector.value = currentVal;
-            }
-
-            // Show/hide fleet panel
-            if (data.count > 1) {
-                panel.classList.add('visible');
-                container.innerHTML = '';
-                droneIds.forEach(id => {
-                    const info = drones[id] || {};
-                    const item = document.createElement('div');
-                    item.className = 'fleet-drone-item';
-                    item.innerHTML = '<span class="drone-name">' + id + '</span>' +
-                        '<span class="drone-bat">Bat: ' + (info.battery || '--') + '%</span>' +
-                        '<button class="fleet-remove" onclick="removeDrone(\'' + id + '\')">X</button>';
-                    container.appendChild(item);
-                });
-            } else {
-                panel.classList.remove('visible');
-            }
-        }
-
-        function updateFleetTelemetry(data) {
-            const container = document.getElementById('fleet-drones');
-            if (!container) return;
-            const items = container.querySelectorAll('.fleet-drone-item');
-            items.forEach(item => {
-                const name = item.querySelector('.drone-name');
-                if (name && data[name.textContent]) {
-                    const info = data[name.textContent];
-                    const bat = item.querySelector('.drone-bat');
-                    if (bat) bat.textContent = 'Bat: ' + (info.battery || '--') + '%';
-                }
-            });
-        }
-
-        // Request fleet status on connect
-        socket.on('connect', () => {
-            socket.emit('get_fleet_status');
-        });
-
-        // Load initial feedback stats
         refreshFeedbackStats();
-
-        // Load sessions on page load (for the collapsed state data pre-fetch)
         fetch('/api/sessions').catch(() => {});
     </script>
 </body>

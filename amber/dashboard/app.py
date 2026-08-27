@@ -132,6 +132,15 @@ def _init_pipeline(source="webcam", target_path=None):
         _state["db"] = SessionDB()
         log.info("session_db_initialized")
 
+    # Initialize obstacle guard
+    if _state.get("obstacle_guard") is None:
+        try:
+            from amber.drone.obstacle import ObstacleGuard
+            _state["obstacle_guard"] = ObstacleGuard()
+            log.info("obstacle_guard_initialized")
+        except Exception as e:
+            log.warning("obstacle_guard_unavailable", error=str(e))
+
     # Initialize target canon
     if _state.get("canon") is None:
         _state["canon"] = TargetCanon()
@@ -148,12 +157,25 @@ def _init_pipeline(source="webcam", target_path=None):
     _state["source"] = source
     if source == "tello":
         fleet = DroneFleet()
-        if fleet.register("drone-1"):
-            _state["fleet"] = fleet
-        else:
-            log.warning("tello_connection_failed", fallback="webcam")
-            _state["source"] = "webcam"
-            _state["cap"] = cv2.VideoCapture(0)
+        _state["fleet"] = fleet
+        def _auto_connect_loop():
+            while _state.get("running", True):
+                primary = fleet.primary
+                if primary and primary.state.is_connected:
+                    time.sleep(3)
+                    continue
+                # Drone missing or disconnected — clean up and retry
+                if "drone-1" in fleet.drone_ids:
+                    log.info("tello_disconnected", hint="cleaning up for reconnect")
+                    fleet.deregister("drone-1")
+                    time.sleep(2)  # let UDP sockets release
+                if fleet.register("drone-1"):
+                    log.info("tello_connected")
+                    socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
+                else:
+                    log.info("tello_waiting", hint="retrying in 5s")
+                time.sleep(5)
+        threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "webcam":
         _state["cap"] = cv2.VideoCapture(0)
     else:
@@ -725,7 +747,8 @@ def on_revert_target(data):
     if img is None:
         emit("error", {"message": "Target version not found"})
         return
-    _state["target_photo"] = img
+    _, buf = cv2.imencode(".jpg", img)
+    _state["target_photo"] = base64.b64encode(buf).decode("utf-8")
     if _state.get("reid"):
         _state["reid"].set_target(img)
     face_ok = False
@@ -790,7 +813,11 @@ def on_drone_command(data):
 
     action = commands.get(cmd)
     if action:
-        action()
+        try:
+            action()
+        except Exception as e:
+            emit("error", {"message": f"Command '{cmd}' failed: {e}"})
+            return
     if _state["logger"]:
         _state["logger"].drone_command(command=cmd)
     emit("command_ack", {"command": cmd})
@@ -815,9 +842,72 @@ def on_start_search(data):
     emit("search_started", {"pattern": pattern_name, "waypoints": len(waypoints)})
 
     def _execute_search():
-        for i, wp in enumerate(waypoints):
+        MAX_AVOIDANCE_RETRIES = 5
+        obstacle_guard = _state.get("obstacle_guard")
+
+        i = 0
+        while i < len(waypoints):
             if not _state["search_active"]:
                 break
+
+            wp = waypoints[i]
+            avoidance_retries = 0
+            frame_warned = False
+            skip_waypoint = False
+
+            # Obstacle check loop for this waypoint
+            while avoidance_retries < MAX_AVOIDANCE_RETRIES:
+                if not _state["search_active"]:
+                    break
+                if not (obstacle_guard and drone):
+                    break
+
+                frame = drone.get_frame()
+                if frame is None:
+                    if not frame_warned:
+                        socketio.emit("warning", {"message": "No video frame — obstacle check skipped"})
+                        frame_warned = True
+                    break
+
+                check = obstacle_guard.check_path(frame)
+                if check["safe"]:
+                    break
+
+                avoidance_retries += 1
+                socketio.emit("obstacle_detected", {
+                    "action": check["action"],
+                    "center_depth": round(check["center_depth"], 3),
+                    "waypoint": i + 1,
+                    "retry": avoidance_retries,
+                })
+
+                if avoidance_retries >= MAX_AVOIDANCE_RETRIES:
+                    socketio.emit("warning", {
+                        "message": f"Max avoidance retries ({MAX_AVOIDANCE_RETRIES}) reached at waypoint {i + 1}, skipping"
+                    })
+                    skip_waypoint = True
+                    break
+
+                try:
+                    if check["action"] == "go_left":
+                        drone.move("left", 30)
+                        time.sleep(0.5)
+                    elif check["action"] == "go_right":
+                        drone.move("right", 30)
+                        time.sleep(0.5)
+                    elif check["action"] == "reverse":
+                        drone.move("back", 50)
+                        time.sleep(0.5)
+                        drone.rotate(90)
+                        time.sleep(0.5)
+                except Exception as e:
+                    socketio.emit("error", {"message": f"Avoidance error: {e}"})
+                    break
+
+            if skip_waypoint:
+                i += 1
+                continue
+
             socketio.emit("search_progress", {
                 "waypoint": i + 1,
                 "total": len(waypoints),
@@ -831,6 +921,8 @@ def on_start_search(data):
             except Exception as e:
                 socketio.emit("error", {"message": f"Search error: {e}"})
                 break
+
+            i += 1
 
         _state["search_active"] = False
         socketio.emit("search_complete", {})
@@ -871,9 +963,31 @@ def on_register_drone(data):
     if not fleet:
         fleet = DroneFleet()
         _state["fleet"] = fleet
-    success = fleet.register(drone_id, host)
-    emit("drone_registered", {"drone_id": drone_id, "success": success})
-    emit("fleet_status", {"drones": fleet.get_all_telemetry(), "count": fleet.count})
+
+    # Check for duplicate host before attempting connection
+    if fleet.has_host(host):
+        emit("drone_registered", {"drone_id": drone_id, "success": False, "error": f"A drone is already connected at {host}"})
+        return
+
+    # Notify client that registration is in progress
+    emit("drone_registered", {"drone_id": drone_id, "success": None, "pending": True})
+
+    # Connect in background thread so we don't block the socket
+    def _bg_register():
+        success = fleet.register(drone_id, host)
+        if success:
+            socketio.emit("drone_registered", {"drone_id": drone_id, "success": True})
+            # Switch source to tello if we were on webcam fallback
+            if _state.get("source") != "tello":
+                _state["source"] = "tello"
+                cap = _state.get("cap")
+                if cap:
+                    cap.release()
+                    _state["cap"] = None
+        else:
+            socketio.emit("drone_registered", {"drone_id": drone_id, "success": False, "error": "Connection timed out"})
+        socketio.emit("fleet_status", {"drones": fleet.get_all_telemetry(), "count": fleet.count})
+    threading.Thread(target=_bg_register, daemon=True).start()
 
 
 @socketio.on("deregister_drone")
@@ -882,6 +996,17 @@ def on_deregister_drone(data):
     drone_id = data.get("drone_id")
     if fleet and drone_id:
         fleet.deregister(drone_id)
+    emit("fleet_status", {
+        "drones": fleet.get_all_telemetry() if fleet else {},
+        "count": fleet.count if fleet else 0
+    })
+
+
+@socketio.on("remove_all_drones")
+def on_remove_all_drones():
+    fleet = _state.get("fleet")
+    if fleet:
+        fleet.disconnect_all()
     emit("fleet_status", {
         "drones": fleet.get_all_telemetry() if fleet else {},
         "count": fleet.count if fleet else 0
@@ -897,10 +1022,29 @@ def on_get_fleet_status():
     })
 
 
+@socketio.on("set_primary_drone")
+def on_set_primary_drone(data):
+    fleet = _state.get("fleet")
+    drone_id = data.get("drone_id")
+    if fleet and drone_id and fleet.set_primary(drone_id):
+        emit("primary_set", {"drone_id": drone_id, "success": True})
+    else:
+        emit("primary_set", {"drone_id": drone_id, "success": False})
+
+
+@socketio.on("restart_dashboard")
+def on_restart_dashboard():
+    fleet = _state.get("fleet")
+    if fleet:
+        fleet.disconnect_all()
+    _init_pipeline(source=_state.get("source", "tello"), target_path=_state.get("target_photo_path"))
+    emit("dashboard_restarted", {})
+
+
 def run_dashboard(source="webcam", target_path=None, port=5555):
     """Start the dashboard server."""
-    _init_pipeline(source=source, target_path=target_path)
     _state["running"] = True
+    _init_pipeline(source=source, target_path=target_path)
 
     frame_thread = threading.Thread(target=_frame_loop, daemon=True)
     frame_thread.start()

@@ -38,6 +38,10 @@ class TelloController:
         self._state_thread: threading.Thread | None = None
         self._running = False
         self._frame_callbacks: list[Callable[[np.ndarray], None]] = []
+        self._last_frame_time: float = 0
+        self._stream_recovering = False
+        self._frozen_count: int = 0
+        self._last_frame_hash: int = 0
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -60,9 +64,15 @@ class TelloController:
         """Land if flying, stop streams, disconnect."""
         self._running = False
         if self.state.is_flying:
-            self.land()
+            try:
+                self.land()
+            except Exception:
+                pass
         try:
             self.tello.streamoff()
+        except Exception:
+            pass
+        try:
             self.tello.end()
         except Exception:
             pass
@@ -77,13 +87,54 @@ class TelloController:
             frame_read = self.tello.get_frame_read()
             frame = frame_read.frame
             if frame is not None:
+                # Lightweight frozen frame detection using center pixel hash
+                h, w = frame.shape[:2]
+                cx, cy = w // 2, h // 2
+                sample = frame[max(0,cy-5):cy+5, max(0,cx-5):cx+5].tobytes()
+                frame_hash = hash(sample)
+                if frame_hash == getattr(self, '_last_frame_hash', None):
+                    self._frozen_count = getattr(self, '_frozen_count', 0) + 1
+                else:
+                    self._frozen_count = 0
+                self._last_frame_hash = frame_hash
+
+                if self._frozen_count > 100:
+                    if not self._stream_recovering:
+                        print(f"[{self.name}] Frozen frame detected ({self._frozen_count} identical), recovering...")
+                        self._recover_stream()
+                    return None
+
+                self._last_frame_time = time.time()
                 with self._frame_lock:
                     self._frame = frame.copy()
                 for cb in self._frame_callbacks:
                     cb(frame)
-            return frame
+                return frame
+            if (self._last_frame_time > 0
+                    and time.time() - self._last_frame_time > 5
+                    and not self._stream_recovering):
+                self._recover_stream()
+            return None
         except Exception:
             return None
+
+    def _recover_stream(self):
+        """Restart the video stream after it goes stale."""
+        self._stream_recovering = True
+        def _do_recover():
+            print(f"[{self.name}] Video stream stale, restarting...")
+            try:
+                self.tello.streamoff()
+            except Exception:
+                pass
+            time.sleep(1)
+            try:
+                self.tello.streamon()
+                print(f"[{self.name}] Video stream restarted.")
+            except Exception as e:
+                print(f"[{self.name}] Stream recovery failed: {e}")
+            self._stream_recovering = False
+        threading.Thread(target=_do_recover, daemon=True, name=f"{self.name}-stream-recover").start()
 
     def on_frame(self, callback: Callable[[np.ndarray], None]):
         """Register a callback that receives each new frame."""
@@ -130,7 +181,7 @@ class TelloController:
         def _keepalive():
             while self._running:
                 try:
-                    self.tello.send_keepalive()
+                    self.tello.send_control_command("command", timeout=5)
                 except Exception:
                     pass
                 time.sleep(10)
@@ -143,14 +194,30 @@ class TelloController:
     def _start_state_polling(self):
         """Poll drone state every 2 seconds."""
         def _poll():
+            poll_failures = 0
             while self._running:
                 try:
+                    # Use query_battery which has a shorter timeout path
                     self.state.battery = self.tello.get_battery()
                     self.state.height = self.tello.get_height()
                     self.state.temperature = self.tello.get_temperature()
                     self.state.flight_time = self.tello.get_flight_time()
+                    poll_failures = 0
+                    if self.state.is_flying and self.state.height == 0:
+                        zero_height_count = getattr(self, '_zero_height_count', 0) + 1
+                        self._zero_height_count = zero_height_count
+                        if zero_height_count >= 3:
+                            self.state.is_flying = False
+                            self._zero_height_count = 0
+                            print(f"[{self.name}] Crash detected — height 0 for {zero_height_count} polls.")
+                    else:
+                        self._zero_height_count = 0
                 except Exception:
-                    pass
+                    poll_failures += 1
+                    if poll_failures >= 3 and self.state.is_connected:
+                        self.state.is_connected = False
+                        self._running = False
+                        print(f"[{self.name}] Connection lost — {poll_failures} consecutive poll failures.")
                 time.sleep(2)
 
         self._state_thread = threading.Thread(
