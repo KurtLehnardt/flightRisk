@@ -172,6 +172,23 @@ class SessionDB:
             self._conn.commit()
             return cursor.lastrowid
 
+    def update_match(
+        self,
+        match_id: int,
+        gemma_match: bool,
+        gemma_confidence: str | None = None,
+        reasoning: str | None = None,
+    ):
+        """Update a match row with Gemma reasoning results."""
+        with self._lock:
+            self._conn.execute(
+                """UPDATE matches
+                   SET gemma_match = ?, gemma_confidence = ?, reasoning = ?
+                   WHERE id = ?""",
+                (int(gemma_match), gemma_confidence, reasoning, match_id),
+            )
+            self._conn.commit()
+
     def get_session_matches(self, session_id: str) -> list[dict]:
         """Return all matches for a given session."""
         cur = self._conn.execute(
