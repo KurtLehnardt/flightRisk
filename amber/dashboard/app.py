@@ -45,6 +45,7 @@ app = Flask(
     static_folder=str(Path(__file__).parent / "static"),
 )
 app.config["SECRET_KEY"] = "amber-drone-2026"
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
 
 # Flask auto-instrumentation (optional)
@@ -225,6 +226,7 @@ def _frame_loop():
     last_metrics_emit = 0
     REASONING_INTERVAL = 5
     METRICS_INTERVAL = 10
+    last_detection_log = 0
     log = _state["logger"]
     metrics = _state["metrics"]
 
@@ -258,7 +260,8 @@ def _frame_loop():
                 metrics.inc_persons(len(detections))
 
             # Periodic detection debug logging (every ~5s)
-            if detections and log and int(time.time()) % 5 == 0:
+            if detections and log and time.time() - last_detection_log >= 5:
+                last_detection_log = time.time()
                 log.info("detection_tick", persons=len(detections), has_target=(_state["target_photo"] is not None))
 
             # ReID matching (photo-based)
@@ -270,7 +273,7 @@ def _frame_loop():
 
             if _state["reid"] and has_target and detections:
                 match_idx, reid_score = _state["reid"].find_match(detections)
-                if reid_score > 0 and log and int(time.time()) % 5 == 0:
+                if reid_score > 0 and log and time.time() - last_detection_log >= 5:
                     log.info("reid_score", score=round(reid_score, 3), matched=(match_idx is not None))
 
             # Face recognition matching
@@ -608,9 +611,9 @@ def clear_target():
     _state["target_photo"] = None
     _state["target_photo_path"] = None
     if _state.get("reid"):
-        _state["reid"]._target_embedding = None
+        _state["reid"].clear_target()
     if _state.get("face"):
-        _state["face"]._target_embedding = None
+        _state["face"].clear_target()
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
     if path.exists():
         path.unlink()

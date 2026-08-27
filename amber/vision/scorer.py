@@ -64,7 +64,7 @@ class MatchScorer:
             weights["face"] = self.face_weight
             total_weight += self.face_weight
 
-        if reasoning_score > 0:
+        if reasoning_score > 0 and (reasoning_result is None or reasoning_result.get("match", False)):
             weights["reasoning"] = self.reasoning_weight
             total_weight += self.reasoning_weight
 

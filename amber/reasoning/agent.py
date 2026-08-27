@@ -83,8 +83,8 @@ class AmberAgent:
         cand_b64 = self._image_to_base64(candidate)
 
         prompt = (
-            "You are helping find a lost child. "
-            "Image 1 is the reference photo of the child we are looking for. "
+            "You are helping find a missing person. "
+            "Image 1 is the reference photo of the person we are looking for. "
             "Image 2 is a person detected by a drone camera.\n\n"
             "Compare the two people. Consider: clothing color/type, hair, "
             "build, height, backpack/accessories, and any distinguishing features.\n\n"
@@ -168,8 +168,8 @@ class AmberAgent:
 
         b64 = self._image_to_base64(image)
         prompt = (
-            "You are helping find a lost child. "
-            f"The child's description: {description}\n\n"
+            "You are helping find a missing person. "
+            f"The person's description: {description}\n\n"
             "Look at this image of a person detected by a drone camera. "
             "Does this person match the description above?\n\n"
             "Consider: clothing color/type, hair color/style, approximate age, "

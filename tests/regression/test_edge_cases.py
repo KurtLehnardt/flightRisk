@@ -32,9 +32,9 @@ class TestMatchScorerEdgeCases:
         from amber.vision.scorer import MatchScorer
         scorer = MatchScorer()
         result = scorer.score(reid_score=0.5, face_score=0.5, reasoning_result={})
-        # empty dict → match=False → dampened score (not zero)
-        assert "reasoning" in result["breakdown"]
-        assert result["breakdown"]["reasoning"]["raw_score"] == 0.3
+        # empty dict → match=False → reasoning excluded from signals to avoid false positive
+        assert "reasoning" not in result["breakdown"]
+        assert result["signals_used"] == 2
 
     def test_reasoning_unknown_confidence(self):
         from amber.vision.scorer import MatchScorer

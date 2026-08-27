@@ -62,12 +62,13 @@ class TelloController:
             return False
 
     def disconnect(self):
-        """Land if flying, stop streams, disconnect."""
+        """Stop streams, disconnect. Landing delegated to Tello.end()."""
         self._running = False
-        try:
-            self.tello.end()
-        except Exception:
-            pass
+        with self._cmd_lock:
+            try:
+                self.tello.end()
+            except Exception:
+                pass
         self.state.is_connected = False
         self.state.is_flying = False
         print(f"[{self.name}] Disconnected.")
@@ -151,23 +152,27 @@ class TelloController:
 
     def move(self, direction: str, distance_cm: int):
         """Move in a direction. Drops command if another is in-flight."""
-        if self._cmd_lock.locked():
+        if not self._cmd_lock.acquire(blocking=False):
             return
-        distance_cm = max(20, min(500, distance_cm))
-        cmd = getattr(self.tello, f"move_{direction}", None)
-        if cmd:
-            with self._cmd_lock:
+        try:
+            distance_cm = max(20, min(500, distance_cm))
+            cmd = getattr(self.tello, f"move_{direction}", None)
+            if cmd:
                 cmd(distance_cm)
+        finally:
+            self._cmd_lock.release()
 
     def rotate(self, degrees: int):
         """Rotate clockwise/counter-clockwise. Drops if another command is in-flight."""
-        if self._cmd_lock.locked():
+        if not self._cmd_lock.acquire(blocking=False):
             return
-        with self._cmd_lock:
+        try:
             if degrees > 0:
                 self.tello.rotate_clockwise(min(360, degrees))
             else:
                 self.tello.rotate_counter_clockwise(min(360, abs(degrees)))
+        finally:
+            self._cmd_lock.release()
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int):
         """Send RC joystick control. Each value -100 to 100."""
