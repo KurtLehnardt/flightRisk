@@ -320,12 +320,16 @@ class MavlinkController:
         finally:
             try:
                 await asyncio.wait_for(system.offboard.set_velocity_body(zero), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop set_velocity_body timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop set_velocity_body failed: %s", self.name, exc)
             try:
                 await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop offboard.stop() timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop offboard.stop() failed: %s", self.name, exc)
 
     async def _rotate_async(self, degrees: int, duration: float) -> None:
         system = self._system
@@ -359,12 +363,16 @@ class MavlinkController:
         finally:
             try:
                 await asyncio.wait_for(system.offboard.set_velocity_body(zero), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop set_velocity_body timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop set_velocity_body failed: %s", self.name, exc)
             try:
                 await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop offboard.stop() timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop offboard.stop() failed: %s", self.name, exc)
 
     async def _hover_async(self, duration: float = 1.0) -> None:
         system = self._system
@@ -396,12 +404,16 @@ class MavlinkController:
                 await asyncio.wait_for(
                     system.offboard.set_velocity_body(setpoint), timeout=2.0
                 )
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop set_velocity_body timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop set_velocity_body failed: %s", self.name, exc)
             try:
                 await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except asyncio.TimeoutError:
+                logger.error("[%s] Safety-stop offboard.stop() timed out", self.name)
+            except Exception as exc:
+                logger.error("[%s] Safety-stop offboard.stop() failed: %s", self.name, exc)
 
     async def _goto_gps_async(self, lat: float, lon: float, alt_m: float) -> None:
         system = self._system
