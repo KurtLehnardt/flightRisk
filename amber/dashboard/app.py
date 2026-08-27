@@ -24,10 +24,12 @@ from amber.vision.reid import PersonReID
 from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
+from amber.vision.tracker import DetectionTracker
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
 from amber.drone.fleet import DroneFleet
+from amber.drone.controller import DroneController
 from amber.canon import TargetCanon
 
 try:
@@ -63,6 +65,7 @@ _state = {
     "reid": None,
     "face": None,
     "scorer": None,
+    "tracker": None,
     "reasoning": None,
     "source": None,
     "cap": None,
@@ -276,6 +279,9 @@ def _init_pipeline(source="webcam", target_path=None):
     if _state["scorer"] is None:
         _state["scorer"] = MatchScorer(match_threshold=0.45)
 
+    if _state["tracker"] is None:
+        _state["tracker"] = DetectionTracker(max_age=30, iou_threshold=0.3)
+
     if _state["reasoning"] is None:
         try:
             from amber.reasoning.agent import AmberAgent
@@ -336,7 +342,7 @@ def _init_pipeline(source="webcam", target_path=None):
         _state["fleet"] = fleet
         def _auto_connect_loop():
             while _state.get("running", True):
-                primary = fleet.primary
+                primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     time.sleep(3)
                     continue
@@ -365,6 +371,31 @@ def _init_pipeline(source="webcam", target_path=None):
     )
 
     log.info("pipeline_ready", source=_state["source"], session_id=_state["session_id"])
+
+
+def _build_track_id_by_bbox(tracked_detections, detections):
+    """Join tracked detections back to this frame's raw detections by bbox.
+
+    `tracked_detections` (as returned by `DetectionTracker.update()`)
+    includes every active track, including aged/unmatched ones that still
+    carry a stale bbox from a previous frame. Restricting the join to
+    bboxes that actually appear in this frame's `detections` prevents a
+    new detection from being misattributed to a stale, unmatched track.
+
+    Args:
+        tracked_detections: Result of `tracker.update(detections)`.
+        detections: This frame's raw detections from `PersonDetector`.
+
+    Returns:
+        Dict mapping bbox tuple -> track_id, restricted to tracks that
+        were actually matched (or newly created) this frame.
+    """
+    current_bboxes = {tuple(d["bbox"]) for d in detections}
+    return {
+        tuple(t.bbox): t.track_id
+        for t in tracked_detections
+        if tuple(t.bbox) in current_bboxes
+    }
 
 
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
@@ -399,8 +430,10 @@ def _frame_loop():
     fps_start = time.time()
     last_reasoning_time = 0
     last_metrics_emit = 0
+    last_track_emit = 0
     REASONING_INTERVAL = 5
     METRICS_INTERVAL = 10
+    TRACK_UPDATE_INTERVAL = 1
     last_detection_log = 0
     log = _state["logger"]
     metrics = _state["metrics"]
@@ -414,7 +447,7 @@ def _frame_loop():
 
             frame = None
             fleet = _state.get("fleet")
-            drone = fleet.primary if fleet else None
+            drone: DroneController | None = fleet.primary if fleet else None
             if drone:
                 frame = drone.get_frame()
             elif _state["cap"] and _state["cap"].isOpened():
@@ -429,6 +462,13 @@ def _frame_loop():
 
             detections = _state["detector"].detect(frame)
             _state["persons_detected"] = len(detections)
+
+            tracker = _state.get("tracker")
+            tracked_detections = tracker.update(detections) if tracker else []
+            if tracker and frame_start - last_track_emit >= TRACK_UPDATE_INTERVAL:
+                last_track_emit = frame_start
+                socketio.emit("track_update", {"active_tracks": len(tracked_detections)})
+            track_id_by_bbox = _build_track_id_by_bbox(tracked_detections, detections)
 
             if metrics:
                 metrics.inc_frames()
@@ -470,6 +510,10 @@ def _frame_loop():
                 if face_score > reid_score:
                     match_idx = face_match_idx
 
+            match_track_id = None
+            if tracker and match_idx is not None:
+                match_track_id = track_id_by_bbox.get(tuple(detections[match_idx]["bbox"]))
+
             # Combined score via multi-feature scorer
             current_alert_level = "no_match"
             if match_idx is not None and _state["scorer"]:
@@ -483,6 +527,23 @@ def _frame_loop():
                 if current_alert_level == "no_match" and det_face >= face_thresh:
                     current_alert_level = "possible_match"
                     match_score = max(match_score, det_face)
+
+                # Accumulate per-track score history and use multi-frame
+                # corroboration (several frames agreeing) to strengthen the
+                # alert level beyond what a single frame's score would give.
+                if tracker and match_track_id is not None:
+                    tracker.add_scores(match_track_id, reid_score=det_reid, face_score=det_face)
+                    track_summary = tracker.get_track(match_track_id)
+                    reid_thresh = _state["reid"].match_threshold if _state.get("reid") else 0.55
+                    if (
+                        track_summary
+                        and len(track_summary.reid_scores) >= 3
+                        and track_summary.avg_reid_score >= reid_thresh
+                        and current_alert_level != "confirmed_match"
+                    ):
+                        current_alert_level = "confirmed_match"
+                        match_score = max(match_score, track_summary.avg_reid_score)
+
                 if log:
                     log.scoring(combined=match_score, reid=det_reid, face=det_face, alert=current_alert_level)
                 # Auto-stop search and hover on confirmed or possible match
@@ -603,6 +664,11 @@ def _frame_loop():
 
                 if best_candidate is not None:
                     crop = detections[best_candidate]["crop"]
+                    desc_track_id = (
+                        track_id_by_bbox.get(tuple(detections[best_candidate]["bbox"]))
+                        if tracker
+                        else None
+                    )
                     if crop is not None and crop.size > 0:
                         last_reasoning_time = time.time()
                         track_key = _compute_track_key(detections[best_candidate]["bbox"])
@@ -982,7 +1048,7 @@ def on_drone_command(data):
     if not fleet or not fleet.primary:
         emit("error", {"message": "No drones connected"})
         return
-    drone = fleet.get(drone_id) if drone_id else fleet.primary
+    drone: DroneController | None = fleet.get(drone_id) if drone_id else fleet.primary
     if not drone:
         emit("error", {"message": f"Drone '{drone_id}' not found"})
         return
@@ -1019,7 +1085,7 @@ def on_drone_command(data):
 def on_start_search(data):
     """Start an autonomous search pattern."""
     fleet = _state.get("fleet")
-    drone = fleet.primary if fleet else None
+    drone: DroneController | None = fleet.primary if fleet else None
     if not drone or not drone.state.is_flying:
         emit("error", {"message": "Drone must be flying to start search"})
         return

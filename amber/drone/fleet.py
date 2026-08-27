@@ -1,16 +1,30 @@
 """Multi-drone fleet manager.
 
-Manages multiple TelloController instances for coordinated search.
+Manages multiple DroneController instances for coordinated search.
 A fleet of 1 behaves identically to single-drone setup.
+
+Backends are pluggable: pass a `factory` callable to build drones other
+than the default Tello (e.g. MAVLink, simulated) without touching this
+module. Any object satisfying the `DroneController` protocol works.
 """
 
 import threading
-from amber.drone.tello import TelloController
+from typing import Callable
+
+from amber.drone.controller import DroneController
+
+
+def _default_factory(name: str, host: str) -> DroneController:
+    """Build a TelloController. Imported lazily so DroneFleet has no hard
+    dependency on the Tello backend (or its djitellopy dependency)."""
+    from amber.drone.tello import TelloController
+    return TelloController(name=name, host=host)
 
 
 class DroneFleet:
-    def __init__(self):
-        self._drones: dict[str, TelloController] = {}
+    def __init__(self, factory: Callable[[str, str], DroneController] | None = None):
+        self._factory: Callable[[str, str], DroneController] = factory or _default_factory
+        self._drones: dict[str, DroneController] = {}
         self._lock = threading.Lock()
         self._primary_id: str | None = None
         self._pending: set[str] = set()
@@ -27,7 +41,7 @@ class DroneFleet:
             if any(ctrl.host == host for ctrl in self._drones.values()):
                 return False
             self._pending.add(drone_id)
-        ctrl = TelloController(name=drone_id, host=host)
+        ctrl = self._factory(drone_id, host)
         try:
             if ctrl.connect():
                 with self._lock:
@@ -54,11 +68,11 @@ class DroneFleet:
             pass
         return True
 
-    def get(self, drone_id: str) -> TelloController | None:
+    def get(self, drone_id: str) -> DroneController | None:
         return self._drones.get(drone_id)
 
     @property
-    def primary(self) -> TelloController | None:
+    def primary(self) -> DroneController | None:
         return self._drones.get(self._primary_id) if self._primary_id else None
 
     def set_primary(self, drone_id: str) -> bool:
