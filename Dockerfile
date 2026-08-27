@@ -1,13 +1,14 @@
 FROM python:3.13-slim AS builder
 WORKDIR /app
-COPY requirements.txt .
-# Use CPU-only PyTorch to reduce image size (open-clip-torch dependency)
-# Install torch/torchvision first with CPU index to prevent CUDA variant from PyPI
+COPY requirements.txt constraints-docker.txt ./
+# Use CPU-only PyTorch to reduce image size (open-clip-torch dependency).
+# A single install with -c constraints-docker.txt pins torch/torchvision to
+# their +cpu variants, so open-clip-torch's transitive `torch>=2.0` dependency
+# resolves against the CPU wheel instead of a second pass re-resolving it
+# from PyPI's default (CUDA) build.
 RUN pip install --no-cache-dir --prefix=/install \
-    torch torchvision \
-    --index-url https://download.pytorch.org/whl/cpu
-# Install remaining dependencies
-RUN pip install --no-cache-dir --prefix=/install \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -c constraints-docker.txt \
     -r requirements.txt
 
 FROM python:3.13-slim AS runtime
@@ -27,7 +28,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 ENV AMBER_SOURCE=webcam
 ENV AMBER_PORT=5555
-# Consumed by amber.dashboard.__main__ (see --source flag)
+# Reserved for amber.dashboard.__main__ --source flag (PR #26)
 ENV AMBER_MAVLINK_ADDRESS=udp://:14540
 # For production: use wss:// with AMBER_EDGE_WS_TOKEN
 ENV AMBER_EDGE_WS=ws://localhost:9000
