@@ -27,6 +27,7 @@ from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
 from amber.drone.fleet import DroneFleet
+from amber.drone.controller import DroneController
 from amber.canon import TargetCanon
 
 try:
@@ -164,7 +165,7 @@ def _init_pipeline(source="webcam", target_path=None):
         _state["fleet"] = fleet
         def _auto_connect_loop():
             while _state.get("running", True):
-                primary = fleet.primary
+                primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     time.sleep(3)
                     continue
@@ -242,7 +243,7 @@ def _frame_loop():
 
             frame = None
             fleet = _state.get("fleet")
-            drone = fleet.primary if fleet else None
+            drone: DroneController | None = fleet.primary if fleet else None
             if drone:
                 frame = drone.get_frame()
             elif _state["cap"] and _state["cap"].isOpened():
@@ -851,7 +852,7 @@ def on_drone_command(data):
     if not fleet or not fleet.primary:
         emit("error", {"message": "No drones connected"})
         return
-    drone = fleet.get(drone_id) if drone_id else fleet.primary
+    drone: DroneController | None = fleet.get(drone_id) if drone_id else fleet.primary
     if not drone:
         emit("error", {"message": f"Drone '{drone_id}' not found"})
         return
@@ -888,7 +889,7 @@ def on_drone_command(data):
 def on_start_search(data):
     """Start an autonomous search pattern."""
     fleet = _state.get("fleet")
-    drone = fleet.primary if fleet else None
+    drone: DroneController | None = fleet.primary if fleet else None
     if not drone or not drone.state.is_flying:
         emit("error", {"message": "Drone must be flying to start search"})
         return
