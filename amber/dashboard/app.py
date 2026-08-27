@@ -28,6 +28,7 @@ from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
 from amber.vision.tracker import DetectionTracker
+from amber.config import get_config
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
@@ -233,6 +234,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         fleet = DroneFleet(factory=lambda n, h: TelloController(n, h))
         app_state.fleet = fleet
         def _auto_connect_loop():
+            retry_interval = get_config().drone.auto_connect_interval
             while not stop_event.is_set() and app_state.running:
                 with fleet_lock:
                     primary: DroneController | None = fleet.primary
@@ -255,8 +257,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     log.info("tello_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
-                    log.info("tello_waiting", hint="retrying in 5s")
-                if stop_event.wait(5):
+                    log.info("tello_waiting", hint=f"retrying in {retry_interval:.0f}s")
+                if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "mavlink":
@@ -265,6 +267,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
         app_state.fleet = fleet
         def _auto_connect_loop():
+            retry_interval = get_config().drone.auto_connect_interval
             while not stop_event.is_set() and app_state.running:
                 with fleet_lock:
                     primary: DroneController | None = fleet.primary
@@ -287,8 +290,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     log.info("mavlink_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
-                    log.info("mavlink_waiting", hint="retrying in 5s")
-                if stop_event.wait(5):
+                    log.info("mavlink_waiting", hint=f"retrying in {retry_interval:.0f}s")
+                if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "webcam":
@@ -511,7 +514,7 @@ def api_threshold_suggestion():
     if not db:
         return jsonify({"error": "no database"}), 500
     scorer = app_state.scorer
-    current = scorer.match_threshold if scorer else 0.50
+    current = scorer.match_threshold if scorer else get_config().vision.scorer_match_threshold
     tuner = ThresholdTuner(db)
     return jsonify(tuner.analyze(current_threshold=current))
 
@@ -603,7 +606,7 @@ def on_set_description(data):
 @socketio.on("set_threshold")
 def on_set_threshold(data):
     """Update the ReID match threshold."""
-    threshold = data.get("threshold", 0.55)
+    threshold = data.get("threshold", get_config().vision.reid_threshold)
     threshold = max(0.1, min(0.99, float(threshold)))
     if app_state.reid:
         app_state.reid.match_threshold = threshold
@@ -790,7 +793,7 @@ def on_stop_recording():
 @socketio.on("register_drone")
 def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(app_state.fleet.count if app_state.fleet else 0) + 1}")
-    host = data.get("host", "192.168.10.1")
+    host = data.get("host", get_config().drone.tello_default_host)
     current_source = app_state.source
     with fleet_lock:
         fleet = app_state.fleet
@@ -896,7 +899,7 @@ def on_restart_dashboard():
         app_state.cap = None
     source_config = app_state.source_config or SourceConfig(
         source=app_state.source or "tello",
-        mavlink_address=app_state.mavlink_address or "udp://:14540",
+        mavlink_address=app_state.mavlink_address or get_config().drone.mavlink_default_address,
         rtsp_url=app_state.rtsp_url,
         edge_ws=app_state.edge_ws or "ws://localhost:9000",
         video_path=app_state.video_path,
@@ -905,7 +908,7 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=5555):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
     """Start the dashboard server.
 
     Args:
@@ -913,8 +916,10 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=5555):
             ``SourceConfig`` (source mode, MAVLink address, RTSP URL, edge
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
-        port: Dashboard HTTP/WebSocket port.
+        port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
     """
+    if port is None:
+        port = get_config().dashboard.port
     app_state.running = True
     # Auto-load previous target photo if none specified
     if target_path is None:

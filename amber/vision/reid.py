@@ -10,6 +10,8 @@ import logging
 import numpy as np
 import cv2
 
+from amber.config import get_config
+
 try:
     import torch
     import open_clip
@@ -24,22 +26,26 @@ logger = logging.getLogger(__name__)
 class PersonReID:
     """Extracts appearance embeddings and matches against a target person."""
 
-    def __init__(self, match_threshold: float = 0.55):
+    def __init__(self, match_threshold: float | None = None):
         """Initialize ReID with CLIP ViT-B/16 feature extractor.
 
         Args:
             match_threshold: Cosine similarity threshold for a match (0-1).
                              Lower = more permissive, higher = stricter.
+                             Defaults to `config.vision.reid_threshold`.
         """
         if not HAS_TORCH:
             raise RuntimeError("PyTorch and open-clip-torch required. pip install torch open-clip-torch")
 
+        cfg = get_config().vision
+        if match_threshold is None:
+            match_threshold = cfg.reid_threshold
         self.match_threshold = match_threshold
         self.device = self._select_device()
 
         # Use CLIP ViT-B/16 — produces 512-d embeddings in CLIP space
         model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-16", pretrained="laion2b_s34b_b88k"
+            cfg.reid_model, pretrained="laion2b_s34b_b88k"
         )
         self.model = model.to(self.device).eval()
         self.preprocess = preprocess

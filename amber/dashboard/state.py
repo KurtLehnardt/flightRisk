@@ -174,6 +174,23 @@ class _StateDictCompat:
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(app_state, key, default)
 
+    def update(self, mapping: dict) -> None:
+        """Bulk-set attributes on ``app_state``."""
+        for key, value in mapping.items():
+            setattr(app_state, key, value)
+
+    def clear(self) -> None:
+        """Reset ``app_state`` to a fresh ``AppState()``."""
+        fresh = AppState()
+        import dataclasses
+        for f in dataclasses.fields(AppState):
+            setattr(app_state, f.name, getattr(fresh, f.name))
+
+    def copy(self) -> dict:
+        """Return a plain-dict snapshot of ``app_state`` fields."""
+        import dataclasses
+        return {f.name: getattr(app_state, f.name) for f in dataclasses.fields(AppState)}
+
 
 #: Backward-compatible dict-like accessor for ``app_state``.
 _state = _StateDictCompat()

@@ -121,7 +121,7 @@ class TestFrameLoopResilience:
     raising) doesn't kill the background thread."""
 
     def test_frame_loop_continues_after_detection_raises(self, clean_app_state, monkeypatch):
-        from amber.dashboard.app import _frame_loop, _state
+        from amber.dashboard.app import _frame_loop, _state, socketio
 
         frame = np.zeros((10, 10, 3), dtype=np.uint8)
         cap = MagicMock()
@@ -166,11 +166,12 @@ class TestFrameLoopResilience:
             "drone_telemetry": {},
         })
 
-        monkeypatch.setattr("amber.dashboard.app.socketio.emit", MagicMock())
+        mock_emit = MagicMock()
+        monkeypatch.setattr("amber.dashboard.app.socketio.emit", mock_emit)
 
         # Blocking call: returns on its own once fake_detect flips
         # _state["running"] to False during the second iteration.
-        _frame_loop()
+        _frame_loop(socketio)
 
         assert len(detect_calls) == 2, "loop must have survived the first exception and retried"
         assert _state["running"] is False
@@ -182,7 +183,7 @@ class TestGemmaWorkerResilience:
     processed."""
 
     def test_worker_continues_after_one_llm_call_raises(self, clean_app_state, monkeypatch):
-        from amber.dashboard.app import _gemma_queue, _gemma_worker, _state
+        from amber.dashboard.app import _gemma_queue, _gemma_worker, _state, socketio
 
         # Drain any leftover items from other tests before starting.
         while not _gemma_queue.empty():
@@ -210,7 +211,7 @@ class TestGemmaWorkerResilience:
         _gemma_queue.put(("analyze", "trackA", crop, ref))
         _gemma_queue.put(("analyze", "trackB", crop, ref))
 
-        worker_thread = threading.Thread(target=_gemma_worker, daemon=True)
+        worker_thread = threading.Thread(target=_gemma_worker, args=(socketio,), daemon=True)
         worker_thread.start()
         try:
             _gemma_queue.join()

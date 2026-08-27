@@ -2,12 +2,13 @@
 
 import time
 
-# Import the module-level dicts/constants and extracted helpers we test.
+from amber.config import get_config
+
+# Import the module-level dicts and extracted helpers we test.
 from amber.dashboard.app import (
     _alerted_tracks,
     _compute_track_key,
     _is_within_alert_cooldown,
-    ALERT_COOLDOWN,
 )
 
 
@@ -48,16 +49,16 @@ class TestAlertThrottle:
         assert not _is_within_alert_cooldown(track_key, now)
 
     def test_second_alert_within_cooldown_suppressed(self):
-        """A track_key alerted <ALERT_COOLDOWN seconds ago should be throttled."""
+        """A track_key alerted less than config.reasoning.alert_cooldown seconds ago should be throttled."""
         track_key = "3_6"
         now = time.time()
         _alerted_tracks[track_key] = now
         assert _is_within_alert_cooldown(track_key, time.time())
 
     def test_alert_after_cooldown_fires(self):
-        """A track_key alerted >ALERT_COOLDOWN seconds ago should be allowed."""
+        """A track_key alerted more than config.reasoning.alert_cooldown seconds ago should be allowed."""
         track_key = "3_6"
-        _alerted_tracks[track_key] = time.time() - ALERT_COOLDOWN - 1
+        _alerted_tracks[track_key] = time.time() - get_config().reasoning.alert_cooldown - 1
         now = time.time()
         assert not _is_within_alert_cooldown(track_key, now)
 

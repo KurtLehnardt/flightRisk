@@ -8,6 +8,8 @@ New signals (thermal, gait, etc.) can be added without touching this
 module's internals via `register_signal()` — see MatchScorer.score().
 """
 
+from amber.config import get_config
+
 # Names populated internally via score()'s named params (reid_score,
 # face_score, reasoning_result). These may not be used as **signals
 # keys or register_signal() names — doing so would silently shadow the
@@ -26,23 +28,32 @@ class MatchScorer:
 
     def __init__(
         self,
-        reid_weight: float = 0.35,
-        face_weight: float = 0.40,
-        reasoning_weight: float = 0.25,
-        match_threshold: float = 0.50,
+        reid_weight: float | None = None,
+        face_weight: float | None = None,
+        reasoning_weight: float | None = None,
+        match_threshold: float | None = None,
     ):
         """Initialize the scorer.
 
         Args:
             reid_weight: Weight for full-body ReID similarity.
+                         Defaults to `config.vision.scorer_reid_weight`.
             face_weight: Weight for face recognition score.
+                         Defaults to `config.vision.scorer_face_weight`.
             reasoning_weight: Weight for LLM reasoning confidence.
+                         Defaults to `config.vision.scorer_reasoning_weight`.
             match_threshold: Combined score threshold for a positive match.
+                         Defaults to `config.vision.scorer_match_threshold`.
         """
-        self.reid_weight = reid_weight
-        self.face_weight = face_weight
-        self.reasoning_weight = reasoning_weight
-        self.match_threshold = match_threshold
+        cfg = get_config().vision
+        self.reid_weight = reid_weight if reid_weight is not None else cfg.scorer_reid_weight
+        self.face_weight = face_weight if face_weight is not None else cfg.scorer_face_weight
+        self.reasoning_weight = (
+            reasoning_weight if reasoning_weight is not None else cfg.scorer_reasoning_weight
+        )
+        self.match_threshold = (
+            match_threshold if match_threshold is not None else cfg.scorer_match_threshold
+        )
 
         # Signal registry: name -> config (currently just weight). The
         # three built-in signals are seeded here so they flow through the
@@ -50,9 +61,9 @@ class MatchScorer:
         # later via register_signal() — no special-cased math for "new"
         # signals vs. the original three.
         self._signals: dict[str, dict] = {
-            "reid": {"weight": reid_weight},
-            "face": {"weight": face_weight},
-            "reasoning": {"weight": reasoning_weight},
+            "reid": {"weight": self.reid_weight},
+            "face": {"weight": self.face_weight},
+            "reasoning": {"weight": self.reasoning_weight},
         }
 
     def register_signal(self, name: str, weight: float) -> None:

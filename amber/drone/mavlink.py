@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from amber.async_bridge import AsyncBridge
+from amber.config import get_config
 from amber.drone.controller import DroneCapabilities, DroneState
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,9 @@ __all__ = ["MavlinkController", "HAS_MAVSDK"]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
+# NOTE: the sync-over-async command timeout used to be a module-level
+# `_CMD_TIMEOUT = 30.0` constant; it now lives in
+# `config.drone.mavlink_cmd_timeout` and is resolved lazily in `_run()`.
 _MOVE_SPEED = 1.0  # m/s for move commands
 _YAW_RATE = 60.0  # deg/s for rotate commands
 _RTSP_RECONNECT_DELAY = 5.0  # seconds before RTSP reconnect attempt
@@ -65,7 +68,7 @@ class MavlinkController:
     def __init__(
         self,
         name: str,
-        host: str = "udp://:14540",
+        host: str | None = None,
         rtsp_url: str | None = None,
     ):
         if not HAS_MAVSDK:
@@ -74,6 +77,8 @@ class MavlinkController:
                 "Install it with: pip install mavsdk"
             )
 
+        if host is None:
+            host = get_config().drone.mavlink_default_address
         self.name = name
         self.host = host
         self.state = DroneState()
@@ -91,7 +96,7 @@ class MavlinkController:
 
         # Async internals -- background event loop bridge shared with
         # amber.transport's sync wrappers (see amber.async_bridge.AsyncBridge).
-        self._bridge = AsyncBridge(name=f"{name}-mavlink", cmd_timeout=_CMD_TIMEOUT)
+        self._bridge = AsyncBridge(name=f"{name}-mavlink", cmd_timeout=get_config().drone.mavlink_cmd_timeout)
         self._system: System | None = None
         self._telemetry_tasks: list[asyncio.Task] = []
 
@@ -146,7 +151,7 @@ class MavlinkController:
         """Stop the background event loop."""
         self._bridge.stop_loop()
 
-    def _run(self, coro, timeout: float = _CMD_TIMEOUT):
+    def _run(self, coro, timeout: float | None = None):
         """Submit *coro* to the event loop and block for the result."""
         return self._bridge.run(coro, timeout=timeout)
 

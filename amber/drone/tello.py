@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from djitellopy import Tello
 
+from amber.config import get_config
 from amber.drone.controller import DroneCapabilities, DroneController, DroneState
 
 # Backward-compatible re-export so `from amber.drone.tello import DroneState` still works
@@ -21,7 +22,9 @@ __all__ = ["TelloController", "DroneState", "DroneCapabilities", "DroneControlle
 class TelloController:
     """Manages a single Tello drone connection and video stream."""
 
-    def __init__(self, name: str = "drone", host: str = "192.168.10.1"):
+    def __init__(self, name: str = "drone", host: str | None = None):
+        if host is None:
+            host = get_config().drone.tello_default_host
         self.name = name
         self.host = host
         self.tello = Tello(host=host)
