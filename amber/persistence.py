@@ -4,6 +4,8 @@ Stores search sessions and match results so history survives
 dashboard restarts. Thread-safe for use from Flask + background threads.
 """
 
+import base64
+import os
 import sqlite3
 import threading
 import time
@@ -62,13 +64,53 @@ CREATE TABLE IF NOT EXISTS match_feedback (
 class SessionDB:
     """Thread-safe SQLite persistence for search sessions and matches."""
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None, encryption_key: str | None = None):
         self._db_path = str(db_path or DB_PATH)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
+
+        # Optional Fernet encryption for sensitive fields (match reasoning).
+        # Enabled when encryption_key is passed or AMBER_ENCRYPTION_KEY env var is set.
+        key = encryption_key or os.environ.get("AMBER_ENCRYPTION_KEY")
+        self._fernet = None
+        if key:
+            try:
+                from cryptography.fernet import Fernet
+                # The key must be a valid 32-byte url-safe base64-encoded key.
+                self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
+            except Exception:
+                raise ValueError(
+                    "AMBER_ENCRYPTION_KEY must be a valid Fernet key "
+                    "(generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+                )
+
         self._create_tables()
+
+    def _encrypt(self, data: str) -> str:
+        """Encrypt a string with Fernet. Returns ciphertext as base64 string.
+
+        When no encryption key is configured, returns the input unchanged.
+        """
+        if self._fernet is None or data is None:
+            return data
+        return self._fernet.encrypt(data.encode("utf-8")).decode("utf-8")
+
+    def _decrypt(self, data: str) -> str:
+        """Decrypt a Fernet-encrypted string. Returns plaintext.
+
+        When no encryption key is configured, returns the input unchanged.
+        Gracefully returns the input unchanged if decryption fails (e.g.
+        data was stored before encryption was enabled).
+        """
+        if self._fernet is None or data is None:
+            return data
+        try:
+            return self._fernet.decrypt(data.encode("utf-8")).decode("utf-8")
+        except Exception:
+            # Data was likely stored in plaintext before encryption was enabled
+            return data
 
     def _create_tables(self):
         with self._lock:
@@ -155,6 +197,7 @@ class SessionDB:
     ) -> int:
         """Record a single match event. Returns the match ID."""
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        encrypted_reasoning = self._encrypt(reasoning)
         with self._lock:
             cursor = self._conn.execute(
                 """INSERT INTO matches
@@ -165,7 +208,7 @@ class SessionDB:
                 (
                     session_id, timestamp, match_type,
                     reid_score, face_score, combined_score,
-                    int(gemma_match), gemma_confidence, reasoning,
+                    int(gemma_match), gemma_confidence, encrypted_reasoning,
                     snapshot_path, crop_path,
                 ),
             )
@@ -180,12 +223,13 @@ class SessionDB:
         reasoning: str | None = None,
     ):
         """Update a match row with Gemma reasoning results."""
+        encrypted_reasoning = self._encrypt(reasoning)
         with self._lock:
             self._conn.execute(
                 """UPDATE matches
                    SET gemma_match = ?, gemma_confidence = ?, reasoning = ?
                    WHERE id = ?""",
-                (int(gemma_match), gemma_confidence, reasoning, match_id),
+                (int(gemma_match), gemma_confidence, encrypted_reasoning, match_id),
             )
             self._conn.commit()
 
@@ -195,7 +239,12 @@ class SessionDB:
             "SELECT * FROM matches WHERE session_id = ? ORDER BY timestamp ASC",
             (session_id,),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["reasoning"] = self._decrypt(d.get("reasoning"))
+            rows.append(d)
+        return rows
 
     # ------------------------------------------------------------------
     # Stats

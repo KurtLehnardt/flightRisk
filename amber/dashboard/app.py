@@ -10,9 +10,11 @@ import base64
 import json
 import os
 import queue
+import secrets
 import threading
 import time
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 
 import cv2
@@ -62,9 +64,32 @@ app = Flask(
     template_folder=str(Path(__file__).parent / "templates"),
     static_folder=str(Path(__file__).parent / "static"),
 )
-app.config["SECRET_KEY"] = "amber-drone-2026"
+app.config["SECRET_KEY"] = os.environ.get("AMBER_SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
+
+# CORS: default "*" for dev, restrict via AMBER_CORS_ORIGINS env var in production
+cors_origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
+_cors_allowed = cors_origins if cors_origins == "*" else cors_origins.split(",")
+socketio = SocketIO(app, cors_allowed_origins=_cors_allowed, async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
+
+# --- API key authentication ---
+_AMBER_API_KEY = os.environ.get("AMBER_API_KEY")
+
+
+@app.before_request
+def _check_api_key():
+    """Enforce Bearer-token auth on all endpoints when AMBER_API_KEY is set.
+
+    /api/health is always exempt (needed for Docker HEALTHCHECK).
+    """
+    if _AMBER_API_KEY is None:
+        return  # auth disabled — dev mode
+    if request.path == "/api/health":
+        return  # exempt
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {_AMBER_API_KEY}":
+        return  # valid
+    return jsonify({"error": "unauthorized"}), 401
 
 # Flask auto-instrumentation (optional)
 try:
@@ -1057,7 +1082,12 @@ def api_threshold_suggestion():
 # --- WebSocket Events ---
 
 @socketio.on("connect")
-def on_connect():
+def on_connect(auth=None):
+    # When AMBER_API_KEY is set, require {"api_key": "<key>"} in SocketIO auth
+    if _AMBER_API_KEY is not None:
+        provided = (auth or {}).get("api_key") if isinstance(auth, dict) else None
+        if provided != _AMBER_API_KEY:
+            return False  # reject connection
     emit("status", {"connected": True, "source": _state["source"]})
     if _state["target_photo"]:
         emit("target_photo", {"image": _state["target_photo"]})
