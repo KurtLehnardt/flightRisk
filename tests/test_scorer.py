@@ -188,7 +188,7 @@ class TestMatchScorerConfidenceLevel:
     def test_high_confidence_requires_high_score_and_two_signals(self):
         scorer = MatchScorer()
         result = scorer.score(reid_score=0.9, face_score=0.9)
-        # combined = 0.9, signals = 2 => high
+        # combined = 0.9, signals = 2 => high (>= 0.65 and >= 2 signals)
         assert result["confidence_level"] == "high"
 
     def test_high_score_single_signal_not_high_confidence(self):
@@ -197,24 +197,37 @@ class TestMatchScorerConfidenceLevel:
         # combined = 0.9, signals = 1 => not "high" (needs >= 2 signals)
         assert result["confidence_level"] == "medium"
 
-    def test_medium_confidence_at_055(self):
+    def test_medium_confidence_at_040(self):
         scorer = MatchScorer()
-        result = scorer.score(reid_score=0.55)
-        # combined = 0.55, 1 signal => medium (>= 0.55)
+        result = scorer.score(reid_score=0.40)
+        # combined = 0.40, 1 signal => medium (>= 0.40)
         assert result["confidence_level"] == "medium"
 
     def test_low_confidence_below_thresholds(self):
         scorer = MatchScorer()
-        result = scorer.score(reid_score=0.15)
-        # combined = 0.15, 1 signal => low
+        result = scorer.score(reid_score=0.3)
+        # combined = 0.3, 1 signal => low (below 0.40 single, below 0.35 multi)
         assert result["confidence_level"] == "low"
 
-    def test_medium_confidence_with_two_signals_at_045(self):
+    def test_medium_confidence_with_two_signals_at_035(self):
         scorer = MatchScorer()
-        # Need combined >= 0.45 and num_signals >= 2
-        result = scorer.score(reid_score=0.5, face_score=0.45)
+        # Need combined >= 0.35 and num_signals >= 2
+        result = scorer.score(reid_score=0.4, face_score=0.35)
         # Weights: reid=0.35/0.75=0.467, face=0.40/0.75=0.533
-        # combined = 0.5*0.467 + 0.45*0.533 = 0.233 + 0.240 = ~0.473
+        # combined = 0.4*0.467 + 0.35*0.533 = 0.187 + 0.187 = ~0.373
+        assert result["confidence_level"] == "medium"
+
+    def test_high_confidence_at_065_with_two_signals(self):
+        scorer = MatchScorer()
+        result = scorer.score(reid_score=0.7, face_score=0.7)
+        # combined = 0.7, signals = 2 => high (>= 0.65 and >= 2 signals)
+        assert result["confidence_level"] == "high"
+
+    def test_below_065_with_two_signals_not_high(self):
+        scorer = MatchScorer()
+        # Need combined < 0.65 with 2 signals => medium, not high
+        result = scorer.score(reid_score=0.6, face_score=0.6)
+        # combined = 0.6, signals = 2 => medium (>= 0.40 but < 0.65)
         assert result["confidence_level"] == "medium"
 
 

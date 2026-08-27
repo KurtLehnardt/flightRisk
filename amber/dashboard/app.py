@@ -99,7 +99,10 @@ def _init_pipeline(source="webcam", target_path=None):
         _state["detector"] = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
 
     if _state["reid"] is None:
-        _state["reid"] = PersonReID(match_threshold=0.25)
+        try:
+            _state["reid"] = PersonReID(match_threshold=0.55)
+        except Exception as e:
+            log.warning("reid_unavailable", error=str(e))
 
     if _state["face"] is None:
         try:
@@ -109,7 +112,7 @@ def _init_pipeline(source="webcam", target_path=None):
             log.warning("insightface_unavailable", error=str(e))
 
     if _state["scorer"] is None:
-        _state["scorer"] = MatchScorer(match_threshold=0.30)
+        _state["scorer"] = MatchScorer(match_threshold=0.45)
 
     if _state["reasoning"] is None:
         try:

@@ -115,9 +115,9 @@ class MatchScorer:
 
         # Determine confidence level
         num_signals = len(weights)
-        if combined >= 0.50 and num_signals >= 2:
+        if combined >= 0.65 and num_signals >= 2:
             confidence_level = "high"
-        elif combined >= 0.30 or (combined >= 0.25 and num_signals >= 2):
+        elif combined >= 0.40 or (combined >= 0.35 and num_signals >= 2):
             confidence_level = "medium"
         else:
             confidence_level = "low"
@@ -139,7 +139,7 @@ class MatchScorer:
         signals = score_result.get("signals_used", 0)
         conf = score_result.get("confidence_level", "low")
 
-        if score >= 0.50 and signals >= 2 and conf == "high":
+        if score >= 0.65 and signals >= 2 and conf == "high":
             return "confirmed_match"
         elif score >= self.match_threshold and conf in ("medium", "high"):
             return "possible_match"
