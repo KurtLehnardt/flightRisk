@@ -213,3 +213,41 @@ class TestFactoryPattern:
 
         assert factory_a_calls == ["d1"]
         assert factory_b_calls == ["d1"]
+
+
+class TestSourceFactorySelection:
+    """Verify the factory lambdas amber.dashboard.app._init_pipeline builds
+    per `--source` mode (T3) wire up the correct controller backend."""
+
+    def test_tello_source_builds_tello_controller_via_factory(self):
+        with patch("amber.drone.tello.TelloController") as MockTello:
+            MockTello.return_value = _make_controller(name="drone-1", host="192.168.10.1", connect_ok=True)
+            from amber.drone.tello import TelloController
+
+            factory = lambda n, h: TelloController(n, h)
+            fleet = DroneFleet(factory=factory)
+            assert fleet.register("drone-1") is True
+            MockTello.assert_called_once_with("drone-1", "192.168.10.1")
+
+    def test_mavlink_source_builds_mavlink_controller_via_factory(self):
+        with patch("amber.drone.mavlink.MavlinkController") as MockMavlink:
+            MockMavlink.return_value = _make_controller(name="drone-1", host="udp://:14540", connect_ok=True)
+            from amber.drone.mavlink import MavlinkController
+
+            factory = lambda n, h: MavlinkController(n, h, rtsp_url="rtsp://1.2.3.4:8554/camera")
+            fleet = DroneFleet(factory=factory)
+            assert fleet.register("drone-1", host="udp://:14540") is True
+            MockMavlink.assert_called_once_with(
+                "drone-1", "udp://:14540", rtsp_url="rtsp://1.2.3.4:8554/camera"
+            )
+
+    def test_default_factory_still_works_for_backward_compat(self):
+        # No factory passed — mirrors sources ("webcam", "file", "edge")
+        # that never construct a DroneFleet with an explicit factory, and
+        # any legacy caller that predates the --source enum. DroneFleet
+        # must still lazily fall back to TelloController.
+        with patch("amber.drone.tello.TelloController") as MockTello:
+            MockTello.return_value = _make_controller(name="drone-1", host="192.168.10.1", connect_ok=True)
+            fleet = DroneFleet()
+            assert fleet.register("drone-1") is True
+            MockTello.assert_called_once_with(name="drone-1", host="192.168.10.1")
