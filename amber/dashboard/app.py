@@ -198,9 +198,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         except Exception as e:
             log.warning("obstacle_guard_unavailable", error=str(e))
 
-    # Initialize target canon
     if app_state.canon is None:
-        app_state.canon = TargetCanon()
+        app_state.canon = TargetCanon(session_db=app_state.db)
         log.info("target_canon_initialized")
 
     # OpenTelemetry

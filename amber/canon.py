@@ -4,16 +4,37 @@ import base64
 import threading
 import sqlite3
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
+if TYPE_CHECKING:
+    from amber.persistence import SessionDB
+
 
 class TargetCanon:
-    def __init__(self, db_path: str = "amber_sessions.db"):
-        self._db_path = db_path
-        self._lock = threading.Lock()
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+    def __init__(self, db_path: str = "amber_sessions.db", session_db: "SessionDB | None" = None):
+        """Create a TargetCanon.
+
+        By default opens its own SQLite connection to *db_path*. When
+        *session_db* (an ``amber.persistence.SessionDB``) is provided, its
+        connection is reused instead -- two independent ``sqlite3.connect()``
+        calls against the same database file can otherwise contend and raise
+        ``SQLITE_BUSY`` under concurrent writes from Flask + background
+        threads. When sharing, ``close()`` is a no-op: the owner of the
+        connection (the ``SessionDB``) is responsible for closing it.
+        """
+        if session_db is not None:
+            self._db_path = session_db._db_path
+            self._conn = session_db._conn
+            self._lock = session_db._lock  # Share the lock too!
+            self._owns_conn = False
+        else:
+            self._db_path = db_path
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._lock = threading.Lock()
+            self._owns_conn = True
         self._conn.row_factory = sqlite3.Row
         self._create_table()
 
@@ -97,4 +118,11 @@ class TargetCanon:
         return d
 
     def close(self):
-        self._conn.close()
+        """Close the underlying connection.
+
+        No-op when the connection is shared with a ``SessionDB`` (i.e.
+        constructed with ``session_db=``) -- the ``SessionDB`` owns that
+        connection's lifecycle and is responsible for closing it.
+        """
+        if self._owns_conn:
+            self._conn.close()

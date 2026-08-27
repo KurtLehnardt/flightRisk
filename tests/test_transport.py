@@ -676,3 +676,225 @@ def test_sync_wrapper_disconnect_without_connect_does_not_raise():
 def test_sync_wrapper_stop_without_start_does_not_raise():
     gt_sync = GroundTransportSync(host="localhost", port=0)
     gt_sync.stop()  # never started -- must be a safe no-op
+
+
+# ===========================================================================
+# Reconnection with exponential backoff
+# ===========================================================================
+#
+# EdgeTransport previously marked itself disconnected on ConnectionClosed
+# and never tried to reconnect, so an edge device that dropped its
+# connection to the ground station would stop sending detections forever.
+# These tests exercise the exponential-backoff reconnect path added to fix
+# that.
+
+def test_reconnect_reestablishes_connection_after_unexpected_drop():
+    """_reconnect() succeeds once the ground station is reachable again."""
+    received = []
+
+    async def scenario():
+        gt = await _start_ground(on_message=received.append)
+        et = await _connect_edge(gt)
+        try:
+            assert et.connected is True
+
+            # Simulate an unexpected drop (e.g. a network blip) rather than
+            # an explicit disconnect() -- the socket dies underneath us but
+            # _should_reconnect stays True.
+            await et._ws.close()
+            et._connected = False
+            et._base_delay = 0.01
+            et._max_delay = 0.01
+
+            reconnected = await et._reconnect()
+            assert reconnected is True
+            assert et.connected is True
+
+            # The new connection should work end-to-end.
+            msg = _make_message(frame_id=21)
+            await et.send_detections(msg)
+            assert await _wait_until(lambda: len(received) == 1)
+            _assert_messages_equal(received[0], msg)
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_gives_up_after_max_retries_exhausted():
+    """_reconnect() stops trying once max_retries attempts have failed."""
+
+    async def scenario():
+        # Port 1 is not a WebSocket server -- every connection attempt
+        # fails immediately (connection refused), so this exercises
+        # exhaustion quickly and deterministically.
+        et = EdgeTransport(ws_url="ws://localhost:1", max_retries=3, base_delay=0.01, max_delay=0.01)
+        et._should_reconnect = True
+
+        reconnected = await et._reconnect()
+
+        assert reconnected is False
+        assert et.connected is False
+        assert et._retry_count == 3
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_retries_forever_when_max_retries_is_none():
+    """max_retries=None (the default) means _reconnect() keeps trying."""
+
+    async def scenario():
+        et = EdgeTransport(ws_url="ws://localhost:1", base_delay=0.01, max_delay=0.01)
+        assert et._max_retries is None
+        et._should_reconnect = True
+
+        # Bound the loop from the test side (rather than via max_retries)
+        # by cancelling the reconnect coroutine after it has clearly made
+        # multiple attempts against the always-refusing port.
+        task = asyncio.ensure_future(et._reconnect())
+        for _ in range(50):
+            if et._retry_count >= 5:
+                break
+            await asyncio.sleep(0.01)
+        assert et._retry_count >= 5
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_stops_immediately_when_reconnection_no_longer_wanted():
+    """Flipping _should_reconnect off (as disconnect() does) stops retrying."""
+
+    async def scenario():
+        et = EdgeTransport(ws_url="ws://localhost:1", base_delay=0.01, max_delay=0.01)
+        et._should_reconnect = False  # never had -- or no longer wants -- a connection
+
+        reconnected = await et._reconnect()
+
+        assert reconnected is False
+        assert et._retry_count == 0  # loop body never ran
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_backoff_delays_grow_exponentially_and_cap_at_max_delay(monkeypatch):
+    """Each retry should sleep roughly double the last, capped at max_delay."""
+    recorded_delays = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay):
+        recorded_delays.append(delay)
+        await real_sleep(0)  # yield control without actually waiting
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def scenario():
+        et = EdgeTransport(
+            ws_url="ws://localhost:1",
+            max_retries=5,
+            base_delay=1.0,
+            max_delay=4.0,
+        )
+        et._should_reconnect = True
+        reconnected = await et._reconnect()
+        assert reconnected is False
+
+    asyncio.run(scenario())
+
+    assert recorded_delays == [1.0, 2.0, 4.0, 4.0, 4.0]
+
+
+def test_send_detections_schedules_background_reconnect_after_drop():
+    """send_detections() must not block waiting for reconnection -- it
+    should schedule a background attempt and return immediately, with the
+    connection recovering shortly afterwards."""
+    received = []
+
+    async def scenario():
+        gt = await _start_ground(on_message=received.append)
+        et = await _connect_edge(gt)
+        et._base_delay = 0.01
+        et._max_delay = 0.01
+        try:
+            await et._ws.close()
+
+            start = time.monotonic()
+            await et.send_detections(_make_message(frame_id=5))
+            elapsed = time.monotonic() - start
+
+            # This call only observes the closed socket and schedules a
+            # background reconnect -- it must return fast, not block for
+            # the reconnect to complete.
+            assert elapsed < 1.0
+            assert et._reconnect_task is not None
+
+            # The background task brings the connection back up shortly.
+            assert await _wait_until(lambda: et.connected is True, attempts=200, interval=0.02)
+
+            await et.send_detections(_make_message(frame_id=6))
+            assert await _wait_until(lambda: len(received) == 1)
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_send_detections_before_any_connect_does_not_schedule_reconnect():
+    """A transport that has never connected shouldn't try to reconnect --
+    matches the pre-existing 'no-op if not connected' contract."""
+
+    async def scenario():
+        et = EdgeTransport(ws_url="ws://localhost:1")
+        await et.send_detections(_make_message())
+        assert et._reconnect_task is None
+
+    asyncio.run(scenario())
+
+
+def test_explicit_disconnect_suppresses_further_reconnection():
+    """disconnect() must cancel any in-flight reconnect and prevent new
+    ones from being scheduled -- an intentional teardown shouldn't silently
+    resurrect the connection."""
+
+    async def scenario():
+        gt = await _start_ground()
+        et = await _connect_edge(gt)
+        et._base_delay = 0.05
+        et._max_delay = 0.05
+
+        await et._ws.close()
+        et._connected = False
+        et._reconnect_task = asyncio.ensure_future(et._reconnect())
+        await asyncio.sleep(0)  # let the background task start
+
+        await et.disconnect()
+
+        assert et._should_reconnect is False
+        assert et.connected is False
+
+        # Give any lingering activity a moment; it must not resurrect the
+        # connection after an explicit disconnect().
+        await asyncio.sleep(0.3)
+        assert et.connected is False
+
+        await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_sync_wrapper_accepts_reconnect_kwargs():
+    """EdgeTransportSync must forward reconnect tuning params to EdgeTransport."""
+    et_sync = EdgeTransportSync(
+        ws_url="ws://localhost:1",
+        max_retries=7,
+        base_delay=0.5,
+        max_delay=2.0,
+    )
+    assert et_sync._transport._max_retries == 7
+    assert et_sync._transport._base_delay == 0.5
+    assert et_sync._transport._max_delay == 2.0

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from amber.canon import TargetCanon
+from amber.persistence import SessionDB
 
 
 @pytest.fixture
@@ -123,3 +124,65 @@ class TestImageRoundtrip:
         canon.set_target(_make_image())  # set another
         recovered = canon.revert_to(vid)
         assert recovered.shape == (50, 100, 3)
+
+
+class TestSharedConnection:
+    """TargetCanon can share a SessionDB's sqlite3 connection instead of
+    opening a second independent connection to the same database file --
+    avoids SQLITE_BUSY contention between the two under concurrent writes.
+    """
+
+    @pytest.fixture
+    def session_db(self, tmp_path):
+        db_path = tmp_path / "shared_sessions.db"
+        db = SessionDB(db_path=db_path)
+        yield db
+        db.close()
+
+    def test_standalone_canon_owns_its_connection(self, canon):
+        assert canon._owns_conn is True
+
+    def test_shared_canon_reuses_session_db_connection_object(self, session_db):
+        canon = TargetCanon(session_db=session_db)
+        assert canon._owns_conn is False
+        assert canon._conn is session_db._conn
+
+    def test_shared_canon_uses_session_db_path(self, session_db):
+        canon = TargetCanon(session_db=session_db)
+        assert canon._db_path == session_db._db_path
+
+    def test_shared_canon_set_and_get_active_work_over_shared_connection(self, session_db):
+        canon = TargetCanon(session_db=session_db)
+        img = _make_image(color=(10, 20, 30))
+        vid = canon.set_target(img)
+        active = canon.get_active()
+        assert active is not None
+        assert active["id"] == vid
+        assert active["image"].shape == img.shape
+
+    def test_session_db_writes_visible_through_shared_connection(self, session_db):
+        """Rows written via SessionDB and via the shared TargetCanon land in
+        the same underlying SQLite file/connection."""
+        canon = TargetCanon(session_db=session_db)
+        session_id = session_db.create_session(source="webcam")
+        canon.set_target(_make_image())
+
+        # Both should be readable back -- proof they share one connection
+        # rather than two independent handles to the same file.
+        assert session_db.get_session(session_id) is not None
+        assert canon.get_active() is not None
+
+    def test_close_on_shared_canon_does_not_close_session_db_connection(self, session_db):
+        canon = TargetCanon(session_db=session_db)
+        canon.close()
+        # The SessionDB's connection must still be usable afterwards --
+        # closing the canon must not have closed the shared connection.
+        session_id = session_db.create_session(source="webcam")
+        assert session_db.get_session(session_id) is not None
+
+    def test_close_on_standalone_canon_closes_its_own_connection(self, tmp_path):
+        db_path = str(tmp_path / "standalone.db")
+        canon = TargetCanon(db_path=db_path)
+        canon.close()
+        with pytest.raises(Exception):
+            canon._conn.execute("SELECT 1")
