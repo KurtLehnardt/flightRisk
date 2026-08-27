@@ -25,12 +25,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 from typing import Any, Callable
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from amber.async_bridge import AsyncBridge
 from amber.edge import DetectionMessage, EdgeRunner
 
 logger = logging.getLogger(__name__)
@@ -58,12 +58,30 @@ class EdgeTransport:
         ws_url: str = "ws://localhost:9000",
         runner: EdgeRunner | None = None,
         token: str | None = None,
+        max_retries: int | None = None,
+        base_delay: float = 1.0,
+        max_delay: float = 30.0,
     ):
         self._ws_url = ws_url
         self._ws = None
         self._connected = False
         self._runner = runner if runner is not None else EdgeRunner()
         self._token = token
+
+        # Reconnection (exponential backoff). ``max_retries=None`` means
+        # retry forever -- appropriate for a long-lived edge device that
+        # should keep trying to reach the ground station.
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._max_delay = max_delay
+        self._retry_count = 0
+        # True once a connection has been established at least once and
+        # hasn't been torn down by an explicit disconnect() -- gates
+        # automatic reconnection so a deliberate disconnect() doesn't
+        # silently reconnect on the next send_detections()/recv() call.
+        self._should_reconnect = False
+        self._reconnect_task: asyncio.Task | None = None
+        self._connect_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
@@ -75,22 +93,92 @@ class EdgeTransport:
         No-ops if already connected -- calling ``connect()`` twice without an
         intervening ``disconnect()`` would otherwise orphan the first
         WebSocket (leaking the connection and its background reader task).
+        Guarded by ``_connect_lock`` so a concurrent call (e.g. an explicit
+        ``connect()`` racing the background ``_reconnect()`` task) can't slip
+        past the ``_connected`` check and open a second, orphaned socket.
         """
+        async with self._connect_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        """Connection logic, assumes ``_connect_lock`` is already held."""
         if self._connected:
             return
         self._ws = await websockets.connect(self._ws_url)
         self._connected = True
+        self._should_reconnect = True
+        self._retry_count = 0
         if self._token is not None:
             await self._ws.send(json.dumps({"type": "auth", "token": self._token}))
+
+    async def _reconnect(self) -> bool:
+        """Attempt to reconnect with exponential backoff.
+
+        Sleeps with a delay that doubles each attempt (capped at
+        ``max_delay``), then tries to connect. Keeps trying until it
+        succeeds, ``max_retries`` is exhausted, or reconnection is no longer
+        wanted (e.g. ``disconnect()`` ran concurrently). Returns ``True`` once
+        reconnected, ``False`` otherwise.
+
+        Acquires ``_connect_lock`` around the connection attempt itself
+        (via ``_connect_locked``, not the public ``connect()``) so it can't
+        race an explicit ``connect()`` call without deadlocking on its own
+        non-reentrant lock.
+        """
+        while self._should_reconnect and (
+            self._max_retries is None or self._retry_count < self._max_retries
+        ):
+            delay = min(self._base_delay * (2**self._retry_count), self._max_delay)
+            logger.info(
+                "[%s] Reconnecting in %.1fs (attempt %d)",
+                self._ws_url, delay, self._retry_count + 1,
+            )
+            await asyncio.sleep(delay)
+            if not self._should_reconnect:
+                return False
+            try:
+                async with self._connect_lock:
+                    await self._connect_locked()
+            except Exception as exc:
+                self._retry_count += 1
+                logger.warning("[%s] Reconnect attempt failed: %s", self._ws_url, exc)
+                continue
+            logger.info("[%s] Reconnected successfully", self._ws_url)
+            return True
+
+        if self._should_reconnect:
+            logger.error(
+                "[%s] Giving up reconnecting after %d attempts",
+                self._ws_url, self._retry_count,
+            )
+        return False
+
+    def _schedule_reconnect(self) -> None:
+        """Kick off a background reconnect attempt, if one isn't already running.
+
+        Runs ``_reconnect()`` as a fire-and-forget task so callers such as
+        ``send_detections`` never block the caller (e.g. the frame-processing
+        loop) waiting for the network to come back -- the connection is
+        simply unavailable until the background attempt succeeds.
+        """
+        if not self._should_reconnect:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.ensure_future(self._reconnect())
 
     async def send_detections(self, msg: DetectionMessage) -> None:
         """Serialize and send a DetectionMessage.
 
-        No-ops if not currently connected. If the connection has dropped
-        underneath us, marks the transport disconnected rather than raising,
-        so callers can decide whether/how to reconnect.
+        No-ops if not currently connected, scheduling a background
+        reconnection attempt first if one is warranted (i.e. a previous
+        connection dropped unexpectedly rather than via explicit
+        ``disconnect()``). If the connection drops mid-send, marks the
+        transport disconnected and schedules a reconnect rather than
+        raising.
         """
         if not self._connected or self._ws is None:
+            self._schedule_reconnect()
             return
         data = self._runner.to_dict(msg)
         try:
@@ -98,6 +186,7 @@ class EdgeTransport:
         except ConnectionClosed:
             logger.warning("send_detections: connection closed")
             self._connected = False
+            self._schedule_reconnect()
 
     async def recv(self, timeout: float | None = None) -> dict[str, Any] | None:
         """Receive and decode one message from the ground station.
@@ -117,6 +206,7 @@ class EdgeTransport:
         except ConnectionClosed:
             logger.warning("recv: connection closed")
             self._connected = False
+            self._schedule_reconnect()
             return None
         except (asyncio.TimeoutError, TimeoutError):
             return None
@@ -134,6 +224,19 @@ class EdgeTransport:
         return data
 
     async def disconnect(self) -> None:
+        """Close the connection and suppress any further reconnection.
+
+        This is an explicit, user-initiated teardown: it cancels a
+        background reconnect attempt if one is in flight and prevents
+        ``send_detections``/``recv`` from auto-reconnecting afterwards.
+        """
+        self._should_reconnect = False
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -312,63 +415,11 @@ class GroundTransport:
 # ---------------------------------------------------------------------------
 # Sync wrappers (background-thread event loop bridge)
 # ---------------------------------------------------------------------------
-
-
-class _AsyncBridge:
-    """Runs an asyncio event loop on a background thread.
-
-    Mirrors the bridge pattern in ``amber.drone.mavlink.MavlinkController``:
-    a dedicated event loop runs forever on a daemon thread, and sync callers
-    submit coroutines onto it via ``run_coroutine_threadsafe`` and block for
-    the result. This lets threading-based code (like the Flask/SocketIO
-    dashboard app) drive an async API without itself becoming async.
-    """
-
-    def __init__(self, name: str):
-        self._name = name
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
-
-    @property
-    def is_running(self) -> bool:
-        return bool(self._loop and self._loop.is_running())
-
-    def start_loop(self) -> None:
-        if self.is_running:
-            return
-        self._loop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(
-            target=self._loop.run_forever,
-            daemon=True,
-            name=f"{self._name}-loop",
-        )
-        self._loop_thread.start()
-
-    def stop_loop(self) -> None:
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._loop_thread and self._loop_thread.is_alive():
-            self._loop_thread.join(timeout=5.0)
-        if self._loop and not self._loop.is_closed():
-            self._loop.close()
-        self._loop = None
-        self._loop_thread = None
-
-    def run(self, coro, timeout: float = _CMD_TIMEOUT):
-        """Submit *coro* to the event loop and block for the result."""
-        # Snapshot self._loop into a local: another thread could set it to
-        # None (e.g. via stop_loop()) between the is_running check and
-        # run_coroutine_threadsafe if we re-read the attribute.
-        loop = self._loop
-        if loop is None or not loop.is_running():
-            raise RuntimeError("Event loop is not running")
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError:
-            future.cancel()
-            logger.error("[%s] Command timed out after %.0fs", self._name, timeout)
-            raise
+#
+# Both sync wrappers below use the shared ``amber.async_bridge.AsyncBridge``
+# (the same bridge pattern used by ``amber.drone.mavlink.MavlinkController``)
+# to drive their async transport from threading-based callers like the
+# Flask/SocketIO dashboard app.
 
 
 class EdgeTransportSync:
@@ -379,9 +430,19 @@ class EdgeTransportSync:
         ws_url: str = "ws://localhost:9000",
         runner: EdgeRunner | None = None,
         token: str | None = None,
+        max_retries: int | None = None,
+        base_delay: float = 1.0,
+        max_delay: float = 30.0,
     ):
-        self._transport = EdgeTransport(ws_url=ws_url, runner=runner, token=token)
-        self._bridge = _AsyncBridge("edge-transport")
+        self._transport = EdgeTransport(
+            ws_url=ws_url,
+            runner=runner,
+            token=token,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
+        )
+        self._bridge = AsyncBridge(name="edge-transport", cmd_timeout=_CMD_TIMEOUT)
 
     @property
     def connected(self) -> bool:
@@ -417,7 +478,7 @@ class GroundTransportSync:
         token: str | None = None,
     ):
         self._transport = GroundTransport(host=host, port=port, on_message=on_message, token=token)
-        self._bridge = _AsyncBridge("ground-transport")
+        self._bridge = AsyncBridge(name="ground-transport", cmd_timeout=_CMD_TIMEOUT)
 
     @property
     def port(self) -> int:

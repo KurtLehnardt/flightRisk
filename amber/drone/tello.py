@@ -187,9 +187,11 @@ class TelloController:
         """Stop all movement and hover in place."""
         self.tello.send_rc_control(0, 0, 0, 0)
 
-    def goto_gps(self, lat: float, lon: float, alt_m: float) -> None:
-        """Navigate to GPS coordinates. Not supported on Tello."""
-        raise NotImplementedError("Tello does not have GPS")
+    # NOTE: no goto_gps() — the standard Tello has no GPS. TelloController
+    # intentionally only satisfies `DroneController`, not
+    # `GpsDroneController` (see amber/drone/controller.py). Callers must
+    # check `isinstance(drone, GpsDroneController)` or
+    # `drone.capabilities.has_gps` before invoking GPS navigation.
 
     # --- Internal threads ---
 

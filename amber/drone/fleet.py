@@ -8,10 +8,13 @@ than the default Tello (e.g. MAVLink, simulated) without touching this
 module. Any object satisfying the `DroneController` protocol works.
 """
 
+import logging
 import threading
 from typing import Callable
 
 from amber.drone.controller import DroneController
+
+logger = logging.getLogger(__name__)
 
 
 def _default_factory(name: str, host: str) -> DroneController:
@@ -103,14 +106,26 @@ class DroneFleet:
             }
         return result
 
-    def broadcast_command(self, command: str, **kwargs):
-        for ctrl in self._drones.values():
-            method = getattr(ctrl, command, None)
-            if method and callable(method):
-                try:
-                    method(**kwargs)
-                except Exception:
-                    pass
+    def broadcast_command(self, command: str, *args, **kwargs) -> dict[str, Exception | None]:
+        """Call `command` on every registered drone.
+
+        Unlike a fire-and-forget broadcast, failures are neither raised
+        nor silently swallowed — each drone's outcome is reported back so
+        callers can surface partial failures (e.g. "land succeeded on
+        drone-1 but drone-2 failed to respond").
+
+        Returns:
+            Mapping of drone_id -> None (success) or the Exception raised.
+        """
+        results: dict[str, Exception | None] = {}
+        for drone_id, drone in self._drones.items():
+            try:
+                getattr(drone, command)(*args, **kwargs)
+                results[drone_id] = None
+            except Exception as e:
+                logger.error("Command %s failed on %s: %s", command, drone_id, e)
+                results[drone_id] = e
+        return results
 
     def disconnect_all(self):
         with self._lock:

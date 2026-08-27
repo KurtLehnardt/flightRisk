@@ -17,6 +17,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from amber.async_bridge import AsyncBridge
 from amber.config import get_config
 from amber.drone.controller import DroneCapabilities, DroneState
 
@@ -93,9 +94,9 @@ class MavlinkController:
         host_ip = _extract_ip(host)
         self.rtsp_url = rtsp_url or f"rtsp://{host_ip}:8554/camera"
 
-        # Async internals
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
+        # Async internals -- background event loop bridge shared with
+        # amber.transport's sync wrappers (see amber.async_bridge.AsyncBridge).
+        self._bridge = AsyncBridge(name=f"{name}-mavlink", cmd_timeout=get_config().drone.mavlink_cmd_timeout)
         self._system: System | None = None
         self._telemetry_tasks: list[asyncio.Task] = []
 
@@ -118,43 +119,41 @@ class MavlinkController:
     # ------------------------------------------------------------------
     # Async event loop management
     # ------------------------------------------------------------------
+    #
+    # These delegate to a shared amber.async_bridge.AsyncBridge instance
+    # (the same bridge pattern used by amber.transport's sync wrappers).
+    # _loop/_loop_thread stay as properties -- rather than being renamed
+    # to go through the bridge directly -- because tests and internal
+    # methods below read/assign them directly (e.g. to inject a fake
+    # System's event loop in tests).
+
+    @property
+    def _loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._bridge.loop
+
+    @_loop.setter
+    def _loop(self, value: asyncio.AbstractEventLoop | None) -> None:
+        self._bridge.loop = value
+
+    @property
+    def _loop_thread(self) -> threading.Thread | None:
+        return self._bridge.loop_thread
+
+    @_loop_thread.setter
+    def _loop_thread(self, value: threading.Thread | None) -> None:
+        self._bridge.loop_thread = value
 
     def _start_loop(self) -> None:
         """Start the background asyncio event loop."""
-        self._loop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(
-            target=self._loop.run_forever,
-            daemon=True,
-            name=f"{self.name}-mavlink-loop",
-        )
-        self._loop_thread.start()
+        self._bridge.start_loop()
 
     def _stop_loop(self) -> None:
         """Stop the background event loop."""
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._loop_thread and self._loop_thread.is_alive():
-            self._loop_thread.join(timeout=5.0)
-        if self._loop and not self._loop.is_closed():
-            self._loop.close()
-        self._loop = None
-        self._loop_thread = None
+        self._bridge.stop_loop()
 
     def _run(self, coro, timeout: float | None = None):
         """Submit *coro* to the event loop and block for the result."""
-        if timeout is None:
-            timeout = get_config().drone.mavlink_cmd_timeout
-        if not self._loop or not self._loop.is_running():
-            raise RuntimeError("Event loop is not running")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError:
-            future.cancel()
-            logger.error("[%s] Command timed out after %.0fs", self.name, timeout)
-            raise
-        except Exception:
-            raise
+        return self._bridge.run(coro, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Telemetry subscriptions
@@ -443,7 +442,7 @@ class MavlinkController:
                 break
 
     # ------------------------------------------------------------------
-    # Public synchronous API (DroneController protocol)
+    # Public synchronous API (DroneController / GpsDroneController protocol)
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
