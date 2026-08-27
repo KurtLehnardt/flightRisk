@@ -23,6 +23,7 @@ from amber.vision.reid import PersonReID
 from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
+from amber.vision.tracker import DetectionTracker
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
@@ -62,6 +63,7 @@ _state = {
     "reid": None,
     "face": None,
     "scorer": None,
+    "tracker": None,
     "reasoning": None,
     "source": None,
     "cap": None,
@@ -113,6 +115,9 @@ def _init_pipeline(source="webcam", target_path=None):
 
     if _state["scorer"] is None:
         _state["scorer"] = MatchScorer(match_threshold=0.45)
+
+    if _state["tracker"] is None:
+        _state["tracker"] = DetectionTracker(max_age=30, iou_threshold=0.3)
 
     if _state["reasoning"] is None:
         try:
@@ -258,6 +263,15 @@ def _frame_loop():
             detections = _state["detector"].detect(frame)
             _state["persons_detected"] = len(detections)
 
+            tracker = _state.get("tracker")
+            tracked_detections = tracker.update(detections) if tracker else []
+            if tracker:
+                socketio.emit("track_update", {"active_tracks": len(tracker.active_tracks)})
+            # Bbox is a stable join key back to `detections`: the tracker
+            # writes the current frame's bbox onto matched tracks verbatim,
+            # and brand-new tracks adopt the detection's bbox as-is.
+            track_id_by_bbox = {tuple(t.bbox): t.track_id for t in tracked_detections}
+
             if metrics:
                 metrics.inc_frames()
                 metrics.inc_persons(len(detections))
@@ -298,6 +312,10 @@ def _frame_loop():
                 if face_score > reid_score:
                     match_idx = face_match_idx
 
+            match_track_id = None
+            if tracker and match_idx is not None:
+                match_track_id = track_id_by_bbox.get(tuple(detections[match_idx]["bbox"]))
+
             # Combined score via multi-feature scorer
             current_alert_level = "no_match"
             if match_idx is not None and _state["scorer"]:
@@ -311,6 +329,23 @@ def _frame_loop():
                 if current_alert_level == "no_match" and det_face >= face_thresh:
                     current_alert_level = "possible_match"
                     match_score = max(match_score, det_face)
+
+                # Accumulate per-track score history and use multi-frame
+                # corroboration (several frames agreeing) to strengthen the
+                # alert level beyond what a single frame's score would give.
+                if tracker and match_track_id is not None:
+                    tracker.add_scores(match_track_id, reid_score=det_reid, face_score=det_face)
+                    track_summary = tracker.get_track(match_track_id)
+                    reid_thresh = _state["reid"].match_threshold if _state.get("reid") else 0.55
+                    if (
+                        track_summary
+                        and track_summary.frames_seen >= 3
+                        and track_summary.avg_reid_score >= reid_thresh
+                        and current_alert_level != "confirmed_match"
+                    ):
+                        current_alert_level = "confirmed_match"
+                        match_score = max(match_score, track_summary.avg_reid_score)
+
                 if log:
                     log.scoring(combined=match_score, reid=det_reid, face=det_face, alert=current_alert_level)
                 # Auto-stop search and hover on confirmed or possible match
@@ -343,6 +378,11 @@ def _frame_loop():
 
                 if best_candidate is not None:
                     crop = detections[best_candidate]["crop"]
+                    desc_track_id = (
+                        track_id_by_bbox.get(tuple(detections[best_candidate]["bbox"]))
+                        if tracker
+                        else None
+                    )
                     if crop is not None and crop.size > 0:
                         reasoning_start = time.time()
                         result = _state["reasoning"].match_description(
@@ -388,6 +428,7 @@ def _frame_loop():
                                 "snapshot": snapshot_b64,
                                 "type": "description",
                                 "alert_level": desc_alert,
+                                "track_id": desc_track_id,
                             }
 
                             if _state["db"] and _state["session_id"]:
@@ -418,6 +459,14 @@ def _frame_loop():
             ):
                 ref_img = cv2.imread(_state["target_photo_path"])
                 candidate_crop = detections[match_idx]["crop"]
+                if tracker and match_track_id is not None:
+                    track_summary = tracker.get_track(match_track_id)
+                    if (
+                        track_summary
+                        and track_summary.best_crop is not None
+                        and track_summary.best_crop.size > 0
+                    ):
+                        candidate_crop = track_summary.best_crop
                 reasoning_start = time.time()
                 result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
                 reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
@@ -463,6 +512,7 @@ def _frame_loop():
                     "face_score": round(face_score, 3),
                     "reid_score": round(reid_score, 3),
                     "alert_level": current_alert_level,
+                    "track_id": match_track_id,
                 }
 
                 if _state["db"] and _state["session_id"]:
