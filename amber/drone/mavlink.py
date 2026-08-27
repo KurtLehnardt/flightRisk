@@ -17,13 +17,12 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from amber.drone.controller import DroneCapabilities, DroneController, DroneState
+from amber.drone.controller import DroneCapabilities, DroneState
 
 logger = logging.getLogger(__name__)
 
 try:
     from mavsdk import System
-    from mavsdk.action import ActionError
     from mavsdk.offboard import (
         OffboardError,
         VelocityBodyYawspeed,
@@ -222,13 +221,15 @@ class MavlinkController:
         self._last_telemetry_time = time.monotonic()
 
         # Start telemetry subscriptions
+        loop = self._loop
+        assert loop is not None, "Event loop must be running before connect"
         self._telemetry_tasks = [
-            self._loop.create_task(self._subscribe_position(system)),
-            self._loop.create_task(self._subscribe_heading(system)),
-            self._loop.create_task(self._subscribe_battery(system)),
-            self._loop.create_task(self._subscribe_flight_mode(system)),
-            self._loop.create_task(self._subscribe_gps_info(system)),
-            self._loop.create_task(self._monitor_heartbeat()),
+            loop.create_task(self._subscribe_position(system)),
+            loop.create_task(self._subscribe_heading(system)),
+            loop.create_task(self._subscribe_battery(system)),
+            loop.create_task(self._subscribe_flight_mode(system)),
+            loop.create_task(self._subscribe_gps_info(system)),
+            loop.create_task(self._monitor_heartbeat()),
         ]
         return True
 
@@ -271,13 +272,10 @@ class MavlinkController:
         self.state.is_flying = False
         logger.info("[%s] Land", self.name)
 
-    async def _move_async(self, direction: str, distance_cm: int) -> None:
+    async def _move_async(self, direction: str, distance_cm: int, duration: float) -> None:
         system = self._system
         if not system:
             raise RuntimeError("Not connected")
-
-        distance_m = distance_cm / 100.0
-        duration = distance_m / _MOVE_SPEED
 
         vx, vy, vz = 0.0, 0.0, 0.0
         direction = direction.lower()
@@ -297,20 +295,22 @@ class MavlinkController:
             raise ValueError(f"Unknown direction: {direction}")
 
         setpoint = VelocityBodyYawspeed(vx, vy, vz, 0.0)
+        zero = VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
 
-        # CRITICAL: send one setpoint BEFORE starting offboard mode
-        await system.offboard.set_velocity_body(setpoint)
-
+        # try/finally wraps the ENTIRE offboard sequence so the safety
+        # stop fires even if cancellation hits during start().
         try:
-            await system.offboard.start()
-        except OffboardError as exc:
-            logger.warning("[%s] Offboard start failed, retrying: %s", self.name, exc)
+            # CRITICAL: send one setpoint BEFORE starting offboard mode
             await system.offboard.set_velocity_body(setpoint)
-            await system.offboard.start()
 
-        # Stream setpoints at ~10Hz to keep PX4 in offboard mode.
-        # try/finally ensures a safety stop even on cancellation/timeout.
-        try:
+            try:
+                await system.offboard.start()
+            except OffboardError as exc:
+                logger.warning("[%s] Offboard start failed, retrying: %s", self.name, exc)
+                await system.offboard.set_velocity_body(setpoint)
+                await system.offboard.start()
+
+            # Stream setpoints at ~10Hz to keep PX4 in offboard mode.
             elapsed = 0.0
             interval = 0.1
             while elapsed < duration:
@@ -318,34 +318,38 @@ class MavlinkController:
                 await asyncio.sleep(interval)
                 elapsed += interval
         finally:
-            await system.offboard.set_velocity_body(
-                VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
-            )
-            await system.offboard.stop()
+            try:
+                await asyncio.wait_for(system.offboard.set_velocity_body(zero), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            try:
+                await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
 
-    async def _rotate_async(self, degrees: int) -> None:
+    async def _rotate_async(self, degrees: int, duration: float) -> None:
         system = self._system
         if not system:
             raise RuntimeError("Not connected")
 
-        duration = abs(degrees) / _YAW_RATE
         yaw_rate = _YAW_RATE if degrees > 0 else -_YAW_RATE
-
         setpoint = VelocityBodyYawspeed(0.0, 0.0, 0.0, yaw_rate)
+        zero = VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
 
-        # Send setpoint before starting offboard
-        await system.offboard.set_velocity_body(setpoint)
-
+        # try/finally wraps the ENTIRE offboard sequence so the safety
+        # stop fires even if cancellation hits during start().
         try:
-            await system.offboard.start()
-        except OffboardError as exc:
-            logger.warning("[%s] Offboard start failed, retrying: %s", self.name, exc)
+            # Send setpoint before starting offboard
             await system.offboard.set_velocity_body(setpoint)
-            await system.offboard.start()
 
-        # Stream setpoints at ~10Hz to keep PX4 in offboard mode.
-        # try/finally ensures a safety stop even on cancellation/timeout.
-        try:
+            try:
+                await system.offboard.start()
+            except OffboardError as exc:
+                logger.warning("[%s] Offboard start failed, retrying: %s", self.name, exc)
+                await system.offboard.set_velocity_body(setpoint)
+                await system.offboard.start()
+
+            # Stream setpoints at ~10Hz to keep PX4 in offboard mode.
             elapsed = 0.0
             interval = 0.1
             while elapsed < duration:
@@ -353,10 +357,14 @@ class MavlinkController:
                 await asyncio.sleep(interval)
                 elapsed += interval
         finally:
-            await system.offboard.set_velocity_body(
-                VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
-            )
-            await system.offboard.stop()
+            try:
+                await asyncio.wait_for(system.offboard.set_velocity_body(zero), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            try:
+                await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
 
     async def _hover_async(self, duration: float = 1.0) -> None:
         system = self._system
@@ -364,17 +372,19 @@ class MavlinkController:
             raise RuntimeError("Not connected")
 
         setpoint = VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
-        await system.offboard.set_velocity_body(setpoint)
 
+        # try/finally wraps the ENTIRE offboard sequence so the safety
+        # stop fires even if cancellation hits during start().
         try:
-            await system.offboard.start()
-        except OffboardError:
             await system.offboard.set_velocity_body(setpoint)
-            await system.offboard.start()
 
-        # Stream zero-velocity setpoints at ~10Hz to maintain offboard mode.
-        # try/finally ensures offboard.stop() even on cancellation/timeout.
-        try:
+            try:
+                await system.offboard.start()
+            except OffboardError:
+                await system.offboard.set_velocity_body(setpoint)
+                await system.offboard.start()
+
+            # Stream zero-velocity setpoints at ~10Hz to maintain offboard mode.
             elapsed = 0.0
             interval = 0.1
             while elapsed < duration:
@@ -382,10 +392,16 @@ class MavlinkController:
                 await asyncio.sleep(interval)
                 elapsed += interval
         finally:
-            await system.offboard.set_velocity_body(
-                VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
-            )
-            await system.offboard.stop()
+            try:
+                await asyncio.wait_for(
+                    system.offboard.set_velocity_body(setpoint), timeout=2.0
+                )
+            except (asyncio.TimeoutError, Exception):
+                pass
+            try:
+                await asyncio.wait_for(system.offboard.stop(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
 
     async def _goto_gps_async(self, lat: float, lon: float, alt_m: float) -> None:
         system = self._system
@@ -503,12 +519,12 @@ class MavlinkController:
     def move(self, direction: str, distance_cm: int) -> None:
         with self._cmd_lock:
             duration = (distance_cm / 100.0) / _MOVE_SPEED
-            self._run(self._move_async(direction, distance_cm), timeout=duration + 10)
+            self._run(self._move_async(direction, distance_cm, duration), timeout=duration + 10)
 
     def rotate(self, degrees: int) -> None:
         with self._cmd_lock:
             duration = abs(degrees) / _YAW_RATE
-            self._run(self._rotate_async(degrees), timeout=duration + 10)
+            self._run(self._rotate_async(degrees, duration), timeout=duration + 10)
 
     def hover(self) -> None:
         with self._cmd_lock:

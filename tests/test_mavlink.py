@@ -10,7 +10,7 @@ import asyncio
 import sys
 import threading
 import types
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -625,6 +625,38 @@ class TestErrorHandling:
         try:
             with pytest.raises(_FakeOffboardError):
                 ctrl.move("forward", 100)
+        finally:
+            _teardown_controller(ctrl)
+
+
+class TestTimeoutSafetyStop:
+    """Verify the finally block fires even when _run times out."""
+
+    def test_timeout_still_calls_offboard_stop(self):
+        """When offboard.start() hangs and _run times out, the finally
+        block must still send zero-velocity and call offboard.stop()."""
+        system = _FakeSystem()
+
+        # Make offboard.start() hang forever so _run's timeout fires
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        system.offboard.start = AsyncMock(side_effect=_hang)
+
+        ctrl = _make_controller(system)
+        try:
+            with pytest.raises(TimeoutError):
+                ctrl._run(
+                    ctrl._move_async("forward", 100, 1.0),
+                    timeout=0.5,
+                )
+
+            # Give the event loop a moment to execute the finally block
+            import time
+            time.sleep(0.5)
+
+            # The finally block should have attempted offboard.stop()
+            system.offboard.stop.assert_awaited()
         finally:
             _teardown_controller(ctrl)
 
