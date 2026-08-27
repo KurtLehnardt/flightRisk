@@ -4,6 +4,8 @@ services:
     network_mode: host
     environment:
       - AMBER_SOURCE=tello
+      - AMBER_MAVLINK_ADDRESS=udp://:14540
+      - AMBER_EDGE_WS=ws://localhost:9000
       - AMBER_OTEL_ENABLED=true
       - OTEL_EXPORTER=otlp-grpc
       - OTEL_ENDPOINT=http://localhost:4317

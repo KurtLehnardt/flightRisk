@@ -1,0 +1,12 @@
+# Docker-only build constraints.
+#
+# Pins torch/torchvision to their CPU-only build variants so that
+# open-clip-torch's transitive `torch>=2.0` dependency resolves against
+# the CPU wheel instead of re-downloading the CUDA build from PyPI.
+# The `+cpu` local version suffix only exists on the PyTorch CPU index,
+# so pip cannot satisfy this constraint from default PyPI.
+#
+# Not used outside Docker builds — main requirements.txt is left
+# untouched so local/dev installs keep resolving torch normally.
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
