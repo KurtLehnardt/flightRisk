@@ -185,6 +185,27 @@ def _teardown_controller(ctrl: MavlinkController) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def fast_offboard(monkeypatch):
+    """Patch asyncio.sleep to be instant so streaming-loop tests don't
+    spend real wall-clock time waiting.
+    """
+
+    _real_sleep = asyncio.sleep
+
+    async def _instant_sleep(delay, result=None):
+        # Let zero-second sleeps through normally (cooperative yield),
+        # but skip any real delays.
+        return await _real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -362,6 +383,7 @@ class TestLand:
             _teardown_controller(ctrl)
 
 
+@pytest.mark.usefixtures("fast_offboard")
 class TestMoveDirections:
     """Test all 6 directions produce the correct velocity vectors."""
 
@@ -405,6 +427,7 @@ class TestMoveDirections:
             _teardown_controller(ctrl)
 
 
+@pytest.mark.usefixtures("fast_offboard")
 class TestRotate:
     def test_rotate_positive(self):
         system = _FakeSystem()
@@ -431,6 +454,7 @@ class TestRotate:
             _teardown_controller(ctrl)
 
 
+@pytest.mark.usefixtures("fast_offboard")
 class TestHover:
     def test_hover_sends_zero_velocity(self):
         system = _FakeSystem()
@@ -575,6 +599,7 @@ class TestTelemetryUpdates:
             _teardown_controller(ctrl)
 
 
+@pytest.mark.usefixtures("fast_offboard")
 class TestErrorHandling:
     def test_offboard_rejected_retries(self):
         """When offboard.start raises OffboardError, it should retry."""
