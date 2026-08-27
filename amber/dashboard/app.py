@@ -1358,7 +1358,10 @@ def on_register_drone(data):
             # "tello" here previously flipped mavlink deployments back to
             # tello on every manual registration.
             if _state.get("source") not in ("tello", "mavlink"):
-                _state["source"] = "mavlink" if current_source == "mavlink" else "tello"
+                new_source = "mavlink" if current_source == "mavlink" else "tello"
+                _state["source"] = new_source
+                if _state.get("source_config") is not None:
+                    _state["source_config"].source = new_source
                 cap = _state.get("cap")
                 if cap:
                     cap.release()
