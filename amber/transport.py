@@ -53,20 +53,35 @@ _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 class EdgeTransport:
     """Sends DetectionMessages to the ground station via WebSocket."""
 
-    def __init__(self, ws_url: str = "ws://localhost:9000", runner: EdgeRunner | None = None):
+    def __init__(
+        self,
+        ws_url: str = "ws://localhost:9000",
+        runner: EdgeRunner | None = None,
+        token: str | None = None,
+    ):
         self._ws_url = ws_url
         self._ws = None
         self._connected = False
         self._runner = runner if runner is not None else EdgeRunner()
+        self._token = token
 
     @property
     def connected(self) -> bool:
         return self._connected
 
     async def connect(self) -> None:
-        """Connect to the ground station WebSocket."""
+        """Connect to the ground station WebSocket.
+
+        No-ops if already connected -- calling ``connect()`` twice without an
+        intervening ``disconnect()`` would otherwise orphan the first
+        WebSocket (leaking the connection and its background reader task).
+        """
+        if self._connected:
+            return
         self._ws = await websockets.connect(self._ws_url)
         self._connected = True
+        if self._token is not None:
+            await self._ws.send(json.dumps({"type": "auth", "token": self._token}))
 
     async def send_detections(self, msg: DetectionMessage) -> None:
         """Serialize and send a DetectionMessage.
@@ -135,12 +150,15 @@ class GroundTransport:
         host: str = "0.0.0.0",
         port: int = 9000,
         on_message: Callable[[DetectionMessage], None] | None = None,
+        token: str | None = None,
     ):
         self._host = host
         self._port = port
         self._on_message = on_message  # callback: (DetectionMessage) -> None
         self._server = None
         self._clients: set = set()
+        self._token = token
+        self._authenticated_clients: set = set()
 
     @property
     def clients(self) -> set:
@@ -154,10 +172,48 @@ class GroundTransport:
             return self._server.sockets[0].getsockname()[1]
         return self._port
 
+    async def _authenticate(self, websocket) -> bool:
+        """Consume the first message as an auth handshake.
+
+        Only called when ``self._token`` is set. The first message from the
+        client must be ``{"type": "auth", "token": "..."}`` with a matching
+        token; anything else (wrong token, wrong shape, malformed JSON, or
+        the connection closing before a message arrives) rejects and closes
+        the connection.
+        """
+        try:
+            raw = await websocket.recv()
+        except ConnectionClosed:
+            return False
+
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+
+        if (
+            isinstance(data, dict)
+            and data.get("type") == "auth"
+            and data.get("token") == self._token
+        ):
+            self._authenticated_clients.add(websocket)
+            return True
+
+        logger.warning("Rejecting client: failed auth handshake")
+        try:
+            await websocket.close(code=4001, reason="unauthorized")
+        except ConnectionClosed:
+            pass
+        return False
+
     async def _handle_client(self, websocket) -> None:
         """Handle incoming messages from an edge client."""
         self._clients.add(websocket)
         try:
+            if self._token is not None:
+                if not await self._authenticate(websocket):
+                    return
+
             async for raw in websocket:
                 try:
                     data = json.loads(raw)
@@ -177,8 +233,11 @@ class GroundTransport:
                         logger.warning("Malformed detections message, ignoring", exc_info=True)
                         continue
                     if self._on_message:
+                        # Dispatch off the event loop thread so a slow
+                        # scoring callback doesn't block other clients.
+                        loop = asyncio.get_event_loop()
                         try:
-                            self._on_message(msg)
+                            await loop.run_in_executor(None, self._on_message, msg)
                         except Exception:
                             logger.exception("on_message callback raised")
                 elif msg_type == "set_target":
@@ -193,9 +252,18 @@ class GroundTransport:
             logger.info("Edge client disconnected")
         finally:
             self._clients.discard(websocket)
+            self._authenticated_clients.discard(websocket)
 
     async def start(self) -> None:
-        """Start the WebSocket server."""
+        """Start the WebSocket server.
+
+        No-ops if already started -- calling ``start()`` twice without an
+        intervening ``stop()`` would otherwise leak the first server (it
+        keeps listening and accepting connections with no way to reach it
+        again).
+        """
+        if self._server is not None:
+            return
         self._server = await websockets.serve(self._handle_client, self._host, self._port)
 
     async def stop(self) -> None:
@@ -204,6 +272,7 @@ class GroundTransport:
             await self._server.wait_closed()
             self._server = None
         self._clients.clear()
+        self._authenticated_clients.clear()
 
     async def send_target(
         self,
@@ -217,15 +286,27 @@ class GroundTransport:
             "reid_embedding": reid_embedding,
             "face_embedding": face_embedding,
         }
-        await websocket.send(json.dumps(msg))
+        try:
+            await websocket.send(json.dumps(msg))
+        except ConnectionClosed:
+            self._clients.discard(websocket)
+            self._authenticated_clients.discard(websocket)
 
     async def broadcast_target(self, reid_embedding, face_embedding=None) -> None:
-        """Send target embeddings to every currently connected edge client."""
-        for ws in list(self._clients):
-            try:
-                await self.send_target(ws, reid_embedding, face_embedding)
-            except ConnectionClosed:
-                self._clients.discard(ws)
+        """Send target embeddings to every currently connected edge client.
+
+        When a shared-secret token is configured, only clients that have
+        completed the auth handshake receive target updates (which include
+        biometric embeddings); otherwise all connected clients are treated
+        as eligible, matching pre-auth behavior.
+        """
+        clients = list(self._authenticated_clients) if self._token is not None else list(self._clients)
+        if not clients:
+            return
+        await asyncio.gather(
+            *(self.send_target(ws, reid_embedding, face_embedding) for ws in clients),
+            return_exceptions=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -275,9 +356,13 @@ class _AsyncBridge:
 
     def run(self, coro, timeout: float = _CMD_TIMEOUT):
         """Submit *coro* to the event loop and block for the result."""
-        if not self.is_running:
+        # Snapshot self._loop into a local: another thread could set it to
+        # None (e.g. via stop_loop()) between the is_running check and
+        # run_coroutine_threadsafe if we re-read the attribute.
+        loop = self._loop
+        if loop is None or not loop.is_running():
             raise RuntimeError("Event loop is not running")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
@@ -289,8 +374,13 @@ class _AsyncBridge:
 class EdgeTransportSync:
     """Synchronous wrapper around ``EdgeTransport`` for threaded callers."""
 
-    def __init__(self, ws_url: str = "ws://localhost:9000", runner: EdgeRunner | None = None):
-        self._transport = EdgeTransport(ws_url=ws_url, runner=runner)
+    def __init__(
+        self,
+        ws_url: str = "ws://localhost:9000",
+        runner: EdgeRunner | None = None,
+        token: str | None = None,
+    ):
+        self._transport = EdgeTransport(ws_url=ws_url, runner=runner, token=token)
         self._bridge = _AsyncBridge("edge-transport")
 
     @property
@@ -324,8 +414,9 @@ class GroundTransportSync:
         host: str = "0.0.0.0",
         port: int = 9000,
         on_message: Callable[[DetectionMessage], None] | None = None,
+        token: str | None = None,
     ):
-        self._transport = GroundTransport(host=host, port=port, on_message=on_message)
+        self._transport = GroundTransport(host=host, port=port, on_message=on_message, token=token)
         self._bridge = _AsyncBridge("ground-transport")
 
     @property

@@ -15,6 +15,7 @@ import time
 
 import pytest
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from amber.edge import Detection, DetectionMessage
 from amber.transport import (
@@ -403,6 +404,219 @@ def test_broadcast_target_reaches_all_connected_clients():
         finally:
             await et1.disconnect()
             await et2.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+# ===========================================================================
+# Repeated connect()/start() must not leak connections/servers
+# ===========================================================================
+
+def test_connect_called_twice_does_not_leak_connection():
+    async def scenario():
+        gt = await _start_ground()
+        et = EdgeTransport(ws_url=f"ws://localhost:{gt.port}")
+        try:
+            await et.connect()
+            assert await _wait_until(lambda: len(gt.clients) == 1)
+            first_ws = et._ws
+
+            # A second connect() while already connected must be a no-op:
+            # no new socket opened, no second client registered on the
+            # server.
+            await et.connect()
+            assert et._ws is first_ws
+            await asyncio.sleep(0.1)
+            assert len(gt.clients) == 1
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_start_called_twice_does_not_leak_server():
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0)
+        try:
+            await gt.start()
+            first_server = gt._server
+            first_port = gt.port
+
+            # A second start() while already started must be a no-op: the
+            # original server (and its bound port) stays in place rather
+            # than being replaced/orphaned.
+            await gt.start()
+            assert gt._server is first_server
+            assert gt.port == first_port
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+# ===========================================================================
+# send_target against a closed/gone websocket
+# ===========================================================================
+
+def test_send_target_against_closed_websocket_does_not_raise():
+    async def scenario():
+        gt = await _start_ground()
+        et = await _connect_edge(gt)
+        try:
+            assert await _wait_until(lambda: len(gt.clients) == 1)
+            server_ws = next(iter(gt.clients))
+
+            await et.disconnect()
+            assert await _wait_until(lambda: len(gt.clients) == 0)
+
+            # server_ws now refers to a closed connection. Sending on it
+            # must not raise -- it should be handled the same way a
+            # mid-send disconnect is.
+            await gt.send_target(server_ws, reid_embedding=[1.0])
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_target_survives_one_dead_client_among_several():
+    async def scenario():
+        gt = await _start_ground()
+        et1 = await _connect_edge(gt)
+        et2 = await _connect_edge(gt)
+        try:
+            assert await _wait_until(lambda: len(gt.clients) == 2)
+            dead_ws = next(iter(gt.clients))
+            await dead_ws.close()
+
+            # One client's socket is now closed underneath the server, but
+            # broadcasting must still reach the surviving client rather
+            # than raising/aborting partway through.
+            await gt.broadcast_target(reid_embedding=[7.0])
+
+            data1 = await et1.recv(timeout=2.0)
+            data2 = await et2.recv(timeout=2.0)
+            assert [d for d in (data1, data2) if d is not None]
+        finally:
+            await et1.disconnect()
+            await et2.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+# ===========================================================================
+# Auth token handshake
+# ===========================================================================
+
+def test_auth_handshake_success_allows_detections_through():
+    received = []
+
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0, token="s3cr3t", on_message=received.append)
+        await gt.start()
+        try:
+            et = EdgeTransport(ws_url=f"ws://localhost:{gt.port}", token="s3cr3t")
+            await et.connect()
+            try:
+                msg = _make_message(frame_id=42)
+                await et.send_detections(msg)
+                assert await _wait_until(lambda: len(received) == 1)
+                _assert_messages_equal(received[0], msg)
+            finally:
+                await et.disconnect()
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_auth_handshake_wrong_token_is_rejected_and_connection_closed():
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0, token="s3cr3t")
+        await gt.start()
+        try:
+            et = EdgeTransport(ws_url=f"ws://localhost:{gt.port}", token="wrong-token")
+            await et.connect()
+            # The server closes the connection right after rejecting the
+            # handshake; the client should observe that as a closed
+            # connection rather than being able to exchange messages.
+            data = await et.recv(timeout=1.0)
+            assert data is None
+            assert et.connected is False
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_auth_handshake_missing_token_configured_server_rejects_plain_client():
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0, token="s3cr3t")
+        await gt.start()
+        try:
+            raw_ws = await websockets.connect(f"ws://localhost:{gt.port}")
+            try:
+                # A client that never sends the auth handshake (e.g. an
+                # attacker connecting directly) and instead sends a normal
+                # message must be rejected, not treated as authenticated.
+                await raw_ws.send(json.dumps({"type": "detections", "frame_id": 1}))
+                with pytest.raises(ConnectionClosed):
+                    await raw_ws.recv()
+            finally:
+                await raw_ws.close()
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_target_skips_unauthenticated_clients_when_token_configured():
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0, token="s3cr3t")
+        await gt.start()
+        try:
+            et = EdgeTransport(ws_url=f"ws://localhost:{gt.port}", token="s3cr3t")
+            await et.connect()
+            # A raw client that connects but never completes the auth
+            # handshake must not receive broadcast target data.
+            raw_ws = await websockets.connect(f"ws://localhost:{gt.port}")
+            try:
+                assert await _wait_until(lambda: len(gt.clients) == 2)
+                await gt.broadcast_target(reid_embedding=[1.0])
+
+                data = await et.recv(timeout=1.0)
+                assert data is not None
+                assert data["reid_embedding"] == [1.0]
+            finally:
+                await et.disconnect()
+                await raw_ws.close()
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_no_token_configured_preserves_backward_compatible_behavior():
+    """When no token is configured, clients are treated as trusted
+    immediately (no handshake required), matching pre-auth behavior."""
+    received = []
+
+    async def scenario():
+        gt = await _start_ground(on_message=received.append)
+        et = await _connect_edge(gt)
+        try:
+            await et.send_detections(_make_message(frame_id=5))
+            assert await _wait_until(lambda: len(received) == 1)
+
+            await gt.broadcast_target(reid_embedding=[3.0])
+            data = await et.recv(timeout=1.0)
+            assert data is not None
+            assert data["reid_embedding"] == [3.0]
+        finally:
+            await et.disconnect()
             await gt.stop()
 
     asyncio.run(scenario())
