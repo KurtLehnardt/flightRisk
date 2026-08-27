@@ -28,13 +28,14 @@ class TargetCanon:
         if session_db is not None:
             self._db_path = session_db._db_path
             self._conn = session_db._conn
+            self._lock = session_db._lock  # Share the lock too!
             self._owns_conn = False
         else:
             self._db_path = db_path
             self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._lock = threading.Lock()
             self._owns_conn = True
         self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
         self._create_table()
 
     def _create_table(self):

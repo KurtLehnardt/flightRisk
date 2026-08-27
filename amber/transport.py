@@ -81,6 +81,7 @@ class EdgeTransport:
         # silently reconnect on the next send_detections()/recv() call.
         self._should_reconnect = False
         self._reconnect_task: asyncio.Task | None = None
+        self._connect_lock = asyncio.Lock()
 
     @property
     def connected(self) -> bool:
@@ -92,7 +93,15 @@ class EdgeTransport:
         No-ops if already connected -- calling ``connect()`` twice without an
         intervening ``disconnect()`` would otherwise orphan the first
         WebSocket (leaking the connection and its background reader task).
+        Guarded by ``_connect_lock`` so a concurrent call (e.g. an explicit
+        ``connect()`` racing the background ``_reconnect()`` task) can't slip
+        past the ``_connected`` check and open a second, orphaned socket.
         """
+        async with self._connect_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        """Connection logic, assumes ``_connect_lock`` is already held."""
         if self._connected:
             return
         self._ws = await websockets.connect(self._ws_url)
@@ -106,10 +115,15 @@ class EdgeTransport:
         """Attempt to reconnect with exponential backoff.
 
         Sleeps with a delay that doubles each attempt (capped at
-        ``max_delay``), then tries ``connect()``. Keeps trying until it
+        ``max_delay``), then tries to connect. Keeps trying until it
         succeeds, ``max_retries`` is exhausted, or reconnection is no longer
         wanted (e.g. ``disconnect()`` ran concurrently). Returns ``True`` once
         reconnected, ``False`` otherwise.
+
+        Acquires ``_connect_lock`` around the connection attempt itself
+        (via ``_connect_locked``, not the public ``connect()``) so it can't
+        race an explicit ``connect()`` call without deadlocking on its own
+        non-reentrant lock.
         """
         while self._should_reconnect and (
             self._max_retries is None or self._retry_count < self._max_retries
@@ -123,7 +137,8 @@ class EdgeTransport:
             if not self._should_reconnect:
                 return False
             try:
-                await self.connect()
+                async with self._connect_lock:
+                    await self._connect_locked()
             except Exception as exc:
                 self._retry_count += 1
                 logger.warning("[%s] Reconnect attempt failed: %s", self._ws_url, exc)
@@ -191,6 +206,7 @@ class EdgeTransport:
         except ConnectionClosed:
             logger.warning("recv: connection closed")
             self._connected = False
+            self._schedule_reconnect()
             return None
         except (asyncio.TimeoutError, TimeoutError):
             return None
