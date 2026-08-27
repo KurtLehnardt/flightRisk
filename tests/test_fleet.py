@@ -213,3 +213,109 @@ class TestFactoryPattern:
 
         assert factory_a_calls == ["d1"]
         assert factory_b_calls == ["d1"]
+
+
+class TestSourceFactorySelection:
+    """Verify amber.dashboard.app._init_pipeline (T3) wires up the correct
+    controller backend per `--source` mode, by calling _init_pipeline()
+    itself rather than duplicating its logic with hand-rolled lambdas
+    (see TestFactoryPattern above, which covers DroneFleet in isolation)."""
+
+    @staticmethod
+    def _stub_heavy_components(state):
+        """Pre-populate _state with mocks for everything _init_pipeline
+        lazily constructs, so these tests don't need real ML models."""
+        for key in (
+            "detector", "reid", "face", "scorer", "tracker", "reasoning",
+            "logger", "metrics", "db", "obstacle_guard", "canon",
+        ):
+            state[key] = MagicMock()
+        state["db"].create_session.return_value = "session-1"
+
+    def teardown_method(self, method):
+        from amber.dashboard.app import _state
+
+        # _init_pipeline() spawns a background auto-connect thread per
+        # source; release it so it doesn't keep running (or touching
+        # mocks torn down by other tests) afterward.
+        stop = _state.get("auto_connect_stop")
+        if stop is not None:
+            stop.set()
+        _state["fleet"] = None
+        _state["cap"] = None
+        _state["running"] = False
+
+    def test_tello_source_builds_tello_controller_via_factory(self):
+        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+
+        self._stub_heavy_components(_state)
+        # running=False keeps the background auto-connect thread from
+        # doing any real work during the test — its loop condition checks
+        # _state["running"] and returns immediately.
+        _state["running"] = False
+
+        with patch("amber.drone.tello.TelloController") as MockTello:
+            MockTello.return_value = _make_controller(name="drone-1", host="192.168.10.1", connect_ok=True)
+            _init_pipeline(SourceConfig(source="tello"))
+
+            assert isinstance(_state["fleet"], DroneFleet)
+            assert _state["source"] == "tello"
+
+            # Exercise the actual factory _init_pipeline built (production
+            # code), not a hand-rolled duplicate, to confirm it constructs
+            # a TelloController with the expected args.
+            _state["fleet"]._factory("drone-1", "192.168.10.1")
+            MockTello.assert_called_once_with("drone-1", "192.168.10.1")
+
+    def test_mavlink_source_builds_mavlink_controller_via_factory(self):
+        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+
+        self._stub_heavy_components(_state)
+        _state["running"] = False
+
+        with patch("amber.drone.mavlink.MavlinkController") as MockMavlink:
+            MockMavlink.return_value = _make_controller(name="drone-1", host="udp://:14540", connect_ok=True)
+            _init_pipeline(SourceConfig(
+                source="mavlink",
+                mavlink_address="udp://:14540",
+                rtsp_url="rtsp://1.2.3.4:8554/camera",
+            ))
+
+            assert isinstance(_state["fleet"], DroneFleet)
+            assert _state["source"] == "mavlink"
+
+            _state["fleet"]._factory("drone-1", "udp://:14540")
+            MockMavlink.assert_called_once_with(
+                "drone-1", "udp://:14540", rtsp_url="rtsp://1.2.3.4:8554/camera"
+            )
+
+    def test_webcam_source_builds_no_fleet(self):
+        """webcam/file/edge sources must not construct a DroneFleet at
+        all — they only wire up local capture (or nothing, for edge)."""
+        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+
+        self._stub_heavy_components(_state)
+        _state["running"] = False
+
+        with patch("cv2.VideoCapture") as MockCap:
+            _init_pipeline(SourceConfig(source="webcam"))
+
+        assert _state["fleet"] is None
+        MockCap.assert_called_once_with(0)
+
+    def test_file_source_without_video_path_logs_error_and_no_capture(self):
+        """PR #26 review fix: --source=file with no video path must not
+        silently produce a dead pipeline — it should log an error and
+        leave `cap` unset rather than calling cv2.VideoCapture(None)."""
+        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+
+        self._stub_heavy_components(_state)
+        _state["running"] = False
+
+        with patch("cv2.VideoCapture") as MockCap:
+            _init_pipeline(SourceConfig(source="file", video_path=None))
+
+        assert _state["fleet"] is None
+        assert _state["cap"] is None
+        _state["logger"].error.assert_called_once()
+        MockCap.assert_not_called()
