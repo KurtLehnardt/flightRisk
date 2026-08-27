@@ -7,7 +7,9 @@ Runs on http://localhost:5555
 """
 
 import base64
+import hmac
 import json
+import logging
 import os
 import queue
 import secrets
@@ -75,21 +77,23 @@ socketio = SocketIO(app, cors_allowed_origins=_cors_allowed, async_mode="threadi
 # --- API key authentication ---
 _AMBER_API_KEY = os.environ.get("AMBER_API_KEY")
 
+log = logging.getLogger(__name__)
+if not os.environ.get("AMBER_API_KEY"):
+    log.warning("AMBER_API_KEY not set — API endpoints are unauthenticated")
+if not os.environ.get("AMBER_ENCRYPTION_KEY"):
+    log.warning("AMBER_ENCRYPTION_KEY not set — biometric data stored unencrypted")
+
 
 @app.before_request
 def _check_api_key():
-    """Enforce Bearer-token auth on all endpoints when AMBER_API_KEY is set.
-
-    /api/health is always exempt (needed for Docker HEALTHCHECK).
-    """
+    """API key auth for REST endpoints. SocketIO auth is handled separately in on_connect()."""
     if _AMBER_API_KEY is None:
         return  # auth disabled — dev mode
     if request.path == "/api/health":
         return  # exempt
     auth = request.headers.get("Authorization", "")
-    if auth == f"Bearer {_AMBER_API_KEY}":
-        return  # valid
-    return jsonify({"error": "unauthorized"}), 401
+    if not hmac.compare_digest(auth.encode(), f"Bearer {_AMBER_API_KEY}".encode()):
+        return jsonify({"error": "unauthorized"}), 401
 
 # Flask auto-instrumentation (optional)
 try:
@@ -1086,7 +1090,7 @@ def on_connect(auth=None):
     # When AMBER_API_KEY is set, require {"api_key": "<key>"} in SocketIO auth
     if _AMBER_API_KEY is not None:
         provided = (auth or {}).get("api_key") if isinstance(auth, dict) else None
-        if provided != _AMBER_API_KEY:
+        if provided is None or not hmac.compare_digest(provided.encode(), _AMBER_API_KEY.encode()):
             return False  # reject connection
     emit("status", {"connected": True, "source": _state["source"]})
     if _state["target_photo"]:

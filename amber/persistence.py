@@ -62,7 +62,18 @@ CREATE TABLE IF NOT EXISTS match_feedback (
 
 
 class SessionDB:
-    """Thread-safe SQLite persistence for search sessions and matches."""
+    """Thread-safe SQLite persistence for search sessions and matches.
+
+    Sensitive text fields (match reasoning, target descriptions) are encrypted
+    at rest using Fernet symmetric encryption when an encryption key is
+    configured via the ``AMBER_ENCRYPTION_KEY`` environment variable.
+
+    **Image files are NOT covered by application-layer encryption.**
+    Target photos, match snapshots, and detection crops are written to disk as
+    ordinary JPEG files.  Deployments that handle real biometric/PII imagery
+    MUST rely on filesystem-level encryption (e.g. dm-crypt / LUKS on Linux,
+    FileVault on macOS, BitLocker on Windows) to protect data at rest.
+    """
 
     def __init__(self, db_path: str | Path | None = None, encryption_key: str | None = None):
         self._db_path = str(db_path or DB_PATH)
@@ -132,12 +143,13 @@ class SessionDB:
         """Create a new search session. Returns the session UUID."""
         session_id = str(uuid.uuid4())
         started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        encrypted_description = self._encrypt(target_description)
         with self._lock:
             self._conn.execute(
                 """INSERT INTO sessions
                    (id, started_at, source, target_photo_path, target_description)
                    VALUES (?, ?, ?, ?, ?)""",
-                (session_id, started_at, source, target_photo_path, target_description),
+                (session_id, started_at, source, target_photo_path, encrypted_description),
             )
             self._conn.commit()
         return session_id
@@ -169,14 +181,23 @@ class SessionDB:
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        d = dict(row)
+        d["target_description"] = self._decrypt(d.get("target_description"))
+        return d
 
     def get_recent_sessions(self, limit: int = 20) -> list[dict]:
         """Return the most recent sessions, newest first."""
         cur = self._conn.execute(
             "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["target_description"] = self._decrypt(d.get("target_description"))
+            rows.append(d)
+        return rows
 
     # ------------------------------------------------------------------
     # Matches
@@ -340,7 +361,12 @@ class SessionDB:
                LIMIT ?""",
             (limit,),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["reasoning"] = self._decrypt(d.get("reasoning"))
+            rows.append(d)
+        return rows
 
     def export_eval_dataset(self, output_path: str) -> int:
         """Export feedback as a JSON evaluation dataset.
@@ -369,7 +395,7 @@ class SessionDB:
                 "combined_score": r["combined_score"],
                 "gemma_match": bool(r["gemma_match"]),
                 "gemma_confidence": r["gemma_confidence"],
-                "reasoning": r["reasoning"],
+                "reasoning": self._decrypt(r["reasoning"]),
                 "snapshot_path": r["snapshot_path"],
                 "crop_path": r["crop_path"],
                 "is_match": r["feedback"] == "confirmed",

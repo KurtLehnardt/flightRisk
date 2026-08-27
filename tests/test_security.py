@@ -1,5 +1,6 @@
 """Security hardening tests for Amber Drone dashboard and persistence."""
 
+import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -18,24 +19,24 @@ class TestSecretKey:
     def test_secret_key_from_env(self, monkeypatch):
         """SECRET_KEY should use AMBER_SECRET_KEY when set."""
         monkeypatch.setenv("AMBER_SECRET_KEY", "env-secret-key-value")
-        # Re-import to pick up the env var at module level
-        import importlib
         import amber.dashboard.app as app_mod
 
+        # Simulate what the app does at startup
         app_mod.app.config["SECRET_KEY"] = os.environ.get(
             "AMBER_SECRET_KEY", "fallback"
         )
         assert app_mod.app.config["SECRET_KEY"] == "env-secret-key-value"
 
     def test_secret_key_random_fallback(self, monkeypatch):
-        """When AMBER_SECRET_KEY is not set, a random hex key should be generated."""
+        """When AMBER_SECRET_KEY is not set, app should have a random secret key."""
         monkeypatch.delenv("AMBER_SECRET_KEY", raising=False)
-        import secrets
+        import amber.dashboard.app as app_mod
 
-        key = os.environ.get("AMBER_SECRET_KEY", secrets.token_hex(32))
-        # Should be a 64-char hex string (32 bytes)
-        assert len(key) == 64
-        assert key != "amber-drone-2026"
+        # The app config should have a non-trivial key even without the env var
+        actual_key = app_mod.app.config["SECRET_KEY"]
+        assert actual_key is not None
+        assert len(actual_key) > 0
+        assert actual_key != "amber-drone-2026"
 
 
 # ---------------------------------------------------------------------------
@@ -287,3 +288,166 @@ class TestCORSOrigins:
         origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
         result = origins if origins == "*" else origins.split(",")
         assert result == ["https://a.com", "https://b.com", "https://c.com"]
+
+
+# ---------------------------------------------------------------------------
+# 5. SocketIO authentication
+# ---------------------------------------------------------------------------
+
+
+class TestSocketIOAuth:
+    @pytest.fixture(autouse=True)
+    def _setup_app(self, monkeypatch):
+        """Configure the app with auth enabled for each test."""
+        monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
+        import amber.dashboard.app as app_mod
+
+        app_mod._AMBER_API_KEY = "test-key-123"
+        app_mod._state["db"] = MagicMock()
+        app_mod._state["metrics"] = MagicMock()
+        app_mod._state["source"] = "webcam"
+        app_mod._state["running"] = False
+        app_mod._state["target_photo"] = None
+        app_mod._state["target_description"] = None
+        app_mod._state["reasoning"] = None
+        app_mod._state["face"] = None
+        app_mod._state["fps"] = 0
+        app_mod._state["persons_detected"] = 0
+        app_mod._state["drone_telemetry"] = {}
+        app_mod._state["match_history"] = []
+        self.app_mod = app_mod
+        yield
+        app_mod._AMBER_API_KEY = os.environ.get("AMBER_API_KEY")
+
+    def test_socketio_rejects_no_auth(self):
+        """Unauthenticated SocketIO connection should be refused."""
+        from flask_socketio import SocketIOTestClient
+
+        client = self.app_mod.app.test_client()
+        sio_client = self.app_mod.socketio.test_client(
+            self.app_mod.app, flask_test_client=client
+        )
+        assert not sio_client.is_connected()
+
+    def test_socketio_rejects_wrong_key(self):
+        """SocketIO connection with wrong api_key should be refused."""
+        from flask_socketio import SocketIOTestClient
+
+        client = self.app_mod.app.test_client()
+        sio_client = self.app_mod.socketio.test_client(
+            self.app_mod.app,
+            flask_test_client=client,
+            auth={"api_key": "wrong-key"},
+        )
+        assert not sio_client.is_connected()
+
+    def test_socketio_accepts_correct_key(self):
+        """SocketIO connection with correct api_key should succeed."""
+        from flask_socketio import SocketIOTestClient
+
+        client = self.app_mod.app.test_client()
+        sio_client = self.app_mod.socketio.test_client(
+            self.app_mod.app,
+            flask_test_client=client,
+            auth={"api_key": "test-key-123"},
+        )
+        assert sio_client.is_connected()
+        sio_client.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# 6. Decryption in get_confirmed_matches / export_eval_dataset
+# ---------------------------------------------------------------------------
+
+
+class TestDecryptionInReadPaths:
+    def _make_db(self, encryption_key=None):
+        """Create a SessionDB with a temp file."""
+        from amber.persistence import SessionDB
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        db = SessionDB(db_path=tmp.name, encryption_key=encryption_key)
+        return db, tmp.name
+
+    def test_get_confirmed_matches_decrypts_reasoning(self):
+        """get_confirmed_matches should return plaintext reasoning when encryption is enabled."""
+        key = Fernet.generate_key().decode()
+        db, path = self._make_db(encryption_key=key)
+        try:
+            sid = db.create_session(source="test")
+            reasoning_text = "Child identified by clothing and height"
+            mid = db.add_match(
+                session_id=sid,
+                match_type="reid",
+                reid_score=0.9,
+                reasoning=reasoning_text,
+            )
+            db.add_feedback(mid, sid, "confirmed")
+
+            matches = db.get_confirmed_matches()
+            assert len(matches) == 1
+            assert matches[0]["reasoning"] == reasoning_text
+        finally:
+            db.close()
+            os.unlink(path)
+
+    def test_export_eval_dataset_decrypts_reasoning(self):
+        """export_eval_dataset should write plaintext reasoning when encryption is enabled."""
+        key = Fernet.generate_key().decode()
+        db, path = self._make_db(encryption_key=key)
+        export_path = tempfile.NamedTemporaryFile(suffix=".json", delete=False).name
+        try:
+            sid = db.create_session(source="test")
+            reasoning_text = "Strong visual match confirmed"
+            mid = db.add_match(
+                session_id=sid,
+                match_type="face",
+                face_score=0.85,
+                reasoning=reasoning_text,
+            )
+            db.add_feedback(mid, sid, "confirmed")
+
+            count = db.export_eval_dataset(export_path)
+            assert count == 1
+
+            with open(export_path) as f:
+                dataset = json.load(f)
+            assert len(dataset) == 1
+            assert dataset[0]["reasoning"] == reasoning_text
+        finally:
+            db.close()
+            os.unlink(path)
+            os.unlink(export_path)
+
+    def test_target_description_encrypted_at_rest(self):
+        """target_description should be encrypted in the DB and decrypted on read."""
+        import sqlite3
+
+        key = Fernet.generate_key().decode()
+        db, path = self._make_db(encryption_key=key)
+        try:
+            description = "5-year-old boy, red shirt, blue jeans"
+            sid = db.create_session(
+                source="test", target_description=description
+            )
+
+            # Raw DB should have ciphertext
+            raw_conn = sqlite3.connect(path)
+            raw = raw_conn.execute(
+                "SELECT target_description FROM sessions WHERE id = ?", (sid,)
+            ).fetchone()[0]
+            raw_conn.close()
+            assert raw != description
+            assert raw is not None
+
+            # get_session should return plaintext
+            session = db.get_session(sid)
+            assert session["target_description"] == description
+
+            # get_recent_sessions should also return plaintext
+            sessions = db.get_recent_sessions()
+            assert sessions[0]["target_description"] == description
+        finally:
+            db.close()
+            os.unlink(path)
