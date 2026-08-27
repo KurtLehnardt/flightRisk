@@ -138,7 +138,16 @@ class TestUploadTarget:
 
 
 class TestClearTarget:
-    def test_clear_target_resets_state(self, client, clean_app_state):
+    def test_clear_target_resets_state(self, client, clean_app_state, monkeypatch):
+        # The handler unconditionally targets the repo root's
+        # target_reference.jpg via `Path(__file__).parent.parent.parent /
+        # "target_reference.jpg"` -- it does not read
+        # `_state["target_photo_path"]`. Mock Path.exists/unlink so this test
+        # can never delete a real file on disk.
+        mock_unlink = MagicMock()
+        monkeypatch.setattr("amber.dashboard.app.Path.exists", MagicMock(return_value=True))
+        monkeypatch.setattr("amber.dashboard.app.Path.unlink", mock_unlink)
+
         reid = MagicMock()
         face = MagicMock()
         _state["reid"] = reid
@@ -154,6 +163,7 @@ class TestClearTarget:
         assert _state["target_photo_path"] is None
         reid.clear_target.assert_called_once()
         face.clear_target.assert_called_once()
+        mock_unlink.assert_called_once()
 
 
 class TestDroneCommandSocket:

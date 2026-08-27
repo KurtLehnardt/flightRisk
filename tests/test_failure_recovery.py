@@ -27,7 +27,6 @@ from amber.drone.fleet import DroneFleet
 # import-time side effect) so MavlinkController can be exercised here too
 # without the real mavsdk package installed.
 from tests.test_mavlink import (
-    MavlinkController,
     _FakeSystem,
     _make_controller,
     _teardown_controller,

@@ -250,8 +250,8 @@ class TestConcurrency:
 
         def _writer(n_writes):
             try:
-                for i in range(25):
-                    db.add_match(session_id=session_id, match_type="reid", reid_score=i / 25)
+                for i in range(n_writes):
+                    db.add_match(session_id=session_id, match_type="reid", reid_score=i / n_writes)
             except Exception as exc:  # pragma: no cover - failure path
                 errors.append(exc)
 
