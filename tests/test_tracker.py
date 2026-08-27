@@ -1,5 +1,7 @@
 """Tests for amber.vision.tracker — IoU-based detection tracker."""
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -40,6 +42,17 @@ class TestComputeIou:
 
     def test_zero_area_box(self):
         assert _compute_iou((5, 5, 5, 5), (0, 0, 10, 10)) == 0.0
+
+    def test_malformed_box_negative_width(self):
+        """x2 < x1 (negative width) must not crash and should yield IoU 0.0."""
+        assert _compute_iou((10, 0, 5, 10), (0, 0, 10, 10)) == 0.0
+
+    def test_malformed_box_negative_height(self):
+        """y2 < y1 (negative height) must not crash and should yield IoU 0.0."""
+        assert _compute_iou((0, 10, 10, 5), (0, 0, 10, 10)) == 0.0
+
+    def test_both_boxes_malformed(self):
+        assert _compute_iou((10, 0, 5, 10), (10, 10, 0, 20)) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +170,37 @@ class TestScoreAccumulation:
         tracker = DetectionTracker()
         # Should not raise
         tracker.add_scores(999, reid_score=0.5)
+
+    def test_zero_score_is_recorded(self):
+        """A reid/face score of exactly 0.0 is a valid 'no match' signal and
+        must be recorded in the rolling window, not silently dropped."""
+        tracker = DetectionTracker()
+        tracker.update([_det((10, 10, 50, 50))])
+        tracker.add_scores(0, reid_score=0.0, face_score=0.0)
+        td = tracker.get_track(0)
+        assert len(td.reid_scores) == 1
+        assert len(td.face_scores) == 1
+        assert td.avg_reid_score == 0.0
+        assert td.avg_face_score == 0.0
+
+    def test_none_scores_are_not_recorded(self):
+        """None means 'no score available' and should be skipped entirely,
+        as opposed to 0.0 which is a real score."""
+        tracker = DetectionTracker()
+        tracker.update([_det((10, 10, 50, 50))])
+        tracker.add_scores(0, reid_score=None, face_score=None)
+        td = tracker.get_track(0)
+        assert len(td.reid_scores) == 0
+        assert len(td.face_scores) == 0
+
+    def test_mixed_none_and_real_scores(self):
+        tracker = DetectionTracker()
+        tracker.update([_det((10, 10, 50, 50))])
+        tracker.add_scores(0, reid_score=0.7, face_score=None)
+        tracker.add_scores(0, reid_score=None, face_score=0.4)
+        td = tracker.get_track(0)
+        assert td.reid_scores == [0.7]
+        assert td.face_scores == [0.4]
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +326,54 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 # Multi-track
 # ---------------------------------------------------------------------------
+
+class TestThreadSafety:
+    def test_concurrent_update_and_add_scores_no_crash(self):
+        """Hammer the tracker from multiple threads concurrently. With the
+        lock in place this should complete without raising (e.g. a
+        RuntimeError from mutating self._tracks while another thread
+        iterates it)."""
+        tracker = DetectionTracker(max_age=100, vote_window=5)
+        errors: list[Exception] = []
+
+        def writer():
+            try:
+                for i in range(200):
+                    tracker.update([_det((i, i, i + 40, i + 40))])
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def scorer():
+            try:
+                for _ in range(200):
+                    tracker.add_scores(0, reid_score=0.0, face_score=0.5)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def reader():
+            try:
+                for _ in range(200):
+                    tracker.active_tracks
+                    tracker.get_track(0)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=writer),
+            threading.Thread(target=scorer),
+            threading.Thread(target=reader),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"Concurrent access raised: {errors}"
+
+    def test_has_lock_attribute(self):
+        tracker = DetectionTracker()
+        assert isinstance(tracker._lock, type(threading.Lock()))
+
 
 class TestMultiTrack:
     def test_two_people_maintain_separate_ids(self):

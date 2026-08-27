@@ -5,6 +5,7 @@ maintains a rolling window of match scores per tracked person,
 and keeps the best crop (highest detection confidence) for each track.
 """
 
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -61,6 +62,12 @@ def _compute_iou(box1: tuple, box2: tuple) -> float:
     Returns:
         IoU value in [0, 1].
     """
+    # Guard against malformed boxes (negative width/height)
+    if box1[2] <= box1[0] or box1[3] <= box1[1]:
+        return 0.0
+    if box2[2] <= box2[0] or box2[3] <= box2[1]:
+        return 0.0
+
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
@@ -93,6 +100,7 @@ class DetectionTracker:
         self.vote_window = vote_window
         self._tracks: dict[int, _Track] = {}
         self._next_id: int = 0
+        self._lock = threading.Lock()
 
     def update(self, detections: list[dict]) -> list[TrackedDetection]:
         """Match new detections to existing tracks and return tracked detections.
@@ -104,107 +112,115 @@ class DetectionTracker:
         Returns:
             List of TrackedDetection with stable track_ids and score histories.
         """
-        if not detections and not self._tracks:
-            return []
+        with self._lock:
+            if not detections and not self._tracks:
+                return []
 
-        matched_track_ids: set[int] = set()
-        matched_det_indices: set[int] = set()
+            matched_track_ids: set[int] = set()
+            matched_det_indices: set[int] = set()
 
-        # Build IoU matrix and do greedy matching
-        if self._tracks and detections:
-            track_ids = list(self._tracks.keys())
-            # Compute all IoU pairs
-            iou_pairs: list[tuple[float, int, int]] = []
-            for det_idx, det in enumerate(detections):
-                det_bbox = tuple(det["bbox"])
-                for tid in track_ids:
+            # Build IoU matrix and do greedy matching
+            if self._tracks and detections:
+                track_ids = list(self._tracks.keys())
+                # Compute all IoU pairs
+                iou_pairs: list[tuple[float, int, int]] = []
+                for det_idx, det in enumerate(detections):
+                    det_bbox = tuple(det["bbox"])
+                    for tid in track_ids:
+                        track = self._tracks[tid]
+                        iou = _compute_iou(det_bbox, track.bbox)
+                        if iou >= self.iou_threshold:
+                            iou_pairs.append((iou, det_idx, tid))
+
+                # Sort by IoU descending for greedy matching
+                iou_pairs.sort(key=lambda x: x[0], reverse=True)
+
+                for iou_val, det_idx, tid in iou_pairs:
+                    if det_idx in matched_det_indices or tid in matched_track_ids:
+                        continue
+                    # Match this detection to this track
+                    det = detections[det_idx]
                     track = self._tracks[tid]
-                    iou = _compute_iou(det_bbox, track.bbox)
-                    if iou >= self.iou_threshold:
-                        iou_pairs.append((iou, det_idx, tid))
+                    track.bbox = tuple(det["bbox"])
+                    track.confidence = det["confidence"]
+                    track.crop = det.get("crop")
+                    track.frames_seen += 1
+                    track.age = 0
 
-            # Sort by IoU descending for greedy matching
-            iou_pairs.sort(key=lambda x: x[0], reverse=True)
+                    # Update best crop if this detection has higher confidence
+                    if det["confidence"] > track.best_crop_confidence:
+                        track.best_crop = det.get("crop")
+                        track.best_crop_confidence = det["confidence"]
 
-            for iou_val, det_idx, tid in iou_pairs:
-                if det_idx in matched_det_indices or tid in matched_track_ids:
+                    matched_track_ids.add(tid)
+                    matched_det_indices.add(det_idx)
+
+            # Create new tracks for unmatched detections
+            for det_idx, det in enumerate(detections):
+                if det_idx in matched_det_indices:
                     continue
-                # Match this detection to this track
-                det = detections[det_idx]
-                track = self._tracks[tid]
-                track.bbox = tuple(det["bbox"])
-                track.confidence = det["confidence"]
-                track.crop = det.get("crop")
-                track.frames_seen += 1
-                track.age = 0
+                crop = det.get("crop")
+                new_track = _Track(
+                    track_id=self._next_id,
+                    bbox=tuple(det["bbox"]),
+                    confidence=det["confidence"],
+                    crop=crop,
+                    reid_scores=[],
+                    face_scores=[],
+                    frames_seen=1,
+                    age=0,
+                    best_crop=crop,
+                    best_crop_confidence=det["confidence"],
+                )
+                self._tracks[self._next_id] = new_track
+                matched_track_ids.add(self._next_id)
+                self._next_id += 1
 
-                # Update best crop if this detection has higher confidence
-                if det["confidence"] > track.best_crop_confidence:
-                    track.best_crop = det.get("crop")
-                    track.best_crop_confidence = det["confidence"]
+            # Age unmatched tracks and remove expired ones
+            expired: list[int] = []
+            for tid, track in self._tracks.items():
+                if tid not in matched_track_ids:
+                    track.age += 1
+                    if track.age > self.max_age:
+                        expired.append(tid)
+            for tid in expired:
+                del self._tracks[tid]
 
-                matched_track_ids.add(tid)
-                matched_det_indices.add(det_idx)
-
-        # Create new tracks for unmatched detections
-        for det_idx, det in enumerate(detections):
-            if det_idx in matched_det_indices:
-                continue
-            crop = det.get("crop")
-            new_track = _Track(
-                track_id=self._next_id,
-                bbox=tuple(det["bbox"]),
-                confidence=det["confidence"],
-                crop=crop,
-                reid_scores=[],
-                face_scores=[],
-                frames_seen=1,
-                age=0,
-                best_crop=crop,
-                best_crop_confidence=det["confidence"],
-            )
-            self._tracks[self._next_id] = new_track
-            matched_track_ids.add(self._next_id)
-            self._next_id += 1
-
-        # Age unmatched tracks and remove expired ones
-        expired: list[int] = []
-        for tid, track in self._tracks.items():
-            if tid not in matched_track_ids:
-                track.age += 1
-                if track.age > self.max_age:
-                    expired.append(tid)
-        for tid in expired:
-            del self._tracks[tid]
-
-        # Return TrackedDetection for all active tracks
-        return self._build_tracked_detections()
+            # Return TrackedDetection for all active tracks
+            return self._build_tracked_detections()
 
     def add_scores(
-        self, track_id: int, reid_score: float = 0.0, face_score: float = 0.0
+        self,
+        track_id: int,
+        reid_score: float | None = None,
+        face_score: float | None = None,
     ):
         """Add match scores to a track's history.
 
         Appends scores to the rolling window and trims to vote_window size.
 
+        A score of 0.0 is a valid "no match" signal and is recorded; only
+        None means "no score was available for this frame" and is skipped.
+
         Args:
             track_id: The track to update.
-            reid_score: ReID similarity score for this frame.
-            face_score: Face recognition score for this frame.
+            reid_score: ReID similarity score for this frame, or None if unavailable.
+            face_score: Face recognition score for this frame, or None if unavailable.
         """
-        track = self._tracks.get(track_id)
-        if track is None:
-            return
+        with self._lock:
+            track = self._tracks.get(track_id)
+            if track is None:
+                return
 
-        if reid_score > 0.0:
-            track.reid_scores.append(reid_score)
-            if len(track.reid_scores) > self.vote_window:
-                track.reid_scores = track.reid_scores[-self.vote_window :]
+            if reid_score is not None:
+                track.reid_scores.append(reid_score)
+                if len(track.reid_scores) > self.vote_window:
+                    track.reid_scores = track.reid_scores[-self.vote_window :]
 
-        if face_score > 0.0:
-            track.face_scores.append(face_score)
-            if len(track.face_scores) > self.vote_window:
-                track.face_scores = track.face_scores[-self.vote_window :]
+            if face_score is not None:
+                track.face_scores.append(face_score)
+                if len(track.face_scores) > self.vote_window:
+                    track.face_scores = track.face_scores[-self.vote_window :]
 
     def get_track(self, track_id: int) -> TrackedDetection | None:
         """Get current state of a specific track.
@@ -215,20 +231,23 @@ class DetectionTracker:
         Returns:
             TrackedDetection if the track exists, None otherwise.
         """
-        track = self._tracks.get(track_id)
-        if track is None:
-            return None
-        return self._track_to_detection(track)
+        with self._lock:
+            track = self._tracks.get(track_id)
+            if track is None:
+                return None
+            return self._track_to_detection(track)
 
     def clear(self):
         """Remove all tracks."""
-        self._tracks.clear()
-        self._next_id = 0
+        with self._lock:
+            self._tracks.clear()
+            self._next_id = 0
 
     @property
     def active_tracks(self) -> list[TrackedDetection]:
         """Return all active (non-expired) tracks."""
-        return self._build_tracked_detections()
+        with self._lock:
+            return self._build_tracked_detections()
 
     def _build_tracked_detections(self) -> list[TrackedDetection]:
         """Convert internal tracks to TrackedDetection list."""
