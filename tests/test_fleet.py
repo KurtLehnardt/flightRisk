@@ -157,6 +157,57 @@ class TestBroadcast:
         for did in fleet.drone_ids:
             fleet.get(did).hover.assert_called_once()
 
+    def test_broadcast_command_returns_success_results(self, mock_tello_connect):
+        """Every drone that succeeds must map to None in the results dict —
+        this is the feedback that was previously swallowed entirely."""
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
+        results = fleet.broadcast_command("hover")
+        assert results == {"d1": None, "d2": None}
+
+    def test_broadcast_command_reports_per_drone_failure(self, mock_tello_connect):
+        """A failing command on one drone must not be silently swallowed —
+        it should show up as that drone's Exception in the results dict,
+        while other drones still get called and report success."""
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
+
+        boom = RuntimeError("land failed")
+        fleet.get("d1").land.side_effect = boom
+
+        results = fleet.broadcast_command("land")
+
+        assert results["d1"] is boom
+        assert results["d2"] is None
+        fleet.get("d2").land.assert_called_once()
+
+    def test_broadcast_command_all_fail(self, mock_tello_connect):
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.get("d1").hover.side_effect = RuntimeError("boom")
+
+        results = fleet.broadcast_command("hover")
+
+        assert isinstance(results["d1"], RuntimeError)
+
+    def test_broadcast_command_passes_args_and_kwargs(self, mock_tello_connect):
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.broadcast_command("move", "forward", distance_cm=50)
+        fleet.get("d1").move.assert_called_once_with("forward", distance_cm=50)
+
+    def test_broadcast_command_unknown_method_reported_not_raised(self, mock_tello_connect):
+        """Calling a command that doesn't exist on the controller must be
+        captured as a per-drone error, not raised out of broadcast_command."""
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+
+        results = fleet.broadcast_command("no_such_command")
+
+        assert isinstance(results["d1"], Exception)
+
 
 class TestDisconnectAll:
     def test_disconnect_all_clears_fleet(self, mock_tello_connect):

@@ -437,7 +437,7 @@ class MavlinkController:
                 break
 
     # ------------------------------------------------------------------
-    # Public synchronous API (DroneController protocol)
+    # Public synchronous API (DroneController / GpsDroneController protocol)
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:

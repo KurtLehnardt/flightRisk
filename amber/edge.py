@@ -77,28 +77,23 @@ class EdgeRunner:
                 confidence=det["confidence"],
             )
 
-            # CLIP ReID embedding (PersonReID._extract_embedding).
-            # NOTE: _extract_embedding is a private/internal API on PersonReID.
-            # PersonReID's public surface (compare/find_match) only returns a
-            # similarity score against an already-set target, but the edge
-            # needs the raw embedding vector to ship to the ground station —
-            # there is no public accessor for that today. We own both modules,
-            # so reaching into the private method is acceptable for now; the
-            # hasattr guard keeps this safe if the method is renamed/removed.
-            if self._reid is not None and hasattr(self._reid, '_extract_embedding'):
+            # CLIP ReID embedding, via PersonReID's public extract_embedding().
+            # PersonReID's compare()/find_match() only return a similarity
+            # score against an already-set target; extract_embedding() gives
+            # the raw feature vector, which the edge needs to ship to the
+            # ground station for later matching.
+            if self._reid is not None and hasattr(self._reid, 'extract_embedding'):
                 try:
-                    emb = self._reid._extract_embedding(crop)
+                    emb = self._reid.extract_embedding(crop)
                     detection.reid_embedding = emb.tolist() if emb is not None else None
                 except Exception:
                     logger.warning("reid_embedding_failed", exc_info=True)
 
-            # Face embedding (FaceRecognizer._best_face_embedding).
-            # NOTE: same rationale as above — _best_face_embedding is a
-            # private/internal API on FaceRecognizer, used because there is no
-            # public method that returns the raw embedding vector.
-            if self._face is not None and hasattr(self._face, '_best_face_embedding'):
+            # Face embedding, via FaceRecognizer's public extract_embedding()
+            # (wraps _best_face_embedding internally).
+            if self._face is not None and hasattr(self._face, 'extract_embedding'):
                 try:
-                    emb = self._face._best_face_embedding(crop)
+                    emb = self._face.extract_embedding(crop)
                     detection.face_embedding = emb.tolist() if emb is not None else None
                 except Exception:
                     logger.warning("face_embedding_failed", exc_info=True)
