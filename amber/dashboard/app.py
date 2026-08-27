@@ -94,6 +94,7 @@ _alerted_tracks: dict[str, float] = {}  # track_key -> timestamp of last alert e
 ALERT_COOLDOWN = 10.0  # seconds before re-alerting for the same spatial track
 GEMMA_RATE_LIMIT = 5.0  # seconds between Gemma calls for the same track
 _gemma_thread_lock = threading.Lock()
+_match_history_lock = threading.Lock()  # guards _state["match_history"] across threads
 
 
 def _compute_track_key(bbox) -> str:
@@ -136,25 +137,31 @@ def _gemma_worker():
             continue
 
         # Items are tuples: ("analyze", track_key, crop, reference)
-        #                 or ("describe", crop, description)
+        #                 or ("describe", track_key, crop, description)
         item_type = item[0]
         try:
             if item_type == "describe":
-                _, crop, description = item
+                _, track_key, crop, description = item
                 result = _state["reasoning"].match_description(crop, description)
                 socketio.emit("reasoning_result", {
-                    "track_id": None,
+                    "track_id": track_key,
                     "result": result,
                     "type": "description",
                 })
-                # Full alert path when description match is confirmed
-                if result.get("match"):
+                # Full alert path when description match is confirmed, gated by
+                # the same spatial-track cooldown used by the photo-match path
+                # so we don't fire a new alert + DB row on every confirmation
+                # (match_description can be re-confirmed roughly every 5s).
+                now_alert = time.time()
+                if result.get("match") and not _is_within_alert_cooldown(track_key, now_alert):
+                    _alerted_tracks[track_key] = now_alert
                     score_result = _state["scorer"].score(reasoning_result=result) if _state["scorer"] else {"combined_score": 0.5, "confidence_level": "medium", "signals_used": 1}
                     match_score = score_result.get("combined_score", 0.5)
                     alert_level = _state["scorer"].alert_level(score_result) if _state["scorer"] else "possible_match"
-                    # Fall back to possible_match if scorer returns no_match
-                    # (description matches always warrant at least possible_match)
-                    if alert_level == "no_match":
+                    # Fall back to possible_match if scorer returns no_match or
+                    # weak_signal (description matches always warrant at least
+                    # possible_match)
+                    if alert_level in ("no_match", "weak_signal"):
                         alert_level = "possible_match"
 
                     snapshot_b64 = None
@@ -173,7 +180,7 @@ def _gemma_worker():
                         "face_score": 0,
                         "reid_score": 0,
                         "alert_level": alert_level,
-                        "track_id": None,
+                        "track_id": track_key,
                     }
 
                     if _state["db"] and _state.get("session_id"):
@@ -189,9 +196,15 @@ def _gemma_worker():
                         )
                         match_entry["match_id"] = match_id
 
-                    _state["match_history"].append(match_entry)
-                    _state["match_history"] = _state["match_history"][-50:]
+                    with _match_history_lock:
+                        _state["match_history"].append(match_entry)
+                        _state["match_history"] = _state["match_history"][-50:]
                     socketio.emit("match_alert", match_entry)
+                    # NOTE: the worker only has the crop, not the full frame the
+                    # detection came from — the async queue item doesn't carry
+                    # it (to avoid ballooning queue memory with full frames).
+                    # So frame and crop are the same image here; this loses the
+                    # wider scene context that the photo-match snapshot path has.
                     _save_match_snapshot(crop, crop, match_score, result)
             else:
                 # "analyze" — photo-based reasoning
@@ -203,21 +216,24 @@ def _gemma_worker():
                     "type": "analyze",
                 })
                 # Back-fill the most recent match_history entry for this track
-                for entry in reversed(_state["match_history"]):
-                    if entry.get("track_id") == track_key:
-                        entry["gemma_match"] = result.get("match", False)
-                        entry["gemma_confidence"] = result.get("confidence")
-                        entry["reasoning"] = result.get("reasoning", "")
-                        # Persist Gemma results to DB
-                        mid = entry.get("match_id")
-                        if mid and _state.get("db"):
-                            _state["db"].update_match(
-                                match_id=mid,
-                                gemma_match=result.get("match", False),
-                                gemma_confidence=result.get("confidence"),
-                                reasoning=result.get("reasoning", ""),
-                            )
-                        break
+                mid = None
+                with _match_history_lock:
+                    for entry in reversed(_state["match_history"]):
+                        if entry.get("track_id") == track_key:
+                            entry["gemma_match"] = result.get("match", False)
+                            entry["gemma_confidence"] = result.get("confidence")
+                            entry["reasoning"] = result.get("reasoning", "")
+                            mid = entry.get("match_id")
+                            break
+                # Persist Gemma results to DB (outside the lock — DB I/O
+                # shouldn't hold up other threads touching match_history)
+                if mid and _state.get("db"):
+                    _state["db"].update_match(
+                        match_id=mid,
+                        gemma_match=result.get("match", False),
+                        gemma_confidence=result.get("confidence"),
+                        reasoning=result.get("reasoning", ""),
+                    )
                 # If reasoning confirms, upgrade alert level
                 if result.get("match") and result.get("confidence") in ("high", "medium"):
                     socketio.emit("alert_upgrade", {
@@ -548,8 +564,9 @@ def _frame_loop():
                             )
                             match_entry["match_id"] = match_id
 
-                        _state["match_history"].append(match_entry)
-                        _state["match_history"] = _state["match_history"][-50:]
+                        with _match_history_lock:
+                            _state["match_history"].append(match_entry)
+                            _state["match_history"] = _state["match_history"][-50:]
                         socketio.emit("match_alert", match_entry)
                         _save_match_snapshot(frame, candidate_crop, match_score, None)
                         if otel_m:
@@ -588,8 +605,9 @@ def _frame_loop():
                     crop = detections[best_candidate]["crop"]
                     if crop is not None and crop.size > 0:
                         last_reasoning_time = time.time()
+                        track_key = _compute_track_key(detections[best_candidate]["bbox"])
                         try:
-                            _gemma_queue.put_nowait(("describe", crop.copy(), _state["target_description"]))
+                            _gemma_queue.put_nowait(("describe", track_key, crop.copy(), _state["target_description"]))
                         except queue.Full:
                             pass  # drop if queue is full, don't block
 

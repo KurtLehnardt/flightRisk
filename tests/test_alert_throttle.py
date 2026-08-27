@@ -1,9 +1,6 @@
 """Tests for the alert throttle and spatial track key logic in app.py."""
 
 import time
-from unittest.mock import patch
-
-import pytest
 
 # Import the module-level dicts/constants and extracted helpers we test.
 from amber.dashboard.app import (
@@ -83,6 +80,6 @@ class TestGemmaQueueItemTypes:
         assert len(item) == 4
 
     def test_describe_item_shape(self):
-        item = ("describe", b"fake_crop", "wearing red hat")
+        item = ("describe", "3_6", b"fake_crop", "wearing red hat")
         assert item[0] == "describe"
-        assert len(item) == 3
+        assert len(item) == 4
