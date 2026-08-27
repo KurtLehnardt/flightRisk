@@ -251,3 +251,67 @@ class TestMatchScorerCustomWeights:
 
         result = scorer.score(reid_score=0.85)
         assert result["is_match"] is True
+
+
+class TestMatchScorerSignalRegistry:
+    """Tests for register_signal()/extensible signal support."""
+
+    def test_register_new_signal_and_score_alone(self):
+        scorer = MatchScorer()
+        scorer.register_signal("thermal", weight=0.2)
+
+        result = scorer.score(thermal=0.8)
+        # Sole active signal -> full weight, combined == raw score.
+        assert result["combined_score"] == 0.8
+        assert result["signals_used"] == 1
+        assert "thermal" in result["breakdown"]
+        assert result["breakdown"]["thermal"]["weight"] == 1.0
+
+    def test_registered_signal_combines_with_builtin_signals(self):
+        scorer = MatchScorer(reid_weight=0.5, face_weight=0.5, reasoning_weight=0.0)
+        scorer.register_signal("thermal", weight=0.5)
+
+        result = scorer.score(reid_score=0.8, thermal=0.4)
+        # reid weight 0.5, thermal weight 0.5 -> normalized 0.5/0.5 each.
+        expected = round(0.8 * 0.5 + 0.4 * 0.5, 3)
+        assert result["combined_score"] == expected
+        assert result["signals_used"] == 2
+        assert "thermal" in result["breakdown"]
+        assert "reid" in result["breakdown"]
+
+    def test_unregistered_signal_raises_value_error(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="Unknown signal"):
+            scorer.score(gait_score=0.5)
+
+    def test_registering_same_name_twice_overwrites_weight(self):
+        scorer = MatchScorer()
+        scorer.register_signal("thermal", weight=0.2)
+        scorer.register_signal("thermal", weight=0.9)
+
+        result = scorer.score(thermal=0.5)
+        assert result["breakdown"]["thermal"]["weight"] == 1.0  # still sole signal
+        assert scorer._signals["thermal"]["weight"] == 0.9
+
+    def test_zero_value_registered_signal_excluded(self):
+        scorer = MatchScorer()
+        scorer.register_signal("thermal", weight=0.2)
+
+        result = scorer.score(reid_score=0.6, thermal=0.0)
+        assert "thermal" not in result["breakdown"]
+        assert result["signals_used"] == 1
+
+    def test_backward_compatible_calls_still_work_after_registering(self):
+        """Registering a new signal must not disturb the original
+        reid_score/face_score/reasoning_result call shape."""
+        scorer = MatchScorer()
+        scorer.register_signal("thermal", weight=0.1)
+
+        result = scorer.score(
+            reid_score=0.8,
+            face_score=0.9,
+            reasoning_result={"match": True, "confidence": "high"},
+        )
+        expected = round(0.8 * 0.35 + 0.9 * 0.40 + 0.90 * 0.25, 3)
+        assert result["combined_score"] == expected
+        assert result["signals_used"] == 3

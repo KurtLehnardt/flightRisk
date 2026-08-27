@@ -41,6 +41,16 @@ class DroneCapabilities:
 
 @runtime_checkable
 class DroneController(Protocol):
+    """Common interface satisfied by every drone backend.
+
+    Deliberately excludes `goto_gps` — not all backends (e.g. Tello) have
+    GPS. Requiring it here forced non-GPS backends to implement a method
+    that only raises `NotImplementedError`, a Liskov Substitution
+    violation that pushed the "does this drone support X?" check onto
+    every caller. See `GpsDroneController` for the GPS-capable subset, or
+    check `capabilities.has_gps` for a cheap boolean test.
+    """
+
     name: str
     host: str
     state: DroneState
@@ -56,4 +66,15 @@ class DroneController(Protocol):
     def rotate(self, degrees: int) -> None: ...
     def hover(self) -> None: ...
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> None: ...
-    def goto_gps(self, lat: float, lon: float, alt_m: float) -> None: ...
+
+
+@runtime_checkable
+class GpsDroneController(DroneController, Protocol):
+    """DroneController subset for backends that support GPS navigation.
+
+    Callers that need `goto_gps` should either narrow with
+    `isinstance(drone, GpsDroneController)` or check
+    `drone.capabilities.has_gps` before dispatching.
+    """
+
+    def goto_gps(self, lat: float, lon: float, alt: float, timeout: float = 300.0) -> None: ...

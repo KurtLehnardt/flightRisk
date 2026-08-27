@@ -72,6 +72,28 @@ class PersonReID:
             embedding = embedding / norm
         return embedding
 
+    def extract_embedding(self, crop: np.ndarray) -> np.ndarray | None:
+        """Public accessor for the raw appearance embedding of a person crop.
+
+        Unlike `compare()`, this doesn't require a target to be set — it's
+        used by callers (e.g. EdgeRunner) that need the raw feature vector
+        itself, for example to ship it over the wire to a ground station
+        for later matching.
+
+        Args:
+            crop: BGR numpy array of a detected person.
+
+        Returns:
+            Normalized 512-d feature vector, or None if extraction fails
+            (e.g. an empty/invalid crop).
+        """
+        if crop is None or crop.size == 0:
+            return None
+        try:
+            return self._extract_embedding(crop)
+        except Exception:
+            return None
+
     def set_target(self, image: np.ndarray):
         """Set the reference image of the person to find.
 
@@ -136,7 +158,3 @@ class PersonReID:
             return best_idx, best_score
 
         return None, best_score
-
-    def clear_target(self):
-        """Clear the current target embedding."""
-        self._target_embedding = None

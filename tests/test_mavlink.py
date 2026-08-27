@@ -94,7 +94,7 @@ sys.modules["mavsdk.manual_control"] = _mavsdk_manual_control
 
 # Now we can import the module under test
 from amber.drone.mavlink import MavlinkController, HAS_MAVSDK, _extract_ip  # noqa: E402
-from amber.drone.controller import DroneController, DroneState  # noqa: E402
+from amber.drone.controller import DroneController, DroneState, GpsDroneController  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +216,12 @@ class TestProtocolConformance:
     def test_isinstance_check(self):
         ctrl = MavlinkController(name="proto", host="udp://:14540")
         assert isinstance(ctrl, DroneController)
+
+    def test_isinstance_check_gps_controller(self):
+        """MavlinkController supports GPS, so it must satisfy the narrower
+        GpsDroneController protocol (goto_gps) too."""
+        ctrl = MavlinkController(name="proto", host="udp://:14540")
+        assert isinstance(ctrl, GpsDroneController)
 
     def test_has_required_attributes(self):
         ctrl = MavlinkController(name="attr", host="udp://:14540")

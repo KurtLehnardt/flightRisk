@@ -70,6 +70,21 @@ class FaceRecognizer:
             emb = emb / norm
         return emb
 
+    def extract_embedding(self, crop: np.ndarray) -> np.ndarray | None:
+        """Public accessor for the raw face embedding of a person crop.
+
+        Wraps `_best_face_embedding` so callers (e.g. EdgeRunner) that need
+        the raw feature vector — not just a similarity score against an
+        already-set target — have a supported, non-private API to call.
+
+        Args:
+            crop: BGR numpy array of a detected person.
+
+        Returns:
+            Normalized 512-d face embedding, or None if no face is found.
+        """
+        return self._best_face_embedding(crop)
+
     def set_target(self, image: np.ndarray) -> bool:
         """Set the reference face from a photo of the target child.
 
