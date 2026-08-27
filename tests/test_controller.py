@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from amber.drone.controller import DroneCapabilities, DroneController, DroneState
+from amber.drone.controller import (
+    DroneCapabilities,
+    DroneController,
+    DroneState,
+    GpsDroneController,
+)
 
 
 class TestDroneState:
@@ -69,12 +74,22 @@ class TestDroneControllerProtocol:
         assert isinstance(ctrl, DroneController)
 
     @patch("amber.drone.tello.Tello")
-    def test_tello_goto_gps_raises(self, mock_tello_cls):
+    def test_tello_has_no_goto_gps(self, mock_tello_cls):
+        """TelloController must not implement goto_gps at all — the standard
+        Tello has no GPS, and a method that only raises NotImplementedError
+        is a Liskov Substitution violation (callers can't trust the
+        DroneController interface without knowing the concrete type)."""
         from amber.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
-        with pytest.raises(NotImplementedError, match="Tello does not have GPS"):
-            ctrl.goto_gps(37.7749, -122.4194, 50.0)
+        assert not hasattr(ctrl, "goto_gps")
+
+    @patch("amber.drone.tello.Tello")
+    def test_tello_is_not_gps_drone_controller(self, mock_tello_cls):
+        from amber.drone.tello import TelloController
+
+        ctrl = TelloController(name="test", host="192.168.10.1")
+        assert not isinstance(ctrl, GpsDroneController)
 
     @patch("amber.drone.tello.Tello")
     def test_tello_capabilities(self, mock_tello_cls):
@@ -103,3 +118,70 @@ class TestDroneControllerProtocol:
         from amber.drone.tello import DroneCapabilities as TelloDroneCapabilities
 
         assert TelloDroneCapabilities is DroneCapabilities
+
+
+class TestGpsDroneControllerProtocol:
+    """Test the GpsDroneController subset protocol (goto_gps support)."""
+
+    def _make_fake_gps_drone(self):
+        """A minimal object satisfying GpsDroneController structurally."""
+
+        class FakeGpsDrone:
+            name = "fake"
+            host = "udp://:14540"
+            state = DroneState()
+            capabilities = DroneCapabilities(has_gps=True)
+
+            def connect(self) -> bool:
+                return True
+
+            def disconnect(self) -> None: ...
+            def get_frame(self): return None
+            def on_frame(self, cb): ...
+            def takeoff(self) -> None: ...
+            def land(self) -> None: ...
+            def move(self, direction, distance_cm) -> None: ...
+            def rotate(self, degrees) -> None: ...
+            def hover(self) -> None: ...
+            def rc_control(self, lr, fb, ud, yaw) -> None: ...
+            def goto_gps(self, lat, lon, alt, timeout=300.0) -> None: ...
+
+        return FakeGpsDrone()
+
+    def test_fake_gps_drone_satisfies_gps_protocol(self):
+        drone = self._make_fake_gps_drone()
+        assert isinstance(drone, DroneController)
+        assert isinstance(drone, GpsDroneController)
+
+    @patch("amber.drone.tello.Tello")
+    def test_drone_controller_does_not_require_goto_gps(self, mock_tello_cls):
+        """The base DroneController protocol must be satisfiable without
+        goto_gps — this is the whole point of the LSP fix."""
+        from amber.drone.tello import TelloController
+
+        ctrl = TelloController(name="test", host="192.168.10.1")
+        assert isinstance(ctrl, DroneController)
+        assert not isinstance(ctrl, GpsDroneController)
+
+    def test_object_missing_goto_gps_fails_gps_protocol(self):
+        class NoGpsDrone:
+            name = "no-gps"
+            host = "1.2.3.4"
+            state = DroneState()
+            capabilities = DroneCapabilities()
+
+            def connect(self) -> bool: return True
+            def disconnect(self) -> None: ...
+            def get_frame(self): return None
+            def on_frame(self, cb): ...
+            def takeoff(self) -> None: ...
+            def land(self) -> None: ...
+            def move(self, direction, distance_cm) -> None: ...
+            def rotate(self, degrees) -> None: ...
+            def hover(self) -> None: ...
+            def rc_control(self, lr, fb, ud, yaw) -> None: ...
+            # No goto_gps.
+
+        drone = NoGpsDrone()
+        assert isinstance(drone, DroneController)
+        assert not isinstance(drone, GpsDroneController)

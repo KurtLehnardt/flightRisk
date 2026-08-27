@@ -59,3 +59,22 @@ class TestSetTargetFromFile:
     def test_bad_path_raises(self, face):
         with pytest.raises(FileNotFoundError):
             face.set_target_from_file("/nonexistent/image.jpg")
+
+
+class TestPublicExtractEmbedding:
+    """Tests for the public extract_embedding() wrapper (used by EdgeRunner
+    instead of reaching into the private _best_face_embedding)."""
+
+    def test_no_face_returns_none(self, face):
+        noise = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        assert face.extract_embedding(noise) is None
+
+    def test_matches_private_best_face_embedding(self, face):
+        crop = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        public = face.extract_embedding(crop)
+        private = face._best_face_embedding(crop)
+        # Both None (no face in random noise) or both equal arrays.
+        if public is None or private is None:
+            assert public is None and private is None
+        else:
+            assert np.allclose(public, private)

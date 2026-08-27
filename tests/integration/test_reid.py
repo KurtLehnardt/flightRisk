@@ -32,6 +32,25 @@ class TestEmbedding:
         assert abs(norm - 1.0) < 1e-5, f"Expected norm ~1.0, got {norm}"
 
 
+class TestPublicExtractEmbedding:
+    """Tests for the public extract_embedding() wrapper (used by EdgeRunner
+    instead of reaching into the private _extract_embedding)."""
+
+    def test_matches_private_extract_embedding(self, reid, sample_crop):
+        public = reid.extract_embedding(sample_crop)
+        private = reid._extract_embedding(sample_crop)
+        assert isinstance(public, np.ndarray)
+        assert public.shape == private.shape
+        assert np.allclose(public, private)
+
+    def test_empty_crop_returns_none(self, reid):
+        empty = np.zeros((0, 0, 3), dtype=np.uint8)
+        assert reid.extract_embedding(empty) is None
+
+    def test_none_crop_returns_none(self, reid):
+        assert reid.extract_embedding(None) is None
+
+
 class TestCompare:
     def test_no_target_returns_zero(self, reid, sample_crop):
         # Fresh reid or one with no target set
@@ -83,3 +102,19 @@ class TestSetTargetFromFile:
     def test_nonexistent_file_raises(self, reid):
         with pytest.raises(FileNotFoundError):
             reid.set_target_from_file("/nonexistent/path/to/image.jpg")
+
+
+class TestClearTarget:
+    """clear_target() was accidentally defined twice; verify the single
+    remaining definition still works correctly."""
+
+    def test_clear_target_resets_to_none(self, reid, sample_crop):
+        reid.set_target(sample_crop)
+        assert reid._target_embedding is not None
+        reid.clear_target()
+        assert reid._target_embedding is None
+
+    def test_compare_after_clear_returns_zero(self, reid, sample_crop):
+        reid.set_target(sample_crop)
+        reid.clear_target()
+        assert reid.compare(sample_crop) == 0.0

@@ -3,11 +3,26 @@
 Combines ReID body similarity, face recognition, and LLM reasoning
 into a single weighted confidence score. This reduces false positives
 by requiring agreement across multiple signals.
+
+New signals (thermal, gait, etc.) can be added without touching this
+module's internals via `register_signal()` — see MatchScorer.score().
 """
+
+# Names populated internally via score()'s named params (reid_score,
+# face_score, reasoning_result). These may not be used as **signals
+# keys or register_signal() names — doing so would silently shadow the
+# named-param value with whatever was passed through **signals.
+BUILTIN_SIGNALS = {"reid", "face", "reasoning"}
 
 
 class MatchScorer:
-    """Weighted multi-signal match scorer."""
+    """Weighted multi-signal match scorer.
+
+    Thread-safety note: `register_signal()` mutates `_signals` without
+    locking. Call it only during setup (e.g. right after construction,
+    before the scorer is shared across threads/tasks) — not from
+    concurrent code paths that might also be calling `score()`.
+    """
 
     def __init__(
         self,
@@ -29,11 +44,47 @@ class MatchScorer:
         self.reasoning_weight = reasoning_weight
         self.match_threshold = match_threshold
 
+        # Signal registry: name -> config (currently just weight). The
+        # three built-in signals are seeded here so they flow through the
+        # exact same weighting/redistribution logic as anything registered
+        # later via register_signal() — no special-cased math for "new"
+        # signals vs. the original three.
+        self._signals: dict[str, dict] = {
+            "reid": {"weight": reid_weight},
+            "face": {"weight": face_weight},
+            "reasoning": {"weight": reasoning_weight},
+        }
+
+    def register_signal(self, name: str, weight: float) -> None:
+        """Register a new named signal (and its weight) for use in score().
+
+        Once registered, pass the signal's numeric score (0-1) as a keyword
+        argument named `name` to score(), e.g.:
+
+            scorer.register_signal("thermal", weight=0.15)
+            scorer.score(reid_score=0.8, thermal=0.6)
+
+        Registering a name that already exists overwrites its weight.
+
+        Not thread-safe: this mutates the internal signal registry without
+        a lock. Only call it during initialization, before the scorer is
+        shared across concurrent code paths.
+
+        Raises:
+            ValueError: If `name` collides with a built-in signal name
+                ("reid", "face", "reasoning") — those are populated via
+                score()'s named parameters and cannot be repointed here.
+        """
+        if name in BUILTIN_SIGNALS:
+            raise ValueError(f"Cannot override built-in signal '{name}'")
+        self._signals[name] = {"weight": weight}
+
     def score(
         self,
         reid_score: float = 0.0,
         face_score: float = 0.0,
         reasoning_result: dict | None = None,
+        **signals: float,
     ) -> dict:
         """Compute a combined match score.
 
@@ -41,6 +92,8 @@ class MatchScorer:
             reid_score: Cosine similarity from ReID (0-1).
             face_score: Cosine similarity from face recognition (0-1).
             reasoning_result: Dict from AmberAgent with 'match', 'confidence' keys.
+            **signals: Additional signals registered via register_signal(),
+                passed as `name=score` keyword arguments (0-1 each).
 
         Returns:
             Dict with:
@@ -52,21 +105,41 @@ class MatchScorer:
         # Convert reasoning to a numeric score
         reasoning_score = self._reasoning_to_score(reasoning_result)
 
-        # Compute active weights (redistribute weight if a signal is missing)
-        weights = {}
-        total_weight = 0.0
+        # Assemble raw scores for every signal supplied this call. Order
+        # matters only for breakdown's key order, which mirrors the
+        # original reid -> face -> reasoning -> extras layout.
+        raw_scores: dict[str, float] = {
+            "reid": reid_score,
+            "face": face_score,
+        }
 
-        if reid_score > 0:
-            weights["reid"] = self.reid_weight
-            total_weight += self.reid_weight
-
-        if face_score > 0:
-            weights["face"] = self.face_weight
-            total_weight += self.face_weight
-
+        # reasoning is excluded unless the LLM actually reported a match —
+        # a confident "no match" shouldn't be treated as a positive signal.
         if reasoning_score > 0 and (reasoning_result is None or reasoning_result.get("match", False)):
-            weights["reasoning"] = self.reasoning_weight
-            total_weight += self.reasoning_weight
+            raw_scores["reasoning"] = reasoning_score
+
+        for name, value in signals.items():
+            if name in BUILTIN_SIGNALS:
+                raise ValueError(
+                    f"Cannot override built-in signal '{name}' via **signals; "
+                    f"use the named parameter instead "
+                    f"(reid_score, face_score, or reasoning_result)"
+                )
+            if name not in self._signals:
+                raise ValueError(
+                    f"Unknown signal '{name}' — register it first with "
+                    f"register_signal({name!r}, weight=...)"
+                )
+            raw_scores[name] = value
+
+        # Compute active weights (redistribute weight if a signal is missing)
+        weights: dict[str, float] = {}
+        total_weight = 0.0
+        for name, value in raw_scores.items():
+            if value > 0:
+                w = self._signals[name]["weight"]
+                weights[name] = w
+                total_weight += w
 
         # If no signals, return zero
         if total_weight == 0:
@@ -83,31 +156,12 @@ class MatchScorer:
         # Weighted sum
         combined = 0.0
         breakdown = {}
-
-        if "reid" in norm_weights:
-            contribution = reid_score * norm_weights["reid"]
+        for name, w in norm_weights.items():
+            contribution = raw_scores[name] * w
             combined += contribution
-            breakdown["reid"] = {
-                "raw_score": round(reid_score, 3),
-                "weight": round(norm_weights["reid"], 2),
-                "contribution": round(contribution, 3),
-            }
-
-        if "face" in norm_weights:
-            contribution = face_score * norm_weights["face"]
-            combined += contribution
-            breakdown["face"] = {
-                "raw_score": round(face_score, 3),
-                "weight": round(norm_weights["face"], 2),
-                "contribution": round(contribution, 3),
-            }
-
-        if "reasoning" in norm_weights:
-            contribution = reasoning_score * norm_weights["reasoning"]
-            combined += contribution
-            breakdown["reasoning"] = {
-                "raw_score": round(reasoning_score, 3),
-                "weight": round(norm_weights["reasoning"], 2),
+            breakdown[name] = {
+                "raw_score": round(raw_scores[name], 3),
+                "weight": round(w, 2),
                 "contribution": round(contribution, 3),
             }
 

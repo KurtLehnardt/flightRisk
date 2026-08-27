@@ -30,22 +30,22 @@ def _make_mock_detector(detections: list[dict]):
 
 
 def _make_mock_reid(embedding: np.ndarray | None = None):
-    """Return a mock PersonReID with a controllable _extract_embedding."""
+    """Return a mock PersonReID with a controllable public extract_embedding."""
     mock = MagicMock()
     if embedding is not None:
-        mock._extract_embedding.return_value = embedding
+        mock.extract_embedding.return_value = embedding
     else:
-        mock._extract_embedding.side_effect = Exception("no embedding")
+        mock.extract_embedding.side_effect = Exception("no embedding")
     return mock
 
 
 def _make_mock_face(embedding: np.ndarray | None = None):
-    """Return a mock FaceRecognizer with a controllable _best_face_embedding."""
+    """Return a mock FaceRecognizer with a controllable public extract_embedding."""
     mock = MagicMock()
     if embedding is not None:
-        mock._best_face_embedding.return_value = embedding
+        mock.extract_embedding.return_value = embedding
     else:
-        mock._best_face_embedding.return_value = None
+        mock.extract_embedding.return_value = None
     return mock
 
 
@@ -172,6 +172,37 @@ class TestEdgeRunnerWithDetector:
         runner = EdgeRunner(detector=_make_mock_detector(dets))
         msg = runner.process_frame(frame)
         assert len(msg.detections) == 2
+
+    def test_uses_public_reid_extract_embedding_api(self):
+        """EdgeRunner must call PersonReID's public extract_embedding(),
+        not the private _extract_embedding() — this was a code review
+        finding (calling private APIs across module boundaries)."""
+        frame = _make_frame()
+        crop = frame[20:220, 10:110]
+        dets = [{"bbox": [10, 20, 110, 220], "confidence": 0.8, "crop": crop}]
+        emb = _normalized([1.0, 0.0, 0.0, 0.0])
+        reid_mock = _make_mock_reid(emb)
+        runner = EdgeRunner(detector=_make_mock_detector(dets), reid=reid_mock)
+
+        runner.process_frame(frame)
+
+        reid_mock.extract_embedding.assert_called_once()
+        reid_mock._extract_embedding.assert_not_called()
+
+    def test_uses_public_face_extract_embedding_api(self):
+        """EdgeRunner must call FaceRecognizer's public extract_embedding(),
+        not the private _best_face_embedding()."""
+        frame = _make_frame()
+        crop = frame[20:220, 10:110]
+        dets = [{"bbox": [10, 20, 110, 220], "confidence": 0.8, "crop": crop}]
+        emb = _normalized([0.0, 1.0, 0.0, 0.0])
+        face_mock = _make_mock_face(emb)
+        runner = EdgeRunner(detector=_make_mock_detector(dets), face=face_mock)
+
+        runner.process_frame(frame)
+
+        face_mock.extract_embedding.assert_called_once()
+        face_mock._best_face_embedding.assert_not_called()
 
 
 class TestEdgeRunnerSerialization:
