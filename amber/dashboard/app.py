@@ -16,7 +16,6 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from functools import wraps
 from pathlib import Path
 
 import cv2

@@ -19,12 +19,9 @@ class TestSecretKey:
     def test_secret_key_from_env(self, monkeypatch):
         """SECRET_KEY should use AMBER_SECRET_KEY when set."""
         monkeypatch.setenv("AMBER_SECRET_KEY", "env-secret-key-value")
+        import importlib
         import amber.dashboard.app as app_mod
-
-        # Simulate what the app does at startup
-        app_mod.app.config["SECRET_KEY"] = os.environ.get(
-            "AMBER_SECRET_KEY", "fallback"
-        )
+        importlib.reload(app_mod)
         assert app_mod.app.config["SECRET_KEY"] == "env-secret-key-value"
 
     def test_secret_key_random_fallback(self, monkeypatch):
