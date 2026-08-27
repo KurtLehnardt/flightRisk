@@ -200,6 +200,31 @@ def _init_pipeline(source="webcam", target_path=None):
     log.info("pipeline_ready", source=_state["source"], session_id=_state["session_id"])
 
 
+def _build_track_id_by_bbox(tracked_detections, detections):
+    """Join tracked detections back to this frame's raw detections by bbox.
+
+    `tracked_detections` (as returned by `DetectionTracker.update()`)
+    includes every active track, including aged/unmatched ones that still
+    carry a stale bbox from a previous frame. Restricting the join to
+    bboxes that actually appear in this frame's `detections` prevents a
+    new detection from being misattributed to a stale, unmatched track.
+
+    Args:
+        tracked_detections: Result of `tracker.update(detections)`.
+        detections: This frame's raw detections from `PersonDetector`.
+
+    Returns:
+        Dict mapping bbox tuple -> track_id, restricted to tracks that
+        were actually matched (or newly created) this frame.
+    """
+    current_bboxes = {tuple(d["bbox"]) for d in detections}
+    return {
+        tuple(t.bbox): t.track_id
+        for t in tracked_detections
+        if tuple(t.bbox) in current_bboxes
+    }
+
+
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
     """Save a match screenshot and crop to disk."""
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -232,8 +257,10 @@ def _frame_loop():
     fps_start = time.time()
     last_reasoning_time = 0
     last_metrics_emit = 0
+    last_track_emit = 0
     REASONING_INTERVAL = 5
     METRICS_INTERVAL = 10
+    TRACK_UPDATE_INTERVAL = 1
     last_detection_log = 0
     log = _state["logger"]
     metrics = _state["metrics"]
@@ -265,12 +292,10 @@ def _frame_loop():
 
             tracker = _state.get("tracker")
             tracked_detections = tracker.update(detections) if tracker else []
-            if tracker:
-                socketio.emit("track_update", {"active_tracks": len(tracker.active_tracks)})
-            # Bbox is a stable join key back to `detections`: the tracker
-            # writes the current frame's bbox onto matched tracks verbatim,
-            # and brand-new tracks adopt the detection's bbox as-is.
-            track_id_by_bbox = {tuple(t.bbox): t.track_id for t in tracked_detections}
+            if tracker and frame_start - last_track_emit >= TRACK_UPDATE_INTERVAL:
+                last_track_emit = frame_start
+                socketio.emit("track_update", {"active_tracks": len(tracked_detections)})
+            track_id_by_bbox = _build_track_id_by_bbox(tracked_detections, detections)
 
             if metrics:
                 metrics.inc_frames()
@@ -339,7 +364,7 @@ def _frame_loop():
                     reid_thresh = _state["reid"].match_threshold if _state.get("reid") else 0.55
                     if (
                         track_summary
-                        and track_summary.frames_seen >= 3
+                        and len(track_summary.reid_scores) >= 3
                         and track_summary.avg_reid_score >= reid_thresh
                         and current_alert_level != "confirmed_match"
                     ):
