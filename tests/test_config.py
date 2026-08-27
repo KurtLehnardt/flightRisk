@@ -7,6 +7,7 @@ constructors across the codebase must actually read from config instead
 of silently keeping their old hardcoded literals.
 """
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,32 @@ from amber.config import (
     get_config,
     reset_config,
 )
+
+
+def _install_fake_mavsdk(monkeypatch):
+    """Install a minimal fake `mavsdk` package tree into `sys.modules`.
+
+    `amber.drone.mavlink` sets `HAS_MAVSDK = True` only if `import mavsdk`
+    succeeds at module-import time, and `MavlinkController.__init__` raises
+    if it isn't. The real `mavsdk` package isn't a test dependency —
+    `tests/test_mavlink.py` normally supplies a fake by mutating
+    `sys.modules` at its own module-import time, but pytest doesn't
+    guarantee that file is collected/imported before this one. Tests here
+    must not depend on that ordering, so they install their own fake and
+    force a fresh import of `amber.drone.mavlink` against it.
+    `monkeypatch.setitem` auto-reverts `sys.modules` after the test.
+    """
+    fake_mavsdk = MagicMock()
+    fake_mavsdk.System = MagicMock
+    for mod in (
+        "mavsdk",
+        "mavsdk.action",
+        "mavsdk.offboard",
+        "mavsdk.telemetry",
+        "mavsdk.manual_control",
+    ):
+        monkeypatch.setitem(sys.modules, mod, fake_mavsdk)
+    monkeypatch.delitem(sys.modules, "amber.drone.mavlink", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +77,7 @@ class TestDefaultsMatchCurrentHardcodedValues:
         assert v.reid_threshold == 0.55
         assert v.reid_model == "ViT-B-16"
         assert v.face_det_size == (640, 640)
+        assert v.face_match_threshold == 0.45
         assert v.scorer_match_threshold == 0.45
         assert v.scorer_reid_weight == 0.35
         assert v.scorer_face_weight == 0.40
@@ -274,13 +302,15 @@ class TestConfigActuallyUsedByConstructors:
             ctrl = TelloController(host="10.0.0.99")
             assert ctrl.host == "10.0.0.99"
 
-    def test_mavlink_controller_uses_config_default_host(self):
+    def test_mavlink_controller_uses_config_default_host(self, monkeypatch):
+        _install_fake_mavsdk(monkeypatch)
         from amber.drone.mavlink import MavlinkController
 
         ctrl = MavlinkController(name="cfg-test-default")
         assert ctrl.host == get_config().drone.mavlink_default_address
 
-    def test_mavlink_controller_explicit_host_overrides_config(self):
+    def test_mavlink_controller_explicit_host_overrides_config(self, monkeypatch):
+        _install_fake_mavsdk(monkeypatch)
         from amber.drone.mavlink import MavlinkController
 
         ctrl = MavlinkController(name="cfg-test-explicit", host="udp://:55555")

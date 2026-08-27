@@ -20,16 +20,25 @@ except ImportError:
 class FaceRecognizer:
     """Face detection + ArcFace embedding extraction and matching."""
 
-    def __init__(self, match_threshold: float = 0.45, det_size: tuple[int, int] = (640, 640)):
+    def __init__(self, match_threshold: float | None = None, det_size: tuple[int, int] | None = None):
         """Initialize InsightFace.
 
         Args:
             match_threshold: Cosine similarity threshold for face match (0-1).
+                Defaults to `config.vision.face_match_threshold`.
             det_size: Detection input size. Smaller = faster but less accurate
-                      on small faces. (320, 320) for speed, (640, 640) for quality.
+                      on small faces. (320, 320) for speed, (640, 640) for
+                      quality. Defaults to `config.vision.face_det_size`.
         """
         if not HAS_INSIGHTFACE:
             raise RuntimeError("pip install insightface onnxruntime")
+
+        if match_threshold is None:
+            from amber.config import get_config
+            match_threshold = get_config().vision.face_match_threshold
+        if det_size is None:
+            from amber.config import get_config
+            det_size = get_config().vision.face_det_size
 
         self.match_threshold = match_threshold
         self._target_embedding: np.ndarray | None = None

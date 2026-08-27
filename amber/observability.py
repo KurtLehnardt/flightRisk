@@ -10,6 +10,8 @@ import time
 import threading
 from typing import Any, Optional
 
+from amber.config import get_config
+
 
 class StructuredLogger:
     """JSON-formatted structured logger with component context.
@@ -85,8 +87,9 @@ class StructuredLogger:
 
     def battery(self, battery_level: int, is_flying: bool = False, **kwargs: Any) -> None:
         """Log a battery status event."""
-        lvl = "warning" if battery_level <= 20 else "info"
-        if battery_level <= 10:
+        cfg = get_config().drone
+        lvl = "warning" if battery_level <= cfg.battery_warn_threshold else "info"
+        if battery_level <= cfg.battery_critical_threshold:
             lvl = "error"
         self._emit(lvl, "battery", battery_level=battery_level, is_flying=is_flying, **kwargs)
 

@@ -12,7 +12,7 @@ import os
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -48,15 +48,22 @@ class SourceConfig:
     separate args to `run_dashboard()` / `_init_pipeline()`.
     """
     source: str = "webcam"
-    mavlink_address: str = get_config().drone.mavlink_default_address
+    mavlink_address: str = field(default_factory=lambda: get_config().drone.mavlink_default_address)
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
     video_path: str | None = None
 
 
-# Match screenshots directory
-CAPTURES_DIR = Path(__file__).parent.parent.parent / get_config().dashboard.captures_dir
-CAPTURES_DIR.mkdir(exist_ok=True)
+def _get_captures_dir() -> Path:
+    """Resolve (and ensure) the match-screenshots directory.
+
+    Resolved lazily rather than at import time so a config override
+    (e.g. `AMBER_*` env vars set after import, or a test that resets the
+    config singleton) is actually honored.
+    """
+    captures_dir = Path(__file__).parent.parent.parent / get_config().dashboard.captures_dir
+    captures_dir.mkdir(exist_ok=True)
+    return captures_dir
 
 app = Flask(
     __name__,
@@ -112,12 +119,14 @@ _state = {
 }
 
 # Async Gemma 4 reasoning — offloaded to a worker thread + queue so the
-# 2-5s LLM call never blocks frame processing or detection.
-_gemma_queue: "queue.Queue" = queue.Queue(maxsize=get_config().reasoning.queue_maxsize)
+# 2-5s LLM call never blocks frame processing or detection. The queue
+# itself is created lazily in `_init_pipeline()` (not here at import time)
+# so its maxsize always reflects the current config, including overrides
+# applied after this module is imported (e.g. tests that reset the config
+# singleton or set `AMBER_QUEUE_SIZE` before initializing the pipeline).
+_gemma_queue: "queue.Queue | None" = None
 _gemma_last_call: dict[str, float] = {}  # track_key -> last_call_timestamp
 _alerted_tracks: dict[str, float] = {}  # track_key -> timestamp of last alert emit
-ALERT_COOLDOWN = get_config().reasoning.alert_cooldown  # seconds before re-alerting for the same spatial track
-GEMMA_RATE_LIMIT = get_config().reasoning.gemma_rate_limit  # seconds between Gemma calls for the same track
 _gemma_thread_lock = threading.Lock()
 _match_history_lock = threading.Lock()  # guards _state["match_history"] across threads
 
@@ -136,8 +145,8 @@ def _compute_track_key(bbox) -> str:
 
 
 def _is_within_alert_cooldown(track_key: str, now: float) -> bool:
-    """Return True if track_key was alerted within ALERT_COOLDOWN seconds."""
-    return now - _alerted_tracks.get(track_key, 0) < ALERT_COOLDOWN
+    """Return True if track_key was alerted within `config.reasoning.alert_cooldown` seconds."""
+    return now - _alerted_tracks.get(track_key, 0) < get_config().reasoning.alert_cooldown
 
 
 def _gemma_worker():
@@ -276,11 +285,15 @@ def _gemma_worker():
 
 def _init_pipeline(source_config: SourceConfig, target_path=None):
     """Initialize the detection pipeline."""
+    global _gemma_queue
     source = source_config.source
     mavlink_address = source_config.mavlink_address
     rtsp_url = source_config.rtsp_url
     edge_ws = source_config.edge_ws
     video_path = source_config.video_path
+
+    if _gemma_queue is None:
+        _gemma_queue = queue.Queue(maxsize=get_config().reasoning.queue_maxsize)
 
     if _state["logger"] is None:
         _state["logger"] = StructuredLogger(component="dashboard")
@@ -518,16 +531,17 @@ def _build_track_id_by_bbox(tracked_detections, detections):
 
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
     """Save a match screenshot and crop to disk."""
+    captures_dir = _get_captures_dir()
     ts = time.strftime("%Y%m%d_%H%M%S")
-    frame_path = CAPTURES_DIR / f"match_{ts}_frame.jpg"
-    crop_path = CAPTURES_DIR / f"match_{ts}_crop.jpg"
+    frame_path = captures_dir / f"match_{ts}_frame.jpg"
+    crop_path = captures_dir / f"match_{ts}_crop.jpg"
 
     cv2.imwrite(str(frame_path), frame)
     if crop is not None and crop.size > 0:
         cv2.imwrite(str(crop_path), crop)
 
     # Save metadata
-    meta_path = CAPTURES_DIR / f"match_{ts}_meta.json"
+    meta_path = captures_dir / f"match_{ts}_meta.json"
     meta = {
         "timestamp": ts,
         "score": match_score,
@@ -556,6 +570,7 @@ def _frame_loop():
     METRICS_INTERVAL = reasoning_cfg.metrics_interval
     TRACK_UPDATE_INTERVAL = reasoning_cfg.track_update_interval
     CORROBORATION_THRESHOLD = reasoning_cfg.corroboration_threshold
+    GEMMA_RATE_LIMIT = reasoning_cfg.gemma_rate_limit
     BATTERY_WARN_THRESHOLD = drone_cfg.battery_warn_threshold
     BATTERY_CRITICAL_THRESHOLD = drone_cfg.battery_critical_threshold
     JPEG_QUALITY = dashboard_cfg.jpeg_quality
@@ -695,7 +710,7 @@ def _frame_loop():
                     track_key = _compute_track_key(bbox)
 
                     # --- Alert throttle: skip writes / emits if we already
-                    # alerted for this spatial track within ALERT_COOLDOWN.
+                    # alerted for this spatial track within config.reasoning.alert_cooldown.
                     now_alert = time.time()
                     if _is_within_alert_cooldown(track_key, now_alert):
                         # Still within cooldown — only try to queue Gemma

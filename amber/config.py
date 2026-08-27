@@ -27,6 +27,8 @@ always wins over the config default.
 """
 
 import os
+import threading
+import warnings
 from dataclasses import dataclass, field
 
 
@@ -39,6 +41,7 @@ class VisionConfig:
     reid_threshold: float = 0.55
     reid_model: str = "ViT-B-16"
     face_det_size: tuple[int, int] = (640, 640)
+    face_match_threshold: float = 0.45
     scorer_match_threshold: float = 0.45
     scorer_reid_weight: float = 0.35
     scorer_face_weight: float = 0.40
@@ -81,8 +84,6 @@ class DashboardConfig:
 
     port: int = 5555
     frame_emit_interval: float = 0.05
-    thumbnail_width: int = 320
-    thumbnail_height: int = 180
     jpeg_quality: int = 70
     captures_dir: str = "captures"
 
@@ -122,24 +123,35 @@ class AmberConfig:
         for env_key, (section, attr, type_fn) in env_map.items():
             val = os.environ.get(env_key)
             if val is not None:
-                setattr(getattr(config, section), attr, type_fn(val))
+                try:
+                    setattr(getattr(config, section), attr, type_fn(val))
+                except (ValueError, TypeError):
+                    warnings.warn(
+                        f"Invalid value for {env_key}={val!r}, using default",
+                        stacklevel=2,
+                    )
         return config
 
 
 # Module-level singleton, lazily initialized on first use so importing this
 # module never has side effects (e.g. reading env vars) on its own.
 _config: AmberConfig | None = None
+_config_lock = threading.Lock()
 
 
 def get_config() -> AmberConfig:
     """Return the process-wide `AmberConfig` singleton.
 
     Loads from environment variables on first call; subsequent calls
-    return the same cached instance.
+    return the same cached instance. Thread-safe via double-checked
+    locking so concurrent first-callers can't race and construct two
+    separate instances.
     """
     global _config
     if _config is None:
-        _config = AmberConfig.from_env()
+        with _config_lock:
+            if _config is None:
+                _config = AmberConfig.from_env()
     return _config
 
 
