@@ -350,9 +350,12 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         except Exception as e:
             log.warning("obstacle_guard_unavailable", error=str(e))
 
-    # Initialize target canon
+    # Initialize target canon. Share the session DB's SQLite connection
+    # rather than opening a second independent connection to the same file
+    # -- two separate sqlite3 connections writing concurrently (matches vs.
+    # target versions) can otherwise contend and raise SQLITE_BUSY.
     if _state.get("canon") is None:
-        _state["canon"] = TargetCanon()
+        _state["canon"] = TargetCanon(session_db=_state["db"])
         log.info("target_canon_initialized")
 
     # OpenTelemetry
@@ -689,7 +692,8 @@ def _frame_loop():
                                     try:
                                         _gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy()))
                                     except queue.Full:
-                                        pass
+                                        if log:
+                                            log.debug("gemma_queue_full", track_id=track_key, mode="analyze")
                     else:
                         # Cooldown expired (or first alert) — full alert path.
                         _alerted_tracks[track_key] = now_alert
@@ -750,7 +754,9 @@ def _frame_loop():
                                     try:
                                         _gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy()))
                                     except queue.Full:
-                                        pass  # drop if queue is full, don't block
+                                        # Drop if queue is full, don't block the frame loop.
+                                        if log:
+                                            log.debug("gemma_queue_full", track_id=track_key, mode="analyze")
             elif match_idx is not None:
                 match_score = max(reid_score, face_score)
 
@@ -782,7 +788,9 @@ def _frame_loop():
                         try:
                             _gemma_queue.put_nowait(("describe", track_key, crop.copy(), _state["target_description"]))
                         except queue.Full:
-                            pass  # drop if queue is full, don't block
+                            # Drop if queue is full, don't block the frame loop.
+                            if log:
+                                log.debug("gemma_queue_full", track_id=track_key, mode="describe")
 
             # Note: photo-based Gemma 4 reasoning (analyze_match) is no longer
             # called synchronously here — see the immediate-alert block above,
