@@ -94,6 +94,10 @@ class FaceRecognizer:
             raise FileNotFoundError(f"Cannot read image: {path}")
         return self.set_target(image)
 
+    def clear_target(self):
+        """Clear the current target embedding."""
+        self._target_embedding = None
+
     def compare(self, crop: np.ndarray) -> float:
         """Compare a detected person crop's face against the target.
 

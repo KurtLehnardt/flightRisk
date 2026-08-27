@@ -94,6 +94,10 @@ class PersonReID:
             raise FileNotFoundError(f"Cannot read image: {path}")
         self.set_target(image)
 
+    def clear_target(self):
+        """Clear the current target embedding."""
+        self._target_embedding = None
+
     def compare(self, crop: np.ndarray) -> float:
         """Compare a detected person crop against the target.
 
