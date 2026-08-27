@@ -23,9 +23,26 @@ if [[ "${1:-}" == "--native" ]]; then
     sim_vehicle.py -v $VEHICLE --no-rebuild -w \
         --out=udp:127.0.0.1:14540
 elif [[ "${1:-}" == "--docker" ]] || command -v docker &>/dev/null; then
+    if ! command -v docker &>/dev/null; then
+        echo "ERROR: Docker not found."
+        exit 1
+    fi
+    if ! docker info &>/dev/null 2>&1; then
+        echo "ERROR: Docker daemon not running."
+        exit 1
+    fi
+
+    # Remove any stale container from a previous run so this script can
+    # be re-run without a "name already in use" failure.
+    docker rm -f amber-sitl >/dev/null 2>&1 || true
+
     echo "Starting SITL via Docker..."
+    # NOTE: radarku/ardupilot-sitl is pinned to :latest -- no versioned
+    # tag is published upstream at time of writing. Pin to a digest if
+    # reproducibility becomes an issue.
     docker run --rm -d \
         --name amber-sitl \
+        --add-host=host.docker.internal:host-gateway \
         -p 5760:5760 \
         -p 14540:14540/udp \
         radarku/ardupilot-sitl:latest \
