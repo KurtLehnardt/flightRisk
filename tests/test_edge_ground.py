@@ -491,6 +491,127 @@ class TestGroundStationNoneEmbeddings:
         assert results[0]["face_score"] == 0.0
 
 
+class TestGroundStationNumpyArrayTargets:
+    """GroundStation must accept numpy array targets, not just lists.
+
+    Regression test: `np.array(x) if x else None` raises
+    "ValueError: truth value of an array with more than one element is
+    ambiguous" when x is already a multi-element numpy array, because
+    numpy arrays don't support truthiness. The fix uses `is not None`.
+    """
+
+    def test_constructor_accepts_numpy_array_reid_target(self):
+        emb = _normalized([1.0, 0.0, 0.0, 0.0])
+        # Should not raise.
+        gs = GroundStation(target_reid_embedding=emb)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                Detection(bbox=(0, 0, 50, 50), confidence=0.9,
+                          reid_embedding=emb.tolist()),
+            ],
+        )
+        results = gs.process_message(msg)
+        assert results[0]["reid_score"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_constructor_accepts_numpy_array_face_target(self):
+        emb = _normalized([0.0, 1.0, 0.0, 0.0])
+        gs = GroundStation(target_face_embedding=emb)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                Detection(bbox=(0, 0, 50, 50), confidence=0.9,
+                          face_embedding=emb.tolist()),
+            ],
+        )
+        results = gs.process_message(msg)
+        assert results[0]["face_score"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_set_target_accepts_numpy_array(self):
+        emb = _normalized([1.0, 0.0, 0.0, 0.0])
+        gs = GroundStation()
+        # Should not raise even though emb is a multi-element numpy array.
+        gs.set_target(reid_embedding=emb, face_embedding=emb)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                Detection(bbox=(0, 0, 50, 50), confidence=0.9,
+                          reid_embedding=emb.tolist(), face_embedding=emb.tolist()),
+            ],
+        )
+        results = gs.process_message(msg)
+        assert results[0]["reid_score"] == pytest.approx(1.0, abs=1e-6)
+        assert results[0]["face_score"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_single_element_numpy_array_target(self):
+        """A single-element numpy array is truthy/falsy without error, but
+        should still be handled consistently via the `is not None` check."""
+        emb = np.array([1.0])
+        gs = GroundStation(target_reid_embedding=emb)
+        assert gs._target_reid is not None
+
+
+class TestGroundStationShapeMismatch:
+    """A mismatched embedding dimension must not crash the whole batch."""
+
+    def test_mismatched_dimension_scores_zero_not_crash(self):
+        target = _normalized([1.0, 0.0, 0.0, 0.0]).tolist()  # 4-d
+        gs = GroundStation(target_reid_embedding=target)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                # 3-d candidate vs 4-d target -> np.dot raises ValueError
+                Detection(bbox=(0, 0, 50, 50), confidence=0.9,
+                          reid_embedding=[1.0, 0.0, 0.0]),
+            ],
+        )
+        # Should not raise.
+        results = gs.process_message(msg)
+        assert len(results) == 1
+        assert results[0]["reid_score"] == 0.0
+
+    def test_mismatched_face_dimension_scores_zero_not_crash(self):
+        target = _normalized([1.0, 0.0, 0.0, 0.0]).tolist()
+        gs = GroundStation(target_face_embedding=target)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                Detection(bbox=(0, 0, 50, 50), confidence=0.9,
+                          face_embedding=[1.0, 0.0]),
+            ],
+        )
+        results = gs.process_message(msg)
+        assert len(results) == 1
+        assert results[0]["face_score"] == 0.0
+
+    def test_one_bad_detection_does_not_block_others_in_batch(self):
+        """A batch with one bad-shaped detection and one valid detection
+        should score the valid one correctly and not abort processing."""
+        target = _normalized([1.0, 0.0, 0.0, 0.0]).tolist()
+        gs = GroundStation(target_reid_embedding=target)
+        msg = DetectionMessage(
+            timestamp=time.time(),
+            frame_id=1,
+            detections=[
+                # Bad: wrong dimensionality.
+                Detection(bbox=(0, 0, 10, 10), confidence=0.5,
+                          reid_embedding=[1.0, 0.0]),
+                # Good: identical to target.
+                Detection(bbox=(20, 20, 60, 60), confidence=0.9,
+                          reid_embedding=target),
+            ],
+        )
+        results = gs.process_message(msg)
+        assert len(results) == 2
+        assert results[0]["reid_score"] == 0.0
+        assert results[1]["reid_score"] == pytest.approx(1.0, abs=1e-6)
+
+
 # ===========================================================================
 # End-to-end round-trip tests
 # ===========================================================================

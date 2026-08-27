@@ -5,12 +5,15 @@ In deployed mode, runs on a Jetson Orin Nano and sends
 detection messages over WebSocket to the ground station.
 """
 import base64
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Callable
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,21 +77,31 @@ class EdgeRunner:
                 confidence=det["confidence"],
             )
 
-            # CLIP ReID embedding (PersonReID._extract_embedding)
+            # CLIP ReID embedding (PersonReID._extract_embedding).
+            # NOTE: _extract_embedding is a private/internal API on PersonReID.
+            # PersonReID's public surface (compare/find_match) only returns a
+            # similarity score against an already-set target, but the edge
+            # needs the raw embedding vector to ship to the ground station —
+            # there is no public accessor for that today. We own both modules,
+            # so reaching into the private method is acceptable for now; the
+            # hasattr guard keeps this safe if the method is renamed/removed.
             if self._reid is not None and hasattr(self._reid, '_extract_embedding'):
                 try:
                     emb = self._reid._extract_embedding(crop)
                     detection.reid_embedding = emb.tolist() if emb is not None else None
                 except Exception:
-                    pass
+                    logger.warning("reid_embedding_failed", exc_info=True)
 
-            # Face embedding (FaceRecognizer._best_face_embedding)
+            # Face embedding (FaceRecognizer._best_face_embedding).
+            # NOTE: same rationale as above — _best_face_embedding is a
+            # private/internal API on FaceRecognizer, used because there is no
+            # public method that returns the raw embedding vector.
             if self._face is not None and hasattr(self._face, '_best_face_embedding'):
                 try:
                     emb = self._face._best_face_embedding(crop)
                     detection.face_embedding = emb.tolist() if emb is not None else None
                 except Exception:
-                    pass
+                    logger.warning("face_embedding_failed", exc_info=True)
 
             # Crop JPEG
             _, crop_buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
