@@ -102,6 +102,7 @@ class MavlinkController:
         self._frame_callbacks: list[Callable[[np.ndarray], None]] = []
         self._frame_thread: threading.Thread | None = None
         self._last_frame_time: float = 0.0
+        self._last_reconnect_time: float = 0.0
 
         # Thread safety
         self._cmd_lock = threading.Lock()
@@ -143,6 +144,7 @@ class MavlinkController:
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
+            future.cancel()
             logger.error("[%s] Command timed out after %.0fs", self.name, timeout)
             raise
         except Exception:
@@ -303,7 +305,13 @@ class MavlinkController:
             await system.offboard.set_velocity_body(setpoint)
             await system.offboard.start()
 
-        await asyncio.sleep(duration)
+        # Stream setpoints at ~10Hz to keep PX4 in offboard mode
+        elapsed = 0.0
+        interval = 0.1
+        while elapsed < duration:
+            await system.offboard.set_velocity_body(setpoint)
+            await asyncio.sleep(interval)
+            elapsed += interval
 
         # Stop
         await system.offboard.set_velocity_body(
@@ -331,14 +339,20 @@ class MavlinkController:
             await system.offboard.set_velocity_body(setpoint)
             await system.offboard.start()
 
-        await asyncio.sleep(duration)
+        # Stream setpoints at ~10Hz to keep PX4 in offboard mode
+        elapsed = 0.0
+        interval = 0.1
+        while elapsed < duration:
+            await system.offboard.set_velocity_body(setpoint)
+            await asyncio.sleep(interval)
+            elapsed += interval
 
         await system.offboard.set_velocity_body(
             VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
         )
         await system.offboard.stop()
 
-    async def _hover_async(self) -> None:
+    async def _hover_async(self, duration: float = 1.0) -> None:
         system = self._system
         if not system:
             raise RuntimeError("Not connected")
@@ -352,7 +366,13 @@ class MavlinkController:
             await system.offboard.set_velocity_body(setpoint)
             await system.offboard.start()
 
-        await system.offboard.set_velocity_body(setpoint)
+        # Stream zero-velocity setpoints at ~10Hz to maintain offboard mode
+        elapsed = 0.0
+        interval = 0.1
+        while elapsed < duration:
+            await system.offboard.set_velocity_body(setpoint)
+            await asyncio.sleep(interval)
+            elapsed += interval
 
     async def _goto_gps_async(self, lat: float, lon: float, alt_m: float) -> None:
         system = self._system
@@ -380,39 +400,42 @@ class MavlinkController:
 
     def connect(self) -> bool:
         """Connect to the MAVLink drone and start telemetry."""
-        self._running = True
-        self._start_loop()
-        try:
-            return self._run(self._connect_async())
-        except Exception as exc:
-            logger.error("[%s] Connect failed: %s", self.name, exc)
-            self._running = False
-            self._stop_loop()
-            return False
+        with self._cmd_lock:
+            self._running = True
+            self._start_loop()
+            try:
+                return self._run(self._connect_async())
+            except Exception as exc:
+                logger.error("[%s] Connect failed: %s", self.name, exc)
+                self._running = False
+                self._stop_loop()
+                return False
 
     def disconnect(self) -> None:
         """Disconnect from the drone, cancel subscriptions, stop event loop."""
-        self._running = False
-        if self._loop and self._loop.is_running():
-            try:
-                self._run(self._disconnect_async(), timeout=10.0)
-            except Exception as exc:
-                logger.error("[%s] Disconnect error: %s", self.name, exc)
+        with self._cmd_lock:
+            self._running = False
+            if self._loop and self._loop.is_running():
+                try:
+                    self._run(self._disconnect_async(), timeout=10.0)
+                except Exception as exc:
+                    logger.error("[%s] Disconnect error: %s", self.name, exc)
 
-        # Stop video capture
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+            # Stop video capture
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
 
-        self._stop_loop()
-        self.state.is_connected = False
-        self.state.is_flying = False
-        logger.info("[%s] Disconnected", self.name)
+            self._stop_loop()
+            self.state.is_connected = False
+            self.state.is_flying = False
+            logger.info("[%s] Disconnected", self.name)
 
     def get_frame(self) -> np.ndarray | None:
         """Read a frame from the RTSP stream."""
         if self._cap is None:
             self._cap = cv2.VideoCapture(self.rtsp_url)
+            self._last_reconnect_time = time.time()
 
         with self._frame_lock:
             ret, frame = self._cap.read()
@@ -421,12 +444,15 @@ class MavlinkController:
                 self._last_frame_time = time.time()
                 return frame
 
-            # RTSP dropout – reconnect after delay
-            if self._last_frame_time > 0 and (time.time() - self._last_frame_time > _RTSP_RECONNECT_DELAY):
+            # RTSP dropout or initial connection failure -- reconnect after delay.
+            # Use the later of last-frame-time and last-reconnect-time so that
+            # initial connection failures (no frame ever received) also trigger.
+            reference_time = max(self._last_frame_time, self._last_reconnect_time)
+            if reference_time > 0 and (time.time() - reference_time > _RTSP_RECONNECT_DELAY):
                 logger.warning("[%s] RTSP dropout, reconnecting...", self.name)
                 self._cap.release()
                 self._cap = cv2.VideoCapture(self.rtsp_url)
-                self._last_frame_time = time.time()  # reset to avoid tight loop
+                self._last_reconnect_time = time.time()
             return None
 
     def on_frame(self, cb: Callable[[np.ndarray], None]) -> None:
@@ -474,7 +500,11 @@ class MavlinkController:
             self._run(self._hover_async())
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> None:
-        """Send manual control input. Values -100..100 mapped to -1.0..1.0."""
+        """Send manual control input.
+
+        lr, fb, yaw: -100..100 mapped to -1.0..1.0
+        ud (throttle): -100..100 mapped to 0.0..1.0 (MAVSDK expects 0..1 for thrust)
+        """
         system = self._system
         if not system:
             raise RuntimeError("Not connected")
@@ -482,15 +512,20 @@ class MavlinkController:
         def _norm(v: int) -> float:
             return max(-1.0, min(1.0, v / 100.0))
 
-        self._run(
-            system.manual_control.set_manual_control_input(
-                _norm(fb),  # pitch (forward/back)
-                _norm(lr),  # roll (left/right)
-                _norm(ud),  # thrust (up/down) -- note: 0 = -1.0 mapped, but MAVSDK expects 0..1 for throttle
-                _norm(yaw),  # yaw
-            )
-        )
+        def _norm_throttle(v: int) -> float:
+            """Map -100..100 to 0.0..1.0 for throttle axis."""
+            return max(0.0, min(1.0, (v + 100) / 200.0))
 
-    def goto_gps(self, lat: float, lon: float, alt_m: float) -> None:
         with self._cmd_lock:
-            self._run(self._goto_gps_async(lat, lon, alt_m))
+            self._run(
+                system.manual_control.set_manual_control_input(
+                    _norm(fb),            # pitch (forward/back)
+                    _norm(lr),            # roll (left/right)
+                    _norm_throttle(ud),   # thrust (up/down) 0..1
+                    _norm(yaw),           # yaw
+                )
+            )
+
+    def goto_gps(self, lat: float, lon: float, alt_m: float, timeout: float = 300.0) -> None:
+        with self._cmd_lock:
+            self._run(self._goto_gps_async(lat, lon, alt_m), timeout=timeout)

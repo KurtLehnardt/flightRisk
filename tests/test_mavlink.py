@@ -448,27 +448,35 @@ class TestHover:
 
 
 class TestRcControl:
-    """Test rc_control normalizes int values to float."""
+    """Test rc_control normalizes int values to float.
+
+    pitch/roll/yaw: -100..100 -> -1.0..1.0
+    throttle (ud): -100..100 -> 0.0..1.0
+    """
 
     @pytest.mark.parametrize(
-        "input_val,expected",
+        "input_val,expected_axis,expected_throttle",
         [
-            (100, 1.0),
-            (-100, -1.0),
-            (0, 0.0),
-            (50, 0.5),
-            (-50, -0.5),
+            (100, 1.0, 1.0),
+            (-100, -1.0, 0.0),
+            (0, 0.0, 0.5),
+            (50, 0.5, 0.75),
+            (-50, -0.5, 0.25),
         ],
     )
-    def test_normalization(self, input_val, expected):
+    def test_normalization(self, input_val, expected_axis, expected_throttle):
         system = _FakeSystem()
         ctrl = _make_controller(system)
         try:
             ctrl.rc_control(input_val, input_val, input_val, input_val)
             call_args = system.manual_control.set_manual_control_input.await_args
-            # All four values should be normalized the same
-            for arg in call_args.args:
-                assert abs(arg - expected) < 0.01
+            pitch, roll, throttle, yaw = call_args.args
+            # pitch, roll, yaw use -1..1
+            assert abs(pitch - expected_axis) < 0.01
+            assert abs(roll - expected_axis) < 0.01
+            assert abs(yaw - expected_axis) < 0.01
+            # throttle uses 0..1
+            assert abs(throttle - expected_throttle) < 0.01
         finally:
             _teardown_controller(ctrl)
 
@@ -478,9 +486,13 @@ class TestRcControl:
         try:
             ctrl.rc_control(200, -200, 150, -150)
             call_args = system.manual_control.set_manual_control_input.await_args
-            # Should clamp to -1.0..1.0
-            for arg in call_args.args:
-                assert -1.0 <= arg <= 1.0
+            pitch, roll, throttle, yaw = call_args.args
+            # pitch/roll/yaw clamp to -1..1
+            assert -1.0 <= pitch <= 1.0
+            assert -1.0 <= roll <= 1.0
+            assert -1.0 <= yaw <= 1.0
+            # throttle clamps to 0..1
+            assert 0.0 <= throttle <= 1.0
         finally:
             _teardown_controller(ctrl)
 
@@ -504,13 +516,19 @@ class TestGotoGps:
 
 
 class TestTelemetryUpdates:
-    """Verify telemetry subscription coroutines update state."""
+    """Verify real telemetry subscription coroutines update state."""
 
     def test_position_updates_state(self):
         system = _FakeSystem()
+        system.telemetry.position = MagicMock(
+            return_value=_make_async_iter([_PositionItem(38.0, -121.0, 100.0)])
+        )
         ctrl = _make_controller(system)
         try:
-            ctrl._run(ctrl._subscribe_position_once(system, _PositionItem(38.0, -121.0, 100.0)))
+            # Run the real _subscribe_position; it will consume the item
+            # then block on the forever-sleep — use a short timeout to break out.
+            with pytest.raises(TimeoutError):
+                ctrl._run(ctrl._subscribe_position(system), timeout=0.3)
             assert ctrl.state.latitude == 38.0
             assert ctrl.state.longitude == -121.0
             assert ctrl.state.altitude_msl == 100.0
@@ -519,57 +537,42 @@ class TestTelemetryUpdates:
 
     def test_heading_updates_state(self):
         system = _FakeSystem()
+        system.telemetry.heading = MagicMock(
+            return_value=_make_async_iter([_HeadingItem(270)])
+        )
         ctrl = _make_controller(system)
         try:
-            ctrl._run(ctrl._subscribe_heading_once(system, _HeadingItem(270)))
+            with pytest.raises(TimeoutError):
+                ctrl._run(ctrl._subscribe_heading(system), timeout=0.3)
             assert ctrl.state.heading == 270
         finally:
             _teardown_controller(ctrl)
 
     def test_battery_updates_state(self):
         system = _FakeSystem()
+        system.telemetry.battery = MagicMock(
+            return_value=_make_async_iter([_BatteryItem(0.42)])
+        )
         ctrl = _make_controller(system)
         try:
-            ctrl._run(ctrl._subscribe_battery_once(system, _BatteryItem(0.42)))
+            with pytest.raises(TimeoutError):
+                ctrl._run(ctrl._subscribe_battery(system), timeout=0.3)
             assert ctrl.state.battery == 42
         finally:
             _teardown_controller(ctrl)
 
     def test_flight_mode_updates_state(self):
         system = _FakeSystem()
+        system.telemetry.flight_mode = MagicMock(
+            return_value=_make_async_iter([_FlightModeItem("MISSION")])
+        )
         ctrl = _make_controller(system)
         try:
-            ctrl._run(ctrl._subscribe_flight_mode_once(system, _FlightModeItem("MISSION")))
+            with pytest.raises(TimeoutError):
+                ctrl._run(ctrl._subscribe_flight_mode(system), timeout=0.3)
             assert ctrl.state.flight_mode == "MISSION"
         finally:
             _teardown_controller(ctrl)
-
-
-# Add helper coroutines to MavlinkController for testability — these
-# process a single telemetry item instead of subscribing to a stream.
-async def _subscribe_position_once(self, system, item):
-    self.state.latitude = item.latitude_deg
-    self.state.longitude = item.longitude_deg
-    self.state.altitude_msl = item.absolute_altitude_m
-
-
-async def _subscribe_heading_once(self, system, item):
-    self.state.heading = int(item.heading_deg) % 360
-
-
-async def _subscribe_battery_once(self, system, item):
-    self.state.battery = int(item.remaining_percent * 100)
-
-
-async def _subscribe_flight_mode_once(self, system, item):
-    self.state.flight_mode = str(item)
-
-
-# Monkey-patch onto the class for tests
-MavlinkController._subscribe_position_once = _subscribe_position_once
-MavlinkController._subscribe_heading_once = _subscribe_heading_once
-MavlinkController._subscribe_battery_once = _subscribe_battery_once
-MavlinkController._subscribe_flight_mode_once = _subscribe_flight_mode_once
 
 
 class TestErrorHandling:
