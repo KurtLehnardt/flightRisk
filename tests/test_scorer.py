@@ -114,14 +114,15 @@ class TestMatchScorerNoSignals:
 class TestMatchScorerReasoning:
     """Tests for reasoning result conversion."""
 
-    def test_reasoning_match_false_gives_zero(self):
+    def test_reasoning_match_false_gives_zero_combined(self):
         scorer = MatchScorer()
         result = scorer.score(
             reasoning_result={"match": False, "confidence": "high"},
         )
-        # match=False => reasoning_score=0.0 => no signal
+        # match=False reasoning is excluded from signals to prevent false positives
         assert result["combined_score"] == 0.0
         assert result["is_match"] is False
+        assert result["confidence_level"] == "none"
 
     def test_confidence_high_maps_to_090(self):
         scorer = MatchScorer()

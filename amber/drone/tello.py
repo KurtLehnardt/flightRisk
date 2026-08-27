@@ -6,22 +6,16 @@ Standard Tello (TLW004) — SDK 1.3, WiFi AP mode only.
 
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Callable
 
 import cv2
 import numpy as np
 from djitellopy import Tello
 
+from amber.drone.controller import DroneCapabilities, DroneController, DroneState
 
-@dataclass
-class DroneState:
-    battery: int = 0
-    height: int = 0  # cm
-    temperature: int = 0
-    flight_time: int = 0  # seconds
-    is_flying: bool = False
-    is_connected: bool = False
+# Backward-compatible re-export so `from amber.drone.tello import DroneState` still works
+__all__ = ["TelloController", "DroneState", "DroneCapabilities", "DroneController"]
 
 
 class TelloController:
@@ -32,8 +26,17 @@ class TelloController:
         self.host = host
         self.tello = Tello(host=host)
         self.state = DroneState()
+        self.capabilities = DroneCapabilities(
+            has_gps=False,
+            has_rtsp=False,
+            min_move_cm=20,
+            max_move_cm=500,
+            max_altitude_m=10,
+            supports_missions=False,
+        )
         self._frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
+        self._cmd_lock = threading.Lock()
         self._keepalive_thread: threading.Thread | None = None
         self._state_thread: threading.Thread | None = None
         self._running = False
@@ -61,22 +64,15 @@ class TelloController:
             return False
 
     def disconnect(self):
-        """Land if flying, stop streams, disconnect."""
+        """Stop streams, disconnect. Landing delegated to Tello.end()."""
         self._running = False
-        if self.state.is_flying:
+        with self._cmd_lock:
             try:
-                self.land()
+                self.tello.end()
             except Exception:
                 pass
-        try:
-            self.tello.streamoff()
-        except Exception:
-            pass
-        try:
-            self.tello.end()
-        except Exception:
-            pass
         self.state.is_connected = False
+        self.state.is_flying = False
         print(f"[{self.name}] Disconnected.")
 
     def get_frame(self) -> np.ndarray | None:
@@ -141,30 +137,44 @@ class TelloController:
         self._frame_callbacks.append(callback)
 
     # --- Flight commands ---
+    # All movement commands are serialized through _cmd_lock to prevent
+    # concurrent UDP commands from saturating the Tello's single channel.
 
     def takeoff(self):
-        self.tello.takeoff()
-        self.state.is_flying = True
-        print(f"[{self.name}] Takeoff.")
+        with self._cmd_lock:
+            self.tello.takeoff()
+            self.state.is_flying = True
+            print(f"[{self.name}] Takeoff.")
 
     def land(self):
-        self.tello.land()
-        self.state.is_flying = False
-        print(f"[{self.name}] Landing.")
+        with self._cmd_lock:
+            self.tello.land()
+            self.state.is_flying = False
+            print(f"[{self.name}] Landing.")
 
     def move(self, direction: str, distance_cm: int):
-        """Move in a direction. direction: forward, back, left, right, up, down."""
-        distance_cm = max(20, min(500, distance_cm))
-        cmd = getattr(self.tello, f"move_{direction}", None)
-        if cmd:
-            cmd(distance_cm)
+        """Move in a direction. Drops command if another is in-flight."""
+        if not self._cmd_lock.acquire(blocking=False):
+            return
+        try:
+            distance_cm = max(20, min(500, distance_cm))
+            cmd = getattr(self.tello, f"move_{direction}", None)
+            if cmd:
+                cmd(distance_cm)
+        finally:
+            self._cmd_lock.release()
 
     def rotate(self, degrees: int):
-        """Rotate clockwise (positive) or counter-clockwise (negative)."""
-        if degrees > 0:
-            self.tello.rotate_clockwise(min(360, degrees))
-        else:
-            self.tello.rotate_counter_clockwise(min(360, abs(degrees)))
+        """Rotate clockwise/counter-clockwise. Drops if another command is in-flight."""
+        if not self._cmd_lock.acquire(blocking=False):
+            return
+        try:
+            if degrees > 0:
+                self.tello.rotate_clockwise(min(360, degrees))
+            else:
+                self.tello.rotate_counter_clockwise(min(360, abs(degrees)))
+        finally:
+            self._cmd_lock.release()
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int):
         """Send RC joystick control. Each value -100 to 100."""
@@ -174,16 +184,21 @@ class TelloController:
         """Stop all movement and hover in place."""
         self.tello.send_rc_control(0, 0, 0, 0)
 
+    def goto_gps(self, lat: float, lon: float, alt_m: float) -> None:
+        """Navigate to GPS coordinates. Not supported on Tello."""
+        raise NotImplementedError("Tello does not have GPS")
+
     # --- Internal threads ---
 
     def _start_keepalive(self):
         """Send keepalive every 10s to prevent auto-landing."""
         def _keepalive():
             while self._running:
-                try:
-                    self.tello.send_control_command("command", timeout=5)
-                except Exception:
-                    pass
+                if not self._cmd_lock.locked():
+                    try:
+                        self.tello.send_control_command("command", timeout=5)
+                    except Exception:
+                        pass
                 time.sleep(10)
 
         self._keepalive_thread = threading.Thread(
@@ -192,12 +207,14 @@ class TelloController:
         self._keepalive_thread.start()
 
     def _start_state_polling(self):
-        """Poll drone state every 2 seconds."""
+        """Poll drone state every 2 seconds. Skips when a flight command is active."""
         def _poll():
             poll_failures = 0
             while self._running:
+                if self._cmd_lock.locked():
+                    time.sleep(2)
+                    continue
                 try:
-                    # Use query_battery which has a shorter timeout path
                     self.state.battery = self.tello.get_battery()
                     self.state.height = self.tello.get_height()
                     self.state.temperature = self.tello.get_temperature()

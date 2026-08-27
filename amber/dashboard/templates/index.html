@@ -1445,6 +1445,7 @@
                                     <div class="upload-icon">&#9678;</div>
                                     <div class="upload-text">Upload Photo</div>
                                 </div>
+                                <button id="clear-target-btn" class="btn btn-ghost btn-danger btn-sm" onclick="event.stopPropagation(); clearTarget()" style="display:none; position:absolute; bottom:4px; right:4px; margin:0; padding:2px 6px; font-size:10px; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); z-index:2;">Clear</button>
                             </div>
                             <input type="file" id="target-upload" accept="image/*">
                             <div class="target-desc-area">
@@ -1792,7 +1793,11 @@
         });
 
         // ========== FRAME HANDLER ==========
+        let lastFrameTime = 0;
         socket.on('frame', (data) => {
+            const now = Date.now();
+            if (now - lastFrameTime < 100) return; // max 10fps display
+            lastFrameTime = now;
             videoFeed.src = 'data:image/jpeg;base64,' + data.image;
             videoFeed.style.display = 'block';
             videoPlaceholder.style.display = 'none';
@@ -1842,6 +1847,7 @@
             preview.style.display = 'block';
             document.getElementById('upload-prompt').style.display = 'none';
             document.getElementById('target-upload-zone').classList.add('has-image');
+            document.getElementById('clear-target-btn').style.display = '';
         });
 
         socket.on('target_set', (data) => {
@@ -1873,22 +1879,49 @@
             // silent update
         });
 
-        // Target upload
+        // Target upload via HTTP POST (reliable, no WebSocket size limits)
         document.getElementById('target-upload').addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                const b64 = ev.target.result.split(',')[1];
-                socket.emit('set_target', { image: b64 });
-                const preview = document.getElementById('target-preview');
-                preview.src = ev.target.result;
-                preview.style.display = 'block';
-                document.getElementById('upload-prompt').style.display = 'none';
-                document.getElementById('target-upload-zone').classList.add('has-image');
-            };
-            reader.readAsDataURL(file);
+            const formData = new FormData();
+            formData.append('file', file);
+            fetch('/api/upload-target', { method: 'POST', body: formData })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                            const preview = document.getElementById('target-preview');
+                            preview.src = ev.target.result;
+                            preview.style.display = 'block';
+                            document.getElementById('upload-prompt').style.display = 'none';
+                            document.getElementById('target-upload-zone').classList.add('has-image');
+                        };
+                        reader.readAsDataURL(file);
+                        showToast('Target photo set' + (data.face_detected ? ' (face detected)' : ''));
+                        document.getElementById('clear-target-btn').style.display = '';
+                    } else {
+                        showToast('Upload failed: ' + (data.error || 'unknown'));
+                    }
+                })
+                .catch(err => showToast('Upload failed: ' + err.message));
         });
+
+        function clearTarget() {
+            fetch('/api/clear-target', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('target-preview').style.display = 'none';
+                        document.getElementById('target-preview').src = '';
+                        document.getElementById('upload-prompt').style.display = '';
+                        document.getElementById('target-upload-zone').classList.remove('has-image');
+                        document.getElementById('clear-target-btn').style.display = 'none';
+                        document.getElementById('target-upload').value = '';
+                        showToast('Target photo cleared');
+                    }
+                });
+        }
 
         function setDescription() {
             const desc = document.getElementById('target-description').value.trim();

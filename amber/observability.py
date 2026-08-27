@@ -83,12 +83,12 @@ class StructuredLogger:
         """Log a drone command."""
         self._emit("info", "drone_command", command=command, **kwargs)
 
-    def battery(self, level: int, is_flying: bool = False, **kwargs: Any) -> None:
+    def battery(self, battery_level: int, is_flying: bool = False, **kwargs: Any) -> None:
         """Log a battery status event."""
-        lvl = "warning" if level <= 20 else "info"
-        if level <= 10:
+        lvl = "warning" if battery_level <= 20 else "info"
+        if battery_level <= 10:
             lvl = "error"
-        self._emit(lvl, "battery", level=level, is_flying=is_flying, **kwargs)
+        self._emit(lvl, "battery", battery_level=battery_level, is_flying=is_flying, **kwargs)
 
 
 class MetricsCollector:

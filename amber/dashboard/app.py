@@ -45,7 +45,8 @@ app = Flask(
     static_folder=str(Path(__file__).parent / "static"),
 )
 app.config["SECRET_KEY"] = "amber-drone-2026"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
 
 # Flask auto-instrumentation (optional)
 try:
@@ -106,7 +107,7 @@ def _init_pipeline(source="webcam", target_path=None):
     if _state["face"] is None:
         try:
             from amber.vision.face import FaceRecognizer
-            _state["face"] = FaceRecognizer(match_threshold=0.45)
+            _state["face"] = FaceRecognizer(match_threshold=0.35)
         except Exception as e:
             log.warning("insightface_unavailable", error=str(e))
 
@@ -228,6 +229,7 @@ def _frame_loop():
     last_metrics_emit = 0
     REASONING_INTERVAL = 5
     METRICS_INTERVAL = 10
+    last_detection_log = 0
     log = _state["logger"]
     metrics = _state["metrics"]
 
@@ -235,328 +237,338 @@ def _frame_loop():
     otel_m = _state.get("otel_metrics")
 
     while _state["running"]:
-        frame_start = time.time()
+        try:
+            frame_start = time.time()
 
-        frame = None
-        fleet = _state.get("fleet")
-        drone = fleet.primary if fleet else None
-        if drone:
-            frame = drone.get_frame()
-        elif _state["cap"] and _state["cap"].isOpened():
-            ret, frame = _state["cap"].read()
-            if not ret:
+            frame = None
+            fleet = _state.get("fleet")
+            drone = fleet.primary if fleet else None
+            if drone:
+                frame = drone.get_frame()
+            elif _state["cap"] and _state["cap"].isOpened():
+                ret, frame = _state["cap"].read()
+                if not ret:
+                    time.sleep(0.01)
+                    continue
+
+            if frame is None:
                 time.sleep(0.01)
                 continue
 
-        if frame is None:
-            time.sleep(0.01)
-            continue
+            detections = _state["detector"].detect(frame)
+            _state["persons_detected"] = len(detections)
 
-        detections = _state["detector"].detect(frame)
-        _state["persons_detected"] = len(detections)
-
-        # Metrics: frame and detection counts
-        if metrics:
-            metrics.inc_frames()
-            metrics.inc_persons(len(detections))
-
-        # ReID matching (photo-based)
-        match_idx = None
-        match_score = 0.0
-        reid_score = 0.0
-        face_score = 0.0
-        has_target = _state["target_photo"] is not None
-
-        if _state["reid"] and has_target and detections:
-            match_idx, reid_score = _state["reid"].find_match(detections)
-
-        # Face recognition matching
-        face_match_idx = None
-        if _state["face"] and _state["face"].has_target and detections:
-            face_match_idx, face_score = _state["face"].find_match(detections)
             if metrics:
-                metrics.record_face_check(face_match_idx is not None)
-            if log:
-                log.face_result(success=face_match_idx is not None, score=face_score)
-            if otel_m:
-                otel_m.record_face_check(found=face_score > 0)
+                metrics.inc_frames()
+                metrics.inc_persons(len(detections))
 
-        # Use face match if ReID didn't find one
-        if match_idx is None and face_match_idx is not None:
-            match_idx = face_match_idx
-        # If both matched, prefer the one with higher score
-        elif match_idx is not None and face_match_idx is not None:
-            if face_score > reid_score:
+            # Periodic detection debug logging (every ~5s)
+            if detections and log and time.time() - last_detection_log >= 5:
+                last_detection_log = time.time()
+                log.info("detection_tick", persons=len(detections), has_target=(_state["target_photo"] is not None))
+
+            # ReID matching (photo-based)
+            match_idx = None
+            match_score = 0.0
+            reid_score = 0.0
+            face_score = 0.0
+            has_target = _state["target_photo"] is not None
+
+            if _state["reid"] and has_target and detections:
+                match_idx, reid_score = _state["reid"].find_match(detections)
+                if reid_score > 0 and log and time.time() - last_detection_log >= 5:
+                    log.info("reid_score", score=round(reid_score, 3), matched=(match_idx is not None))
+
+            # Face recognition matching
+            face_match_idx = None
+            if _state["face"] and _state["face"].has_target and detections:
+                face_match_idx, face_score = _state["face"].find_match(detections)
+                if metrics:
+                    metrics.record_face_check(face_match_idx is not None)
+                if log:
+                    log.face_result(success=face_match_idx is not None, score=face_score)
+                if otel_m:
+                    otel_m.record_face_check(found=face_score > 0)
+
+            # Use face match if ReID didn't find one
+            if match_idx is None and face_match_idx is not None:
                 match_idx = face_match_idx
+            # If both matched, prefer the one with higher score
+            elif match_idx is not None and face_match_idx is not None:
+                if face_score > reid_score:
+                    match_idx = face_match_idx
 
-        # Combined score via multi-feature scorer
-        current_alert_level = "no_match"
-        if match_idx is not None and _state["scorer"]:
-            # Get per-detection scores for the matched index
-            det_reid = _state["reid"].compare(detections[match_idx]["crop"]) if has_target else 0.0
-            det_face = _state["face"].compare(detections[match_idx]["crop"]) if (_state["face"] and _state["face"].has_target) else 0.0
-            scored = _state["scorer"].score(reid_score=det_reid, face_score=det_face)
-            match_score = scored["combined_score"]
-            current_alert_level = _state["scorer"].alert_level(scored)
-            if log:
-                log.scoring(combined=match_score, reid=det_reid, face=det_face)
-        elif match_idx is not None:
-            match_score = max(reid_score, face_score)
-
-        # Description-based matching via Gemma 4 (when no photo but description exists)
-        description_match = False
-        if (
-            match_idx is None
-            and _state["target_description"]
-            and _state["reasoning"]
-            and detections
-            and time.time() - last_reasoning_time > REASONING_INTERVAL
-        ):
-            # Ask Gemma 4 to check each detected person against description
-            best_candidate = None
-            if len(detections) > 0:
-                # Pick the largest detection (most prominent person)
-                areas = [(d["bbox"][2]-d["bbox"][0]) * (d["bbox"][3]-d["bbox"][1]) for d in detections]
-                best_candidate = int(np.argmax(areas))
-
-            if best_candidate is not None:
-                crop = detections[best_candidate]["crop"]
-                if crop is not None and crop.size > 0:
-                    reasoning_start = time.time()
-                    result = _state["reasoning"].match_description(
-                        crop, _state["target_description"]
-                    )
-                    reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
-                    last_reasoning_time = time.time()
-                    if otel_m:
-                        otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
-
-                    if metrics:
-                        metrics.record_reasoning(reasoning_elapsed_ms)
-                    if log:
-                        log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
-
-                    if result.get("match"):
-                        match_idx = best_candidate
-                        match_score = 0.8  # synthetic score for description match
-                        description_match = True
-
-                        if metrics:
-                            metrics.record_match("description", match_score)
-                        if log:
-                            log.match(score=match_score, match_type="description")
-
-                        snapshot_b64 = None
-                        _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                        snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
-
-                        # Determine alert level for description match
-                        desc_scored = {
-                            "combined_score": match_score,
-                            "signals_used": 1,
-                            "confidence_level": "medium" if result.get("confidence") in ("high", "medium") else "low",
-                        }
-                        desc_alert = _state["scorer"].alert_level(desc_scored) if _state["scorer"] else "possible_match"
-
-                        match_entry = {
-                            "time": time.strftime("%H:%M:%S"),
-                            "score": round(match_score, 3),
-                            "gemma_match": True,
-                            "gemma_confidence": result.get("confidence", "medium"),
-                            "reasoning": result.get("reasoning", "Description match"),
-                            "snapshot": snapshot_b64,
-                            "type": "description",
-                            "alert_level": desc_alert,
-                        }
-
-                        # Persist to DB and capture match_id
-                        if _state["db"] and _state["session_id"]:
-                            match_id = _state["db"].add_match(
-                                session_id=_state["session_id"],
-                                match_type="description",
-                                combined_score=match_score,
-                                gemma_match=True,
-                                gemma_confidence=result.get("confidence", "medium"),
-                                reasoning=result.get("reasoning", "Description match"),
-                            )
-                            match_entry["match_id"] = match_id
-
-                        _state["match_history"].append(match_entry)
-                        _state["match_history"] = _state["match_history"][-50:]
-                        socketio.emit("match_alert", match_entry)
-                        _save_match_snapshot(frame, crop, match_score, result)
-                        if otel_m:
-                            otel_m.record_match(match_score, match_type="description")
-
-        # Photo-based ReID + Face + Gemma 4 reasoning
-        if (
-            match_idx is not None
-            and not description_match
-            and _state["reasoning"]
-            and _state["target_photo_path"]
-            and time.time() - last_reasoning_time > REASONING_INTERVAL
-        ):
-            ref_img = cv2.imread(_state["target_photo_path"])
-            candidate_crop = detections[match_idx]["crop"]
-            reasoning_start = time.time()
-            result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
-            reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
-            last_reasoning_time = time.time()
-            if otel_m:
-                otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
-
-            if metrics:
-                metrics.record_reasoning(reasoning_elapsed_ms)
-            if log:
-                log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
-
-            # Re-score with all three signals
-            if _state["scorer"]:
-                det_reid = _state["reid"].compare(candidate_crop) if has_target else 0.0
-                det_face = _state["face"].compare(candidate_crop) if (_state["face"] and _state["face"].has_target) else 0.0
-                scored = _state["scorer"].score(
-                    reid_score=det_reid,
-                    face_score=det_face,
-                    reasoning_result=result,
-                )
+            # Combined score via multi-feature scorer
+            current_alert_level = "no_match"
+            if match_idx is not None and _state["scorer"]:
+                det_reid = _state["reid"].compare(detections[match_idx]["crop"]) if has_target else 0.0
+                det_face = _state["face"].compare(detections[match_idx]["crop"]) if (_state["face"] and _state["face"].has_target) else 0.0
+                scored = _state["scorer"].score(reid_score=det_reid, face_score=det_face)
                 match_score = scored["combined_score"]
                 current_alert_level = _state["scorer"].alert_level(scored)
-
-            snapshot_b64 = None
-            if candidate_crop is not None and candidate_crop.size > 0:
-                _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
-
-            # Track photo-based match in metrics
-            match_type = "face" if (face_score > reid_score and face_match_idx is not None) else "reid"
-            if metrics:
-                metrics.record_match(match_type, match_score)
-            if log:
-                log.match(score=match_score, match_type=match_type)
-
-            match_entry = {
-                "time": time.strftime("%H:%M:%S"),
-                "score": round(match_score, 3),
-                "gemma_match": result["match"],
-                "gemma_confidence": result["confidence"],
-                "reasoning": result["reasoning"],
-                "snapshot": snapshot_b64,
-                "type": "photo",
-                "face_score": round(face_score, 3),
-                "reid_score": round(reid_score, 3),
-                "alert_level": current_alert_level,
-            }
-
-            # Persist to DB and capture match_id
-            if _state["db"] and _state["session_id"]:
-                match_id = _state["db"].add_match(
-                    session_id=_state["session_id"],
-                    match_type="photo",
-                    reid_score=reid_score,
-                    face_score=face_score,
-                    combined_score=match_score,
-                    gemma_match=result["match"],
-                    gemma_confidence=result["confidence"],
-                    reasoning=result["reasoning"],
-                )
-                match_entry["match_id"] = match_id
-
-            _state["match_history"].append(match_entry)
-            _state["match_history"] = _state["match_history"][-50:]
-            socketio.emit("match_alert", match_entry)
-            _save_match_snapshot(frame, candidate_crop, match_score, result)
-            if otel_m:
-                otel_m.record_match(match_score, match_type="photo")
-
-        # Annotate frame
-        annotated = _state["detector"].annotate(frame, detections, match_idx)
-
-        if match_idx is not None and current_alert_level in ("confirmed_match", "possible_match"):
-            h, w = annotated.shape[:2]
-            if current_alert_level == "confirmed_match":
-                # Red banner for confirmed match
-                cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
-                label = "CHILD FOUND"
-            else:
-                # Amber/yellow banner for possible match
-                cv2.rectangle(annotated, (0, 0), (w, 45), (0, 165, 255), -1)
-                label = "POSSIBLE MATCH"
-            cv2.putText(
-                annotated, f"{label} — Score: {match_score:.2f}",
-                (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2,
-            )
-
-        # FPS
-        frame_count += 1
-        elapsed = time.time() - fps_start
-        if elapsed >= 1.0:
-            _state["fps"] = round(frame_count / elapsed, 1)
-            frame_count = 0
-            fps_start = time.time()
-
-        # Encode and emit
-        _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        frame_b64 = base64.b64encode(buffer).decode("utf-8")
-
-        # Record frame if recording
-        if _state["recorder"] and _state["recorder"].is_recording:
-            _state["recorder"].write_frame(annotated)
-
-        telemetry = {}
-        if drone:
-            s = drone.state
-            telemetry = {
-                "battery": s.battery,
-                "height": s.height,
-                "temperature": s.temperature,
-                "flight_time": s.flight_time,
-                "is_flying": s.is_flying,
-            }
-
-            # Battery warnings
-            if s.battery > 0 and s.is_flying:
+                # Face recognition alone is reliable enough for possible_match
+                face_thresh = _state["face"].match_threshold if _state["face"] else 0.35
+                if current_alert_level == "no_match" and det_face >= face_thresh:
+                    current_alert_level = "possible_match"
+                    match_score = max(match_score, det_face)
                 if log:
-                    log.battery(level=s.battery, is_flying=s.is_flying)
-                if s.battery <= 10 and not _state.get("battery_critical"):
-                    _state["battery_critical"] = True
-                    socketio.emit("battery_critical", {"battery": s.battery})
-                    # Auto-land at critical battery
-                    try:
-                        drone.land()
-                    except Exception:
-                        pass
-                elif s.battery <= 20 and not _state.get("battery_warned"):
-                    _state["battery_warned"] = True
-                    socketio.emit("battery_warning", {"battery": s.battery})
+                    log.scoring(combined=match_score, reid=det_reid, face=det_face, alert=current_alert_level)
+                # Auto-stop search and hover on confirmed or possible match
+                if current_alert_level in ("confirmed_match", "possible_match") and _state.get("search_active"):
+                    _state["search_active"] = False
+                    fleet = _state.get("fleet")
+                    drone = fleet.primary if fleet else None
+                    if drone:
+                        try:
+                            drone.hover()
+                        except Exception:
+                            pass
+                    socketio.emit("search_complete", {"reason": "match_found", "alert_level": current_alert_level})
+            elif match_idx is not None:
+                match_score = max(reid_score, face_score)
 
-            # Emit fleet telemetry when >1 drone
-            if fleet and fleet.count > 1:
-                socketio.emit("fleet_telemetry", fleet.get_all_telemetry())
+            # Description-based matching via Gemma 4 (when no photo but description exists)
+            description_match = False
+            if (
+                match_idx is None
+                and _state["target_description"]
+                and _state["reasoning"]
+                and detections
+                and time.time() - last_reasoning_time > REASONING_INTERVAL
+            ):
+                best_candidate = None
+                if len(detections) > 0:
+                    areas = [(d["bbox"][2]-d["bbox"][0]) * (d["bbox"][3]-d["bbox"][1]) for d in detections]
+                    best_candidate = int(np.argmax(areas))
 
-        _state["drone_telemetry"] = telemetry
+                if best_candidate is not None:
+                    crop = detections[best_candidate]["crop"]
+                    if crop is not None and crop.size > 0:
+                        reasoning_start = time.time()
+                        result = _state["reasoning"].match_description(
+                            crop, _state["target_description"]
+                        )
+                        reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
+                        last_reasoning_time = time.time()
+                        if otel_m:
+                            otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
 
-        # OTel frame-level metrics
-        if otel_m:
-            frame_duration = (time.time() - frame_start) * 1000
-            otel_m.record_frame(frame_duration, len(detections), _state["fps"])
-            if telemetry.get("battery"):
-                otel_m.record_battery(telemetry["battery"])
+                        if metrics:
+                            metrics.record_reasoning(reasoning_elapsed_ms)
+                        if log:
+                            log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
 
-        socketio.emit("frame", {
-            "image": frame_b64,
-            "fps": _state["fps"],
-            "persons": _state["persons_detected"],
-            "match": match_idx is not None,
-            "match_score": round(match_score, 3),
-            "telemetry": telemetry,
-            "recording": _state["recorder"].is_recording if _state["recorder"] else False,
-        })
+                        if result.get("match"):
+                            match_idx = best_candidate
+                            match_score = 0.8
+                            description_match = True
 
-        # Emit metrics update every 10 seconds
-        now = time.time()
-        if metrics and now - last_metrics_emit >= METRICS_INTERVAL:
-            last_metrics_emit = now
-            socketio.emit("metrics_update", metrics.snapshot())
+                            if metrics:
+                                metrics.record_match("description", match_score)
+                            if log:
+                                log.match(score=match_score, match_type="description")
+
+                            snapshot_b64 = None
+                            _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+
+                            desc_scored = {
+                                "combined_score": match_score,
+                                "signals_used": 1,
+                                "confidence_level": "medium" if result.get("confidence") in ("high", "medium") else "low",
+                            }
+                            desc_alert = _state["scorer"].alert_level(desc_scored) if _state["scorer"] else "possible_match"
+
+                            match_entry = {
+                                "time": time.strftime("%H:%M:%S"),
+                                "score": round(match_score, 3),
+                                "gemma_match": True,
+                                "gemma_confidence": result.get("confidence", "medium"),
+                                "reasoning": result.get("reasoning", "Description match"),
+                                "snapshot": snapshot_b64,
+                                "type": "description",
+                                "alert_level": desc_alert,
+                            }
+
+                            if _state["db"] and _state["session_id"]:
+                                match_id = _state["db"].add_match(
+                                    session_id=_state["session_id"],
+                                    match_type="description",
+                                    combined_score=match_score,
+                                    gemma_match=True,
+                                    gemma_confidence=result.get("confidence", "medium"),
+                                    reasoning=result.get("reasoning", "Description match"),
+                                )
+                                match_entry["match_id"] = match_id
+
+                            _state["match_history"].append(match_entry)
+                            _state["match_history"] = _state["match_history"][-50:]
+                            socketio.emit("match_alert", match_entry)
+                            _save_match_snapshot(frame, crop, match_score, result)
+                            if otel_m:
+                                otel_m.record_match(match_score, match_type="description")
+
+            # Photo-based ReID + Face + Gemma 4 reasoning
+            if (
+                match_idx is not None
+                and not description_match
+                and _state["reasoning"]
+                and _state["target_photo_path"]
+                and time.time() - last_reasoning_time > REASONING_INTERVAL
+            ):
+                ref_img = cv2.imread(_state["target_photo_path"])
+                candidate_crop = detections[match_idx]["crop"]
+                reasoning_start = time.time()
+                result = _state["reasoning"].analyze_match(ref_img, candidate_crop)
+                reasoning_elapsed_ms = (time.time() - reasoning_start) * 1000
+                last_reasoning_time = time.time()
+                if otel_m:
+                    otel_m.record_reasoning((time.time() - reasoning_start) * 1000)
+
+                if metrics:
+                    metrics.record_reasoning(reasoning_elapsed_ms)
+                if log:
+                    log.reasoning(duration_ms=reasoning_elapsed_ms, result=result)
+
+                if _state["scorer"]:
+                    det_reid = _state["reid"].compare(candidate_crop) if has_target else 0.0
+                    det_face = _state["face"].compare(candidate_crop) if (_state["face"] and _state["face"].has_target) else 0.0
+                    scored = _state["scorer"].score(
+                        reid_score=det_reid,
+                        face_score=det_face,
+                        reasoning_result=result,
+                    )
+                    match_score = scored["combined_score"]
+                    current_alert_level = _state["scorer"].alert_level(scored)
+
+                snapshot_b64 = None
+                if candidate_crop is not None and candidate_crop.size > 0:
+                    _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+
+                match_type = "face" if (face_score > reid_score and face_match_idx is not None) else "reid"
+                if metrics:
+                    metrics.record_match(match_type, match_score)
+                if log:
+                    log.match(score=match_score, match_type=match_type)
+
+                match_entry = {
+                    "time": time.strftime("%H:%M:%S"),
+                    "score": round(match_score, 3),
+                    "gemma_match": result["match"],
+                    "gemma_confidence": result["confidence"],
+                    "reasoning": result["reasoning"],
+                    "snapshot": snapshot_b64,
+                    "type": "photo",
+                    "face_score": round(face_score, 3),
+                    "reid_score": round(reid_score, 3),
+                    "alert_level": current_alert_level,
+                }
+
+                if _state["db"] and _state["session_id"]:
+                    match_id = _state["db"].add_match(
+                        session_id=_state["session_id"],
+                        match_type="photo",
+                        reid_score=reid_score,
+                        face_score=face_score,
+                        combined_score=match_score,
+                        gemma_match=result["match"],
+                        gemma_confidence=result["confidence"],
+                        reasoning=result["reasoning"],
+                    )
+                    match_entry["match_id"] = match_id
+
+                _state["match_history"].append(match_entry)
+                _state["match_history"] = _state["match_history"][-50:]
+                socketio.emit("match_alert", match_entry)
+                _save_match_snapshot(frame, candidate_crop, match_score, result)
+                if otel_m:
+                    otel_m.record_match(match_score, match_type="photo")
+
+            # Annotate frame
+            annotated = _state["detector"].annotate(frame, detections, match_idx)
+
+            if match_idx is not None and current_alert_level in ("confirmed_match", "possible_match"):
+                h, w = annotated.shape[:2]
+                if current_alert_level == "confirmed_match":
+                    cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
+                    label = "CHILD FOUND"
+                else:
+                    cv2.rectangle(annotated, (0, 0), (w, 45), (0, 165, 255), -1)
+                    label = "POSSIBLE MATCH"
+                cv2.putText(
+                    annotated, f"{label} — Score: {match_score:.2f}",
+                    (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2,
+                )
+
+            # FPS
+            frame_count += 1
+            elapsed = time.time() - fps_start
+            if elapsed >= 1.0:
+                _state["fps"] = round(frame_count / elapsed, 1)
+                frame_count = 0
+                fps_start = time.time()
+
+            # Encode and emit
+            _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            frame_b64 = base64.b64encode(buffer).decode("utf-8")
+
+            if _state["recorder"] and _state["recorder"].is_recording:
+                _state["recorder"].write_frame(annotated)
+
+            telemetry = {}
+            if drone:
+                s = drone.state
+                telemetry = {
+                    "battery": s.battery,
+                    "height": s.height,
+                    "temperature": s.temperature,
+                    "flight_time": s.flight_time,
+                    "is_flying": s.is_flying,
+                }
+
+                if s.battery > 0 and s.is_flying:
+                    if log:
+                        log.battery(battery_level=s.battery, is_flying=s.is_flying)
+                    if s.battery <= 10 and not _state.get("battery_critical"):
+                        _state["battery_critical"] = True
+                        socketio.emit("battery_critical", {"battery": s.battery})
+                        try:
+                            drone.land()
+                        except Exception:
+                            pass
+                    elif s.battery <= 20 and not _state.get("battery_warned"):
+                        _state["battery_warned"] = True
+                        socketio.emit("battery_warning", {"battery": s.battery})
+
+                if fleet and fleet.count > 1:
+                    socketio.emit("fleet_telemetry", fleet.get_all_telemetry())
+
+            _state["drone_telemetry"] = telemetry
+
+            if otel_m:
+                frame_duration = (time.time() - frame_start) * 1000
+                otel_m.record_frame(frame_duration, len(detections), _state["fps"])
+                if telemetry.get("battery"):
+                    otel_m.record_battery(telemetry["battery"])
+
+            socketio.emit("frame", {
+                "image": frame_b64,
+                "fps": _state["fps"],
+                "persons": _state["persons_detected"],
+                "match": match_idx is not None,
+                "match_score": round(match_score, 3),
+                "telemetry": telemetry,
+                "recording": _state["recorder"].is_recording if _state["recorder"] else False,
+            })
+
+            now = time.time()
+            if metrics and now - last_metrics_emit >= METRICS_INTERVAL:
+                last_metrics_emit = now
+                socketio.emit("metrics_update", metrics.snapshot())
+
+        except Exception as e:
+            print(f"[frame_loop] Error (continuing): {e}")
 
         time.sleep(0.05)
 
@@ -566,6 +578,50 @@ def _frame_loop():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/upload-target", methods=["POST"])
+def upload_target():
+    """HTTP fallback for target photo upload (bypasses WebSocket size limits)."""
+    from flask import request
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    file = request.files["file"]
+    img_data = file.read()
+    nparr = np.frombuffer(img_data, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "Invalid image"}), 400
+
+    _state["reid"].set_target(img)
+    path = Path(__file__).parent.parent.parent / "target_reference.jpg"
+    cv2.imwrite(str(path), img)
+    _state["target_photo_path"] = str(path)
+    _, buf = cv2.imencode(".jpg", img)
+    _state["target_photo"] = base64.b64encode(buf).decode("utf-8")
+    if _state.get("canon"):
+        _state["canon"].set_target(img, operator_id="dashboard")
+    face_ok = False
+    if _state["face"]:
+        face_ok = _state["face"].set_target(img)
+    print(f"[upload-target] Target saved via HTTP POST ({len(img_data)//1024}KB)")
+    return jsonify({"success": True, "face_detected": face_ok})
+
+
+@app.route("/api/clear-target", methods=["POST"])
+def clear_target():
+    """Clear the current target photo."""
+    _state["target_photo"] = None
+    _state["target_photo_path"] = None
+    if _state.get("reid"):
+        _state["reid"].clear_target()
+    if _state.get("face"):
+        _state["face"].clear_target()
+    path = Path(__file__).parent.parent.parent / "target_reference.jpg"
+    if path.exists():
+        path.unlink()
+    print("[clear-target] Target photo cleared")
+    return jsonify({"success": True})
 
 
 @app.route("/api/health")
@@ -706,6 +762,7 @@ def on_connect():
 @socketio.on("set_target")
 def on_set_target(data):
     """Receive a target photo as base64."""
+    print(f"[set_target] Received photo upload ({len(data.get('image', ''))//1024}KB)")
     img_data = base64.b64decode(data["image"])
     nparr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -716,6 +773,7 @@ def on_set_target(data):
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
         cv2.imwrite(str(path), img)
         _state["target_photo_path"] = str(path)
+        print(f"[set_target] Target saved to {path}, ReID target set")
         # Store in target canon
         if _state.get("canon"):
             _state["canon"].set_target(img, operator_id=data.get("operator_id", "dashboard"))
@@ -1047,6 +1105,11 @@ def on_restart_dashboard():
 def run_dashboard(source="webcam", target_path=None, port=5555):
     """Start the dashboard server."""
     _state["running"] = True
+    # Auto-load previous target photo if none specified
+    if target_path is None:
+        default_target = Path(__file__).parent.parent.parent / "target_reference.jpg"
+        if default_target.exists():
+            target_path = str(default_target)
     _init_pipeline(source=source, target_path=target_path)
 
     frame_thread = threading.Thread(target=_frame_loop, daemon=True)
