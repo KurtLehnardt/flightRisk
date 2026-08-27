@@ -43,6 +43,7 @@ from amber.dashboard.state import (  # noqa: F401 — re-exported for backward c
     SourceConfig,
     app_state,
     _state,
+    fleet_lock,
     match_history_lock as _match_history_lock,
     gemma_thread_lock as _gemma_thread_lock,
     gemma_queue as _gemma_queue,
@@ -204,22 +205,22 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = fleet
         def _auto_connect_loop():
             while not stop_event.is_set() and app_state.running:
-                with app_state.fleet_lock:
+                with fleet_lock:
                     primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     if stop_event.wait(3):
                         break
                     continue
                 # Drone missing or disconnected -- clean up and retry
-                with app_state.fleet_lock:
+                with fleet_lock:
                     has_drone = "drone-1" in fleet.drone_ids
                 if has_drone:
                     log.info("tello_disconnected", hint="cleaning up for reconnect")
-                    with app_state.fleet_lock:
+                    with fleet_lock:
                         fleet.deregister("drone-1")
                     if stop_event.wait(2):  # let UDP sockets release
                         break
-                with app_state.fleet_lock:
+                with fleet_lock:
                     registered = fleet.register("drone-1")
                 if registered:
                     log.info("tello_connected")
@@ -236,22 +237,22 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = fleet
         def _auto_connect_loop():
             while not stop_event.is_set() and app_state.running:
-                with app_state.fleet_lock:
+                with fleet_lock:
                     primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     if stop_event.wait(3):
                         break
                     continue
                 # Drone missing or disconnected -- clean up and retry
-                with app_state.fleet_lock:
+                with fleet_lock:
                     has_drone = "drone-1" in fleet.drone_ids
                 if has_drone:
                     log.info("mavlink_disconnected", hint="cleaning up for reconnect")
-                    with app_state.fleet_lock:
+                    with fleet_lock:
                         fleet.deregister("drone-1")
                     if stop_event.wait(2):
                         break
-                with app_state.fleet_lock:
+                with fleet_lock:
                     registered = fleet.register("drone-1", host=mavlink_address)
                 if registered:
                     log.info("mavlink_connected")
@@ -757,7 +758,7 @@ def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(app_state.fleet.count if app_state.fleet else 0) + 1}")
     host = data.get("host", "192.168.10.1")
     current_source = app_state.source
-    with app_state.fleet_lock:
+    with fleet_lock:
         fleet = app_state.fleet
         if not fleet:
             # Build a fleet whose backend matches the currently configured
@@ -808,7 +809,7 @@ def on_register_drone(data):
 @socketio.on("deregister_drone")
 def on_deregister_drone(data):
     drone_id = data.get("drone_id")
-    with app_state.fleet_lock:
+    with fleet_lock:
         fleet = app_state.fleet
         if fleet and drone_id:
             fleet.deregister(drone_id)
