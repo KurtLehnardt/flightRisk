@@ -245,6 +245,17 @@ class TestSourceFactorySelection:
         _state["cap"] = None
         _state["running"] = False
 
+        # Reset every key _stub_heavy_components() populated with a
+        # MagicMock — otherwise those mocks (e.g. _state["face"]) leak into
+        # whatever test module runs next in the same pytest process (module
+        # globals are shared process-wide) and break unrelated tests, e.g.
+        # jsonify() choking on a MagicMock returned from a route handler.
+        for key in (
+            "detector", "reid", "face", "scorer", "tracker", "reasoning",
+            "logger", "metrics", "db", "obstacle_guard", "canon",
+        ):
+            _state[key] = None
+
     def test_tello_source_builds_tello_controller_via_factory(self):
         from amber.dashboard.app import SourceConfig, _init_pipeline, _state
 
