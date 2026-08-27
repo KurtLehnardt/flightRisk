@@ -6,22 +6,16 @@ Standard Tello (TLW004) — SDK 1.3, WiFi AP mode only.
 
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Callable
 
 import cv2
 import numpy as np
 from djitellopy import Tello
 
+from amber.drone.controller import DroneCapabilities, DroneController, DroneState
 
-@dataclass
-class DroneState:
-    battery: int = 0
-    height: int = 0  # cm
-    temperature: int = 0
-    flight_time: int = 0  # seconds
-    is_flying: bool = False
-    is_connected: bool = False
+# Backward-compatible re-export so `from amber.drone.tello import DroneState` still works
+__all__ = ["TelloController", "DroneState", "DroneCapabilities", "DroneController"]
 
 
 class TelloController:
@@ -32,6 +26,14 @@ class TelloController:
         self.host = host
         self.tello = Tello(host=host)
         self.state = DroneState()
+        self.capabilities = DroneCapabilities(
+            has_gps=False,
+            has_rtsp=False,
+            min_move_cm=20,
+            max_move_cm=500,
+            max_altitude_m=10,
+            supports_missions=False,
+        )
         self._frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
         self._keepalive_thread: threading.Thread | None = None
@@ -173,6 +175,10 @@ class TelloController:
     def hover(self):
         """Stop all movement and hover in place."""
         self.tello.send_rc_control(0, 0, 0, 0)
+
+    def goto_gps(self, lat: float, lon: float, alt_m: float) -> None:
+        """Navigate to GPS coordinates. Not supported on Tello."""
+        raise NotImplementedError("Tello does not have GPS")
 
     # --- Internal threads ---
 
