@@ -139,7 +139,7 @@ class MatchScorer:
         signals = score_result.get("signals_used", 0)
         conf = score_result.get("confidence_level", "low")
 
-        if score >= 0.70 and signals >= 2 and conf == "high":
+        if score >= 0.65 and signals >= 2 and conf == "high":
             return "confirmed_match"
         elif score >= self.match_threshold and conf in ("medium", "high"):
             return "possible_match"
