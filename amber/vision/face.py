@@ -7,6 +7,8 @@ confidence matching, especially when clothing changes.
 Requires: pip install insightface onnxruntime
 """
 
+import logging
+
 import numpy as np
 import cv2
 
@@ -15,6 +17,8 @@ try:
     HAS_INSIGHTFACE = True
 except ImportError:
     HAS_INSIGHTFACE = False
+
+logger = logging.getLogger(__name__)
 
 
 class FaceRecognizer:
@@ -81,9 +85,14 @@ class FaceRecognizer:
             crop: BGR numpy array of a detected person.
 
         Returns:
-            Normalized 512-d face embedding, or None if no face is found.
+            Normalized 512-d face embedding, or None if no face is found
+            or extraction fails.
         """
-        return self._best_face_embedding(crop)
+        try:
+            return self._best_face_embedding(crop)
+        except Exception:
+            logger.warning("face_embedding_failed", exc_info=True)
+            return None
 
     def set_target(self, image: np.ndarray) -> bool:
         """Set the reference face from a photo of the target child.

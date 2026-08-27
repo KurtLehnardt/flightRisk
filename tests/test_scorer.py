@@ -253,6 +253,40 @@ class TestMatchScorerCustomWeights:
         assert result["is_match"] is True
 
 
+class TestMatchScorerBuiltinSignalCollision:
+    """Tests guarding against **signals shadowing the built-in named params."""
+
+    def test_score_rejects_reid_via_signals_kwarg(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'reid'"):
+            scorer.score(reid_score=0.8, reid=0.1)
+
+    def test_score_rejects_face_via_signals_kwarg(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'face'"):
+            scorer.score(face_score=0.8, face=0.1)
+
+    def test_score_rejects_reasoning_via_signals_kwarg(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'reasoning'"):
+            scorer.score(reasoning=0.1)
+
+    def test_register_signal_rejects_builtin_name_reid(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'reid'"):
+            scorer.register_signal("reid", weight=0.5)
+
+    def test_register_signal_rejects_builtin_name_face(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'face'"):
+            scorer.register_signal("face", weight=0.5)
+
+    def test_register_signal_rejects_builtin_name_reasoning(self):
+        scorer = MatchScorer()
+        with pytest.raises(ValueError, match="built-in signal 'reasoning'"):
+            scorer.register_signal("reasoning", weight=0.5)
+
+
 class TestMatchScorerSignalRegistry:
     """Tests for register_signal()/extensible signal support."""
 

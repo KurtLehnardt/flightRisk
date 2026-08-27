@@ -8,9 +8,21 @@ New signals (thermal, gait, etc.) can be added without touching this
 module's internals via `register_signal()` — see MatchScorer.score().
 """
 
+# Names populated internally via score()'s named params (reid_score,
+# face_score, reasoning_result). These may not be used as **signals
+# keys or register_signal() names — doing so would silently shadow the
+# named-param value with whatever was passed through **signals.
+BUILTIN_SIGNALS = {"reid", "face", "reasoning"}
+
 
 class MatchScorer:
-    """Weighted multi-signal match scorer."""
+    """Weighted multi-signal match scorer.
+
+    Thread-safety note: `register_signal()` mutates `_signals` without
+    locking. Call it only during setup (e.g. right after construction,
+    before the scorer is shared across threads/tasks) — not from
+    concurrent code paths that might also be calling `score()`.
+    """
 
     def __init__(
         self,
@@ -52,9 +64,19 @@ class MatchScorer:
             scorer.register_signal("thermal", weight=0.15)
             scorer.score(reid_score=0.8, thermal=0.6)
 
-        Registering a name that already exists (including the built-in
-        "reid"/"face"/"reasoning") overwrites its weight.
+        Registering a name that already exists overwrites its weight.
+
+        Not thread-safe: this mutates the internal signal registry without
+        a lock. Only call it during initialization, before the scorer is
+        shared across concurrent code paths.
+
+        Raises:
+            ValueError: If `name` collides with a built-in signal name
+                ("reid", "face", "reasoning") — those are populated via
+                score()'s named parameters and cannot be repointed here.
         """
+        if name in BUILTIN_SIGNALS:
+            raise ValueError(f"Cannot override built-in signal '{name}'")
         self._signals[name] = {"weight": weight}
 
     def score(
@@ -97,6 +119,12 @@ class MatchScorer:
             raw_scores["reasoning"] = reasoning_score
 
         for name, value in signals.items():
+            if name in BUILTIN_SIGNALS:
+                raise ValueError(
+                    f"Cannot override built-in signal '{name}' via **signals; "
+                    f"use the named parameter instead "
+                    f"(reid_score, face_score, or reasoning_result)"
+                )
             if name not in self._signals:
                 raise ValueError(
                     f"Unknown signal '{name}' — register it first with "

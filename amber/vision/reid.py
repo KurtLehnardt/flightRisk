@@ -5,6 +5,8 @@ Uses CLIP ViT-B/16 to extract appearance embeddings, then cosine
 similarity for matching.
 """
 
+import logging
+
 import numpy as np
 import cv2
 
@@ -15,6 +17,8 @@ try:
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
+
+logger = logging.getLogger(__name__)
 
 
 class PersonReID:
@@ -92,6 +96,7 @@ class PersonReID:
         try:
             return self._extract_embedding(crop)
         except Exception:
+            logger.warning("reid_embedding_failed", exc_info=True)
             return None
 
     def set_target(self, image: np.ndarray):
