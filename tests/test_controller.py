@@ -1,6 +1,6 @@
 """Tests for DroneController protocol, DroneState, and DroneCapabilities."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -89,3 +89,17 @@ class TestDroneControllerProtocol:
         from amber.drone.tello import DroneState as TelloDroneState
 
         assert TelloDroneState is DroneState
+
+    def test_non_conforming_object_fails_protocol(self):
+        """A class missing the required attributes/methods must fail the isinstance check."""
+
+        class FakeDrone:
+            pass  # missing all required attributes/methods
+
+        assert not isinstance(FakeDrone(), DroneController)
+
+    def test_drone_capabilities_reexported_from_tello(self):
+        """Verify DroneCapabilities can be imported from amber.drone.tello."""
+        from amber.drone.tello import DroneCapabilities as TelloDroneCapabilities
+
+        assert TelloDroneCapabilities is DroneCapabilities
