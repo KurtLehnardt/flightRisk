@@ -5,29 +5,40 @@ into a single weighted confidence score. This reduces false positives
 by requiring agreement across multiple signals.
 """
 
+from amber.config import get_config
+
 
 class MatchScorer:
     """Weighted multi-signal match scorer."""
 
     def __init__(
         self,
-        reid_weight: float = 0.35,
-        face_weight: float = 0.40,
-        reasoning_weight: float = 0.25,
-        match_threshold: float = 0.50,
+        reid_weight: float | None = None,
+        face_weight: float | None = None,
+        reasoning_weight: float | None = None,
+        match_threshold: float | None = None,
     ):
         """Initialize the scorer.
 
         Args:
             reid_weight: Weight for full-body ReID similarity.
+                         Defaults to `config.vision.scorer_reid_weight`.
             face_weight: Weight for face recognition score.
+                         Defaults to `config.vision.scorer_face_weight`.
             reasoning_weight: Weight for LLM reasoning confidence.
+                         Defaults to `config.vision.scorer_reasoning_weight`.
             match_threshold: Combined score threshold for a positive match.
+                         Defaults to `config.vision.scorer_match_threshold`.
         """
-        self.reid_weight = reid_weight
-        self.face_weight = face_weight
-        self.reasoning_weight = reasoning_weight
-        self.match_threshold = match_threshold
+        cfg = get_config().vision
+        self.reid_weight = reid_weight if reid_weight is not None else cfg.scorer_reid_weight
+        self.face_weight = face_weight if face_weight is not None else cfg.scorer_face_weight
+        self.reasoning_weight = (
+            reasoning_weight if reasoning_weight is not None else cfg.scorer_reasoning_weight
+        )
+        self.match_threshold = (
+            match_threshold if match_threshold is not None else cfg.scorer_match_threshold
+        )
 
     def score(
         self,

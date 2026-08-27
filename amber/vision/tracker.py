@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from amber.config import get_config
+
 
 @dataclass
 class TrackedDetection:
@@ -84,20 +86,24 @@ class DetectionTracker:
 
     def __init__(
         self,
-        iou_threshold: float = 0.3,
-        max_age: int = 15,
-        vote_window: int = 8,
+        iou_threshold: float | None = None,
+        max_age: int | None = None,
+        vote_window: int | None = None,
     ):
         """Initialize the tracker.
 
         Args:
-            iou_threshold: Minimum IoU to match a detection to an existing track.
-            max_age: Number of frames a track survives without a match before removal.
+            iou_threshold: Minimum IoU to match a detection to an existing
+                track. Defaults to `config.vision.tracker_iou_threshold`.
+            max_age: Number of frames a track survives without a match
+                before removal. Defaults to `config.vision.tracker_max_missing`.
             vote_window: Number of recent scores to keep for averaging.
+                Defaults to `config.vision.tracker_score_window`.
         """
-        self.iou_threshold = iou_threshold
-        self.max_age = max_age
-        self.vote_window = vote_window
+        cfg = get_config().vision
+        self.iou_threshold = iou_threshold if iou_threshold is not None else cfg.tracker_iou_threshold
+        self.max_age = max_age if max_age is not None else cfg.tracker_max_missing
+        self.vote_window = vote_window if vote_window is not None else cfg.tracker_score_window
         self._tracks: dict[int, _Track] = {}
         self._next_id: int = 0
         self._lock = threading.Lock()

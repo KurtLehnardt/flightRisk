@@ -7,20 +7,29 @@ Runs on Apple Silicon via MPS backend. Filters to person class only.
 import numpy as np
 from ultralytics import YOLO
 
+from amber.config import get_config
+
 
 class PersonDetector:
     """Detects people in video frames using YOLO."""
 
     PERSON_CLASS_ID = 0  # COCO class 0 = person
 
-    def __init__(self, model_name: str = "yolo11n.pt", confidence: float = 0.4):
+    def __init__(self, model_name: str | None = None, confidence: float | None = None):
         """Initialize the detector.
 
         Args:
             model_name: YOLO model to load. Downloads automatically on first run.
                         Use 'yolo11n.pt' (fast) or 'yolo11s.pt' (more accurate).
+                        Defaults to `config.vision.detector_model`.
             confidence: Minimum confidence threshold for detections.
+                        Defaults to `config.vision.detector_confidence`.
         """
+        cfg = get_config().vision
+        if model_name is None:
+            model_name = cfg.detector_model
+        if confidence is None:
+            confidence = cfg.detector_confidence
         self.model = YOLO(model_name)
         self.confidence = confidence
         self._device = self._select_device()

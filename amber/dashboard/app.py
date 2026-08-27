@@ -26,6 +26,7 @@ from amber.vision.quality import ImageQualityScorer
 from amber.vision.scorer import MatchScorer
 from amber.vision.threshold_tuner import ThresholdTuner
 from amber.vision.tracker import DetectionTracker
+from amber.config import get_config
 from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
@@ -47,14 +48,14 @@ class SourceConfig:
     separate args to `run_dashboard()` / `_init_pipeline()`.
     """
     source: str = "webcam"
-    mavlink_address: str = "udp://:14540"
+    mavlink_address: str = get_config().drone.mavlink_default_address
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
     video_path: str | None = None
 
 
 # Match screenshots directory
-CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
+CAPTURES_DIR = Path(__file__).parent.parent.parent / get_config().dashboard.captures_dir
 CAPTURES_DIR.mkdir(exist_ok=True)
 
 app = Flask(
@@ -112,11 +113,11 @@ _state = {
 
 # Async Gemma 4 reasoning — offloaded to a worker thread + queue so the
 # 2-5s LLM call never blocks frame processing or detection.
-_gemma_queue: "queue.Queue" = queue.Queue(maxsize=10)
+_gemma_queue: "queue.Queue" = queue.Queue(maxsize=get_config().reasoning.queue_maxsize)
 _gemma_last_call: dict[str, float] = {}  # track_key -> last_call_timestamp
 _alerted_tracks: dict[str, float] = {}  # track_key -> timestamp of last alert emit
-ALERT_COOLDOWN = 10.0  # seconds before re-alerting for the same spatial track
-GEMMA_RATE_LIMIT = 5.0  # seconds between Gemma calls for the same track
+ALERT_COOLDOWN = get_config().reasoning.alert_cooldown  # seconds before re-alerting for the same spatial track
+GEMMA_RATE_LIMIT = get_config().reasoning.gemma_rate_limit  # seconds between Gemma calls for the same track
 _gemma_thread_lock = threading.Lock()
 _match_history_lock = threading.Lock()  # guards _state["match_history"] across threads
 
@@ -124,11 +125,13 @@ _match_history_lock = threading.Lock()  # guards _state["match_history"] across 
 def _compute_track_key(bbox) -> str:
     """Compute a coarse spatial grid key from a bbox [x1, y1, x2, y2].
 
-    Rounds the bbox center to a 50px grid cell so the key stays consistent
-    even with small detection jitter across frames.
+    Rounds the bbox center to a `config.reasoning.spatial_grid_size` px grid
+    cell so the key stays consistent even with small detection jitter
+    across frames.
     """
-    cx = int((bbox[0] + bbox[2]) / 2) // 50
-    cy = int((bbox[1] + bbox[3]) / 2) // 50
+    grid_size = get_config().reasoning.spatial_grid_size
+    cx = int((bbox[0] + bbox[2]) / 2) // grid_size
+    cy = int((bbox[1] + bbox[3]) / 2) // grid_size
     return f"{cx}_{cy}"
 
 
@@ -288,31 +291,37 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     log.info("pipeline_init", source=source, target_path=target_path)
 
     if _state["detector"] is None:
-        _state["detector"] = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
+        _state["detector"] = PersonDetector()
 
     if _state["reid"] is None:
         try:
-            _state["reid"] = PersonReID(match_threshold=0.55)
+            _state["reid"] = PersonReID()
         except Exception as e:
             log.warning("reid_unavailable", error=str(e))
 
     if _state["face"] is None:
         try:
             from amber.vision.face import FaceRecognizer
+            # Intentionally more permissive than FaceRecognizer's own default
+            # (0.45) for live drone footage, where face crops are smaller
+            # and lower quality than the reference photo.
             _state["face"] = FaceRecognizer(match_threshold=0.35)
         except Exception as e:
             log.warning("insightface_unavailable", error=str(e))
 
     if _state["scorer"] is None:
-        _state["scorer"] = MatchScorer(match_threshold=0.45)
+        _state["scorer"] = MatchScorer()
 
     if _state["tracker"] is None:
-        _state["tracker"] = DetectionTracker(max_age=30, iou_threshold=0.3)
+        # max_age=30 intentionally overrides the tracker's own default
+        # (config.vision.tracker_max_missing) so tracks survive longer in
+        # the live dashboard pipeline.
+        _state["tracker"] = DetectionTracker(max_age=30)
 
     if _state["reasoning"] is None:
         try:
             from amber.reasoning.agent import AmberAgent
-            _state["reasoning"] = AmberAgent(model="gemma4:latest")
+            _state["reasoning"] = AmberAgent()
         except Exception as e:
             log.warning("gemma4_unavailable", error=str(e))
 
@@ -386,6 +395,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         fleet = DroneFleet(factory=lambda n, h: TelloController(n, h))
         _state["fleet"] = fleet
         def _auto_connect_loop():
+            retry_interval = get_config().drone.auto_connect_interval
             while not stop_event.is_set() and _state.get("running", True):
                 primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
@@ -402,8 +412,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     log.info("tello_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
-                    log.info("tello_waiting", hint="retrying in 5s")
-                if stop_event.wait(5):
+                    log.info("tello_waiting", hint=f"retrying in {retry_interval:.0f}s")
+                if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "mavlink":
@@ -412,6 +422,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
         _state["fleet"] = fleet
         def _auto_connect_loop():
+            retry_interval = get_config().drone.auto_connect_interval
             while not stop_event.is_set() and _state.get("running", True):
                 primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
@@ -428,8 +439,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     log.info("mavlink_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
-                    log.info("mavlink_waiting", hint="retrying in 5s")
-                if stop_event.wait(5):
+                    log.info("mavlink_waiting", hint=f"retrying in {retry_interval:.0f}s")
+                if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "webcam":
@@ -538,9 +549,17 @@ def _frame_loop():
     last_reasoning_time = 0
     last_metrics_emit = 0
     last_track_emit = 0
-    REASONING_INTERVAL = 5
-    METRICS_INTERVAL = 10
-    TRACK_UPDATE_INTERVAL = 1
+    reasoning_cfg = get_config().reasoning
+    dashboard_cfg = get_config().dashboard
+    drone_cfg = get_config().drone
+    REASONING_INTERVAL = reasoning_cfg.reasoning_interval
+    METRICS_INTERVAL = reasoning_cfg.metrics_interval
+    TRACK_UPDATE_INTERVAL = reasoning_cfg.track_update_interval
+    CORROBORATION_THRESHOLD = reasoning_cfg.corroboration_threshold
+    BATTERY_WARN_THRESHOLD = drone_cfg.battery_warn_threshold
+    BATTERY_CRITICAL_THRESHOLD = drone_cfg.battery_critical_threshold
+    JPEG_QUALITY = dashboard_cfg.jpeg_quality
+    FRAME_EMIT_INTERVAL = dashboard_cfg.frame_emit_interval
     last_detection_log = 0
     log = _state["logger"]
     metrics = _state["metrics"]
@@ -641,10 +660,10 @@ def _frame_loop():
                 if tracker and match_track_id is not None:
                     tracker.add_scores(match_track_id, reid_score=det_reid, face_score=det_face)
                     track_summary = tracker.get_track(match_track_id)
-                    reid_thresh = _state["reid"].match_threshold if _state.get("reid") else 0.55
+                    reid_thresh = _state["reid"].match_threshold if _state.get("reid") else get_config().vision.reid_threshold
                     if (
                         track_summary
-                        and len(track_summary.reid_scores) >= 3
+                        and len(track_summary.reid_scores) >= CORROBORATION_THRESHOLD
                         and track_summary.avg_reid_score >= reid_thresh
                         and current_alert_level != "confirmed_match"
                     ):
@@ -814,7 +833,7 @@ def _frame_loop():
                 fps_start = time.time()
 
             # Encode and emit
-            _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             frame_b64 = base64.b64encode(buffer).decode("utf-8")
 
             if _state["recorder"] and _state["recorder"].is_recording:
@@ -834,14 +853,14 @@ def _frame_loop():
                 if s.battery > 0 and s.is_flying:
                     if log:
                         log.battery(battery_level=s.battery, is_flying=s.is_flying)
-                    if s.battery <= 10 and not _state.get("battery_critical"):
+                    if s.battery <= BATTERY_CRITICAL_THRESHOLD and not _state.get("battery_critical"):
                         _state["battery_critical"] = True
                         socketio.emit("battery_critical", {"battery": s.battery})
                         try:
                             drone.land()
                         except Exception:
                             pass
-                    elif s.battery <= 20 and not _state.get("battery_warned"):
+                    elif s.battery <= BATTERY_WARN_THRESHOLD and not _state.get("battery_warned"):
                         _state["battery_warned"] = True
                         socketio.emit("battery_warning", {"battery": s.battery})
 
@@ -874,7 +893,7 @@ def _frame_loop():
         except Exception as e:
             print(f"[frame_loop] Error (continuing): {e}")
 
-        time.sleep(0.05)
+        time.sleep(FRAME_EMIT_INTERVAL)
 
 
 # --- Routes ---
@@ -1049,7 +1068,7 @@ def api_threshold_suggestion():
     if not db:
         return jsonify({"error": "no database"}), 500
     scorer = _state.get("scorer")
-    current = scorer.match_threshold if scorer else 0.50
+    current = scorer.match_threshold if scorer else get_config().vision.scorer_match_threshold
     tuner = ThresholdTuner(db)
     return jsonify(tuner.analyze(current_threshold=current))
 
@@ -1136,7 +1155,7 @@ def on_set_description(data):
 @socketio.on("set_threshold")
 def on_set_threshold(data):
     """Update the ReID match threshold."""
-    threshold = data.get("threshold", 0.55)
+    threshold = data.get("threshold", get_config().vision.reid_threshold)
     threshold = max(0.1, min(0.99, float(threshold)))
     if _state["reid"]:
         _state["reid"].match_threshold = threshold
@@ -1323,7 +1342,7 @@ def on_stop_recording():
 @socketio.on("register_drone")
 def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(_state.get('fleet').count if _state.get('fleet') else 0) + 1}")
-    host = data.get("host", "192.168.10.1")
+    host = data.get("host", get_config().drone.tello_default_host)
     fleet = _state.get("fleet")
     current_source = _state.get("source")
     if not fleet:
@@ -1427,7 +1446,7 @@ def on_restart_dashboard():
         _state["cap"] = None
     source_config = _state.get("source_config") or SourceConfig(
         source=_state.get("source", "tello"),
-        mavlink_address=_state.get("mavlink_address", "udp://:14540"),
+        mavlink_address=_state.get("mavlink_address", get_config().drone.mavlink_default_address),
         rtsp_url=_state.get("rtsp_url"),
         edge_ws=_state.get("edge_ws", "ws://localhost:9000"),
         video_path=_state.get("video_path"),
@@ -1436,7 +1455,7 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=5555):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
     """Start the dashboard server.
 
     Args:
@@ -1444,8 +1463,10 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=5555):
             `SourceConfig` (source mode, MAVLink address, RTSP URL, edge
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
-        port: Dashboard HTTP/WebSocket port.
+        port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
     """
+    if port is None:
+        port = get_config().dashboard.port
     _state["running"] = True
     # Auto-load previous target photo if none specified
     if target_path is None:

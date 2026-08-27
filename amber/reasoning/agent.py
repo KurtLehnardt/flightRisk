@@ -17,6 +17,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from amber.config import get_config
+
 try:
     import ollama
     HAS_OLLAMA = True
@@ -27,7 +29,7 @@ except ImportError:
 class AmberAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
 
-    def __init__(self, model: str = "gemma4:latest"):
+    def __init__(self, model: str | None = None):
         """Initialize the reasoning agent.
 
         Args:
@@ -35,10 +37,13 @@ class AmberAgent:
                    - 'gemma4:latest' — 12B, 9.6GB, good balance
                    - 'gemma4:e2b' — smallest with vision, 7.2GB
                    - 'gemma4:26b-mlx' — best quality, ~18GB, MLX optimized
+                   Defaults to `config.reasoning.model`.
         """
         if not HAS_OLLAMA:
             raise RuntimeError("pip install ollama && brew install ollama")
 
+        if model is None:
+            model = get_config().reasoning.model
         self.model = model
         host = os.environ.get("OLLAMA_HOST")
         if host:
