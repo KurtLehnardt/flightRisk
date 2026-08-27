@@ -21,10 +21,10 @@ class TestPersonReIDInit:
 
 
 class TestEmbedding:
-    def test_extract_embedding_returns_1280d(self, reid, sample_crop):
+    def test_extract_embedding_returns_512d(self, reid, sample_crop):
         embedding = reid._extract_embedding(sample_crop)
         assert isinstance(embedding, np.ndarray)
-        assert embedding.shape == (1280,)
+        assert embedding.shape == (512,)
 
     def test_embedding_is_l2_normalized(self, reid, sample_crop):
         embedding = reid._extract_embedding(sample_crop)

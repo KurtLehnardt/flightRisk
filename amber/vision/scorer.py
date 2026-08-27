@@ -115,9 +115,9 @@ class MatchScorer:
 
         # Determine confidence level
         num_signals = len(weights)
-        if combined >= 0.75 and num_signals >= 2:
+        if combined >= 0.65 and num_signals >= 2:
             confidence_level = "high"
-        elif combined >= 0.55 or (combined >= 0.45 and num_signals >= 2):
+        elif combined >= 0.40 or (combined >= 0.35 and num_signals >= 2):
             confidence_level = "medium"
         else:
             confidence_level = "low"

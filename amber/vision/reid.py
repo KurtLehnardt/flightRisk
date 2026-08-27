@@ -1,8 +1,8 @@
 """Person Re-Identification using feature embeddings.
 
 Compares detected persons against a reference photo of the target child.
-Uses a lightweight CNN (ResNet18 or MobileNetV2) to extract appearance
-embeddings, then cosine similarity for matching.
+Uses CLIP ViT-B/16 to extract appearance embeddings, then cosine
+similarity for matching.
 """
 
 import numpy as np
@@ -10,8 +10,8 @@ import cv2
 
 try:
     import torch
-    import torchvision.transforms as T
-    from torchvision import models
+    import open_clip
+    from PIL import Image
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
@@ -21,34 +21,27 @@ class PersonReID:
     """Extracts appearance embeddings and matches against a target person."""
 
     def __init__(self, match_threshold: float = 0.55):
-        """Initialize ReID with a lightweight feature extractor.
+        """Initialize ReID with CLIP ViT-B/16 feature extractor.
 
         Args:
             match_threshold: Cosine similarity threshold for a match (0-1).
                              Lower = more permissive, higher = stricter.
         """
         if not HAS_TORCH:
-            raise RuntimeError("PyTorch required. pip install torch torchvision")
+            raise RuntimeError("PyTorch and open-clip-torch required. pip install torch open-clip-torch")
 
         self.match_threshold = match_threshold
         self.device = self._select_device()
 
-        # Use MobileNetV2 — lightweight, fast, good enough for ReID
-        self.model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
-        # Remove the classifier, keep feature extractor (1280-d output)
-        self.model.classifier = torch.nn.Identity()
-        self.model = self.model.to(self.device)
-        self.model.eval()
-
-        self.transform = T.Compose([
-            T.ToPILImage(),
-            T.Resize((224, 224)),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        # Use CLIP ViT-B/16 — produces 512-d embeddings in CLIP space
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-16", pretrained="laion2b_s34b_b88k"
+        )
+        self.model = model.to(self.device).eval()
+        self.preprocess = preprocess
 
         self._target_embedding: np.ndarray | None = None
-        print(f"[reid] MobileNetV2 loaded on {self.device}")
+        print(f"[reid] CLIP ViT-B/16 loaded on {self.device}")
 
     def _select_device(self) -> str:
         if torch.backends.mps.is_available():
@@ -64,13 +57,14 @@ class PersonReID:
             image: BGR numpy array of a cropped person.
 
         Returns:
-            Normalized 1280-d feature vector.
+            Normalized 512-d feature vector.
         """
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        tensor = self.transform(rgb).unsqueeze(0).to(self.device)
+        pil_img = Image.fromarray(rgb)
+        tensor = self.preprocess(pil_img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            embedding = self.model(tensor).cpu().numpy().flatten()
+            embedding = self.model.encode_image(tensor).cpu().numpy().flatten()
 
         # L2 normalize
         norm = np.linalg.norm(embedding)
@@ -138,3 +132,7 @@ class PersonReID:
             return best_idx, best_score
 
         return None, best_score
+
+    def clear_target(self):
+        """Clear the current target embedding."""
+        self._target_embedding = None

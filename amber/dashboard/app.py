@@ -108,7 +108,7 @@ def _init_pipeline(source="webcam", target_path=None):
             log.warning("insightface_unavailable", error=str(e))
 
     if _state["scorer"] is None:
-        _state["scorer"] = MatchScorer()
+        _state["scorer"] = MatchScorer(match_threshold=0.45)
 
     if _state["reasoning"] is None:
         try:
