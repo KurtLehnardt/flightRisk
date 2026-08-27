@@ -204,18 +204,24 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = fleet
         def _auto_connect_loop():
             while not stop_event.is_set() and app_state.running:
-                primary: DroneController | None = fleet.primary
+                with app_state.fleet_lock:
+                    primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     if stop_event.wait(3):
                         break
                     continue
                 # Drone missing or disconnected -- clean up and retry
-                if "drone-1" in fleet.drone_ids:
+                with app_state.fleet_lock:
+                    has_drone = "drone-1" in fleet.drone_ids
+                if has_drone:
                     log.info("tello_disconnected", hint="cleaning up for reconnect")
-                    fleet.deregister("drone-1")
+                    with app_state.fleet_lock:
+                        fleet.deregister("drone-1")
                     if stop_event.wait(2):  # let UDP sockets release
                         break
-                if fleet.register("drone-1"):
+                with app_state.fleet_lock:
+                    registered = fleet.register("drone-1")
+                if registered:
                     log.info("tello_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
@@ -230,18 +236,24 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = fleet
         def _auto_connect_loop():
             while not stop_event.is_set() and app_state.running:
-                primary: DroneController | None = fleet.primary
+                with app_state.fleet_lock:
+                    primary: DroneController | None = fleet.primary
                 if primary and primary.state.is_connected:
                     if stop_event.wait(3):
                         break
                     continue
                 # Drone missing or disconnected -- clean up and retry
-                if "drone-1" in fleet.drone_ids:
+                with app_state.fleet_lock:
+                    has_drone = "drone-1" in fleet.drone_ids
+                if has_drone:
                     log.info("mavlink_disconnected", hint="cleaning up for reconnect")
-                    fleet.deregister("drone-1")
+                    with app_state.fleet_lock:
+                        fleet.deregister("drone-1")
                     if stop_event.wait(2):
                         break
-                if fleet.register("drone-1", host=mavlink_address):
+                with app_state.fleet_lock:
+                    registered = fleet.register("drone-1", host=mavlink_address)
+                if registered:
                     log.info("mavlink_connected")
                     socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
                 else:
@@ -744,20 +756,21 @@ def on_stop_recording():
 def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(app_state.fleet.count if app_state.fleet else 0) + 1}")
     host = data.get("host", "192.168.10.1")
-    fleet = app_state.fleet
     current_source = app_state.source
-    if not fleet:
-        # Build a fleet whose backend matches the currently configured
-        # source, instead of always defaulting to Tello -- a manual
-        # registration on a mavlink deployment must build a
-        # MavlinkController, not silently create a Tello-backed fleet.
-        if current_source == "mavlink":
-            from amber.drone.mavlink import MavlinkController
-            rtsp_url = app_state.rtsp_url
-            fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
-        else:
-            fleet = DroneFleet()
-        app_state.fleet = fleet
+    with app_state.fleet_lock:
+        fleet = app_state.fleet
+        if not fleet:
+            # Build a fleet whose backend matches the currently configured
+            # source, instead of always defaulting to Tello -- a manual
+            # registration on a mavlink deployment must build a
+            # MavlinkController, not silently create a Tello-backed fleet.
+            if current_source == "mavlink":
+                from amber.drone.mavlink import MavlinkController
+                rtsp_url = app_state.rtsp_url
+                fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
+            else:
+                fleet = DroneFleet()
+            app_state.fleet = fleet
 
     # Check for duplicate host before attempting connection
     if fleet.has_host(host):
@@ -794,10 +807,11 @@ def on_register_drone(data):
 
 @socketio.on("deregister_drone")
 def on_deregister_drone(data):
-    fleet = app_state.fleet
     drone_id = data.get("drone_id")
-    if fleet and drone_id:
-        fleet.deregister(drone_id)
+    with app_state.fleet_lock:
+        fleet = app_state.fleet
+        if fleet and drone_id:
+            fleet.deregister(drone_id)
     emit("fleet_status", {
         "drones": fleet.get_all_telemetry() if fleet else {},
         "count": fleet.count if fleet else 0

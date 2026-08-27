@@ -13,6 +13,7 @@ import base64
 import json
 import queue
 import time
+import traceback
 from pathlib import Path
 
 import cv2
@@ -213,6 +214,7 @@ def _gemma_worker(socketio):
                         "reasoning": result.get("reasoning", ""),
                     })
         except Exception as e:
-            print(f"[gemma] Error: {e}")
+            if app_state.logger:
+                app_state.logger.error("gemma_worker_error", error=str(e), traceback=traceback.format_exc())
         finally:
             gemma_queue.task_done()

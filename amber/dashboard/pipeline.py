@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import queue
 import time
+import traceback
 
 import cv2
 import numpy as np
@@ -20,6 +21,7 @@ from amber.drone.controller import DroneController
 
 from amber.dashboard.state import (
     app_state,
+    fleet_lock,
     match_history_lock,
     alerted_tracks,
     gemma_queue,
@@ -76,7 +78,6 @@ def _frame_loop(socketio):
     log = app_state.logger
     metrics = app_state.metrics
 
-    tracer = app_state.tracer
     otel_m = app_state.otel_metrics
 
     while app_state.running:
@@ -84,8 +85,9 @@ def _frame_loop(socketio):
             frame_start = time.time()
 
             frame = None
-            fleet = app_state.fleet
-            drone: DroneController | None = fleet.primary if fleet else None
+            with fleet_lock:
+                fleet = app_state.fleet
+                drone: DroneController | None = fleet.primary if fleet else None
             if drone:
                 frame = drone.get_frame()
             elif app_state.cap and app_state.cap.isOpened():
@@ -187,8 +189,9 @@ def _frame_loop(socketio):
                 # Auto-stop search and hover on confirmed or possible match
                 if current_alert_level in ("confirmed_match", "possible_match") and app_state.search_active:
                     app_state.search_active = False
-                    fleet = app_state.fleet
-                    drone = fleet.primary if fleet else None
+                    with fleet_lock:
+                        fleet = app_state.fleet
+                        drone = fleet.primary if fleet else None
                     if drone:
                         try:
                             drone.hover()
@@ -302,11 +305,6 @@ def _frame_loop(socketio):
 
                 if best_candidate is not None:
                     crop = detections[best_candidate]["crop"]
-                    desc_track_id = (
-                        track_id_by_bbox.get(tuple(detections[best_candidate]["bbox"]))
-                        if tracker
-                        else None
-                    )
                     if crop is not None and crop.size > 0:
                         last_reasoning_time = time.time()
                         track_key = _compute_track_key(detections[best_candidate]["bbox"])
@@ -403,6 +401,7 @@ def _frame_loop(socketio):
                 socketio.emit("metrics_update", metrics.snapshot())
 
         except Exception as e:
-            print(f"[frame_loop] Error (continuing): {e}")
+            if log:
+                log.error("frame_loop_error", error=str(e), traceback=traceback.format_exc())
 
         time.sleep(0.05)
