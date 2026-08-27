@@ -27,7 +27,7 @@ from amber.recorder import SessionRecorder
 from amber.observability import StructuredLogger, MetricsCollector
 from amber.persistence import SessionDB
 from amber.drone.fleet import DroneFleet
-from amber.drone.controller import DroneController, DroneCapabilities
+from amber.drone.controller import DroneController
 from amber.canon import TargetCanon
 
 try:
@@ -318,7 +318,7 @@ def _frame_loop():
                 if current_alert_level in ("confirmed_match", "possible_match") and _state.get("search_active"):
                     _state["search_active"] = False
                     fleet = _state.get("fleet")
-                    drone: DroneController | None = fleet.primary if fleet else None
+                    drone = fleet.primary if fleet else None
                     if drone:
                         try:
                             drone.hover()
