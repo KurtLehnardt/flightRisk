@@ -660,6 +660,122 @@
         }
         .fleet-remove:hover { background: var(--red); color: white; border-color: var(--red); }
 
+        /* ========== KEYBOARD CONTROLS ========== */
+        .keyboard-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .keyboard-toggle > span:not(.toggle-switch) {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            transition: all 150ms ease;
+        }
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            left: 2px;
+            bottom: 2px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            transition: all 150ms ease;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background: var(--amber-glow);
+            border-color: var(--amber);
+        }
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(16px);
+            background: var(--amber);
+        }
+        .keyboard-status {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            border-radius: var(--radius-badge);
+            background: var(--bg-card);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            margin-left: auto;
+        }
+        .keyboard-status.active {
+            background: var(--green-bg);
+            color: var(--green);
+            border-color: var(--green);
+        }
+        .keyboard-legend {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 4px 10px;
+            margin-bottom: 10px;
+            padding: 8px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-btn);
+        }
+        .keyboard-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+        .keyboard-key {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-light);
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+        .dpad-btn.key-active {
+            background: var(--amber);
+            border-color: var(--amber);
+            color: white;
+            transform: scale(0.96);
+        }
+        .btn-takeoff.key-active {
+            background: var(--green);
+            color: #000;
+        }
+        .btn-land.key-active {
+            background: var(--red);
+            color: #fff;
+        }
+
         /* D-pad */
         .dpad-grid {
             display: grid;
@@ -1485,20 +1601,40 @@
                     <!-- D-pad Flight Controls -->
                     <div class="panel-section">
                         <div class="panel-title">Flight Controls</div>
+                        <div class="keyboard-toggle">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="keyboard-toggle" onchange="toggleKeyboardControls(this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span>Keyboard Controls</span>
+                            <span class="keyboard-status" id="keyboard-status">OFF</span>
+                        </div>
+                        <div class="keyboard-legend" id="keyboard-legend" style="display:none;">
+                            <div class="keyboard-legend-item"><span class="keyboard-key">W</span> Forward</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">S</span> Back</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">A</span> Left</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">D</span> Right</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">Q</span> Yaw Left</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">E</span> Yaw Right</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">Z</span> Down</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">X</span> Up</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">T</span> Takeoff</div>
+                            <div class="keyboard-legend-item"><span class="keyboard-key">L</span> Land</div>
+                        </div>
                         <div class="dpad-grid">
-                            <button class="dpad-btn" onclick="sendCmd('ccw')">
+                            <button class="dpad-btn" data-key="q" onclick="sendCmd('ccw')">
                                 <span class="dpad-icon">&#8634;</span>
                                 <span class="dpad-label">Yaw L</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('forward')">
+                            <button class="dpad-btn" data-key="w" onclick="sendCmd('forward')">
                                 <span class="dpad-icon">&#8593;</span>
                                 <span class="dpad-label">Fwd</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('cw')">
+                            <button class="dpad-btn" data-key="e" onclick="sendCmd('cw')">
                                 <span class="dpad-icon">&#8635;</span>
                                 <span class="dpad-label">Yaw R</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('left')">
+                            <button class="dpad-btn" data-key="a" onclick="sendCmd('left')">
                                 <span class="dpad-icon">&#8592;</span>
                                 <span class="dpad-label">Left</span>
                             </button>
@@ -1506,26 +1642,26 @@
                                 <span class="dpad-icon">&#9632;</span>
                                 <span class="dpad-label">Stop</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('right')">
+                            <button class="dpad-btn" data-key="d" onclick="sendCmd('right')">
                                 <span class="dpad-icon">&#8594;</span>
                                 <span class="dpad-label">Right</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('up')">
+                            <button class="dpad-btn" data-key="x" onclick="sendCmd('up')">
                                 <span class="dpad-icon">&#11014;</span>
                                 <span class="dpad-label">Up</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('back')">
+                            <button class="dpad-btn" data-key="s" onclick="sendCmd('back')">
                                 <span class="dpad-icon">&#8595;</span>
                                 <span class="dpad-label">Back</span>
                             </button>
-                            <button class="dpad-btn" onclick="sendCmd('down')">
+                            <button class="dpad-btn" data-key="z" onclick="sendCmd('down')">
                                 <span class="dpad-icon">&#11015;</span>
                                 <span class="dpad-label">Down</span>
                             </button>
                         </div>
                         <div class="flight-actions">
-                            <button class="btn-takeoff" onclick="sendCmd('takeoff')">TAKEOFF</button>
-                            <button class="btn-land" onclick="sendCmd('land')">LAND</button>
+                            <button class="btn-takeoff" data-key="t" onclick="sendCmd('takeoff')">TAKEOFF</button>
+                            <button class="btn-land" data-key="l" onclick="sendCmd('land')">LAND</button>
                         </div>
                     </div>
 
@@ -2079,6 +2215,64 @@
             if (droneId) payload.drone_id = droneId;
             socket.emit('drone_command', payload);
         }
+
+        // ========== KEYBOARD CONTROLS ==========
+        let keyboardControlEnabled = false;
+        const KEY_THROTTLE_MS = 200; // minimum ms between repeated commands from held keys
+        const keyLastFired = {};
+
+        const KEY_MAP = {
+            'w': 'forward',
+            's': 'back',
+            'a': 'left',
+            'd': 'right',
+            'q': 'ccw',
+            'e': 'cw',
+            't': 'takeoff',
+            'l': 'land',
+            'z': 'down',
+            'x': 'up',
+        };
+
+        function toggleKeyboardControls(enabled) {
+            keyboardControlEnabled = enabled;
+            document.getElementById('keyboard-status').textContent = enabled ? 'ON' : 'OFF';
+            document.getElementById('keyboard-status').className = 'keyboard-status ' + (enabled ? 'active' : '');
+            document.getElementById('keyboard-legend').style.display = enabled ? 'block' : 'none';
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (!keyboardControlEnabled) return;
+
+            // Don't capture when typing in input fields
+            const tag = e.target.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+
+            const key = e.key.toLowerCase();
+            const command = KEY_MAP[key];
+            if (!command) return;
+
+            e.preventDefault();
+
+            // Throttle repeated keydown events from holding a key
+            const now = Date.now();
+            if (keyLastFired[key] && (now - keyLastFired[key]) < KEY_THROTTLE_MS) return;
+            keyLastFired[key] = now;
+
+            sendCmd(command);
+
+            // Briefly highlight the matching control button
+            const btn = document.querySelector('[data-key="' + key + '"]');
+            if (btn) btn.classList.add('key-active');
+        });
+
+        document.addEventListener('keyup', function(e) {
+            const key = e.key.toLowerCase();
+            delete keyLastFired[key];
+
+            const btn = document.querySelector('[data-key="' + key + '"]');
+            if (btn) btn.classList.remove('key-active');
+        });
 
         function startSearch() {
             const pattern = document.getElementById('search-pattern').value;
