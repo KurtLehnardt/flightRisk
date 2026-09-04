@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
     parser.add_argument(
         "--ws-url", type=str,
-        default=os.environ.get("AMBER_EDGE_WS", _DEFAULT_WS_URL),
+        default=os.environ.get("FLIGHTRISK_EDGE_WS", _DEFAULT_WS_URL),
         help=f"Ground-station WebSocket URL (default: {_DEFAULT_WS_URL})",
     )
     parser.add_argument(

@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from typing import Any
 
-from amber.edge import DetectionMessage, Detection
+from amber.edge import DetectionMessage
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +15,8 @@ logger = logging.getLogger(__name__)
 class GroundStation:
     """Processes detection messages and produces match scores."""
 
-    def __init__(self, scorer=None, tracker=None, target_reid_embedding=None, target_face_embedding=None):
+    def __init__(self, scorer=None, target_reid_embedding=None, target_face_embedding=None):
         self._scorer = scorer
-        self._tracker = tracker
         # Use `is not None` rather than truthiness — target_*_embedding may be a
         # numpy array, whose truthiness is ambiguous for arrays with >1 element
         # and raises ValueError.

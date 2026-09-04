@@ -19,7 +19,6 @@ import time
 import sys
 
 import cv2
-import numpy as np
 
 from amber.vision.detector import PersonDetector
 from amber.vision.reid import PersonReID

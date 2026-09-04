@@ -8,7 +8,6 @@ import base64
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable
 
 import cv2
 import numpy as np

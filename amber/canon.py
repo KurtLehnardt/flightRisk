@@ -3,7 +3,6 @@
 import base64
 import threading
 import sqlite3
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import cv2
