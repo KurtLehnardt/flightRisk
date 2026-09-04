@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import amber.dashboard.app as _app_mod
+import flightrisk.dashboard.app as _app_mod
 
 # Register a throwaway, auth-decorator-free route at IMPORT time -- before the
 # shared Flask app handles its first request, after which Flask locks further
@@ -47,16 +47,16 @@ def _stub_state(app_mod):
 
 @pytest.fixture
 def app_with_key(monkeypatch):
-    """Flask test client with AMBER_API_KEY configured (auth enforced)."""
-    monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
-    import amber.dashboard.app as app_mod
+    """Flask test client with FLIGHTRISK_API_KEY configured (auth enforced)."""
+    monkeypatch.setenv("FLIGHTRISK_API_KEY", "test-key-123")
+    import flightrisk.dashboard.app as app_mod
 
     # Patch the module global via monkeypatch so it is restored atomically at
     # teardown. A manual save/restore leaks here: the fixture finalizer runs
     # before monkeypatch reverts the env var, so reading os.environ back would
     # re-store "test-key-123" into the global and poison later tests (e.g. the
     # unauthenticated SocketIO connect in tests/test_handlers.py).
-    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
+    monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", "test-key-123")
     _stub_state(app_mod)
     with app_mod.app.test_client() as client:
         yield app_mod, client
@@ -64,11 +64,11 @@ def app_with_key(monkeypatch):
 
 @pytest.fixture
 def app_no_key(monkeypatch):
-    """Flask test client with AMBER_API_KEY unset (auth disabled / dev mode)."""
-    monkeypatch.delenv("AMBER_API_KEY", raising=False)
-    import amber.dashboard.app as app_mod
+    """Flask test client with FLIGHTRISK_API_KEY unset (auth disabled / dev mode)."""
+    monkeypatch.delenv("FLIGHTRISK_API_KEY", raising=False)
+    import flightrisk.dashboard.app as app_mod
 
-    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", None)
+    monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", None)
     _stub_state(app_mod)
     with app_mod.app.test_client() as client:
         yield app_mod, client

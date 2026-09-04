@@ -11,12 +11,12 @@ Both classes expose a plain ``async``/``await`` API built directly on top of
 the ``websockets`` library. ``EdgeTransportSync`` / ``GroundTransportSync``
 wrap that async API on a dedicated background asyncio event loop thread,
 using the same run_coroutine_threadsafe bridge pattern as
-``amber.drone.mavlink.MavlinkController``, so the threading-based Flask/
-SocketIO app (``amber/dashboard/app.py``) can drive them without itself
+``flightrisk.drone.mavlink.MavlinkController``, so the threading-based Flask/
+SocketIO app (``flightrisk/dashboard/app.py``) can drive them without itself
 becoming async.
 
 This module is a transport layer only: it does not modify or depend on the
-internals of ``amber/edge.py`` or ``amber/ground.py`` beyond their public
+internals of ``flightrisk/edge.py`` or ``flightrisk/ground.py`` beyond their public
 ``EdgeRunner``/``DetectionMessage``/``GroundStation`` API (``to_dict`` /
 ``from_dict`` / ``process_message``).
 """
@@ -30,8 +30,8 @@ from typing import Any, Callable
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from amber.async_bridge import AsyncBridge
-from amber.edge import DetectionMessage, EdgeRunner
+from flightrisk.async_bridge import AsyncBridge
+from flightrisk.edge import DetectionMessage, EdgeRunner
 
 logger = logging.getLogger(__name__)
 
@@ -467,8 +467,8 @@ class GroundTransport:
 # Sync wrappers (background-thread event loop bridge)
 # ---------------------------------------------------------------------------
 #
-# Both sync wrappers below use the shared ``amber.async_bridge.AsyncBridge``
-# (the same bridge pattern used by ``amber.drone.mavlink.MavlinkController``)
+# Both sync wrappers below use the shared ``flightrisk.async_bridge.AsyncBridge``
+# (the same bridge pattern used by ``flightrisk.drone.mavlink.MavlinkController``)
 # to drive their async transport from threading-based callers like the
 # Flask/SocketIO dashboard app.
 

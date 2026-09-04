@@ -1,11 +1,11 @@
-"""Tests for amber.vision.tracker — IoU-based detection tracker."""
+"""Tests for flightrisk.vision.tracker — IoU-based detection tracker."""
 
 import threading
 
 import numpy as np
 import pytest
 
-from amber.vision.tracker import DetectionTracker, TrackedDetection, _compute_iou
+from flightrisk.vision.tracker import DetectionTracker, TrackedDetection, _compute_iou
 
 
 # ---------------------------------------------------------------------------

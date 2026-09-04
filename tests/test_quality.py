@@ -1,9 +1,9 @@
-"""Tests for amber.vision.quality.ImageQualityScorer."""
+"""Tests for flightrisk.vision.quality.ImageQualityScorer."""
 
 import numpy as np
 import pytest
 
-from amber.vision.quality import ImageQualityScorer, QualityReport
+from flightrisk.vision.quality import ImageQualityScorer, QualityReport
 
 
 @pytest.fixture

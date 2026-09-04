@@ -17,9 +17,9 @@ import traceback
 import cv2
 import numpy as np
 
-from amber.drone.controller import DroneController
+from flightrisk.drone.controller import DroneController
 
-from amber.dashboard.state import (
+from flightrisk.dashboard.state import (
     app_state,
     fleet_lock,
     match_history_lock,
@@ -28,7 +28,7 @@ from amber.dashboard.state import (
     gemma_last_call,
     GEMMA_RATE_LIMIT,
 )
-from amber.dashboard.alerts import (
+from flightrisk.dashboard.alerts import (
     _compute_track_key,
     _is_within_alert_cooldown,
     _save_match_snapshot,

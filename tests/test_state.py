@@ -1,11 +1,11 @@
-"""Tests for amber.dashboard.state — AppState dataclass and thread safety."""
+"""Tests for flightrisk.dashboard.state — AppState dataclass and thread safety."""
 
 import threading
 import time
 
 import pytest
 
-from amber.dashboard.state import AppState, SourceConfig, _StateDictCompat
+from flightrisk.dashboard.state import AppState, SourceConfig, _StateDictCompat
 
 
 class TestSourceConfig:
@@ -56,26 +56,26 @@ class TestStateDictCompat:
         compat = _StateDictCompat.__new__(_StateDictCompat)
         # Patch to use a local state instead of the module singleton
         # by monkey-patching getattr -- but easier: just test the real module one
-        from amber.dashboard.state import _state, app_state
+        from flightrisk.dashboard.state import _state, app_state
         app_state.fps = 42
         assert _state["fps"] == 42
 
     def test_setitem(self):
-        from amber.dashboard.state import _state, app_state
+        from flightrisk.dashboard.state import _state, app_state
         _state["fps"] = 99
         assert app_state.fps == 99
 
     def test_get_default(self):
-        from amber.dashboard.state import _state
+        from flightrisk.dashboard.state import _state
         assert _state.get("nonexistent_attr_xyz", "fallback") == "fallback"
 
     def test_contains(self):
-        from amber.dashboard.state import _state
+        from flightrisk.dashboard.state import _state
         assert "running" in _state
         assert "nonexistent_attr_xyz" not in _state
 
     def test_getitem_raises_keyerror_for_missing(self):
-        from amber.dashboard.state import _state
+        from flightrisk.dashboard.state import _state
         with pytest.raises(KeyError):
             _ = _state["nonexistent_attr_xyz"]
 
@@ -85,7 +85,7 @@ class TestAppStateThreadSafety:
 
     def test_concurrent_match_history_writes(self):
         """Multiple threads appending to match_history via the lock."""
-        from amber.dashboard.state import app_state, match_history_lock
+        from flightrisk.dashboard.state import app_state, match_history_lock
 
         original = app_state.match_history
         app_state.match_history = []
@@ -111,7 +111,7 @@ class TestAppStateThreadSafety:
 
     def test_concurrent_scalar_reads_writes(self):
         """Concurrent reads and writes to scalar fields under the GIL."""
-        from amber.dashboard.state import app_state
+        from flightrisk.dashboard.state import app_state
 
         original_fps = app_state.fps
         errors = []
@@ -142,7 +142,7 @@ class TestAppStateThreadSafety:
 
     def test_fleet_lock_serializes_access(self):
         """fleet_lock can serialize access to fleet operations."""
-        from amber.dashboard.state import fleet_lock
+        from flightrisk.dashboard.state import fleet_lock
 
         counter = [0]
 

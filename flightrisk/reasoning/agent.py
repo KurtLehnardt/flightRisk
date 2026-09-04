@@ -16,7 +16,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 try:
     import ollama
@@ -25,7 +25,7 @@ except ImportError:
     HAS_OLLAMA = False
 
 
-class AmberAgent:
+class FlightRiskAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
 
     def __init__(self, model: str | None = None):

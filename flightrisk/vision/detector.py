@@ -7,7 +7,7 @@ Runs on Apple Silicon via MPS backend. Filters to person class only.
 import numpy as np
 from ultralytics import YOLO
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 
 class PersonDetector:

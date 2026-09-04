@@ -1,11 +1,11 @@
-"""Tests for amber.recorder.SessionRecorder."""
+"""Tests for flightrisk.recorder.SessionRecorder."""
 
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from amber.recorder import SessionRecorder
+from flightrisk.recorder import SessionRecorder
 
 
 class TestSessionRecorderInit:
@@ -32,7 +32,7 @@ class TestSessionRecorderStop:
 class TestSessionRecorderStart:
     """Tests for start behavior."""
 
-    @patch("amber.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
     def test_start_returns_string_path(self, mock_writer_cls):
         mock_writer_cls.return_value = MagicMock()
         rec = SessionRecorder()
@@ -40,14 +40,14 @@ class TestSessionRecorderStart:
         assert isinstance(path, str)
         assert "test_session.mp4" in path
 
-    @patch("amber.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
     def test_start_sets_is_recording_true(self, mock_writer_cls):
         mock_writer_cls.return_value = MagicMock()
         rec = SessionRecorder()
         rec.start(filename="test_session.mp4")
         assert rec.is_recording is True
 
-    @patch("amber.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
     def test_start_twice_returns_same_path(self, mock_writer_cls):
         mock_writer_cls.return_value = MagicMock()
         rec = SessionRecorder()
@@ -55,7 +55,7 @@ class TestSessionRecorderStart:
         path2 = rec.start(filename="different.mp4")
         assert path1 == path2
 
-    @patch("amber.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
     def test_custom_filename_works(self, mock_writer_cls):
         mock_writer_cls.return_value = MagicMock()
         rec = SessionRecorder()
@@ -73,8 +73,8 @@ class TestSessionRecorderWriteFrame:
         rec.write_frame(frame)
         assert rec.frame_count == 0
 
-    @patch("amber.recorder.cv2.VideoWriter")
-    @patch("amber.recorder.cv2.resize")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.resize")
     def test_write_frame_increments_frame_count(self, mock_resize, mock_writer_cls):
         mock_writer = MagicMock()
         mock_writer_cls.return_value = mock_writer
@@ -97,7 +97,7 @@ class TestSessionRecorderWriteFrame:
 class TestSessionRecorderStopAfterStart:
     """Tests for stop after recording."""
 
-    @patch("amber.recorder.cv2.VideoWriter")
+    @patch("flightrisk.recorder.cv2.VideoWriter")
     def test_stop_returns_path_and_sets_not_recording(self, mock_writer_cls):
         mock_writer = MagicMock()
         mock_writer_cls.return_value = mock_writer

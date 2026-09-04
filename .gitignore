@@ -31,7 +31,7 @@ captures/
 recordings/
 
 # Session database
-amber_sessions.db
+flightrisk_sessions.db
 
 # Claude worktrees
 .claude/worktrees/

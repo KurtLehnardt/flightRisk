@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 try:
-    from amber.vision.face import FaceRecognizer, HAS_INSIGHTFACE
+    from flightrisk.vision.face import FaceRecognizer, HAS_INSIGHTFACE
 except ImportError:
     HAS_INSIGHTFACE = False
 

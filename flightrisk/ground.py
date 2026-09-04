@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from typing import Any
 
-from amber.edge import DetectionMessage
+from flightrisk.edge import DetectionMessage
 
 logger = logging.getLogger(__name__)
 

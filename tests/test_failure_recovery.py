@@ -6,9 +6,9 @@ Covers:
     (its background event loop stops) mid-command.
   - DroneFleet.broadcast_command must keep notifying other drones even if
     one drone's command raises.
-  - amber.dashboard.app._frame_loop must keep running frame-to-frame even
+  - flightrisk.dashboard.app._frame_loop must keep running frame-to-frame even
     if a single frame's detection call raises.
-  - amber.dashboard.app._gemma_worker must keep draining the queue even if
+  - flightrisk.dashboard.app._gemma_worker must keep draining the queue even if
     one queued LLM call times out / raises.
 """
 
@@ -19,8 +19,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from amber.drone.controller import DroneController
-from amber.drone.fleet import DroneFleet
+from flightrisk.drone.controller import DroneController
+from flightrisk.drone.fleet import DroneFleet
 
 # Reuses the fake mavsdk module bootstrap from tests/test_mavlink.py (it
 # registers fake `mavsdk`, `mavsdk.offboard`, etc. into sys.modules as an
@@ -70,7 +70,7 @@ class TestMavlinkDisconnectDuringMove:
 
 class TestFleetBroadcastResilience:
     """DroneFleet.broadcast_command swallows per-drone exceptions
-    (amber/drone/fleet.py) so one misbehaving drone can't stop the fleet
+    (flightrisk/drone/fleet.py) so one misbehaving drone can't stop the fleet
     from receiving a command."""
 
     @staticmethod
@@ -116,12 +116,12 @@ class TestFleetBroadcastResilience:
 
 
 class TestFrameLoopResilience:
-    """amber.dashboard.app._frame_loop wraps each iteration's body in a
+    """flightrisk.dashboard.app._frame_loop wraps each iteration's body in a
     broad try/except so a single frame's failure (e.g. detector.detect
     raising) doesn't kill the background thread."""
 
     def test_frame_loop_continues_after_detection_raises(self, clean_app_state, monkeypatch):
-        from amber.dashboard.app import _frame_loop, _state, socketio
+        from flightrisk.dashboard.app import _frame_loop, _state, socketio
 
         frame = np.zeros((10, 10, 3), dtype=np.uint8)
         cap = MagicMock()
@@ -167,7 +167,7 @@ class TestFrameLoopResilience:
         })
 
         mock_emit = MagicMock()
-        monkeypatch.setattr("amber.dashboard.app.socketio.emit", mock_emit)
+        monkeypatch.setattr("flightrisk.dashboard.app.socketio.emit", mock_emit)
 
         # Blocking call: returns on its own once fake_detect flips
         # _state["running"] to False during the second iteration.
@@ -178,12 +178,12 @@ class TestFrameLoopResilience:
 
 
 class TestGemmaWorkerResilience:
-    """amber.dashboard.app._gemma_worker catches exceptions per queued item
+    """flightrisk.dashboard.app._gemma_worker catches exceptions per queued item
     so one bad/timed-out LLM call doesn't stop later items from being
     processed."""
 
     def test_worker_continues_after_one_llm_call_raises(self, clean_app_state, monkeypatch):
-        from amber.dashboard.app import _gemma_queue, _gemma_worker, _state, socketio
+        from flightrisk.dashboard.app import _gemma_queue, _gemma_worker, _state, socketio
 
         # Drain any leftover items from other tests before starting.
         while not _gemma_queue.empty():
@@ -202,7 +202,7 @@ class TestGemmaWorkerResilience:
 
         emitted = []
         monkeypatch.setattr(
-            "amber.dashboard.app.socketio.emit",
+            "flightrisk.dashboard.app.socketio.emit",
             lambda event, *args, **kwargs: emitted.append((event, args[0] if args else None)),
         )
 

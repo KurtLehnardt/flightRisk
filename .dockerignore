@@ -9,7 +9,7 @@ __pycache__/
 ios/
 captures/
 recordings/
-amber_sessions.db
+flightrisk_sessions.db
 eval_data/**/*.jpg
 eval_data/**/*.png
 tests/

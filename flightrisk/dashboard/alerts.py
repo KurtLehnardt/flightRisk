@@ -18,7 +18,7 @@ from pathlib import Path
 
 import cv2
 
-from amber.dashboard.state import (
+from flightrisk.dashboard.state import (
     app_state,
     match_history_lock,
     alerted_tracks,

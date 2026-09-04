@@ -1,4 +1,4 @@
-"""SQLite session persistence for Amber Drone match history.
+"""SQLite session persistence for FlightRisk match history.
 
 Stores search sessions and match results so history survives
 dashboard restarts. Thread-safe for use from Flask + background threads.
@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "amber_sessions.db"
+DB_PATH = Path(__file__).parent.parent / "flightrisk_sessions.db"
 
 _CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -65,7 +65,7 @@ class SessionDB:
 
     Sensitive text fields (match reasoning, target descriptions) are encrypted
     at rest using Fernet symmetric encryption when an encryption key is
-    configured via the ``AMBER_ENCRYPTION_KEY`` environment variable.
+    configured via the ``FLIGHTRISK_ENCRYPTION_KEY`` environment variable.
 
     **Image files are NOT covered by application-layer encryption.**
     Target photos, match snapshots, and detection crops are written to disk as
@@ -82,8 +82,8 @@ class SessionDB:
         self._conn.execute("PRAGMA journal_mode=WAL;")
 
         # Optional Fernet encryption for sensitive fields (match reasoning).
-        # Enabled when encryption_key is passed or AMBER_ENCRYPTION_KEY env var is set.
-        key = encryption_key or os.environ.get("AMBER_ENCRYPTION_KEY")
+        # Enabled when encryption_key is passed or FLIGHTRISK_ENCRYPTION_KEY env var is set.
+        key = encryption_key or os.environ.get("FLIGHTRISK_ENCRYPTION_KEY")
         self._fernet = None
         if key:
             try:
@@ -92,7 +92,7 @@ class SessionDB:
                 self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
             except Exception:
                 raise ValueError(
-                    "AMBER_ENCRYPTION_KEY must be a valid Fernet key "
+                    "FLIGHTRISK_ENCRYPTION_KEY must be a valid Fernet key "
                     "(generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
                 )
 

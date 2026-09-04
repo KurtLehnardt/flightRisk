@@ -38,10 +38,10 @@ class FaceRecognizer:
             raise RuntimeError("pip install insightface onnxruntime")
 
         if match_threshold is None:
-            from amber.config import get_config
+            from flightrisk.config import get_config
             match_threshold = get_config().vision.face_match_threshold
         if det_size is None:
-            from amber.config import get_config
+            from flightrisk.config import get_config
             det_size = get_config().vision.face_det_size
 
         self.match_threshold = match_threshold

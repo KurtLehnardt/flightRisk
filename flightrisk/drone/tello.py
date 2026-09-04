@@ -11,10 +11,10 @@ from typing import Callable
 import numpy as np
 from djitellopy import Tello
 
-from amber.config import get_config
-from amber.drone.controller import DroneCapabilities, DroneController, DroneState
+from flightrisk.config import get_config
+from flightrisk.drone.controller import DroneCapabilities, DroneController, DroneState
 
-# Backward-compatible re-export so `from amber.drone.tello import DroneState` still works
+# Backward-compatible re-export so `from flightrisk.drone.tello import DroneState` still works
 __all__ = ["TelloController", "DroneState", "DroneCapabilities", "DroneController"]
 
 
@@ -188,7 +188,7 @@ class TelloController:
 
     # NOTE: no goto_gps() — the standard Tello has no GPS. TelloController
     # intentionally only satisfies `DroneController`, not
-    # `GpsDroneController` (see amber/drone/controller.py). Callers must
+    # `GpsDroneController` (see flightrisk/drone/controller.py). Callers must
     # check `isinstance(drone, GpsDroneController)` or
     # `drone.capabilities.has_gps` before invoking GPS navigation.
 

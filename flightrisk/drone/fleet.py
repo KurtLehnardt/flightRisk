@@ -12,7 +12,7 @@ import logging
 import threading
 from typing import Callable
 
-from amber.drone.controller import DroneController
+from flightrisk.drone.controller import DroneController
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _default_factory(name: str, host: str) -> DroneController:
     """Build a TelloController. Imported lazily so DroneFleet has no hard
     dependency on the Tello backend (or its djitellopy dependency)."""
-    from amber.drone.tello import TelloController
+    from flightrisk.drone.tello import TelloController
     return TelloController(name=name, host=host)
 
 

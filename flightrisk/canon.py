@@ -9,15 +9,15 @@ import cv2
 import numpy as np
 
 if TYPE_CHECKING:
-    from amber.persistence import SessionDB
+    from flightrisk.persistence import SessionDB
 
 
 class TargetCanon:
-    def __init__(self, db_path: str = "amber_sessions.db", session_db: "SessionDB | None" = None):
+    def __init__(self, db_path: str = "flightrisk_sessions.db", session_db: "SessionDB | None" = None):
         """Create a TargetCanon.
 
         By default opens its own SQLite connection to *db_path*. When
-        *session_db* (an ``amber.persistence.SessionDB``) is provided, its
+        *session_db* (an ``flightrisk.persistence.SessionDB``) is provided, its
         connection is reused instead -- two independent ``sqlite3.connect()``
         calls against the same database file can otherwise contend and raise
         ``SQLITE_BUSY`` under concurrent writes from Flask + background

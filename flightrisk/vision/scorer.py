@@ -8,7 +8,7 @@ New signals (thermal, gait, etc.) can be added without touching this
 module's internals via `register_signal()` — see MatchScorer.score().
 """
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 # Names populated internally via score()'s named params (reid_score,
 # face_score, reasoning_result). These may not be used as **signals
@@ -102,7 +102,7 @@ class MatchScorer:
         Args:
             reid_score: Cosine similarity from ReID (0-1).
             face_score: Cosine similarity from face recognition (0-1).
-            reasoning_result: Dict from AmberAgent with 'match', 'confidence' keys.
+            reasoning_result: Dict from FlightRiskAgent with 'match', 'confidence' keys.
             **signals: Additional signals registered via register_signal(),
                 passed as `name=score` keyword arguments (0-1 each).
 

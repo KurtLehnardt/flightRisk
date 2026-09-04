@@ -17,12 +17,12 @@ from unittest.mock import MagicMock
 import cv2
 import numpy as np
 
-from amber.dashboard import app as app_module
-from amber.dashboard.app import app, socketio, _state
-from amber.dashboard.state import app_state
-from amber.edge import Detection, DetectionMessage
-from amber.ground import GroundStation
-from amber.vision.scorer import MatchScorer
+from flightrisk.dashboard import app as app_module
+from flightrisk.dashboard.app import app, socketio, _state
+from flightrisk.dashboard.state import app_state
+from flightrisk.edge import Detection, DetectionMessage
+from flightrisk.ground import GroundStation
+from flightrisk.vision.scorer import MatchScorer
 
 
 def _jpeg_bytes(size=(20, 20)):

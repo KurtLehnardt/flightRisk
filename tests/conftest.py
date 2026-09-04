@@ -31,7 +31,7 @@ def large_crop():
 
 @pytest.fixture(autouse=False)
 def clean_app_state():
-    """Reset amber.dashboard.app module-level state for test isolation.
+    """Reset flightrisk.dashboard.app module-level state for test isolation.
 
     Request this fixture explicitly in any test that reads or mutates
     ``app_state`` or ``_alerted_tracks`` -- it snapshots both before the
@@ -40,8 +40,8 @@ def clean_app_state():
     """
     import copy
     import dataclasses
-    from amber.dashboard import app as app_module
-    from amber.dashboard.state import app_state, AppState
+    from flightrisk.dashboard import app as app_module
+    from flightrisk.dashboard.state import app_state, AppState
 
     # Snapshot the current AppState fields (shallow copy is fine for
     # the scalar / None fields that tests typically touch).

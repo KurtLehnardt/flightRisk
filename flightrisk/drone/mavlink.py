@@ -17,9 +17,9 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from amber.async_bridge import AsyncBridge
-from amber.config import get_config
-from amber.drone.controller import DroneCapabilities, DroneState
+from flightrisk.async_bridge import AsyncBridge
+from flightrisk.config import get_config
+from flightrisk.drone.controller import DroneCapabilities, DroneState
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class MavlinkController:
         self.rtsp_url = rtsp_url or f"rtsp://{host_ip}:8554/camera"
 
         # Async internals -- background event loop bridge shared with
-        # amber.transport's sync wrappers (see amber.async_bridge.AsyncBridge).
+        # flightrisk.transport's sync wrappers (see flightrisk.async_bridge.AsyncBridge).
         self._bridge = AsyncBridge(name=f"{name}-mavlink", cmd_timeout=get_config().drone.mavlink_cmd_timeout)
         self._system: System | None = None
         self._telemetry_tasks: list[asyncio.Task] = []
@@ -120,8 +120,8 @@ class MavlinkController:
     # Async event loop management
     # ------------------------------------------------------------------
     #
-    # These delegate to a shared amber.async_bridge.AsyncBridge instance
-    # (the same bridge pattern used by amber.transport's sync wrappers).
+    # These delegate to a shared flightrisk.async_bridge.AsyncBridge instance
+    # (the same bridge pattern used by flightrisk.transport's sync wrappers).
     # _loop/_loop_thread stay as properties -- rather than being renamed
     # to go through the bridge directly -- because tests and internal
     # methods below read/assign them directly (e.g. to inject a fake

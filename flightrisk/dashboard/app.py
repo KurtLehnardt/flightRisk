@@ -1,4 +1,4 @@
-"""Amber Drone web dashboard.
+"""FlightRisk web dashboard.
 
 Real-time web UI showing drone video feed, detection overlays,
 match alerts, drone telemetry, and search controls.
@@ -21,22 +21,22 @@ import numpy as np
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
-from amber.vision.detector import PersonDetector
-from amber.vision.reid import PersonReID
-from amber.vision.quality import ImageQualityScorer
-from amber.vision.scorer import MatchScorer
-from amber.vision.threshold_tuner import ThresholdTuner
-from amber.vision.tracker import DetectionTracker
-from amber.config import get_config
-from amber.recorder import SessionRecorder
-from amber.observability import StructuredLogger, MetricsCollector
-from amber.persistence import SessionDB
-from amber.drone.fleet import DroneFleet
-from amber.drone.controller import DroneController
-from amber.canon import TargetCanon
+from flightrisk.vision.detector import PersonDetector
+from flightrisk.vision.reid import PersonReID
+from flightrisk.vision.quality import ImageQualityScorer
+from flightrisk.vision.scorer import MatchScorer
+from flightrisk.vision.threshold_tuner import ThresholdTuner
+from flightrisk.vision.tracker import DetectionTracker
+from flightrisk.config import get_config
+from flightrisk.recorder import SessionRecorder
+from flightrisk.observability import StructuredLogger, MetricsCollector
+from flightrisk.persistence import SessionDB
+from flightrisk.drone.fleet import DroneFleet
+from flightrisk.drone.controller import DroneController
+from flightrisk.canon import TargetCanon
 
 try:
-    from amber.telemetry import init_telemetry, get_tracer, get_meter, AmberMetrics
+    from flightrisk.telemetry import init_telemetry, get_tracer, get_meter, FlightRiskMetrics
     _HAS_TELEMETRY = True
 except ImportError:
     _HAS_TELEMETRY = False
@@ -44,7 +44,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Import decomposed modules
 # ---------------------------------------------------------------------------
-from amber.dashboard.state import (  # noqa: F401 — re-exported for backward compat
+from flightrisk.dashboard.state import (  # noqa: F401 — re-exported for backward compat
     SourceConfig,
     app_state,
     _state,
@@ -57,14 +57,14 @@ from amber.dashboard.state import (  # noqa: F401 — re-exported for backward c
     ALERT_COOLDOWN,
     GEMMA_RATE_LIMIT,
 )
-from amber.dashboard.alerts import (  # noqa: F401 — re-exported for backward compat
+from flightrisk.dashboard.alerts import (  # noqa: F401 — re-exported for backward compat
     _compute_track_key,
     _is_within_alert_cooldown,
     _save_match_snapshot,
     _gemma_worker,
     CAPTURES_DIR,
 )
-from amber.dashboard.pipeline import (  # noqa: F401 — re-exported for backward compat
+from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for backward compat
     _build_track_id_by_bbox,
     _frame_loop,
 )
@@ -78,24 +78,24 @@ app = Flask(
     template_folder=str(Path(__file__).parent / "templates"),
     static_folder=str(Path(__file__).parent / "static"),
 )
-app.config["SECRET_KEY"] = os.environ.get("AMBER_SECRET_KEY", secrets.token_hex(32))
+app.config["SECRET_KEY"] = os.environ.get("FLIGHTRISK_SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
 
-# CORS: default "*" for dev, restrict via AMBER_CORS_ORIGINS env var in production
-cors_origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
+# CORS: default "*" for dev, restrict via FLIGHTRISK_CORS_ORIGINS env var in production
+cors_origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
 _cors_allowed = cors_origins if cors_origins == "*" else cors_origins.split(",")
 socketio = SocketIO(app, cors_allowed_origins=_cors_allowed, async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
 
 # --- API key authentication ---
-# Empty string is treated as "unset" so an accidental AMBER_API_KEY="" never
+# Empty string is treated as "unset" so an accidental FLIGHTRISK_API_KEY="" never
 # half-enables auth with a blank key.
-_AMBER_API_KEY = os.environ.get("AMBER_API_KEY") or None
+_FLIGHTRISK_API_KEY = os.environ.get("FLIGHTRISK_API_KEY") or None
 
 log = logging.getLogger(__name__)
-if not _AMBER_API_KEY:
-    log.warning("AMBER_API_KEY not set — API endpoints are unauthenticated")
-if not os.environ.get("AMBER_ENCRYPTION_KEY"):
-    log.warning("AMBER_ENCRYPTION_KEY not set — biometric data stored unencrypted")
+if not _FLIGHTRISK_API_KEY:
+    log.warning("FLIGHTRISK_API_KEY not set — API endpoints are unauthenticated")
+if not os.environ.get("FLIGHTRISK_ENCRYPTION_KEY"):
+    log.warning("FLIGHTRISK_ENCRYPTION_KEY not set — biometric data stored unencrypted")
 
 
 # Public paths that stay reachable even when an API key is configured, so the
@@ -107,7 +107,7 @@ _PUBLIC_PATHS = frozenset({"/", "/api/health"})
 def _require_api_key():
     """Fail-closed API-key gate applied to every request (Option C).
 
-    Deny-by-default: when ``AMBER_API_KEY`` is configured, EVERY request must
+    Deny-by-default: when ``FLIGHTRISK_API_KEY`` is configured, EVERY request must
     carry a matching ``Authorization: Bearer <key>`` header, except the small
     set of public paths (the root HTML page ``/``, the ``/api/health`` ping, and
     static assets) that must stay reachable so the dashboard loads in a browser.
@@ -115,12 +115,12 @@ def _require_api_key():
     added in the future is protected automatically -- there is nothing to keep in
     sync.
 
-    No-op passthrough when ``AMBER_API_KEY`` is unset/empty (local dev keeps
+    No-op passthrough when ``FLIGHTRISK_API_KEY`` is unset/empty (local dev keeps
     working with no key). The SocketIO control channel is authenticated
     separately at connect time (see ``on_connect``); individual SocketIO events
     are not covered by this check.
     """
-    if not _AMBER_API_KEY:
+    if not _FLIGHTRISK_API_KEY:
         return None
     # Static assets: match both the Flask endpoint and the URL prefix so a
     # custom static route or direct /static/... path both stay open.
@@ -129,7 +129,7 @@ def _require_api_key():
     if request.path in _PUBLIC_PATHS:
         return None
     auth = request.headers.get("Authorization", "")
-    if not hmac.compare_digest(auth.encode(), f"Bearer {_AMBER_API_KEY}".encode()):
+    if not hmac.compare_digest(auth.encode(), f"Bearer {_FLIGHTRISK_API_KEY}".encode()):
         return jsonify({"error": "unauthorized"}), 401
     return None
 
@@ -235,7 +235,7 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
 
     Runs off the asyncio loop in a ``GroundTransport`` executor thread, so it
     uses plain (thread-safe) ``socketio.emit(...)`` rather than the
-    request-context ``emit()``. See ``amber/transport.py`` for the dispatch.
+    request-context ``emit()``. See ``flightrisk/transport.py`` for the dispatch.
     """
     station = app_state.ground_station
     if station is None:
@@ -343,7 +343,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
     if app_state.face is None:
         try:
-            from amber.vision.face import FaceRecognizer
+            from flightrisk.vision.face import FaceRecognizer
             app_state.face = FaceRecognizer(match_threshold=0.35)
         except Exception as e:
             log.warning("insightface_unavailable", error=str(e))
@@ -356,8 +356,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
     if app_state.reasoning is None:
         try:
-            from amber.reasoning.agent import AmberAgent
-            app_state.reasoning = AmberAgent(model="gemma4:latest")
+            from flightrisk.reasoning.agent import FlightRiskAgent
+            app_state.reasoning = FlightRiskAgent(model="gemma4:latest")
         except Exception as e:
             log.warning("gemma4_unavailable", error=str(e))
 
@@ -389,7 +389,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     # Initialize obstacle guard
     if app_state.obstacle_guard is None:
         try:
-            from amber.drone.obstacle import ObstacleGuard
+            from flightrisk.drone.obstacle import ObstacleGuard
             app_state.obstacle_guard = ObstacleGuard()
             log.info("obstacle_guard_initialized")
         except Exception as e:
@@ -404,7 +404,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         otel_enabled = init_telemetry()
         if otel_enabled:
             app_state.tracer = get_tracer()
-            app_state.otel_metrics = AmberMetrics(get_meter())
+            app_state.otel_metrics = FlightRiskMetrics(get_meter())
             log.info("opentelemetry_enabled")
 
     app_state.source_config = source_config
@@ -426,7 +426,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     app_state.auto_connect_stop = stop_event
 
     if source == "tello":
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
         fleet = DroneFleet(factory=lambda n, h: TelloController(n, h))
         app_state.fleet = fleet
         def _auto_connect_loop():
@@ -459,7 +459,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
     elif source == "mavlink":
         # Imported lazily so `mavsdk` is only required when actually used.
-        from amber.drone.mavlink import MavlinkController
+        from flightrisk.drone.mavlink import MavlinkController
         fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
         app_state.fleet = fleet
         def _auto_connect_loop():
@@ -512,12 +512,12 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             app_state.cap = cv2.VideoCapture(video_path)
     elif source == "edge":
         # Ground-station mode: no local drone fleet or capture device. Edge
-        # devices (amber/edge.py) connect to the WebSocket *server* we start
+        # devices (flightrisk/edge.py) connect to the WebSocket *server* we start
         # here and stream DetectionMessages; GroundStation scores them and
         # the adapter below streams results to the browser. The normal
         # _frame_loop idles harmlessly (fleet/cap are None).
-        from amber.ground import GroundStation
-        from amber.transport import GroundTransportSync
+        from flightrisk.ground import GroundStation
+        from flightrisk.transport import GroundTransportSync
 
         app_state.fleet = None
         app_state.cap = None
@@ -568,7 +568,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     else:
         # Backward-compat: treat any other source string as a video path
         # (e.g. direct callers of run_dashboard()/_init_pipeline() that
-        # predate the --source enum, such as amber/main.py --dashboard).
+        # predate the --source enum, such as flightrisk/main.py --dashboard).
         app_state.fleet = None
         app_state.cap = cv2.VideoCapture(source)
 
@@ -764,9 +764,9 @@ def api_threshold_suggestion():
 @socketio.on("connect")
 def on_connect(auth=None):
     """SocketIO auth is handled here, separate from the REST before_request gate."""
-    if _AMBER_API_KEY is not None:
+    if _FLIGHTRISK_API_KEY is not None:
         provided = (auth or {}).get("api_key") if isinstance(auth, dict) else None
-        if provided is None or not hmac.compare_digest(provided.encode(), _AMBER_API_KEY.encode()):
+        if provided is None or not hmac.compare_digest(provided.encode(), _FLIGHTRISK_API_KEY.encode()):
             return False  # reject connection
     emit("status", {"connected": True, "source": app_state.source})
     if app_state.target_photo:
@@ -943,7 +943,7 @@ def on_start_search(data):
         emit("error", {"message": "Drone must be flying to start search"})
         return
 
-    from amber.drone.search import get_search_pattern, PatternType
+    from flightrisk.drone.search import get_search_pattern, PatternType
 
     pattern_name = data.get("pattern", "expanding_square")
     pattern_type = PatternType(pattern_name)
@@ -1079,7 +1079,7 @@ def on_register_drone(data):
             # registration on a mavlink deployment must build a
             # MavlinkController, not silently create a Tello-backed fleet.
             if current_source == "mavlink":
-                from amber.drone.mavlink import MavlinkController
+                from flightrisk.drone.mavlink import MavlinkController
                 rtsp_url = app_state.rtsp_url
                 fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
             else:

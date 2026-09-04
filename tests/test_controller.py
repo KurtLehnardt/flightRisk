@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from amber.drone.controller import (
+from flightrisk.drone.controller import (
     DroneCapabilities,
     DroneController,
     DroneState,
@@ -66,42 +66,42 @@ class TestDroneCapabilities:
 class TestDroneControllerProtocol:
     """Test that TelloController satisfies the DroneController protocol."""
 
-    @patch("amber.drone.tello.Tello")
+    @patch("flightrisk.drone.tello.Tello")
     def test_tello_is_drone_controller(self, mock_tello_cls):
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
         assert isinstance(ctrl, DroneController)
 
-    @patch("amber.drone.tello.Tello")
+    @patch("flightrisk.drone.tello.Tello")
     def test_tello_has_no_goto_gps(self, mock_tello_cls):
         """TelloController must not implement goto_gps at all — the standard
         Tello has no GPS, and a method that only raises NotImplementedError
         is a Liskov Substitution violation (callers can't trust the
         DroneController interface without knowing the concrete type)."""
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
         assert not hasattr(ctrl, "goto_gps")
 
-    @patch("amber.drone.tello.Tello")
+    @patch("flightrisk.drone.tello.Tello")
     def test_tello_is_not_gps_drone_controller(self, mock_tello_cls):
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
         assert not isinstance(ctrl, GpsDroneController)
 
-    @patch("amber.drone.tello.Tello")
+    @patch("flightrisk.drone.tello.Tello")
     def test_tello_capabilities(self, mock_tello_cls):
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
         assert ctrl.capabilities.has_gps is False
         assert ctrl.capabilities.max_altitude_m == 10
 
     def test_backward_compat_import(self):
-        """Verify DroneState can still be imported from amber.drone.tello."""
-        from amber.drone.tello import DroneState as TelloDroneState
+        """Verify DroneState can still be imported from flightrisk.drone.tello."""
+        from flightrisk.drone.tello import DroneState as TelloDroneState
 
         assert TelloDroneState is DroneState
 
@@ -114,8 +114,8 @@ class TestDroneControllerProtocol:
         assert not isinstance(FakeDrone(), DroneController)
 
     def test_drone_capabilities_reexported_from_tello(self):
-        """Verify DroneCapabilities can be imported from amber.drone.tello."""
-        from amber.drone.tello import DroneCapabilities as TelloDroneCapabilities
+        """Verify DroneCapabilities can be imported from flightrisk.drone.tello."""
+        from flightrisk.drone.tello import DroneCapabilities as TelloDroneCapabilities
 
         assert TelloDroneCapabilities is DroneCapabilities
 
@@ -153,11 +153,11 @@ class TestGpsDroneControllerProtocol:
         assert isinstance(drone, DroneController)
         assert isinstance(drone, GpsDroneController)
 
-    @patch("amber.drone.tello.Tello")
+    @patch("flightrisk.drone.tello.Tello")
     def test_drone_controller_does_not_require_goto_gps(self, mock_tello_cls):
         """The base DroneController protocol must be satisfiable without
         goto_gps — this is the whole point of the LSP fix."""
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
 
         ctrl = TelloController(name="test", host="192.168.10.1")
         assert isinstance(ctrl, DroneController)

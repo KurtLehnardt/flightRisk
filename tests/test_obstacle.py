@@ -62,7 +62,7 @@ def mock_midas(monkeypatch):
 
 @pytest.fixture
 def guard():
-    from amber.drone.obstacle import ObstacleGuard
+    from flightrisk.drone.obstacle import ObstacleGuard
     return ObstacleGuard(min_safe_depth=0.35, check_interval=0.0)
 
 
@@ -182,7 +182,7 @@ class TestActionLogic:
 class TestCaching:
     def test_cached_result_within_interval(self, mock_midas, frame):
         """Calling check_path twice within check_interval should return cached result."""
-        from amber.drone.obstacle import ObstacleGuard
+        from flightrisk.drone.obstacle import ObstacleGuard
         guard = ObstacleGuard(min_safe_depth=0.35, check_interval=5.0)
 
         mock_midas.set_depth_map(torch.ones(1, 256, 256) * 0.1)
@@ -197,7 +197,7 @@ class TestCaching:
 
     def test_cache_expires(self, mock_midas, frame):
         """After check_interval expires, a fresh inference should run."""
-        from amber.drone.obstacle import ObstacleGuard
+        from flightrisk.drone.obstacle import ObstacleGuard
         guard = ObstacleGuard(min_safe_depth=0.35, check_interval=0.05)
 
         mock_midas.set_depth_map(torch.ones(1, 256, 256) * 0.1)
@@ -294,7 +294,7 @@ class TestDepthVisualization:
     def test_visualization_uses_cached_depth(self, mock_midas, frame):
         """Visualization should use cached depth map, not run inference again."""
         import unittest.mock as mock_module
-        from amber.drone.obstacle import ObstacleGuard
+        from flightrisk.drone.obstacle import ObstacleGuard
 
         guard = ObstacleGuard(min_safe_depth=0.35, check_interval=5.0)
 

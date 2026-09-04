@@ -1,4 +1,4 @@
-"""Structured logging and metrics collection for the Amber Drone pipeline.
+"""Structured logging and metrics collection for the FlightRisk pipeline.
 
 Provides JSON-formatted logging with component/event context and
 per-session metrics tracking for detection, matching, and reasoning.
@@ -10,7 +10,7 @@ import time
 import threading
 from typing import Any, Optional
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 
 class StructuredLogger:
@@ -20,9 +20,9 @@ class StructuredLogger:
     and arbitrary context kwargs.
     """
 
-    def __init__(self, component: str = "amber", level: int = logging.INFO):
+    def __init__(self, component: str = "flightrisk", level: int = logging.INFO):
         self.component = component
-        self._logger = logging.getLogger(f"amber.{component}")
+        self._logger = logging.getLogger(f"flightrisk.{component}")
         self._logger.setLevel(level)
 
         if not self._logger.handlers:

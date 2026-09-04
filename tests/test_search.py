@@ -1,8 +1,8 @@
-"""Tests for amber.drone.search SAR patterns."""
+"""Tests for flightrisk.drone.search SAR patterns."""
 
 import pytest
 
-from amber.drone.search import (
+from flightrisk.drone.search import (
     PatternType,
     Waypoint,
     _clamp_distance,

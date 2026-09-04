@@ -1,4 +1,4 @@
-"""Tests for amber.dashboard.pipeline -- frame processing loop and helpers."""
+"""Tests for flightrisk.dashboard.pipeline -- frame processing loop and helpers."""
 
 import base64
 import queue
@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import numpy as np
 import pytest
 
-from amber.dashboard.pipeline import _build_track_id_by_bbox, _frame_loop
-from amber.dashboard.state import (
+from flightrisk.dashboard.pipeline import _build_track_id_by_bbox, _frame_loop
+from flightrisk.dashboard.state import (
     app_state,
     alerted_tracks,
     match_history_lock,
@@ -230,7 +230,7 @@ class TestFrameLoopMatchAlert:
 
             mock_socketio.emit = tracking_emit
 
-            with patch("amber.dashboard.pipeline._save_match_snapshot"):
+            with patch("flightrisk.dashboard.pipeline._save_match_snapshot"):
                 _frame_loop(mock_socketio)
 
             assert "match_alert" in emitted_events

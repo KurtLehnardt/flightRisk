@@ -17,8 +17,8 @@ import pytest
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from amber.edge import Detection, DetectionMessage
-from amber.transport import (
+from flightrisk.edge import Detection, DetectionMessage
+from flightrisk.transport import (
     EdgeTransport,
     EdgeTransportSync,
     GroundTransport,

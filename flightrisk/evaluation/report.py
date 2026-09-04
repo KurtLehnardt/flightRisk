@@ -23,7 +23,7 @@ def generate_text_report(result: EvalResult) -> str:
 
     lines = [
         "=" * 60,
-        "  Amber Drone — Match Evaluation Report",
+        "  FlightRisk — Match Evaluation Report",
         "=" * 60,
         "",
         f"  Total pairs evaluated:  {total}",

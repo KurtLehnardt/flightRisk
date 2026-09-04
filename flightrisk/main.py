@@ -1,17 +1,17 @@
-"""Amber Drone — main entry point.
+"""FlightRisk — main entry point.
 
 Connects to a Tello drone, runs the person detection + ReID pipeline,
 and displays results in an OpenCV window. Web dashboard is separate.
 
 Usage:
     # With a real drone connected via WiFi:
-    python -m amber.main --target reference_photo.jpg
+    python -m flightrisk.main --target reference_photo.jpg
 
     # Test with webcam (no drone needed):
-    python -m amber.main --target reference_photo.jpg --webcam
+    python -m flightrisk.main --target reference_photo.jpg --webcam
 
     # Test with a video file:
-    python -m amber.main --target reference_photo.jpg --video test.mp4
+    python -m flightrisk.main --target reference_photo.jpg --video test.mp4
 """
 
 import argparse
@@ -20,8 +20,8 @@ import sys
 
 import cv2
 
-from amber.vision.detector import PersonDetector
-from amber.vision.reid import PersonReID
+from flightrisk.vision.detector import PersonDetector
+from flightrisk.vision.reid import PersonReID
 
 
 def run_pipeline(
@@ -52,8 +52,8 @@ def run_pipeline(
     # --- Initialize Gemma 4 reasoning (optional, lazy) ---
     reasoning_agent = None
     try:
-        from amber.reasoning.agent import AmberAgent
-        reasoning_agent = AmberAgent(model="gemma4:latest")
+        from flightrisk.reasoning.agent import FlightRiskAgent
+        reasoning_agent = FlightRiskAgent(model="gemma4:latest")
     except Exception as e:
         print(f"[reasoning] Gemma 4 not available ({e}). Running without LLM reasoning.")
 
@@ -62,7 +62,7 @@ def run_pipeline(
     drone = None
 
     if source == "tello":
-        from amber.drone.tello import TelloController
+        from flightrisk.drone.tello import TelloController
         drone = TelloController()
         if not drone.connect():
             print("Failed to connect to Tello. Exiting.")
@@ -79,7 +79,7 @@ def run_pipeline(
             sys.exit(1)
 
     # --- Main loop ---
-    print("\nAmber Drone pipeline running. Press 'q' to quit.\n")
+    print("\nFlightRisk pipeline running. Press 'q' to quit.\n")
     frame_count = 0
     fps_start = time.time()
     last_reasoning_time = 0
@@ -163,7 +163,7 @@ def run_pipeline(
                 )
 
             if show_window:
-                cv2.imshow("Amber Drone", annotated)
+                cv2.imshow("FlightRisk", annotated)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     break
@@ -183,7 +183,7 @@ def run_pipeline(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Amber Drone — AI lost child finder")
+    parser = argparse.ArgumentParser(description="FlightRisk — AI lost child finder")
     parser.add_argument("--target", "-t", type=str, help="Path to reference photo of the child")
     parser.add_argument("--webcam", action="store_true", help="Use webcam instead of Tello")
     parser.add_argument("--video", "-v", type=str, help="Path to a test video file")
@@ -202,7 +202,7 @@ def main():
         source = "tello"
 
     if args.dashboard:
-        from amber.dashboard.app import run_dashboard, SourceConfig
+        from flightrisk.dashboard.app import run_dashboard, SourceConfig
         run_dashboard(SourceConfig(source=source), target_path=args.target, port=args.port)
     else:
         run_pipeline(

@@ -1,19 +1,19 @@
-"""Centralized configuration for the Amber Drone system.
+"""Centralized configuration for the FlightRisk system.
 
 Thresholds, model names, intervals, grid sizes, and queue limits used to be
-scattered as magic literals across `amber/vision/*`, `amber/reasoning/*`,
-`amber/drone/*`, and `amber/dashboard/app.py`. This module is the single
+scattered as magic literals across `flightrisk/vision/*`, `flightrisk/reasoning/*`,
+`flightrisk/drone/*`, and `flightrisk/dashboard/app.py`. This module is the single
 place to read (and eventually tune, per deployment profile) those values.
 
 Every default below mirrors the value that was already hardcoded at its
 call site before this module existed, so introducing `AmberConfig` is
 behavior-neutral: nothing changes until a value is overridden, either by
-constructing `AmberConfig`/`VisionConfig`/etc. directly or via `AMBER_*`
+constructing `AmberConfig`/`VisionConfig`/etc. directly or via `FLIGHTRISK_*`
 environment variables (see `AmberConfig.from_env`).
 
 Usage in a module that owns a tunable constant:
 
-    from amber.config import get_config
+    from flightrisk.config import get_config
 
     class PersonReID:
         def __init__(self, match_threshold: float | None = None):
@@ -99,7 +99,7 @@ class AmberConfig:
 
     @classmethod
     def from_env(cls) -> "AmberConfig":
-        """Build a config with values overridden from `AMBER_*` env vars.
+        """Build a config with values overridden from `FLIGHTRISK_*` env vars.
 
         Only a curated subset of the most commonly-tuned values is exposed
         via environment variables today. Anything not listed here can still
@@ -110,15 +110,15 @@ class AmberConfig:
         """
         config = cls()
         env_map = {
-            "AMBER_DETECTOR_MODEL": ("vision", "detector_model", str),
-            "AMBER_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
-            "AMBER_REID_THRESHOLD": ("vision", "reid_threshold", float),
-            "AMBER_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
-            "AMBER_GEMMA_MODEL": ("reasoning", "model", str),
-            "AMBER_ALERT_COOLDOWN": ("reasoning", "alert_cooldown", float),
-            "AMBER_QUEUE_SIZE": ("reasoning", "queue_maxsize", int),
-            "AMBER_PORT": ("dashboard", "port", int),
-            "AMBER_MAVLINK_ADDRESS": ("drone", "mavlink_default_address", str),
+            "FLIGHTRISK_DETECTOR_MODEL": ("vision", "detector_model", str),
+            "FLIGHTRISK_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
+            "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
+            "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
+            "FLIGHTRISK_GEMMA_MODEL": ("reasoning", "model", str),
+            "FLIGHTRISK_ALERT_COOLDOWN": ("reasoning", "alert_cooldown", float),
+            "FLIGHTRISK_QUEUE_SIZE": ("reasoning", "queue_maxsize", int),
+            "FLIGHTRISK_PORT": ("dashboard", "port", int),
+            "FLIGHTRISK_MAVLINK_ADDRESS": ("drone", "mavlink_default_address", str),
         }
         for env_key, (section, attr, type_fn) in env_map.items():
             val = os.environ.get(env_key)
@@ -158,7 +158,7 @@ def get_config() -> AmberConfig:
 def reset_config() -> None:
     """Clear the cached singleton so the next `get_config()` reloads it.
 
-    Mainly for tests that need to change `AMBER_*` env vars mid-run and
+    Mainly for tests that need to change `FLIGHTRISK_*` env vars mid-run and
     observe a fresh config.
     """
     global _config

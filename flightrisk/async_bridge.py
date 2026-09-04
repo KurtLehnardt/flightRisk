@@ -6,8 +6,8 @@ app) can drive an async API by submitting coroutines onto it via
 ``asyncio.run_coroutine_threadsafe`` and blocking for the result.
 
 This is the "sync-over-async" bridge pattern that was previously
-duplicated between ``amber.drone.mavlink.MavlinkController`` (MAVSDK)
-and ``amber.transport.EdgeTransportSync`` / ``GroundTransportSync``
+duplicated between ``flightrisk.drone.mavlink.MavlinkController`` (MAVSDK)
+and ``flightrisk.transport.EdgeTransportSync`` / ``GroundTransportSync``
 (WebSocket transports). Both now share this single implementation for
 loop lifecycle management (start/stop) and coroutine dispatch with
 timeout handling.

@@ -1,4 +1,4 @@
-"""Allow running as: python -m amber.evaluation"""
+"""Allow running as: python -m flightrisk.evaluation"""
 
 from .cli import main
 

@@ -1,4 +1,4 @@
-"""Allow running as: python -m amber"""
-from amber.main import main
+"""Allow running as: python -m flightrisk"""
+from flightrisk.main import main
 
 main()

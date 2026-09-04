@@ -19,19 +19,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /install /usr/local
-COPY amber/ amber/
+COPY flightrisk/ flightrisk/
 COPY eval_data/ eval_data/
 COPY pytest.ini .
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import requests; r=requests.get('http://localhost:5555/api/health'); r.raise_for_status()"
 
-ENV AMBER_SOURCE=webcam
-ENV AMBER_PORT=5555
-# Reserved for amber.dashboard.__main__ --source flag (PR #26)
-ENV AMBER_MAVLINK_ADDRESS=udp://:14540
-# For production: use wss:// with AMBER_EDGE_WS_TOKEN
-ENV AMBER_EDGE_WS=ws://localhost:9000
+ENV FLIGHTRISK_SOURCE=webcam
+ENV FLIGHTRISK_PORT=5555
+# Reserved for flightrisk.dashboard.__main__ --source flag (PR #26)
+ENV FLIGHTRISK_MAVLINK_ADDRESS=udp://:14540
+# For production: use wss:// with FLIGHTRISK_EDGE_WS_TOKEN
+ENV FLIGHTRISK_EDGE_WS=ws://localhost:9000
 EXPOSE 5555
 
-CMD ["python", "-m", "amber.dashboard"]
+CMD ["python", "-m", "flightrisk.dashboard"]

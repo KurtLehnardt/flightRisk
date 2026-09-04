@@ -1,9 +1,9 @@
-"""OpenTelemetry instrumentation for Amber Drone.
+"""OpenTelemetry instrumentation for FlightRisk.
 
 Provides distributed tracing, metrics, and structured logs exportable
 to any OTel-compatible backend (Jaeger, Grafana, Datadog, console).
 
-Enable via env var: AMBER_OTEL_ENABLED=true
+Enable via env var: FLIGHTRISK_OTEL_ENABLED=true
 Configure exporter: OTEL_EXPORTER=console|otlp-grpc|otlp-http
 Configure endpoint: OTEL_ENDPOINT=http://localhost:4317
 """
@@ -66,7 +66,7 @@ if HAS_OTEL:
 # ---------------------------------------------------------------------------
 
 def init_telemetry(
-    service_name: str = "amber-drone",
+    service_name: str = "flightrisk",
     environment: str = "development",
 ) -> bool:
     """Initialise OpenTelemetry tracing and metrics.
@@ -77,7 +77,7 @@ def init_telemetry(
         logger.debug("opentelemetry packages not installed — telemetry disabled")
         return False
 
-    enabled = os.environ.get("AMBER_OTEL_ENABLED", "false").lower() == "true"
+    enabled = os.environ.get("FLIGHTRISK_OTEL_ENABLED", "false").lower() == "true"
     if not enabled:
         # Explicitly set no-op providers so any stray get_tracer / get_meter
         # calls produce harmless no-op objects.
@@ -114,14 +114,14 @@ def init_telemetry(
     return True
 
 
-def get_tracer(name: str = "amber") -> "trace.Tracer":
+def get_tracer(name: str = "flightrisk") -> "trace.Tracer":
     """Return a Tracer (no-op if OTel is disabled or not installed)."""
     if not HAS_OTEL:
         return _NoOpTracer()
     return trace.get_tracer(name)
 
 
-def get_meter(name: str = "amber") -> "metrics.Meter":
+def get_meter(name: str = "flightrisk") -> "metrics.Meter":
     """Return a Meter (no-op if OTel is disabled or not installed)."""
     if not HAS_OTEL:
         return _NoOpMeter()
@@ -129,37 +129,37 @@ def get_meter(name: str = "amber") -> "metrics.Meter":
 
 
 # ---------------------------------------------------------------------------
-# AmberMetrics — pre-defined metric instruments
+# FlightRiskMetrics — pre-defined metric instruments
 # ---------------------------------------------------------------------------
 
-class AmberMetrics:
+class FlightRiskMetrics:
     """Holds all Amber-specific OTel metric instruments."""
 
     def __init__(self, meter):
         self.frame_duration = meter.create_histogram(
-            "amber.frame.duration_ms",
+            "flightrisk.frame.duration_ms",
             unit="ms",
             description="Frame processing latency",
         )
         self.detections_count = meter.create_up_down_counter(
-            "amber.detections.count",
+            "flightrisk.detections.count",
             description="Persons detected",
         )
         self.match_score = meter.create_histogram(
-            "amber.match.score",
+            "flightrisk.match.score",
             description="Match confidence scores",
         )
         self.errors_count = meter.create_counter(
-            "amber.errors.count",
+            "flightrisk.errors.count",
             description="Pipeline errors",
         )
         self.reasoning_duration = meter.create_histogram(
-            "amber.reasoning.duration_ms",
+            "flightrisk.reasoning.duration_ms",
             unit="ms",
             description="Gemma 4 reasoning latency",
         )
         self.match_count = meter.create_counter(
-            "amber.match.count",
+            "flightrisk.match.count",
             description="Total matches",
         )
 
@@ -171,16 +171,16 @@ class AmberMetrics:
 
         try:
             self.face_detection_rate = meter.create_gauge(
-                "amber.face.detection_rate",
+                "flightrisk.face.detection_rate",
                 unit="%",
                 description="Face detection success rate",
             )
             self.fps_gauge = meter.create_gauge(
-                "amber.fps",
+                "flightrisk.fps",
                 description="Frames per second",
             )
             self.drone_battery = meter.create_gauge(
-                "amber.drone.battery",
+                "flightrisk.drone.battery",
                 unit="%",
                 description="Drone battery level",
             )
@@ -192,18 +192,18 @@ class AmberMetrics:
             self._has_gauge = False
 
             meter.create_observable_gauge(
-                "amber.face.detection_rate",
+                "flightrisk.face.detection_rate",
                 callbacks=[self._observe_face_rate],
                 unit="%",
                 description="Face detection success rate",
             )
             meter.create_observable_gauge(
-                "amber.fps",
+                "flightrisk.fps",
                 callbacks=[self._observe_fps],
                 description="Frames per second",
             )
             meter.create_observable_gauge(
-                "amber.drone.battery",
+                "flightrisk.drone.battery",
                 callbacks=[self._observe_battery],
                 unit="%",
                 description="Drone battery level",

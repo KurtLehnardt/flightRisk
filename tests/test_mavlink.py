@@ -93,8 +93,8 @@ sys.modules["mavsdk.telemetry"] = _mavsdk_telemetry
 sys.modules["mavsdk.manual_control"] = _mavsdk_manual_control
 
 # Now we can import the module under test
-from amber.drone.mavlink import MavlinkController, HAS_MAVSDK, _extract_ip  # noqa: E402
-from amber.drone.controller import DroneController, DroneState, GpsDroneController  # noqa: E402
+from flightrisk.drone.mavlink import MavlinkController, HAS_MAVSDK, _extract_ip  # noqa: E402
+from flightrisk.drone.controller import DroneController, DroneState, GpsDroneController  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +272,7 @@ class TestMavsdkMissing:
     """When mavsdk is not installed, constructor should raise."""
 
     def test_raises_without_mavsdk(self):
-        with patch("amber.drone.mavlink.HAS_MAVSDK", False):
+        with patch("flightrisk.drone.mavlink.HAS_MAVSDK", False):
             with pytest.raises(RuntimeError, match="mavsdk"):
                 MavlinkController(name="no-sdk")
 
@@ -338,7 +338,7 @@ class TestConnect:
             return_value=_make_async_iter([_GpsInfoItem()])
         )
 
-        with patch("amber.drone.mavlink.System", return_value=system):
+        with patch("flightrisk.drone.mavlink.System", return_value=system):
             ctrl = MavlinkController(name="conn")
             try:
                 result = ctrl.connect()
@@ -686,7 +686,7 @@ class TestGetFrame:
         frame = ctrl.get_frame()
         assert frame is None
 
-    @patch("amber.drone.mavlink.cv2")
+    @patch("flightrisk.drone.mavlink.cv2")
     def test_get_frame_creates_capture(self, mock_cv2):
         ctrl = MavlinkController(name="cap-create")
         mock_cap = MagicMock()

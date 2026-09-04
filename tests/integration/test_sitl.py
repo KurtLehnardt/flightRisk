@@ -38,7 +38,7 @@ def _import_real_mavlink_controller():
     during collection regardless of marker filters, so those fakes end
     up cached in sys.modules even when running `pytest -m sitl` on this
     file alone. If we didn't clear them first, importing
-    amber.drone.mavlink here would silently bind to the fake mavsdk
+    flightrisk.drone.mavlink here would silently bind to the fake mavsdk
     classes and these "integration" tests would pass against mocks
     instead of a real SITL instance.
 
@@ -47,7 +47,7 @@ def _import_real_mavlink_controller():
     and non-SITL tests run in the *same* pytest process without the
     default `-m "not sitl"` filter (e.g. `pytest tests/ -m ""`):
     tests/test_mavlink.py uses string-target `mock.patch`
-    ("amber.drone.mavlink.System", ...), which re-resolves the module
+    ("flightrisk.drone.mavlink.System", ...), which re-resolves the module
     via sys.modules / package attributes at patch time, not just at
     collection time. Leaving the real module installed permanently
     would break those patches for the rest of the session. Restoring
@@ -59,10 +59,10 @@ def _import_real_mavlink_controller():
     target_names = [
         name
         for name in sys.modules
-        if name == "mavsdk" or name.startswith("mavsdk.") or name == "amber.drone.mavlink"
+        if name == "mavsdk" or name.startswith("mavsdk.") or name == "flightrisk.drone.mavlink"
     ]
     saved_modules = {name: sys.modules.pop(name) for name in target_names}
-    parent_pkg = sys.modules.get("amber.drone")
+    parent_pkg = sys.modules.get("flightrisk.drone")
     saved_attr = getattr(parent_pkg, "mavlink", None) if parent_pkg else None
 
     try:
@@ -84,7 +84,7 @@ def _import_real_mavlink_controller():
                 "pytest tests/integration/test_sitl.py -m sitl"
             )
 
-        from amber.drone.mavlink import HAS_MAVSDK, MavlinkController
+        from flightrisk.drone.mavlink import HAS_MAVSDK, MavlinkController
 
         if not HAS_MAVSDK:
             pytest.skip("mavsdk not installed")
@@ -92,7 +92,7 @@ def _import_real_mavlink_controller():
         return MavlinkController
     finally:
         for name in list(sys.modules):
-            if name == "mavsdk" or name.startswith("mavsdk.") or name == "amber.drone.mavlink":
+            if name == "mavsdk" or name.startswith("mavsdk.") or name == "flightrisk.drone.mavlink":
                 del sys.modules[name]
         sys.modules.update(saved_modules)
         if parent_pkg is not None and saved_attr is not None:

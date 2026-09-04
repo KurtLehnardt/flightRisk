@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from amber.vision.reid import PersonReID
+from flightrisk.vision.reid import PersonReID
 
 pytestmark = pytest.mark.integration
 

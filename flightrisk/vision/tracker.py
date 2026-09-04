@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 
 @dataclass

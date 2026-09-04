@@ -16,15 +16,15 @@ control messages off the same connection and applies them:
 
 Run it with::
 
-    python -m amber.edge_device --source webcam
-    python -m amber.edge_device --source file --video path/to/clip.mp4
-    FLIGHTRISK_EDGE_TOKEN=secret python -m amber.edge_device --ws-url ws://ground:9000
+    python -m flightrisk.edge_device --source webcam
+    python -m flightrisk.edge_device --source file --video path/to/clip.mp4
+    FLIGHTRISK_EDGE_TOKEN=secret python -m flightrisk.edge_device --ws-url ws://ground:9000
 
 The core loop (``run_edge_device``) is dependency-injected -- the frame
 source, transport, and runner are all passed in -- so it can be unit-tested
 without a real camera, network, or vision model. The heavy real-object
 construction (cv2 capture, YOLO/CLIP/InsightFace) lives in ``main()`` and is
-imported lazily, keeping ``import amber.edge_device`` cheap.
+imported lazily, keeping ``import flightrisk.edge_device`` cheap.
 """
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ import os
 import time
 from typing import Any, Iterable
 
-from amber.edge import EdgeRunner
-from amber.observability import StructuredLogger
-from amber.transport import EdgeTransportSync
+from flightrisk.edge import EdgeRunner
+from flightrisk.observability import StructuredLogger
+from flightrisk.transport import EdgeTransportSync
 
 __all__ = [
     "run_edge_device",
@@ -238,20 +238,20 @@ def _build_runner(args: argparse.Namespace, log: StructuredLogger) -> EdgeRunner
     """Construct detector/reid/face + EdgeRunner the way the dashboard does."""
     # Lazy imports: these pull in ultralytics / torch / insightface, which are
     # heavy and unnecessary for importing this module or unit-testing the loop.
-    from amber.vision.detector import PersonDetector
+    from flightrisk.vision.detector import PersonDetector
 
     detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
 
     reid = None
     try:
-        from amber.vision.reid import PersonReID
+        from flightrisk.vision.reid import PersonReID
         reid = PersonReID(match_threshold=0.55)
     except Exception as e:
         log.warning("reid_unavailable", error=str(e))
 
     face = None
     try:
-        from amber.vision.face import FaceRecognizer
+        from flightrisk.vision.face import FaceRecognizer
         face = FaceRecognizer(match_threshold=0.35)
     except Exception as e:
         log.warning("insightface_unavailable", error=str(e))
@@ -260,7 +260,7 @@ def _build_runner(args: argparse.Namespace, log: StructuredLogger) -> EdgeRunner
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI entry point for ``python -m amber.edge_device``."""
+    """CLI entry point for ``python -m flightrisk.edge_device``."""
     parser = argparse.ArgumentParser(description="FlightRisk edge-device program")
     parser.add_argument(
         "--source", choices=("webcam", "file"), default="webcam",

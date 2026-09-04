@@ -1,9 +1,9 @@
 """CLI for running match accuracy evaluations.
 
 Usage:
-    python -m amber.evaluation --dataset path/to/labels.json --threshold 0.5
-    python -m amber.evaluation --dataset path/to/labels.json --output results.json
-    python -m amber.evaluation --create-sample --output eval_data/sample/
+    python -m flightrisk.evaluation --dataset path/to/labels.json --threshold 0.5
+    python -m flightrisk.evaluation --dataset path/to/labels.json --output results.json
+    python -m flightrisk.evaluation --create-sample --output eval_data/sample/
 """
 
 import argparse
@@ -58,19 +58,19 @@ def run_evaluation(dataset_path: str, output_path: str | None, threshold: float)
     scorer = None
 
     try:
-        from amber.vision.reid import PersonReID
+        from flightrisk.vision.reid import PersonReID
         reid = PersonReID()
     except Exception as e:
         print(f"[eval] ReID unavailable: {e}")
 
     try:
-        from amber.vision.face import FaceRecognizer
+        from flightrisk.vision.face import FaceRecognizer
         face = FaceRecognizer()
     except Exception as e:
         print(f"[eval] Face recognition unavailable: {e}")
 
     try:
-        from amber.vision.scorer import MatchScorer
+        from flightrisk.vision.scorer import MatchScorer
         scorer = MatchScorer()
     except Exception as e:
         print(f"[eval] Scorer unavailable: {e}")
@@ -97,8 +97,8 @@ def run_evaluation(dataset_path: str, output_path: str | None, threshold: float)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="amber.evaluation",
-        description="Evaluate match accuracy for Amber Drone vision pipeline",
+        prog="flightrisk.evaluation",
+        description="Evaluate match accuracy for FlightRisk vision pipeline",
     )
 
     parser.add_argument(
