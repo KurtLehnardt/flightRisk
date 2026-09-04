@@ -36,11 +36,19 @@ class DetectionMessage:
 class EdgeRunner:
     """Produces detection messages from video frames."""
 
-    def __init__(self, detector=None, reid=None, face=None):
+    def __init__(self, detector=None, reid=None, face=None, stream_video: bool = False):
         self._detector = detector
         self._reid = reid
         self._face = face
         self._frame_id = 0
+        # When False (the default), only detection metadata + per-detection
+        # crops/embeddings are shipped -- no full-frame thumbnail -- to keep
+        # bandwidth and battery use down. Flip on for live video streaming.
+        self.stream_video = stream_video
+
+    def set_stream_video(self, enabled: bool) -> None:
+        """Enable or disable full-frame thumbnail streaming at runtime."""
+        self.stream_video = enabled
 
     def process_frame(self, frame: np.ndarray) -> DetectionMessage:
         """Run detection + embedding pipeline on a frame.
@@ -53,10 +61,13 @@ class EdgeRunner:
             frame_id=self._frame_id,
         )
 
-        # Generate thumbnail
-        thumb = cv2.resize(frame, (320, 180))
-        _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
-        msg.thumbnail_jpeg = buf.tobytes()
+        # Generate thumbnail only when streaming video is enabled. When off
+        # (the default), thumbnail_jpeg stays None -- crops and embeddings
+        # below are still produced regardless.
+        if self.stream_video:
+            thumb = cv2.resize(frame, (320, 180))
+            _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            msg.thumbnail_jpeg = buf.tobytes()
 
         # Run YOLO
         if self._detector is None:

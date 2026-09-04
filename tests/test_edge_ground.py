@@ -76,8 +76,8 @@ class TestEdgeRunnerNoDetector:
         assert m1.frame_id == 1
         assert m2.frame_id == 2
 
-    def test_generates_thumbnail(self):
-        runner = EdgeRunner()
+    def test_generates_thumbnail_when_stream_video_enabled(self):
+        runner = EdgeRunner(stream_video=True)
         msg = runner.process_frame(_make_frame())
         assert msg.thumbnail_jpeg is not None
         # Thumbnail should be decodable JPEG
@@ -86,6 +86,20 @@ class TestEdgeRunnerNoDetector:
         assert img is not None
         assert img.shape[1] == 320  # width
         assert img.shape[0] == 180  # height
+
+    def test_no_thumbnail_by_default(self):
+        # Default is detections-only (bandwidth/battery-frugal): no thumbnail.
+        runner = EdgeRunner()
+        msg = runner.process_frame(_make_frame())
+        assert msg.thumbnail_jpeg is None
+
+    def test_set_stream_video_toggles_thumbnail_at_runtime(self):
+        runner = EdgeRunner()
+        assert runner.process_frame(_make_frame()).thumbnail_jpeg is None
+        runner.set_stream_video(True)
+        assert runner.process_frame(_make_frame()).thumbnail_jpeg is not None
+        runner.set_stream_video(False)
+        assert runner.process_frame(_make_frame()).thumbnail_jpeg is None
 
 
 class TestEdgeRunnerWithDetector:
@@ -293,8 +307,8 @@ class TestEdgeRunnerEdgeCases:
     """Edge cases and boundary conditions."""
 
     def test_empty_frame(self):
-        """A 1x1 frame should not crash."""
-        runner = EdgeRunner()
+        """A 1x1 frame should not crash (thumbnail resize path included)."""
+        runner = EdgeRunner(stream_video=True)
         tiny = np.zeros((1, 1, 3), dtype=np.uint8)
         msg = runner.process_frame(tiny)
         assert msg.frame_id == 1
