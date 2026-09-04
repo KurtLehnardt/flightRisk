@@ -14,7 +14,6 @@ import secrets
 import threading
 import time
 import traceback
-from functools import wraps
 from pathlib import Path
 
 import cv2
@@ -99,29 +98,40 @@ if not os.environ.get("AMBER_ENCRYPTION_KEY"):
     log.warning("AMBER_ENCRYPTION_KEY not set — biometric data stored unencrypted")
 
 
-def require_api_key(view):
-    """Gate a data/mutation REST endpoint behind the API key.
+# Public paths that stay reachable even when an API key is configured, so the
+# dashboard still loads in a browser. Everything else is deny-by-default.
+_PUBLIC_PATHS = frozenset({"/", "/api/health"})
+
+
+@app.before_request
+def _require_api_key():
+    """Fail-closed API-key gate applied to every request (Option C).
+
+    Deny-by-default: when ``AMBER_API_KEY`` is configured, EVERY request must
+    carry a matching ``Authorization: Bearer <key>`` header, except the small
+    set of public paths (the root HTML page ``/``, the ``/api/health`` ping, and
+    static assets) that must stay reachable so the dashboard loads in a browser.
+    Because gating happens here rather than via a per-route allow-list, any route
+    added in the future is protected automatically -- there is nothing to keep in
+    sync.
 
     No-op passthrough when ``AMBER_API_KEY`` is unset/empty (local dev keeps
-    working with no key). When a key *is* configured, the request must carry a
-    matching ``Authorization: Bearer <key>`` header, else it gets HTTP 401 JSON.
-
-    Deliberately NOT applied to the root HTML page (``index``), ``/api/health``,
-    or static assets, so the dashboard stays loadable in a browser. The SocketIO
-    control channel is authenticated separately at connect time (see
-    ``on_connect``); individual SocketIO events are not covered by this check.
+    working with no key). The SocketIO control channel is authenticated
+    separately at connect time (see ``on_connect``); individual SocketIO events
+    are not covered by this check.
     """
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        if _AMBER_API_KEY:
-            auth = request.headers.get("Authorization", "")
-            if not hmac.compare_digest(
-                auth.encode(), f"Bearer {_AMBER_API_KEY}".encode()
-            ):
-                return jsonify({"error": "unauthorized"}), 401
-        return view(*args, **kwargs)
-
-    return wrapper
+    if not _AMBER_API_KEY:
+        return None
+    # Static assets: match both the Flask endpoint and the URL prefix so a
+    # custom static route or direct /static/... path both stay open.
+    if request.endpoint == "static" or request.path.startswith("/static/"):
+        return None
+    if request.path in _PUBLIC_PATHS:
+        return None
+    auth = request.headers.get("Authorization", "")
+    if not hmac.compare_digest(auth.encode(), f"Bearer {_AMBER_API_KEY}".encode()):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 # Flask auto-instrumentation (optional)
 try:
@@ -580,7 +590,6 @@ def index():
 
 
 @app.route("/api/upload-target", methods=["POST"])
-@require_api_key
 def upload_target():
     """HTTP fallback for target photo upload (bypasses WebSocket size limits)."""
     from flask import request
@@ -609,7 +618,6 @@ def upload_target():
 
 
 @app.route("/api/clear-target", methods=["POST"])
-@require_api_key
 def clear_target():
     """Clear the current target photo."""
     app_state.target_photo = None
@@ -641,7 +649,6 @@ def health():
 
 
 @app.route("/api/metrics")
-@require_api_key
 def metrics_endpoint():
     if app_state.metrics:
         return jsonify(app_state.metrics.snapshot())
@@ -649,7 +656,6 @@ def metrics_endpoint():
 
 
 @app.route("/api/status")
-@require_api_key
 def status():
     return jsonify({
         "running": app_state.running,
@@ -666,7 +672,6 @@ def status():
 
 
 @app.route("/api/sessions")
-@require_api_key
 def api_sessions():
     """Return recent search sessions."""
     db = app_state.db
@@ -677,7 +682,6 @@ def api_sessions():
 
 
 @app.route("/api/sessions/<session_id>")
-@require_api_key
 def api_session_detail(session_id):
     """Return a single session with its matches."""
     db = app_state.db
@@ -691,7 +695,6 @@ def api_session_detail(session_id):
 
 
 @app.route("/api/match-stats")
-@require_api_key
 def api_match_stats():
     """Return aggregate match statistics."""
     db = app_state.db
@@ -701,7 +704,6 @@ def api_match_stats():
 
 
 @app.route("/api/matches/<int:match_id>/feedback", methods=["POST"])
-@require_api_key
 def api_match_feedback(match_id):
     """Record operator feedback for a match."""
     db = app_state.db
@@ -718,7 +720,6 @@ def api_match_feedback(match_id):
 
 
 @app.route("/api/feedback-stats")
-@require_api_key
 def api_feedback_stats():
     """Return aggregate feedback statistics."""
     db = app_state.db
@@ -728,7 +729,6 @@ def api_feedback_stats():
 
 
 @app.route("/api/export-eval-dataset", methods=["POST"])
-@require_api_key
 def api_export_eval_dataset():
     """Export feedback as evaluation dataset JSON."""
     db = app_state.db
@@ -740,7 +740,6 @@ def api_export_eval_dataset():
 
 
 @app.route("/api/target-history")
-@require_api_key
 def target_history():
     canon = app_state.canon
     if not canon:
@@ -749,7 +748,6 @@ def target_history():
 
 
 @app.route("/api/threshold-suggestion")
-@require_api_key
 def api_threshold_suggestion():
     """Analyze feedback and suggest an optimal match threshold."""
     db = app_state.db
@@ -765,7 +763,7 @@ def api_threshold_suggestion():
 
 @socketio.on("connect")
 def on_connect(auth=None):
-    """SocketIO auth is handled here, separate from REST auth in require_api_key."""
+    """SocketIO auth is handled here, separate from the REST before_request gate."""
     if _AMBER_API_KEY is not None:
         provided = (auth or {}).get("api_key") if isinstance(auth, dict) else None
         if provided is None or not hmac.compare_digest(provided.encode(), _AMBER_API_KEY.encode()):

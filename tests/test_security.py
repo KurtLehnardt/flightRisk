@@ -45,10 +45,13 @@ class TestSecretKey:
 def app_with_auth(monkeypatch):
     """Return a Flask test client with AMBER_API_KEY enabled."""
     monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
-    # Reload the module-level _AMBER_API_KEY
     import amber.dashboard.app as app_mod
 
-    app_mod._AMBER_API_KEY = "test-key-123"
+    # Patch via monkeypatch so the global is restored atomically at teardown; a
+    # manual restore that reads os.environ back leaks "test-key-123" into the
+    # global (the fixture finalizer runs before monkeypatch reverts the env
+    # var) and poisons later tests such as tests/test_handlers.py.
+    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
     # Stub heavy components so routes don't crash
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
@@ -66,9 +69,6 @@ def app_with_auth(monkeypatch):
     with app_mod.app.test_client() as client:
         yield client
 
-    # Restore
-    app_mod._AMBER_API_KEY = os.environ.get("AMBER_API_KEY")
-
 
 @pytest.fixture
 def app_no_auth(monkeypatch):
@@ -76,7 +76,7 @@ def app_no_auth(monkeypatch):
     monkeypatch.delenv("AMBER_API_KEY", raising=False)
     import amber.dashboard.app as app_mod
 
-    app_mod._AMBER_API_KEY = None
+    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", None)
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
     app_mod._state["source"] = "webcam"
@@ -299,7 +299,7 @@ class TestSocketIOAuth:
         monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
         import amber.dashboard.app as app_mod
 
-        app_mod._AMBER_API_KEY = "test-key-123"
+        monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
         app_mod._state["db"] = MagicMock()
         app_mod._state["metrics"] = MagicMock()
         app_mod._state["source"] = "webcam"
@@ -314,7 +314,6 @@ class TestSocketIOAuth:
         app_mod._state["match_history"] = []
         self.app_mod = app_mod
         yield
-        app_mod._AMBER_API_KEY = os.environ.get("AMBER_API_KEY")
 
     def test_socketio_rejects_no_auth(self):
         """Unauthenticated SocketIO connection should be refused."""

@@ -1,15 +1,32 @@
-"""Tests for the ``require_api_key`` decorator that gates REST endpoints.
+"""Tests for the fail-closed ``before_request`` API-key gate on REST endpoints.
 
-Complements ``tests/test_security.py::TestAPIKeyAuth``. These focus on the
-decorator design introduced in Phase 2: only data/mutation REST routes are
-gated, while the root HTML page (``index``), ``/api/health``, and static
-assets stay open so the dashboard still loads in a browser when a key is set.
+Complements ``tests/test_security.py::TestAPIKeyAuth``. Option C replaced the
+Phase 2 per-route ``@require_api_key`` allow-list decorator with a
+deny-by-default ``@app.before_request`` hook: EVERY route is gated when a key is
+set, except the exempt public paths (the root HTML page ``/``, ``/api/health``,
+and static assets) so the dashboard still loads in a browser. The observable
+contract is unchanged (data routes 401 without a key / work with the correct
+key; index + health stay reachable; everything open when the key is unset), and
+``test_unlisted_route_protected_by_default`` additionally proves the fail-closed
+property that motivated Option C.
 """
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
+
+import amber.dashboard.app as _app_mod
+
+# Register a throwaway, auth-decorator-free route at IMPORT time -- before the
+# shared Flask app handles its first request, after which Flask locks further
+# setup (``add_url_rule`` inside a test would raise). This route is on no
+# allow-list and carries no ``@require_api_key`` decorator, so it exists purely
+# to prove the fail-closed property exercised by
+# ``test_unlisted_route_protected_by_default``.
+if "_test_unlisted" not in _app_mod.app.view_functions:
+    _app_mod.app.add_url_rule(
+        "/api/_test_unlisted", "_test_unlisted", lambda: ("ok", 200)
+    )
 
 
 def _stub_state(app_mod):
@@ -34,11 +51,15 @@ def app_with_key(monkeypatch):
     monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
     import amber.dashboard.app as app_mod
 
-    app_mod._AMBER_API_KEY = "test-key-123"
+    # Patch the module global via monkeypatch so it is restored atomically at
+    # teardown. A manual save/restore leaks here: the fixture finalizer runs
+    # before monkeypatch reverts the env var, so reading os.environ back would
+    # re-store "test-key-123" into the global and poison later tests (e.g. the
+    # unauthenticated SocketIO connect in tests/test_handlers.py).
+    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
     _stub_state(app_mod)
     with app_mod.app.test_client() as client:
         yield app_mod, client
-    app_mod._AMBER_API_KEY = os.environ.get("AMBER_API_KEY") or None
 
 
 @pytest.fixture
@@ -47,13 +68,13 @@ def app_no_key(monkeypatch):
     monkeypatch.delenv("AMBER_API_KEY", raising=False)
     import amber.dashboard.app as app_mod
 
-    app_mod._AMBER_API_KEY = None
+    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", None)
     _stub_state(app_mod)
     with app_mod.app.test_client() as client:
         yield app_mod, client
 
 
-class TestRequireApiKeyDecorator:
+class TestApiKeyGate:
     def test_protected_mutation_route_blocked_without_key(self, app_with_key):
         """A gated mutation endpoint returns 401 JSON when the key is missing."""
         _, client = app_with_key
@@ -95,4 +116,30 @@ class TestRequireApiKeyDecorator:
         app_mod, client = app_no_key
         app_mod._state["db"].get_recent_sessions.return_value = []
         resp = client.get("/api/sessions")
+        assert resp.status_code == 200
+
+    def test_unlisted_route_protected_by_default(self, app_with_key):
+        """Fail-closed proof: a route with NO explicit auth is STILL gated.
+
+        This is the whole reason for Option C. ``/api/_test_unlisted`` (see the
+        module-level registration) carries no ``@require_api_key`` decorator and
+        is on no allow-list. Under the old per-route decorator this endpoint
+        would have been wide open; under the ``before_request`` gate it is
+        protected by default -- demonstrating routes are protected because they
+        exist, not because someone remembered to add them to an allow-list.
+        """
+        _, client = app_with_key
+
+        # No Authorization header: the gate must reject it even though nothing
+        # explicitly opted this route into auth -- proving default-deny.
+        resp = client.get("/api/_test_unlisted")
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "unauthorized"
+
+        # Correct Bearer key: the same route now succeeds, confirming the 401
+        # above came from the auth gate and not a routing/500 error.
+        resp = client.get(
+            "/api/_test_unlisted",
+            headers={"Authorization": "Bearer test-key-123"},
+        )
         assert resp.status_code == 200
