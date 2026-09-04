@@ -77,10 +77,6 @@ class StructuredLogger:
         self._emit("info", "scoring", combined=round(combined, 4),
                    reid=round(reid, 4), face=round(face, 4), **kwargs)
 
-    def pipeline_error(self, error: str, **kwargs: Any) -> None:
-        """Log a pipeline error."""
-        self._emit("error", "pipeline_error", error=error, **kwargs)
-
     def drone_command(self, command: str, **kwargs: Any) -> None:
         """Log a drone command."""
         self._emit("info", "drone_command", command=command, **kwargs)
@@ -148,16 +144,6 @@ class MetricsCollector:
             self._faces_checked += 1
             if found:
                 self._faces_found += 1
-
-    def record_reasoning(self, latency_ms: float) -> None:
-        """Record a reasoning/LLM call."""
-        with self._lock:
-            self._reasoning_calls += 1
-            self._reasoning_latency_ms += latency_ms
-
-    def inc_errors(self, n: int = 1) -> None:
-        with self._lock:
-            self._pipeline_errors += n
 
     def snapshot(self) -> dict:
         """Return a snapshot of all metrics as a dict."""

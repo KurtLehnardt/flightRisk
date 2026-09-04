@@ -8,7 +8,6 @@ import threading
 import time
 from typing import Callable
 
-import cv2
 import numpy as np
 from djitellopy import Tello
 

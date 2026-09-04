@@ -34,6 +34,15 @@ class SourceConfig:
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
     video_path: str | None = None
+    # -- Edge / ground-station source mode --
+    # The ground station runs a WebSocket *server* that edge devices connect
+    # to. ``edge_host``/``edge_port`` are the server bind address (distinct
+    # from ``edge_ws``, a legacy client-side URL kept for back-compat).
+    # Defaults to loopback so ``GroundTransport``'s secure-by-default guard
+    # (which refuses a non-loopback bind without a token) is satisfied.
+    stream_video: bool = False
+    edge_host: str = "127.0.0.1"
+    edge_port: int = 9000
 
 
 @dataclass
@@ -48,6 +57,11 @@ class AppState:
     # -- Drone / fleet --
     fleet: Any = None
     auto_connect_stop: threading.Event | None = None
+
+    # -- Edge / ground-station (source == "edge") --
+    ground_transport: Any = None  # GroundTransportSync (WebSocket server)
+    ground_station: Any = None  # GroundStation (scorer over edge detections)
+    stream_video: bool = False  # whether edge devices should stream full frames
 
     # -- Vision pipeline components (lazy-init) --
     detector: Any = None

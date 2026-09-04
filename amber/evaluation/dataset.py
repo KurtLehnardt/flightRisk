@@ -5,7 +5,7 @@ for measuring match accuracy across ReID, face recognition, and scoring.
 """
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -63,26 +63,6 @@ class EvalDataset:
             dataset.add_pair(pair)
 
         return dataset
-
-    def save_to_json(self, path: str) -> None:
-        """Save dataset to a JSON manifest file."""
-        data = {
-            "name": self.name,
-            "description": self.description,
-            "pairs": [
-                {
-                    "reference": p.reference_path,
-                    "candidate": p.candidate_path,
-                    "is_match": p.is_match,
-                    "match_type": p.match_type,
-                    "notes": p.notes,
-                }
-                for p in self._pairs
-            ],
-        }
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
 
     def add_pair(self, pair: EvalPair) -> None:
         """Add a labeled pair to the dataset."""

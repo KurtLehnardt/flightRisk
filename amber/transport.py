@@ -44,6 +44,11 @@ __all__ = [
 
 _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 
+# Hosts treated as local-only. Binding one of these without a token is
+# allowed (open, for local dev); binding anything else without a token is
+# refused at start() -- see GroundTransport.start().
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 # ---------------------------------------------------------------------------
 # Async transports
@@ -349,6 +354,12 @@ class GroundTransport:
                     # so a client echoing/relaying a set_target message is
                     # tolerated rather than logged as "unknown type".
                     pass
+                elif msg_type == "stream_video":
+                    # Stream-video toggles normally flow ground -> edge (see
+                    # send_stream_video/broadcast_stream_video below). Tolerate
+                    # a client echoing/relaying one rather than logging it as
+                    # an "unknown type".
+                    pass
                 else:
                     logger.warning("Unknown message type: %r", msg_type)
         except ConnectionClosed:
@@ -364,9 +375,22 @@ class GroundTransport:
         intervening ``stop()`` would otherwise leak the first server (it
         keeps listening and accepting connections with no way to reach it
         again).
+
+        Secure-by-default: binding a non-loopback host (i.e. exposing the
+        edge socket beyond the local machine) without a configured token is
+        refused, so a deployed ground station can't accidentally accept
+        unauthenticated edge clients.
         """
         if self._server is not None:
             return
+        if self._host not in _LOOPBACK_HOSTS and self._token is None:
+            raise ValueError(
+                f"Refusing to bind GroundTransport to non-loopback host "
+                f"{self._host!r} without authentication. Set the "
+                f"FLIGHTRISK_EDGE_TOKEN environment variable (or pass "
+                f"token=) to enable the WebSocket auth handshake, or bind a "
+                f"loopback host (e.g. 127.0.0.1) for local development."
+            )
         self._server = await websockets.serve(self._handle_client, self._host, self._port)
 
     async def stop(self) -> None:
@@ -408,6 +432,33 @@ class GroundTransport:
             return
         await asyncio.gather(
             *(self.send_target(ws, reid_embedding, face_embedding) for ws in clients),
+            return_exceptions=True,
+        )
+
+    async def send_stream_video(self, websocket, enabled: bool) -> None:
+        """Send a stream-video toggle to a single edge client."""
+        msg = {
+            "type": "stream_video",
+            "enabled": enabled,
+        }
+        try:
+            await websocket.send(json.dumps(msg))
+        except ConnectionClosed:
+            self._clients.discard(websocket)
+            self._authenticated_clients.discard(websocket)
+
+    async def broadcast_stream_video(self, enabled: bool) -> None:
+        """Send a stream-video toggle to every connected edge client.
+
+        When a shared-secret token is configured, only clients that have
+        completed the auth handshake receive the toggle; otherwise all
+        connected clients are treated as eligible, matching broadcast_target.
+        """
+        clients = list(self._authenticated_clients) if self._token is not None else list(self._clients)
+        if not clients:
+            return
+        await asyncio.gather(
+            *(self.send_stream_video(ws, enabled) for ws in clients),
             return_exceptions=True,
         )
 
@@ -491,6 +542,12 @@ class GroundTransportSync:
     def broadcast_target(self, reid_embedding, face_embedding=None, timeout: float = _CMD_TIMEOUT) -> None:
         self._bridge.run(
             self._transport.broadcast_target(reid_embedding, face_embedding),
+            timeout=timeout,
+        )
+
+    def broadcast_stream_video(self, enabled: bool, timeout: float = _CMD_TIMEOUT) -> None:
+        self._bridge.run(
+            self._transport.broadcast_stream_video(enabled),
             timeout=timeout,
         )
 

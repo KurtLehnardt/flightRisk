@@ -56,7 +56,6 @@ class ImageQualityScorer:
         # Try FaceDetectorYN (OpenCV 5.x) -- requires model file
         elif hasattr(cv2, "FaceDetectorYN"):
             try:
-                import importlib.resources
                 model_path = str(
                     cv2.data.haarcascades + "face_detection_yunet_2023mar.onnx"
                 )

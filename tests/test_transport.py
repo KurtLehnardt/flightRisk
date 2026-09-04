@@ -410,6 +410,98 @@ def test_broadcast_target_reaches_all_connected_clients():
 
 
 # ===========================================================================
+# Stream-video toggle flow (ground -> edge)
+# ===========================================================================
+
+def test_stream_video_toggle_ground_to_edge():
+    async def scenario():
+        gt = await _start_ground()
+        et = await _connect_edge(gt)
+        try:
+            assert await _wait_until(lambda: len(gt.clients) == 1)
+            server_ws = next(iter(gt.clients))
+            await gt.send_stream_video(server_ws, True)
+
+            data = await et.recv(timeout=2.0)
+            # Payload shape must be exactly this.
+            assert data == {"type": "stream_video", "enabled": True}
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_stream_video_toggle_off_payload_shape():
+    async def scenario():
+        gt = await _start_ground()
+        et = await _connect_edge(gt)
+        try:
+            assert await _wait_until(lambda: len(gt.clients) == 1)
+            server_ws = next(iter(gt.clients))
+            await gt.send_stream_video(server_ws, False)
+
+            data = await et.recv(timeout=2.0)
+            assert data == {"type": "stream_video", "enabled": False}
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_stream_video_reaches_all_connected_clients():
+    async def scenario():
+        gt = await _start_ground()
+        et1 = await _connect_edge(gt)
+        et2 = await _connect_edge(gt)
+        try:
+            assert await _wait_until(lambda: len(gt.clients) == 2)
+
+            await gt.broadcast_stream_video(True)
+
+            data1 = await et1.recv(timeout=2.0)
+            data2 = await et2.recv(timeout=2.0)
+            for data in (data1, data2):
+                assert data == {"type": "stream_video", "enabled": True}
+        finally:
+            await et1.disconnect()
+            await et2.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_broadcast_stream_video_skips_unauthenticated_clients_when_token_configured():
+    async def scenario():
+        gt = GroundTransport(host="localhost", port=0, token="s3cr3t")
+        await gt.start()
+        try:
+            et = EdgeTransport(ws_url=f"ws://localhost:{gt.port}", token="s3cr3t")
+            await et.connect()
+            # A raw client that connects but never completes the auth
+            # handshake must not receive broadcast stream-video toggles.
+            raw_ws = await websockets.connect(f"ws://localhost:{gt.port}")
+            try:
+                assert await _wait_until(lambda: len(gt.clients) == 2)
+                await gt.broadcast_stream_video(True)
+
+                data = await et.recv(timeout=1.0)
+                assert data == {"type": "stream_video", "enabled": True}
+
+                # The unauthenticated client receives nothing.
+                with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+                    await asyncio.wait_for(raw_ws.recv(), timeout=0.5)
+            finally:
+                await et.disconnect()
+                await raw_ws.close()
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+# ===========================================================================
 # Repeated connect()/start() must not leak connections/servers
 # ===========================================================================
 
@@ -599,6 +691,28 @@ def test_broadcast_target_skips_unauthenticated_clients_when_token_configured():
     asyncio.run(scenario())
 
 
+def test_non_loopback_bind_requires_token():
+    """Secure-by-default: exposing the socket on a non-loopback host without
+    a token must fail fast, but succeeds once a token is configured."""
+
+    async def scenario():
+        # 0.0.0.0 + no token -> refuse with a clear, actionable error.
+        gt_open = GroundTransport(host="0.0.0.0", port=0)
+        with pytest.raises((ValueError, RuntimeError)) as exc_info:
+            await gt_open.start()
+        assert "FLIGHTRISK_EDGE_TOKEN" in str(exc_info.value)
+
+        # 0.0.0.0 + a token -> starts fine.
+        gt_auth = GroundTransport(host="0.0.0.0", port=0, token="s3cr3t")
+        try:
+            await gt_auth.start()
+            assert gt_auth._server is not None
+        finally:
+            await gt_auth.stop()
+
+    asyncio.run(scenario())
+
+
 def test_no_token_configured_preserves_backward_compatible_behavior():
     """When no token is configured, clients are treated as trusted
     immediately (no handshake required), matching pre-auth behavior."""
@@ -662,6 +776,22 @@ def test_sync_wrapper_target_update_flow():
             assert data["type"] == "set_target"
             assert data["reid_embedding"] == [1.0, 1.0]
             assert data["face_embedding"] == [2.0]
+        finally:
+            et_sync.disconnect()
+    finally:
+        gt_sync.stop()
+
+
+def test_sync_wrapper_stream_video_broadcast_flow():
+    gt_sync = GroundTransportSync(host="localhost", port=0)
+    gt_sync.start()
+    try:
+        et_sync = EdgeTransportSync(ws_url=f"ws://localhost:{gt_sync.port}")
+        et_sync.connect()
+        try:
+            gt_sync.broadcast_stream_video(True)
+            data = et_sync.recv(recv_timeout=2.0)
+            assert data == {"type": "stream_video", "enabled": True}
         finally:
             et_sync.disconnect()
     finally:

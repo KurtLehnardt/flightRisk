@@ -7,7 +7,6 @@ and computes accuracy, precision, recall, F1, and threshold curves.
 import cv2
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .dataset import EvalPair, EvalDataset
 

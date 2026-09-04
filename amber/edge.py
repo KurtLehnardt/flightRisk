@@ -8,7 +8,6 @@ import base64
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable
 
 import cv2
 import numpy as np
@@ -31,16 +30,28 @@ class DetectionMessage:
     frame_id: int
     thumbnail_jpeg: bytes | None = None
     detections: list[Detection] = field(default_factory=list)
+    # Source frame dimensions, so the client can scale/normalize detection
+    # bboxes for rendering (esp. in detections-only mode over a canvas).
+    frame_width: int = 0
+    frame_height: int = 0
 
 
 class EdgeRunner:
     """Produces detection messages from video frames."""
 
-    def __init__(self, detector=None, reid=None, face=None):
+    def __init__(self, detector=None, reid=None, face=None, stream_video: bool = False):
         self._detector = detector
         self._reid = reid
         self._face = face
         self._frame_id = 0
+        # When False (the default), only detection metadata + per-detection
+        # crops/embeddings are shipped -- no full-frame thumbnail -- to keep
+        # bandwidth and battery use down. Flip on for live video streaming.
+        self.stream_video = stream_video
+
+    def set_stream_video(self, enabled: bool) -> None:
+        """Enable or disable full-frame thumbnail streaming at runtime."""
+        self.stream_video = enabled
 
     def process_frame(self, frame: np.ndarray) -> DetectionMessage:
         """Run detection + embedding pipeline on a frame.
@@ -51,12 +62,17 @@ class EdgeRunner:
         msg = DetectionMessage(
             timestamp=time.time(),
             frame_id=self._frame_id,
+            frame_width=frame.shape[1],
+            frame_height=frame.shape[0],
         )
 
-        # Generate thumbnail
-        thumb = cv2.resize(frame, (320, 180))
-        _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
-        msg.thumbnail_jpeg = buf.tobytes()
+        # Generate thumbnail only when streaming video is enabled. When off
+        # (the default), thumbnail_jpeg stays None -- crops and embeddings
+        # below are still produced regardless.
+        if self.stream_video:
+            thumb = cv2.resize(frame, (320, 180))
+            _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            msg.thumbnail_jpeg = buf.tobytes()
 
         # Run YOLO
         if self._detector is None:
@@ -112,6 +128,8 @@ class EdgeRunner:
             "type": "detections",
             "timestamp": msg.timestamp,
             "frame_id": msg.frame_id,
+            "frame_width": msg.frame_width,
+            "frame_height": msg.frame_height,
             "thumbnail": base64.b64encode(msg.thumbnail_jpeg).decode() if msg.thumbnail_jpeg else None,
             "detections": [
                 {
@@ -132,6 +150,8 @@ class EdgeRunner:
             timestamp=data["timestamp"],
             frame_id=data["frame_id"],
             thumbnail_jpeg=base64.b64decode(data["thumbnail"]) if data.get("thumbnail") else None,
+            frame_width=data.get("frame_width", 0),
+            frame_height=data.get("frame_height", 0),
         )
         for d in data.get("detections", []):
             det = Detection(

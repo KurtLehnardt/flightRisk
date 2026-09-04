@@ -4,7 +4,6 @@ Stores search sessions and match results so history survives
 dashboard restarts. Thread-safe for use from Flask + background threads.
 """
 
-import base64
 import os
 import sqlite3
 import threading

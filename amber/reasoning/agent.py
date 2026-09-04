@@ -10,7 +10,6 @@ Usage:
 """
 
 import base64
-import io
 import os
 from typing import Any
 
