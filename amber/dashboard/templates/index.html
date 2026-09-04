@@ -186,6 +186,44 @@
             object-fit: contain;
             display: none;
         }
+        /* Detection box overlay canvas -- sits exactly over the video feed */
+        #detection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 4;
+        }
+        /* "detections only -- video off" indicator (edge not streaming video) */
+        .detections-only-indicator {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            background: rgba(10, 15, 26, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--cyan-dim);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--cyan);
+            z-index: 5;
+        }
+        .detections-only-indicator.active { display: flex; }
+        /* Edge video toggle helper text */
+        .video-toggle-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            line-height: 1.4;
+            margin-top: 2px;
+        }
 
         /* No-video placeholder with radar animation */
         .video-placeholder {
@@ -1483,6 +1521,14 @@
         <div class="video-panel">
             <img id="video-feed" alt="Drone Feed">
 
+            <!-- Detection box overlay (edge devices send normalized boxes) -->
+            <canvas id="detection-overlay"></canvas>
+
+            <!-- Detections-only indicator (shown when edge sends boxes but no video) -->
+            <div id="detections-only-indicator" class="detections-only-indicator">
+                DETECTIONS ONLY &mdash; VIDEO OFF
+            </div>
+
             <div id="video-placeholder" class="video-placeholder">
                 <div class="radar-container">
                     <div class="radar-circle"></div>
@@ -1693,6 +1739,20 @@
                         </div>
                         <div id="rec-status" class="rec-status-text"></div>
                     </div>
+
+                    <!-- Edge Video Stream -->
+                    <div class="panel-section">
+                        <div class="panel-title">Edge Video</div>
+                        <div class="keyboard-toggle">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="video-toggle" checked onchange="toggleStreamVideo(this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span>Stream Video</span>
+                            <span class="keyboard-status active" id="video-status">ON</span>
+                        </div>
+                        <div class="video-toggle-hint">Off = detections-only: the edge device sends bounding boxes without video frames to save link bandwidth.</div>
+                    </div>
                 </div>
 
                 <!-- ALERTS TAB -->
@@ -1885,6 +1945,110 @@
         // ========== DOM REFS ==========
         const videoFeed = document.getElementById('video-feed');
         const videoPlaceholder = document.getElementById('video-placeholder');
+        const videoPanel = document.querySelector('.video-panel');
+        const overlayCanvas = document.getElementById('detection-overlay');
+        const detectionsOnlyIndicator = document.getElementById('detections-only-indicator');
+
+        // ========== DETECTION OVERLAY (edge boxes) ==========
+        // Latest edge-detection state, kept so the overlay can be redrawn on
+        // image load / window resize without waiting for the next frame.
+        let latestBoxes = [];
+        let latestHasImage = true;
+
+        function resizeOverlayCanvas() {
+            const w = videoPanel.clientWidth;
+            const h = videoPanel.clientHeight;
+            if (overlayCanvas.width !== w) overlayCanvas.width = w;
+            if (overlayCanvas.height !== h) overlayCanvas.height = h;
+        }
+
+        // Rectangle (in canvas px) that the video image actually occupies inside
+        // the panel, mirroring CSS object-fit: contain letterboxing.
+        function getVideoRect() {
+            const Wp = overlayCanvas.width, Hp = overlayCanvas.height;
+            const nw = videoFeed.naturalWidth, nh = videoFeed.naturalHeight;
+            if (!nw || !nh) return { x: 0, y: 0, w: Wp, h: Hp };
+            const scale = Math.min(Wp / nw, Hp / nh);
+            const w = nw * scale, h = nh * scale;
+            return { x: (Wp - w) / 2, y: (Hp - h) / 2, w: w, h: h };
+        }
+
+        function drawDetectionBoxes(ctx, boxes, rect) {
+            for (let i = 0; i < boxes.length; i++) {
+                const b = boxes[i];
+                const bb = b && b.bbox_norm;
+                if (!bb || bb.length < 4) continue;
+                const x = rect.x + bb[0] * rect.w;
+                const y = rect.y + bb[1] * rect.h;
+                const w = (bb[2] - bb[0]) * rect.w;
+                const h = (bb[3] - bb[1]) * rect.h;
+                const matched = !!b.matched;
+                const color = matched ? '#EF4444' : '#22C55E'; // red for match, green otherwise
+                ctx.lineWidth = matched ? 3 : 2;
+                ctx.strokeStyle = color;
+                ctx.strokeRect(x, y, w, h);
+
+                // Label: [MATCH] [#track] score
+                let label = '';
+                if (b.track_id !== null && b.track_id !== undefined) label += '#' + b.track_id + ' ';
+                if (typeof b.score === 'number') label += b.score.toFixed(2);
+                if (matched) label = 'MATCH ' + label;
+                label = label.trim();
+                if (label) {
+                    ctx.font = "600 12px 'SF Mono', 'JetBrains Mono', monospace";
+                    const tw = ctx.measureText(label).width;
+                    const ly = y > 16 ? y - 2 : y + h + 14;
+                    ctx.fillStyle = color;
+                    ctx.fillRect(x, ly - 12, tw + 8, 15);
+                    ctx.fillStyle = '#0A0F1A';
+                    ctx.fillText(label, x + 4, ly);
+                }
+            }
+        }
+
+        // Redraw the overlay from the latest frame state.
+        function renderDetectionOverlay() {
+            resizeOverlayCanvas();
+            const ctx = overlayCanvas.getContext('2d');
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            // Detections-only mode: paint a clean dark background behind the boxes.
+            if (!latestHasImage) {
+                ctx.fillStyle = '#0A0F1A';
+                ctx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            }
+            if (!latestBoxes || latestBoxes.length === 0) return;
+            // Video present -> map boxes into the letterboxed image rect;
+            // detections-only -> map across the full canvas.
+            const rect = latestHasImage
+                ? getVideoRect()
+                : { x: 0, y: 0, w: overlayCanvas.width, h: overlayCanvas.height };
+            drawDetectionBoxes(ctx, latestBoxes, rect);
+        }
+
+        // Redraw when the feed image finishes loading (natural size now known)
+        // and on resize so boxes stay aligned.
+        videoFeed.addEventListener('load', renderDetectionOverlay);
+        window.addEventListener('resize', renderDetectionOverlay);
+
+        // ========== EDGE VIDEO TOGGLE ==========
+        function syncVideoToggle(enabled) {
+            const cb = document.getElementById('video-toggle');
+            const st = document.getElementById('video-status');
+            if (cb) cb.checked = !!enabled;
+            if (st) {
+                st.textContent = enabled ? 'ON' : 'OFF';
+                st.className = 'keyboard-status ' + (enabled ? 'active' : '');
+            }
+        }
+
+        function toggleStreamVideo(enabled) {
+            syncVideoToggle(enabled); // reflect immediately; server ack re-syncs
+            socket.emit('set_stream_video', { enabled: !!enabled });
+        }
+
+        socket.on('stream_video_state', (data) => {
+            if (data && typeof data.enabled === 'boolean') syncVideoToggle(data.enabled);
+        });
 
         // ========== TABS ==========
         function switchTab(tabId) {
@@ -1934,9 +2098,34 @@
             const now = Date.now();
             if (now - lastFrameTime < 100) return; // max 10fps display
             lastFrameTime = now;
-            videoFeed.src = 'data:image/jpeg;base64,' + data.image;
-            videoFeed.style.display = 'block';
-            videoPlaceholder.style.display = 'none';
+
+            // Edge devices may send explicit detection boxes (normalized 0..1)
+            // and may omit the video image entirely (detections-only mode).
+            // The normal on-device pipeline burns boxes into the JPEG and sends
+            // no `boxes` array -> guard all overlay drawing on a non-empty array
+            // so normal mode looks exactly as before.
+            const hasImage = typeof data.image === 'string' && data.image.length > 0;
+            latestHasImage = hasImage;
+            latestBoxes = Array.isArray(data.boxes) ? data.boxes : [];
+
+            if (hasImage) {
+                videoFeed.src = 'data:image/jpeg;base64,' + data.image;
+                videoFeed.style.display = 'block';
+                videoPlaceholder.style.display = 'none';
+                detectionsOnlyIndicator.classList.remove('active');
+            } else {
+                // Detections-only: no video frame. Hide the (stale) image and
+                // show a clean dark canvas with the "video off" indicator.
+                videoFeed.style.display = 'none';
+                videoPlaceholder.style.display = 'none';
+                detectionsOnlyIndicator.classList.add('active');
+            }
+            // Draw (or clear) the box overlay from the latest state. When there
+            // is an image, the `load` listener redraws once natural size is known.
+            renderDetectionOverlay();
+
+            // Keep the edge video toggle in sync with the server's actual state.
+            if (typeof data.stream_video === 'boolean') syncVideoToggle(data.stream_video);
 
             // HUD
             document.getElementById('hud-fps').querySelector('.hud-val').textContent = data.fps;
