@@ -15,6 +15,7 @@ import queue
 import secrets
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import cv2
@@ -114,6 +115,177 @@ try:
     FlaskInstrumentor().instrument_app(app)
 except ImportError:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Edge (ground-station) detection consumer
+# ---------------------------------------------------------------------------
+
+def _sr_get(score_result, key, default=None):
+    """Read ``key`` from a MatchScorer score result.
+
+    ``MatchScorer.score()`` returns a plain ``dict`` (keys ``combined_score``,
+    ``is_match``, ...), but this stays tolerant of an attribute-style object
+    too, so a future scorer returning a dataclass/namedtuple keeps working.
+    """
+    if score_result is None:
+        return default
+    if isinstance(score_result, dict):
+        return score_result.get(key, default)
+    return getattr(score_result, key, default)
+
+
+def _maybe_emit_edge_match(socketio, det, result, score_result, now):
+    """Emit a ``match_alert`` for one matched edge detection, respecting cooldown.
+
+    Reuses the same spatial-track cooldown (``_alerted_tracks`` +
+    ``ALERT_COOLDOWN``) as the local frame-loop match path so we don't spam a
+    new alert + DB row for every frame the same person appears in.
+    """
+    bbox = result["bbox"]
+    track_key = _compute_track_key(bbox)
+    if _is_within_alert_cooldown(track_key, now):
+        return
+    _alerted_tracks[track_key] = now
+
+    snapshot_b64 = None
+    crop_jpeg = getattr(det, "crop_jpeg", None)
+    if crop_jpeg:
+        snapshot_b64 = base64.b64encode(crop_jpeg).decode("utf-8")
+
+    reid_score = float(result.get("reid_score", 0.0) or 0.0)
+    face_score = float(result.get("face_score", 0.0) or 0.0)
+    if score_result is not None:
+        combined = float(_sr_get(score_result, "combined_score", 0.0) or 0.0)
+    else:
+        combined = max(reid_score, face_score)
+
+    alert_level = "possible_match"
+    scorer = app_state.scorer
+    if scorer is not None and isinstance(score_result, dict):
+        try:
+            alert_level = scorer.alert_level(score_result)
+        except Exception:
+            alert_level = "possible_match"
+
+    match_entry = {
+        "time": time.strftime("%H:%M:%S"),
+        "score": round(combined, 3),
+        "gemma_match": None,
+        "gemma_confidence": None,
+        "reasoning": None,
+        "snapshot": snapshot_b64,
+        "type": "edge",
+        "face_score": round(face_score, 3),
+        "reid_score": round(reid_score, 3),
+        "alert_level": alert_level,
+        "track_id": track_key,
+    }
+
+    if app_state.db and app_state.session_id:
+        try:
+            match_id = app_state.db.add_match(
+                session_id=app_state.session_id,
+                match_type="edge",
+                reid_score=reid_score,
+                face_score=face_score,
+                combined_score=combined,
+                gemma_match=False,
+                gemma_confidence=None,
+                reasoning=None,
+            )
+            match_entry["match_id"] = match_id
+        except Exception:
+            if app_state.logger:
+                app_state.logger.warning("edge_match_db_write_failed", exc_info=True)
+
+    with _match_history_lock:
+        app_state.match_history.append(match_entry)
+        app_state.match_history = app_state.match_history[-50:]
+
+    socketio.emit("match_alert", match_entry)
+
+
+def _edge_process_and_emit(socketio, msg, fps_state=None):
+    """Score one edge ``DetectionMessage`` and emit ``frame`` (+ ``match_alert``).
+
+    Runs off the asyncio loop in a ``GroundTransport`` executor thread, so it
+    uses plain (thread-safe) ``socketio.emit(...)`` rather than the
+    request-context ``emit()``. See ``amber/transport.py`` for the dispatch.
+    """
+    station = app_state.ground_station
+    if station is None:
+        return
+    results = station.process_message(msg)
+
+    w = msg.frame_width or 0
+    h = msg.frame_height or 0
+    now = time.time()
+
+    boxes = []
+    any_matched = False
+    max_score = 0.0
+
+    for det, result in zip(msg.detections, results):
+        score_result = result.get("score_result")
+        if score_result is not None:
+            score = float(_sr_get(score_result, "combined_score", 0.0) or 0.0)
+            matched = bool(_sr_get(score_result, "is_match", False))
+        else:
+            score = max(
+                float(result.get("reid_score", 0.0) or 0.0),
+                float(result.get("face_score", 0.0) or 0.0),
+            )
+            matched = False
+
+        x1, y1, x2, y2 = result["bbox"]
+        if w > 0 and h > 0:
+            bbox_norm = [x1 / w, y1 / h, x2 / w, y2 / h]
+        else:
+            # Guard divide-by-zero when the edge device didn't report frame
+            # dimensions -- emit zeros rather than crash the callback.
+            bbox_norm = [0.0, 0.0, 0.0, 0.0]
+
+        boxes.append({
+            "bbox_norm": bbox_norm,
+            "score": round(score, 3),
+            "matched": matched,
+            "track_id": None,
+        })
+
+        if score > max_score:
+            max_score = score
+        if matched:
+            any_matched = True
+            _maybe_emit_edge_match(socketio, det, result, score_result, now)
+
+    # Best-effort FPS from consecutive message timestamps.
+    fps = 0.0
+    if fps_state is not None:
+        last = fps_state.get("last")
+        if last is not None:
+            dt = msg.timestamp - last
+            if dt > 0:
+                fps = round(1.0 / dt, 1)
+        fps_state["last"] = msg.timestamp
+
+    image_b64 = (
+        base64.b64encode(msg.thumbnail_jpeg).decode("utf-8")
+        if msg.thumbnail_jpeg
+        else None
+    )
+
+    socketio.emit("frame", {
+        "image": image_b64,
+        "boxes": boxes,
+        "fps": fps,
+        "persons": len(results),
+        "match": any_matched,
+        "match_score": round(max_score, 3),
+        "stream_video": app_state.stream_video,
+        "telemetry": {},
+        "recording": False,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -315,16 +487,60 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         else:
             app_state.cap = cv2.VideoCapture(video_path)
     elif source == "edge":
-        # No local drone fleet or capture device -- frames are expected to
-        # arrive via the EdgeRunner/GroundStation WebSocket bridge
-        # (amber/edge.py, amber/ground.py). Wiring the frame loop to
-        # consume from ``edge_ws`` is tracked separately.
-        log.warning(
-            "edge_source_stub",
-            hint="Edge source mode is not yet fully implemented -- dashboard will not show live video until edge transport is connected",
-        )
+        # Ground-station mode: no local drone fleet or capture device. Edge
+        # devices (amber/edge.py) connect to the WebSocket *server* we start
+        # here and stream DetectionMessages; GroundStation scores them and
+        # the adapter below streams results to the browser. The normal
+        # _frame_loop idles harmlessly (fleet/cap are None).
+        from amber.ground import GroundStation
+        from amber.transport import GroundTransportSync
+
         app_state.fleet = None
         app_state.cap = None
+        app_state.stream_video = source_config.stream_video
+
+        # Stop any ground transport left running from a previous
+        # _init_pipeline() call (e.g. via restart_dashboard) before binding a
+        # new server on the same port -- otherwise start() fails with an
+        # address-already-in-use error.
+        old_transport = app_state.ground_transport
+        if old_transport is not None:
+            try:
+                old_transport.stop()
+            except Exception:
+                log.warning("edge_transport_stop_failed")
+            app_state.ground_transport = None
+
+        station = GroundStation(scorer=app_state.scorer)
+        app_state.ground_station = station
+
+        _fps_state = {"last": None}
+
+        def _on_edge_message(msg):
+            # Runs in a GroundTransport executor thread -- plain socketio.emit
+            # is thread-safe (async_mode="threading").
+            try:
+                _edge_process_and_emit(socketio, msg, _fps_state)
+            except Exception:
+                if app_state.logger:
+                    app_state.logger.error(
+                        "edge_message_error", traceback=traceback.format_exc()
+                    )
+
+        transport = GroundTransportSync(
+            host=source_config.edge_host,
+            port=source_config.edge_port,
+            on_message=_on_edge_message,
+            token=os.environ.get("FLIGHTRISK_EDGE_TOKEN"),
+        )
+        transport.start()
+        app_state.ground_transport = transport
+        log.info(
+            "edge_ground_station_started",
+            host=source_config.edge_host,
+            port=transport.port,
+            stream_video=app_state.stream_video,
+        )
     else:
         # Backward-compat: treat any other source string as a video path
         # (e.g. direct callers of run_dashboard()/_init_pipeline() that
@@ -555,6 +771,22 @@ def on_set_target(data):
         face_ok = False
         if app_state.face:
             face_ok = app_state.face.set_target(img)
+        # Edge mode: extract target embeddings from the reference photo and
+        # push them down to the local GroundStation scorer + every connected
+        # edge device. Mirrors how EdgeRunner extracts per-crop embeddings
+        # (extract_embedding -> .tolist()); here the whole photo is the crop.
+        if app_state.ground_transport is not None:
+            reid_emb = None
+            face_emb = None
+            if app_state.reid is not None:
+                _r = app_state.reid.extract_embedding(img)
+                reid_emb = _r.tolist() if _r is not None else None
+            if app_state.face is not None:
+                _f = app_state.face.extract_embedding(img)
+                face_emb = _f.tolist() if _f is not None else None
+            if app_state.ground_station is not None:
+                app_state.ground_station.set_target(reid_emb, face_emb)
+            app_state.ground_transport.broadcast_target(reid_emb, face_emb)
         # Score input image quality
         quality_scorer = ImageQualityScorer()
         quality_report = quality_scorer.score(img)
@@ -615,6 +847,26 @@ def on_set_threshold(data):
     if app_state.logger:
         app_state.logger.info("threshold_updated", threshold=threshold)
     emit("threshold_updated", {"threshold": threshold})
+
+
+@socketio.on("set_stream_video")
+def on_set_stream_video(data):
+    """Toggle live full-frame video streaming from edge devices.
+
+    Mirrors ``on_set_threshold``: update local state, push the toggle down to
+    connected edge devices (edge mode only), then ack the new state.
+    """
+    enabled = bool((data or {}).get("enabled", False))
+    app_state.stream_video = enabled
+    if app_state.ground_transport is not None:
+        try:
+            app_state.ground_transport.broadcast_stream_video(enabled)
+        except Exception:
+            if app_state.logger:
+                app_state.logger.warning("broadcast_stream_video_failed", exc_info=True)
+    if app_state.logger:
+        app_state.logger.info("stream_video_updated", enabled=enabled)
+    emit("stream_video_state", {"enabled": app_state.stream_video})
 
 
 @socketio.on("drone_command")
@@ -903,6 +1155,7 @@ def on_restart_dashboard():
         rtsp_url=app_state.rtsp_url,
         edge_ws=app_state.edge_ws or "ws://localhost:9000",
         video_path=app_state.video_path,
+        stream_video=app_state.stream_video,
     )
     _init_pipeline(source_config, target_path=app_state.target_photo_path)
     emit("dashboard_restarted", {})

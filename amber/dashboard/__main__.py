@@ -28,7 +28,25 @@ def main():
     parser.add_argument(
         "--edge-ws", type=str,
         default=os.environ.get("AMBER_EDGE_WS", "ws://localhost:9000"),
-        help="Edge compute WebSocket URL",
+        help="Edge compute WebSocket URL (legacy client-side, kept for back-compat)",
+    )
+    parser.add_argument(
+        "--edge-host", type=str,
+        default=os.environ.get("FLIGHTRISK_EDGE_HOST", "127.0.0.1"),
+        help="Ground-station WebSocket bind host (when --source=edge). "
+             "Defaults to loopback; a non-loopback host requires "
+             "FLIGHTRISK_EDGE_TOKEN.",
+    )
+    parser.add_argument(
+        "--edge-port", type=int,
+        default=int(os.environ.get("FLIGHTRISK_EDGE_PORT", "9000")),
+        help="Ground-station WebSocket bind port (when --source=edge)",
+    )
+    parser.add_argument(
+        "--stream-video", action="store_true",
+        default=os.environ.get("FLIGHTRISK_STREAM_VIDEO", "").strip().lower()
+        in ("1", "true", "yes", "on"),
+        help="Request live full-frame video from edge devices (when --source=edge)",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
     parser.add_argument("--target", type=str, help="Path to target reference photo")
@@ -56,6 +74,9 @@ def main():
         rtsp_url=args.rtsp_url,
         edge_ws=args.edge_ws,
         video_path=args.video,
+        stream_video=args.stream_video,
+        edge_host=args.edge_host,
+        edge_port=args.edge_port,
     )
     run_dashboard(source_config, target_path=args.target, port=args.port)
 
