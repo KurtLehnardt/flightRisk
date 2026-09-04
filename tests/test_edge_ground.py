@@ -76,6 +76,15 @@ class TestEdgeRunnerNoDetector:
         assert m1.frame_id == 1
         assert m2.frame_id == 2
 
+    def test_populates_frame_dimensions(self):
+        # Dimensions must be set even with no detections and regardless of
+        # stream_video, so the client can scale/normalize bboxes.
+        runner = EdgeRunner()
+        msg = runner.process_frame(_make_frame(width=640, height=480))
+        assert msg.detections == []
+        assert msg.frame_width == 640
+        assert msg.frame_height == 480
+
     def test_generates_thumbnail_when_stream_video_enabled(self):
         runner = EdgeRunner(stream_video=True)
         msg = runner.process_frame(_make_frame())
@@ -301,6 +310,22 @@ class TestEdgeRunnerSerialization:
         runner = EdgeRunner()
         data = runner.to_dict(msg)
         assert data["type"] == "detections"
+
+    def test_round_trip_preserves_frame_dimensions(self):
+        msg = DetectionMessage(
+            timestamp=1.0,
+            frame_id=1,
+            frame_width=640,
+            frame_height=480,
+        )
+        runner = EdgeRunner()
+        data = runner.to_dict(msg)
+        # Serialized as plain ints under these keys (no base64).
+        assert data["frame_width"] == 640
+        assert data["frame_height"] == 480
+        restored = EdgeRunner.from_dict(data)
+        assert restored.frame_width == 640
+        assert restored.frame_height == 480
 
 
 class TestEdgeRunnerEdgeCases:

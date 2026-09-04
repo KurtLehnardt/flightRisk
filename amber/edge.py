@@ -31,6 +31,10 @@ class DetectionMessage:
     frame_id: int
     thumbnail_jpeg: bytes | None = None
     detections: list[Detection] = field(default_factory=list)
+    # Source frame dimensions, so the client can scale/normalize detection
+    # bboxes for rendering (esp. in detections-only mode over a canvas).
+    frame_width: int = 0
+    frame_height: int = 0
 
 
 class EdgeRunner:
@@ -59,6 +63,8 @@ class EdgeRunner:
         msg = DetectionMessage(
             timestamp=time.time(),
             frame_id=self._frame_id,
+            frame_width=frame.shape[1],
+            frame_height=frame.shape[0],
         )
 
         # Generate thumbnail only when streaming video is enabled. When off
@@ -123,6 +129,8 @@ class EdgeRunner:
             "type": "detections",
             "timestamp": msg.timestamp,
             "frame_id": msg.frame_id,
+            "frame_width": msg.frame_width,
+            "frame_height": msg.frame_height,
             "thumbnail": base64.b64encode(msg.thumbnail_jpeg).decode() if msg.thumbnail_jpeg else None,
             "detections": [
                 {
@@ -143,6 +151,8 @@ class EdgeRunner:
             timestamp=data["timestamp"],
             frame_id=data["frame_id"],
             thumbnail_jpeg=base64.b64decode(data["thumbnail"]) if data.get("thumbnail") else None,
+            frame_width=data.get("frame_width", 0),
+            frame_height=data.get("frame_height", 0),
         )
         for d in data.get("detections", []):
             det = Detection(
