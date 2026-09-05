@@ -40,6 +40,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,6 +73,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
+import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.TelloConnectionState
+import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
@@ -99,6 +103,9 @@ private const val TAG = "SearchScreen"
  * @property cameraFrame The latest camera frame bitmap for preview.
  * @property frameWidth Source frame width for overlay scaling.
  * @property frameHeight Source frame height for overlay scaling.
+ * @property droneState Current drone connection/telemetry state, or null if drone not active.
+ * @property frameSourceMode Whether frames come from the device camera or drone.
+ * @property latestDroneFrame The most recent video frame from the drone, or null.
  */
 data class SearchScreenState(
     val isSearching: Boolean = false,
@@ -112,6 +119,9 @@ data class SearchScreenState(
     val cameraFrame: Bitmap? = null,
     val frameWidth: Int = 1920,
     val frameHeight: Int = 1080,
+    val droneState: TelloState? = null,
+    val frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
+    val latestDroneFrame: Bitmap? = null,
 )
 
 // -----------------------------------------------------------------------
@@ -139,6 +149,12 @@ data class SearchScreenState(
  * @param onDismissAlert Callback to dismiss the current alert.
  * @param onNotMyChild Callback for "Not My Child" action on an alert.
  * @param onNavigateToMatch Callback to open Maps for a match location.
+ * @param onDroneConnect Callback to initiate drone connection.
+ * @param onDroneDisconnect Callback to disconnect from the drone.
+ * @param onTakeoff Callback to command drone takeoff.
+ * @param onLand Callback to command drone landing.
+ * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
+ * @param onDroneRotate Callback for drone rotation (degrees).
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -149,6 +165,12 @@ fun SearchScreen(
     onDismissAlert: () -> Unit,
     onNotMyChild: () -> Unit,
     onNavigateToMatch: (latitude: Double, longitude: Double) -> Unit,
+    onDroneConnect: () -> Unit = {},
+    onDroneDisconnect: () -> Unit = {},
+    onTakeoff: () -> Unit = {},
+    onLand: () -> Unit = {},
+    onDroneMove: (String, Int) -> Unit = { _, _ -> },
+    onDroneRotate: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Finding 8: delay banner to avoid flash on every start
@@ -165,14 +187,26 @@ fun SearchScreen(
     Box(
         modifier = modifier.fillMaxSize(),
     ) {
-        // ----- Camera preview (full screen) -----
-        if (state.isSearching) {
-            LiveCameraPreview(modifier = Modifier.fillMaxSize())
-        } else {
-            CameraPreviewPlaceholder(
-                frame = state.cameraFrame,
-                modifier = Modifier.fillMaxSize(),
-            )
+        // ----- Camera / drone preview (full screen) -----
+        when (state.frameSourceMode) {
+            FrameSourceMode.DRONE -> {
+                DroneVideoPreview(
+                    droneState = state.droneState,
+                    latestFrame = state.latestDroneFrame,
+                    cameraFrame = state.cameraFrame,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            FrameSourceMode.CAMERA -> {
+                if (state.isSearching) {
+                    LiveCameraPreview(modifier = Modifier.fillMaxSize())
+                } else {
+                    CameraPreviewPlaceholder(
+                        frame = state.cameraFrame,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
         }
 
         // ----- Models-not-loaded banner -----
@@ -221,6 +255,31 @@ fun SearchScreen(
                     )
                 }
             }
+
+            // Drone status badge
+            val droneState = state.droneState
+            if (droneState != null &&
+                droneState.connectionState != TelloConnectionState.DISCONNECTED
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TelloStatusBadge(droneState = droneState)
+
+                // Battery warnings
+                val battery = droneState.telemetry.battery
+                if (battery in 0..10) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    BatteryWarningPill(
+                        text = stringResource(R.string.drone_battery_critical, battery),
+                        color = AlertRed,
+                    )
+                } else if (battery in 11..20) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    BatteryWarningPill(
+                        text = stringResource(R.string.drone_battery_warning, battery),
+                        color = AlertOrange,
+                    )
+                }
+            }
         }
 
         // ----- Match alert banner + card -----
@@ -251,25 +310,51 @@ fun SearchScreen(
             }
         }
 
-        // ----- Bottom section (action bar + disclaimer) -----
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        // ----- Reconnecting video overlay -----
+        if (state.frameSourceMode == FrameSourceMode.DRONE &&
+            state.droneState?.connectionState == TelloConnectionState.CONNECTED &&
+            state.latestDroneFrame == null
         ) {
-            // Action bar
-            BottomActionBar(
-                isSearching = state.isSearching,
-                onStartSearch = onStartSearch,
-                onStopSearch = onStopSearch,
+            ReconnectingOverlay(
+                modifier = Modifier.align(Alignment.Center),
             )
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        // ----- Bottom section: flight controls OR action bar (never both) -----
+        if (state.droneState?.connectionState == TelloConnectionState.STREAMING) {
+            // Show flight controls instead of action bar when streaming
+            FlightControlsOverlay(
+                isFlying = state.droneState.telemetry.isFlying,
+                onTakeoff = onTakeoff,
+                onLand = onLand,
+                onMove = onDroneMove,
+                onRotate = onDroneRotate,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        } else {
+            // Normal bottom section
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Action bar
+                BottomActionBar(
+                    isSearching = state.isSearching,
+                    onStartSearch = onStartSearch,
+                    onStopSearch = onStopSearch,
+                    droneState = state.droneState,
+                    onDroneConnect = onDroneConnect,
+                    onDroneDisconnect = onDroneDisconnect,
+                )
 
-            // Persistent disclaimer
-            DisclaimerFooter()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Persistent disclaimer
+                DisclaimerFooter()
+            }
         }
     }
 }
@@ -756,14 +841,16 @@ private fun MatchAlertCard(
 // -----------------------------------------------------------------------
 
 /**
- * Bottom action bar with start/stop search button and drone connect
- * placeholder.
+ * Bottom action bar with start/stop search button and drone connect button.
  */
 @Composable
 private fun BottomActionBar(
     isSearching: Boolean,
     onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
+    droneState: TelloState? = null,
+    onDroneConnect: () -> Unit = {},
+    onDroneDisconnect: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -806,19 +893,236 @@ private fun BottomActionBar(
 
         Spacer(modifier = Modifier.width(16.dp))
 
-        // Drone connect button (future - placeholder)
-        OutlinedButton(
-            onClick = { /* Future: drone connection */ },
-            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+        // Drone connect button
+        DroneConnectButton(
+            droneState = droneState,
+            onConnect = onDroneConnect,
+            onDisconnect = onDroneDisconnect,
+        )
+    }
+}
+
+// -----------------------------------------------------------------------
+// Drone connect button
+// -----------------------------------------------------------------------
+
+/**
+ * Circular button for connecting/disconnecting the drone.
+ *
+ * - DISCONNECTED: outlined "D" button, tapping calls onConnect
+ * - CONNECTING: shows a spinner in place of "D"
+ * - CONNECTED/STREAMING: filled/highlighted "D" button, tapping calls onDisconnect
+ * - ERROR: shows "D" button in red
+ */
+@Composable
+private fun DroneConnectButton(
+    droneState: TelloState?,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val connectionState = droneState?.connectionState ?: TelloConnectionState.DISCONNECTED
+    val isConnected = connectionState == TelloConnectionState.CONNECTED ||
+        connectionState == TelloConnectionState.STREAMING
+    val isConnecting = connectionState == TelloConnectionState.CONNECTING
+    val isError = connectionState == TelloConnectionState.ERROR
+
+    val connectDesc = stringResource(R.string.drone_connect)
+    val disconnectDesc = stringResource(R.string.drone_disconnect)
+
+    if (isConnecting) {
+        // Show spinner during connection
+        Box(
+            modifier = modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .semantics { contentDescription = "Drone connecting" },
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp,
+            )
+        }
+    } else if (isConnected) {
+        // Filled button when connected
+        Button(
+            onClick = onDisconnect,
+            modifier = modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
             shape = CircleShape,
-            enabled = false,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
         ) {
             Text(
                 text = "D",
                 style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.semantics {
-                    contentDescription = "Drone connect (coming soon)"
-                },
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics { contentDescription = disconnectDesc },
+            )
+        }
+    } else {
+        // Outlined button for disconnected/error
+        OutlinedButton(
+            onClick = onConnect,
+            modifier = modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            shape = CircleShape,
+            colors = if (isError) {
+                ButtonDefaults.outlinedButtonColors(
+                    contentColor = AlertRed,
+                )
+            } else {
+                ButtonDefaults.outlinedButtonColors()
+            },
+        ) {
+            Text(
+                text = "D",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = if (isError) AlertRed else Color.Unspecified,
+                modifier = Modifier.semantics { contentDescription = connectDesc },
+            )
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Drone video preview
+// -----------------------------------------------------------------------
+
+/**
+ * Full-screen preview area for drone video feed.
+ *
+ * Shows different content based on the drone connection state:
+ * - STREAMING with frame: renders the drone frame as an Image
+ * - CONNECTING: shows a centered spinner with "Connecting to drone..." text
+ * - CONNECTED but no frame: shows "Waiting for video feed..." text
+ * - DISCONNECTED: falls back to CameraPreviewPlaceholder behavior
+ */
+@Composable
+private fun DroneVideoPreview(
+    droneState: TelloState?,
+    latestFrame: Bitmap?,
+    cameraFrame: Bitmap?,
+    modifier: Modifier = Modifier,
+) {
+    val connectionState = droneState?.connectionState ?: TelloConnectionState.DISCONNECTED
+
+    when {
+        connectionState == TelloConnectionState.STREAMING && latestFrame != null -> {
+            Image(
+                bitmap = latestFrame.asImageBitmap(),
+                contentDescription = stringResource(R.string.drone_streaming),
+                contentScale = ContentScale.Fit,
+                modifier = modifier,
+            )
+        }
+        connectionState == TelloConnectionState.CONNECTING -> {
+            Box(
+                modifier = modifier.background(Color(0xFF121212)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.drone_connecting),
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            }
+        }
+        connectionState == TelloConnectionState.CONNECTED ||
+            (connectionState == TelloConnectionState.STREAMING && latestFrame == null) -> {
+            Box(
+                modifier = modifier.background(Color(0xFF121212)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.drone_no_video),
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
+        else -> {
+            // DISCONNECTED or ERROR: show camera placeholder
+            CameraPreviewPlaceholder(
+                frame = cameraFrame,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Battery warning pill
+// -----------------------------------------------------------------------
+
+/**
+ * Small pill showing a battery warning or critical message.
+ */
+@Composable
+private fun BatteryWarningPill(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .background(
+                color = color,
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .semantics { contentDescription = text },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            color = HudWhite,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+// -----------------------------------------------------------------------
+// Reconnecting overlay
+// -----------------------------------------------------------------------
+
+/**
+ * Semi-transparent overlay shown when the drone stream appears frozen
+ * (CONNECTED but no new frames).
+ */
+@Composable
+private fun ReconnectingOverlay(
+    modifier: Modifier = Modifier,
+) {
+    val reconnectingText = stringResource(R.string.drone_reconnecting)
+    Box(
+        modifier = modifier
+            .background(
+                color = Color(0x99000000),
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .semantics { contentDescription = reconnectingText },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp,
+                color = HudWhite,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = reconnectingText,
+                color = HudWhite,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
