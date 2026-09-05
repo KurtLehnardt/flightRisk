@@ -20,6 +20,16 @@ import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
 
+import com.flightrisk.app.alert.AlertManager
+import com.flightrisk.app.camera.CameraXFrameSource
+import com.flightrisk.app.llm.LlmSelector
+import com.flightrisk.app.location.LocationProvider
+import com.flightrisk.app.pipeline.SearchPipeline
+import com.flightrisk.app.vision.Detection
+import com.flightrisk.app.vision.FaceRecognizer
+import com.flightrisk.app.vision.PersonDetector
+import com.flightrisk.app.vision.PersonReID
+
 import com.flightrisk.app.ui.navigation.FlightRiskNavHost
 import com.flightrisk.app.ui.onboarding.OnboardingScreen
 import com.flightrisk.app.ui.onboarding.isOnboardingComplete
@@ -65,6 +75,17 @@ class MainActivity : ComponentActivity() {
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
 
+    // AI pipeline state
+    private var searchPipeline: SearchPipeline? = null
+    private var personDetector: PersonDetector? = null
+    private var personReID: PersonReID? = null
+    private var faceRecognizer: FaceRecognizer? = null
+    private var alertManager: AlertManager? = null
+    private var pipelineEventJob: Job? = null
+    private var llmSelector: LlmSelector? = null
+    private var locationProvider: LocationProvider? = null
+    private var cameraFrameSource: CameraXFrameSource? = null
+
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -104,6 +125,11 @@ class MainActivity : ComponentActivity() {
             llmApiKey = savedApiKey,
             llmAvailable = savedApiKey.isNotBlank(),
         )
+
+        // Initialize alert, LLM, and location subsystems
+        alertManager = AlertManager(applicationContext)
+        llmSelector = LlmSelector(applicationContext).also { it.startMonitoring() }
+        locationProvider = LocationProvider(applicationContext)
 
         // Request permissions
         requestPermissionsIfNeeded()
@@ -199,24 +225,197 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // TODO: Wire SearchPipeline.FrameSource when pipeline is fully initialized in MainActivity.
-        // The pipeline should pull frames from the active source:
-        //   val frameSource = SearchPipeline.FrameSource {
-        //       if (frameSourceMode == FrameSourceMode.DRONE) {
-        //           droneManager?.frameSource?.getLatestFrame()
-        //       } else {
-        //           null // CameraX preview is handled separately
-        //       }
-        //   }
-        //   pipeline.frameSource = frameSource
-        //   pipeline.start()
+        val config = FlightRiskConfig.getInstance(this)
+
+        // --- Instantiate vision components (if not already created) ---
+
+        if (personDetector == null) {
+            try {
+                personDetector = PersonDetector(applicationContext)
+                Log.i(TAG, "PersonDetector loaded")
+            } catch (e: Exception) {
+                Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
+            }
+        }
+
+        if (personReID == null) {
+            try {
+                personReID = PersonReID(applicationContext)
+                Log.i(TAG, "PersonReID loaded")
+            } catch (e: Exception) {
+                Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
+            }
+        }
+
+        if (faceRecognizer == null) {
+            try {
+                faceRecognizer = FaceRecognizer(applicationContext)
+                Log.i(TAG, "FaceRecognizer loaded")
+            } catch (e: Exception) {
+                Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
+            }
+        }
+
+        // --- Set target photo on vision components ---
+
+        val target = targetBitmap
+        if (target != null) {
+            try {
+                personReID?.setTarget(target)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to set ReID target", e)
+            }
+            try {
+                faceRecognizer?.setTarget(target)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to set face target", e)
+            }
+        }
+
+        // --- Create camera frame source for camera mode ---
+
+        if (frameSourceMode == FrameSourceMode.CAMERA && cameraFrameSource == null) {
+            cameraFrameSource = CameraXFrameSource(1920, 1080)
+        }
+
+        // --- Create SearchPipeline ---
+
+        val am = alertManager ?: AlertManager(applicationContext).also { alertManager = it }
+        val ls = llmSelector ?: LlmSelector(applicationContext).also {
+            it.startMonitoring()
+            llmSelector = it
+        }
+        val lp = locationProvider ?: LocationProvider(applicationContext).also {
+            locationProvider = it
+        }
+
+        val pipeline = SearchPipeline(config, ls, am, lp)
+        searchPipeline = pipeline
+
+        // Wire frame source: pull from drone or camera based on active mode
+        pipeline.frameSource = SearchPipeline.FrameSource {
+            if (frameSourceMode == FrameSourceMode.DRONE) {
+                droneManager?.frameSource?.getLatestFrame()
+            } else {
+                cameraFrameSource?.getLatestFrame()
+            }
+        }
+
+        // Wire detection callback (delegates to PersonDetector)
+        val detector = personDetector
+        if (detector != null) {
+            pipeline.detectionCallback = object : SearchPipeline.DetectionCallback {
+                override fun detect(frame: Bitmap): List<Detection> {
+                    return detector.detect(frame)
+                }
+
+                override fun annotate(
+                    frame: Bitmap,
+                    detections: List<Detection>,
+                    matchIdx: Int?,
+                ): Bitmap {
+                    return detector.annotate(frame, detections, matchIdx)
+                }
+            }
+        }
+
+        // Wire ReID callback (delegates to PersonReID)
+        val reid = personReID
+        if (reid != null) {
+            pipeline.reidCallback = object : SearchPipeline.ReidCallback {
+                override val matchThreshold: Float =
+                    config.vision.reidThreshold.toFloat()
+
+                override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
+                    val result = reid.findMatch(detections)
+                    return if (result.first != null) {
+                        Pair(result.first!!, result.second)
+                    } else {
+                        null
+                    }
+                }
+
+                override fun compare(crop: Bitmap): Float {
+                    return reid.compare(crop)
+                }
+            }
+        }
+
+        // Wire face callback (delegates to FaceRecognizer)
+        val face = faceRecognizer
+        if (face != null) {
+            pipeline.faceCallback = object : SearchPipeline.FaceCallback {
+                override val hasTarget: Boolean get() = face.hasTarget
+
+                override val matchThreshold: Float =
+                    config.vision.faceMatchThreshold.toFloat()
+
+                override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
+                    val result = face.findMatch(detections)
+                    return if (result.first != null) {
+                        Pair(result.first!!, result.second)
+                    } else {
+                        null
+                    }
+                }
+
+                override fun compare(crop: Bitmap): Float {
+                    return face.compare(crop)
+                }
+            }
+        }
+
+        // Set target photo on pipeline for LLM reasoning
+        pipeline.targetPhoto = target
+
+        // --- Collect pipeline events into searchState ---
+
+        pipelineEventJob = lifecycleScope.launch {
+            pipeline.events.collect { event ->
+                when (event) {
+                    is SearchPipeline.PipelineEvent.FrameProcessed -> {
+                        searchState = searchState.copy(
+                            fps = event.fps,
+                            personsDetected = event.personsDetected,
+                            cameraFrame = event.annotatedFrame,
+                        )
+                    }
+                    is SearchPipeline.PipelineEvent.MatchAlert -> {
+                        searchState = searchState.copy(
+                            activeAlert = event.matchEntry,
+                        )
+                    }
+                    is SearchPipeline.PipelineEvent.ConfidenceProgress -> {
+                        searchState = searchState.copy(
+                            confidenceFrames = event.framesMatched,
+                            confidenceNeeded = event.framesNeeded,
+                            highestMatchScore = event.avgScore,
+                        )
+                    }
+                    is SearchPipeline.PipelineEvent.SearchComplete -> {
+                        Log.i(
+                            TAG,
+                            "Search complete: reason=${event.reason}, " +
+                                "alertLevel=${event.alertLevel}",
+                        )
+                    }
+                }
+            }
+        }
+
+        // Start the pipeline
+        pipeline.start()
+
         Log.i(TAG, "Search started, frameSource=$frameSourceMode")
     }
 
     private fun handleStopSearch() {
+        pipelineEventJob?.cancel()
+        pipelineEventJob = null
+        searchPipeline?.stop("user_stopped")
+        searchPipeline = null
         searchState = searchState.copy(isSearching = false, activeAlert = null)
         Log.i(TAG, "Search stopped")
-        // Future: stop SearchPipeline
     }
 
     private fun handleDismissAlert() {
@@ -448,6 +647,35 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // Clean up pipeline
+        pipelineEventJob?.cancel()
+        pipelineEventJob = null
+        searchPipeline?.stop("activity_destroyed")
+        searchPipeline = null
+
+        // Clean up vision components
+        try { personDetector?.close() } catch (e: Exception) {
+            Log.w(TAG, "Error closing PersonDetector", e)
+        }
+        personDetector = null
+        try { personReID?.close() } catch (e: Exception) {
+            Log.w(TAG, "Error closing PersonReID", e)
+        }
+        personReID = null
+        try { faceRecognizer?.close() } catch (e: Exception) {
+            Log.w(TAG, "Error closing FaceRecognizer", e)
+        }
+        faceRecognizer = null
+
+        // Clean up supporting components
+        alertManager?.release()
+        alertManager = null
+        locationProvider?.stopUpdates()
+        locationProvider = null
+        cameraFrameSource?.stop()
+        cameraFrameSource = null
+
+        // Clean up drone
         droneManager?.onActivityDestroy()
         droneManager = null
         super.onDestroy()
