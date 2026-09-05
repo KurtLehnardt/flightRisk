@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private var faceRecognizer: FaceRecognizer? = null
     private var alertManager: AlertManager? = null
     private var pipelineEventJob: Job? = null
+    private var pipelineSetupJob: Job? = null
     private var llmSelector: LlmSelector? = null
     private var locationProvider: LocationProvider? = null
     private var cameraFrameSource: CameraXFrameSource? = null
@@ -233,7 +234,7 @@ class MainActivity : ComponentActivity() {
         val currentFrameSourceMode = frameSourceMode
 
         // Load models and start pipeline off the main thread
-        lifecycleScope.launch(Dispatchers.Default) {
+        pipelineSetupJob = lifecycleScope.launch(Dispatchers.Default) {
             // --- Instantiate vision components (if not already created) ---
 
             if (personDetector == null) {
@@ -420,6 +421,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleStopSearch() {
+        pipelineSetupJob?.cancel()
+        pipelineSetupJob = null
         pipelineEventJob?.cancel()
         pipelineEventJob = null
         searchPipeline?.stop("user_stopped")
@@ -658,6 +661,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         // Clean up pipeline
+        pipelineSetupJob?.cancel()
+        pipelineSetupJob = null
         pipelineEventJob?.cancel()
         pipelineEventJob = null
         searchPipeline?.stop("activity_destroyed")
