@@ -23,7 +23,11 @@ import androidx.compose.ui.unit.dp
 import com.flightrisk.app.R
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.ui.theme.AlertOrange
+import com.flightrisk.app.ui.theme.AlertRed
+import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.HudWhite
+import com.flightrisk.app.ui.theme.MatchGreen
 
 /**
  * HUD pill showing drone connection state, matching the existing [HudPill]
@@ -41,11 +45,11 @@ fun TelloStatusBadge(
     modifier: Modifier = Modifier,
 ) {
     val dotColor = when (droneState.connectionState) {
-        TelloConnectionState.DISCONNECTED -> Color.Red
-        TelloConnectionState.CONNECTING -> Color.Yellow
-        TelloConnectionState.CONNECTED -> Color(0xFF2563EB) // Blue
-        TelloConnectionState.STREAMING -> Color(0xFF16A34A) // Green
-        TelloConnectionState.ERROR -> Color.Red
+        TelloConnectionState.DISCONNECTED -> AlertRed
+        TelloConnectionState.CONNECTING -> AlertOrange
+        TelloConnectionState.CONNECTED -> DetectionBlue
+        TelloConnectionState.STREAMING -> MatchGreen
+        TelloConnectionState.ERROR -> AlertRed
     }
 
     val stateText = when (droneState.connectionState) {

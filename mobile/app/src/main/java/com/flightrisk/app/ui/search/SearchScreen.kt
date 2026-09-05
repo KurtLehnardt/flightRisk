@@ -266,13 +266,13 @@ fun SearchScreen(
 
                 // Battery warnings
                 val battery = droneState.telemetry.battery
-                if (battery in 1..9) {
+                if (battery in 0..10) {
                     Spacer(modifier = Modifier.height(4.dp))
                     BatteryWarningPill(
                         text = stringResource(R.string.drone_battery_critical, battery),
                         color = AlertRed,
                     )
-                } else if (battery in 10..19) {
+                } else if (battery in 11..20) {
                     Spacer(modifier = Modifier.height(4.dp))
                     BatteryWarningPill(
                         text = stringResource(R.string.drone_battery_warning, battery),
@@ -320,8 +320,9 @@ fun SearchScreen(
             )
         }
 
-        // ----- Flight controls overlay -----
+        // ----- Bottom section: flight controls OR action bar (never both) -----
         if (state.droneState?.connectionState == TelloConnectionState.STREAMING) {
+            // Show flight controls instead of action bar when streaming
             FlightControlsOverlay(
                 isFlying = state.droneState.telemetry.isFlying,
                 onTakeoff = onTakeoff,
@@ -330,30 +331,30 @@ fun SearchScreen(
                 onRotate = onDroneRotate,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-        }
+        } else {
+            // Normal bottom section
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Action bar
+                BottomActionBar(
+                    isSearching = state.isSearching,
+                    onStartSearch = onStartSearch,
+                    onStopSearch = onStopSearch,
+                    droneState = state.droneState,
+                    onDroneConnect = onDroneConnect,
+                    onDroneDisconnect = onDroneDisconnect,
+                )
 
-        // ----- Bottom section (action bar + disclaimer) -----
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // Action bar
-            BottomActionBar(
-                isSearching = state.isSearching,
-                onStartSearch = onStartSearch,
-                onStopSearch = onStopSearch,
-                droneState = state.droneState,
-                onDroneConnect = onDroneConnect,
-                onDroneDisconnect = onDroneDisconnect,
-            )
+                Spacer(modifier = Modifier.height(8.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Persistent disclaimer
-            DisclaimerFooter()
+                // Persistent disclaimer
+                DisclaimerFooter()
+            }
         }
     }
 }
