@@ -7,6 +7,7 @@ import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.llm.LlmBackend
 import com.flightrisk.app.llm.LlmSelector
 import com.flightrisk.app.location.LocationProvider
+import com.flightrisk.app.vision.Detection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -270,18 +271,6 @@ class SearchPipeline(
          * @return Face similarity score.
          */
         fun compare(crop: Bitmap): Float
-    }
-
-    /** A single person detection from the detector. */
-    data class Detection(
-        val bbox: IntArray,
-        val crop: Bitmap,
-        val confidence: Float,
-    ) {
-        override fun equals(other: Any?): Boolean =
-            other is Detection && bbox.contentEquals(other.bbox)
-
-        override fun hashCode(): Int = bbox.contentHashCode()
     }
 
     /** Set by the vision layer (T05). */
