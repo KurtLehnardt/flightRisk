@@ -257,3 +257,111 @@ class TestRestartDashboardSocket:
         sio_client.disconnect()
 
         fleet.disconnect_all.assert_called_once()
+
+
+class TestSetSensitivityPreset:
+    def test_set_sensitivity_preset_balanced(self, clean_app_state):
+        reid = MagicMock()
+        scorer = MagicMock()
+        face = MagicMock()
+        _state["reid"] = reid
+        _state["scorer"] = scorer
+        _state["face"] = face
+        _state["logger"] = None
+
+        sio_client = socketio.test_client(app)
+        sio_client.get_received()
+        sio_client.emit("set_sensitivity_preset", {"preset": "balanced"})
+        received = sio_client.get_received()
+        sio_client.disconnect()
+
+        assert reid.match_threshold == 0.55
+        assert face.match_threshold == 0.45
+        assert scorer.match_threshold == 0.45
+        updates = [r for r in received if r["name"] == "threshold_updated"]
+        assert len(updates) == 1
+        assert updates[0]["args"][0]["preset"] == "balanced"
+
+    def test_set_sensitivity_preset_more_alerts(self, clean_app_state):
+        reid = MagicMock()
+        scorer = MagicMock()
+        face = MagicMock()
+        _state["reid"] = reid
+        _state["scorer"] = scorer
+        _state["face"] = face
+        _state["logger"] = None
+
+        sio_client = socketio.test_client(app)
+        sio_client.get_received()
+        sio_client.emit("set_sensitivity_preset", {"preset": "more_alerts"})
+        received = sio_client.get_received()
+        sio_client.disconnect()
+
+        assert reid.match_threshold == 0.40
+        assert face.match_threshold == 0.30
+        assert scorer.match_threshold == 0.35
+        updates = [r for r in received if r["name"] == "threshold_updated"]
+        assert len(updates) == 1
+        assert updates[0]["args"][0]["preset"] == "more_alerts"
+
+    def test_set_sensitivity_preset_fewer_alerts(self, clean_app_state):
+        reid = MagicMock()
+        scorer = MagicMock()
+        face = MagicMock()
+        _state["reid"] = reid
+        _state["scorer"] = scorer
+        _state["face"] = face
+        _state["logger"] = None
+
+        sio_client = socketio.test_client(app)
+        sio_client.get_received()
+        sio_client.emit("set_sensitivity_preset", {"preset": "fewer_alerts"})
+        received = sio_client.get_received()
+        sio_client.disconnect()
+
+        assert reid.match_threshold == 0.70
+        assert face.match_threshold == 0.55
+        assert scorer.match_threshold == 0.60
+        updates = [r for r in received if r["name"] == "threshold_updated"]
+        assert len(updates) == 1
+        assert updates[0]["args"][0]["preset"] == "fewer_alerts"
+
+    def test_set_sensitivity_preset_unknown(self, clean_app_state):
+        _state["reid"] = MagicMock()
+        _state["scorer"] = MagicMock()
+        _state["face"] = MagicMock()
+        _state["logger"] = None
+
+        sio_client = socketio.test_client(app)
+        sio_client.get_received()
+        sio_client.emit("set_sensitivity_preset", {"preset": "nonexistent"})
+        received = sio_client.get_received()
+        sio_client.disconnect()
+
+        errors = [r for r in received if r["name"] == "error"]
+        assert len(errors) == 1
+        assert "nonexistent" in errors[0]["args"][0]["message"]
+
+
+class TestSetThresholdFace:
+    def test_set_threshold_also_sets_face(self, clean_app_state):
+        reid = MagicMock()
+        scorer = MagicMock()
+        face = MagicMock()
+        _state["reid"] = reid
+        _state["scorer"] = scorer
+        _state["face"] = face
+        _state["logger"] = None
+
+        sio_client = socketio.test_client(app)
+        sio_client.get_received()
+        sio_client.emit("set_threshold", {"threshold": 0.65})
+        received = sio_client.get_received()
+        sio_client.disconnect()
+
+        assert reid.match_threshold == 0.65
+        assert scorer.match_threshold == 0.65
+        assert face.match_threshold == 0.65
+        updates = [r for r in received if r["name"] == "threshold_updated"]
+        assert len(updates) == 1
+        assert updates[0]["args"][0]["threshold"] == 0.65
