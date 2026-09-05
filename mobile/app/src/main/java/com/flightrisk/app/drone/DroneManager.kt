@@ -7,7 +7,6 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -135,10 +134,22 @@ class DroneManager(
     suspend fun disconnect() {
         monitorJob?.cancel()
         monitorJob = null
+
+        // Safety: land first if still flying
+        val state = droneState.value
+        if (state.telemetry.isFlying) {
+            Log.w(TAG, "Disconnecting while flying -- attempting to land first")
+            try {
+                withTimeoutOrNull(3000) {
+                    connection.land()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Land attempt during disconnect failed: ${e.message}")
+            }
+        }
+
         frameSource.onStreamFrozen = null
-
         frameSource.stop()
-
         try {
             connection.stopStream()
         } catch (e: CancellationException) {
@@ -147,8 +158,6 @@ class DroneManager(
             Log.w(TAG, "Error stopping stream: ${e.message}")
         }
         connection.disconnect()
-        // Do NOT cancel scope here — onActivityPause may still need it
-
         Log.i(TAG, "Disconnected")
     }
 
@@ -209,31 +218,25 @@ class DroneManager(
      */
     fun onActivityDestroy() {
         monitorJob?.cancel()
-        frameSource.stop()
+        monitorJob = null
         val state = droneState.value
-        if (state.telemetry.isFlying) {
-            Log.w(TAG, "Activity destroying while flying -- emergency landing")
-            // Fire-and-forget on a background thread so the main thread is never blocked (no ANR).
-            // The process may die before land completes, but that is better than an ANR.
-            Thread {
+        Thread {
+            frameSource.stop()  // Blocking join happens off main thread
+            if (state.telemetry.isFlying) {
+                Log.w(TAG, "Activity destroying while flying -- emergency landing")
                 try {
-                    runBlocking {
+                    runBlocking(Dispatchers.IO) {
                         withTimeoutOrNull(1500) {
-                            withContext(NonCancellable) {
-                                connection.land()
-                            }
+                            connection.land()
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Emergency land failed: ${e.message}")
                 }
-                try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
-                scope.cancel()
-            }.start()
-        } else {
-            try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
+            }
+            connection.disconnect()
             scope.cancel()
-        }
+        }.start()
         Log.i(TAG, "Destroyed")
     }
 
@@ -247,11 +250,10 @@ class DroneManager(
     /** Command the drone to land. */
     suspend fun land(): Boolean {
         commandedLanding = true
-        val result = connection.land()
-        if (!result) {
-            commandedLanding = false
-        }
-        return result
+        return connection.land()
+        // Don't reset commandedLanding on failure — the monitoring loop will
+        // clear it once it observes !isFlying, preventing false crash alerts
+        // from lost UDP acks
     }
 
     /**
@@ -286,14 +288,10 @@ class DroneManager(
 
     /**
      * Emergency motor stop. Use only as a last resort — cuts motors immediately.
-     *
-     * TODO: Uncomment when TelloConnection.emergencyStop() is added by W1.
      */
     suspend fun emergencyStop(): Boolean {
         commandedLanding = true
-        // return connection.emergencyStop()
-        Log.w(TAG, "emergencyStop() called but TelloConnection.emergencyStop() not yet available")
-        return connection.land() // Fallback to land until emergencyStop is wired
+        return connection.emergencyStop()
     }
 
     // ------------------------------------------------------------------
@@ -340,14 +338,12 @@ class DroneManager(
                 // Crash detection: was flying but TelloConnection flipped
                 // isFlying to false (after 3 consecutive zero-height polls).
                 // Skip if this was a commanded landing.
-                if (wasFlying && !state.telemetry.isFlying &&
-                    state.telemetry.height == 0 && isConnected
-                ) {
-                    if (!commandedLanding) {
+                if (wasFlying && !state.telemetry.isFlying) {
+                    if (state.telemetry.height == 0 && isConnected && !commandedLanding) {
                         Log.e(TAG, "Crash detected")
                         _alerts.tryEmit(DroneAlert.CrashDetected)
                     }
-                    commandedLanding = false
+                    commandedLanding = false  // Reset after processing, regardless of crash or normal landing
                 }
                 wasFlying = state.telemetry.isFlying
             }
