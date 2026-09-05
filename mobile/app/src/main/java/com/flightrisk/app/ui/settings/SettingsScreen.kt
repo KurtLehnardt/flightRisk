@@ -51,7 +51,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.config.SensitivityPreset
+import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.TelloConnectionState
+import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
+import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.MatchGreen
 
 /**
@@ -65,6 +69,9 @@ import com.flightrisk.app.ui.theme.MatchGreen
  * @property llmBackend Currently selected LLM backend name.
  * @property llmApiKey Current API key for cloud LLM.
  * @property llmAvailable Whether the selected LLM backend is available.
+ * @property frameSourceMode Current frame source (camera or drone).
+ * @property droneConnectionState Current Tello connection state.
+ * @property droneBattery Current Tello battery percentage (0-100).
  */
 data class SettingsScreenState(
     val activePreset: SensitivityPreset? = SensitivityPreset.BALANCED,
@@ -74,6 +81,9 @@ data class SettingsScreenState(
     val llmBackend: String = "cloud_claude",
     val llmApiKey: String = "",
     val llmAvailable: Boolean = false,
+    val frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
+    val droneConnectionState: TelloConnectionState = TelloConnectionState.DISCONNECTED,
+    val droneBattery: Int = 0,
 )
 
 /**
@@ -86,6 +96,7 @@ data class SettingsScreenState(
  *   Params: (name, value) where name is "reid", "face", or "scorer".
  * @param onLlmBackendChanged Callback when the LLM backend is changed.
  * @param onApiKeyChanged Callback when the API key is changed.
+ * @param onFrameSourceChanged Callback when the frame source mode is changed.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -95,6 +106,7 @@ fun SettingsScreen(
     onThresholdChanged: (String, Float) -> Unit,
     onLlmBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    onFrameSourceChanged: (FrameSourceMode) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier) { innerPadding ->
@@ -132,6 +144,18 @@ fun SettingsScreen(
                 isAvailable = state.llmAvailable,
                 onBackendChanged = onLlmBackendChanged,
                 onApiKeyChanged = onApiKeyChanged,
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Drone section -----
+            DroneSection(
+                frameSourceMode = state.frameSourceMode,
+                connectionState = state.droneConnectionState,
+                battery = state.droneBattery,
+                onFrameSourceChanged = onFrameSourceChanged,
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -362,6 +386,165 @@ private fun LlmBackendSection(
 private fun LlmBackendOption(
     name: String,
     backendId: String,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .sizeIn(minHeight = 48.dp)
+            .clickable(onClick = onSelect)
+            .padding(vertical = 4.dp)
+            .semantics {
+                contentDescription = "$name" +
+                    if (isSelected) " (selected)" else ""
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = isSelected,
+            onClick = onSelect,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = name,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+}
+
+// -----------------------------------------------------------------------
+// Drone section
+// -----------------------------------------------------------------------
+
+/**
+ * Frame source selection and drone connection status.
+ */
+@Composable
+private fun DroneSection(
+    frameSourceMode: FrameSourceMode,
+    connectionState: TelloConnectionState,
+    battery: Int,
+    onFrameSourceChanged: (FrameSourceMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = "Drone",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.semantics { heading() },
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Select the video source for detection.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Phone Camera option
+        FrameSourceOption(
+            name = "Phone Camera",
+            mode = FrameSourceMode.CAMERA,
+            isSelected = frameSourceMode == FrameSourceMode.CAMERA,
+            onSelect = { onFrameSourceChanged(FrameSourceMode.CAMERA) },
+        )
+
+        // Tello Drone option
+        FrameSourceOption(
+            name = "Tello Drone",
+            mode = FrameSourceMode.DRONE,
+            isSelected = frameSourceMode == FrameSourceMode.DRONE,
+            onSelect = { onFrameSourceChanged(FrameSourceMode.DRONE) },
+        )
+
+        // Show connection status when drone mode is selected
+        if (frameSourceMode == FrameSourceMode.DRONE) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Connection state indicator
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val statusColor = when (connectionState) {
+                    TelloConnectionState.CONNECTED,
+                    TelloConnectionState.STREAMING -> MatchGreen
+                    TelloConnectionState.CONNECTING -> AlertOrange
+                    TelloConnectionState.ERROR -> AlertRed
+                    TelloConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                val statusText = when (connectionState) {
+                    TelloConnectionState.DISCONNECTED -> "Disconnected"
+                    TelloConnectionState.CONNECTING -> "Connecting..."
+                    TelloConnectionState.CONNECTED -> "Connected"
+                    TelloConnectionState.STREAMING -> "Streaming"
+                    TelloConnectionState.ERROR -> "Error"
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            color = statusColor,
+                            shape = RoundedCornerShape(4.dp),
+                        ),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = statusColor,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Drone status: $statusText"
+                    },
+                )
+            }
+
+            // Battery level when connected
+            if (connectionState == TelloConnectionState.CONNECTED ||
+                connectionState == TelloConnectionState.STREAMING
+            ) {
+                Spacer(modifier = Modifier.height(4.dp))
+
+                val batteryColor = when {
+                    battery > 50 -> MatchGreen
+                    battery > 20 -> AlertOrange
+                    else -> AlertRed
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Battery: $battery%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = batteryColor,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Drone battery: $battery percent"
+                        },
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Connect to the Tello's WiFi network, then use the drone button on the Search screen to connect.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * A single frame source radio option.
+ */
+@Composable
+private fun FrameSourceOption(
+    name: String,
+    mode: FrameSourceMode,
     isSelected: Boolean,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier,
