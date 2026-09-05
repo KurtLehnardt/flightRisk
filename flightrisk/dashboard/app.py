@@ -868,6 +868,8 @@ def on_set_threshold(data):
         app_state.reid.match_threshold = threshold
     if app_state.scorer:
         app_state.scorer.match_threshold = threshold
+    if app_state.face:
+        app_state.face.match_threshold = threshold
     if app_state.logger:
         app_state.logger.info("threshold_updated", threshold=threshold)
     emit("threshold_updated", {"threshold": threshold})
