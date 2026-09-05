@@ -210,7 +210,9 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private fun handleStartSearch() {
-        // Set frame dimensions based on active source for correct overlay scaling
+        if (searchState.isSearching) return
+
+        // Update UI immediately so button toggles without waiting for model load
         if (frameSourceMode == FrameSourceMode.DRONE) {
             searchState = searchState.copy(
                 isSearching = true,
@@ -226,187 +228,195 @@ class MainActivity : ComponentActivity() {
         }
 
         val config = FlightRiskConfig.getInstance(this)
-
-        // --- Instantiate vision components (if not already created) ---
-
-        if (personDetector == null) {
-            try {
-                personDetector = PersonDetector(applicationContext)
-                Log.i(TAG, "PersonDetector loaded")
-            } catch (e: Exception) {
-                Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
-            }
-        }
-
-        if (personReID == null) {
-            try {
-                personReID = PersonReID(applicationContext)
-                Log.i(TAG, "PersonReID loaded")
-            } catch (e: Exception) {
-                Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
-            }
-        }
-
-        if (faceRecognizer == null) {
-            try {
-                faceRecognizer = FaceRecognizer(applicationContext)
-                Log.i(TAG, "FaceRecognizer loaded")
-            } catch (e: Exception) {
-                Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
-            }
-        }
-
-        // --- Set target photo on vision components ---
-
+        val ctx = applicationContext
         val target = targetBitmap
-        if (target != null) {
-            try {
-                personReID?.setTarget(target)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to set ReID target", e)
-            }
-            try {
-                faceRecognizer?.setTarget(target)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to set face target", e)
-            }
-        }
+        val currentFrameSourceMode = frameSourceMode
 
-        // --- Create camera frame source for camera mode ---
+        // Load models and start pipeline off the main thread
+        lifecycleScope.launch(Dispatchers.Default) {
+            // --- Instantiate vision components (if not already created) ---
 
-        if (frameSourceMode == FrameSourceMode.CAMERA && cameraFrameSource == null) {
-            cameraFrameSource = CameraXFrameSource(1920, 1080)
-        }
-
-        // --- Create SearchPipeline ---
-
-        val am = alertManager ?: AlertManager(applicationContext).also { alertManager = it }
-        val ls = llmSelector ?: LlmSelector(applicationContext).also {
-            it.startMonitoring()
-            llmSelector = it
-        }
-        val lp = locationProvider ?: LocationProvider(applicationContext).also {
-            locationProvider = it
-        }
-
-        val pipeline = SearchPipeline(config, ls, am, lp)
-        searchPipeline = pipeline
-
-        // Wire frame source: pull from drone or camera based on active mode
-        pipeline.frameSource = SearchPipeline.FrameSource {
-            if (frameSourceMode == FrameSourceMode.DRONE) {
-                droneManager?.frameSource?.getLatestFrame()
-            } else {
-                cameraFrameSource?.getLatestFrame()
-            }
-        }
-
-        // Wire detection callback (delegates to PersonDetector)
-        val detector = personDetector
-        if (detector != null) {
-            pipeline.detectionCallback = object : SearchPipeline.DetectionCallback {
-                override fun detect(frame: Bitmap): List<Detection> {
-                    return detector.detect(frame)
-                }
-
-                override fun annotate(
-                    frame: Bitmap,
-                    detections: List<Detection>,
-                    matchIdx: Int?,
-                ): Bitmap {
-                    return detector.annotate(frame, detections, matchIdx)
+            if (personDetector == null) {
+                try {
+                    personDetector = PersonDetector(ctx)
+                    Log.i(TAG, "PersonDetector loaded")
+                } catch (e: Exception) {
+                    Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
                 }
             }
-        }
 
-        // Wire ReID callback (delegates to PersonReID)
-        val reid = personReID
-        if (reid != null) {
-            pipeline.reidCallback = object : SearchPipeline.ReidCallback {
-                override val matchThreshold: Float =
-                    config.vision.reidThreshold.toFloat()
+            if (personReID == null) {
+                try {
+                    personReID = PersonReID(ctx)
+                    Log.i(TAG, "PersonReID loaded")
+                } catch (e: Exception) {
+                    Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
+                }
+            }
 
-                override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
-                    val result = reid.findMatch(detections)
-                    return if (result.first != null) {
-                        Pair(result.first!!, result.second)
-                    } else {
-                        null
+            if (faceRecognizer == null) {
+                try {
+                    faceRecognizer = FaceRecognizer(ctx)
+                    Log.i(TAG, "FaceRecognizer loaded")
+                } catch (e: Exception) {
+                    Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
+                }
+            }
+
+            // --- Set target photo on vision components ---
+
+            if (target != null) {
+                try {
+                    personReID?.setTarget(target)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to set ReID target", e)
+                }
+                try {
+                    faceRecognizer?.setTarget(target)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to set face target", e)
+                }
+            }
+
+            // --- Create camera frame source for camera mode ---
+
+            if (currentFrameSourceMode == FrameSourceMode.CAMERA && cameraFrameSource == null) {
+                cameraFrameSource = CameraXFrameSource(1920, 1080)
+            }
+
+            // --- Create SearchPipeline ---
+
+            val am = alertManager ?: AlertManager(ctx).also { alertManager = it }
+            val ls = llmSelector ?: LlmSelector(ctx).also {
+                it.startMonitoring()
+                llmSelector = it
+            }
+            val lp = locationProvider ?: LocationProvider(ctx).also {
+                locationProvider = it
+            }
+
+            // Bail out if user stopped search while we were loading models
+            if (!searchState.isSearching) return@launch
+
+            val pipeline = SearchPipeline(config, ls, am, lp)
+            searchPipeline = pipeline
+
+            // Wire frame source: pull from drone or camera based on active mode
+            pipeline.frameSource = SearchPipeline.FrameSource {
+                if (frameSourceMode == FrameSourceMode.DRONE) {
+                    droneManager?.frameSource?.getLatestFrame()
+                } else {
+                    cameraFrameSource?.getLatestFrame()
+                }
+            }
+
+            // Wire detection callback (delegates to PersonDetector)
+            val detector = personDetector
+            if (detector != null) {
+                pipeline.detectionCallback = object : SearchPipeline.DetectionCallback {
+                    override fun detect(frame: Bitmap): List<Detection> {
+                        return detector.detect(frame)
                     }
-                }
 
-                override fun compare(crop: Bitmap): Float {
-                    return reid.compare(crop)
-                }
-            }
-        }
-
-        // Wire face callback (delegates to FaceRecognizer)
-        val face = faceRecognizer
-        if (face != null) {
-            pipeline.faceCallback = object : SearchPipeline.FaceCallback {
-                override val hasTarget: Boolean get() = face.hasTarget
-
-                override val matchThreshold: Float =
-                    config.vision.faceMatchThreshold.toFloat()
-
-                override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
-                    val result = face.findMatch(detections)
-                    return if (result.first != null) {
-                        Pair(result.first!!, result.second)
-                    } else {
-                        null
-                    }
-                }
-
-                override fun compare(crop: Bitmap): Float {
-                    return face.compare(crop)
-                }
-            }
-        }
-
-        // Set target photo on pipeline for LLM reasoning
-        pipeline.targetPhoto = target
-
-        // --- Collect pipeline events into searchState ---
-
-        pipelineEventJob = lifecycleScope.launch {
-            pipeline.events.collect { event ->
-                when (event) {
-                    is SearchPipeline.PipelineEvent.FrameProcessed -> {
-                        searchState = searchState.copy(
-                            fps = event.fps,
-                            personsDetected = event.personsDetected,
-                            cameraFrame = event.annotatedFrame,
-                        )
-                    }
-                    is SearchPipeline.PipelineEvent.MatchAlert -> {
-                        searchState = searchState.copy(
-                            activeAlert = event.matchEntry,
-                        )
-                    }
-                    is SearchPipeline.PipelineEvent.ConfidenceProgress -> {
-                        searchState = searchState.copy(
-                            confidenceFrames = event.framesMatched,
-                            confidenceNeeded = event.framesNeeded,
-                            highestMatchScore = event.avgScore,
-                        )
-                    }
-                    is SearchPipeline.PipelineEvent.SearchComplete -> {
-                        Log.i(
-                            TAG,
-                            "Search complete: reason=${event.reason}, " +
-                                "alertLevel=${event.alertLevel}",
-                        )
+                    override fun annotate(
+                        frame: Bitmap,
+                        detections: List<Detection>,
+                        matchIdx: Int?,
+                    ): Bitmap {
+                        return detector.annotate(frame, detections, matchIdx)
                     }
                 }
             }
+
+            // Wire ReID callback (delegates to PersonReID)
+            val reid = personReID
+            if (reid != null) {
+                pipeline.reidCallback = object : SearchPipeline.ReidCallback {
+                    override val matchThreshold: Float =
+                        config.vision.reidThreshold.toFloat()
+
+                    override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
+                        val result = reid.findMatch(detections)
+                        return if (result.first != null) {
+                            Pair(result.first!!, result.second)
+                        } else {
+                            null
+                        }
+                    }
+
+                    override fun compare(crop: Bitmap): Float {
+                        return reid.compare(crop)
+                    }
+                }
+            }
+
+            // Wire face callback (delegates to FaceRecognizer)
+            val face = faceRecognizer
+            if (face != null) {
+                pipeline.faceCallback = object : SearchPipeline.FaceCallback {
+                    override val hasTarget: Boolean get() = face.hasTarget
+
+                    override val matchThreshold: Float =
+                        config.vision.faceMatchThreshold.toFloat()
+
+                    override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
+                        val result = face.findMatch(detections)
+                        return if (result.first != null) {
+                            Pair(result.first!!, result.second)
+                        } else {
+                            null
+                        }
+                    }
+
+                    override fun compare(crop: Bitmap): Float {
+                        return face.compare(crop)
+                    }
+                }
+            }
+
+            // Set target photo on pipeline for LLM reasoning
+            pipeline.targetPhoto = target
+
+            // --- Collect pipeline events into searchState ---
+
+            pipelineEventJob = lifecycleScope.launch {
+                pipeline.events.collect { event ->
+                    when (event) {
+                        is SearchPipeline.PipelineEvent.FrameProcessed -> {
+                            searchState = searchState.copy(
+                                fps = event.fps,
+                                personsDetected = event.personsDetected,
+                                cameraFrame = event.annotatedFrame,
+                            )
+                        }
+                        is SearchPipeline.PipelineEvent.MatchAlert -> {
+                            searchState = searchState.copy(
+                                activeAlert = event.matchEntry,
+                            )
+                        }
+                        is SearchPipeline.PipelineEvent.ConfidenceProgress -> {
+                            searchState = searchState.copy(
+                                confidenceFrames = event.framesMatched,
+                                confidenceNeeded = event.framesNeeded,
+                                highestMatchScore = event.avgScore,
+                            )
+                        }
+                        is SearchPipeline.PipelineEvent.SearchComplete -> {
+                            Log.i(
+                                TAG,
+                                "Search complete: reason=${event.reason}, " +
+                                    "alertLevel=${event.alertLevel}",
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Start the pipeline
+            pipeline.start()
+
+            Log.i(TAG, "Search started, frameSource=$frameSourceMode")
         }
-
-        // Start the pipeline
-        pipeline.start()
-
-        Log.i(TAG, "Search started, frameSource=$frameSourceMode")
     }
 
     private fun handleStopSearch() {
@@ -522,7 +532,7 @@ class MainActivity : ComponentActivity() {
                     wifiStatus !is TelloWifiChecker.WifiStatus.OnTelloWifi ->
                         manager.wifiChecker.getGuidanceMessage(wifiStatus)
                     droneError != null ->
-                        "$droneError — tap Retry to try again."
+                        droneError
                     else ->
                         "Connection failed. Make sure the Tello is powered on and try again."
                 }
