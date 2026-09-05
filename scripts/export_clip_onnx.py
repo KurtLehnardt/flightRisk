@@ -14,7 +14,7 @@ For each model the script:
 Mobile preprocessing reference
 ------------------------------
   Input tensor : float32 [1, 3, 224, 224]  (NCHW, RGB)
-  Resize       : resize shortest edge to 256 (bilinear)
+  Resize       : resize shortest edge to 256 (bicubic)
   Center crop  : 224 x 224
   Normalize    : mean = [0.48145466, 0.4578275, 0.40821073]
                  std  = [0.26862954, 0.26130258, 0.27577711]
@@ -205,7 +205,7 @@ def run_onnx_embeddings(
             new_h, new_w = 256, int(256 * w / h)
         else:
             new_h, new_w = int(256 * h / w), 256
-        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
         # Center crop 224x224
         ch, cw = resized.shape[:2]

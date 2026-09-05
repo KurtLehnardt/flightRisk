@@ -94,7 +94,7 @@ before shipping a model that fails parity.
 - Post-process: transpose output, filter by confidence, NMS, rescale boxes
 
 ### CLIP (MobileCLIP-S2 / ViT-B/32)
-- Resize shortest edge to 256 (bilinear)
+- Resize shortest edge to 256 (bicubic)
 - Center crop 224x224
 - `pixel / 255.0`, then `(pixel - mean) / std`
 - mean = `[0.48145466, 0.4578275, 0.40821073]`
