@@ -1,4 +1,4 @@
-"""Tests for tracker-integration glue logic in amber.dashboard.app.
+"""Tests for tracker-integration glue logic in flightrisk.dashboard.app.
 
 Covers the PR #22 review fixes:
   - the bbox->track_id join must not misattribute a new detection to a
@@ -10,8 +10,8 @@ Covers the PR #22 review fixes:
 import numpy as np
 import pytest
 
-from amber.dashboard.app import _build_track_id_by_bbox
-from amber.vision.tracker import DetectionTracker
+from flightrisk.dashboard.app import _build_track_id_by_bbox
+from flightrisk.vision.tracker import DetectionTracker
 
 pytestmark = pytest.mark.e2e
 

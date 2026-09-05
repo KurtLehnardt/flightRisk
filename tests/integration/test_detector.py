@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from amber.vision.detector import PersonDetector
+from flightrisk.vision.detector import PersonDetector
 
 pytestmark = pytest.mark.integration
 

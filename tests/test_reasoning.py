@@ -1,4 +1,4 @@
-"""Tests for amber.reasoning.agent.AmberAgent — Gemma 4 reasoning via Ollama.
+"""Tests for flightrisk.reasoning.agent.FlightRiskAgent — Gemma 4 reasoning via Ollama.
 
 All Ollama I/O is mocked (`ollama.Client` is patched at construction time),
 so this suite never contacts a real Ollama server and does not require one
@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from amber.reasoning.agent import AmberAgent
+from flightrisk.reasoning.agent import FlightRiskAgent
 
 
 def _mock_client(model_names=("gemma4:latest",), chat_response_text="MATCH: yes\nCONFIDENCE: high\nREASONING: same jacket"):
@@ -30,7 +30,7 @@ def _mock_client(model_names=("gemma4:latest",), chat_response_text="MATCH: yes\
 
 @pytest.fixture
 def make_agent(monkeypatch):
-    """Factory fixture: build an AmberAgent with a mocked ollama.Client.
+    """Factory fixture: build an FlightRiskAgent with a mocked ollama.Client.
 
     Returns (agent, mock_client) so tests can assert on calls made to the
     underlying (fake) Ollama client.
@@ -43,8 +43,8 @@ def make_agent(monkeypatch):
             chat_response_text=chat_response_text
             or "MATCH: yes\nCONFIDENCE: high\nREASONING: same jacket",
         )
-        with patch("amber.reasoning.agent.ollama.Client", return_value=client):
-            agent = AmberAgent(model=model)
+        with patch("flightrisk.reasoning.agent.ollama.Client", return_value=client):
+            agent = FlightRiskAgent(model=model)
         return agent, client
 
     return _make
@@ -78,9 +78,9 @@ class TestOllamaUnavailable:
     """Error handling when the `ollama` package/server is unavailable."""
 
     def test_init_raises_when_ollama_package_missing(self, monkeypatch):
-        monkeypatch.setattr("amber.reasoning.agent.HAS_OLLAMA", False)
+        monkeypatch.setattr("flightrisk.reasoning.agent.HAS_OLLAMA", False)
         with pytest.raises(RuntimeError):
-            AmberAgent()
+            FlightRiskAgent()
 
     def test_methods_degrade_gracefully_when_model_unavailable(self, make_agent, sample_image):
         agent, client = make_agent(model_names=("some-other-model",))

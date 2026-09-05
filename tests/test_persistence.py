@@ -1,7 +1,7 @@
-"""Tests for amber.persistence.SessionDB — SQLite session/match/feedback store.
+"""Tests for flightrisk.persistence.SessionDB — SQLite session/match/feedback store.
 
 Every test uses its own temp-file database (via the `db` fixture / `tmp_path`)
-rather than the project's default `amber_sessions.db`, so running the suite
+rather than the project's default `flightrisk_sessions.db`, so running the suite
 never touches real session data.
 """
 
@@ -10,7 +10,7 @@ import threading
 
 import pytest
 
-from amber.persistence import SessionDB
+from flightrisk.persistence import SessionDB
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ class TestGetRecentSessions:
             "2026-01-01T12:00:00",
         ])
         monkeypatch.setattr(
-            "amber.persistence.time.strftime",
+            "flightrisk.persistence.time.strftime",
             lambda *_args, **_kwargs: next(timestamps),
         )
         id1 = db.create_session(source="webcam")

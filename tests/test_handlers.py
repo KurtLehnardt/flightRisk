@@ -1,5 +1,5 @@
 """Behavior-level tests for Flask routes and SocketIO event handlers in
-amber.dashboard.app.
+flightrisk.dashboard.app.
 
 Unlike tests/e2e/test_dashboard.py (which only checks route registration),
 these tests drive real request/event handling via Flask's and
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pytest
 
-from amber.dashboard.app import app, socketio, _state
+from flightrisk.dashboard.app import app, socketio, _state
 
 
 @pytest.fixture
@@ -145,8 +145,8 @@ class TestClearTarget:
         # `_state["target_photo_path"]`. Mock Path.exists/unlink so this test
         # can never delete a real file on disk.
         mock_unlink = MagicMock()
-        monkeypatch.setattr("amber.dashboard.app.Path.exists", MagicMock(return_value=True))
-        monkeypatch.setattr("amber.dashboard.app.Path.unlink", mock_unlink)
+        monkeypatch.setattr("flightrisk.dashboard.app.Path.exists", MagicMock(return_value=True))
+        monkeypatch.setattr("flightrisk.dashboard.app.Path.unlink", mock_unlink)
 
         reid = MagicMock()
         face = MagicMock()
@@ -225,7 +225,7 @@ class TestRestartDashboardSocket:
             calls["source"] = source_config.source
             calls["target_path"] = target_path
 
-        monkeypatch.setattr("amber.dashboard.app._init_pipeline", fake_init_pipeline)
+        monkeypatch.setattr("flightrisk.dashboard.app._init_pipeline", fake_init_pipeline)
         _state["fleet"] = None
         _state["cap"] = None
         _state["source"] = "webcam"
@@ -243,7 +243,7 @@ class TestRestartDashboardSocket:
         assert calls["source"] == "webcam"
 
     def test_restart_dashboard_disconnects_existing_fleet(self, clean_app_state, monkeypatch):
-        monkeypatch.setattr("amber.dashboard.app._init_pipeline", MagicMock())
+        monkeypatch.setattr("flightrisk.dashboard.app._init_pipeline", MagicMock())
         fleet = MagicMock()
         _state["fleet"] = fleet
         _state["cap"] = None

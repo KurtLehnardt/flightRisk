@@ -1,4 +1,4 @@
-"""Security hardening tests for Amber Drone dashboard and persistence."""
+"""Security hardening tests for FlightRisk dashboard and persistence."""
 
 import json
 import os
@@ -17,23 +17,23 @@ from cryptography.fernet import Fernet
 
 class TestSecretKey:
     def test_secret_key_from_env(self, monkeypatch):
-        """SECRET_KEY should use AMBER_SECRET_KEY when set."""
-        monkeypatch.setenv("AMBER_SECRET_KEY", "env-secret-key-value")
+        """SECRET_KEY should use FLIGHTRISK_SECRET_KEY when set."""
+        monkeypatch.setenv("FLIGHTRISK_SECRET_KEY", "env-secret-key-value")
         import importlib
-        import amber.dashboard.app as app_mod
+        import flightrisk.dashboard.app as app_mod
         importlib.reload(app_mod)
         assert app_mod.app.config["SECRET_KEY"] == "env-secret-key-value"
 
     def test_secret_key_random_fallback(self, monkeypatch):
-        """When AMBER_SECRET_KEY is not set, app should have a random secret key."""
-        monkeypatch.delenv("AMBER_SECRET_KEY", raising=False)
-        import amber.dashboard.app as app_mod
+        """When FLIGHTRISK_SECRET_KEY is not set, app should have a random secret key."""
+        monkeypatch.delenv("FLIGHTRISK_SECRET_KEY", raising=False)
+        import flightrisk.dashboard.app as app_mod
 
         # The app config should have a non-trivial key even without the env var
         actual_key = app_mod.app.config["SECRET_KEY"]
         assert actual_key is not None
         assert len(actual_key) > 0
-        assert actual_key != "amber-drone-2026"
+        assert actual_key != "flightrisk-2026"
 
 
 # ---------------------------------------------------------------------------
@@ -43,15 +43,15 @@ class TestSecretKey:
 
 @pytest.fixture
 def app_with_auth(monkeypatch):
-    """Return a Flask test client with AMBER_API_KEY enabled."""
-    monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
-    import amber.dashboard.app as app_mod
+    """Return a Flask test client with FLIGHTRISK_API_KEY enabled."""
+    monkeypatch.setenv("FLIGHTRISK_API_KEY", "test-key-123")
+    import flightrisk.dashboard.app as app_mod
 
     # Patch via monkeypatch so the global is restored atomically at teardown; a
     # manual restore that reads os.environ back leaks "test-key-123" into the
     # global (the fixture finalizer runs before monkeypatch reverts the env
     # var) and poisons later tests such as tests/test_handlers.py.
-    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
+    monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", "test-key-123")
     # Stub heavy components so routes don't crash
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
@@ -72,11 +72,11 @@ def app_with_auth(monkeypatch):
 
 @pytest.fixture
 def app_no_auth(monkeypatch):
-    """Return a Flask test client with AMBER_API_KEY disabled."""
-    monkeypatch.delenv("AMBER_API_KEY", raising=False)
-    import amber.dashboard.app as app_mod
+    """Return a Flask test client with FLIGHTRISK_API_KEY disabled."""
+    monkeypatch.delenv("FLIGHTRISK_API_KEY", raising=False)
+    import flightrisk.dashboard.app as app_mod
 
-    monkeypatch.setattr(app_mod, "_AMBER_API_KEY", None)
+    monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", None)
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
     app_mod._state["source"] = "webcam"
@@ -120,7 +120,7 @@ class TestAPIKeyAuth:
         assert resp.status_code == 200
 
     def test_no_auth_when_key_not_set(self, app_no_auth):
-        """When AMBER_API_KEY is not set, all requests should pass without auth."""
+        """When FLIGHTRISK_API_KEY is not set, all requests should pass without auth."""
         resp = app_no_auth.get("/api/status")
         assert resp.status_code == 200
 
@@ -133,7 +133,7 @@ class TestAPIKeyAuth:
 class TestSessionDBEncryption:
     def _make_db(self, encryption_key=None):
         """Create a SessionDB with a temp file."""
-        from amber.persistence import SessionDB
+        from flightrisk.persistence import SessionDB
 
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
@@ -232,7 +232,7 @@ class TestSessionDBEncryption:
 
     def test_decrypt_handles_plaintext_gracefully(self):
         """If data was stored without encryption, _decrypt should return it unchanged."""
-        from amber.persistence import SessionDB
+        from flightrisk.persistence import SessionDB
 
         key = Fernet.generate_key().decode()
         db, path = self._make_db(encryption_key=None)
@@ -264,25 +264,25 @@ class TestSessionDBEncryption:
 
 class TestCORSOrigins:
     def test_cors_default_is_wildcard(self, monkeypatch):
-        """Without AMBER_CORS_ORIGINS, default should be '*'."""
-        monkeypatch.delenv("AMBER_CORS_ORIGINS", raising=False)
-        origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
+        """Without FLIGHTRISK_CORS_ORIGINS, default should be '*'."""
+        monkeypatch.delenv("FLIGHTRISK_CORS_ORIGINS", raising=False)
+        origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
         result = origins if origins == "*" else origins.split(",")
         assert result == "*"
 
     def test_cors_single_origin(self, monkeypatch):
         """Single origin from env var."""
-        monkeypatch.setenv("AMBER_CORS_ORIGINS", "https://amber.example.com")
-        origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
+        monkeypatch.setenv("FLIGHTRISK_CORS_ORIGINS", "https://amber.example.com")
+        origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
         result = origins if origins == "*" else origins.split(",")
         assert result == ["https://amber.example.com"]
 
     def test_cors_multiple_origins(self, monkeypatch):
         """Multiple comma-separated origins from env var."""
         monkeypatch.setenv(
-            "AMBER_CORS_ORIGINS", "https://a.com,https://b.com,https://c.com"
+            "FLIGHTRISK_CORS_ORIGINS", "https://a.com,https://b.com,https://c.com"
         )
-        origins = os.environ.get("AMBER_CORS_ORIGINS", "*")
+        origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
         result = origins if origins == "*" else origins.split(",")
         assert result == ["https://a.com", "https://b.com", "https://c.com"]
 
@@ -296,10 +296,10 @@ class TestSocketIOAuth:
     @pytest.fixture(autouse=True)
     def _setup_app(self, monkeypatch):
         """Configure the app with auth enabled for each test."""
-        monkeypatch.setenv("AMBER_API_KEY", "test-key-123")
-        import amber.dashboard.app as app_mod
+        monkeypatch.setenv("FLIGHTRISK_API_KEY", "test-key-123")
+        import flightrisk.dashboard.app as app_mod
 
-        monkeypatch.setattr(app_mod, "_AMBER_API_KEY", "test-key-123")
+        monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", "test-key-123")
         app_mod._state["db"] = MagicMock()
         app_mod._state["metrics"] = MagicMock()
         app_mod._state["source"] = "webcam"
@@ -359,7 +359,7 @@ class TestSocketIOAuth:
 class TestDecryptionInReadPaths:
     def _make_db(self, encryption_key=None):
         """Create a SessionDB with a temp file."""
-        from amber.persistence import SessionDB
+        from flightrisk.persistence import SessionDB
 
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()

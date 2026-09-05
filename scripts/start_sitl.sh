@@ -34,14 +34,14 @@ elif [[ "${1:-}" == "--docker" ]] || command -v docker &>/dev/null; then
 
     # Remove any stale container from a previous run so this script can
     # be re-run without a "name already in use" failure.
-    docker rm -f amber-sitl >/dev/null 2>&1 || true
+    docker rm -f flightrisk-sitl >/dev/null 2>&1 || true
 
     echo "Starting SITL via Docker..."
     # NOTE: radarku/ardupilot-sitl is pinned to :latest -- no versioned
     # tag is published upstream at time of writing. Pin to a digest if
     # reproducibility becomes an issue.
     docker run --rm -d \
-        --name amber-sitl \
+        --name flightrisk-sitl \
         --add-host=host.docker.internal:host-gateway \
         -p 5760:5760 \
         -p 14540:14540/udp \
@@ -49,7 +49,7 @@ elif [[ "${1:-}" == "--docker" ]] || command -v docker &>/dev/null; then
         sim_vehicle.py -v $VEHICLE --no-rebuild -w \
         --out=udpout:host.docker.internal:14540
     echo "SITL running in Docker. Connect on udp://:14540"
-    echo "Stop with: docker stop amber-sitl"
+    echo "Stop with: docker stop flightrisk-sitl"
 elif command -v sim_vehicle.py &>/dev/null; then
     echo "Starting native SITL..."
     sim_vehicle.py -v $VEHICLE --no-rebuild -w \

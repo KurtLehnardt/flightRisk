@@ -8,9 +8,9 @@ import cv2
 import numpy as np
 import pytest
 
-from amber.edge import Detection, DetectionMessage, EdgeRunner
-from amber.ground import GroundStation
-from amber.vision.scorer import MatchScorer
+from flightrisk.edge import Detection, DetectionMessage, EdgeRunner
+from flightrisk.ground import GroundStation
+from flightrisk.vision.scorer import MatchScorer
 
 
 # ---------------------------------------------------------------------------

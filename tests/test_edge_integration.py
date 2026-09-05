@@ -40,13 +40,13 @@ import time
 import numpy as np
 import pytest
 
-from amber.dashboard import app as app_module
-from amber.dashboard.state import app_state
-from amber.edge import EdgeRunner
-from amber.edge_device import run_edge_device
-from amber.ground import GroundStation
-from amber.transport import EdgeTransportSync, GroundTransportSync
-from amber.vision.scorer import MatchScorer
+from flightrisk.dashboard import app as app_module
+from flightrisk.dashboard.state import app_state
+from flightrisk.edge import EdgeRunner
+from flightrisk.edge_device import run_edge_device
+from flightrisk.ground import GroundStation
+from flightrisk.transport import EdgeTransportSync, GroundTransportSync
+from flightrisk.vision.scorer import MatchScorer
 
 
 # ---------------------------------------------------------------------------

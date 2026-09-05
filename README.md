@@ -29,17 +29,17 @@ brew install ollama
 ollama pull gemma4
 
 # Test with webcam (no drone needed) — OpenCV window
-python -m amber --webcam --target photo_of_child.jpg
+python -m flightrisk --webcam --target photo_of_child.jpg
 
 # Test with web dashboard (recommended)
-python -m amber --webcam --dashboard --target photo_of_child.jpg
+python -m flightrisk --webcam --dashboard --target photo_of_child.jpg
 # Open http://localhost:5555
 
 # Run with Tello drone
-python -m amber --target photo_of_child.jpg
+python -m flightrisk --target photo_of_child.jpg
 
 # Run with Tello drone + web dashboard
-python -m amber --dashboard --target photo_of_child.jpg
+python -m flightrisk --dashboard --target photo_of_child.jpg
 ```
 
 ## Keyboard Controls (OpenCV window)
@@ -57,7 +57,7 @@ python -m amber --dashboard --target photo_of_child.jpg
 ## Project Structure
 
 ```
-amber/
+flightrisk/
 ├── drone/       # Tello control + search patterns
 ├── vision/      # YOLO detection + ReID matching
 ├── reasoning/   # Gemma 4 LLM reasoning

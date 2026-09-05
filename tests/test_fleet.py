@@ -1,12 +1,12 @@
-"""Tests for amber.drone.fleet multi-drone manager."""
+"""Tests for flightrisk.drone.fleet multi-drone manager."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from amber.drone.controller import DroneController
-from amber.drone.fleet import DroneFleet
-from amber.drone.tello import DroneState
+from flightrisk.drone.controller import DroneController
+from flightrisk.drone.fleet import DroneFleet
+from flightrisk.drone.tello import DroneState
 
 
 def _make_controller(name="drone", host="192.168.10.1", connect_ok=True):
@@ -239,7 +239,7 @@ class TestFactoryPattern:
     def test_default_factory_used_when_none_provided(self):
         # No factory passed — DroneFleet must fall back to building a
         # TelloController (lazily imported), never raise at construction time.
-        with patch("amber.drone.tello.TelloController") as MockTello:
+        with patch("flightrisk.drone.tello.TelloController") as MockTello:
             MockTello.return_value = _make_controller(name="d1", host="192.168.10.1", connect_ok=True)
             fleet = DroneFleet()
             assert fleet.register("d1") is True
@@ -267,7 +267,7 @@ class TestFactoryPattern:
 
 
 class TestSourceFactorySelection:
-    """Verify amber.dashboard.app._init_pipeline (T3) wires up the correct
+    """Verify flightrisk.dashboard.app._init_pipeline (T3) wires up the correct
     controller backend per `--source` mode, by calling _init_pipeline()
     itself rather than duplicating its logic with hand-rolled lambdas
     (see TestFactoryPattern above, which covers DroneFleet in isolation)."""
@@ -284,7 +284,7 @@ class TestSourceFactorySelection:
         state["db"].create_session.return_value = "session-1"
 
     def teardown_method(self, method):
-        from amber.dashboard.app import _state
+        from flightrisk.dashboard.app import _state
 
         # _init_pipeline() spawns a background auto-connect thread per
         # source; release it so it doesn't keep running (or touching
@@ -308,7 +308,7 @@ class TestSourceFactorySelection:
             _state[key] = None
 
     def test_tello_source_builds_tello_controller_via_factory(self):
-        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+        from flightrisk.dashboard.app import SourceConfig, _init_pipeline, _state
 
         self._stub_heavy_components(_state)
         # running=False keeps the background auto-connect thread from
@@ -316,7 +316,7 @@ class TestSourceFactorySelection:
         # _state["running"] and returns immediately.
         _state["running"] = False
 
-        with patch("amber.drone.tello.TelloController") as MockTello:
+        with patch("flightrisk.drone.tello.TelloController") as MockTello:
             MockTello.return_value = _make_controller(name="drone-1", host="192.168.10.1", connect_ok=True)
             _init_pipeline(SourceConfig(source="tello"))
 
@@ -330,12 +330,12 @@ class TestSourceFactorySelection:
             MockTello.assert_called_once_with("drone-1", "192.168.10.1")
 
     def test_mavlink_source_builds_mavlink_controller_via_factory(self):
-        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+        from flightrisk.dashboard.app import SourceConfig, _init_pipeline, _state
 
         self._stub_heavy_components(_state)
         _state["running"] = False
 
-        with patch("amber.drone.mavlink.MavlinkController") as MockMavlink:
+        with patch("flightrisk.drone.mavlink.MavlinkController") as MockMavlink:
             MockMavlink.return_value = _make_controller(name="drone-1", host="udp://:14540", connect_ok=True)
             _init_pipeline(SourceConfig(
                 source="mavlink",
@@ -354,7 +354,7 @@ class TestSourceFactorySelection:
     def test_webcam_source_builds_no_fleet(self):
         """webcam/file/edge sources must not construct a DroneFleet at
         all — they only wire up local capture (or nothing, for edge)."""
-        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+        from flightrisk.dashboard.app import SourceConfig, _init_pipeline, _state
 
         self._stub_heavy_components(_state)
         _state["running"] = False
@@ -369,7 +369,7 @@ class TestSourceFactorySelection:
         """PR #26 review fix: --source=file with no video path must not
         silently produce a dead pipeline — it should log an error and
         leave `cap` unset rather than calling cv2.VideoCapture(None)."""
-        from amber.dashboard.app import SourceConfig, _init_pipeline, _state
+        from flightrisk.dashboard.app import SourceConfig, _init_pipeline, _state
 
         self._stub_heavy_components(_state)
         _state["running"] = False

@@ -1,4 +1,4 @@
-"""Tests for amber.config — centralized configuration.
+"""Tests for flightrisk.config — centralized configuration.
 
 Covers WS6 (centralized configuration management): default values must
 match what used to be hardcoded at each call site, `from_env()` overrides
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from amber.config import (
+from flightrisk.config import (
     AmberConfig,
     DashboardConfig,
     DroneConfig,
@@ -26,14 +26,14 @@ from amber.config import (
 def _install_fake_mavsdk(monkeypatch):
     """Install a minimal fake `mavsdk` package tree into `sys.modules`.
 
-    `amber.drone.mavlink` sets `HAS_MAVSDK = True` only if `import mavsdk`
+    `flightrisk.drone.mavlink` sets `HAS_MAVSDK = True` only if `import mavsdk`
     succeeds at module-import time, and `MavlinkController.__init__` raises
     if it isn't. The real `mavsdk` package isn't a test dependency —
     `tests/test_mavlink.py` normally supplies a fake by mutating
     `sys.modules` at its own module-import time, but pytest doesn't
     guarantee that file is collected/imported before this one. Tests here
     must not depend on that ordering, so they install their own fake and
-    force a fresh import of `amber.drone.mavlink` against it.
+    force a fresh import of `flightrisk.drone.mavlink` against it.
     `monkeypatch.setitem` auto-reverts `sys.modules` after the test.
     """
     fake_mavsdk = MagicMock()
@@ -46,7 +46,7 @@ def _install_fake_mavsdk(monkeypatch):
         "mavsdk.manual_control",
     ):
         monkeypatch.setitem(sys.modules, mod, fake_mavsdk)
-    monkeypatch.delitem(sys.modules, "amber.drone.mavlink", raising=False)
+    monkeypatch.delitem(sys.modules, "flightrisk.drone.mavlink", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -114,14 +114,14 @@ class TestDefaultsMatchCurrentHardcodedValues:
         assert db.jpeg_quality == 70
         assert db.captures_dir == "captures"
 
-    def test_amber_config_bundles_all_sections(self):
+    def test_flightrisk_config_bundles_all_sections(self):
         cfg = AmberConfig()
         assert isinstance(cfg.vision, VisionConfig)
         assert isinstance(cfg.reasoning, ReasoningConfig)
         assert isinstance(cfg.drone, DroneConfig)
         assert isinstance(cfg.dashboard, DashboardConfig)
 
-    def test_each_amber_config_instance_gets_independent_sections(self):
+    def test_each_flightrisk_config_instance_gets_independent_sections(self):
         """default_factory must prevent shared mutable state between instances."""
         a = AmberConfig()
         b = AmberConfig()
@@ -137,15 +137,15 @@ class TestDefaultsMatchCurrentHardcodedValues:
 class TestFromEnv:
     def test_no_env_vars_uses_defaults(self, monkeypatch):
         for key in (
-            "AMBER_DETECTOR_MODEL",
-            "AMBER_DETECTOR_CONFIDENCE",
-            "AMBER_REID_THRESHOLD",
-            "AMBER_SCORER_THRESHOLD",
-            "AMBER_GEMMA_MODEL",
-            "AMBER_ALERT_COOLDOWN",
-            "AMBER_QUEUE_SIZE",
-            "AMBER_PORT",
-            "AMBER_MAVLINK_ADDRESS",
+            "FLIGHTRISK_DETECTOR_MODEL",
+            "FLIGHTRISK_DETECTOR_CONFIDENCE",
+            "FLIGHTRISK_REID_THRESHOLD",
+            "FLIGHTRISK_SCORER_THRESHOLD",
+            "FLIGHTRISK_GEMMA_MODEL",
+            "FLIGHTRISK_ALERT_COOLDOWN",
+            "FLIGHTRISK_QUEUE_SIZE",
+            "FLIGHTRISK_PORT",
+            "FLIGHTRISK_MAVLINK_ADDRESS",
         ):
             monkeypatch.delenv(key, raising=False)
         cfg = AmberConfig.from_env()
@@ -153,56 +153,56 @@ class TestFromEnv:
         assert cfg.dashboard.port == 5555
 
     def test_detector_model_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_DETECTOR_MODEL", "yolo11s.pt")
+        monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", "yolo11s.pt")
         cfg = AmberConfig.from_env()
         assert cfg.vision.detector_model == "yolo11s.pt"
 
     def test_detector_confidence_override_casts_to_float(self, monkeypatch):
-        monkeypatch.setenv("AMBER_DETECTOR_CONFIDENCE", "0.7")
+        monkeypatch.setenv("FLIGHTRISK_DETECTOR_CONFIDENCE", "0.7")
         cfg = AmberConfig.from_env()
         assert cfg.vision.detector_confidence == 0.7
         assert isinstance(cfg.vision.detector_confidence, float)
 
     def test_reid_threshold_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_REID_THRESHOLD", "0.8")
+        monkeypatch.setenv("FLIGHTRISK_REID_THRESHOLD", "0.8")
         cfg = AmberConfig.from_env()
         assert cfg.vision.reid_threshold == 0.8
 
     def test_scorer_threshold_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_SCORER_THRESHOLD", "0.6")
+        monkeypatch.setenv("FLIGHTRISK_SCORER_THRESHOLD", "0.6")
         cfg = AmberConfig.from_env()
         assert cfg.vision.scorer_match_threshold == 0.6
 
     def test_gemma_model_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_GEMMA_MODEL", "gemma4:e2b")
+        monkeypatch.setenv("FLIGHTRISK_GEMMA_MODEL", "gemma4:e2b")
         cfg = AmberConfig.from_env()
         assert cfg.reasoning.model == "gemma4:e2b"
 
     def test_alert_cooldown_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_ALERT_COOLDOWN", "20.5")
+        monkeypatch.setenv("FLIGHTRISK_ALERT_COOLDOWN", "20.5")
         cfg = AmberConfig.from_env()
         assert cfg.reasoning.alert_cooldown == 20.5
 
     def test_queue_size_override_casts_to_int(self, monkeypatch):
-        monkeypatch.setenv("AMBER_QUEUE_SIZE", "25")
+        monkeypatch.setenv("FLIGHTRISK_QUEUE_SIZE", "25")
         cfg = AmberConfig.from_env()
         assert cfg.reasoning.queue_maxsize == 25
         assert isinstance(cfg.reasoning.queue_maxsize, int)
 
     def test_port_override_casts_to_int(self, monkeypatch):
-        monkeypatch.setenv("AMBER_PORT", "9090")
+        monkeypatch.setenv("FLIGHTRISK_PORT", "9090")
         cfg = AmberConfig.from_env()
         assert cfg.dashboard.port == 9090
         assert isinstance(cfg.dashboard.port, int)
 
     def test_mavlink_address_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_MAVLINK_ADDRESS", "udp://:99999")
+        monkeypatch.setenv("FLIGHTRISK_MAVLINK_ADDRESS", "udp://:99999")
         cfg = AmberConfig.from_env()
         assert cfg.drone.mavlink_default_address == "udp://:99999"
 
     def test_multiple_overrides_combine_and_others_stay_default(self, monkeypatch):
-        monkeypatch.setenv("AMBER_PORT", "7000")
-        monkeypatch.setenv("AMBER_REID_THRESHOLD", "0.9")
+        monkeypatch.setenv("FLIGHTRISK_PORT", "7000")
+        monkeypatch.setenv("FLIGHTRISK_REID_THRESHOLD", "0.9")
         cfg = AmberConfig.from_env()
         assert cfg.dashboard.port == 7000
         assert cfg.vision.reid_threshold == 0.9
@@ -223,14 +223,14 @@ class TestGetConfigSingleton:
 
     def test_reset_config_forces_a_new_instance(self, monkeypatch):
         a = get_config()
-        monkeypatch.setenv("AMBER_PORT", "1234")
+        monkeypatch.setenv("FLIGHTRISK_PORT", "1234")
         reset_config()
         b = get_config()
         assert a is not b
         assert b.dashboard.port == 1234
 
     def test_get_config_reads_env_on_first_call_after_reset(self, monkeypatch):
-        monkeypatch.setenv("AMBER_ALERT_COOLDOWN", "42")
+        monkeypatch.setenv("FLIGHTRISK_ALERT_COOLDOWN", "42")
         reset_config()
         cfg = get_config()
         assert cfg.reasoning.alert_cooldown == 42.0
@@ -248,7 +248,7 @@ class TestGetConfigSingleton:
 
 class TestConfigActuallyUsedByConstructors:
     def test_match_scorer_uses_config_defaults(self):
-        from amber.vision.scorer import MatchScorer
+        from flightrisk.vision.scorer import MatchScorer
 
         cfg = get_config().vision
         scorer = MatchScorer()
@@ -258,22 +258,22 @@ class TestConfigActuallyUsedByConstructors:
         assert scorer.match_threshold == cfg.scorer_match_threshold
 
     def test_match_scorer_explicit_args_override_config(self):
-        from amber.vision.scorer import MatchScorer
+        from flightrisk.vision.scorer import MatchScorer
 
         scorer = MatchScorer(match_threshold=0.99, reid_weight=0.1)
         assert scorer.match_threshold == 0.99
         assert scorer.reid_weight == 0.1
 
     def test_match_scorer_picks_up_env_override(self, monkeypatch):
-        monkeypatch.setenv("AMBER_SCORER_THRESHOLD", "0.77")
+        monkeypatch.setenv("FLIGHTRISK_SCORER_THRESHOLD", "0.77")
         reset_config()
-        from amber.vision.scorer import MatchScorer
+        from flightrisk.vision.scorer import MatchScorer
 
         scorer = MatchScorer()
         assert scorer.match_threshold == 0.77
 
     def test_detection_tracker_uses_config_defaults(self):
-        from amber.vision.tracker import DetectionTracker
+        from flightrisk.vision.tracker import DetectionTracker
 
         cfg = get_config().vision
         tracker = DetectionTracker()
@@ -282,44 +282,44 @@ class TestConfigActuallyUsedByConstructors:
         assert tracker.vote_window == cfg.tracker_score_window
 
     def test_detection_tracker_explicit_args_override_config(self):
-        from amber.vision.tracker import DetectionTracker
+        from flightrisk.vision.tracker import DetectionTracker
 
         tracker = DetectionTracker(max_age=999, iou_threshold=0.9)
         assert tracker.max_age == 999
         assert tracker.iou_threshold == 0.9
 
     def test_tello_controller_uses_config_default_host(self):
-        with patch("amber.drone.tello.Tello"):
-            from amber.drone.tello import TelloController
+        with patch("flightrisk.drone.tello.Tello"):
+            from flightrisk.drone.tello import TelloController
 
             ctrl = TelloController()
             assert ctrl.host == get_config().drone.tello_default_host
 
     def test_tello_controller_explicit_host_overrides_config(self):
-        with patch("amber.drone.tello.Tello"):
-            from amber.drone.tello import TelloController
+        with patch("flightrisk.drone.tello.Tello"):
+            from flightrisk.drone.tello import TelloController
 
             ctrl = TelloController(host="10.0.0.99")
             assert ctrl.host == "10.0.0.99"
 
     def test_mavlink_controller_uses_config_default_host(self, monkeypatch):
         _install_fake_mavsdk(monkeypatch)
-        from amber.drone.mavlink import MavlinkController
+        from flightrisk.drone.mavlink import MavlinkController
 
         ctrl = MavlinkController(name="cfg-test-default")
         assert ctrl.host == get_config().drone.mavlink_default_address
 
     def test_mavlink_controller_explicit_host_overrides_config(self, monkeypatch):
         _install_fake_mavsdk(monkeypatch)
-        from amber.drone.mavlink import MavlinkController
+        from flightrisk.drone.mavlink import MavlinkController
 
         ctrl = MavlinkController(name="cfg-test-explicit", host="udp://:55555")
         assert ctrl.host == "udp://:55555"
 
     def test_person_detector_uses_config_defaults(self):
-        with patch("amber.vision.detector.YOLO") as mock_yolo:
+        with patch("flightrisk.vision.detector.YOLO") as mock_yolo:
             mock_yolo.return_value = MagicMock()
-            from amber.vision.detector import PersonDetector
+            from flightrisk.vision.detector import PersonDetector
 
             cfg = get_config().vision
             detector = PersonDetector()
@@ -327,54 +327,54 @@ class TestConfigActuallyUsedByConstructors:
             assert detector.confidence == cfg.detector_confidence
 
     def test_person_detector_explicit_args_override_config(self):
-        with patch("amber.vision.detector.YOLO") as mock_yolo:
+        with patch("flightrisk.vision.detector.YOLO") as mock_yolo:
             mock_yolo.return_value = MagicMock()
-            from amber.vision.detector import PersonDetector
+            from flightrisk.vision.detector import PersonDetector
 
             detector = PersonDetector(model_name="yolo11s.pt", confidence=0.9)
             mock_yolo.assert_called_once_with("yolo11s.pt")
             assert detector.confidence == 0.9
 
     def test_person_reid_uses_config_default_threshold(self):
-        with patch("amber.vision.reid.open_clip") as mock_clip:
+        with patch("flightrisk.vision.reid.open_clip") as mock_clip:
             mock_clip.create_model_and_transforms.return_value = (
                 MagicMock(),
                 None,
                 MagicMock(),
             )
-            from amber.vision.reid import PersonReID
+            from flightrisk.vision.reid import PersonReID
 
             reid = PersonReID()
             assert reid.match_threshold == get_config().vision.reid_threshold
 
     def test_person_reid_explicit_threshold_overrides_config(self):
-        with patch("amber.vision.reid.open_clip") as mock_clip:
+        with patch("flightrisk.vision.reid.open_clip") as mock_clip:
             mock_clip.create_model_and_transforms.return_value = (
                 MagicMock(),
                 None,
                 MagicMock(),
             )
-            from amber.vision.reid import PersonReID
+            from flightrisk.vision.reid import PersonReID
 
             reid = PersonReID(match_threshold=0.11)
             assert reid.match_threshold == 0.11
 
-    def test_amber_agent_uses_config_default_model(self):
-        with patch("amber.reasoning.agent.ollama") as mock_ollama:
+    def test_flightrisk_agent_uses_config_default_model(self):
+        with patch("flightrisk.reasoning.agent.ollama") as mock_ollama:
             mock_client = MagicMock()
             mock_client.list.return_value = MagicMock(models=[])
             mock_ollama.Client.return_value = mock_client
-            from amber.reasoning.agent import AmberAgent
+            from flightrisk.reasoning.agent import FlightRiskAgent
 
-            agent = AmberAgent()
+            agent = FlightRiskAgent()
             assert agent.model == get_config().reasoning.model
 
-    def test_amber_agent_explicit_model_overrides_config(self):
-        with patch("amber.reasoning.agent.ollama") as mock_ollama:
+    def test_flightrisk_agent_explicit_model_overrides_config(self):
+        with patch("flightrisk.reasoning.agent.ollama") as mock_ollama:
             mock_client = MagicMock()
             mock_client.list.return_value = MagicMock(models=[])
             mock_ollama.Client.return_value = mock_client
-            from amber.reasoning.agent import AmberAgent
+            from flightrisk.reasoning.agent import FlightRiskAgent
 
-            agent = AmberAgent(model="gemma4:e2b")
+            agent = FlightRiskAgent(model="gemma4:e2b")
             assert agent.model == "gemma4:e2b"

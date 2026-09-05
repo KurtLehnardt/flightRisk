@@ -10,8 +10,8 @@ thumbnail -- exactly the behaviour we assert on).
 
 import numpy as np
 
-from amber.edge import DetectionMessage, EdgeRunner
-from amber.edge_device import run_edge_device
+from flightrisk.edge import DetectionMessage, EdgeRunner
+from flightrisk.edge_device import run_edge_device
 
 
 # ---------------------------------------------------------------------------

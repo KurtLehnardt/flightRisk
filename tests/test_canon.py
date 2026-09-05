@@ -1,10 +1,10 @@
-"""Tests for amber.canon.TargetCanon."""
+"""Tests for flightrisk.canon.TargetCanon."""
 
 import numpy as np
 import pytest
 
-from amber.canon import TargetCanon
-from amber.persistence import SessionDB
+from flightrisk.canon import TargetCanon
+from flightrisk.persistence import SessionDB
 
 
 @pytest.fixture

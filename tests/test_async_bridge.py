@@ -1,8 +1,8 @@
-"""Tests for amber.async_bridge.AsyncBridge.
+"""Tests for flightrisk.async_bridge.AsyncBridge.
 
 AsyncBridge is the shared background-thread event loop bridge used by both
-amber.drone.mavlink.MavlinkController (via its _loop/_loop_thread/_run
-compatibility properties) and amber.transport's EdgeTransportSync /
+flightrisk.drone.mavlink.MavlinkController (via its _loop/_loop_thread/_run
+compatibility properties) and flightrisk.transport's EdgeTransportSync /
 GroundTransportSync. These tests exercise it directly, independent of
 either caller.
 """
@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from amber.async_bridge import AsyncBridge
+from flightrisk.async_bridge import AsyncBridge
 
 
 async def _return(value):

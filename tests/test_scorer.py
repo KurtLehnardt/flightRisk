@@ -1,8 +1,8 @@
-"""Tests for amber.vision.scorer.MatchScorer."""
+"""Tests for flightrisk.vision.scorer.MatchScorer."""
 
 import pytest
 
-from amber.vision.scorer import MatchScorer
+from flightrisk.vision.scorer import MatchScorer
 
 
 class TestMatchScorerAllSignals:

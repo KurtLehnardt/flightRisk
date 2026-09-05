@@ -2,10 +2,10 @@
 
 import time
 
-from amber.config import get_config
+from flightrisk.config import get_config
 
 # Import the module-level dicts and extracted helpers we test.
-from amber.dashboard.app import (
+from flightrisk.dashboard.app import (
     _alerted_tracks,
     _compute_track_key,
     _is_within_alert_cooldown,

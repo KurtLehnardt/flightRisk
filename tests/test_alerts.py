@@ -1,4 +1,4 @@
-"""Tests for amber.dashboard.alerts -- Gemma worker and alert logic."""
+"""Tests for flightrisk.dashboard.alerts -- Gemma worker and alert logic."""
 
 import queue
 import time
@@ -7,14 +7,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from amber.dashboard.alerts import (
+from flightrisk.dashboard.alerts import (
     _compute_track_key,
     _gemma_worker,
     _is_within_alert_cooldown,
     _save_match_snapshot,
     CAPTURES_DIR,
 )
-from amber.dashboard.state import (
+from flightrisk.dashboard.state import (
     app_state,
     alerted_tracks,
     match_history_lock,
@@ -54,7 +54,7 @@ class TestIsWithinAlertCooldown:
 class TestSaveMatchSnapshot:
     def test_saves_files(self, tmp_path, monkeypatch):
         """Verify snapshot saving writes frame, crop, and metadata files."""
-        monkeypatch.setattr("amber.dashboard.alerts.CAPTURES_DIR", tmp_path)
+        monkeypatch.setattr("flightrisk.dashboard.alerts.CAPTURES_DIR", tmp_path)
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         crop = np.zeros((50, 50, 3), dtype=np.uint8)
 
@@ -74,7 +74,7 @@ class TestSaveMatchSnapshot:
 
     def test_handles_empty_crop(self, tmp_path, monkeypatch):
         """Snapshot saving should not crash on an empty crop array."""
-        monkeypatch.setattr("amber.dashboard.alerts.CAPTURES_DIR", tmp_path)
+        monkeypatch.setattr("flightrisk.dashboard.alerts.CAPTURES_DIR", tmp_path)
         frame = np.zeros((100, 100, 3), dtype=np.uint8)
         crop = np.array([], dtype=np.uint8)
 
