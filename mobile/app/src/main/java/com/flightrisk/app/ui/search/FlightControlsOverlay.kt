@@ -8,11 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -20,6 +18,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.R
 import com.flightrisk.app.ui.theme.AlertRed
@@ -50,6 +50,7 @@ import com.flightrisk.app.ui.theme.MatchGreen
  * @param onLand Callback to initiate landing.
  * @param onMove Callback for directional movement (direction, distanceCm).
  * @param onRotate Callback for rotation (degrees; positive=CW, negative=CCW).
+ * @param onStopSearch Callback to stop the AI search pipeline.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -59,9 +60,10 @@ fun FlightControlsOverlay(
     onLand: () -> Unit,
     onMove: (direction: String, distanceCm: Int) -> Unit,
     onRotate: (degrees: Int) -> Unit,
+    onStopSearch: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .background(
@@ -70,7 +72,16 @@ fun FlightControlsOverlay(
             )
             .padding(16.dp)
             .semantics { contentDescription = "Flight controls" },
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Stop Search button — always visible during streaming
+        TextButton(
+            onClick = onStopSearch,
+            modifier = Modifier.sizeIn(minHeight = 48.dp),
+        ) {
+            Text("Stop Search", color = AlertRed)
+        }
+
         if (!isFlying) {
             // Simplified view: only Takeoff button
             Box(
@@ -192,6 +203,18 @@ fun FlightControlsOverlay(
                 }
             }
         }
+
+        // Safety disclaimer — always visible during streaming
+        Text(
+            text = "FlightRisk is an assistive search tool. " +
+                "Always verify matches visually before approaching anyone.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+        )
     }
 }
 

@@ -329,6 +329,7 @@ fun SearchScreen(
                 onLand = onLand,
                 onMove = onDroneMove,
                 onRotate = onDroneRotate,
+                onStopSearch = onStopSearch,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         } else {
