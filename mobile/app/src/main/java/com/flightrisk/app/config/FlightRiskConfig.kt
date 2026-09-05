@@ -162,6 +162,13 @@ data class DroneConfig(
     val batteryWarnThreshold: Int = 20,
     val batteryCriticalThreshold: Int = 10,
     val telloDefaultHost: String = "192.168.10.1",
+    val telloCommandPort: Int = 8889,
+    val telloVideoPort: Int = 11111,
+    val telloStatePort: Int = 8890,
+    val keepaliveIntervalSec: Int = 10,
+    val statePollingIntervalSec: Int = 2,
+    val commandTimeoutMs: Long = 7000,
+    val streamRecoveryThresholdMs: Long = 5000,
     val mavlinkDefaultAddress: String = "udp://:14540",
     val mavlinkCmdTimeout: Double = 30.0,
 )
