@@ -295,6 +295,67 @@ class DroneManager(
     }
 
     // ------------------------------------------------------------------
+    // Search pattern execution
+    // ------------------------------------------------------------------
+
+    private var searchJob: Job? = null
+
+    @Volatile
+    var searchActive: Boolean = false
+        private set
+
+    @Volatile
+    var searchProgress: Pair<Int, Int> = Pair(0, 0)
+        private set
+
+    fun startSearchPattern(pattern: PatternType = PatternType.EXPANDING_SQUARE) {
+        if (searchActive) return
+        val waypoints = SearchPattern.generate(pattern)
+        searchActive = true
+        searchProgress = Pair(0, waypoints.size)
+        Log.i(TAG, "Starting search pattern: ${pattern.displayName}, ${waypoints.size} waypoints")
+
+        searchJob = scope.launch {
+            for ((index, wp) in waypoints.withIndex()) {
+                if (!searchActive) break
+
+                searchProgress = Pair(index + 1, waypoints.size)
+
+                try {
+                    if (wp.distanceCm > 0) {
+                        connection.move(wp.direction, wp.distanceCm)
+                        delay(500)
+                    }
+                    if (wp.rotateDegrees != 0) {
+                        connection.rotate(wp.rotateDegrees)
+                        delay(500)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Search pattern error at waypoint ${index + 1}: ${e.message}")
+                    break
+                }
+            }
+
+            searchActive = false
+            searchProgress = Pair(0, 0)
+            Log.i(TAG, "Search pattern complete")
+        }
+    }
+
+    fun stopSearchPattern() {
+        searchActive = false
+        searchJob?.cancel()
+        searchJob = null
+        searchProgress = Pair(0, 0)
+        scope.launch {
+            try { connection.hover() } catch (_: Exception) {}
+        }
+        Log.i(TAG, "Search pattern stopped")
+    }
+
+    // ------------------------------------------------------------------
     // Telemetry monitoring
     // ------------------------------------------------------------------
 

@@ -416,6 +416,14 @@ class MainActivity : ComponentActivity() {
             // Start the pipeline
             pipeline.start()
 
+            // Start autonomous search pattern if drone is flying
+            if (currentFrameSourceMode == FrameSourceMode.DRONE) {
+                val state = droneManager?.droneState?.value
+                if (state?.telemetry?.isFlying == true) {
+                    droneManager?.startSearchPattern()
+                }
+            }
+
             Log.i(TAG, "Search started, frameSource=$frameSourceMode")
         }
     }
@@ -427,11 +435,14 @@ class MainActivity : ComponentActivity() {
         pipelineEventJob = null
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
+        droneManager?.stopSearchPattern()
+        alertManager?.dismissAll()
         searchState = searchState.copy(isSearching = false, activeAlert = null)
         Log.i(TAG, "Search stopped")
     }
 
     private fun handleDismissAlert() {
+        alertManager?.dismissAll()
         searchState = searchState.copy(activeAlert = null)
     }
 
@@ -441,6 +452,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleNotMyChild() {
         val alert = searchState.activeAlert
+        alertManager?.dismissAll()
         Log.i(TAG, "Not my child: track=${alert?.trackId}")
         searchState = searchState.copy(activeAlert = null)
         // Future: record negative feedback for this track
