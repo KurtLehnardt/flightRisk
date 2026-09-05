@@ -9,7 +9,7 @@ enum class TelloConnectionState {
 }
 
 data class TelloTelemetry(
-    val battery: Int = 0,
+    val battery: Int? = null,  // null = no reading yet, 0 = genuinely 0%
     val height: Int = 0,
     val temperature: Int = 0,
     val flightTime: Int = 0,
