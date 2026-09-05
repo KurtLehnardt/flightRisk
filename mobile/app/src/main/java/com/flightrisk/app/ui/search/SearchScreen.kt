@@ -1,6 +1,11 @@
 package com.flightrisk.app.ui.search
 
 import android.graphics.Bitmap
+import android.util.Log
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,18 +45,24 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.theme.AlertOrange
@@ -133,10 +144,27 @@ fun SearchScreen(
         modifier = modifier.fillMaxSize(),
     ) {
         // ----- Camera preview (full screen) -----
-        CameraPreviewPlaceholder(
-            frame = state.cameraFrame,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (state.isSearching) {
+            LiveCameraPreview(modifier = Modifier.fillMaxSize())
+        } else {
+            CameraPreviewPlaceholder(
+                frame = state.cameraFrame,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // ----- Models-not-loaded banner -----
+        if (state.isSearching && state.fps == 0f) {
+            ModelsNotLoadedBanner(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(
+                        top = WindowInsets.statusBars
+                            .asPaddingValues()
+                            .calculateTopPadding() + 56.dp,
+                    ),
+            )
+        }
 
         // ----- Detection overlay -----
         if (state.boxes.isNotEmpty()) {
@@ -260,6 +288,76 @@ private fun CameraPreviewPlaceholder(
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Live camera preview (CameraX)
+// -----------------------------------------------------------------------
+
+/**
+ * Live camera preview using CameraX [PreviewView] wrapped in [AndroidView].
+ *
+ * Binds CameraX to the composable's lifecycle owner and unbinds on dispose.
+ */
+@Composable
+private fun LiveCameraPreview(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val previewView = remember { PreviewView(context) }
+
+    DisposableEffect(lifecycleOwner) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            val preview = Preview.Builder().build().also {
+                it.surfaceProvider = previewView.surfaceProvider
+            }
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+            } catch (e: Exception) {
+                Log.e("SearchScreen", "Camera bind failed", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
+
+        onDispose {
+            cameraProviderFuture.get().unbindAll()
+        }
+    }
+
+    AndroidView(factory = { previewView }, modifier = modifier)
+}
+
+// -----------------------------------------------------------------------
+// Models-not-loaded banner
+// -----------------------------------------------------------------------
+
+/**
+ * Translucent pill banner displayed when the camera is active but
+ * the AI detection pipeline is not running (fps == 0).
+ */
+@Composable
+private fun ModelsNotLoadedBanner(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(
+                color = Color(0xCC000000),
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .semantics {
+                contentDescription = "Camera active, AI models not loaded"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Camera active — AI models not loaded",
+            color = Color(0xFFCCCCCC),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
