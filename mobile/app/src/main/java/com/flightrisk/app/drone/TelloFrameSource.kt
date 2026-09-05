@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
@@ -74,6 +75,11 @@ class TelloFrameSource(
     private var decodeThread: Thread? = null
     private val nalQueue = ConcurrentLinkedQueue<ByteArray>()
 
+    // NAL reassembly across UDP packet boundaries
+    private val nalAccumulator = ByteArrayOutputStream(65536)
+    @Volatile
+    private var seenFirstStartCode = false
+
     // Frozen frame tracking
     private var lastFrameHash: Long = 0
     private var frozenFrameCount = 0
@@ -83,37 +89,51 @@ class TelloFrameSource(
 
     override fun start() {
         if (isRunning) return
-        isRunning = true
 
-        // UDP socket
-        udpSocket = DatagramSocket(config.telloVideoPort).apply {
-            soTimeout = SOCKET_TIMEOUT_MS
+        try {
+            // UDP socket
+            udpSocket = DatagramSocket(config.telloVideoPort).apply {
+                soTimeout = SOCKET_TIMEOUT_MS
+            }
+
+            // MediaCodec H264 decoder in ByteBuffer output mode
+            val format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                nativeWidth,
+                nativeHeight,
+            )
+            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+                configure(format, null, null, 0) // null surface = ByteBuffer mode
+                start()
+            }
+
+            // All resources created successfully
+            isRunning = true
+
+            // Receive thread (daemon)
+            receiveThread = Thread(::receiveLoop, "TelloFrameSource-recv").apply {
+                isDaemon = true
+                start()
+            }
+
+            // Decode thread (daemon)
+            decodeThread = Thread(::decodeLoop, "TelloFrameSource-decode").apply {
+                isDaemon = true
+                start()
+            }
+
+            Log.i(TAG, "Started on UDP port ${config.telloVideoPort}")
+        } catch (e: Exception) {
+            // Cleanup any partially created resources
+            try { codec?.stop() } catch (_: Exception) {}
+            try { codec?.release() } catch (_: Exception) {}
+            codec = null
+            try { udpSocket?.close() } catch (_: Exception) {}
+            udpSocket = null
+            isRunning = false
+            Log.e(TAG, "Failed to start: ${e.message}", e)
+            throw e
         }
-
-        // MediaCodec H264 decoder in ByteBuffer output mode
-        val format = MediaFormat.createVideoFormat(
-            MediaFormat.MIMETYPE_VIDEO_AVC,
-            nativeWidth,
-            nativeHeight,
-        )
-        codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
-            configure(format, null, null, 0) // null surface = ByteBuffer mode
-            start()
-        }
-
-        // Receive thread (daemon)
-        receiveThread = Thread(::receiveLoop, "TelloFrameSource-recv").apply {
-            isDaemon = true
-            start()
-        }
-
-        // Decode thread (daemon)
-        decodeThread = Thread(::decodeLoop, "TelloFrameSource-decode").apply {
-            isDaemon = true
-            start()
-        }
-
-        Log.i(TAG, "Started on UDP port ${config.telloVideoPort}")
     }
 
     override fun stop() {
@@ -145,8 +165,11 @@ class TelloFrameSource(
 
         // Clear state
         nalQueue.clear()
+        nalAccumulator.reset()
+        seenFirstStartCode = false
         lock.withLock {
             latestFrame = null
+            frameCallback = null
         }
         lastFrameHash = 0
         frozenFrameCount = 0
@@ -169,7 +192,12 @@ class TelloFrameSource(
     // -- Internal threads -----------------------------------------------------
 
     /**
-     * Receive UDP packets from the Tello and enqueue raw data for decoding.
+     * Receive UDP packets from the Tello and reassemble NAL units across
+     * packet boundaries before enqueuing for decoding.
+     *
+     * H264 NAL units (especially IDR frames) can span multiple UDP packets.
+     * We accumulate incoming bytes and split on NAL start codes
+     * (0x00 0x00 0x00 0x01), emitting complete NAL units to the decode queue.
      */
     private fun receiveLoop() {
         val buffer = ByteArray(UDP_BUFFER_SIZE)
@@ -177,10 +205,34 @@ class TelloFrameSource(
 
         while (isRunning) {
             try {
+                packet.setLength(buffer.size) // Reset length before each receive
                 udpSocket?.receive(packet) ?: break
-                // Copy received bytes and enqueue
-                val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
-                nalQueue.add(data)
+
+                // Append received bytes to accumulator
+                nalAccumulator.write(
+                    packet.data, packet.offset, packet.length
+                )
+
+                // Scan accumulated buffer for NAL start codes
+                val accumulated = nalAccumulator.toByteArray()
+                val startCodes = findNalStartCodes(accumulated)
+
+                if (startCodes.isEmpty()) continue // keep accumulating
+
+                if (!seenFirstStartCode) {
+                    seenFirstStartCode = true
+                    // Data before first start code is a partial NAL — discard it
+                }
+
+                // Emit complete NALs (each bounded by two consecutive start codes)
+                for (i in 0 until startCodes.size - 1) {
+                    nalQueue.add(accumulated.copyOfRange(startCodes[i], startCodes[i + 1]))
+                }
+
+                // Keep the last (potentially incomplete) NAL in the accumulator
+                nalAccumulator.reset()
+                val lastStart = startCodes.last()
+                nalAccumulator.write(accumulated, lastStart, accumulated.size - lastStart)
             } catch (_: SocketTimeoutException) {
                 // Expected when no data arrives within timeout; loop continues
             } catch (_: IOException) {
@@ -219,14 +271,19 @@ class TelloFrameSource(
                     outputIndex >= 0 -> {
                         didWork = true
                         try {
-                            val outputBuffer = decoder.getOutputBuffer(outputIndex)
                             val outputFormat = decoder.outputFormat
-                            if (outputBuffer != null) {
-                                val bitmap = outputBufferToBitmap(outputBuffer, outputFormat)
-                                if (bitmap != null) {
-                                    handleDecodedFrame(bitmap)
-                                }
+                            // Prefer Image API (API 21+) for device-independent
+                            // color format handling; fall back to raw ByteBuffer
+                            val image = decoder.getOutputImage(outputIndex)
+                            val bitmap = if (image != null) {
+                                imageToBitmap(image)
+                            } else {
+                                val outputBuffer = decoder.getOutputBuffer(outputIndex)
+                                if (outputBuffer != null) {
+                                    outputBufferToBitmap(outputBuffer, outputFormat)
+                                } else null
                             }
+                            bitmap?.let { handleDecodedFrame(it) }
                         } finally {
                             decoder.releaseOutputBuffer(outputIndex, false)
                         }
@@ -317,9 +374,68 @@ class TelloFrameSource(
     // -- Frame conversion -----------------------------------------------------
 
     /**
+     * Convert a decoded [Image] (from [MediaCodec.getOutputImage]) to an RGB
+     * [Bitmap] and downscale to [targetWidth] x [targetHeight].
+     *
+     * The Image API normalizes plane access regardless of the underlying
+     * color format (NV12, I420, etc.), avoiding hardcoded assumptions.
+     */
+    private fun imageToBitmap(image: Image): Bitmap? {
+        val width = image.width
+        val height = image.height
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+
+        val yRowStride = yPlane.rowStride
+        val uvRowStride = uPlane.rowStride
+        val uvPixelStride = uPlane.pixelStride
+
+        val nv21Size = width * height + width * (height / 2)
+        val nv21 = ByteArray(nv21Size)
+
+        // Copy Y plane row by row (row stride may exceed width)
+        var pos = 0
+        for (row in 0 until height) {
+            yBuffer.position(row * yRowStride)
+            yBuffer.get(nv21, pos, width)
+            pos += width
+        }
+
+        // Build NV21 chroma: V then U interleaved
+        val uvHeight = height / 2
+        val uvWidth = width / 2
+        for (row in 0 until uvHeight) {
+            for (col in 0 until uvWidth) {
+                val uvIndex = row * uvRowStride + col * uvPixelStride
+                nv21[pos++] = vBuffer.get(uvIndex) // V first for NV21
+                nv21[pos++] = uBuffer.get(uvIndex) // then U
+            }
+        }
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val outputStream = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 90, outputStream)
+
+        val jpegBytes = outputStream.toByteArray()
+        val fullBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return null
+
+        val scaled = Bitmap.createScaledBitmap(fullBitmap, targetWidth, targetHeight, true)
+        if (scaled !== fullBitmap) {
+            fullBitmap.recycle()
+        }
+        return scaled
+    }
+
+    /**
      * Convert a decoded YUV output buffer to an RGB [Bitmap] and downscale
      * to [targetWidth] x [targetHeight].
      *
+     * Fallback path when [MediaCodec.getOutputImage] returns null.
      * Uses [YuvImage] + JPEG compression, matching the pattern in
      * [CameraXFrameSource.imageProxyToBitmap].
      */
@@ -332,26 +448,47 @@ class TelloFrameSource(
             width
         }
 
+        // Account for slice height (may be larger than height on some decoders)
+        val sliceHeight = if (format.containsKey(MediaFormat.KEY_SLICE_HEIGHT)) {
+            format.getInteger(MediaFormat.KEY_SLICE_HEIGHT).let { if (it > 0) it else height }
+        } else {
+            height
+        }
+
         // MediaCodec outputs NV12 (COLOR_FormatYUV420SemiPlanar) by default.
         // YuvImage expects NV21 (VU interleaved), so swap U and V bytes.
-        val ySize = stride * height
-        val uvSize = stride * height / 2
+        // Y plane occupies stride * sliceHeight bytes (includes padding rows)
+        val yBufferSize = stride * sliceHeight
+        val uvBufferSize = stride * (sliceHeight / 2)
 
         // Ensure buffer has enough data
-        val totalSize = ySize + uvSize
-        if (buffer.remaining() < totalSize) {
+        val bufferTotalSize = yBufferSize + uvBufferSize
+        if (buffer.remaining() < bufferTotalSize) {
             // Fall back to actual remaining size
             val available = buffer.remaining()
             if (available < width * height) return null
             return outputBufferToBitmapFallback(buffer, width, height)
         }
 
-        val nv21 = ByteArray(totalSize)
-        buffer.position(buffer.position()) // ensure position is at start of data
-        buffer.get(nv21, 0, totalSize)
+        // Output NV21 array sized for actual image dimensions (no padding)
+        val nv21YSize = stride * height
+        val nv21UvSize = stride * (height / 2)
+        val nv21Total = nv21YSize + nv21UvSize
+        val nv21 = ByteArray(nv21Total)
+
+        // Copy Y rows (skip padding between sliceHeight and height)
+        val fullBuffer = ByteArray(bufferTotalSize)
+        buffer.get(fullBuffer, 0, bufferTotalSize)
+
+        System.arraycopy(fullBuffer, 0, nv21, 0, nv21YSize)
+
+        // Copy UV rows from offset yBufferSize (after Y plane including padding)
+        val uvSrcOffset = yBufferSize
+        val uvCopySize = nv21UvSize.coerceAtMost(uvBufferSize)
+        System.arraycopy(fullBuffer, uvSrcOffset, nv21, nv21YSize, uvCopySize)
 
         // NV12 -> NV21: swap U/V pairs in the chroma plane
-        for (i in ySize until totalSize - 1 step 2) {
+        for (i in nv21YSize until nv21Total - 1 step 2) {
             val temp = nv21[i]
             nv21[i] = nv21[i + 1]
             nv21[i + 1] = temp
@@ -424,6 +561,7 @@ class TelloFrameSource(
             if (frozenFrameCount >= frozenFrameThreshold) {
                 Log.w(TAG, "Frozen frame detected ($frozenFrameCount identical)")
                 onStreamFrozen?.invoke()
+                frozenFrameCount = 0
                 // Don't update latestFrame with a frozen frame
                 bitmap.recycle()
                 return
