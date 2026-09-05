@@ -311,6 +311,16 @@
             box-shadow: 0 0 12px var(--amber-glow);
         }
         .hud-pill.match-active .hud-val { color: var(--amber); }
+        .hud-pill.hud-confidence {
+            border-color: var(--cyan-dim);
+            font-size: 10px;
+        }
+        .hud-pill.hud-confidence.strong {
+            border-color: var(--green);
+        }
+        .hud-pill.hud-confidence.strong .hud-val {
+            color: var(--green);
+        }
 
         /* Recording indicator */
         .rec-indicator {
@@ -1574,6 +1584,7 @@
                 <div id="hud-fps" class="hud-pill">FPS <span class="hud-val">--</span></div>
                 <div id="hud-persons" class="hud-pill">DET <span class="hud-val">0</span></div>
                 <div id="hud-match" class="hud-pill" style="display:none">MATCH <span class="hud-val">--</span></div>
+                <div id="hud-confidence" class="hud-pill hud-confidence" style="display:none"><span class="hud-val"></span></div>
             </div>
 
             <!-- Recording indicator -->
@@ -2200,6 +2211,28 @@
             fill.style.width = bat + '%';
             fill.className = 'battery-fill' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
         }
+
+        // ========== CONFIDENCE PROGRESS ==========
+        let confidenceHideTimeout = null;
+        socket.on('confidence_progress', (data) => {
+            const el = document.getElementById('hud-confidence');
+            const val = el.querySelector('.hud-val');
+            const n = data.frames_matched;
+            const needed = data.frames_needed;
+            if (n >= needed) {
+                val.textContent = 'Strong match — ' + needed + '/' + needed + ' frames agree';
+                el.className = 'hud-pill hud-confidence strong';
+            } else {
+                val.textContent = 'Confidence building... ' + n + '/' + needed + ' frames';
+                el.className = 'hud-pill hud-confidence';
+            }
+            el.style.display = 'flex';
+            // Auto-hide after 3s of no updates
+            clearTimeout(confidenceHideTimeout);
+            confidenceHideTimeout = setTimeout(() => {
+                el.style.display = 'none';
+            }, 3000);
+        });
 
         // ========== TARGET ==========
         socket.on('target_photo', (data) => {

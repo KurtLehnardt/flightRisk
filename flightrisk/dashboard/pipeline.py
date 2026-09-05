@@ -175,6 +175,16 @@ def _frame_loop(socketio):
                     tracker.add_scores(match_track_id, reid_score=det_reid, face_score=det_face)
                     track_summary = tracker.get_track(match_track_id)
                     reid_thresh = app_state.reid.match_threshold if app_state.reid else 0.55
+                    if track_summary:
+                        n_frames = len(track_summary.reid_scores)
+                        frames_needed = 3
+                        if n_frames < frames_needed:
+                            socketio.emit("confidence_progress", {
+                                "track_id": match_track_id,
+                                "frames_matched": n_frames,
+                                "frames_needed": frames_needed,
+                                "avg_score": round(track_summary.avg_reid_score, 3),
+                            })
                     if (
                         track_summary
                         and len(track_summary.reid_scores) >= 3
