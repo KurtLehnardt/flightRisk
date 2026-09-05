@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
 
+
     // ------------------------------------------------------------------
     // Permission launcher
     // ------------------------------------------------------------------
@@ -298,30 +299,36 @@ class MainActivity : ComponentActivity() {
         val manager = DroneManager(applicationContext, config)
         droneManager = manager
 
+        currentDroneState = null
+        searchState = searchState.copy(droneConnectionMessage = null)
+
+        // Collect drone state immediately so CONNECTING/ERROR states are visible
+        droneStateJob = lifecycleScope.launch {
+            manager.droneState.collect { state ->
+                currentDroneState = state
+            }
+        }
+
         lifecycleScope.launch {
             val success = manager.connectAndStream()
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
                 val guidance = manager.wifiChecker.getGuidanceMessage(wifiStatus)
                 Log.w(TAG, "Drone connection failed: $guidance")
+                searchState = searchState.copy(droneConnectionMessage = guidance)
+                droneStateJob?.cancel()
+                droneStateJob = null
                 droneManager = null
                 return@launch
             }
 
             frameSourceMode = FrameSourceMode.DRONE
+            searchState = searchState.copy(droneConnectionMessage = null)
 
             // Wire frame callback for Compose state updates
             manager.frameSource.setOnFrameCallback { bitmap ->
-                // Received on decode thread — dispatch to main for Compose state update
                 lifecycleScope.launch(Dispatchers.Main.immediate) {
                     latestDroneFrame = bitmap
-                }
-            }
-
-            // Collect drone state updates
-            droneStateJob = lifecycleScope.launch {
-                manager.droneState.collect { state ->
-                    currentDroneState = state
                 }
             }
 
@@ -400,6 +407,7 @@ class MainActivity : ComponentActivity() {
         currentDroneState = null
         latestDroneFrame = null
         frameSourceMode = FrameSourceMode.CAMERA
+        searchState = searchState.copy(droneConnectionMessage = null)
 
         lifecycleScope.launch {
             manager?.disconnect()

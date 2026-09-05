@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.flightrisk.app.BuildConfig
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloConnectionState
@@ -616,6 +617,12 @@ private fun AdvancedSection(
                     text = "ReID: ${"%.2f".format(reidThreshold)} | " +
                         "Face: ${"%.2f".format(faceThreshold)} | " +
                         "Scorer: ${"%.2f".format(scorerThreshold)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
