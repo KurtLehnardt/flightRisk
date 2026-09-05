@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private var searchState by mutableStateOf(SearchScreenState())
     private var settingsState by mutableStateOf(SettingsScreenState())
     private var targetBitmap by mutableStateOf<Bitmap?>(null)
+    private var targetQualityReport by mutableStateOf<QualityReport?>(null)
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -76,12 +77,14 @@ class MainActivity : ComponentActivity() {
 
         // Load initial settings from config
         val config = FlightRiskConfig.getInstance(this)
+        val savedApiKey = config.reasoning.apiKey ?: ""
         settingsState = SettingsScreenState(
             activePreset = SensitivityPreset.BALANCED,
             reidThreshold = config.vision.reidThreshold.toFloat(),
             faceThreshold = config.vision.faceMatchThreshold.toFloat(),
             scorerThreshold = config.vision.scorerMatchThreshold.toFloat(),
-            llmApiKey = config.reasoning.apiKey ?: "",
+            llmApiKey = savedApiKey,
+            llmAvailable = savedApiKey.isNotBlank(),
         )
 
         // Request permissions
@@ -100,6 +103,8 @@ class MainActivity : ComponentActivity() {
                     FlightRiskNavHost(
                         searchState = searchState,
                         settingsState = settingsState,
+                        targetBitmap = targetBitmap,
+                        targetQualityReport = targetQualityReport,
                         onStartSearch = ::handleStartSearch,
                         onStopSearch = ::handleStopSearch,
                         onDismissAlert = ::handleDismissAlert,
@@ -178,8 +183,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handlePhotoSelected(bitmap: Bitmap, report: QualityReport) {
         targetBitmap = bitmap
+        targetQualityReport = report
         Log.i(TAG, "Target photo selected: grade=${report.grade}, score=${report.overallScore}")
-        // Future: set target on SearchPipeline and vision components
     }
 
     // ------------------------------------------------------------------
@@ -208,13 +213,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleLlmBackendChanged(backend: String) {
-        settingsState = settingsState.copy(llmBackend = backend)
+        settingsState = settingsState.copy(
+            llmBackend = backend,
+            llmAvailable = when (backend) {
+                "cloud_claude" -> settingsState.llmApiKey.isNotBlank()
+                else -> false
+            },
+        )
         Log.i(TAG, "LLM backend changed: $backend")
-        // Future: update LlmSelector
     }
 
     private fun handleApiKeyChanged(apiKey: String) {
-        settingsState = settingsState.copy(llmApiKey = apiKey)
-        // Future: update config and refresh LlmSelector
+        getSharedPreferences("flightrisk_config", MODE_PRIVATE)
+            .edit()
+            .putString("FLIGHTRISK_API_KEY", apiKey)
+            .apply()
+        settingsState = settingsState.copy(
+            llmApiKey = apiKey,
+            llmAvailable = apiKey.isNotBlank() && settingsState.llmBackend == "cloud_claude",
+        )
     }
 }
