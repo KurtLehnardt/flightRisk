@@ -133,6 +133,7 @@ fun FlightRiskNavHost(
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     latestDroneFrame: Bitmap? = null,
+    onDismissDroneAlert: () -> Unit = {},
     onDroneConnect: () -> Unit = {},
     onDroneDisconnect: () -> Unit = {},
     onTakeoff: () -> Unit = {},
@@ -209,6 +210,7 @@ fun FlightRiskNavHost(
                             )
                         }
                     },
+                    onDismissDroneAlert = onDismissDroneAlert,
                     onDroneConnect = onDroneConnect,
                     onDroneDisconnect = onDroneDisconnect,
                     onTakeoff = onTakeoff,

@@ -121,6 +121,7 @@ data class SearchScreenState(
     val confidenceFrames: Int = 0,
     val confidenceNeeded: Int = 3,
     val activeAlert: MatchEntry? = null,
+    val droneAlert: String? = null,
     val boxes: List<BoundingBox> = emptyList(),
     val cameraFrame: Bitmap? = null,
     val frameWidth: Int = 1920,
@@ -172,6 +173,7 @@ fun SearchScreen(
     onDismissAlert: () -> Unit,
     onNotMyChild: () -> Unit,
     onNavigateToMatch: (latitude: Double, longitude: Double) -> Unit,
+    onDismissDroneAlert: () -> Unit = {},
     onDroneConnect: () -> Unit = {},
     onDroneDisconnect: () -> Unit = {},
     onTakeoff: () -> Unit = {},
@@ -315,6 +317,28 @@ fun SearchScreen(
                         onNavigate = onNavigateToMatch,
                     )
                 }
+            }
+        }
+
+        // ----- Drone alert banner (not a match alert) -----
+        AnimatedVisibility(
+            visible = state.droneAlert != null,
+            enter = slideInVertically { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(
+                    top = WindowInsets.statusBars
+                        .asPaddingValues()
+                        .calculateTopPadding() + 100.dp,
+                ),
+        ) {
+            state.droneAlert?.let { message ->
+                DroneAlertBanner(
+                    message = message,
+                    onDismiss = onDismissDroneAlert,
+                )
             }
         }
 
@@ -1265,4 +1289,52 @@ private fun DisclaimerFooter(
             )
             .padding(horizontal = 16.dp, vertical = 6.dp),
     )
+}
+
+// -----------------------------------------------------------------------
+// Drone alert banner
+// -----------------------------------------------------------------------
+
+@Composable
+private fun DroneAlertBanner(
+    message: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xE6B71C1C)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Drone Alert",
+                    color = HudWhite,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = message,
+                    color = HudWhite,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.sizeIn(minHeight = 48.dp),
+            ) {
+                Text("OK", color = HudWhite, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }

@@ -19,7 +19,7 @@ import com.flightrisk.app.drone.DroneManager
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
-import com.flightrisk.app.pipeline.MatchEntry
+
 import com.flightrisk.app.ui.navigation.FlightRiskNavHost
 import com.flightrisk.app.ui.onboarding.OnboardingScreen
 import com.flightrisk.app.ui.onboarding.isOnboardingComplete
@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                         droneState = currentDroneState,
                         frameSourceMode = frameSourceMode,
                         latestDroneFrame = latestDroneFrame,
+                        onDismissDroneAlert = ::handleDismissDroneAlert,
                         onDroneConnect = ::handleDroneConnect,
                         onDroneDisconnect = ::handleDroneDisconnect,
                         onTakeoff = ::handleTakeoff,
@@ -220,6 +221,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleDismissAlert() {
         searchState = searchState.copy(activeAlert = null)
+    }
+
+    private fun handleDismissDroneAlert() {
+        searchState = searchState.copy(droneAlert = null)
     }
 
     private fun handleNotMyChild() {
@@ -339,53 +344,22 @@ class MainActivity : ComponentActivity() {
                         is DroneManager.DroneAlert.ConnectionLost -> {
                             Log.e(TAG, "Drone alert: connection lost")
                             searchState = searchState.copy(
-                                activeAlert = MatchEntry(
-                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
-                                        .format(java.util.Date()),
-                                    score = 0f,
-                                    reidScore = 0f,
-                                    faceScore = 0f,
-                                    alertLevel = "drone_alert",
-                                    trackId = "drone_connection",
-                                    reasoning = "Drone connection lost",
-                                    matchType = "drone",
-                                ),
+                                droneAlert = "Connection lost — check Tello WiFi",
                             )
                         }
                         is DroneManager.DroneAlert.BatteryCritical -> {
                             Log.e(TAG, "Drone alert: battery critical ${alert.percent}%")
                             searchState = searchState.copy(
-                                activeAlert = MatchEntry(
-                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
-                                        .format(java.util.Date()),
-                                    score = 0f,
-                                    reidScore = 0f,
-                                    faceScore = 0f,
-                                    alertLevel = "drone_alert",
-                                    trackId = "drone_battery",
-                                    reasoning = "Battery critical: ${alert.percent}% — drone is auto-landing",
-                                    matchType = "drone",
-                                ),
+                                droneAlert = "Battery critical: ${alert.percent}% — drone is auto-landing",
                             )
                         }
                         is DroneManager.DroneAlert.CrashDetected -> {
                             Log.e(TAG, "Drone alert: crash detected")
                             searchState = searchState.copy(
-                                activeAlert = MatchEntry(
-                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
-                                        .format(java.util.Date()),
-                                    score = 0f,
-                                    reidScore = 0f,
-                                    faceScore = 0f,
-                                    alertLevel = "drone_alert",
-                                    trackId = "drone_crash",
-                                    reasoning = "Crash detected — drone may have landed unexpectedly",
-                                    matchType = "drone",
-                                ),
+                                droneAlert = "Drone may have landed unexpectedly",
                             )
                         }
                         is DroneManager.DroneAlert.StreamFrozen -> {
-                            // Don't show UI alert for stream recovery — it auto-recovers
                             Log.w(TAG, "Drone alert: stream frozen, recovering")
                         }
                     }
