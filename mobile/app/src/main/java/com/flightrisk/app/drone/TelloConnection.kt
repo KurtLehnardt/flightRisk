@@ -71,51 +71,53 @@ class TelloConnection(private val config: DroneConfig) {
      *
      * @return true on successful connection, false on failure.
      */
-    suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
-        if (isConnected) {
-            Log.w(TAG, "connect() called while already connected")
-            return@withContext true
-        }
+    suspend fun connect(): Boolean = commandMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (isConnected) {
+                Log.w(TAG, "connect() called while already connected")
+                return@withContext true
+            }
 
-        try {
-            updateState(connectionState = TelloConnectionState.CONNECTING)
+            try {
+                updateState(connectionState = TelloConnectionState.CONNECTING)
 
-            commandSocket = DatagramSocket(config.telloCommandPort)
-            Log.i(TAG, "Socket bound to port ${config.telloCommandPort}")
+                commandSocket = DatagramSocket(config.telloCommandPort)
+                Log.i(TAG, "Socket bound to port ${config.telloCommandPort}")
 
-            val response = sendCommand("command")
-            if (response == null || !response.trim().equals("ok", ignoreCase = true)) {
-                Log.e(TAG, "SDK mode failed, response: $response")
-                commandSocket?.close()
-                commandSocket = null
+                val response = sendCommandInternal("command")
+                if (response == null || !response.trim().equals("ok", ignoreCase = true)) {
+                    Log.e(TAG, "SDK mode failed, response: $response")
+                    commandSocket?.close()
+                    commandSocket = null
+                    updateState(
+                        connectionState = TelloConnectionState.ERROR,
+                        errorMessage = "SDK mode failed: ${response ?: "timeout"}"
+                    )
+                    return@withContext false
+                }
+
+                isConnected = true
+                updateState(connectionState = TelloConnectionState.CONNECTED)
+                Log.i(TAG, "Connected to Tello")
+
+                startKeepalive()
+                startStatePolling()
+                return@withContext true
+            } catch (e: SocketException) {
+                Log.e(TAG, "Connection failed: ${e.message}")
                 updateState(
                     connectionState = TelloConnectionState.ERROR,
-                    errorMessage = "SDK mode failed: ${response ?: "timeout"}"
+                    errorMessage = "Socket error: ${e.message}"
+                )
+                return@withContext false
+            } catch (e: IOException) {
+                Log.e(TAG, "Connection failed: ${e.message}")
+                updateState(
+                    connectionState = TelloConnectionState.ERROR,
+                    errorMessage = "IO error: ${e.message}"
                 )
                 return@withContext false
             }
-
-            isConnected = true
-            updateState(connectionState = TelloConnectionState.CONNECTED)
-            Log.i(TAG, "Connected to Tello")
-
-            startKeepalive()
-            startStatePolling()
-            return@withContext true
-        } catch (e: SocketException) {
-            Log.e(TAG, "Connection failed: ${e.message}")
-            updateState(
-                connectionState = TelloConnectionState.ERROR,
-                errorMessage = "Socket error: ${e.message}"
-            )
-            return@withContext false
-        } catch (e: IOException) {
-            Log.e(TAG, "Connection failed: ${e.message}")
-            updateState(
-                connectionState = TelloConnectionState.ERROR,
-                errorMessage = "IO error: ${e.message}"
-            )
-            return@withContext false
         }
     }
 
@@ -235,29 +237,29 @@ class TelloConnection(private val config: DroneConfig) {
     /**
      * Command the Tello to take off.
      */
-    suspend fun takeoff() {
+    suspend fun takeoff(): Boolean {
         val response = sendCommand("takeoff")
-        if (response != null && response.trim().equals("ok", ignoreCase = true)) {
-            val current = _state.value
-            updateState(telemetry = current.telemetry.copy(isFlying = true))
+        if (response != null && response.trim().lowercase().startsWith("ok")) {
+            updateState(isFlying = true)
             Log.i(TAG, "Takeoff")
-        } else {
-            Log.w(TAG, "Takeoff failed: $response")
+            return true
         }
+        Log.w(TAG, "Takeoff failed: $response")
+        return false
     }
 
     /**
      * Command the Tello to land.
      */
-    suspend fun land() {
+    suspend fun land(): Boolean {
         val response = sendCommand("land")
-        if (response != null && response.trim().equals("ok", ignoreCase = true)) {
-            val current = _state.value
-            updateState(telemetry = current.telemetry.copy(isFlying = false))
+        if (response != null && response.trim().lowercase().startsWith("ok")) {
+            updateState(isFlying = false)
             Log.i(TAG, "Landing")
-        } else {
-            Log.w(TAG, "Land failed: $response")
+            return true
         }
+        Log.w(TAG, "Land failed: $response")
+        return false
     }
 
     /**
@@ -499,11 +501,18 @@ class TelloConnection(private val config: DroneConfig) {
         telemetry: TelloTelemetry? = null,
         errorMessage: String? = null,
         isOnTelloWifi: Boolean? = null,
+        isFlying: Boolean? = null,
     ) {
         _state.update { current ->
+            val baseTelemetry = telemetry ?: current.telemetry
+            val finalTelemetry = if (isFlying != null) {
+                baseTelemetry.copy(isFlying = isFlying)
+            } else {
+                baseTelemetry
+            }
             current.copy(
                 connectionState = connectionState ?: current.connectionState,
-                telemetry = telemetry ?: current.telemetry,
+                telemetry = finalTelemetry,
                 errorMessage = errorMessage
                     ?: if (connectionState != null && connectionState != TelloConnectionState.ERROR) {
                         null
