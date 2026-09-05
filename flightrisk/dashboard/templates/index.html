@@ -655,6 +655,44 @@
             font-weight: 600;
         }
 
+        /* Sensitivity presets */
+        .sensitivity-presets {
+            margin-top: 10px;
+        }
+        .sensitivity-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: block;
+            margin-bottom: 6px;
+        }
+        .preset-pills {
+            display: flex;
+            gap: 4px;
+        }
+        .preset-pill {
+            flex: 1;
+            padding: 6px 4px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            text-align: center;
+            transition: all 150ms ease;
+            white-space: nowrap;
+        }
+        .preset-pill:hover {
+            border-color: var(--border-light);
+            color: var(--text-primary);
+        }
+        .preset-pill.active {
+            background: var(--amber-glow);
+            border-color: var(--amber);
+            color: var(--amber);
+        }
+
         /* ========== CONTROLS TAB ========== */
         /* Fleet bar */
         .fleet-bar {
@@ -1659,10 +1697,13 @@
                             </div>
                         </div>
                         <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
-                        <div class="threshold-section">
-                            <label>Threshold</label>
-                            <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
-                            <span id="threshold-val" class="threshold-val">0.55</span>
+                        <div class="sensitivity-presets">
+                            <label class="sensitivity-label">Sensitivity</label>
+                            <div class="preset-pills">
+                                <button class="preset-pill" data-preset="more_alerts" onclick="setSensitivityPreset('more_alerts', this)">More Alerts</button>
+                                <button class="preset-pill active" data-preset="balanced" onclick="setSensitivityPreset('balanced', this)">Balanced</button>
+                                <button class="preset-pill" data-preset="fewer_alerts" onclick="setSensitivityPreset('fewer_alerts', this)">Fewer Alerts</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1867,6 +1908,16 @@
                     <div class="obs-row">
                         <span class="obs-row-label">Avg reasoning latency</span>
                         <span id="obs-reasoning-lat" class="obs-row-val dim">--</span>
+                    </div>
+                </div>
+
+                <!-- Manual Threshold Override -->
+                <div class="panel-section">
+                    <div class="panel-title">Manual Threshold</div>
+                    <div class="threshold-section">
+                        <label>Threshold</label>
+                        <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
+                        <span id="threshold-val" class="threshold-val">0.55</span>
                     </div>
                 </div>
 
@@ -2327,6 +2378,24 @@
             const thresh = val / 100;
             document.getElementById('threshold-val').textContent = thresh.toFixed(2);
             socket.emit('set_threshold', { threshold: thresh });
+            // Deselect any active preset since the user is manually overriding
+            document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('active'));
+        }
+
+        const PRESET_SCORER_VALUES = {
+            'more_alerts': 35,
+            'balanced': 45,
+            'fewer_alerts': 60,
+        };
+
+        function setSensitivityPreset(preset, btnEl) {
+            document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('active'));
+            if (btnEl) btnEl.classList.add('active');
+            socket.emit('set_sensitivity_preset', { preset: preset });
+            // Sync the advanced slider to the scorer threshold
+            const sliderVal = PRESET_SCORER_VALUES[preset] || 45;
+            document.getElementById('threshold-slider').value = sliderVal;
+            document.getElementById('threshold-val').textContent = (sliderVal / 100).toFixed(2);
         }
 
         // ========== MATCH ALERTS ==========
