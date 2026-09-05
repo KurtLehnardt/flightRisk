@@ -7,7 +7,7 @@ AI-powered lost child finder using a DJI Tello drone.
 ## Architecture
 
 ```
-DJI Tello (720p WiFi) → MacBook / iPhone → AI Pipeline → Alert
+DJI Tello (720p WiFi) → MacBook / iPhone / Android → AI Pipeline → Alert
 ```
 
 **Real-time pipeline (every frame):**
@@ -48,10 +48,26 @@ python -m flightrisk --dashboard --target photo_of_child.jpg
 - `l` — land
 - `q` — quit
 
+## Mobile App (Android)
+
+**Prerequisites:**
+- Android Studio (Hedgehog or later)
+- Android SDK 34
+- USB debugging enabled on your phone
+
+**Build & Run:**
+1. Open the `mobile/` directory in Android Studio
+2. Let Gradle sync complete
+3. Connect your Android phone via USB
+4. Click Run
+
+**ONNX Models:** The app builds and runs without model files, but detection won't work until you export the ONNX models. See `scripts/export_*.py` for model export scripts.
+
 ## Hardware
 
 - **Drone:** DJI Ryze Tello (TLW004, SDK 1.3)
 - **Laptop:** MacBook Pro M1 Max
+- **Phone:** Android (SDK 34+) for on-device detection
 - **Future:** iOS app for iPhone 17+
 
 ## Project Structure
@@ -63,5 +79,7 @@ flightrisk/
 ├── reasoning/   # Gemma 4 LLM reasoning
 ├── dashboard/   # Web dashboard (Flask + WebSocket)
 └── main.py      # Entry point
+mobile/          # Android app (Kotlin/Jetpack Compose)
+scripts/         # Model export scripts (ONNX)
 ios/             # Future iOS app (Swift/SwiftUI)
 ```
