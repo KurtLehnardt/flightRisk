@@ -1190,6 +1190,11 @@
             max-height: 100px;
             overflow-y: auto;
         }
+        .overlay-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
         .overlay-dismiss {
             padding: 10px 32px;
             border: 1px solid var(--border-light);
@@ -1206,6 +1211,15 @@
         .overlay-dismiss:hover {
             background: var(--bg-card-hover);
             border-color: var(--text-secondary);
+        }
+        .overlay-not-my-child {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .overlay-not-my-child:hover {
+            background: var(--red);
+            color: #fff;
+            border-color: var(--red);
         }
         .overlay-timer {
             margin-top: 12px;
@@ -1903,7 +1917,10 @@
             <img id="overlay-snapshot" class="overlay-snapshot" style="display:none">
             <div id="overlay-score" class="overlay-score"></div>
             <div id="overlay-reasoning" class="overlay-reasoning"></div>
-            <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
+            <div class="overlay-actions">
+                <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
+                <button class="overlay-dismiss overlay-not-my-child" onclick="notMyChild()">NOT MY CHILD</button>
+            </div>
             <div class="overlay-timer">
                 <div id="overlay-timer-bar" class="overlay-timer-bar" style="width:100%"></div>
             </div>
@@ -1959,6 +1976,7 @@
         let sessionsOpen = false;
         let advancedOpen = false;
         let searchTotal = 0;
+        let currentOverlayMatchId = null;
 
         // ========== DOM REFS ==========
         const videoFeed = document.getElementById('video-feed');
@@ -2333,7 +2351,7 @@
             if (matchId) {
                 feedbackHtml = '<span class="feedback-btns" id="fb-' + matchId + '">' +
                     '<button class="fb-btn confirm" title="Confirm" onclick="submitFeedback(' + matchId + ',\'confirmed\',this)">&#10003;</button>' +
-                    '<button class="fb-btn reject" title="Reject" onclick="submitFeedback(' + matchId + ',\'rejected\',this)">&#10007;</button>' +
+                    '<button class="fb-btn reject" title="Not my child" onclick="submitFeedback(' + matchId + ',\'rejected\',this)">&#10007;</button>' +
                     '</span>';
             }
 
@@ -2389,6 +2407,8 @@
             score.textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | Gemma: ' + data.gemma_confidence : '');
             reasoning.textContent = data.reasoning || '';
 
+            currentOverlayMatchId = data.match_id || null;
+
             // Timer bar animation
             timerBar.style.transition = 'none';
             timerBar.style.width = '100%';
@@ -2408,6 +2428,22 @@
         function dismissOverlay() {
             document.getElementById('match-overlay').classList.remove('active');
             clearTimeout(overlayTimeout);
+        }
+
+        function notMyChild() {
+            // Submit rejected feedback for the current overlay match
+            if (currentOverlayMatchId) {
+                const btn = document.querySelector('.overlay-not-my-child');
+                submitFeedback(currentOverlayMatchId, 'rejected', btn);
+            }
+            // Bump threshold slightly to reduce re-alerts for similar people
+            const slider = document.getElementById('threshold-slider');
+            const currentVal = parseInt(slider.value, 10);
+            const newVal = Math.min(90, currentVal + 3); // +0.03 in threshold units
+            slider.value = newVal;
+            updateThreshold(newVal);
+            dismissOverlay();
+            showToast('Feedback recorded — threshold raised to ' + (newVal / 100).toFixed(2));
         }
 
         // ========== DRONE COMMANDS ==========
