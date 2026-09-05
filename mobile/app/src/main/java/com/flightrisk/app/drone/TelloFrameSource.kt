@@ -284,6 +284,8 @@ class TelloFrameSource(
                                 } else null
                             }
                             bitmap?.let { handleDecodedFrame(it) }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Frame conversion failed, skipping frame", e)
                         } finally {
                             decoder.releaseOutputBuffer(outputIndex, false)
                         }
