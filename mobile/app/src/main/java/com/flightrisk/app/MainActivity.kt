@@ -26,10 +26,8 @@ import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreenState
 import com.flightrisk.app.ui.settings.SettingsScreenState
 import com.flightrisk.app.ui.theme.FlightRiskTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -61,7 +59,7 @@ class MainActivity : ComponentActivity() {
     private var droneManager: DroneManager? = null
     private var currentDroneState by mutableStateOf<TelloState?>(null)
     private var frameSourceMode by mutableStateOf(FrameSourceMode.CAMERA)
-    private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
 
@@ -131,6 +129,15 @@ class MainActivity : ComponentActivity() {
                         onThresholdChanged = ::handleThresholdChanged,
                         onLlmBackendChanged = ::handleLlmBackendChanged,
                         onApiKeyChanged = ::handleApiKeyChanged,
+                        droneState = currentDroneState,
+                        frameSourceMode = frameSourceMode,
+                        latestDroneFrame = latestDroneFrame,
+                        onDroneConnect = ::handleDroneConnect,
+                        onDroneDisconnect = ::handleDroneDisconnect,
+                        onTakeoff = ::handleTakeoff,
+                        onLand = ::handleLand,
+                        onDroneMove = ::handleDroneMove,
+                        onDroneRotate = ::handleDroneRotate,
                     )
                 }
             }
@@ -264,10 +271,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleDroneConnect() {
         val config = FlightRiskConfig.getInstance(this)
-        val manager = DroneManager(this, config)
+        val manager = DroneManager(applicationContext, config)
         droneManager = manager
 
-        activityScope.launch {
+        lifecycleScope.launch {
             val success = manager.connectAndStream()
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
@@ -279,15 +286,20 @@ class MainActivity : ComponentActivity() {
 
             frameSourceMode = FrameSourceMode.DRONE
 
+            // Wire frame callback for Compose state updates
+            manager.frameSource.setOnFrameCallback { bitmap ->
+                latestDroneFrame = bitmap
+            }
+
             // Collect drone state updates
-            droneStateJob = activityScope.launch {
+            droneStateJob = lifecycleScope.launch {
                 manager.droneState.collect { state ->
                     currentDroneState = state
                 }
             }
 
             // Collect alerts
-            droneAlertJob = activityScope.launch {
+            droneAlertJob = lifecycleScope.launch {
                 manager.alerts.collect { alert ->
                     when (alert) {
                         is DroneManager.DroneAlert.ConnectionLost ->
@@ -313,28 +325,32 @@ class MainActivity : ComponentActivity() {
         droneAlertJob?.cancel()
         droneAlertJob = null
 
-        droneManager?.disconnect()
+        val manager = droneManager
         droneManager = null
         currentDroneState = null
+        latestDroneFrame = null
         frameSourceMode = FrameSourceMode.CAMERA
 
-        Log.i(TAG, "Drone disconnected")
+        lifecycleScope.launch {
+            manager?.disconnect()
+            Log.i(TAG, "Drone disconnected")
+        }
     }
 
     private fun handleTakeoff() {
-        activityScope.launch { droneManager?.takeoff() }
+        lifecycleScope.launch { droneManager?.takeoff() }
     }
 
     private fun handleLand() {
-        activityScope.launch { droneManager?.land() }
+        lifecycleScope.launch { droneManager?.land() }
     }
 
     private fun handleDroneMove(direction: String, distanceCm: Int) {
-        activityScope.launch { droneManager?.move(direction, distanceCm) }
+        lifecycleScope.launch { droneManager?.move(direction, distanceCm) }
     }
 
     private fun handleDroneRotate(degrees: Int) {
-        activityScope.launch { droneManager?.rotate(degrees) }
+        lifecycleScope.launch { droneManager?.rotate(degrees) }
     }
 
     // ------------------------------------------------------------------

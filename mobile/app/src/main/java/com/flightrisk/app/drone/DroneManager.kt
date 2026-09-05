@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -71,6 +72,8 @@ class DroneManager(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var monitorJob: Job? = null
+    @Volatile
+    private var commandedLanding = false
 
     // ------------------------------------------------------------------
     // Connect / disconnect
@@ -104,11 +107,11 @@ class DroneManager(
             Log.w(TAG, "Stream start failed, continuing without video")
         }
 
+        // Wire frozen-stream recovery before start to avoid missing early freezes
+        frameSource.onStreamFrozen = { recoverStream() }
+
         // Start frame source
         frameSource.start()
-
-        // Wire frozen-stream recovery
-        frameSource.onStreamFrozen = { recoverStream() }
 
         // Start monitoring coroutine
         startMonitoring()
@@ -119,21 +122,23 @@ class DroneManager(
 
     /**
      * Disconnect from the Tello and release all resources.
+     *
+     * Suspend so callers await full teardown before reconnecting,
+     * preventing port races on UDP 8889.
      */
-    fun disconnect() {
+    suspend fun disconnect() {
         monitorJob?.cancel()
         monitorJob = null
 
         frameSource.stop()
 
-        scope.launch {
-            try {
-                connection.stopStream()
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping stream: ${e.message}")
-            }
-            connection.disconnect()
+        try {
+            connection.stopStream()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping stream: ${e.message}")
         }
+        connection.disconnect()
+        scope.cancel()
 
         Log.i(TAG, "Disconnected")
     }
@@ -178,19 +183,23 @@ class DroneManager(
 
     /**
      * Called when the activity is destroyed. Safety net: land the drone
-     * and disconnect.
+     * and disconnect synchronously (cannot suspend on the main thread).
      */
     fun onActivityDestroy() {
+        monitorJob?.cancel()
+        monitorJob = null
+        frameSource.stop()
+
         val state = droneState.value
         if (state.telemetry.isFlying) {
-            Log.w(TAG, "Activity destroying while flying -- landing")
-            scope.launch {
-                connection.land()
-                disconnect()
-            }
-        } else {
-            disconnect()
+            Log.w(TAG, "Activity destroying while flying -- emergency cleanup")
+            // Fire-and-forget land command, then synchronous socket close
+            scope.launch { connection.land() }
         }
+
+        // TelloConnection.disconnect() is synchronous (closes socket directly)
+        connection.disconnect()
+        scope.cancel()
     }
 
     // ------------------------------------------------------------------
@@ -201,7 +210,10 @@ class DroneManager(
     suspend fun takeoff() = connection.takeoff()
 
     /** Command the drone to land. */
-    suspend fun land() = connection.land()
+    suspend fun land() {
+        commandedLanding = true
+        connection.land()
+    }
 
     /**
      * Move the drone in a cardinal direction.
@@ -258,9 +270,9 @@ class DroneManager(
                 }
                 wasConnected = isConnected
 
-                // Battery critical
+                // Battery critical (0% is a real value after t02 null fix)
                 val battery = state.telemetry.battery
-                if (battery in 1..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
+                if (battery in 0..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
                     Log.w(TAG, "Battery critical: $battery%")
                     _alerts.tryEmit(DroneAlert.BatteryCritical(battery))
                     batteryAlertSent = true
@@ -275,12 +287,16 @@ class DroneManager(
                 }
 
                 // Crash detection: was flying but TelloConnection flipped
-                // isFlying to false (after 3 consecutive zero-height polls)
+                // isFlying to false (after 3 consecutive zero-height polls).
+                // Skip if this was a commanded landing.
                 if (wasFlying && !state.telemetry.isFlying &&
                     state.telemetry.height == 0 && isConnected
                 ) {
-                    Log.e(TAG, "Crash detected")
-                    _alerts.tryEmit(DroneAlert.CrashDetected)
+                    if (!commandedLanding) {
+                        Log.e(TAG, "Crash detected")
+                        _alerts.tryEmit(DroneAlert.CrashDetected)
+                    }
+                    commandedLanding = false
                 }
                 wasFlying = state.telemetry.isFlying
             }
