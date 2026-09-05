@@ -145,6 +145,8 @@ class TelloConnection(private val config: DroneConfig) {
             connectionState = TelloConnectionState.DISCONNECTED,
             telemetry = TelloTelemetry()
         )
+
+        scope.cancel()
         Log.i(TAG, "Disconnected")
     }
 
@@ -259,6 +261,26 @@ class TelloConnection(private val config: DroneConfig) {
             return true
         }
         Log.w(TAG, "Land failed: $response")
+        return false
+    }
+
+    /**
+     * Emergency motor kill — immediately stops all motors.
+     *
+     * Unlike [land], which performs a controlled descent, this command
+     * cuts power instantly. The drone will fall from whatever altitude
+     * it is at. Use only when a controlled landing is not possible
+     * (e.g., flyaway, entanglement, imminent collision with a person).
+     *
+     * @return true if the Tello acknowledged the command.
+     */
+    suspend fun emergencyStop(): Boolean {
+        val response = sendCommand("emergency")
+        if (response != null) {
+            updateState(isFlying = false)
+            Log.w(TAG, "EMERGENCY STOP executed")
+            return true
+        }
         return false
     }
 

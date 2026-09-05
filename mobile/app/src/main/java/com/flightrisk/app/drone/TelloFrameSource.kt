@@ -76,6 +76,7 @@ class TelloFrameSource(
     private val nalQueue = ConcurrentLinkedQueue<ByteArray>()
 
     // NAL reassembly across UDP packet boundaries
+    private val maxAccumulatorSize = 512 * 1024 // 512KB
     private val nalAccumulator = ByteArrayOutputStream(65536)
     @Volatile
     private var seenFirstStartCode = false
@@ -207,6 +208,13 @@ class TelloFrameSource(
             try {
                 packet.setLength(buffer.size) // Reset length before each receive
                 udpSocket?.receive(packet) ?: break
+
+                // Guard against unbounded accumulator growth
+                if (nalAccumulator.size() > maxAccumulatorSize) {
+                    Log.w(TAG, "NAL accumulator exceeded $maxAccumulatorSize bytes, resetting")
+                    nalAccumulator.reset()
+                    seenFirstStartCode = false
+                }
 
                 // Append received bytes to accumulator
                 nalAccumulator.write(
@@ -575,10 +583,14 @@ class TelloFrameSource(
 
         var callback: ((Bitmap) -> Unit)? = null
         lock.withLock {
+            latestFrame?.recycle()
             latestFrame = bitmap
             callback = frameCallback
         }
-        callback?.invoke(bitmap)
+        // Give the callback a COPY so the consumer owns it independently.
+        // TelloFrameSource owns latestFrame; the consumer owns the copy.
+        val frameCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        callback?.invoke(frameCopy)
     }
 
     /**
