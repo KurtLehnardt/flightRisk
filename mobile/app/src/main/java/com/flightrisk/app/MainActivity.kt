@@ -19,6 +19,7 @@ import com.flightrisk.app.drone.DroneManager
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
+import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.navigation.FlightRiskNavHost
 import com.flightrisk.app.ui.onboarding.OnboardingScreen
 import com.flightrisk.app.ui.onboarding.isOnboardingComplete
@@ -27,6 +28,7 @@ import com.flightrisk.app.ui.search.SearchScreenState
 import com.flightrisk.app.ui.settings.SettingsScreenState
 import com.flightrisk.app.ui.theme.FlightRiskTheme
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -179,15 +181,32 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private fun handleStartSearch() {
-        searchState = searchState.copy(isSearching = true)
-        // Wire the active frame source to the pipeline
-        // pipeline.frameSource = SearchPipeline.FrameSource {
-        //     if (frameSourceMode == FrameSourceMode.DRONE) {
-        //         droneManager?.frameSource?.getLatestFrame()
-        //     } else {
-        //         cameraFrameSource?.getLatestFrame()
-        //     }
-        // }
+        // Set frame dimensions based on active source for correct overlay scaling
+        if (frameSourceMode == FrameSourceMode.DRONE) {
+            searchState = searchState.copy(
+                isSearching = true,
+                frameWidth = 640,
+                frameHeight = 480,
+            )
+        } else {
+            searchState = searchState.copy(
+                isSearching = true,
+                frameWidth = 1920,
+                frameHeight = 1080,
+            )
+        }
+
+        // TODO: Wire SearchPipeline.FrameSource when pipeline is fully initialized in MainActivity.
+        // The pipeline should pull frames from the active source:
+        //   val frameSource = SearchPipeline.FrameSource {
+        //       if (frameSourceMode == FrameSourceMode.DRONE) {
+        //           droneManager?.frameSource?.getLatestFrame()
+        //       } else {
+        //           null // CameraX preview is handled separately
+        //       }
+        //   }
+        //   pipeline.frameSource = frameSource
+        //   pipeline.start()
         Log.i(TAG, "Search started, frameSource=$frameSourceMode")
     }
 
@@ -288,7 +307,10 @@ class MainActivity : ComponentActivity() {
 
             // Wire frame callback for Compose state updates
             manager.frameSource.setOnFrameCallback { bitmap ->
-                latestDroneFrame = bitmap
+                // Received on decode thread — dispatch to main for Compose state update
+                lifecycleScope.launch(Dispatchers.Main.immediate) {
+                    latestDroneFrame = bitmap
+                }
             }
 
             // Collect drone state updates
@@ -298,20 +320,63 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Collect alerts
+            // Collect alerts and route critical ones to the UI
             droneAlertJob = lifecycleScope.launch {
                 manager.alerts.collect { alert ->
                     when (alert) {
-                        is DroneManager.DroneAlert.ConnectionLost ->
+                        is DroneManager.DroneAlert.ConnectionLost -> {
                             Log.e(TAG, "Drone alert: connection lost")
-                        is DroneManager.DroneAlert.BatteryCritical ->
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_connection",
+                                    reasoning = "Drone connection lost",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.BatteryCritical -> {
                             Log.e(TAG, "Drone alert: battery critical ${alert.percent}%")
-                        is DroneManager.DroneAlert.CrashDetected ->
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_battery",
+                                    reasoning = "Battery critical: ${alert.percent}% — drone is auto-landing",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.CrashDetected -> {
                             Log.e(TAG, "Drone alert: crash detected")
-                        is DroneManager.DroneAlert.StreamFrozen ->
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_crash",
+                                    reasoning = "Crash detected — drone may have landed unexpectedly",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.StreamFrozen -> {
+                            // Don't show UI alert for stream recovery — it auto-recovers
                             Log.w(TAG, "Drone alert: stream frozen, recovering")
+                        }
                     }
-                    // Future: route alerts to AlertManager UI
                 }
             }
 
