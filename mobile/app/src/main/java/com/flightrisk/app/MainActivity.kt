@@ -318,9 +318,17 @@ class MainActivity : ComponentActivity() {
             val success = manager.connectAndStream()
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
-                val guidance = manager.wifiChecker.getGuidanceMessage(wifiStatus)
-                Log.w(TAG, "Drone connection failed: $guidance")
-                searchState = searchState.copy(droneConnectionMessage = guidance)
+                val droneError = manager.droneState.value.errorMessage
+                val message = when {
+                    wifiStatus !is TelloWifiChecker.WifiStatus.OnTelloWifi ->
+                        manager.wifiChecker.getGuidanceMessage(wifiStatus)
+                    droneError != null ->
+                        "$droneError — tap Retry to try again."
+                    else ->
+                        "Connection failed. Make sure the Tello is powered on and try again."
+                }
+                Log.w(TAG, "Drone connection failed: $message")
+                searchState = searchState.copy(droneConnectionMessage = message)
                 droneStateJob?.cancel()
                 droneStateJob = null
                 droneManager = null

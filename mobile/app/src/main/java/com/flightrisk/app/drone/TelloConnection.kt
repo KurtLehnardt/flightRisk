@@ -89,7 +89,10 @@ class TelloConnection(private val config: DroneConfig) {
             try {
                 updateState(connectionState = TelloConnectionState.CONNECTING)
 
-                commandSocket = DatagramSocket(config.telloCommandPort)
+                val sock = DatagramSocket(null)
+                sock.reuseAddress = true
+                sock.bind(java.net.InetSocketAddress(config.telloCommandPort))
+                commandSocket = sock
                 Log.i(TAG, "Socket bound to port ${config.telloCommandPort}")
 
                 val response = sendCommandInternal("command")
