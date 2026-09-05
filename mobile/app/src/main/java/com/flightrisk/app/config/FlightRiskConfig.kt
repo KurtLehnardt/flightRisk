@@ -69,6 +69,8 @@ data class FlightRiskConfig(
                 reasoning = config.reasoning.copy(
                     model = prefs.getString("FLIGHTRISK_GEMMA_MODEL", null)
                         ?: config.reasoning.model,
+                    apiKey = prefs.getString("FLIGHTRISK_API_KEY", null)
+                        ?: config.reasoning.apiKey,
                     alertCooldown = prefs.getFloat(
                         "FLIGHTRISK_ALERT_COOLDOWN",
                         config.reasoning.alertCooldown.toFloat()
@@ -139,6 +141,7 @@ data class VisionConfig(
  */
 data class ReasoningConfig(
     val model: String = "gemma4:latest",
+    val apiKey: String? = null,
     val queueMaxSize: Int = 10,
     val alertCooldown: Double = 10.0,
     val gemmaRateLimit: Double = 5.0,
