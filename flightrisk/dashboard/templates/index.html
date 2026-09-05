@@ -358,6 +358,21 @@
             box-shadow: 0 0 8px var(--amber-glow);
         }
 
+        /* Safety disclaimer */
+        .safety-disclaimer {
+            position: absolute;
+            bottom: 6px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 4px;
+            z-index: 5;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
         /* ========== SIDEBAR ========== */
         .sidebar {
             width: 320px;
@@ -1557,6 +1572,9 @@
             <div id="search-bar" class="search-bar">
                 <div id="search-bar-fill" class="search-bar-fill" style="width: 0%"></div>
             </div>
+
+            <!-- Safety disclaimer -->
+            <div class="safety-disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</div>
         </div>
 
         <!-- SIDEBAR -->
