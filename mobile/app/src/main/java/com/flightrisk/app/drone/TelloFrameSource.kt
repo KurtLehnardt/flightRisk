@@ -75,6 +75,9 @@ class TelloFrameSource(
     private var decodeThread: Thread? = null
     private val nalQueue = ConcurrentLinkedQueue<ByteArray>()
 
+    // NAL queue size cap (~4 seconds at 30fps)
+    private val maxQueueSize = 120
+
     // NAL reassembly across UDP packet boundaries
     private val maxAccumulatorSize = 512 * 1024 // 512KB
     private val nalAccumulator = ByteArrayOutputStream(65536)
@@ -147,40 +150,49 @@ class TelloFrameSource(
         } catch (e: Exception) {
             Log.w(TAG, "Error closing UDP socket", e)
         }
-        udpSocket = null
 
-        // Join threads
-        receiveThread?.join(2000)
-        decodeThread?.join(2000)
-        receiveThread = null
-        decodeThread = null
+        // Interrupt threads to speed up exit
+        receiveThread?.interrupt()
+        decodeThread?.interrupt()
 
-        // Release MediaCodec
-        try {
-            codec?.stop()
-            codec?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing MediaCodec", e)
-        }
-        codec = null
+        // Release codec on a background thread to avoid main-thread blocking
+        val codecRef = codec
+        val recvThread = receiveThread
+        val decThread = decodeThread
 
-        // Clear state
-        nalQueue.clear()
-        nalAccumulator.reset()
-        seenFirstStartCode = false
+        Thread {
+            recvThread?.join(2000)
+            decThread?.join(2000)
+            try {
+                codecRef?.stop()
+                codecRef?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing codec: ${e.message}")
+            }
+        }.start()
+
         lock.withLock {
+            latestFrame?.recycle()
             latestFrame = null
             frameCallback = null
         }
+
+        codec = null
+        udpSocket = null
+        receiveThread = null
+        decodeThread = null
+        nalAccumulator.reset()
+        nalQueue.clear()
+        seenFirstStartCode = false
         lastFrameHash = 0
         frozenFrameCount = 0
 
-        Log.i(TAG, "Stopped")
+        Log.i(TAG, "TelloFrameSource stopped")
     }
 
     override fun getLatestFrame(): Bitmap? {
         lock.withLock {
-            return latestFrame
+            return latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
         }
     }
 
@@ -209,6 +221,12 @@ class TelloFrameSource(
                 packet.setLength(buffer.size) // Reset length before each receive
                 udpSocket?.receive(packet) ?: break
 
+                // Validate sender address to reject spoofed packets
+                val expectedAddress = java.net.InetAddress.getByName(config.telloDefaultHost)
+                if (packet.address != expectedAddress) {
+                    continue
+                }
+
                 // Guard against unbounded accumulator growth
                 if (nalAccumulator.size() > maxAccumulatorSize) {
                     Log.w(TAG, "NAL accumulator exceeded $maxAccumulatorSize bytes, resetting")
@@ -234,6 +252,9 @@ class TelloFrameSource(
 
                 // Emit complete NALs (each bounded by two consecutive start codes)
                 for (i in 0 until startCodes.size - 1) {
+                    while (nalQueue.size > maxQueueSize) {
+                        nalQueue.poll() // drop oldest to prevent unbounded growth
+                    }
                     nalQueue.add(accumulated.copyOfRange(startCodes[i], startCodes[i + 1]))
                 }
 
@@ -269,7 +290,11 @@ class TelloFrameSource(
             val data = nalQueue.poll()
             if (data != null) {
                 didWork = true
-                feedNalUnits(decoder, data)
+                try {
+                    feedNalUnits(decoder, data)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error feeding NAL units: ${e.message}")
+                }
             }
 
             // --- Drain output ---
@@ -307,6 +332,7 @@ class TelloFrameSource(
                 Log.e(TAG, "MediaCodec error in decode loop", e)
             } catch (e: IllegalStateException) {
                 Log.e(TAG, "MediaCodec illegal state", e)
+                isRunning = false // Signal receiveLoop to stop too
                 break
             }
 
@@ -315,6 +341,10 @@ class TelloFrameSource(
             }
         }
         Log.d(TAG, "Decode loop exited")
+        if (!isRunning) {
+            Log.e(TAG, "Decode loop exited unexpectedly")
+            onStreamFrozen?.invoke() // Trigger stream recovery in DroneManager
+        }
     }
 
     // -- NAL unit handling ----------------------------------------------------
@@ -370,14 +400,19 @@ class TelloFrameSource(
             val inputIndex = decoder.dequeueInputBuffer(DECODE_POLL_TIMEOUT_US)
             if (inputIndex >= 0) {
                 val inputBuffer = decoder.getInputBuffer(inputIndex) ?: return
+                if (nalUnit.size > inputBuffer.remaining()) {
+                    Log.w(TAG, "NAL unit too large for input buffer: ${nalUnit.size} > ${inputBuffer.remaining()}, dropping")
+                    decoder.queueInputBuffer(inputIndex, 0, 0, 0, 0) // return empty buffer
+                    return
+                }
                 inputBuffer.clear()
                 inputBuffer.put(nalUnit)
                 decoder.queueInputBuffer(inputIndex, 0, nalUnit.size, 0, 0)
             }
         } catch (e: MediaCodec.CodecException) {
             Log.e(TAG, "Error submitting NAL unit to decoder", e)
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "Decoder not in executing state", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error in submitToDecoder: ${e.message}")
         }
     }
 
