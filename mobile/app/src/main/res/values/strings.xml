@@ -29,4 +29,6 @@
     <string name="drone_altitude_down">Down</string>
     <string name="drone_rotate_cw">Rotate CW</string>
     <string name="drone_rotate_ccw">Rotate CCW</string>
+    <string name="drone_stop_search">Stop Search</string>
+    <string name="drone_search_disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</string>
 </resources>

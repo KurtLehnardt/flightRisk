@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
                         onLand = ::handleLand,
                         onDroneMove = ::handleDroneMove,
                         onDroneRotate = ::handleDroneRotate,
+                        onEmergencyStop = ::handleEmergencyStop,
                     )
                 }
             }
@@ -289,6 +290,10 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private fun handleDroneConnect() {
+        if (droneManager != null) {
+            Log.w(TAG, "Already connected or connecting, ignoring duplicate connect")
+            return
+        }
         val config = FlightRiskConfig.getInstance(this)
         val manager = DroneManager(applicationContext, config)
         droneManager = manager
@@ -408,6 +413,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleLand() {
         lifecycleScope.launch { droneManager?.land() }
+    }
+
+    private fun handleEmergencyStop() {
+        lifecycleScope.launch { droneManager?.emergencyStop() }
     }
 
     private fun handleDroneMove(direction: String, distanceCm: Int) {

@@ -171,6 +171,7 @@ fun SearchScreen(
     onLand: () -> Unit = {},
     onDroneMove: (String, Int) -> Unit = { _, _ -> },
     onDroneRotate: (Int) -> Unit = {},
+    onEmergencyStop: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Finding 8: delay banner to avoid flash on every start
@@ -330,6 +331,7 @@ fun SearchScreen(
                 onMove = onDroneMove,
                 onRotate = onDroneRotate,
                 onStopSearch = onStopSearch,
+                onEmergencyStop = onEmergencyStop,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         } else {

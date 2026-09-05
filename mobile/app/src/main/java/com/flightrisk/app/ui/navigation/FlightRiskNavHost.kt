@@ -139,6 +139,7 @@ fun FlightRiskNavHost(
     onLand: () -> Unit = {},
     onDroneMove: (String, Int) -> Unit = { _, _ -> },
     onDroneRotate: (Int) -> Unit = {},
+    onEmergencyStop: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -214,6 +215,7 @@ fun FlightRiskNavHost(
                     onLand = onLand,
                     onDroneMove = onDroneMove,
                     onDroneRotate = onDroneRotate,
+                    onEmergencyStop = onEmergencyStop,
                 )
             }
 

@@ -51,6 +51,7 @@ import com.flightrisk.app.ui.theme.MatchGreen
  * @param onMove Callback for directional movement (direction, distanceCm).
  * @param onRotate Callback for rotation (degrees; positive=CW, negative=CCW).
  * @param onStopSearch Callback to stop the AI search pipeline.
+ * @param onEmergencyStop Callback for emergency motor stop (kills motors immediately).
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -61,6 +62,7 @@ fun FlightControlsOverlay(
     onMove: (direction: String, distanceCm: Int) -> Unit,
     onRotate: (degrees: Int) -> Unit,
     onStopSearch: () -> Unit,
+    onEmergencyStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -79,7 +81,7 @@ fun FlightControlsOverlay(
             onClick = onStopSearch,
             modifier = Modifier.sizeIn(minHeight = 48.dp),
         ) {
-            Text("Stop Search", color = AlertRed)
+            Text(stringResource(R.string.drone_stop_search), color = AlertRed)
         }
 
         if (!isFlying) {
@@ -117,7 +119,7 @@ fun FlightControlsOverlay(
                 Box(modifier = Modifier.fillMaxWidth()) {
                     val emergencyText = stringResource(R.string.drone_emergency_land)
                     Button(
-                        onClick = onLand,
+                        onClick = onEmergencyStop,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = AlertRed,
                             contentColor = HudWhite,
@@ -206,8 +208,7 @@ fun FlightControlsOverlay(
 
         // Safety disclaimer — always visible during streaming
         Text(
-            text = "FlightRisk is an assistive search tool. " +
-                "Always verify matches visually before approaching anyone.",
+            text = stringResource(R.string.drone_search_disclaimer),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
