@@ -850,6 +850,20 @@ private fun MatchAlertCard(
                     }
                 }
 
+                // Confirm match button
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .sizeIn(minHeight = 48.dp),
+                ) {
+                    Text("CONFIRM")
+                }
+
                 // Not My Child button
                 Button(
                     onClick = onNotMyChild,
@@ -1145,8 +1159,9 @@ private fun DroneVideoPreview(
 
     when {
         connectionState == TelloConnectionState.STREAMING && latestFrame != null -> {
+            val displayFrame = cameraFrame ?: latestFrame
             Image(
-                bitmap = latestFrame.asImageBitmap(),
+                bitmap = displayFrame.asImageBitmap(),
                 contentDescription = stringResource(R.string.drone_streaming),
                 contentScale = ContentScale.Fit,
                 modifier = modifier,

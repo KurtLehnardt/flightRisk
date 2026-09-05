@@ -96,13 +96,14 @@ class TelloConnection(private val config: DroneConfig) {
                 Log.i(TAG, "Socket bound to port ${config.telloCommandPort}")
 
                 val response = sendCommandInternal("command")
-                if (response == null || !response.trim().equals("ok", ignoreCase = true)) {
-                    Log.e(TAG, "SDK mode failed, response: $response")
+                val cleaned = response?.filter { it.isLetterOrDigit() || it.isWhitespace() || it in ".,;:!?-_()" }?.trim()
+                if (cleaned == null || !cleaned.equals("ok", ignoreCase = true)) {
+                    Log.e(TAG, "SDK mode failed, response: $response (cleaned: $cleaned)")
                     commandSocket?.close()
                     commandSocket = null
                     updateState(
                         connectionState = TelloConnectionState.ERROR,
-                        errorMessage = "SDK mode failed: ${response ?: "timeout"}"
+                        errorMessage = "SDK mode failed — tap Retry to try again"
                     )
                     return@withContext false
                 }
