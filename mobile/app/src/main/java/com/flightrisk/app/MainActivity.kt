@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
+    private var droneConnectionMessage by mutableStateOf<String?>(null)
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -298,17 +299,24 @@ class MainActivity : ComponentActivity() {
         val manager = DroneManager(applicationContext, config)
         droneManager = manager
 
+        droneConnectionMessage = null
+        searchState = searchState.copy(droneConnectionMessage = null)
+
         lifecycleScope.launch {
             val success = manager.connectAndStream()
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
                 val guidance = manager.wifiChecker.getGuidanceMessage(wifiStatus)
                 Log.w(TAG, "Drone connection failed: $guidance")
+                droneConnectionMessage = guidance
+                searchState = searchState.copy(droneConnectionMessage = guidance)
                 droneManager = null
                 return@launch
             }
 
             frameSourceMode = FrameSourceMode.DRONE
+            droneConnectionMessage = null
+            searchState = searchState.copy(droneConnectionMessage = null)
 
             // Wire frame callback for Compose state updates
             manager.frameSource.setOnFrameCallback { bitmap ->
@@ -400,6 +408,8 @@ class MainActivity : ComponentActivity() {
         currentDroneState = null
         latestDroneFrame = null
         frameSourceMode = FrameSourceMode.CAMERA
+        droneConnectionMessage = null
+        searchState = searchState.copy(droneConnectionMessage = null)
 
         lifecycleScope.launch {
             manager?.disconnect()

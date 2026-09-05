@@ -30,12 +30,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -80,7 +80,9 @@ import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.AlertRedDark
+import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.HudWhite
+import com.flightrisk.app.ui.theme.MatchGreen
 import kotlinx.coroutines.delay
 
 private const val TAG = "SearchScreen"
@@ -106,6 +108,9 @@ private const val TAG = "SearchScreen"
  * @property droneState Current drone connection/telemetry state, or null if drone not active.
  * @property frameSourceMode Whether frames come from the device camera or drone.
  * @property latestDroneFrame The most recent video frame from the drone, or null.
+ * @property droneConnectionMessage User-facing status/error message for the drone connection
+ *   attempt (e.g. troubleshooting guidance after a failed connect), or null when there is
+ *   nothing to report.
  */
 data class SearchScreenState(
     val isSearching: Boolean = false,
@@ -122,6 +127,7 @@ data class SearchScreenState(
     val droneState: TelloState? = null,
     val frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     val latestDroneFrame: Bitmap? = null,
+    val droneConnectionMessage: String? = null,
 )
 
 // -----------------------------------------------------------------------
@@ -343,14 +349,21 @@ fun SearchScreen(
                     .padding(bottom = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // Drone connection status card
+                DroneConnectionCard(
+                    droneState = state.droneState,
+                    droneConnectionMessage = state.droneConnectionMessage,
+                    onConnect = onDroneConnect,
+                    onDisconnect = onDroneDisconnect,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 // Action bar
                 BottomActionBar(
                     isSearching = state.isSearching,
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
-                    droneState = state.droneState,
-                    onDroneConnect = onDroneConnect,
-                    onDroneDisconnect = onDroneDisconnect,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -844,16 +857,16 @@ private fun MatchAlertCard(
 // -----------------------------------------------------------------------
 
 /**
- * Bottom action bar with start/stop search button and drone connect button.
+ * Bottom action bar with the start/stop search button.
+ *
+ * The drone connection status/actions live in [DroneConnectionCard], rendered
+ * above this bar — this bar only ever contains the search toggle.
  */
 @Composable
 private fun BottomActionBar(
     isSearching: Boolean,
     onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
-    droneState: TelloState? = null,
-    onDroneConnect: () -> Unit = {},
-    onDroneDisconnect: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -893,98 +906,213 @@ private fun BottomActionBar(
                 fontWeight = FontWeight.Bold,
             )
         }
-
-        Spacer(modifier = Modifier.width(16.dp))
-
-        // Drone connect button
-        DroneConnectButton(
-            droneState = droneState,
-            onConnect = onDroneConnect,
-            onDisconnect = onDroneDisconnect,
-        )
     }
 }
 
 // -----------------------------------------------------------------------
-// Drone connect button
+// Drone connection card
 // -----------------------------------------------------------------------
 
 /**
- * Circular button for connecting/disconnecting the drone.
+ * Full-width status card describing the current drone connection state and
+ * exposing the connect/disconnect/retry actions. Replaces the old cryptic
+ * "D" icon button with an explicit, legible status.
  *
- * - DISCONNECTED: outlined "D" button, tapping calls onConnect
- * - CONNECTING: shows a spinner in place of "D"
- * - CONNECTED/STREAMING: filled/highlighted "D" button, tapping calls onDisconnect
- * - ERROR: shows "D" button in red
+ * - DISCONNECTED (no [droneState], or [TelloConnectionState.DISCONNECTED]): banner with
+ *   a "Connect to Drone" button, Wi-Fi hint text, and (if present) [droneConnectionMessage]
+ *   shown as troubleshooting text.
+ * - [TelloConnectionState.CONNECTING]: spinner + "Connecting to drone...".
+ * - [TelloConnectionState.CONNECTED]: green "Connected to Drone" status + disconnect action.
+ * - [TelloConnectionState.STREAMING]: green "Drone Connected — Streaming" status, battery
+ *   (if known), + disconnect action.
+ * - [TelloConnectionState.ERROR]: red "Connection Failed" status with [droneConnectionMessage]
+ *   as troubleshooting text + a retry action.
  */
 @Composable
-private fun DroneConnectButton(
+private fun DroneConnectionCard(
     droneState: TelloState?,
+    droneConnectionMessage: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val connectionState = droneState?.connectionState ?: TelloConnectionState.DISCONNECTED
-    val isConnected = connectionState == TelloConnectionState.CONNECTED ||
-        connectionState == TelloConnectionState.STREAMING
-    val isConnecting = connectionState == TelloConnectionState.CONNECTING
-    val isError = connectionState == TelloConnectionState.ERROR
 
-    val connectDesc = stringResource(R.string.drone_connect)
-    val disconnectDesc = stringResource(R.string.drone_disconnect)
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xE61A1A1A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+    ) {
+        when (connectionState) {
+            TelloConnectionState.CONNECTING -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .semantics { contentDescription = "Connecting to drone" },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = DetectionBlue,
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Connecting to drone...",
+                        color = HudWhite,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
 
-    if (isConnecting) {
-        // Show spinner during connection
-        Box(
-            modifier = modifier
-                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                .semantics { contentDescription = "Drone connecting" },
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 2.dp,
-            )
-        }
-    } else if (isConnected) {
-        // Filled button when connected
-        Button(
-            onClick = onDisconnect,
-            modifier = modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            ),
-        ) {
-            Text(
-                text = "D",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.semantics { contentDescription = disconnectDesc },
-            )
-        }
-    } else {
-        // Outlined button for disconnected/error
-        OutlinedButton(
-            onClick = onConnect,
-            modifier = modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-            shape = CircleShape,
-            colors = if (isError) {
-                ButtonDefaults.outlinedButtonColors(
-                    contentColor = AlertRed,
-                )
-            } else {
-                ButtonDefaults.outlinedButtonColors()
-            },
-        ) {
-            Text(
-                text = "D",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = if (isError) AlertRed else Color.Unspecified,
-                modifier = Modifier.semantics { contentDescription = connectDesc },
-            )
+            TelloConnectionState.CONNECTED -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Text(
+                        text = "Connected to Drone",
+                        color = MatchGreen,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HudWhite),
+                    ) {
+                        Text("Disconnect")
+                    }
+                }
+            }
+
+            TelloConnectionState.STREAMING -> {
+                val battery = droneState?.telemetry?.battery
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Text(
+                        text = "Drone Connected — Streaming",
+                        color = MatchGreen,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (battery != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Battery: $battery%",
+                            color = HudWhite,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HudWhite),
+                    ) {
+                        Text("Disconnect")
+                    }
+                }
+            }
+
+            TelloConnectionState.ERROR -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Text(
+                        text = "Connection Failed",
+                        color = AlertRed,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (droneConnectionMessage != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = droneConnectionMessage,
+                            color = HudWhite,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onConnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AlertRed,
+                            contentColor = HudWhite,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Retry")
+                    }
+                }
+            }
+
+            TelloConnectionState.DISCONNECTED -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Text(
+                        text = "Connect to Drone",
+                        color = HudWhite,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onConnect,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DetectionBlue,
+                            contentColor = HudWhite,
+                        ),
+                    ) {
+                        Text("Connect to Drone")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Connect your phone to the Tello WiFi network first",
+                        color = Color(0xFFAAAAAA),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (droneConnectionMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = droneConnectionMessage,
+                            color = AlertRed,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+            }
         }
     }
 }
