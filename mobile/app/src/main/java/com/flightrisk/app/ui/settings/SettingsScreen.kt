@@ -51,7 +51,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.config.SensitivityPreset
+import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.TelloConnectionState
+import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
+import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.MatchGreen
 
 /**
@@ -86,6 +91,8 @@ data class SettingsScreenState(
  *   Params: (name, value) where name is "reid", "face", or "scorer".
  * @param onLlmBackendChanged Callback when the LLM backend is changed.
  * @param onApiKeyChanged Callback when the API key is changed.
+ * @param droneState Current drone connection and telemetry state, or null.
+ * @param frameSourceMode Current frame source (camera or drone).
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -95,6 +102,8 @@ fun SettingsScreen(
     onThresholdChanged: (String, Float) -> Unit,
     onLlmBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    droneState: TelloState? = null,
+    frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier) { innerPadding ->
@@ -132,6 +141,18 @@ fun SettingsScreen(
                 isAvailable = state.llmAvailable,
                 onBackendChanged = onLlmBackendChanged,
                 onApiKeyChanged = onApiKeyChanged,
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Drone section -----
+            DroneSection(
+                frameSourceMode = frameSourceMode,
+                connectionState = droneState?.connectionState
+                    ?: TelloConnectionState.DISCONNECTED,
+                battery = droneState?.telemetry?.battery ?: 0,
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -387,6 +408,112 @@ private fun LlmBackendOption(
             text = name,
             style = MaterialTheme.typography.bodyLarge,
         )
+    }
+}
+
+// -----------------------------------------------------------------------
+// Drone section
+// -----------------------------------------------------------------------
+
+/**
+ * Read-only drone connection status display. Frame source is toggled
+ * via the drone button on the Search screen, not here.
+ */
+@Composable
+private fun DroneSection(
+    frameSourceMode: FrameSourceMode,
+    connectionState: TelloConnectionState,
+    battery: Int,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = "Drone",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.semantics { heading() },
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Tello drone connection status. Use the drone button on the Search screen to connect or disconnect.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Current source indicator
+        Text(
+            text = "Video source: ${if (frameSourceMode == FrameSourceMode.DRONE) "Tello Drone" else "Phone Camera"}",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.semantics {
+                contentDescription = "Video source: ${if (frameSourceMode == FrameSourceMode.DRONE) "Tello Drone" else "Phone Camera"}"
+            },
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Connection state indicator
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val statusColor = when (connectionState) {
+                TelloConnectionState.CONNECTED,
+                TelloConnectionState.STREAMING -> MatchGreen
+                TelloConnectionState.CONNECTING -> AlertOrange
+                TelloConnectionState.ERROR -> AlertRed
+                TelloConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            val statusText = when (connectionState) {
+                TelloConnectionState.DISCONNECTED -> "Disconnected"
+                TelloConnectionState.CONNECTING -> "Connecting..."
+                TelloConnectionState.CONNECTED -> "Connected"
+                TelloConnectionState.STREAMING -> "Streaming"
+                TelloConnectionState.ERROR -> "Error"
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(
+                        color = statusColor,
+                        shape = RoundedCornerShape(4.dp),
+                    ),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall,
+                color = statusColor,
+                modifier = Modifier.semantics {
+                    contentDescription = "Drone status: $statusText"
+                },
+            )
+        }
+
+        // Battery level when connected
+        if (connectionState == TelloConnectionState.CONNECTED ||
+            connectionState == TelloConnectionState.STREAMING
+        ) {
+            Spacer(modifier = Modifier.height(4.dp))
+
+            val batteryColor = when {
+                battery > 50 -> MatchGreen
+                battery > 20 -> AlertOrange
+                else -> AlertRed
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Battery: $battery%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = batteryColor,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Drone battery: $battery percent"
+                    },
+                )
+            }
+        }
     }
 }
 

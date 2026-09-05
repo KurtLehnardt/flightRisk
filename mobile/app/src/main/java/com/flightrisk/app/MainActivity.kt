@@ -15,6 +15,11 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.config.SensitivityPreset
+import com.flightrisk.app.drone.DroneManager
+import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.drone.TelloWifiChecker
+import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.navigation.FlightRiskNavHost
 import com.flightrisk.app.ui.onboarding.OnboardingScreen
 import com.flightrisk.app.ui.onboarding.isOnboardingComplete
@@ -22,6 +27,10 @@ import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreenState
 import com.flightrisk.app.ui.settings.SettingsScreenState
 import com.flightrisk.app.ui.theme.FlightRiskTheme
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * Entry point activity for FlightRisk.
@@ -47,6 +56,14 @@ class MainActivity : ComponentActivity() {
     private var settingsState by mutableStateOf(SettingsScreenState())
     private var targetBitmap by mutableStateOf<Bitmap?>(null)
     private var targetQualityReport by mutableStateOf<QualityReport?>(null)
+
+    // Drone state
+    private var droneManager: DroneManager? = null
+    private var currentDroneState by mutableStateOf<TelloState?>(null)
+    private var frameSourceMode by mutableStateOf(FrameSourceMode.CAMERA)
+    private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
+    private var droneStateJob: Job? = null
+    private var droneAlertJob: Job? = null
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -114,6 +131,16 @@ class MainActivity : ComponentActivity() {
                         onThresholdChanged = ::handleThresholdChanged,
                         onLlmBackendChanged = ::handleLlmBackendChanged,
                         onApiKeyChanged = ::handleApiKeyChanged,
+                        droneState = currentDroneState,
+                        frameSourceMode = frameSourceMode,
+                        latestDroneFrame = latestDroneFrame,
+                        onDroneConnect = ::handleDroneConnect,
+                        onDroneDisconnect = ::handleDroneDisconnect,
+                        onTakeoff = ::handleTakeoff,
+                        onLand = ::handleLand,
+                        onDroneMove = ::handleDroneMove,
+                        onDroneRotate = ::handleDroneRotate,
+                        onEmergencyStop = ::handleEmergencyStop,
                     )
                 }
             }
@@ -155,9 +182,33 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private fun handleStartSearch() {
-        searchState = searchState.copy(isSearching = true)
-        Log.i(TAG, "Search started")
-        // Future: initialize and start SearchPipeline
+        // Set frame dimensions based on active source for correct overlay scaling
+        if (frameSourceMode == FrameSourceMode.DRONE) {
+            searchState = searchState.copy(
+                isSearching = true,
+                frameWidth = 640,
+                frameHeight = 480,
+            )
+        } else {
+            searchState = searchState.copy(
+                isSearching = true,
+                frameWidth = 1920,
+                frameHeight = 1080,
+            )
+        }
+
+        // TODO: Wire SearchPipeline.FrameSource when pipeline is fully initialized in MainActivity.
+        // The pipeline should pull frames from the active source:
+        //   val frameSource = SearchPipeline.FrameSource {
+        //       if (frameSourceMode == FrameSourceMode.DRONE) {
+        //           droneManager?.frameSource?.getLatestFrame()
+        //       } else {
+        //           null // CameraX preview is handled separately
+        //       }
+        //   }
+        //   pipeline.frameSource = frameSource
+        //   pipeline.start()
+        Log.i(TAG, "Search started, frameSource=$frameSourceMode")
     }
 
     private fun handleStopSearch() {
@@ -232,5 +283,162 @@ class MainActivity : ComponentActivity() {
             llmApiKey = apiKey,
             llmAvailable = apiKey.isNotBlank() && settingsState.llmBackend == "cloud_claude",
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Drone callbacks
+    // ------------------------------------------------------------------
+
+    private fun handleDroneConnect() {
+        if (droneManager != null) {
+            Log.w(TAG, "Already connected or connecting, ignoring duplicate connect")
+            return
+        }
+        val config = FlightRiskConfig.getInstance(this)
+        val manager = DroneManager(applicationContext, config)
+        droneManager = manager
+
+        lifecycleScope.launch {
+            val success = manager.connectAndStream()
+            if (!success) {
+                val wifiStatus = manager.wifiChecker.check()
+                val guidance = manager.wifiChecker.getGuidanceMessage(wifiStatus)
+                Log.w(TAG, "Drone connection failed: $guidance")
+                droneManager = null
+                return@launch
+            }
+
+            frameSourceMode = FrameSourceMode.DRONE
+
+            // Wire frame callback for Compose state updates
+            manager.frameSource.setOnFrameCallback { bitmap ->
+                // Received on decode thread — dispatch to main for Compose state update
+                lifecycleScope.launch(Dispatchers.Main.immediate) {
+                    latestDroneFrame = bitmap
+                }
+            }
+
+            // Collect drone state updates
+            droneStateJob = lifecycleScope.launch {
+                manager.droneState.collect { state ->
+                    currentDroneState = state
+                }
+            }
+
+            // Collect alerts and route critical ones to the UI
+            droneAlertJob = lifecycleScope.launch {
+                manager.alerts.collect { alert ->
+                    when (alert) {
+                        is DroneManager.DroneAlert.ConnectionLost -> {
+                            Log.e(TAG, "Drone alert: connection lost")
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_connection",
+                                    reasoning = "Drone connection lost",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.BatteryCritical -> {
+                            Log.e(TAG, "Drone alert: battery critical ${alert.percent}%")
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_battery",
+                                    reasoning = "Battery critical: ${alert.percent}% — drone is auto-landing",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.CrashDetected -> {
+                            Log.e(TAG, "Drone alert: crash detected")
+                            searchState = searchState.copy(
+                                activeAlert = MatchEntry(
+                                    time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                                        .format(java.util.Date()),
+                                    score = 0f,
+                                    reidScore = 0f,
+                                    faceScore = 0f,
+                                    alertLevel = "drone_alert",
+                                    trackId = "drone_crash",
+                                    reasoning = "Crash detected — drone may have landed unexpectedly",
+                                    matchType = "drone",
+                                ),
+                            )
+                        }
+                        is DroneManager.DroneAlert.StreamFrozen -> {
+                            // Don't show UI alert for stream recovery — it auto-recovers
+                            Log.w(TAG, "Drone alert: stream frozen, recovering")
+                        }
+                    }
+                }
+            }
+
+            Log.i(TAG, "Drone connected and streaming")
+        }
+    }
+
+    private fun handleDroneDisconnect() {
+        droneStateJob?.cancel()
+        droneStateJob = null
+        droneAlertJob?.cancel()
+        droneAlertJob = null
+
+        val manager = droneManager
+        droneManager = null
+        currentDroneState = null
+        latestDroneFrame = null
+        frameSourceMode = FrameSourceMode.CAMERA
+
+        lifecycleScope.launch {
+            manager?.disconnect()
+            Log.i(TAG, "Drone disconnected")
+        }
+    }
+
+    private fun handleTakeoff() {
+        lifecycleScope.launch { droneManager?.takeoff() }
+    }
+
+    private fun handleLand() {
+        lifecycleScope.launch { droneManager?.land() }
+    }
+
+    private fun handleEmergencyStop() {
+        lifecycleScope.launch { droneManager?.emergencyStop() }
+    }
+
+    private fun handleDroneMove(direction: String, distanceCm: Int) {
+        lifecycleScope.launch { droneManager?.move(direction, distanceCm) }
+    }
+
+    private fun handleDroneRotate(degrees: Int) {
+        lifecycleScope.launch { droneManager?.rotate(degrees) }
+    }
+
+    // ------------------------------------------------------------------
+    // Lifecycle
+    // ------------------------------------------------------------------
+
+    override fun onPause() {
+        super.onPause()
+        droneManager?.onActivityPause()
+    }
+
+    override fun onDestroy() {
+        droneManager?.onActivityDestroy()
+        droneManager = null
+        super.onDestroy()
     }
 }

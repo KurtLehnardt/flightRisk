@@ -31,6 +31,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.flightrisk.app.config.SensitivityPreset
+import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreen
 import com.flightrisk.app.ui.search.SearchScreenState
@@ -102,6 +104,15 @@ private val destinations = listOf(
  * @param onThresholdChanged Callback for raw threshold changes.
  * @param onLlmBackendChanged Callback for LLM backend changes.
  * @param onApiKeyChanged Callback for API key changes.
+ * @param droneState Current drone connection/telemetry state, or null.
+ * @param frameSourceMode Whether frames come from device camera or drone.
+ * @param latestDroneFrame The most recent video frame from the drone, or null.
+ * @param onDroneConnect Callback to initiate drone connection.
+ * @param onDroneDisconnect Callback to disconnect from the drone.
+ * @param onTakeoff Callback to command drone takeoff.
+ * @param onLand Callback to command drone landing.
+ * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
+ * @param onDroneRotate Callback for drone rotation (degrees).
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -119,6 +130,16 @@ fun FlightRiskNavHost(
     onThresholdChanged: (String, Float) -> Unit,
     onLlmBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    droneState: TelloState? = null,
+    frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
+    latestDroneFrame: Bitmap? = null,
+    onDroneConnect: () -> Unit = {},
+    onDroneDisconnect: () -> Unit = {},
+    onTakeoff: () -> Unit = {},
+    onLand: () -> Unit = {},
+    onDroneMove: (String, Int) -> Unit = { _, _ -> },
+    onDroneRotate: (Int) -> Unit = {},
+    onEmergencyStop: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -165,7 +186,11 @@ fun FlightRiskNavHost(
         ) {
             composable(NavDestination.Search.route) {
                 SearchScreen(
-                    state = searchState,
+                    state = searchState.copy(
+                        droneState = droneState,
+                        frameSourceMode = frameSourceMode,
+                        latestDroneFrame = latestDroneFrame,
+                    ),
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
                     onDismissAlert = onDismissAlert,
@@ -184,6 +209,13 @@ fun FlightRiskNavHost(
                             )
                         }
                     },
+                    onDroneConnect = onDroneConnect,
+                    onDroneDisconnect = onDroneDisconnect,
+                    onTakeoff = onTakeoff,
+                    onLand = onLand,
+                    onDroneMove = onDroneMove,
+                    onDroneRotate = onDroneRotate,
+                    onEmergencyStop = onEmergencyStop,
                 )
             }
 
@@ -202,6 +234,8 @@ fun FlightRiskNavHost(
                     onThresholdChanged = onThresholdChanged,
                     onLlmBackendChanged = onLlmBackendChanged,
                     onApiKeyChanged = onApiKeyChanged,
+                    droneState = droneState,
+                    frameSourceMode = frameSourceMode,
                 )
             }
         }

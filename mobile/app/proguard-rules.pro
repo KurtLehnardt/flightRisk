@@ -19,3 +19,11 @@
 -keepclassmembers class kotlinx.coroutines.** {
     volatile <fields>;
 }
+
+# MediaCodec - keep codec info classes used via reflection
+-keep class android.media.MediaCodecInfo { *; }
+-keep class android.media.MediaCodecList { *; }
+-keep class android.media.MediaFormat { *; }
+
+# Tello drone classes - keep for coroutine-based state flows
+-keep class com.flightrisk.app.drone.** { *; }
