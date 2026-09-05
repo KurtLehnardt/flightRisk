@@ -57,10 +57,12 @@ import com.flightrisk.app.ui.theme.MatchGreen
 @Composable
 fun FlightControlsOverlay(
     isFlying: Boolean,
+    isSearching: Boolean,
     onTakeoff: () -> Unit,
     onLand: () -> Unit,
     onMove: (direction: String, distanceCm: Int) -> Unit,
     onRotate: (degrees: Int) -> Unit,
+    onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
     onEmergencyStop: () -> Unit,
     modifier: Modifier = Modifier,
@@ -76,12 +78,43 @@ fun FlightControlsOverlay(
             .semantics { contentDescription = "Flight controls" },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Stop Search button — always visible during streaming
-        TextButton(
-            onClick = onStopSearch,
-            modifier = Modifier.sizeIn(minHeight = 48.dp),
-        ) {
-            Text(stringResource(R.string.drone_stop_search), color = AlertRed)
+        // Start/Stop Search button — always visible during streaming
+        if (isSearching) {
+            Button(
+                onClick = onStopSearch,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AlertRed,
+                    contentColor = HudWhite,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sizeIn(minHeight = 48.dp),
+                shape = RoundedCornerShape(24.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.drone_stop_search),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        } else {
+            Button(
+                onClick = onStartSearch,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MatchGreen,
+                    contentColor = HudWhite,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sizeIn(minHeight = 48.dp),
+                shape = RoundedCornerShape(24.dp),
+            ) {
+                Text(
+                    text = "Start Search",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
 
         if (!isFlying) {
