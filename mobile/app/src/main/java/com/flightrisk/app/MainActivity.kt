@@ -416,6 +416,14 @@ class MainActivity : ComponentActivity() {
             // Start the pipeline
             pipeline.start()
 
+            // Start autonomous search pattern if drone is flying
+            if (currentFrameSourceMode == FrameSourceMode.DRONE) {
+                val state = droneManager?.droneState?.value
+                if (state?.telemetry?.isFlying == true) {
+                    droneManager?.startSearchPattern()
+                }
+            }
+
             Log.i(TAG, "Search started, frameSource=$frameSourceMode")
         }
     }
@@ -427,6 +435,7 @@ class MainActivity : ComponentActivity() {
         pipelineEventJob = null
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
+        droneManager?.stopSearchPattern()
         searchState = searchState.copy(isSearching = false, activeAlert = null)
         Log.i(TAG, "Search stopped")
     }
