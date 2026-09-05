@@ -486,9 +486,9 @@ private fun AdvancedSection(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "ReID: ${"%0.2f".format(reidThreshold)} | " +
-                        "Face: ${"%0.2f".format(faceThreshold)} | " +
-                        "Scorer: ${"%0.2f".format(scorerThreshold)}",
+                    text = "ReID: ${"%.2f".format(reidThreshold)} | " +
+                        "Face: ${"%.2f".format(faceThreshold)} | " +
+                        "Scorer: ${"%.2f".format(scorerThreshold)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -519,11 +519,11 @@ private fun ThresholdSlider(
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                text = "%0.2f".format(sliderValue),
+                text = "%.2f".format(sliderValue),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.semantics {
-                    contentDescription = "$label: ${"%0.2f".format(sliderValue)}"
+                    contentDescription = "$label: ${"%.2f".format(sliderValue)}"
                 },
             )
         }

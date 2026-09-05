@@ -108,6 +108,8 @@ private val destinations = listOf(
 fun FlightRiskNavHost(
     searchState: SearchScreenState,
     settingsState: SettingsScreenState,
+    targetBitmap: Bitmap? = null,
+    targetQualityReport: QualityReport? = null,
     onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
     onDismissAlert: () -> Unit,
@@ -188,6 +190,8 @@ fun FlightRiskNavHost(
             composable(NavDestination.Target.route) {
                 TargetPickerScreen(
                     onPhotoSelected = onPhotoSelected,
+                    savedBitmap = targetBitmap,
+                    savedQualityReport = targetQualityReport,
                 )
             }
 

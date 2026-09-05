@@ -263,24 +263,34 @@ object ImageQualityScorer {
      */
     private fun analyzeFacePresence(bitmap: Bitmap): Float {
         return try {
-            // FaceDetector requires RGB_565
-            val rgb565 = if (bitmap.config != Bitmap.Config.RGB_565) {
-                bitmap.copy(Bitmap.Config.RGB_565, false) ?: return 0f
+            val scaled = scaledBitmap(bitmap, 480)
+            // FaceDetector requires even width
+            val evenW = scaled.width and 0x7FFFFFFE
+            val evenH = scaled.height and 0x7FFFFFFE
+            if (evenW < 2 || evenH < 2) return 0f
+
+            val cropped = if (evenW != scaled.width || evenH != scaled.height) {
+                Bitmap.createBitmap(scaled, 0, 0, evenW, evenH)
             } else {
-                bitmap
+                scaled
+            }
+
+            val rgb565 = if (cropped.config != Bitmap.Config.RGB_565) {
+                cropped.copy(Bitmap.Config.RGB_565, false) ?: return 0f
+            } else {
+                cropped
             }
 
             val detector = FaceDetector(rgb565.width, rgb565.height, 1)
             val faces = arrayOfNulls<FaceDetector.Face>(1)
             val count = detector.findFaces(rgb565, faces)
 
-            if (rgb565 !== bitmap) {
-                rgb565.recycle()
-            }
+            if (rgb565 !== cropped) rgb565.recycle()
+            if (cropped !== scaled) cropped.recycle()
+            if (scaled !== bitmap) scaled.recycle()
 
             if (count > 0) 1f else 0f
         } catch (e: Exception) {
-            // FaceDetector can fail on odd-width bitmaps or other edge cases
             0f
         }
     }

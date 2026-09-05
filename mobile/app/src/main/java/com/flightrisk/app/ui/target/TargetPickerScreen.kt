@@ -84,10 +84,13 @@ fun TargetPickerScreen(
     onPhotoSelected: (Bitmap, QualityReport) -> Unit,
     modifier: Modifier = Modifier,
     inline: Boolean = false,
+    savedBitmap: Bitmap? = null,
+    savedQualityReport: QualityReport? = null,
 ) {
     val context = LocalContext.current
-    var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var qualityReport by remember { mutableStateOf<QualityReport?>(null) }
+    var selectedBitmap by remember { mutableStateOf(savedBitmap) }
+    var qualityReport by remember { mutableStateOf(savedQualityReport) }
+    var photoConfirmed by remember { mutableStateOf(savedBitmap != null) }
 
     // Photo picker launcher
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -98,6 +101,7 @@ fun TargetPickerScreen(
             if (bitmap != null) {
                 selectedBitmap = bitmap
                 qualityReport = ImageQualityScorer.analyze(bitmap)
+                photoConfirmed = false
             }
         }
     }
@@ -113,6 +117,7 @@ fun TargetPickerScreen(
                 if (bitmap != null) {
                     selectedBitmap = bitmap
                     qualityReport = ImageQualityScorer.analyze(bitmap)
+                    photoConfirmed = false
                 }
             }
         }
@@ -191,39 +196,79 @@ fun TargetPickerScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Use This Photo button
-                Button(
-                    onClick = {
-                        selectedBitmap?.let { bitmap ->
-                            qualityReport?.let { report ->
-                                onPhotoSelected(bitmap, report)
-                            }
-                        }
-                    },
-                    enabled = qualityReport?.isAcceptable == true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .sizeIn(minHeight = 56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MatchGreen,
-                        contentColor = Color.White,
-                    ),
-                ) {
-                    Text(
-                        text = "Use This Photo",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+                if (photoConfirmed) {
+                    // Confirmation banner
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = MatchGreen,
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Photo saved — ready to search",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
+                    }
 
-                if (qualityReport?.isAcceptable == false) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Photo quality is too low. Please select a better photo.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AlertRed,
-                        textAlign = TextAlign.Center,
-                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Allow selecting a different photo
+                    OutlinedButton(
+                        onClick = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Choose Different Photo")
+                    }
+                } else {
+                    // Use This Photo button
+                    Button(
+                        onClick = {
+                            selectedBitmap?.let { bitmap ->
+                                qualityReport?.let { report ->
+                                    onPhotoSelected(bitmap, report)
+                                    photoConfirmed = true
+                                }
+                            }
+                        },
+                        enabled = qualityReport?.isAcceptable == true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 56.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MatchGreen,
+                            contentColor = Color.White,
+                        ),
+                    ) {
+                        Text(
+                            text = "Use This Photo",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+
+                    if (qualityReport?.isAcceptable == false) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Photo quality is too low. Please select a better photo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AlertRed,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             } else {
                 // Empty state
@@ -405,9 +450,14 @@ private fun loadBitmapFromUri(
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, uri)
-            ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 decoder.isMutableRequired = false
+                val maxDim = maxOf(info.size.width, info.size.height)
+                if (maxDim > 1920) {
+                    val sample = maxDim / 1920
+                    decoder.setTargetSampleSize(sample)
+                }
             }
         } else {
             @Suppress("DEPRECATION")
