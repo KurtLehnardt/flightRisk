@@ -478,39 +478,39 @@ class TelloConnection(private val config: DroneConfig) {
 
                 try {
                     val success = commandMutex.withLock {
-                        val battery = queryInt("battery?")
-                        val height = queryInt("height?")
-                        val temperature = queryInt("temp?")
-                        val flightTime = queryInt("time?")
+                        // Query only battery and height — fewer queries = less
+                        // time holding the mutex and fewer timeout opportunities
+                        val battery = queryInt("battery?", timeoutMs = 3000)
+                        val height = queryInt("height?", timeoutMs = 3000)
 
-                        // Null return means communication failure, not a value
-                        if (battery == null || height == null || temperature == null || flightTime == null) {
-                            Log.w(TAG, "State poll returned null values")
+                        // At least one must succeed to count as a good poll
+                        if (battery == null && height == null) {
+                            Log.w(TAG, "State poll: both queries failed")
                             return@withLock false
                         }
 
                         val current = _state.value
                         var isFlying = current.telemetry.isFlying
 
-                        // Crash detection: 3 consecutive zero-height polls while flying
-                        // Only triggers on confirmed zero height (non-null), not comm failures
-                        if (isFlying && height == 0) {
-                            zeroHeightCount++
-                            if (zeroHeightCount >= 3) {
-                                isFlying = false
-                                Log.w(TAG, "Crash detected — height 0 for $zeroHeightCount polls")
+                        if (height != null) {
+                            if (isFlying && height == 0) {
+                                zeroHeightCount++
+                                if (zeroHeightCount >= 3) {
+                                    isFlying = false
+                                    Log.w(TAG, "Crash detected — height 0 for $zeroHeightCount polls")
+                                    zeroHeightCount = 0
+                                }
+                            } else {
                                 zeroHeightCount = 0
                             }
-                        } else {
-                            zeroHeightCount = 0
                         }
 
                         updateState(
                             telemetry = TelloTelemetry(
-                                battery = battery,
-                                height = height,
-                                temperature = temperature,
-                                flightTime = flightTime,
+                                battery = battery ?: current.telemetry.battery,
+                                height = height ?: current.telemetry.height,
+                                temperature = current.telemetry.temperature,
+                                flightTime = current.telemetry.flightTime,
                                 isFlying = isFlying,
                             )
                         )
@@ -521,7 +521,7 @@ class TelloConnection(private val config: DroneConfig) {
                     } else {
                         pollFailures++
                         Log.w(TAG, "Poll failure ($pollFailures consecutive)")
-                        if (pollFailures >= 3 && isConnected) {
+                        if (pollFailures >= 5 && isConnected) {
                             Log.e(TAG, "Connection lost — $pollFailures consecutive poll failures")
                             isConnected = false
                             updateState(
@@ -535,7 +535,7 @@ class TelloConnection(private val config: DroneConfig) {
                 } catch (e: Exception) {
                     pollFailures++
                     Log.w(TAG, "State poll failed ($pollFailures consecutive): ${e.message}")
-                    if (pollFailures >= 3 && isConnected) {
+                    if (pollFailures >= 5 && isConnected) {
                         Log.e(TAG, "Connection lost — $pollFailures consecutive poll failures")
                         isConnected = false
                         updateState(
@@ -559,8 +559,8 @@ class TelloConnection(private val config: DroneConfig) {
      * @param query The query command (e.g., "battery?").
      * @return The integer value, or null on communication failure or unparseable response.
      */
-    private suspend fun queryInt(query: String): Int? {
-        val response = sendCommandInternal(query) ?: return null
+    private suspend fun queryInt(query: String, timeoutMs: Long = config.commandTimeoutMs): Int? {
+        val response = sendCommandInternal(query, timeoutMs) ?: return null
         return response.trim().split("~").firstOrNull()?.toIntOrNull()
     }
 

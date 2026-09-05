@@ -346,6 +346,9 @@ class MainActivity : ComponentActivity() {
                             searchState = searchState.copy(
                                 droneAlert = "Connection lost — check Tello WiFi",
                             )
+                            // Clean up so user can reconnect (launch separately
+                            // to avoid cancelling this collector mid-collect)
+                            lifecycleScope.launch { cleanUpDroneConnection() }
                         }
                         is DroneManager.DroneAlert.BatteryCritical -> {
                             Log.e(TAG, "Drone alert: battery critical ${alert.percent}%")
@@ -386,6 +389,24 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             manager?.disconnect()
             Log.i(TAG, "Drone disconnected")
+        }
+    }
+
+    private fun cleanUpDroneConnection() {
+        droneStateJob?.cancel()
+        droneStateJob = null
+        droneAlertJob?.cancel()
+        droneAlertJob = null
+
+        val manager = droneManager
+        droneManager = null
+        currentDroneState = null
+        latestDroneFrame = null
+        frameSourceMode = FrameSourceMode.CAMERA
+
+        lifecycleScope.launch {
+            manager?.disconnect()
+            Log.i(TAG, "Drone cleaned up after connection loss")
         }
     }
 
