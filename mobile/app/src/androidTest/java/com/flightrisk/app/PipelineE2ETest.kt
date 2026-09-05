@@ -12,7 +12,7 @@ import com.flightrisk.app.config.VisionConfig
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectionTracker
 import com.flightrisk.app.vision.MatchScorer
-import com.flightrisk.app.vision.ReasoningResult
+import com.flightrisk.app.llm.ReasoningResult
 import com.flightrisk.app.vision.ScoredResult
 import org.junit.After
 import org.junit.Assert.assertEquals

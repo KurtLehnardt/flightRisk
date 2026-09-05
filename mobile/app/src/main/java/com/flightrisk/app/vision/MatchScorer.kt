@@ -1,5 +1,7 @@
 package com.flightrisk.app.vision
 
+import com.flightrisk.app.llm.ReasoningResult
+
 /**
  * Multi-signal weighted confidence scorer.
  *

@@ -100,15 +100,3 @@ data class TrackSummary(
     val bestCrop: Bitmap?,
 )
 
-/**
- * Result from the LLM reasoning worker.
- *
- * @property isMatch Whether the LLM believes this is the target.
- * @property confidence "high", "medium", or "low".
- * @property reasoning Free-text explanation from the LLM.
- */
-data class ReasoningResult(
-    val isMatch: Boolean,
-    val confidence: String,
-    val reasoning: String,
-)
