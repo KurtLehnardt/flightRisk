@@ -311,6 +311,16 @@
             box-shadow: 0 0 12px var(--amber-glow);
         }
         .hud-pill.match-active .hud-val { color: var(--amber); }
+        .hud-pill.hud-confidence {
+            border-color: var(--cyan-dim);
+            font-size: 10px;
+        }
+        .hud-pill.hud-confidence.strong {
+            border-color: var(--green);
+        }
+        .hud-pill.hud-confidence.strong .hud-val {
+            color: var(--green);
+        }
 
         /* Recording indicator */
         .rec-indicator {
@@ -356,6 +366,21 @@
             background: var(--amber);
             transition: width 0.5s ease;
             box-shadow: 0 0 8px var(--amber-glow);
+        }
+
+        /* Safety disclaimer */
+        .safety-disclaimer {
+            position: absolute;
+            bottom: 6px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 4px;
+            z-index: 5;
+            pointer-events: none;
+            white-space: nowrap;
         }
 
         /* ========== SIDEBAR ========== */
@@ -628,6 +653,44 @@
             color: var(--cyan);
             min-width: 32px;
             font-weight: 600;
+        }
+
+        /* Sensitivity presets */
+        .sensitivity-presets {
+            margin-top: 10px;
+        }
+        .sensitivity-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: block;
+            margin-bottom: 6px;
+        }
+        .preset-pills {
+            display: flex;
+            gap: 4px;
+        }
+        .preset-pill {
+            flex: 1;
+            padding: 6px 4px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            text-align: center;
+            transition: all 150ms ease;
+            white-space: nowrap;
+        }
+        .preset-pill:hover {
+            border-color: var(--border-light);
+            color: var(--text-primary);
+        }
+        .preset-pill.active {
+            background: var(--amber-glow);
+            border-color: var(--amber);
+            color: var(--amber);
         }
 
         /* ========== CONTROLS TAB ========== */
@@ -1175,6 +1238,11 @@
             max-height: 100px;
             overflow-y: auto;
         }
+        .overlay-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
         .overlay-dismiss {
             padding: 10px 32px;
             border: 1px solid var(--border-light);
@@ -1191,6 +1259,15 @@
         .overlay-dismiss:hover {
             background: var(--bg-card-hover);
             border-color: var(--text-secondary);
+        }
+        .overlay-not-my-child {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .overlay-not-my-child:hover {
+            background: var(--red);
+            color: #fff;
+            border-color: var(--red);
         }
         .overlay-timer {
             margin-top: 12px;
@@ -1545,6 +1622,7 @@
                 <div id="hud-fps" class="hud-pill">FPS <span class="hud-val">--</span></div>
                 <div id="hud-persons" class="hud-pill">DET <span class="hud-val">0</span></div>
                 <div id="hud-match" class="hud-pill" style="display:none">MATCH <span class="hud-val">--</span></div>
+                <div id="hud-confidence" class="hud-pill hud-confidence" style="display:none"><span class="hud-val"></span></div>
             </div>
 
             <!-- Recording indicator -->
@@ -1557,6 +1635,9 @@
             <div id="search-bar" class="search-bar">
                 <div id="search-bar-fill" class="search-bar-fill" style="width: 0%"></div>
             </div>
+
+            <!-- Safety disclaimer -->
+            <div class="safety-disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</div>
         </div>
 
         <!-- SIDEBAR -->
@@ -1616,10 +1697,13 @@
                             </div>
                         </div>
                         <div id="quality-feedback" class="quality-feedback" style="display:none;"></div>
-                        <div class="threshold-section">
-                            <label>Threshold</label>
-                            <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
-                            <span id="threshold-val" class="threshold-val">0.55</span>
+                        <div class="sensitivity-presets">
+                            <label class="sensitivity-label">Sensitivity</label>
+                            <div class="preset-pills">
+                                <button class="preset-pill" data-preset="more_alerts" onclick="setSensitivityPreset('more_alerts', this)">More Alerts</button>
+                                <button class="preset-pill active" data-preset="balanced" onclick="setSensitivityPreset('balanced', this)">Balanced</button>
+                                <button class="preset-pill" data-preset="fewer_alerts" onclick="setSensitivityPreset('fewer_alerts', this)">Fewer Alerts</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1827,6 +1911,16 @@
                     </div>
                 </div>
 
+                <!-- Manual Threshold Override -->
+                <div class="panel-section">
+                    <div class="panel-title">Manual Threshold</div>
+                    <div class="threshold-section">
+                        <label>Threshold</label>
+                        <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
+                        <span id="threshold-val" class="threshold-val">0.55</span>
+                    </div>
+                </div>
+
                 <!-- Threshold Tuner -->
                 <div class="panel-section">
                     <div class="panel-title">Threshold Tuner</div>
@@ -1880,12 +1974,15 @@
     <!-- FULL-SCREEN MATCH OVERLAY -->
     <div id="match-overlay" class="match-overlay">
         <div id="match-overlay-card" class="match-overlay-card">
-            <div id="overlay-title" class="overlay-title red">CHILD FOUND</div>
-            <div id="overlay-subtitle" class="overlay-subtitle">Confirmed Match Detected</div>
+            <div id="overlay-title" class="overlay-title red">POSSIBLE MATCH — VERIFY IN PERSON</div>
+            <div id="overlay-subtitle" class="overlay-subtitle">Strong match detected — verify visually</div>
             <img id="overlay-snapshot" class="overlay-snapshot" style="display:none">
             <div id="overlay-score" class="overlay-score"></div>
             <div id="overlay-reasoning" class="overlay-reasoning"></div>
-            <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
+            <div class="overlay-actions">
+                <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
+                <button class="overlay-dismiss overlay-not-my-child" onclick="notMyChild()">NOT MY CHILD</button>
+            </div>
             <div class="overlay-timer">
                 <div id="overlay-timer-bar" class="overlay-timer-bar" style="width:100%"></div>
             </div>
@@ -1941,6 +2038,7 @@
         let sessionsOpen = false;
         let advancedOpen = false;
         let searchTotal = 0;
+        let currentOverlayMatchId = null;
 
         // ========== DOM REFS ==========
         const videoFeed = document.getElementById('video-feed');
@@ -2165,6 +2263,28 @@
             fill.className = 'battery-fill' + (bat < 15 ? ' critical' : bat < 30 ? ' warning' : '');
         }
 
+        // ========== CONFIDENCE PROGRESS ==========
+        let confidenceHideTimeout = null;
+        socket.on('confidence_progress', (data) => {
+            const el = document.getElementById('hud-confidence');
+            const val = el.querySelector('.hud-val');
+            const n = data.frames_matched;
+            const needed = data.frames_needed;
+            if (n >= needed) {
+                val.textContent = 'Strong match — ' + needed + '/' + needed + ' frames agree';
+                el.className = 'hud-pill hud-confidence strong';
+            } else {
+                val.textContent = 'Confidence building... ' + n + '/' + needed + ' frames';
+                el.className = 'hud-pill hud-confidence';
+            }
+            el.style.display = 'flex';
+            // Auto-hide after 3s of no updates
+            clearTimeout(confidenceHideTimeout);
+            confidenceHideTimeout = setTimeout(() => {
+                el.style.display = 'none';
+            }, 3000);
+        });
+
         // ========== TARGET ==========
         socket.on('target_photo', (data) => {
             const preview = document.getElementById('target-preview');
@@ -2258,6 +2378,24 @@
             const thresh = val / 100;
             document.getElementById('threshold-val').textContent = thresh.toFixed(2);
             socket.emit('set_threshold', { threshold: thresh });
+            // Deselect any active preset since the user is manually overriding
+            document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('active'));
+        }
+
+        const PRESET_SCORER_VALUES = {
+            'more_alerts': 35,
+            'balanced': 45,
+            'fewer_alerts': 60,
+        };
+
+        function setSensitivityPreset(preset, btnEl) {
+            document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('active'));
+            if (btnEl) btnEl.classList.add('active');
+            socket.emit('set_sensitivity_preset', { preset: preset });
+            // Sync the advanced slider to the scorer threshold
+            const sliderVal = PRESET_SCORER_VALUES[preset] || 45;
+            document.getElementById('threshold-slider').value = sliderVal;
+            document.getElementById('threshold-val').textContent = (sliderVal / 100).toFixed(2);
         }
 
         // ========== MATCH ALERTS ==========
@@ -2277,7 +2415,7 @@
                 playAlertSound();
                 showMatchOverlay(data, 'confirmed', 8000);
                 if (Notification.permission === 'granted') {
-                    new Notification('AMBER DRONE -- CHILD FOUND', {
+                    new Notification('FlightRisk — POSSIBLE MATCH', {
                         body: 'Score: ' + data.score + ' | ' + data.reasoning,
                         requireInteraction: true
                     });
@@ -2301,7 +2439,7 @@
             entry.className = entryClass;
 
             const dotClass = alertLevel.replace('_', '-');
-            const levelLabel = alertLevel === 'confirmed_match' ? 'CONFIRMED'
+            const levelLabel = alertLevel === 'confirmed_match' ? 'STRONG MATCH'
                 : alertLevel === 'possible_match' ? 'POSSIBLE' : 'WEAK';
             const levelClass = alertLevel === 'confirmed_match' ? 'confirmed'
                 : alertLevel === 'possible_match' ? 'possible' : 'weak';
@@ -2315,7 +2453,7 @@
             if (matchId) {
                 feedbackHtml = '<span class="feedback-btns" id="fb-' + matchId + '">' +
                     '<button class="fb-btn confirm" title="Confirm" onclick="submitFeedback(' + matchId + ',\'confirmed\',this)">&#10003;</button>' +
-                    '<button class="fb-btn reject" title="Reject" onclick="submitFeedback(' + matchId + ',\'rejected\',this)">&#10007;</button>' +
+                    '<button class="fb-btn reject" title="Not my child" onclick="submitFeedback(' + matchId + ',\'rejected\',this)">&#10007;</button>' +
                     '</span>';
             }
 
@@ -2350,9 +2488,9 @@
             const timerBar = document.getElementById('overlay-timer-bar');
 
             if (type === 'confirmed') {
-                title.textContent = 'CHILD FOUND';
+                title.textContent = 'POSSIBLE MATCH — VERIFY IN PERSON';
                 title.className = 'overlay-title red';
-                subtitle.textContent = 'Confirmed Match Detected';
+                subtitle.textContent = 'Strong match detected — verify visually';
                 card.className = 'match-overlay-card';
             } else {
                 title.textContent = 'POSSIBLE MATCH';
@@ -2370,6 +2508,8 @@
 
             score.textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | Gemma: ' + data.gemma_confidence : '');
             reasoning.textContent = data.reasoning || '';
+
+            currentOverlayMatchId = data.match_id || null;
 
             // Timer bar animation
             timerBar.style.transition = 'none';
@@ -2390,6 +2530,22 @@
         function dismissOverlay() {
             document.getElementById('match-overlay').classList.remove('active');
             clearTimeout(overlayTimeout);
+        }
+
+        function notMyChild() {
+            // Submit rejected feedback for the current overlay match
+            if (currentOverlayMatchId) {
+                const btn = document.querySelector('.overlay-not-my-child');
+                submitFeedback(currentOverlayMatchId, 'rejected', btn);
+            }
+            // Bump threshold slightly to reduce re-alerts for similar people
+            const slider = document.getElementById('threshold-slider');
+            const currentVal = parseInt(slider.value, 10);
+            const newVal = Math.min(90, currentVal + 3); // +0.03 in threshold units
+            slider.value = newVal;
+            updateThreshold(newVal);
+            dismissOverlay();
+            showToast('Feedback recorded — threshold raised to ' + (newVal / 100).toFixed(2));
         }
 
         // ========== DRONE COMMANDS ==========

@@ -868,9 +868,35 @@ def on_set_threshold(data):
         app_state.reid.match_threshold = threshold
     if app_state.scorer:
         app_state.scorer.match_threshold = threshold
+    if app_state.face:
+        app_state.face.match_threshold = threshold
     if app_state.logger:
         app_state.logger.info("threshold_updated", threshold=threshold)
     emit("threshold_updated", {"threshold": threshold})
+
+
+@socketio.on("set_sensitivity_preset")
+def on_set_sensitivity_preset(data):
+    """Apply a named sensitivity preset that sets all thresholds at once."""
+    PRESETS = {
+        "more_alerts": {"reid": 0.40, "scorer": 0.35, "face": 0.30},
+        "balanced": {"reid": 0.55, "scorer": 0.45, "face": 0.45},
+        "fewer_alerts": {"reid": 0.70, "scorer": 0.60, "face": 0.55},
+    }
+    preset_name = data.get("preset", "balanced")
+    preset = PRESETS.get(preset_name)
+    if not preset:
+        emit("error", {"message": f"Unknown preset: {preset_name}"})
+        return
+    if app_state.reid:
+        app_state.reid.match_threshold = preset["reid"]
+    if app_state.scorer:
+        app_state.scorer.match_threshold = preset["scorer"]
+    if app_state.face:
+        app_state.face.match_threshold = preset["face"]
+    if app_state.logger:
+        app_state.logger.info("sensitivity_preset_applied", preset=preset_name, **preset)
+    emit("threshold_updated", {"threshold": preset["scorer"], "preset": preset_name})
 
 
 @socketio.on("set_stream_video")

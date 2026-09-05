@@ -158,7 +158,7 @@ def run_pipeline(
             if match_idx is not None:
                 cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 40), (0, 0, 200), -1)
                 cv2.putText(
-                    annotated, f"CHILD FOUND — Score: {match_score:.2f}",
+                    annotated, f"POSSIBLE MATCH — VERIFY IN PERSON — Score: {match_score:.2f}",
                     (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
                 )
 
