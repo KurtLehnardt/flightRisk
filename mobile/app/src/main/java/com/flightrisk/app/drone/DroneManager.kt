@@ -108,7 +108,9 @@ class DroneManager(
         // Enable video stream
         val streaming = connection.startStream()
         if (!streaming) {
-            Log.w(TAG, "Stream start failed, continuing without video")
+            Log.e(TAG, "Stream start failed")
+            connection.disconnect()
+            return false
         }
 
         // Wire frozen-stream recovery before start to avoid missing early freezes
@@ -133,6 +135,7 @@ class DroneManager(
     suspend fun disconnect() {
         monitorJob?.cancel()
         monitorJob = null
+        frameSource.onStreamFrozen = null
 
         frameSource.stop()
 
@@ -144,9 +147,18 @@ class DroneManager(
             Log.w(TAG, "Error stopping stream: ${e.message}")
         }
         connection.disconnect()
-        scope.cancel()
+        // Do NOT cancel scope here — onActivityPause may still need it
 
         Log.i(TAG, "Disconnected")
+    }
+
+    /**
+     * Permanently cancel the coroutine scope. Call only when this
+     * DroneManager instance will never be used again (e.g. activity destroyed).
+     */
+    fun shutdown() {
+        scope.cancel()
+        Log.i(TAG, "Shutdown complete")
     }
 
     // ------------------------------------------------------------------
@@ -163,9 +175,13 @@ class DroneManager(
         scope.launch {
             withContext(Dispatchers.IO) {
                 Log.w(TAG, "Recovering frozen stream")
+                frameSource.stop()
                 connection.sendCommand("streamoff")
                 delay(500)
                 connection.sendCommand("streamon")
+                delay(200)
+                frameSource.onStreamFrozen = { recoverStream() }
+                frameSource.start()
                 _alerts.tryEmit(DroneAlert.StreamFrozen)
             }
         }
@@ -192,23 +208,32 @@ class DroneManager(
      * and disconnect synchronously (cannot suspend on the main thread).
      */
     fun onActivityDestroy() {
+        monitorJob?.cancel()
+        frameSource.stop()
         val state = droneState.value
         if (state.telemetry.isFlying) {
             Log.w(TAG, "Activity destroying while flying -- emergency landing")
-            runBlocking(Dispatchers.IO) {
-                withTimeoutOrNull(3000) {
-                    withContext(NonCancellable) {
-                        connection.land()
+            // Fire-and-forget on a background thread so the main thread is never blocked (no ANR).
+            // The process may die before land completes, but that is better than an ANR.
+            Thread {
+                try {
+                    runBlocking {
+                        withTimeoutOrNull(1500) {
+                            withContext(NonCancellable) {
+                                connection.land()
+                            }
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Emergency land failed: ${e.message}")
                 }
-            }
+                try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
+                scope.cancel()
+            }.start()
+        } else {
+            try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
+            scope.cancel()
         }
-
-        // Synchronous cleanup after land attempt completes (or times out)
-        monitorJob?.cancel()
-        frameSource.stop()
-        try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
-        scope.cancel()
         Log.i(TAG, "Destroyed")
     }
 
@@ -220,9 +245,13 @@ class DroneManager(
     suspend fun takeoff() = connection.takeoff()
 
     /** Command the drone to land. */
-    suspend fun land() {
+    suspend fun land(): Boolean {
         commandedLanding = true
-        connection.land()
+        val result = connection.land()
+        if (!result) {
+            commandedLanding = false
+        }
+        return result
     }
 
     /**
@@ -254,6 +283,18 @@ class DroneManager(
 
     /** Stop all movement and hover in place. */
     suspend fun hover() = connection.hover()
+
+    /**
+     * Emergency motor stop. Use only as a last resort — cuts motors immediately.
+     *
+     * TODO: Uncomment when TelloConnection.emergencyStop() is added by W1.
+     */
+    suspend fun emergencyStop(): Boolean {
+        commandedLanding = true
+        // return connection.emergencyStop()
+        Log.w(TAG, "emergencyStop() called but TelloConnection.emergencyStop() not yet available")
+        return connection.land() // Fallback to land until emergencyStop is wired
+    }
 
     // ------------------------------------------------------------------
     // Telemetry monitoring
