@@ -1880,8 +1880,8 @@
     <!-- FULL-SCREEN MATCH OVERLAY -->
     <div id="match-overlay" class="match-overlay">
         <div id="match-overlay-card" class="match-overlay-card">
-            <div id="overlay-title" class="overlay-title red">CHILD FOUND</div>
-            <div id="overlay-subtitle" class="overlay-subtitle">Confirmed Match Detected</div>
+            <div id="overlay-title" class="overlay-title red">POSSIBLE MATCH — VERIFY IN PERSON</div>
+            <div id="overlay-subtitle" class="overlay-subtitle">Strong match detected — verify visually</div>
             <img id="overlay-snapshot" class="overlay-snapshot" style="display:none">
             <div id="overlay-score" class="overlay-score"></div>
             <div id="overlay-reasoning" class="overlay-reasoning"></div>
@@ -2277,7 +2277,7 @@
                 playAlertSound();
                 showMatchOverlay(data, 'confirmed', 8000);
                 if (Notification.permission === 'granted') {
-                    new Notification('AMBER DRONE -- CHILD FOUND', {
+                    new Notification('FlightRisk — POSSIBLE MATCH', {
                         body: 'Score: ' + data.score + ' | ' + data.reasoning,
                         requireInteraction: true
                     });
@@ -2301,7 +2301,7 @@
             entry.className = entryClass;
 
             const dotClass = alertLevel.replace('_', '-');
-            const levelLabel = alertLevel === 'confirmed_match' ? 'CONFIRMED'
+            const levelLabel = alertLevel === 'confirmed_match' ? 'STRONG MATCH'
                 : alertLevel === 'possible_match' ? 'POSSIBLE' : 'WEAK';
             const levelClass = alertLevel === 'confirmed_match' ? 'confirmed'
                 : alertLevel === 'possible_match' ? 'possible' : 'weak';
@@ -2350,9 +2350,9 @@
             const timerBar = document.getElementById('overlay-timer-bar');
 
             if (type === 'confirmed') {
-                title.textContent = 'CHILD FOUND';
+                title.textContent = 'POSSIBLE MATCH — VERIFY IN PERSON';
                 title.className = 'overlay-title red';
-                subtitle.textContent = 'Confirmed Match Detected';
+                subtitle.textContent = 'Strong match detected — verify visually';
                 card.className = 'match-overlay-card';
             } else {
                 title.textContent = 'POSSIBLE MATCH';

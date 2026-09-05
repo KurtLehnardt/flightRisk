@@ -325,10 +325,10 @@ def _frame_loop(socketio):
                 h, w = annotated.shape[:2]
                 if current_alert_level == "confirmed_match":
                     cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
-                    label = "CHILD FOUND"
+                    label = "POSSIBLE MATCH — VERIFY IN PERSON"
                 else:
                     cv2.rectangle(annotated, (0, 0), (w, 45), (0, 165, 255), -1)
-                    label = "POSSIBLE MATCH"
+                    label = "POSSIBLE MATCH — VERIFY"
                 cv2.putText(
                     annotated, f"{label} -- Score: {match_score:.2f}",
                     (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2,
