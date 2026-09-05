@@ -415,26 +415,44 @@ class TelloConnection(private val config: DroneConfig) {
     /**
      * Start the keepalive coroutine.
      *
-     * Sends "command" every [DroneConfig.keepaliveIntervalSec] seconds
-     * to prevent the Tello from auto-landing. Skips if the command mutex
-     * is held by another operation.
+     * Sends "rc 0 0 0 0" (hover) every [DroneConfig.keepaliveIntervalSec]
+     * seconds to reset the Tello's 15-second auto-land timer. Uses a direct
+     * UDP send that bypasses [commandMutex] — rc commands are fire-and-forget
+     * and must never be blocked by long-running state polls.
      */
     private fun startKeepalive() {
         keepaliveJob = scope.launch {
             while (isConnected) {
                 delay(config.keepaliveIntervalSec * 1000L)
                 if (!isConnected) break
-                if (!commandMutex.tryLock()) continue
                 try {
-                    sendCommandInternal("command", timeoutMs = 5000)
+                    sendKeepalivePacket()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Keepalive failed: ${e.message}")
-                } finally {
-                    commandMutex.unlock()
                 }
             }
+        }
+    }
+
+    /**
+     * Send a keepalive packet directly on the UDP socket without acquiring
+     * [commandMutex]. Uses "rc 0 0 0 0" which resets the Tello's command
+     * timer without expecting a response.
+     */
+    private fun sendKeepalivePacket() {
+        val socket = commandSocket ?: return
+        try {
+            val data = "rc 0 0 0 0".toByteArray(Charsets.UTF_8)
+            val packet = DatagramPacket(
+                data, data.size,
+                InetAddress.getByName(telloHost),
+                config.telloCommandPort,
+            )
+            socket.send(packet)
+        } catch (e: Exception) {
+            Log.w(TAG, "Keepalive packet failed: ${e.message}")
         }
     }
 

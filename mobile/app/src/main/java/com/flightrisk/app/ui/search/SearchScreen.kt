@@ -333,10 +333,12 @@ fun SearchScreen(
             // Show flight controls instead of action bar when streaming
             FlightControlsOverlay(
                 isFlying = state.droneState.telemetry.isFlying,
+                isSearching = state.isSearching,
                 onTakeoff = onTakeoff,
                 onLand = onLand,
                 onMove = onDroneMove,
                 onRotate = onDroneRotate,
+                onStartSearch = onStartSearch,
                 onStopSearch = onStopSearch,
                 onEmergencyStop = onEmergencyStop,
                 modifier = Modifier.align(Alignment.BottomCenter),
