@@ -46,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -966,7 +967,14 @@ private fun DroneConnectionCard(
                         color = HudWhite,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
                     )
+                    TextButton(
+                        onClick = onDisconnect,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Cancel", color = HudWhite)
+                    }
                 }
             }
 
@@ -995,39 +1003,9 @@ private fun DroneConnectionCard(
                 }
             }
 
-            TelloConnectionState.STREAMING -> {
-                val battery = droneState?.telemetry?.battery
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                ) {
-                    Text(
-                        text = "Drone Connected — Streaming",
-                        color = MatchGreen,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    if (battery != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Battery: $battery%",
-                            color = HudWhite,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = onDisconnect,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sizeIn(minHeight = 48.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = HudWhite),
-                    ) {
-                        Text("Disconnect")
-                    }
-                }
-            }
+            // STREAMING is handled by FlightControlsOverlay in the parent;
+            // DroneConnectionCard is never rendered during STREAMING.
+            TelloConnectionState.STREAMING -> { }
 
             TelloConnectionState.ERROR -> {
                 Column(

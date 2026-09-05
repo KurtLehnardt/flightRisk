@@ -1,5 +1,6 @@
 package com.flightrisk.app.vision
 
+import com.flightrisk.app.llm.ReasoningResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
