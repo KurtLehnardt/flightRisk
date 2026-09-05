@@ -37,9 +37,11 @@ class TelloConnection(private val config: DroneConfig) {
 
     companion object {
         private const val TAG = "TelloConnection"
-        private const val TELLO_HOST = "192.168.10.1"
         private const val RC_MIN_INTERVAL_MS = 50L
     }
+
+    /** Tello IP from config — replaces hardcoded constant. */
+    private val telloHost: String = config.telloDefaultHost
 
     // Observable state
     private val _state = MutableStateFlow(TelloState())
@@ -49,7 +51,7 @@ class TelloConnection(private val config: DroneConfig) {
     private var commandSocket: DatagramSocket? = null
 
     // Coroutine management
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val commandMutex = Mutex()
     private var keepaliveJob: Job? = null
     private var statePollingJob: Job? = null
@@ -76,6 +78,11 @@ class TelloConnection(private val config: DroneConfig) {
             if (isConnected) {
                 Log.w(TAG, "connect() called while already connected")
                 return@withContext true
+            }
+
+            // Recreate scope if previously cancelled by disconnect()
+            if (!scope.isActive) {
+                scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
             }
 
             try {
@@ -180,22 +187,38 @@ class TelloConnection(private val config: DroneConfig) {
         }
 
         try {
-            val address = InetAddress.getByName(TELLO_HOST)
+            val expectedAddress = InetAddress.getByName(telloHost)
             val sendData = command.toByteArray(Charsets.UTF_8)
             val sendPacket = DatagramPacket(
-                sendData, sendData.size, address, config.telloCommandPort
+                sendData, sendData.size, expectedAddress, config.telloCommandPort
             )
             socket.send(sendPacket)
             Log.d(TAG, ">> $command")
 
-            socket.soTimeout = timeoutMs.toInt()
+            val startTime = System.currentTimeMillis()
             val recvBuf = ByteArray(1024)
             val recvPacket = DatagramPacket(recvBuf, recvBuf.size)
-            socket.receive(recvPacket)
 
-            val response = String(recvPacket.data, 0, recvPacket.length, Charsets.UTF_8)
-            Log.d(TAG, "<< $response")
-            response
+            while (true) {
+                val elapsed = System.currentTimeMillis() - startTime
+                val remaining = timeoutMs - elapsed
+                if (remaining <= 0) {
+                    Log.w(TAG, "Timeout waiting for response to: $command")
+                    return@withContext null
+                }
+                socket.soTimeout = remaining.toInt()
+                socket.receive(recvPacket)
+
+                if (recvPacket.address == expectedAddress) {
+                    val response = String(recvPacket.data, 0, recvPacket.length, Charsets.UTF_8)
+                    Log.d(TAG, "<< $response")
+                    return@withContext response
+                }
+                Log.w(TAG, "Ignoring packet from ${recvPacket.address}, expected $expectedAddress")
+            }
+
+            @Suppress("UNREACHABLE_CODE")
+            null
         } catch (e: SocketTimeoutException) {
             Log.w(TAG, "Timeout waiting for response to: $command")
             null
@@ -274,14 +297,22 @@ class TelloConnection(private val config: DroneConfig) {
      *
      * @return true if the Tello acknowledged the command.
      */
-    suspend fun emergencyStop(): Boolean {
-        val response = sendCommand("emergency")
-        if (response != null) {
+    suspend fun emergencyStop(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val cmd = "emergency".toByteArray()
+            val packet = DatagramPacket(
+                cmd, cmd.size,
+                InetAddress.getByName(telloHost),
+                config.telloCommandPort
+            )
+            commandSocket?.send(packet)
             updateState(isFlying = false)
-            Log.w(TAG, "EMERGENCY STOP executed")
-            return true
+            Log.w(TAG, "EMERGENCY STOP executed (bypass mutex)")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Emergency stop failed: ${e.message}")
+            false
         }
-        return false
     }
 
     /**
@@ -362,7 +393,7 @@ class TelloConnection(private val config: DroneConfig) {
 
         val command = "rc $clampedLr $clampedFb $clampedUd $clampedYaw"
         try {
-            val address = InetAddress.getByName(TELLO_HOST)
+            val address = InetAddress.getByName(telloHost)
             val sendData = command.toByteArray(Charsets.UTF_8)
             val packet = DatagramPacket(
                 sendData, sendData.size, address, config.telloCommandPort
