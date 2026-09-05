@@ -265,7 +265,7 @@ fun SearchScreen(
                 TelloStatusBadge(droneState = droneState)
 
                 // Battery warnings
-                val battery = droneState.telemetry.battery
+                val battery = droneState.telemetry.battery ?: 100  // no reading yet = suppress warning
                 if (battery in 0..10) {
                     Spacer(modifier = Modifier.height(4.dp))
                     BatteryWarningPill(

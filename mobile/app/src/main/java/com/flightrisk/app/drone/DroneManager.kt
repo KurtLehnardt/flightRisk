@@ -3,9 +3,11 @@ package com.flightrisk.app.drone
 import android.content.Context
 import android.util.Log
 import com.flightrisk.app.config.FlightRiskConfig
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -14,7 +16,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Facade that owns [TelloConnection], [TelloFrameSource], and [TelloWifiChecker]
@@ -134,6 +138,8 @@ class DroneManager(
 
         try {
             connection.stopStream()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping stream: ${e.message}")
         }
@@ -186,20 +192,24 @@ class DroneManager(
      * and disconnect synchronously (cannot suspend on the main thread).
      */
     fun onActivityDestroy() {
-        monitorJob?.cancel()
-        monitorJob = null
-        frameSource.stop()
-
         val state = droneState.value
         if (state.telemetry.isFlying) {
-            Log.w(TAG, "Activity destroying while flying -- emergency cleanup")
-            // Fire-and-forget land command, then synchronous socket close
-            scope.launch { connection.land() }
+            Log.w(TAG, "Activity destroying while flying -- emergency landing")
+            runBlocking(Dispatchers.IO) {
+                withTimeoutOrNull(3000) {
+                    withContext(NonCancellable) {
+                        connection.land()
+                    }
+                }
+            }
         }
 
-        // TelloConnection.disconnect() is synchronous (closes socket directly)
-        connection.disconnect()
+        // Synchronous cleanup after land attempt completes (or times out)
+        monitorJob?.cancel()
+        frameSource.stop()
+        try { connection.disconnect() } catch (e: Exception) { Log.w(TAG, "Cleanup error: ${e.message}") }
         scope.cancel()
+        Log.i(TAG, "Destroyed")
     }
 
     // ------------------------------------------------------------------
@@ -270,19 +280,19 @@ class DroneManager(
                 }
                 wasConnected = isConnected
 
-                // Battery critical (0% is a real value after t02 null fix)
+                // Battery critical (null = no reading yet, skip check)
                 val battery = state.telemetry.battery
-                if (battery in 0..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
+                if (battery != null && battery in 0..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
                     Log.w(TAG, "Battery critical: $battery%")
                     _alerts.tryEmit(DroneAlert.BatteryCritical(battery))
                     batteryAlertSent = true
                     // Auto-land on critical battery
                     if (state.telemetry.isFlying) {
                         Log.w(TAG, "Auto-landing due to critical battery")
-                        connection.land()
+                        land()  // NOT connection.land() — sets commandedLanding flag
                     }
                 }
-                if (battery > config.drone.batteryCriticalThreshold) {
+                if (battery != null && battery > config.drone.batteryCriticalThreshold) {
                     batteryAlertSent = false
                 }
 

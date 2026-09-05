@@ -65,7 +65,7 @@ fun TelloStatusBadge(
         when (droneState.connectionState) {
             TelloConnectionState.STREAMING -> {
                 append(" | ")
-                append(stringResource(R.string.drone_battery, droneState.telemetry.battery))
+                append(stringResource(R.string.drone_battery, droneState.telemetry.battery ?: 0))
                 append(" | ")
                 append(stringResource(R.string.drone_height, droneState.telemetry.height))
             }
