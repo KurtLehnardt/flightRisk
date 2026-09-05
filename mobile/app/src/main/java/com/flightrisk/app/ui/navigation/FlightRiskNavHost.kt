@@ -232,6 +232,8 @@ fun FlightRiskNavHost(
                     onThresholdChanged = onThresholdChanged,
                     onLlmBackendChanged = onLlmBackendChanged,
                     onApiKeyChanged = onApiKeyChanged,
+                    droneState = droneState,
+                    frameSourceMode = frameSourceMode,
                 )
             }
         }
