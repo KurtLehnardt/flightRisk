@@ -2,6 +2,7 @@ package com.flightrisk.app.drone
 
 import android.util.Log
 import com.flightrisk.app.config.DroneConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,6 +12,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,9 +55,11 @@ class TelloConnection(private val config: DroneConfig) {
     private var statePollingJob: Job? = null
 
     // Connection state
+    @Volatile
     private var isConnected = false
 
     // RC rate limiting
+    @Volatile
     private var lastRcTime = 0L
 
     /**
@@ -68,6 +72,11 @@ class TelloConnection(private val config: DroneConfig) {
      * @return true on successful connection, false on failure.
      */
     suspend fun connect(): Boolean = withContext(Dispatchers.IO) {
+        if (isConnected) {
+            Log.w(TAG, "connect() called while already connected")
+            return@withContext true
+        }
+
         try {
             updateState(connectionState = TelloConnectionState.CONNECTING)
 
@@ -362,6 +371,8 @@ class TelloConnection(private val config: DroneConfig) {
                 if (!commandMutex.tryLock()) continue
                 try {
                     sendCommandInternal("command", timeoutMs = 5000)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Keepalive failed: ${e.message}")
                 } finally {
@@ -392,16 +403,23 @@ class TelloConnection(private val config: DroneConfig) {
                 if (commandMutex.isLocked) continue
 
                 try {
-                    commandMutex.withLock {
+                    val success = commandMutex.withLock {
                         val battery = queryInt("battery?")
                         val height = queryInt("height?")
                         val temperature = queryInt("temp?")
                         val flightTime = queryInt("time?")
 
+                        // Null return means communication failure, not a value
+                        if (battery == null || height == null || temperature == null || flightTime == null) {
+                            Log.w(TAG, "State poll returned null values")
+                            return@withLock false
+                        }
+
                         val current = _state.value
                         var isFlying = current.telemetry.isFlying
 
                         // Crash detection: 3 consecutive zero-height polls while flying
+                        // Only triggers on confirmed zero height (non-null), not comm failures
                         if (isFlying && height == 0) {
                             zeroHeightCount++
                             if (zeroHeightCount >= 3) {
@@ -422,8 +440,24 @@ class TelloConnection(private val config: DroneConfig) {
                                 isFlying = isFlying,
                             )
                         )
+                        true
                     }
-                    pollFailures = 0
+                    if (success) {
+                        pollFailures = 0
+                    } else {
+                        pollFailures++
+                        Log.w(TAG, "Poll failure ($pollFailures consecutive)")
+                        if (pollFailures >= 3 && isConnected) {
+                            Log.e(TAG, "Connection lost — $pollFailures consecutive poll failures")
+                            isConnected = false
+                            updateState(
+                                connectionState = TelloConnectionState.DISCONNECTED,
+                                errorMessage = "Connection lost"
+                            )
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     pollFailures++
                     Log.w(TAG, "State poll failed ($pollFailures consecutive): ${e.message}")
@@ -445,12 +479,15 @@ class TelloConnection(private val config: DroneConfig) {
      *
      * Caller must hold [commandMutex].
      *
+     * Handles Tello SDK 2.0 tilde-delimited ranges (e.g., "56~58" for temp?)
+     * by taking the first number in the range.
+     *
      * @param query The query command (e.g., "battery?").
-     * @return The integer value, or 0 if the response cannot be parsed.
+     * @return The integer value, or null on communication failure or unparseable response.
      */
-    private suspend fun queryInt(query: String): Int {
-        val response = sendCommandInternal(query) ?: return 0
-        return response.trim().toIntOrNull() ?: 0
+    private suspend fun queryInt(query: String): Int? {
+        val response = sendCommandInternal(query) ?: return null
+        return response.trim().split("~").firstOrNull()?.toIntOrNull()
     }
 
     /**
@@ -463,16 +500,18 @@ class TelloConnection(private val config: DroneConfig) {
         errorMessage: String? = null,
         isOnTelloWifi: Boolean? = null,
     ) {
-        val current = _state.value
-        _state.value = current.copy(
-            connectionState = connectionState ?: current.connectionState,
-            telemetry = telemetry ?: current.telemetry,
-            errorMessage = if (connectionState != null && connectionState != TelloConnectionState.ERROR) {
-                null
-            } else {
-                errorMessage ?: current.errorMessage
-            },
-            isOnTelloWifi = isOnTelloWifi ?: current.isOnTelloWifi,
-        )
+        _state.update { current ->
+            current.copy(
+                connectionState = connectionState ?: current.connectionState,
+                telemetry = telemetry ?: current.telemetry,
+                errorMessage = errorMessage
+                    ?: if (connectionState != null && connectionState != TelloConnectionState.ERROR) {
+                        null
+                    } else {
+                        current.errorMessage
+                    },
+                isOnTelloWifi = isOnTelloWifi ?: current.isOnTelloWifi,
+            )
+        }
     }
 }
