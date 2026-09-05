@@ -40,6 +40,7 @@ import com.flightrisk.app.ui.theme.FlightRiskTheme
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -416,11 +417,16 @@ class MainActivity : ComponentActivity() {
             // Start the pipeline
             pipeline.start()
 
-            // Start autonomous search pattern if drone is flying
+            // Take off and start search pattern if drone is connected
             if (currentFrameSourceMode == FrameSourceMode.DRONE) {
-                val state = droneManager?.droneState?.value
-                if (state?.telemetry?.isFlying == true) {
-                    droneManager?.startSearchPattern()
+                val manager = droneManager
+                if (manager != null) {
+                    val alreadyFlying = manager.droneState.value.telemetry.isFlying
+                    if (!alreadyFlying) {
+                        manager.takeoff()
+                        delay(3000)
+                    }
+                    manager.startSearchPattern()
                 }
             }
 
@@ -436,6 +442,9 @@ class MainActivity : ComponentActivity() {
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
         droneManager?.stopSearchPattern()
+        if (frameSourceMode == FrameSourceMode.DRONE) {
+            lifecycleScope.launch { droneManager?.land() }
+        }
         alertManager?.dismissAll()
         searchState = searchState.copy(isSearching = false, activeAlert = null)
         Log.i(TAG, "Search stopped")
