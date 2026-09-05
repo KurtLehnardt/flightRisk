@@ -191,6 +191,7 @@ def run_onnx_embeddings(
     onnx_path: str,
     images: list[np.ndarray],
     has_face: list[bool],
+    model_pack: str = "buffalo_sc",
 ) -> list[np.ndarray]:
     """Run ArcFace ONNX inference directly on aligned face crops.
 
@@ -227,7 +228,7 @@ def run_onnx_embeddings(
     input_shape = sess.get_inputs()[0].shape  # typically [1, 3, 112, 112]
 
     # Use InsightFace for face detection + alignment only
-    app = FaceAnalysis(name="buffalo_sc", providers=["CPUExecutionProvider"])
+    app = FaceAnalysis(name=model_pack, providers=["CPUExecutionProvider"])
     app.prepare(ctx_id=0, det_size=(640, 640))
 
     embeddings: list[np.ndarray] = []
@@ -366,7 +367,7 @@ def main() -> None:
             })
         else:
             # Get ONNX embeddings (using InsightFace for detection/alignment only)
-            ox_embs = run_onnx_embeddings(str(onnx_path), images, has_face)
+            ox_embs = run_onnx_embeddings(str(onnx_path), images, has_face, model_pack=args.model_pack)
 
             # Only compare images where faces were found
             pt_filtered = [e for e, hf in zip(pt_embs, has_face) if hf]
