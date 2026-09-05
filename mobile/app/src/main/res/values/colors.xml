@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="amber_primary">#FFC107</color>
+    <color name="amber_primary_dark">#FFA000</color>
+    <color name="amber_accent">#FFD54F</color>
+    <color name="alert_red">#F44336</color>
+    <color name="safe_green">#4CAF50</color>
+    <color name="background_light">#FFFFFF</color>
+    <color name="background_dark">#121212</color>
+</resources>
