@@ -1,6 +1,13 @@
 package com.flightrisk.app.ui.search
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.util.Log
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,24 +47,39 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.pipeline.MatchEntry
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.AlertRedDark
 import com.flightrisk.app.ui.theme.HudWhite
+import kotlinx.coroutines.delay
+
+private const val TAG = "SearchScreen"
 
 // -----------------------------------------------------------------------
 // Search screen state (passed from ViewModel / parent)
@@ -129,14 +151,42 @@ fun SearchScreen(
     onNavigateToMatch: (latitude: Double, longitude: Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Finding 8: delay banner to avoid flash on every start
+    var showBanner by remember { mutableStateOf(false) }
+    LaunchedEffect(state.isSearching) {
+        if (state.isSearching) {
+            delay(2000)
+            showBanner = true
+        } else {
+            showBanner = false
+        }
+    }
+
     Box(
         modifier = modifier.fillMaxSize(),
     ) {
         // ----- Camera preview (full screen) -----
-        CameraPreviewPlaceholder(
-            frame = state.cameraFrame,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (state.isSearching) {
+            LiveCameraPreview(modifier = Modifier.fillMaxSize())
+        } else {
+            CameraPreviewPlaceholder(
+                frame = state.cameraFrame,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // ----- Models-not-loaded banner -----
+        if (state.isSearching && showBanner && state.fps < 0.5f) {
+            ModelsNotLoadedBanner(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(
+                        top = WindowInsets.statusBars
+                            .asPaddingValues()
+                            .calculateTopPadding() + 56.dp,
+                    ),
+            )
+        }
 
         // ----- Detection overlay -----
         if (state.boxes.isNotEmpty()) {
@@ -240,10 +290,12 @@ private fun CameraPreviewPlaceholder(
     frame: Bitmap?,
     modifier: Modifier = Modifier,
 ) {
+    val previewDesc = stringResource(R.string.camera_preview)
+    val inactiveDesc = stringResource(R.string.camera_preview_inactive)
     if (frame != null) {
         Image(
             bitmap = frame.asImageBitmap(),
-            contentDescription = "Camera preview",
+            contentDescription = previewDesc,
             contentScale = ContentScale.Crop,
             modifier = modifier,
         )
@@ -251,15 +303,132 @@ private fun CameraPreviewPlaceholder(
         Box(
             modifier = modifier
                 .background(Color(0xFF121212))
-                .semantics { contentDescription = "Camera preview inactive" },
+                .semantics { contentDescription = inactiveDesc },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "Camera preview",
+                text = previewDesc,
                 color = Color.Gray,
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Live camera preview (CameraX)
+// -----------------------------------------------------------------------
+
+/**
+ * Live camera preview using CameraX [PreviewView] wrapped in [AndroidView].
+ *
+ * Binds CameraX to the composable's lifecycle owner and unbinds on dispose.
+ */
+@Composable
+private fun LiveCameraPreview(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Finding 4: guard against missing camera permission
+    val hasPermission = remember {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    if (!hasPermission) {
+        Box(
+            modifier = modifier.background(Color(0xFF121212)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = stringResource(R.string.camera_permission_required),
+                color = Color.Gray,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+        return
+    }
+
+    // Finding 10: PreviewView created in AndroidView factory, not in remember
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+
+    DisposableEffect(lifecycleOwner) {
+        // Finding 1: cache provider reference from callback
+        var cameraProvider: ProcessCameraProvider? = null
+        // Finding 2: track the specific preview use case
+        var preview: Preview? = null
+        // Finding 3: disposed flag to guard against race conditions
+        var disposed = false
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            if (disposed) return@addListener
+            val provider = cameraProviderFuture.get()
+            cameraProvider = provider
+            val p = Preview.Builder().build().also { prev ->
+                previewView?.let { pv -> prev.setSurfaceProvider(pv.surfaceProvider) }
+            }
+            preview = p
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            try {
+                // Finding 2: bind without unbindAll — only our use case
+                provider.bindToLifecycle(lifecycleOwner, cameraSelector, p)
+            } catch (e: IllegalStateException) {
+                // Finding 6: catch specific exceptions
+                Log.e(TAG, "Camera bind failed: illegal state", e)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Camera bind failed: security exception", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
+
+        onDispose {
+            disposed = true
+            try {
+                // Finding 1 & 2: unbind only our preview, using cached provider
+                preview?.let { cameraProvider?.unbind(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Camera cleanup failed", e)
+            }
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            PreviewView(ctx).also { pv -> previewView = pv }
+        },
+        modifier = modifier,
+    )
+}
+
+// -----------------------------------------------------------------------
+// Models-not-loaded banner
+// -----------------------------------------------------------------------
+
+/**
+ * Translucent pill banner displayed when the camera is active but
+ * the AI detection pipeline is not running (fps == 0).
+ */
+@Composable
+private fun ModelsNotLoadedBanner(modifier: Modifier = Modifier) {
+    val bannerText = stringResource(R.string.camera_active_models_not_loaded)
+    Box(
+        modifier = modifier
+            .background(
+                color = Color(0xCC000000),
+                shape = RoundedCornerShape(16.dp),
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .semantics {
+                contentDescription = bannerText
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = bannerText,
+            color = Color(0xFFCCCCCC),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

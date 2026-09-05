@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">FlightRisk</string>
+    <string name="camera_active_models_not_loaded">Camera active — AI models not loaded</string>
+    <string name="camera_permission_required">Camera permission required</string>
+    <string name="camera_preview">Camera preview</string>
+    <string name="camera_preview_inactive">Camera preview inactive</string>
 </resources>
