@@ -36,6 +36,8 @@ class PersonDetector(
     private val loader = OnnxModelLoader(context, modelAsset)
     private val environment: OrtEnvironment = loader.environment
 
+    private var debugFrameCount = 0
+
     companion object {
         private const val TAG = "PersonDetector"
         private const val INPUT_SIZE = 640
@@ -190,6 +192,16 @@ class PersonDetector(
         val outputArray = results[0].value as Array<Array<FloatArray>>
         val output = outputArray[0] // [84, N]
         val numDetections = output[0].size
+
+        // Diagnostic: log output shape and max person score periodically
+        if (debugFrameCount++ % 30 == 0) {
+            val personScores = output[4 + PERSON_CLASS_ID]
+            val maxPersonScore = personScores.max()
+            val maxAnyClass = (4 until output.size).maxOf { output[it].max() }
+            Log.d(TAG, "Output shape: [${output.size}, $numDetections], " +
+                "maxPersonScore=%.4f, maxAnyClass=%.4f, threshold=%.2f".format(
+                    maxPersonScore, maxAnyClass, confidence))
+        }
 
         data class RawDet(val x1: Int, val y1: Int, val x2: Int, val y2: Int, val conf: Float)
         val rawDetections = mutableListOf<RawDet>()

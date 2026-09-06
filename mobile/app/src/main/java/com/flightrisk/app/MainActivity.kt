@@ -474,6 +474,7 @@ class MainActivity : ComponentActivity() {
     private fun handleDismissAlert() {
         alertManager?.dismissAll()
         searchState = searchState.copy(activeAlert = null)
+        searchPipeline?.resumeAfterMatch()
         droneManager?.resumeSearch()
     }
 
@@ -484,8 +485,13 @@ class MainActivity : ComponentActivity() {
     private fun handleNotMyChild() {
         val alert = searchState.activeAlert
         alertManager?.dismissAll()
-        Log.i(TAG, "Not my child: track=${alert?.trackId}")
+        val trackKey = alert?.trackId
+        Log.i(TAG, "Not my child: track=$trackKey")
+        if (trackKey != null) {
+            searchPipeline?.suppressTrack(trackKey)
+        }
         searchState = searchState.copy(activeAlert = null)
+        searchPipeline?.resumeAfterMatch()
         droneManager?.resumeSearch()
     }
 
