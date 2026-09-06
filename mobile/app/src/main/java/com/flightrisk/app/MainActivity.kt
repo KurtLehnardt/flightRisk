@@ -60,6 +60,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val MAX_DRONE_CONNECT_ATTEMPTS = 3
+        private const val DRONE_RETRY_DELAY_MS = 2000L
     }
 
     // ------------------------------------------------------------------
@@ -588,7 +590,17 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            val success = manager.connectAndStream()
+            var success = false
+            for (attempt in 1..MAX_DRONE_CONNECT_ATTEMPTS) {
+                Log.i(TAG, "Drone connect attempt $attempt/$MAX_DRONE_CONNECT_ATTEMPTS")
+                success = manager.connectAndStream()
+                if (success) break
+                if (attempt < MAX_DRONE_CONNECT_ATTEMPTS) {
+                    Log.i(TAG, "Retrying drone connection in ${DRONE_RETRY_DELAY_MS}ms...")
+                    delay(DRONE_RETRY_DELAY_MS)
+                    if (droneManager == null) return@launch
+                }
+            }
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
                 val droneError = manager.droneState.value.errorMessage
@@ -598,7 +610,8 @@ class MainActivity : ComponentActivity() {
                     droneError != null ->
                         droneError
                     else ->
-                        "Connection failed. Make sure the Tello is powered on and try again."
+                        "Connection failed after $MAX_DRONE_CONNECT_ATTEMPTS attempts. " +
+                            "Make sure the Tello is powered on and try again."
                 }
                 Log.w(TAG, "Drone connection failed: $message")
                 searchState = searchState.copy(droneConnectionMessage = message)
