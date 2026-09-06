@@ -8,6 +8,8 @@ import com.flightrisk.app.llm.LlmBackend
 import com.flightrisk.app.llm.LlmSelector
 import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.vision.Detection
+import com.flightrisk.app.vision.DetectionTracker
+import com.flightrisk.app.vision.MatchScorer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -167,8 +169,20 @@ class SearchPipeline(
     /** Per-track last LLM call timestamps (for rate limiting). */
     private val llmLastCall = ConcurrentHashMap<String, Long>()
 
-    /** Per-track score history for multi-frame corroboration. */
-    private val trackScores = ConcurrentHashMap<Int, MutableList<Float>>()
+    /** IoU-based detection tracker for stable multi-frame corroboration. */
+    private val tracker = DetectionTracker(
+        iouThreshold = config.vision.trackerIouThreshold.toFloat(),
+        maxMissing = config.vision.trackerMaxMissing,
+        scoreWindow = config.vision.trackerScoreWindow,
+    )
+
+    /** Multi-signal weighted scorer. */
+    private val scorer = MatchScorer(
+        reidWeight = config.vision.scorerReidWeight.toFloat(),
+        faceWeight = config.vision.scorerFaceWeight.toFloat(),
+        reasoningWeight = config.vision.scorerReasoningWeight.toFloat(),
+        matchThreshold = config.vision.scorerMatchThreshold.toFloat(),
+    )
 
     /** Async LLM reasoning queue. */
     private val reasoningChannel = Channel<ReasoningWorkItem>(capacity = config.reasoning.queueMaxSize)
@@ -325,6 +339,7 @@ class SearchPipeline(
         pipelineScope = null
         pipelineJob = null
 
+        tracker.clear()
         locationProvider.stopUpdates()
 
         _events.tryEmit(
@@ -349,11 +364,7 @@ class SearchPipeline(
         var fpsStart = System.currentTimeMillis()
         var lastReasoningTime = 0L
 
-        val reidThreshold = config.vision.reidThreshold.toFloat()
         val faceThreshold = config.vision.faceMatchThreshold.toFloat()
-        val scorerMatchThreshold = config.vision.scorerMatchThreshold.toFloat()
-        val reidWeight = config.vision.scorerReidWeight.toFloat()
-        val faceWeight = config.vision.scorerFaceWeight.toFloat()
         val corroborationThreshold = config.reasoning.corroborationThreshold
 
         val scope = pipelineScope ?: return
@@ -409,7 +420,10 @@ class SearchPipeline(
                     matchIdx = faceMatchIdx
                 }
 
-                // 5. Score
+                // 5. Update tracker with all detections (IoU-based stable IDs)
+                val trackedDetections = tracker.update(detections)
+
+                // 6. Score + corroborate
                 var matchScore = 0f
                 var alertLevel = AlertManager.NO_MATCH
 
@@ -418,64 +432,57 @@ class SearchPipeline(
                     val detReid = reid?.compare(crop) ?: 0f
                     val detFace = face?.compare(crop) ?: 0f
 
-                    // Weighted combination (no reasoning weight yet)
-                    val totalWeight = reidWeight + faceWeight
-                    matchScore = if (totalWeight > 0f) {
-                        (detReid * reidWeight + detFace * faceWeight) / totalWeight
-                    } else {
-                        maxOf(detReid, detFace)
-                    }
+                    // Use MatchScorer for proper weighted combination with
+                    // dynamic weight redistribution for missing signals
+                    val scored = scorer.score(reidScore = detReid, faceScore = detFace)
+                    matchScore = scored.combinedScore
+                    alertLevel = scorer.alertLevel(scored)
 
-                    // Determine alert level from combined score
-                    alertLevel = when {
-                        matchScore >= scorerMatchThreshold + 0.15f -> AlertManager.CONFIRMED_MATCH
-                        matchScore >= scorerMatchThreshold -> AlertManager.POSSIBLE_MATCH
-                        else -> AlertManager.NO_MATCH
-                    }
-
-                    // Face-only promotion: if face is strong but combined is weak,
-                    // promote to possible_match
+                    // Face-only promotion: if face is strong but combined is weak
                     if (alertLevel == AlertManager.NO_MATCH && detFace >= faceThreshold) {
                         alertLevel = AlertManager.POSSIBLE_MATCH
                         matchScore = maxOf(matchScore, detFace)
                     }
 
-                    // 6. Multi-frame corroboration
-                    val bbox = detections[matchIdx].bbox
-                    val trackId = computeTrackId(bbox)
-                    val scores = trackScores.getOrPut(trackId) { mutableListOf() }
-                    scores.add(detReid)
+                    // Find the tracked detection that matches our matched detection
+                    val matchedBbox = detections[matchIdx].bbox
+                    val trackedMatch = trackedDetections.minByOrNull { td ->
+                        val iou = DetectionTracker.computeIou(td.bbox, matchedBbox)
+                        if (iou > 0f) -iou else Float.MAX_VALUE
+                    }
 
-                    // Trim to score window
-                    val window = config.vision.trackerScoreWindow
-                    while (scores.size > window) scores.removeAt(0)
+                    val trackId = trackedMatch?.trackId ?: computeTrackId(matchedBbox)
 
-                    val avgScore = scores.average().toFloat()
+                    // Add scores to the tracker's rolling window
+                    tracker.addScores(trackId, reidScore = detReid, faceScore = detFace)
 
-                    // Emit corroboration progress
+                    // Multi-frame corroboration via tracker history
+                    val trackSummary = tracker.getTrack(trackId)
+                    val framesMatched = trackSummary?.reidScores?.size ?: 0
+                    val avgReid = trackSummary?.avgReidScore ?: 0f
+
                     _events.tryEmit(
                         PipelineEvent.ConfidenceProgress(
                             trackId = trackId,
-                            framesMatched = scores.size,
+                            framesMatched = framesMatched,
                             framesNeeded = corroborationThreshold,
-                            avgScore = avgScore,
+                            avgScore = avgReid,
                         )
                     )
 
-                    // Upgrade to confirmed if corroborated
-                    if (scores.size >= corroborationThreshold
-                        && avgScore >= reidThreshold
+                    // Upgrade to confirmed if corroborated across enough frames
+                    if (framesMatched >= corroborationThreshold
+                        && avgReid >= config.vision.reidThreshold.toFloat()
                         && alertLevel != AlertManager.CONFIRMED_MATCH
                     ) {
                         alertLevel = AlertManager.CONFIRMED_MATCH
-                        matchScore = maxOf(matchScore, avgScore)
+                        matchScore = maxOf(matchScore, avgReid)
                     }
 
                     // Fire alert if match detected
                     if (alertLevel in listOf(AlertManager.CONFIRMED_MATCH, AlertManager.POSSIBLE_MATCH)) {
-                        val trackKey = computeTrackKey(bbox)
+                        val trackKey = computeTrackKey(matchedBbox)
 
-                        // Alert throttle
                         val now = System.currentTimeMillis()
                         val lastAlert = alertedTracks[trackKey]
                         val cooldownMs = (config.reasoning.alertCooldown * 1000).toLong()
@@ -483,10 +490,8 @@ class SearchPipeline(
                         if (lastAlert == null || (now - lastAlert) >= cooldownMs) {
                             alertedTracks[trackKey] = now
 
-                            // Fire audio/haptic/visual alert
                             alertManager.fireAlert(alertLevel, trackKey)
 
-                            // Get GPS location
                             val location = locationProvider.getCurrentLocation()
 
                             val matchType = if (faceScore > reidScore && faceMatchIdx != null) "face" else "reid"
@@ -519,7 +524,6 @@ class SearchPipeline(
 
                             _events.tryEmit(PipelineEvent.MatchAlert(entry))
 
-                            // Queue async LLM reasoning (rate-limited)
                             val llmCooldownMs = (config.reasoning.gemmaRateLimit * 1000).toLong()
                             val lastLlm = llmLastCall[trackKey]
                             if (llmAvailable && (lastLlm == null || (now - lastLlm) >= llmCooldownMs)) {
@@ -534,7 +538,6 @@ class SearchPipeline(
                             }
                         }
 
-                        // Auto-stop search on confirmed/possible match
                         if (running.get()) {
                             _events.tryEmit(
                                 PipelineEvent.SearchComplete(
