@@ -32,6 +32,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreen
@@ -141,6 +142,8 @@ fun FlightRiskNavHost(
     onDroneMove: (String, Int) -> Unit = { _, _ -> },
     onDroneRotate: (Int) -> Unit = {},
     onEmergencyStop: () -> Unit = {},
+    selectedSearchPattern: PatternType = PatternType.EXPANDING_SQUARE,
+    onSearchPatternChanged: (PatternType) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -191,6 +194,7 @@ fun FlightRiskNavHost(
                         droneState = droneState,
                         frameSourceMode = frameSourceMode,
                         latestDroneFrame = latestDroneFrame,
+                        selectedPattern = selectedSearchPattern,
                     ),
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
@@ -218,6 +222,7 @@ fun FlightRiskNavHost(
                     onDroneMove = onDroneMove,
                     onDroneRotate = onDroneRotate,
                     onEmergencyStop = onEmergencyStop,
+                    onSearchPatternChanged = onSearchPatternChanged,
                 )
             }
 

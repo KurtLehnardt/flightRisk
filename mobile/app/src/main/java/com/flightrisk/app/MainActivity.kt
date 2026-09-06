@@ -17,6 +17,7 @@ import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.DroneManager
 import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
 
@@ -78,6 +79,7 @@ class MainActivity : ComponentActivity() {
     private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
+    private var selectedSearchPattern by mutableStateOf(PatternType.EXPANDING_SQUARE)
 
     // AI pipeline state
     private var searchPipeline: SearchPipeline? = null
@@ -176,6 +178,8 @@ class MainActivity : ComponentActivity() {
                         onDroneMove = ::handleDroneMove,
                         onDroneRotate = ::handleDroneRotate,
                         onEmergencyStop = ::handleEmergencyStop,
+                        selectedSearchPattern = selectedSearchPattern,
+                        onSearchPatternChanged = { selectedSearchPattern = it },
                     )
                 }
             }
@@ -448,7 +452,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             Log.i(TAG, "Auto-takeoff: drone already flying")
                         }
-                        manager.startSearchPattern()
+                        manager.startSearchPattern(selectedSearchPattern)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
