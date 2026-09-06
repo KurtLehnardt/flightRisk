@@ -337,14 +337,14 @@ class TelloFrameSource(
             }
 
             if (!didWork) {
-                Thread.sleep(IDLE_SLEEP_MS)
+                try {
+                    Thread.sleep(IDLE_SLEEP_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
             }
         }
         Log.d(TAG, "Decode loop exited")
-        if (!isRunning) {
-            Log.e(TAG, "Decode loop exited unexpectedly")
-            onStreamFrozen?.invoke() // Trigger stream recovery in DroneManager
-        }
     }
 
     // -- NAL unit handling ----------------------------------------------------

@@ -166,6 +166,9 @@ class SearchPipeline(
     /** Per-track alerted timestamps (for cooldown). */
     private val alertedTracks = ConcurrentHashMap<String, Long>()
 
+    /** Tracks dismissed via "Not My Child" — suppressed from future alerts. */
+    private val suppressedTracks = ConcurrentHashMap.newKeySet<String>()
+
     /** Per-track last LLM call timestamps (for rate limiting). */
     private val llmLastCall = ConcurrentHashMap<String, Long>()
 
@@ -189,6 +192,34 @@ class SearchPipeline(
 
     /** Whether the search is actively running. */
     val isRunning: Boolean get() = running.get()
+
+    /**
+     * Suppress a track from future alerts (called when user taps "Not My Child").
+     * The track key is the spatial grid key (e.g. "11_7").
+     */
+    fun suppressTrack(trackKey: String) {
+        suppressedTracks.add(trackKey)
+        Log.i(TAG, "Track suppressed: $trackKey")
+    }
+
+    /**
+     * Whether the pipeline is paused waiting for user to confirm/dismiss a match.
+     * Frame processing halts while paused — the pipeline stays running but
+     * skips detection until [resumeAfterMatch] is called.
+     */
+    @Volatile
+    var matchPaused: Boolean = false
+        private set
+
+    fun pauseForMatch() {
+        matchPaused = true
+        Log.i(TAG, "Pipeline paused for match inspection")
+    }
+
+    fun resumeAfterMatch() {
+        matchPaused = false
+        Log.i(TAG, "Pipeline resumed after match inspection")
+    }
 
     /** Frames-per-second (updated once per second). */
     @Volatile
@@ -340,6 +371,7 @@ class SearchPipeline(
         pipelineJob = null
 
         tracker.clear()
+        suppressedTracks.clear()
         locationProvider.stopUpdates()
 
         _events.tryEmit(
@@ -370,6 +402,12 @@ class SearchPipeline(
         val scope = pipelineScope ?: return
 
         while (running.get() && scope.isActive) {
+            // Wait while paused for match inspection
+            if (matchPaused) {
+                delay(200)
+                continue
+            }
+
             try {
                 // 1. Acquire frame
                 val frame = frameSource?.getFrame()
@@ -480,10 +518,13 @@ class SearchPipeline(
                         matchScore = maxOf(matchScore, avgReid)
                     }
 
-                    // Fire alert if match detected
+                    // Fire alert if match detected (skip suppressed tracks)
                     if (alertLevel in listOf(AlertManager.CONFIRMED_MATCH, AlertManager.POSSIBLE_MATCH)) {
                         val trackKey = computeTrackKey(matchedBbox)
 
+                        if (trackKey in suppressedTracks) {
+                            // User already dismissed this track — skip silently
+                        } else {
                         val now = System.currentTimeMillis()
                         val lastAlert = alertedTracks[trackKey]
                         val cooldownMs = (config.reasoning.alertCooldown * 1000).toLong()
@@ -525,6 +566,16 @@ class SearchPipeline(
 
                             _events.tryEmit(PipelineEvent.MatchAlert(entry))
 
+                            // Pause pipeline until user confirms or dismisses
+                            pauseForMatch()
+
+                            _events.tryEmit(
+                                PipelineEvent.SearchComplete(
+                                    reason = "match_found",
+                                    alertLevel = alertLevel,
+                                )
+                            )
+
                             val llmCooldownMs = (config.reasoning.gemmaRateLimit * 1000).toLong()
                             val lastLlm = llmLastCall[trackKey]
                             if (llmAvailable && (lastLlm == null || (now - lastLlm) >= llmCooldownMs)) {
@@ -538,15 +589,7 @@ class SearchPipeline(
                                 item?.let { reasoningChannel.trySend(it) }
                             }
                         }
-
-                        if (running.get()) {
-                            _events.tryEmit(
-                                PipelineEvent.SearchComplete(
-                                    reason = "match_found",
-                                    alertLevel = alertLevel,
-                                )
-                            )
-                        }
+                        } // end suppression else
                     }
                 }
 
