@@ -321,4 +321,118 @@ class MatchScorerTest {
         val scorer = MatchScorer()
         assertEquals(0.0f, scorer.reasoningToScore(null), 0.001f)
     }
+
+    // -- Edge cases --
+
+    @Test
+    fun `score with only face signal redistributes all weight`() {
+        val scorer = MatchScorer()
+        val result = scorer.score(reidScore = 0.0f, faceScore = 0.75f)
+        assertEquals(1, result.signalsUsed)
+        assertEquals(0.75f, result.combinedScore, 0.01f)
+    }
+
+    @Test
+    fun `alertLevel boundary - score exactly at 0_65 with 2 signals is confirmed`() {
+        val scorer = MatchScorer()
+        val result = ScoredResult(
+            combinedScore = 0.65f,
+            isMatch = true,
+            confidenceLevel = "high",
+            signalsUsed = 2,
+        )
+        assertEquals("confirmed_match", scorer.alertLevel(result))
+    }
+
+    @Test
+    fun `alertLevel boundary - score 0_65 with 1 signal is not confirmed`() {
+        val scorer = MatchScorer()
+        val result = ScoredResult(
+            combinedScore = 0.65f,
+            isMatch = true,
+            confidenceLevel = "high",
+            signalsUsed = 1,
+        )
+        assertEquals("possible_match", scorer.alertLevel(result))
+    }
+
+    @Test
+    fun `alertLevel with medium confidence below threshold is weak_signal`() {
+        val scorer = MatchScorer(matchThreshold = 0.45f)
+        val result = ScoredResult(
+            combinedScore = 0.36f,
+            isMatch = false,
+            confidenceLevel = "medium",
+            signalsUsed = 2,
+        )
+        // 0.36 < 0.45 threshold, so not possible_match; 0.36 >= 0.225 (half threshold)
+        assertEquals("weak_signal", scorer.alertLevel(result))
+    }
+
+    @Test
+    fun `score all signals at 1_0 gives maximum combined`() {
+        val scorer = MatchScorer()
+        val result = scorer.score(
+            reidScore = 1.0f,
+            faceScore = 1.0f,
+            reasoningResult = ReasoningResult(isMatch = true, confidence = "high", reasoning = ""),
+        )
+        // 1.0*0.35 + 1.0*0.40 + 0.90*0.25 = 0.975
+        assertEquals(0.975f, result.combinedScore, 0.01f)
+        assertEquals("high", result.confidenceLevel)
+    }
+
+    @Test
+    fun `multiple extra signals combine correctly`() {
+        val scorer = MatchScorer()
+        scorer.registerSignal("thermal", 0.10f)
+        scorer.registerSignal("gait", 0.10f)
+        val result = scorer.score(
+            reidScore = 0.6f,
+            faceScore = 0.5f,
+            extraSignals = mapOf("thermal" to 0.9f, "gait" to 0.7f),
+        )
+        assertEquals(4, result.signalsUsed)
+        assertTrue(result.combinedScore > 0.5f)
+    }
+
+    /**
+     * Documents that SearchPipeline.frameLoop bypasses MatchScorer
+     * and uses inline weighted averaging. This test captures what
+     * the pipeline ACTUALLY computes vs what MatchScorer would compute,
+     * demonstrating the divergence.
+     */
+    @Test
+    fun `pipeline inline scoring diverges from MatchScorer`() {
+        val reidWeight = 0.35f
+        val faceWeight = 0.40f
+        val reidScore = 0.7f
+        val faceScore = 0.6f
+
+        // Pipeline inline logic (SearchPipeline.kt:422-424):
+        val totalWeight = reidWeight + faceWeight
+        val pipelineScore = (reidScore * reidWeight + faceScore * faceWeight) / totalWeight
+
+        // MatchScorer logic:
+        val scorer = MatchScorer(reidWeight = reidWeight, faceWeight = faceWeight)
+        val scorerResult = scorer.score(reidScore = reidScore, faceScore = faceScore)
+
+        // They should match for the 2-signal case
+        assertEquals(
+            "Pipeline and MatchScorer should agree on 2-signal scoring",
+            pipelineScore, scorerResult.combinedScore, 0.01f,
+        )
+
+        // But pipeline cannot incorporate reasoning - it hard-codes
+        // totalWeight = reidWeight + faceWeight, never including reasoning
+        val withReasoning = scorer.score(
+            reidScore = reidScore,
+            faceScore = faceScore,
+            reasoningResult = ReasoningResult(isMatch = true, confidence = "high", reasoning = ""),
+        )
+        assertTrue(
+            "MatchScorer with reasoning gives different score than pipeline inline",
+            withReasoning.combinedScore != pipelineScore,
+        )
+    }
 }
