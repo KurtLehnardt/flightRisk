@@ -7,6 +7,10 @@ import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.llm.LlmBackend
 import com.flightrisk.app.llm.LlmSelector
 import com.flightrisk.app.location.LocationProvider
+import com.flightrisk.app.observability.MetricsCollector
+import com.flightrisk.app.observability.StructuredLogger
+import com.flightrisk.app.persistence.SessionRepository
+import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectionTracker
 import com.flightrisk.app.vision.MatchScorer
@@ -69,6 +73,8 @@ class SearchPipeline(
     private val llmSelector: LlmSelector,
     private val alertManager: AlertManager,
     private val locationProvider: LocationProvider,
+    val sessionRepository: SessionRepository? = null,
+    val sessionRecorder: SessionRecorder? = null,
 ) {
 
     companion object {
@@ -189,6 +195,32 @@ class SearchPipeline(
 
     /** Async LLM reasoning queue. */
     private val reasoningChannel = Channel<ReasoningWorkItem>(capacity = config.reasoning.queueMaxSize)
+
+    /** Structured logger for pipeline events. */
+    val logger = StructuredLogger("pipeline")
+
+    /** Per-session metrics collector. */
+    val metrics = MetricsCollector()
+
+    /** Active session ID (set when persistence is wired). */
+    @Volatile
+    var currentSessionId: String? = null
+        private set
+
+    /** Total frames processed in the current search. */
+    @Volatile
+    var totalFrames: Int = 0
+        private set
+
+    /** Total detections in the current search. */
+    @Volatile
+    var totalDetections: Int = 0
+        private set
+
+    /** Total matches in the current search. */
+    @Volatile
+    var totalMatches: Int = 0
+        private set
 
     /** Whether the search is actively running. */
     val isRunning: Boolean get() = running.get()
@@ -343,8 +375,33 @@ class SearchPipeline(
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         pipelineScope = scope
 
+        totalFrames = 0
+        totalDetections = 0
+        totalMatches = 0
+        metrics.reset()
+
         // Start location updates for match tagging
         locationProvider.startUpdates()
+
+        // Create a persistence session
+        scope.launch {
+            try {
+                val repo = sessionRepository
+                if (repo != null) {
+                    val source = if (frameSource != null) "drone" else "camera"
+                    currentSessionId = repo.createSession(
+                        source = source,
+                        targetDescription = targetDescription,
+                    )
+                    logger.info("session_created", "sessionId" to currentSessionId)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create session: ${e.message}")
+            }
+        }
+
+        // Start video recording
+        sessionRecorder?.start()
 
         // Launch the async LLM reasoning worker
         scope.launch { reasoningWorker() }
@@ -352,7 +409,7 @@ class SearchPipeline(
         // Launch the main frame processing loop
         pipelineJob = scope.launch { frameLoop() }
 
-        Log.i(TAG, "Search pipeline started")
+        logger.info("pipeline_started")
     }
 
     /**
@@ -366,6 +423,29 @@ class SearchPipeline(
     fun stop(reason: String = "user_stopped") {
         if (!running.compareAndSet(true, false)) return
 
+        val recordingPath = sessionRecorder?.stop()
+
+        // End persistence session
+        val sessionId = currentSessionId
+        if (sessionId != null && sessionRepository != null) {
+            val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            scope.launch {
+                try {
+                    sessionRepository.endSession(
+                        sessionId = sessionId,
+                        totalFrames = totalFrames,
+                        totalDetections = totalDetections,
+                        totalMatches = totalMatches,
+                        recordingPath = recordingPath,
+                    )
+                    logger.info("session_ended", "sessionId" to sessionId, "reason" to reason)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to end session: ${e.message}")
+                }
+            }
+        }
+        currentSessionId = null
+
         pipelineScope?.cancel()
         pipelineScope = null
         pipelineJob = null
@@ -378,7 +458,7 @@ class SearchPipeline(
             PipelineEvent.SearchComplete(reason = reason, alertLevel = "no_match")
         )
 
-        Log.i(TAG, "Search pipeline stopped: $reason")
+        logger.info("pipeline_stopped", "reason" to reason)
     }
 
     // ------------------------------------------------------------------
@@ -425,6 +505,9 @@ class SearchPipeline(
                 // 2. Detect persons
                 val detections = detector.detect(frame)
                 personsDetected = detections.size
+                totalDetections += detections.size
+                metrics.incFrames()
+                metrics.incPersons(detections.size)
 
                 // 3. ReID match
                 var matchIdx: Int? = null
@@ -565,6 +648,28 @@ class SearchPipeline(
                             }
 
                             _events.tryEmit(PipelineEvent.MatchAlert(entry))
+                            totalMatches++
+                            metrics.recordMatch(matchType, matchScore.toDouble())
+                            logger.match(matchScore, matchType, "trackKey" to trackKey, "alertLevel" to alertLevel)
+
+                            // Persist match to database
+                            val sid = currentSessionId
+                            if (sid != null && sessionRepository != null) {
+                                pipelineScope?.launch {
+                                    try {
+                                        sessionRepository.addMatch(
+                                            sessionId = sid,
+                                            matchType = matchType,
+                                            reidScore = reidScore.toDouble(),
+                                            faceScore = faceScore.toDouble(),
+                                            combinedScore = matchScore.toDouble(),
+                                            snapshot = crop,
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to persist match: ${e.message}")
+                                    }
+                                }
+                            }
 
                             // Pause pipeline until user confirms or dismisses
                             pauseForMatch()
@@ -620,6 +725,10 @@ class SearchPipeline(
 
                 // Annotate frame
                 val annotated = detector.annotate(frame, detections, matchIdx)
+                totalFrames++
+
+                // Write frame to recording
+                sessionRecorder?.writeFrame(annotated)
 
                 // FPS calculation
                 frameCount++

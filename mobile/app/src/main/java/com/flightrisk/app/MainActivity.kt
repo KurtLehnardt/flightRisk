@@ -24,7 +24,9 @@ import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
 import com.flightrisk.app.llm.LlmSelector
 import com.flightrisk.app.location.LocationProvider
+import com.flightrisk.app.persistence.SessionRepository
 import com.flightrisk.app.pipeline.SearchPipeline
+import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.FaceRecognizer
 import com.flightrisk.app.vision.PersonDetector
@@ -88,6 +90,8 @@ class MainActivity : ComponentActivity() {
     private var llmSelector: LlmSelector? = null
     private var locationProvider: LocationProvider? = null
     private var cameraFrameSource: CameraXFrameSource? = null
+    private var sessionRepository: SessionRepository? = null
+    private var sessionRecorder: SessionRecorder? = null
 
 
     // ------------------------------------------------------------------
@@ -301,7 +305,11 @@ class MainActivity : ComponentActivity() {
             // Bail out if user stopped search while we were loading models
             if (!searchState.isSearching) return@launch
 
-            val pipeline = SearchPipeline(config, ls, am, lp)
+            val repo = sessionRepository ?: SessionRepository(ctx).also { sessionRepository = it }
+            val recordingsDir = java.io.File(ctx.filesDir, "recordings")
+            val recorder = SessionRecorder(recordingsDir).also { sessionRecorder = it }
+
+            val pipeline = SearchPipeline(config, ls, am, lp, repo, recorder)
             searchPipeline = pipeline
 
             // Wire frame source: pull from drone or camera based on active mode
