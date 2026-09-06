@@ -47,10 +47,24 @@ class SearchPatternTest {
     @Test
     fun `expanding square grows side length`() {
         val waypoints = SearchPattern.generateExpandingSquare(
-            initialSideCm = 100, growthCm = 100, numExpansions = 3,
+            initialSideCm = 100, growthCm = 100, numExpansions = 2,
         )
-        val forwardMoves = waypoints.filter { it.distanceCm > 0 && it.rotateDegrees == 0 }
-        assertTrue("Should have forward moves", forwardMoves.isNotEmpty())
+        // Group forward moves into sides (split by rotation waypoints)
+        val sides = mutableListOf<Int>()
+        var currentSide = 0
+        for (wp in waypoints) {
+            if (wp.distanceCm > 0) {
+                currentSide += wp.distanceCm
+            }
+            if (wp.rotateDegrees != 0) {
+                if (currentSide > 0) sides.add(currentSide)
+                currentSide = 0
+            }
+        }
+        if (currentSide > 0) sides.add(currentSide)
+        assertTrue("Should have multiple sides", sides.size >= 4)
+        assertTrue("Later sides should be longer than first",
+            sides.last() > sides.first())
     }
 
     @Test
@@ -118,19 +132,25 @@ class SearchPatternTest {
     }
 
     @Test
-    fun `parallel track alternates forward and back`() {
+    fun `parallel track alternates forward and back between strips`() {
         val waypoints = SearchPattern.generateParallelTrack(
             widthCm = 300, depthCm = 200, stripWidthCm = 100,
         )
-        val longMoves = waypoints.filter { it.direction in listOf("forward", "back") }
-        val directions = longMoves.map { it.direction }
-        for (i in 0 until directions.size - 1) {
-            if (directions[i] == "forward" && directions[i + 1] != "right".also { } ) {
-                // Adjacent forward/back moves within same strip are fine
+        // Extract one direction per strip: first forward/back move before each lateral move
+        val stripDirections = mutableListOf<String>()
+        for (wp in waypoints) {
+            if (wp.direction in listOf("forward", "back") && wp.distanceCm > 0) {
+                if (stripDirections.isEmpty() || stripDirections.last() != wp.direction) {
+                    stripDirections.add(wp.direction)
+                }
             }
         }
-        assertTrue("Should have both forward and back moves",
-            directions.contains("forward") && directions.contains("back"))
+        assertTrue("Should have at least 2 strips", stripDirections.size >= 2)
+        assertEquals("First strip should go forward", "forward", stripDirections[0])
+        assertEquals("Second strip should go back", "back", stripDirections[1])
+        if (stripDirections.size >= 3) {
+            assertEquals("Third strip should go forward", "forward", stripDirections[2])
+        }
     }
 
     @Test

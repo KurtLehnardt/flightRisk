@@ -286,13 +286,13 @@ class AlertManagerTest {
     }
 
     @Test
-    fun `weak_signal is not suppressed by confirmed_match cooldown for same track`() {
+    fun `weak_signal is suppressed by same track cooldown`() {
         manager.currentTimeMs = 0L
         manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
 
         manager.currentTimeMs = 500L
         val weak = manager.fireAlert(AlertManager.WEAK_SIGNAL, "track_1")
-        // Same track, still within cooldown — should be suppressed
+        // Cooldown is per-track regardless of alert level
         assertNull(weak)
     }
 
