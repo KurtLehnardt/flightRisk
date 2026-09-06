@@ -613,6 +613,12 @@ class MainActivity : ComponentActivity() {
                             // to avoid cancelling this collector mid-collect)
                             lifecycleScope.launch { cleanUpDroneConnection() }
                         }
+                        is DroneManager.DroneAlert.BatteryWarning -> {
+                            Log.w(TAG, "Drone alert: battery warning ${alert.percent}%")
+                            searchState = searchState.copy(
+                                droneAlert = "Battery low: ${alert.percent}% — consider landing soon",
+                            )
+                        }
                         is DroneManager.DroneAlert.BatteryCritical -> {
                             Log.e(TAG, "Drone alert: battery critical ${alert.percent}%")
                             searchState = searchState.copy(

@@ -56,6 +56,7 @@ class DroneManager(
 
     sealed class DroneAlert {
         data object ConnectionLost : DroneAlert()
+        data class BatteryWarning(val percent: Int) : DroneAlert()
         data class BatteryCritical(val percent: Int) : DroneAlert()
         data object CrashDetected : DroneAlert()
         data object StreamFrozen : DroneAlert()
@@ -427,7 +428,8 @@ class DroneManager(
         monitorJob = scope.launch {
             var wasConnected = true
             var wasFlying = false
-            var batteryAlertSent = false
+            var batteryWarnSent = false
+            var batteryCriticalSent = false
 
             connection.state.collect { state ->
                 val isConnected = state.connectionState != TelloConnectionState.DISCONNECTED &&
@@ -439,17 +441,25 @@ class DroneManager(
                 wasConnected = isConnected
 
                 val battery = state.telemetry.battery
-                if (battery != null && battery in 0..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
+                if (battery != null && battery in (config.drone.batteryCriticalThreshold + 1)..config.drone.batteryWarnThreshold && !batteryWarnSent) {
+                    Log.w(TAG, "Battery warning: $battery%")
+                    _alerts.tryEmit(DroneAlert.BatteryWarning(battery))
+                    batteryWarnSent = true
+                }
+                if (battery != null && battery in 0..config.drone.batteryCriticalThreshold && !batteryCriticalSent) {
                     Log.w(TAG, "Battery critical: $battery%")
                     _alerts.tryEmit(DroneAlert.BatteryCritical(battery))
-                    batteryAlertSent = true
+                    batteryCriticalSent = true
                     if (state.telemetry.isFlying) {
                         Log.w(TAG, "Auto-landing due to critical battery")
                         land()
                     }
                 }
-                if (battery != null && battery > config.drone.batteryCriticalThreshold) {
-                    batteryAlertSent = false
+                if (battery != null && battery > config.drone.batteryWarnThreshold) {
+                    batteryWarnSent = false
+                    batteryCriticalSent = false
+                } else if (battery != null && battery > config.drone.batteryCriticalThreshold) {
+                    batteryCriticalSent = false
                 }
 
                 if (wasFlying && !state.telemetry.isFlying) {
