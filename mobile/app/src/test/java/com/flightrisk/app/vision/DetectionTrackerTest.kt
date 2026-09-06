@@ -174,4 +174,67 @@ class DetectionTrackerTest {
         val result = tracker.update(emptyList())
         assertTrue(result.isEmpty())
     }
+
+    // -- IoU edge cases --
+
+    @Test
+    fun `computeIou with large boxes`() {
+        val box1 = intArrayOf(0, 0, 1920, 1080)
+        val box2 = intArrayOf(0, 0, 1920, 1080)
+        assertEquals(1.0f, DetectionTracker.computeIou(box1, box2), 0.001f)
+    }
+
+    @Test
+    fun `computeIou with single pixel overlap`() {
+        val box1 = intArrayOf(0, 0, 10, 10)
+        val box2 = intArrayOf(9, 9, 19, 19)
+        // intersection: (9,9)-(10,10) = 1*1 = 1
+        // union: 100 + 100 - 1 = 199
+        assertEquals(1f / 199f, DetectionTracker.computeIou(box1, box2), 0.001f)
+    }
+
+    @Test
+    fun `computeIou with both boxes malformed returns zero`() {
+        val bad1 = intArrayOf(50, 10, 10, 50)
+        val bad2 = intArrayOf(10, 50, 50, 10)
+        assertEquals(0.0f, DetectionTracker.computeIou(bad1, bad2), 0.001f)
+    }
+
+    // -- addScores and getTrack without Bitmap --
+
+    @Test
+    fun `addScores for nonexistent track is no-op`() {
+        val tracker = DetectionTracker()
+        tracker.addScores(trackId = 999, reidScore = 0.8f)
+        assertNull(tracker.getTrack(999))
+    }
+
+    @Test
+    fun `addScores with null scores is no-op`() {
+        val tracker = DetectionTracker()
+        tracker.addScores(trackId = 0, reidScore = null, faceScore = null)
+        assertNull(tracker.getTrack(0))
+    }
+
+    @Test
+    fun `activeTracks is empty after creation`() {
+        val tracker = DetectionTracker()
+        assertTrue(tracker.activeTracks.isEmpty())
+    }
+
+    @Test
+    fun `multiple clears are safe`() {
+        val tracker = DetectionTracker()
+        tracker.clear()
+        tracker.clear()
+        assertTrue(tracker.activeTracks.isEmpty())
+    }
+
+    @Test
+    fun `empty update after empty update returns empty`() {
+        val tracker = DetectionTracker()
+        tracker.update(emptyList())
+        val result = tracker.update(emptyList())
+        assertTrue(result.isEmpty())
+    }
 }

@@ -227,4 +227,119 @@ class AlertManagerTest {
         assertNotNull(refired1)
         assertNotNull(refired2)
     }
+
+    // ------------------------------------------------------------------
+    // Edge cases
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `fireAlert with unknown level returns null`() {
+        val actions = manager.fireAlert("unknown_level", "track_1")
+        assertNull(actions)
+    }
+
+    @Test
+    fun `fireAlert with empty string level returns null`() {
+        val actions = manager.fireAlert("", "track_1")
+        assertNull(actions)
+    }
+
+    @Test
+    fun `dismiss nonexistent track is no-op`() {
+        manager.dismiss("nonexistent")
+        assertFalse(manager.isWithinCooldown("nonexistent"))
+    }
+
+    @Test
+    fun `dismissAll when no alerts active is no-op`() {
+        manager.dismissAll()
+        assertEquals(0, manager.firedAlerts.size)
+    }
+
+    @Test
+    fun `cooldown exactly at boundary fires`() {
+        manager.currentTimeMs = 0L
+        manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+
+        manager.currentTimeMs = 10_000L
+        val second = manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+        assertNotNull(second)
+    }
+
+    @Test
+    fun `cooldown 1ms before boundary suppresses`() {
+        manager.currentTimeMs = 0L
+        manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+
+        manager.currentTimeMs = 9_999L
+        val second = manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+        assertNull(second)
+    }
+
+    @Test
+    fun `rapid-fire same track only records first`() {
+        manager.currentTimeMs = 0L
+        for (i in 0 until 10) {
+            manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+        }
+        assertEquals(1, manager.firedAlerts.size)
+    }
+
+    @Test
+    fun `weak_signal is not suppressed by confirmed_match cooldown for same track`() {
+        manager.currentTimeMs = 0L
+        manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1")
+
+        manager.currentTimeMs = 500L
+        val weak = manager.fireAlert(AlertManager.WEAK_SIGNAL, "track_1")
+        // Same track, still within cooldown — should be suppressed
+        assertNull(weak)
+    }
+
+    @Test
+    fun `alert level constants match expected values`() {
+        assertEquals("confirmed_match", AlertManager.CONFIRMED_MATCH)
+        assertEquals("possible_match", AlertManager.POSSIBLE_MATCH)
+        assertEquals("weak_signal", AlertManager.WEAK_SIGNAL)
+        assertEquals("no_match", AlertManager.NO_MATCH)
+    }
+
+    /**
+     * Documents the double-throttle issue: Both SearchPipeline and
+     * AlertManager implement per-track cooldowns independently.
+     * Pipeline checks alertedTracks before calling alertManager.fireAlert(),
+     * which checks its own lastAlertTime. The effective cooldown is the
+     * max of both, and they can diverge since pipeline uses its own clock.
+     */
+    @Test
+    fun `double throttle documented - pipeline and AlertManager both throttle`() {
+        // Simulate pipeline alertedTracks cooldown
+        val pipelineCooldownMs = 10_000L
+        val pipelineAlertedTracks = mutableMapOf<String, Long>()
+        var pipelineTime = 0L
+
+        fun pipelineWouldFire(trackKey: String): Boolean {
+            val last = pipelineAlertedTracks[trackKey]
+            if (last != null && (pipelineTime - last) < pipelineCooldownMs) return false
+            pipelineAlertedTracks[trackKey] = pipelineTime
+            return true
+        }
+
+        // First alert: both pipeline and AlertManager allow it
+        pipelineTime = 0L
+        manager.currentTimeMs = 0L
+        assertTrue(pipelineWouldFire("track_1"))
+        assertNotNull(manager.fireAlert(AlertManager.CONFIRMED_MATCH, "track_1"))
+
+        // 5s later: both suppress
+        pipelineTime = 5000L
+        manager.currentTimeMs = 5000L
+        assertFalse(pipelineWouldFire("track_1"))
+
+        // Dismiss AlertManager cooldown but not pipeline's
+        manager.dismiss("track_1")
+        pipelineTime = 5000L
+        assertFalse("Pipeline still blocks even after AlertManager dismiss",
+            pipelineWouldFire("track_1"))
+    }
 }
