@@ -444,12 +444,13 @@ class SearchPipeline(
                         matchScore = maxOf(matchScore, detFace)
                     }
 
-                    // Find the tracked detection that matches our matched detection
+                    // Find the tracked detection with highest IoU to our match
                     val matchedBbox = detections[matchIdx].bbox
-                    val trackedMatch = trackedDetections.minByOrNull { td ->
-                        val iou = DetectionTracker.computeIou(td.bbox, matchedBbox)
-                        if (iou > 0f) -iou else Float.MAX_VALUE
-                    }
+                    val trackedMatch = trackedDetections
+                        .map { td -> td to DetectionTracker.computeIou(td.bbox, matchedBbox) }
+                        .filter { it.second > 0f }
+                        .maxByOrNull { it.second }
+                        ?.first
 
                     val trackId = trackedMatch?.trackId ?: computeTrackId(matchedBbox)
 
