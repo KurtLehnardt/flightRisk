@@ -60,7 +60,6 @@ fun FlightControlsOverlay(
     selectedPattern: PatternType,
     onToggleExpanded: () -> Unit,
     onPatternSelected: (PatternType) -> Unit,
-    onTakeoff: () -> Unit,
     onLand: () -> Unit,
     onMove: (direction: String, distanceCm: Int) -> Unit,
     onRotate: (degrees: Int) -> Unit,
@@ -168,28 +167,8 @@ fun FlightControlsOverlay(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (!isFlying) {
-                    val takeoffText = stringResource(R.string.drone_takeoff)
-                    Button(
-                        onClick = onTakeoff,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MatchGreen,
-                            contentColor = HudWhite,
-                        ),
-                        modifier = Modifier
-                            .size(64.dp)
-                            .semantics { contentDescription = takeoffText },
-                        shape = CircleShape,
-                    ) {
-                        Text(
-                            text = takeoffText,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                } else {
+                if (isFlying) {
+                    Spacer(modifier = Modifier.height(12.dp))
                     // Full flight controls
                     Box(modifier = Modifier.fillMaxWidth()) {
                         val emergencyText = stringResource(R.string.drone_emergency_land)

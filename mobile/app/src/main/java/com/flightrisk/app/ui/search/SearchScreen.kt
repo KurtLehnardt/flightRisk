@@ -344,7 +344,6 @@ fun SearchScreen(
                 selectedPattern = state.selectedPattern,
                 onToggleExpanded = { controlsExpanded = !controlsExpanded },
                 onPatternSelected = onSearchPatternChanged,
-                onTakeoff = onTakeoff,
                 onLand = onLand,
                 onMove = onDroneMove,
                 onRotate = onDroneRotate,
