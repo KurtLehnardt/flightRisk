@@ -38,6 +38,7 @@ import com.flightrisk.app.ui.search.SearchScreenState
 import com.flightrisk.app.ui.settings.SettingsScreenState
 import com.flightrisk.app.ui.theme.FlightRiskTheme
 import androidx.lifecycle.lifecycleScope
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -395,6 +396,10 @@ class MainActivity : ComponentActivity() {
                             searchState = searchState.copy(
                                 activeAlert = event.matchEntry,
                             )
+                            // Pause drone search and hover when match detected
+                            if (frameSourceMode == FrameSourceMode.DRONE) {
+                                droneManager?.pauseSearchForMatch()
+                            }
                         }
                         is SearchPipeline.PipelineEvent.ConfidenceProgress -> {
                             searchState = searchState.copy(
@@ -417,16 +422,32 @@ class MainActivity : ComponentActivity() {
             // Start the pipeline
             pipeline.start()
 
-            // Take off and start search pattern if drone is connected
+            // Auto-takeoff and start search pattern if drone is connected
             if (currentFrameSourceMode == FrameSourceMode.DRONE) {
                 val manager = droneManager
                 if (manager != null) {
-                    val alreadyFlying = manager.droneState.value.telemetry.isFlying
-                    if (!alreadyFlying) {
-                        manager.takeoff()
-                        delay(3000)
+                    try {
+                        val alreadyFlying = manager.droneState.value.telemetry.isFlying
+                        if (!alreadyFlying) {
+                            Log.i(TAG, "Auto-takeoff: sending takeoff command")
+                            val success = manager.takeoff()
+                            if (success) {
+                                Log.i(TAG, "Auto-takeoff: success, waiting for stabilization")
+                                delay(3000)
+                            } else {
+                                Log.e(TAG, "Auto-takeoff: takeoff command failed")
+                            }
+                        } else {
+                            Log.i(TAG, "Auto-takeoff: drone already flying")
+                        }
+                        manager.startSearchPattern()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Auto-takeoff/search failed: ${e.message}", e)
                     }
-                    manager.startSearchPattern()
+                } else {
+                    Log.w(TAG, "Auto-takeoff: droneManager is null")
                 }
             }
 
@@ -453,6 +474,7 @@ class MainActivity : ComponentActivity() {
     private fun handleDismissAlert() {
         alertManager?.dismissAll()
         searchState = searchState.copy(activeAlert = null)
+        droneManager?.resumeSearch()
     }
 
     private fun handleDismissDroneAlert() {
@@ -464,7 +486,7 @@ class MainActivity : ComponentActivity() {
         alertManager?.dismissAll()
         Log.i(TAG, "Not my child: track=${alert?.trackId}")
         searchState = searchState.copy(activeAlert = null)
-        // Future: record negative feedback for this track
+        droneManager?.resumeSearch()
     }
 
     // ------------------------------------------------------------------
@@ -605,6 +627,12 @@ class MainActivity : ComponentActivity() {
                         }
                         is DroneManager.DroneAlert.StreamFrozen -> {
                             Log.w(TAG, "Drone alert: stream frozen, recovering")
+                        }
+                        is DroneManager.DroneAlert.ObstacleDetected -> {
+                            Log.w(TAG, "Drone alert: obstacle, action=${alert.action}, depth=${alert.centerDepth}")
+                        }
+                        is DroneManager.DroneAlert.MatchPause -> {
+                            Log.i(TAG, "Drone alert: search paused for match inspection")
                         }
                     }
                 }
