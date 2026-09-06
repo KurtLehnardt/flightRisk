@@ -17,6 +17,7 @@ import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.DroneManager
 import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
 
@@ -24,7 +25,9 @@ import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
 import com.flightrisk.app.llm.LlmSelector
 import com.flightrisk.app.location.LocationProvider
+import com.flightrisk.app.persistence.SessionRepository
 import com.flightrisk.app.pipeline.SearchPipeline
+import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.FaceRecognizer
 import com.flightrisk.app.vision.PersonDetector
@@ -57,6 +60,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val MAX_DRONE_CONNECT_ATTEMPTS = 3
+        private const val DRONE_RETRY_DELAY_MS = 2000L
     }
 
     // ------------------------------------------------------------------
@@ -76,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
+    private var selectedSearchPattern by mutableStateOf(PatternType.EXPANDING_SQUARE)
 
     // AI pipeline state
     private var searchPipeline: SearchPipeline? = null
@@ -88,6 +94,8 @@ class MainActivity : ComponentActivity() {
     private var llmSelector: LlmSelector? = null
     private var locationProvider: LocationProvider? = null
     private var cameraFrameSource: CameraXFrameSource? = null
+    private var sessionRepository: SessionRepository? = null
+    private var sessionRecorder: SessionRecorder? = null
 
 
     // ------------------------------------------------------------------
@@ -172,6 +180,8 @@ class MainActivity : ComponentActivity() {
                         onDroneMove = ::handleDroneMove,
                         onDroneRotate = ::handleDroneRotate,
                         onEmergencyStop = ::handleEmergencyStop,
+                        selectedSearchPattern = selectedSearchPattern,
+                        onSearchPatternChanged = { selectedSearchPattern = it },
                     )
                 }
             }
@@ -301,7 +311,11 @@ class MainActivity : ComponentActivity() {
             // Bail out if user stopped search while we were loading models
             if (!searchState.isSearching) return@launch
 
-            val pipeline = SearchPipeline(config, ls, am, lp)
+            val repo = sessionRepository ?: SessionRepository(ctx).also { sessionRepository = it }
+            val recordingsDir = java.io.File(ctx.filesDir, "recordings")
+            val recorder = SessionRecorder(recordingsDir).also { sessionRecorder = it }
+
+            val pipeline = SearchPipeline(config, ls, am, lp, repo, recorder)
             searchPipeline = pipeline
 
             // Wire frame source: pull from drone or camera based on active mode
@@ -440,7 +454,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             Log.i(TAG, "Auto-takeoff: drone already flying")
                         }
-                        manager.startSearchPattern()
+                        manager.startSearchPattern(selectedSearchPattern)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -576,7 +590,17 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            val success = manager.connectAndStream()
+            var success = false
+            for (attempt in 1..MAX_DRONE_CONNECT_ATTEMPTS) {
+                Log.i(TAG, "Drone connect attempt $attempt/$MAX_DRONE_CONNECT_ATTEMPTS")
+                success = manager.connectAndStream()
+                if (success) break
+                if (attempt < MAX_DRONE_CONNECT_ATTEMPTS) {
+                    Log.i(TAG, "Retrying drone connection in ${DRONE_RETRY_DELAY_MS}ms...")
+                    delay(DRONE_RETRY_DELAY_MS)
+                    if (droneManager == null) return@launch
+                }
+            }
             if (!success) {
                 val wifiStatus = manager.wifiChecker.check()
                 val droneError = manager.droneState.value.errorMessage
@@ -586,7 +610,8 @@ class MainActivity : ComponentActivity() {
                     droneError != null ->
                         droneError
                     else ->
-                        "Connection failed. Make sure the Tello is powered on and try again."
+                        "Connection failed after $MAX_DRONE_CONNECT_ATTEMPTS attempts. " +
+                            "Make sure the Tello is powered on and try again."
                 }
                 Log.w(TAG, "Drone connection failed: $message")
                 searchState = searchState.copy(droneConnectionMessage = message)

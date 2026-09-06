@@ -75,6 +75,7 @@ import androidx.core.content.ContextCompat
 import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.drone.FrameSourceMode
+import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.pipeline.MatchEntry
@@ -130,6 +131,7 @@ data class SearchScreenState(
     val frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     val latestDroneFrame: Bitmap? = null,
     val droneConnectionMessage: String? = null,
+    val selectedPattern: PatternType = PatternType.EXPANDING_SQUARE,
 )
 
 // -----------------------------------------------------------------------
@@ -181,6 +183,7 @@ fun SearchScreen(
     onDroneMove: (String, Int) -> Unit = { _, _ -> },
     onDroneRotate: (Int) -> Unit = {},
     onEmergencyStop: () -> Unit = {},
+    onSearchPatternChanged: (PatternType) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Finding 8: delay banner to avoid flash on every start
@@ -191,6 +194,14 @@ fun SearchScreen(
             showBanner = true
         } else {
             showBanner = false
+        }
+    }
+
+    // Flight controls collapse state — auto-collapse when alert is active
+    var controlsExpanded by remember { mutableStateOf(true) }
+    LaunchedEffect(state.activeAlert) {
+        if (state.activeAlert != null) {
+            controlsExpanded = false
         }
     }
 
@@ -292,34 +303,6 @@ fun SearchScreen(
             }
         }
 
-        // ----- Match alert banner + card -----
-        AnimatedVisibility(
-            visible = state.activeAlert != null,
-            enter = slideInVertically { -it } + fadeIn(),
-            exit = slideOutVertically { -it } + fadeOut(),
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.Center),
-        ) {
-            state.activeAlert?.let { alert ->
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    MatchAlertBanner(alertLevel = alert.alertLevel)
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    MatchAlertCard(
-                        matchEntry = alert,
-                        onDismiss = onDismissAlert,
-                        onNotMyChild = onNotMyChild,
-                        onNavigate = onNavigateToMatch,
-                    )
-                }
-            }
-        }
-
         // ----- Drone alert banner (not a match alert) -----
         AnimatedVisibility(
             visible = state.droneAlert != null,
@@ -354,11 +337,13 @@ fun SearchScreen(
 
         // ----- Bottom section: flight controls OR action bar (never both) -----
         if (state.droneState?.connectionState == TelloConnectionState.STREAMING) {
-            // Show flight controls instead of action bar when streaming
             FlightControlsOverlay(
                 isFlying = state.droneState.telemetry.isFlying,
                 isSearching = state.isSearching,
-                onTakeoff = onTakeoff,
+                isExpanded = controlsExpanded,
+                selectedPattern = state.selectedPattern,
+                onToggleExpanded = { controlsExpanded = !controlsExpanded },
+                onPatternSelected = onSearchPatternChanged,
                 onLand = onLand,
                 onMove = onDroneMove,
                 onRotate = onDroneRotate,
@@ -368,7 +353,6 @@ fun SearchScreen(
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         } else {
-            // Normal bottom section
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -376,7 +360,6 @@ fun SearchScreen(
                     .padding(bottom = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // Drone connection status card
                 DroneConnectionCard(
                     droneState = state.droneState,
                     droneConnectionMessage = state.droneConnectionMessage,
@@ -386,7 +369,6 @@ fun SearchScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Action bar
                 BottomActionBar(
                     isSearching = state.isSearching,
                     onStartSearch = onStartSearch,
@@ -395,8 +377,35 @@ fun SearchScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Persistent disclaimer
                 DisclaimerFooter()
+            }
+        }
+
+        // ----- Match alert banner + card (rendered LAST = highest z-index) -----
+        AnimatedVisibility(
+            visible = state.activeAlert != null,
+            enter = slideInVertically { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center),
+        ) {
+            state.activeAlert?.let { alert ->
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    MatchAlertBanner(alertLevel = alert.alertLevel)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    MatchAlertCard(
+                        matchEntry = alert,
+                        onDismiss = onDismissAlert,
+                        onNotMyChild = onNotMyChild,
+                        onNavigate = onNavigateToMatch,
+                    )
+                }
             }
         }
     }

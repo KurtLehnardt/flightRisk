@@ -42,6 +42,10 @@ class PersonDetector(
         private const val TAG = "PersonDetector"
         private const val INPUT_SIZE = 640
         private const val PERSON_CLASS_ID = 0
+        private const val MIN_BBOX_AREA_RATIO = 0.008f
+        private const val MIN_BBOX_HEIGHT_RATIO = 0.12f
+        private const val MIN_ASPECT_RATIO = 0.15f
+        private const val MAX_ASPECT_RATIO = 1.5f
     }
 
     /**
@@ -233,9 +237,26 @@ class PersonDetector(
             floatArrayOf(it.x1.toFloat(), it.y1.toFloat(), it.x2.toFloat(), it.y2.toFloat())
         }, rawDetections.map { it.conf })
 
+        val frameArea = frame.width.toFloat() * frame.height.toFloat()
+        val minArea = frameArea * MIN_BBOX_AREA_RATIO
+        val minHeight = frame.height * MIN_BBOX_HEIGHT_RATIO
+
         val detections = mutableListOf<Detection>()
+        var bodyPartFiltered = 0
         for (idx in nmsIndices) {
             val raw = rawDetections[idx]
+            val bboxW = (raw.x2 - raw.x1).toFloat()
+            val bboxH = (raw.y2 - raw.y1).toFloat()
+            val bboxArea = bboxW * bboxH
+            val aspectRatio = if (bboxH > 0) bboxW / bboxH else 0f
+
+            if (bboxArea < minArea || bboxH < minHeight ||
+                aspectRatio < MIN_ASPECT_RATIO || aspectRatio > MAX_ASPECT_RATIO
+            ) {
+                bodyPartFiltered++
+                continue
+            }
+
             val crop = Bitmap.createBitmap(
                 frame,
                 raw.x1.coerceAtLeast(0),
@@ -252,6 +273,9 @@ class PersonDetector(
             )
         }
 
+        if (bodyPartFiltered > 0) {
+            Log.d(TAG, "Filtered $bodyPartFiltered body-part detections (too small or wrong aspect ratio)")
+        }
         Log.d(TAG, "Detected ${detections.size} persons (${rawDetections.size} pre-NMS)")
         return detections
     }
