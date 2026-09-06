@@ -38,6 +38,9 @@ class DroneManager(
 
     companion object {
         private const val TAG = "DroneManager"
+        private const val MAX_AVOIDANCE_RETRIES = 5
+        private const val AVOIDANCE_SIDE_CM = 30
+        private const val AVOIDANCE_REVERSE_CM = 50
     }
 
     val wifiChecker = TelloWifiChecker(context)
@@ -51,19 +54,13 @@ class DroneManager(
     // Alert system
     // ------------------------------------------------------------------
 
-    /** Critical drone alerts emitted to the UI layer. */
     sealed class DroneAlert {
-        /** Connection to Tello was lost unexpectedly. */
         data object ConnectionLost : DroneAlert()
-
-        /** Battery is at or below the critical threshold. */
         data class BatteryCritical(val percent: Int) : DroneAlert()
-
-        /** Crash detected (height dropped to 0 while flying). */
         data object CrashDetected : DroneAlert()
-
-        /** Video stream froze (identical frames exceeded threshold). */
         data object StreamFrozen : DroneAlert()
+        data class ObstacleDetected(val action: String, val centerDepth: Float) : DroneAlert()
+        data object MatchPause : DroneAlert()
     }
 
     private val _alerts = MutableSharedFlow<DroneAlert>(extraBufferCapacity = 8)
@@ -79,17 +76,32 @@ class DroneManager(
     private var commandedLanding = false
 
     // ------------------------------------------------------------------
+    // Obstacle avoidance
+    // ------------------------------------------------------------------
+
+    private var obstacleGuard: ObstacleGuard? = null
+
+    fun initObstacleGuard() {
+        if (obstacleGuard != null) return
+        try {
+            obstacleGuard = ObstacleGuard(context)
+            if (obstacleGuard?.isAvailable == true) {
+                Log.i(TAG, "Obstacle avoidance enabled")
+            } else {
+                Log.w(TAG, "Obstacle avoidance: MiDaS model not available")
+                obstacleGuard = null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Obstacle avoidance init failed: ${e.message}")
+            obstacleGuard = null
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Connect / disconnect
     // ------------------------------------------------------------------
 
-    /**
-     * Check WiFi, connect to the Tello, enable the video stream, and start
-     * monitoring telemetry for critical alerts.
-     *
-     * @return true if the full connection + stream setup succeeded.
-     */
     suspend fun connectAndStream(): Boolean {
-        // WiFi gate
         val wifiStatus = wifiChecker.check()
         if (wifiStatus !is TelloWifiChecker.WifiStatus.OnTelloWifi) {
             val guidance = wifiChecker.getGuidanceMessage(wifiStatus)
@@ -97,14 +109,12 @@ class DroneManager(
             return false
         }
 
-        // SDK connect
         val connected = connection.connect()
         if (!connected) {
             Log.e(TAG, "Connection failed")
             return false
         }
 
-        // Enable video stream
         val streaming = connection.startStream()
         if (!streaming) {
             Log.e(TAG, "Stream start failed")
@@ -112,30 +122,21 @@ class DroneManager(
             return false
         }
 
-        // Wire frozen-stream recovery before start to avoid missing early freezes
         frameSource.onStreamFrozen = { recoverStream() }
-
-        // Start frame source
         frameSource.start()
-
-        // Start monitoring coroutine
         startMonitoring()
+
+        // Initialize obstacle avoidance in background
+        scope.launch { initObstacleGuard() }
 
         Log.i(TAG, "Connected and streaming")
         return true
     }
 
-    /**
-     * Disconnect from the Tello and release all resources.
-     *
-     * Suspend so callers await full teardown before reconnecting,
-     * preventing port races on UDP 8889.
-     */
     suspend fun disconnect() {
         monitorJob?.cancel()
         monitorJob = null
 
-        // Safety: land first if still flying
         val state = droneState.value
         if (state.telemetry.isFlying) {
             Log.w(TAG, "Disconnecting while flying -- attempting to land first")
@@ -158,15 +159,15 @@ class DroneManager(
             Log.w(TAG, "Error stopping stream: ${e.message}")
         }
         connection.disconnect()
+        obstacleGuard?.close()
+        obstacleGuard = null
         Log.i(TAG, "Disconnected")
     }
 
-    /**
-     * Permanently cancel the coroutine scope. Call only when this
-     * DroneManager instance will never be used again (e.g. activity destroyed).
-     */
     fun shutdown() {
         scope.cancel()
+        obstacleGuard?.close()
+        obstacleGuard = null
         Log.i(TAG, "Shutdown complete")
     }
 
@@ -174,12 +175,6 @@ class DroneManager(
     // Stream recovery
     // ------------------------------------------------------------------
 
-    /**
-     * Recover a frozen video stream by cycling streamon/off.
-     *
-     * Called by [TelloFrameSource.onStreamFrozen] when identical frames
-     * exceed the threshold.
-     */
     private fun recoverStream() {
         scope.launch {
             withContext(Dispatchers.IO) {
@@ -200,10 +195,6 @@ class DroneManager(
     // Lifecycle hooks
     // ------------------------------------------------------------------
 
-    /**
-     * Called when the activity pauses. If the drone is flying, hover in
-     * place so it doesn't drift while the user is in another app.
-     */
     fun onActivityPause() {
         val state = droneState.value
         if (state.telemetry.isFlying) {
@@ -212,16 +203,12 @@ class DroneManager(
         }
     }
 
-    /**
-     * Called when the activity is destroyed. Safety net: land the drone
-     * and disconnect synchronously (cannot suspend on the main thread).
-     */
     fun onActivityDestroy() {
         monitorJob?.cancel()
         monitorJob = null
         val state = droneState.value
         Thread {
-            frameSource.stop()  // Blocking join happens off main thread
+            frameSource.stop()
             if (state.telemetry.isFlying) {
                 Log.w(TAG, "Activity destroying while flying -- emergency landing")
                 try {
@@ -235,6 +222,7 @@ class DroneManager(
                 }
             }
             connection.disconnect()
+            obstacleGuard?.close()
             scope.cancel()
         }.start()
         Log.i(TAG, "Destroyed")
@@ -244,58 +232,65 @@ class DroneManager(
     // Flight command delegates
     // ------------------------------------------------------------------
 
-    /** Command the drone to take off. */
     suspend fun takeoff() = connection.takeoff()
 
-    /** Command the drone to land. */
     suspend fun land(): Boolean {
         commandedLanding = true
         return connection.land()
-        // Don't reset commandedLanding on failure — the monitoring loop will
-        // clear it once it observes !isFlying, preventing false crash alerts
-        // from lost UDP acks
     }
 
-    /**
-     * Move the drone in a cardinal direction.
-     *
-     * @param direction One of "forward", "back", "left", "right", "up", "down".
-     * @param distanceCm Distance in centimeters (clamped to 20..500).
-     */
     suspend fun move(direction: String, distanceCm: Int) =
         connection.move(direction, distanceCm)
 
-    /**
-     * Rotate the drone.
-     *
-     * @param degrees Positive for clockwise, negative for counter-clockwise.
-     */
     suspend fun rotate(degrees: Int) = connection.rotate(degrees)
 
-    /**
-     * Send RC joystick values.
-     *
-     * @param lr   Left/right (-100 to 100).
-     * @param fb   Forward/backward (-100 to 100).
-     * @param ud   Up/down (-100 to 100).
-     * @param yaw  Yaw (-100 to 100).
-     */
     suspend fun rcControl(lr: Int, fb: Int, ud: Int, yaw: Int) =
         connection.rcControl(lr, fb, ud, yaw)
 
-    /** Stop all movement and hover in place. */
     suspend fun hover() = connection.hover()
 
-    /**
-     * Emergency motor stop. Use only as a last resort — cuts motors immediately.
-     */
     suspend fun emergencyStop(): Boolean {
         commandedLanding = true
         return connection.emergencyStop()
     }
 
     // ------------------------------------------------------------------
-    // Search pattern execution
+    // Pause / resume for match detection
+    // ------------------------------------------------------------------
+
+    @Volatile
+    var searchPaused: Boolean = false
+        private set
+
+    /**
+     * Pause the active search pattern and hover in place.
+     * Called when the vision pipeline detects a confident match.
+     */
+    fun pauseSearchForMatch() {
+        if (!searchActive || searchPaused) return
+        searchPaused = true
+        Log.i(TAG, "Search paused — match detected, hovering")
+        scope.launch {
+            try {
+                connection.hover()
+            } catch (e: Exception) {
+                Log.w(TAG, "Hover on match pause failed: ${e.message}")
+            }
+        }
+        _alerts.tryEmit(DroneAlert.MatchPause)
+    }
+
+    /**
+     * Resume the search pattern after the operator dismisses a match alert.
+     */
+    fun resumeSearch() {
+        if (!searchPaused) return
+        searchPaused = false
+        Log.i(TAG, "Search resumed")
+    }
+
+    // ------------------------------------------------------------------
+    // Search pattern execution (with obstacle avoidance)
     // ------------------------------------------------------------------
 
     private var searchJob: Job? = null
@@ -312,6 +307,7 @@ class DroneManager(
         if (searchActive) return
         val waypoints = SearchPattern.generate(pattern)
         searchActive = true
+        searchPaused = false
         searchProgress = Pair(0, waypoints.size)
         Log.i(TAG, "Starting search pattern: ${pattern.displayName}, ${waypoints.size} waypoints")
 
@@ -319,10 +315,22 @@ class DroneManager(
             for ((index, wp) in waypoints.withIndex()) {
                 if (!searchActive) break
 
+                // Wait while paused for match inspection
+                while (searchPaused && searchActive) {
+                    delay(200)
+                }
+                if (!searchActive) break
+
                 searchProgress = Pair(index + 1, waypoints.size)
 
                 try {
                     if (wp.distanceCm > 0) {
+                        // Obstacle check before each forward move
+                        if (!checkAndAvoidObstacles(index)) {
+                            Log.w(TAG, "Skipping waypoint ${index + 1} — obstacle avoidance exhausted")
+                            continue
+                        }
+
                         connection.move(wp.direction, wp.distanceCm)
                         delay(500)
                     }
@@ -339,13 +347,68 @@ class DroneManager(
             }
 
             searchActive = false
+            searchPaused = false
             searchProgress = Pair(0, 0)
             Log.i(TAG, "Search pattern complete")
         }
     }
 
+    /**
+     * Check for obstacles before moving. If an obstacle is detected,
+     * perform evasive maneuvers up to [MAX_AVOIDANCE_RETRIES] times.
+     *
+     * @return true if the path is now clear, false if retries exhausted.
+     */
+    private suspend fun checkAndAvoidObstacles(waypointIndex: Int): Boolean {
+        val guard = obstacleGuard ?: return true
+
+        for (retry in 1..MAX_AVOIDANCE_RETRIES) {
+            if (!searchActive) return false
+
+            val frame = frameSource.getLatestFrame() ?: return true
+
+            val check = guard.checkPath(frame)
+            if (check.safe) return true
+
+            Log.w(TAG, "Obstacle at waypoint ${waypointIndex + 1}: " +
+                "action=${check.action}, depth=${check.centerDepth}, retry=$retry")
+            _alerts.tryEmit(DroneAlert.ObstacleDetected(check.action, check.centerDepth))
+
+            if (retry >= MAX_AVOIDANCE_RETRIES) {
+                Log.w(TAG, "Max avoidance retries at waypoint ${waypointIndex + 1}")
+                return false
+            }
+
+            try {
+                when (check.action) {
+                    "go_left" -> {
+                        connection.move("left", AVOIDANCE_SIDE_CM)
+                        delay(500)
+                    }
+                    "go_right" -> {
+                        connection.move("right", AVOIDANCE_SIDE_CM)
+                        delay(500)
+                    }
+                    "reverse" -> {
+                        connection.move("back", AVOIDANCE_REVERSE_CM)
+                        delay(500)
+                        connection.rotate(90)
+                        delay(500)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Avoidance maneuver failed: ${e.message}")
+                return false
+            }
+        }
+        return false
+    }
+
     fun stopSearchPattern() {
         searchActive = false
+        searchPaused = false
         searchJob?.cancel()
         searchJob = null
         searchProgress = Pair(0, 0)
@@ -359,10 +422,6 @@ class DroneManager(
     // Telemetry monitoring
     // ------------------------------------------------------------------
 
-    /**
-     * Start a coroutine that observes [connection.state] and emits
-     * [DroneAlert]s for critical conditions.
-     */
     private fun startMonitoring() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
@@ -371,7 +430,6 @@ class DroneManager(
             var batteryAlertSent = false
 
             connection.state.collect { state ->
-                // Connection loss detection
                 val isConnected = state.connectionState != TelloConnectionState.DISCONNECTED &&
                     state.connectionState != TelloConnectionState.ERROR
                 if (wasConnected && !isConnected) {
@@ -380,31 +438,26 @@ class DroneManager(
                 }
                 wasConnected = isConnected
 
-                // Battery critical (null = no reading yet, skip check)
                 val battery = state.telemetry.battery
                 if (battery != null && battery in 0..config.drone.batteryCriticalThreshold && !batteryAlertSent) {
                     Log.w(TAG, "Battery critical: $battery%")
                     _alerts.tryEmit(DroneAlert.BatteryCritical(battery))
                     batteryAlertSent = true
-                    // Auto-land on critical battery
                     if (state.telemetry.isFlying) {
                         Log.w(TAG, "Auto-landing due to critical battery")
-                        land()  // NOT connection.land() — sets commandedLanding flag
+                        land()
                     }
                 }
                 if (battery != null && battery > config.drone.batteryCriticalThreshold) {
                     batteryAlertSent = false
                 }
 
-                // Crash detection: was flying but TelloConnection flipped
-                // isFlying to false (after 3 consecutive zero-height polls).
-                // Skip if this was a commanded landing.
                 if (wasFlying && !state.telemetry.isFlying) {
                     if (state.telemetry.height == 0 && isConnected && !commandedLanding) {
                         Log.e(TAG, "Crash detected")
                         _alerts.tryEmit(DroneAlert.CrashDetected)
                     }
-                    commandedLanding = false  // Reset after processing, regardless of crash or normal landing
+                    commandedLanding = false
                 }
                 wasFlying = state.telemetry.isFlying
             }
