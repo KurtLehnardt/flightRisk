@@ -74,7 +74,10 @@ class ObstacleGuard(
 
         val results = sess.run(mapOf("0" to inputTensor))
         val outputTensor = results[0] as OnnxTensor
-        val depthMap = (outputTensor.value as Array<*>)[0] as FloatArray
+        val outerArray = outputTensor.value as? Array<*>
+            ?: run { inputTensor.close(); results.close(); return ObstacleResult.Clear }
+        val depthMap = outerArray[0] as? FloatArray
+            ?: run { inputTensor.close(); results.close(); return ObstacleResult.Clear }
 
         inputTensor.close()
         results.close()
