@@ -112,6 +112,13 @@ final class TelloFrameSource: FrameSource {
         }
     }
 
+    deinit {
+        if let session = decompressionSession {
+            VTDecompressionSessionInvalidate(session)
+        }
+        listener?.cancel()
+    }
+
     func stop() {
         guard isRunning else { return }
         isRunning = false
@@ -350,16 +357,8 @@ final class TelloFrameSource: FrameSource {
 
         // Build CMVideoFormatDescription from SPS and PPS
         var newFormat: CMVideoFormatDescription?
-        let parameterSets: [UnsafePointer<UInt8>] = sps.withUnsafeBytes { spsPtr in
-            pps.withUnsafeBytes { ppsPtr in
-                [
-                    spsPtr.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                    ppsPtr.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                ]
-            }
-        }
 
-        // We need to keep pointers alive during the call
+        // Keep pointers alive for the duration of the C call
         sps.withUnsafeBytes { spsBuffer in
             pps.withUnsafeBytes { ppsBuffer in
                 let spsPtr = spsBuffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
@@ -533,24 +532,28 @@ final class TelloFrameSource: FrameSource {
     /// Check for frozen frames, update latestFrame, and invoke callback.
     private func handleDecodedFrame(_ image: CGImage) {
         let hash = computeFrameHash(image)
+
+        var frozen = false
+        lock.lock()
         if hash == lastFrameHash {
             frozenFrameCount += 1
             if frozenFrameCount >= frozenFrameThreshold {
-                Self.logger.warning("Frozen frame detected (\(self.frozenFrameCount) identical)")
-                onStreamFrozen?()
+                frozen = true
                 frozenFrameCount = 0
-                return
             }
         } else {
             frozenFrameCount = 0
         }
         lastFrameHash = hash
-
-        var callback: ((CGImage) -> Void)?
-        lock.lock()
         latestFrame = image
-        callback = frameCallback
+        let callback = frameCallback
         lock.unlock()
+
+        if frozen {
+            Self.logger.warning("Frozen frame detected")
+            onStreamFrozen?()
+            return
+        }
 
         callback?(image)
     }

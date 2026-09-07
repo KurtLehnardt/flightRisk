@@ -100,7 +100,9 @@ final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutpu
     }
 
     func setOnFrameCallback(_ callback: @escaping (CGImage) -> Void) {
+        frameLock.lock()
         onFrameCallback = callback
+        frameLock.unlock()
     }
 
     // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
@@ -117,8 +119,9 @@ final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutpu
 
         frameLock.lock()
         latestFrame = cgImage
+        let callback = onFrameCallback
         frameLock.unlock()
 
-        onFrameCallback?(cgImage)
+        callback?(cgImage)
     }
 }

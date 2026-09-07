@@ -431,19 +431,26 @@ final class FaceRecognizer {
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let destData = baseAddress.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let destData = baseAddress.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
 
         // Copy pixel data (RGBA from context -> BGRA for CVPixelBuffer)
-        for i in 0..<(width * height) {
-            let srcOffset = i * 4
-            let r = pixelData[srcOffset]
-            let g = pixelData[srcOffset + 1]
-            let b = pixelData[srcOffset + 2]
+        // Use bytesPerRow for destination stride since hardware may add padding
+        for y in 0..<height {
+            let destRowStart = y * bytesPerRow
+            let srcRowStart = y * width * 4
+            for x in 0..<width {
+                let srcOffset = srcRowStart + x * 4
+                let destOffset = destRowStart + x * 4
+                let r = pixelData[srcOffset]
+                let g = pixelData[srcOffset + 1]
+                let b = pixelData[srcOffset + 2]
 
-            destData[srcOffset] = b     // B
-            destData[srcOffset + 1] = g // G
-            destData[srcOffset + 2] = r // R
-            destData[srcOffset + 3] = 255 // A
+                destData[destOffset] = b     // B
+                destData[destOffset + 1] = g // G
+                destData[destOffset + 2] = r // R
+                destData[destOffset + 3] = 255 // A
+            }
         }
 
         return buffer

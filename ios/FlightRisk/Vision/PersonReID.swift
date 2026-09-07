@@ -185,6 +185,10 @@ final class PersonReID {
         }
 
         // Convert MLMultiArray to [Float] and L2-normalize
+        guard outputArray.dataType == .float32 else {
+            logger.warning("Unexpected MLMultiArray dataType: \(outputArray.dataType.rawValue), expected Float32")
+            throw ReIDError.modelNotLoaded
+        }
         let count = outputArray.count
         var embedding = [Float](repeating: 0, count: count)
         let ptr = outputArray.dataPointer.bindMemory(to: Float.self, capacity: count)

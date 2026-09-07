@@ -2,6 +2,27 @@ import Foundation
 import Network
 import os.log
 
+// MARK: - Thread-safe emergency connection holder
+
+/// Sendable wrapper for the emergency NWConnection reference.
+/// Uses os_unfair_lock for safe access from both actor-isolated and nonisolated contexts.
+final class EmergencyConnectionRef: @unchecked Sendable {
+    private var _connection: NWConnection?
+    private var lock = os_unfair_lock()
+
+    func get() -> NWConnection? {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return _connection
+    }
+
+    func set(_ conn: NWConnection?) {
+        os_unfair_lock_lock(&lock)
+        _connection = conn
+        os_unfair_lock_unlock(&lock)
+    }
+}
+
 // MARK: - DroneConfig (inline until iOS config module lands)
 
 /// Drone connection parameters matching Android DroneConfig / Python AmberConfig.
@@ -60,8 +81,13 @@ actor TelloConnection {
     private var connection: NWConnection?
 
     /// Direct reference kept for `emergencyStop` bypass.
-    /// Accessed from `nonisolated` context -- reads/writes are atomic via the sendable NWConnection.
-    nonisolated(unsafe) private var emergencyConnection: NWConnection?
+    /// Protected by `emergencyLock` since it's accessed from both actor-isolated and nonisolated contexts.
+    private let emergencyRef = EmergencyConnectionRef()
+
+    private var emergencyConnection: NWConnection? {
+        get { emergencyRef.get() }
+        set { emergencyRef.set(newValue) }
+    }
 
     // MARK: - Connection tracking
 
@@ -350,7 +376,7 @@ actor TelloConnection {
     ///
     /// - Returns: `true` if the send completed without error.
     nonisolated func emergencyStop() async -> Bool {
-        guard let conn = emergencyConnection else {
+        guard let conn = emergencyRef.get() else {
             Self.logger.error("emergencyStop: no connection")
             return false
         }

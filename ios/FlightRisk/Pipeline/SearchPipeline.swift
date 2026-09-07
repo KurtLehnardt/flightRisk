@@ -160,27 +160,27 @@ actor SearchPipeline {
     private let tracker: DetectionTracker
     private let scorer: MatchScorer
 
-    // MARK: - Callbacks (set by caller before start)
+    // MARK: - Callbacks (set by caller before start via actor-isolated setters)
 
     /// The active frame source. Set before calling ``start()``.
-    nonisolated(unsafe) var frameSource: FrameSource?
+    var frameSource: FrameSource?
 
     /// Detection callback (person detector + annotator). Set by the vision layer.
-    nonisolated(unsafe) var detectionCallback: PipelineDetectionCallback?
+    var detectionCallback: PipelineDetectionCallback?
 
     /// ReID callback (body re-identification). Set by the vision layer.
-    nonisolated(unsafe) var reidCallback: PipelineReidCallback?
+    var reidCallback: PipelineReidCallback?
 
     /// Face recognition callback. Set by the vision layer.
-    nonisolated(unsafe) var faceCallback: PipelineFaceCallback?
+    var faceCallback: PipelineFaceCallback?
 
     // MARK: - Target
 
     /// Target reference photo (set before starting search).
-    nonisolated(unsafe) var targetPhoto: CGImage?
+    var targetPhoto: CGImage?
 
     /// Target text description (used when no photo is available).
-    nonisolated(unsafe) var targetDescription: String?
+    var targetDescription: String?
 
     // MARK: - Mutable State
 

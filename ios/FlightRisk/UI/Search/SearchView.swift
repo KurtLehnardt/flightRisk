@@ -30,6 +30,14 @@ struct SearchView: View {
     /// The camera capture session for the live preview layer.
     var cameraSession: AVCaptureSession
 
+    /// Drone manager callbacks (set by parent to wire up drone commands).
+    var onDroneLand: (() -> Void)?
+    var onDroneMove: ((String, Int) -> Void)?
+    var onDroneRotate: ((Int) -> Void)?
+    var onDroneEmergencyStop: (() -> Void)?
+    var onDroneConnect: (() -> Void)?
+    var onDroneDisconnect: (() -> Void)?
+
     /// Whether the "models not loaded" banner should be shown.
     /// Delayed by 2 seconds after search starts to avoid flash.
     @State private var showModelsNotLoadedBanner = false
@@ -303,12 +311,12 @@ struct SearchView: View {
                 isExpanded: $controlsExpanded,
                 selectedPattern: viewModel.selectedPattern,
                 onPatternSelected: { viewModel.selectedPattern = $0 },
-                onLand: { /* DroneManager.land() */ },
-                onMove: { direction, distance in /* DroneManager.move() */ },
-                onRotate: { degrees in /* DroneManager.rotate() */ },
+                onLand: { onDroneLand?() },
+                onMove: { direction, distance in onDroneMove?(direction, distance) },
+                onRotate: { degrees in onDroneRotate?(degrees) },
                 onStartSearch: { viewModel.startSearch() },
                 onStopSearch: { viewModel.stopSearch() },
-                onEmergencyStop: { /* DroneManager.emergencyStop() */ }
+                onEmergencyStop: { onDroneEmergencyStop?() }
             )
         } else {
             VStack(spacing: 12) {
@@ -316,8 +324,8 @@ struct SearchView: View {
                 DroneConnectionCardView(
                     droneState: viewModel.droneState,
                     droneConnectionMessage: viewModel.droneConnectionMessage,
-                    onConnect: { /* DroneManager.connect() */ },
-                    onDisconnect: { /* DroneManager.disconnect() */ }
+                    onConnect: { onDroneConnect?() },
+                    onDisconnect: { onDroneDisconnect?() }
                 )
 
                 // Layer 12: Start/Stop Search button
@@ -344,13 +352,14 @@ struct SearchView: View {
             }
             .foregroundStyle(FlightRiskTheme.hudWhite)
             .frame(minWidth: 200, minHeight: 56)
+            .background(
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(viewModel.isSearching
+                          ? FlightRiskTheme.alertRed
+                          : Color.accentColor)
+            )
         }
-        .background(
-            RoundedRectangle(cornerRadius: 28)
-                .fill(viewModel.isSearching
-                      ? FlightRiskTheme.alertRed
-                      : Color.accentColor)
-        )
+        .buttonStyle(.plain)
         .accessibilityLabel(viewModel.isSearching ? "Stop search" : "Start search")
     }
 

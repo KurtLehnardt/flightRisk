@@ -115,6 +115,10 @@ actor ObstacleGuard {
                     return
                 }
 
+                guard multiArray.dataType == .float32 else {
+                    continuation.resume(returning: [Float](repeating: 1.0, count: 256 * 256))
+                    return
+                }
                 let count = multiArray.count
                 var depthMap = [Float](repeating: 0, count: count)
                 let pointer = multiArray.dataPointer.bindMemory(to: Float.self, capacity: count)
