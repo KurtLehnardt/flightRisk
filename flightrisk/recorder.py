@@ -33,22 +33,23 @@ class SessionRecorder:
         Returns:
             Path to the recording file.
         """
-        if self._recording:
+        with self._lock:
+            if self._recording:
+                return str(self._filepath)
+
+            if filename is None:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                filename = f"session_{ts}.mp4"
+
+            self._filepath = RECORDINGS_DIR / filename
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            self._writer = cv2.VideoWriter(
+                str(self._filepath), fourcc, self.fps, self.resolution
+            )
+            self._recording = True
+            self._frame_count = 0
+            print(f"[recorder] Recording started: {self._filepath}")
             return str(self._filepath)
-
-        if filename is None:
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"session_{ts}.mp4"
-
-        self._filepath = RECORDINGS_DIR / filename
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self._writer = cv2.VideoWriter(
-            str(self._filepath), fourcc, self.fps, self.resolution
-        )
-        self._recording = True
-        self._frame_count = 0
-        print(f"[recorder] Recording started: {self._filepath}")
-        return str(self._filepath)
 
     def write_frame(self, frame: np.ndarray):
         """Write a frame to the recording."""
