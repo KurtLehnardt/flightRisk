@@ -176,10 +176,11 @@ class SessionDB:
 
     def get_session(self, session_id: str) -> dict | None:
         """Return a single session as a dict, or None."""
-        cur = self._conn.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
-        )
-        row = cur.fetchone()
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            )
+            row = cur.fetchone()
         if row is None:
             return None
         d = dict(row)
@@ -188,11 +189,13 @@ class SessionDB:
 
     def get_recent_sessions(self, limit: int = 20) -> list[dict]:
         """Return the most recent sessions, newest first."""
-        cur = self._conn.execute(
-            "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
-        )
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
+            )
+            raw_rows = cur.fetchall()
         rows = []
-        for r in cur.fetchall():
+        for r in raw_rows:
             d = dict(r)
             d["target_description"] = self._decrypt(d.get("target_description"))
             rows.append(d)
@@ -255,12 +258,14 @@ class SessionDB:
 
     def get_session_matches(self, session_id: str) -> list[dict]:
         """Return all matches for a given session."""
-        cur = self._conn.execute(
-            "SELECT * FROM matches WHERE session_id = ? ORDER BY timestamp ASC",
-            (session_id,),
-        )
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM matches WHERE session_id = ? ORDER BY timestamp ASC",
+                (session_id,),
+            )
+            raw_rows = cur.fetchall()
         rows = []
-        for r in cur.fetchall():
+        for r in raw_rows:
             d = dict(r)
             d["reasoning"] = self._decrypt(d.get("reasoning"))
             rows.append(d)
@@ -272,18 +277,20 @@ class SessionDB:
 
     def get_match_stats(self) -> dict:
         """Aggregate match statistics across all sessions."""
-        total = self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
 
-        avg_cur = self._conn.execute(
-            """SELECT match_type,
-                      COUNT(*) AS cnt,
-                      AVG(reid_score) AS avg_reid,
-                      AVG(face_score) AS avg_face,
-                      AVG(combined_score) AS avg_combined
-               FROM matches GROUP BY match_type"""
-        )
+            avg_cur = self._conn.execute(
+                """SELECT match_type,
+                          COUNT(*) AS cnt,
+                          AVG(reid_score) AS avg_reid,
+                          AVG(face_score) AS avg_face,
+                          AVG(combined_score) AS avg_combined
+                   FROM matches GROUP BY match_type"""
+            )
+            raw_rows = avg_cur.fetchall()
         by_type = {}
-        for row in avg_cur.fetchall():
+        for row in raw_rows:
             by_type[row["match_type"]] = {
                 "count": row["cnt"],
                 "avg_reid_score": round(row["avg_reid"] or 0, 4),
@@ -320,26 +327,28 @@ class SessionDB:
 
     def get_feedback_stats(self) -> dict:
         """Aggregate feedback statistics with average scores."""
-        confirmed = self._conn.execute(
-            "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'confirmed'"
-        ).fetchone()[0]
-        rejected = self._conn.execute(
-            "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'rejected'"
-        ).fetchone()[0]
+        with self._lock:
+            confirmed = self._conn.execute(
+                "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'confirmed'"
+            ).fetchone()[0]
+            rejected = self._conn.execute(
+                "SELECT COUNT(*) FROM match_feedback WHERE feedback = 'rejected'"
+            ).fetchone()[0]
+
+            avg_confirmed = self._conn.execute(
+                """SELECT AVG(m.combined_score) FROM match_feedback f
+                   JOIN matches m ON f.match_id = m.id
+                   WHERE f.feedback = 'confirmed'"""
+            ).fetchone()[0]
+
+            avg_rejected = self._conn.execute(
+                """SELECT AVG(m.combined_score) FROM match_feedback f
+                   JOIN matches m ON f.match_id = m.id
+                   WHERE f.feedback = 'rejected'"""
+            ).fetchone()[0]
+
         total = confirmed + rejected
         confirmation_rate = round(confirmed / total, 4) if total > 0 else 0.0
-
-        avg_confirmed = self._conn.execute(
-            """SELECT AVG(m.combined_score) FROM match_feedback f
-               JOIN matches m ON f.match_id = m.id
-               WHERE f.feedback = 'confirmed'"""
-        ).fetchone()[0]
-
-        avg_rejected = self._conn.execute(
-            """SELECT AVG(m.combined_score) FROM match_feedback f
-               JOIN matches m ON f.match_id = m.id
-               WHERE f.feedback = 'rejected'"""
-        ).fetchone()[0]
 
         return {
             "total_confirmed": confirmed,
@@ -351,17 +360,19 @@ class SessionDB:
 
     def get_confirmed_matches(self, limit: int = 100) -> list[dict]:
         """Return confirmed matches with their scores."""
-        cur = self._conn.execute(
-            """SELECT m.*, f.timestamp AS feedback_time, f.notes
-               FROM match_feedback f
-               JOIN matches m ON f.match_id = m.id
-               WHERE f.feedback = 'confirmed'
-               ORDER BY f.timestamp DESC
-               LIMIT ?""",
-            (limit,),
-        )
+        with self._lock:
+            cur = self._conn.execute(
+                """SELECT m.*, f.timestamp AS feedback_time, f.notes
+                   FROM match_feedback f
+                   JOIN matches m ON f.match_id = m.id
+                   WHERE f.feedback = 'confirmed'
+                   ORDER BY f.timestamp DESC
+                   LIMIT ?""",
+                (limit,),
+            )
+            raw_rows = cur.fetchall()
         rows = []
-        for r in cur.fetchall():
+        for r in raw_rows:
             d = dict(r)
             d["reasoning"] = self._decrypt(d.get("reasoning"))
             rows.append(d)
@@ -373,16 +384,17 @@ class SessionDB:
         Each entry maps confirmed -> is_match=True, rejected -> is_match=False.
         Returns the number of exported records.
         """
-        cur = self._conn.execute(
-            """SELECT m.id, m.match_type, m.reid_score, m.face_score,
-                      m.combined_score, m.gemma_match, m.gemma_confidence,
-                      m.reasoning, m.snapshot_path, m.crop_path,
-                      f.feedback, f.notes AS feedback_notes
-               FROM match_feedback f
-               JOIN matches m ON f.match_id = m.id
-               ORDER BY f.timestamp ASC"""
-        )
-        rows = cur.fetchall()
+        with self._lock:
+            cur = self._conn.execute(
+                """SELECT m.id, m.match_type, m.reid_score, m.face_score,
+                          m.combined_score, m.gemma_match, m.gemma_confidence,
+                          m.reasoning, m.snapshot_path, m.crop_path,
+                          f.feedback, f.notes AS feedback_notes
+                   FROM match_feedback f
+                   JOIN matches m ON f.match_id = m.id
+                   ORDER BY f.timestamp ASC"""
+            )
+            rows = cur.fetchall()
         dataset = []
         for row in rows:
             r = dict(row)

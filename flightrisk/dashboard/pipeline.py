@@ -335,7 +335,7 @@ def _frame_loop(socketio):
                 h, w = annotated.shape[:2]
                 if current_alert_level == "confirmed_match":
                     cv2.rectangle(annotated, (0, 0), (w, 45), (0, 0, 200), -1)
-                    label = "POSSIBLE MATCH — VERIFY IN PERSON"
+                    label = "CONFIRMED MATCH — VERIFY IN PERSON"
                 else:
                     cv2.rectangle(annotated, (0, 0), (w, 45), (0, 165, 255), -1)
                     label = "POSSIBLE MATCH — VERIFY"

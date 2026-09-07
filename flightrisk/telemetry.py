@@ -10,6 +10,7 @@ Configure endpoint: OTEL_ENDPOINT=http://localhost:4317
 
 import os
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class FlightRiskMetrics:
         # is not available.
         self._face_successes = 0
         self._face_total = 0
+        self._face_lock = threading.Lock()
 
         try:
             self.face_detection_rate = meter.create_gauge(
@@ -212,7 +214,8 @@ class FlightRiskMetrics:
     # --- observable callbacks (fallback path) ---
 
     def _observe_face_rate(self, observer):
-        rate = (self._face_successes / self._face_total * 100) if self._face_total else 0.0
+        with self._face_lock:
+            rate = (self._face_successes / self._face_total * 100) if self._face_total else 0.0
         observer.observe(rate)
 
     def _observe_fps(self, observer):
@@ -239,12 +242,13 @@ class FlightRiskMetrics:
 
     def record_face_check(self, found: bool):
         """Track face detection success / failure."""
-        self._face_total += 1
-        if found:
-            self._face_successes += 1
-        if self._has_gauge:
-            rate = (self._face_successes / self._face_total * 100) if self._face_total else 0.0
-            self.face_detection_rate.set(rate)
+        with self._face_lock:
+            self._face_total += 1
+            if found:
+                self._face_successes += 1
+            if self._has_gauge:
+                rate = (self._face_successes / self._face_total * 100) if self._face_total else 0.0
+                self.face_detection_rate.set(rate)
 
     def record_reasoning(self, duration_ms: float):
         """Record Gemma 4 reasoning latency."""

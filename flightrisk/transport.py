@@ -23,6 +23,7 @@ internals of ``flightrisk/edge.py`` or ``flightrisk/ground.py`` beyond their pub
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 from typing import Any, Callable
@@ -302,7 +303,7 @@ class GroundTransport:
         if (
             isinstance(data, dict)
             and data.get("type") == "auth"
-            and data.get("token") == self._token
+            and hmac.compare_digest(str(data.get("token", "")), self._token)
         ):
             self._authenticated_clients.add(websocket)
             return True
