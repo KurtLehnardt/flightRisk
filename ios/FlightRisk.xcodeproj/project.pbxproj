@@ -1,0 +1,474 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */; };
+		994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */; };
+		EE04B6E7B408309ACA1495F9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703EF934C8A58C9E09EF38A7 /* ContentView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00E19DB885E4EF6328E33EC7 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		02E3F0A55F5DDD81B2A7D321 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskApp.swift; sourceTree = "<group>"; };
+		1DACFD81851A1FF8A832CCEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		35792841BED0D09966745935 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		3C18B10FC35D8511EDDFC931 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		4ABE92EEEE51DF56E95D0159 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		51095A1B6253211E12D08740 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		5C62204D4A923643A5EB39B4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		66F0F05724180E94E78FA3F5 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		703EF934C8A58C9E09EF38A7 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B191F1BA99C2BE70899B22C8 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskTheme.swift; sourceTree = "<group>"; };
+		B69634E5AA5C105D3BEC3074 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		DB1B56CF1671883797BA7506 /* FlightRisk.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FlightRisk.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EBBCE586F65491E560BBE3AC /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		F0487FADF5286091CD37A120 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		F461B964B446E0595A7168D1 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		04B022B65D9C2F29DEF35A31 /* Pipeline */ = {
+			isa = PBXGroup;
+			children = (
+				B69634E5AA5C105D3BEC3074 /* .gitkeep */,
+			);
+			path = Pipeline;
+			sourceTree = "<group>";
+		};
+		056CEF11A1A83968D080DD91 /* Navigation */ = {
+			isa = PBXGroup;
+			children = (
+				703EF934C8A58C9E09EF38A7 /* ContentView.swift */,
+			);
+			path = Navigation;
+			sourceTree = "<group>";
+		};
+		131D972A15050BF78DFB92A6 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B191F1BA99C2BE70899B22C8 /* .gitkeep */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		4CDC4B0C02F5D528478F29E6 /* Target */ = {
+			isa = PBXGroup;
+			children = (
+				BC27CB526DDAD7CAEA259FFB /* .gitkeep */,
+			);
+			path = Target;
+			sourceTree = "<group>";
+		};
+		5441201088FCDE769A1EEEC2 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				056CEF11A1A83968D080DD91 /* Navigation */,
+				607B3FC3EBC21FBD9D368565 /* Onboarding */,
+				DE9B03A2FAABB0C125EA9505 /* Search */,
+				131D972A15050BF78DFB92A6 /* Settings */,
+				4CDC4B0C02F5D528478F29E6 /* Target */,
+				6BC980AC998B8CE665AD0CC2 /* Theme */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		6024718204B7B14B69454174 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				51095A1B6253211E12D08740 /* .gitkeep */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		607B3FC3EBC21FBD9D368565 /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+				66F0F05724180E94E78FA3F5 /* .gitkeep */,
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		6A805EAE6AD9C200F0A71180 /* LLM */ = {
+			isa = PBXGroup;
+			children = (
+				02E3F0A55F5DDD81B2A7D321 /* .gitkeep */,
+			);
+			path = LLM;
+			sourceTree = "<group>";
+		};
+		6BC980AC998B8CE665AD0CC2 /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		6D853C7BEF8E62CE9570AC19 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C2F0614400A1B57A25C18B0A /* Models */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		727F9A14F792C536EE0EBFA1 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				5C62204D4A923643A5EB39B4 /* .gitkeep */,
+			);
+			path = State;
+			sourceTree = "<group>";
+		};
+		8ACC0A7E11AFC1B14F7BA35C /* Drone */ = {
+			isa = PBXGroup;
+			children = (
+				00E19DB885E4EF6328E33EC7 /* .gitkeep */,
+			);
+			path = Drone;
+			sourceTree = "<group>";
+		};
+		9A2DCB8C29944397847D6B46 /* Vision */ = {
+			isa = PBXGroup;
+			children = (
+				F461B964B446E0595A7168D1 /* .gitkeep */,
+			);
+			path = Vision;
+			sourceTree = "<group>";
+		};
+		9E0FE97CD88AC376B1C1920C /* Camera */ = {
+			isa = PBXGroup;
+			children = (
+				EBBCE586F65491E560BBE3AC /* .gitkeep */,
+			);
+			path = Camera;
+			sourceTree = "<group>";
+		};
+		BDDD43E843468FCD7F14A5CE /* FlightRisk */ = {
+			isa = PBXGroup;
+			children = (
+				0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */,
+				4ABE92EEEE51DF56E95D0159 /* Info.plist */,
+				F13333465B30BF9D1F2B584E /* Alert */,
+				9E0FE97CD88AC376B1C1920C /* Camera */,
+				6024718204B7B14B69454174 /* Config */,
+				8ACC0A7E11AFC1B14F7BA35C /* Drone */,
+				6A805EAE6AD9C200F0A71180 /* LLM */,
+				F370B9DEFAA9329A7AB428FC /* Location */,
+				04B022B65D9C2F29DEF35A31 /* Pipeline */,
+				6D853C7BEF8E62CE9570AC19 /* Resources */,
+				727F9A14F792C536EE0EBFA1 /* State */,
+				5441201088FCDE769A1EEEC2 /* UI */,
+				9A2DCB8C29944397847D6B46 /* Vision */,
+			);
+			path = FlightRisk;
+			sourceTree = "<group>";
+		};
+		C2F0614400A1B57A25C18B0A /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F0487FADF5286091CD37A120 /* .gitkeep */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		D63EB7FAD1009AC95314462C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DB1B56CF1671883797BA7506 /* FlightRisk.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DE9B03A2FAABB0C125EA9505 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				1DACFD81851A1FF8A832CCEF /* .gitkeep */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		E1254E755EE27D1A6D45B2C4 = {
+			isa = PBXGroup;
+			children = (
+				BDDD43E843468FCD7F14A5CE /* FlightRisk */,
+				D63EB7FAD1009AC95314462C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F13333465B30BF9D1F2B584E /* Alert */ = {
+			isa = PBXGroup;
+			children = (
+				35792841BED0D09966745935 /* .gitkeep */,
+			);
+			path = Alert;
+			sourceTree = "<group>";
+		};
+		F370B9DEFAA9329A7AB428FC /* Location */ = {
+			isa = PBXGroup;
+			children = (
+				3C18B10FC35D8511EDDFC931 /* .gitkeep */,
+			);
+			path = Location;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		26600B6E30CEF74C316886F7 /* FlightRisk */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 37854391229A03FCE9C84BEF /* Build configuration list for PBXNativeTarget "FlightRisk" */;
+			buildPhases = (
+				657C6045B0A0DD0997C6553E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FlightRisk;
+			packageProductDependencies = (
+			);
+			productName = FlightRisk;
+			productReference = DB1B56CF1671883797BA7506 /* FlightRisk.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F88E9F64F2982F727627EBFC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					26600B6E30CEF74C316886F7 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = D42564AA596D673305D935AC /* Build configuration list for PBXProject "FlightRisk" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E1254E755EE27D1A6D45B2C4;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = D63EB7FAD1009AC95314462C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				26600B6E30CEF74C316886F7 /* FlightRisk */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		657C6045B0A0DD0997C6553E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE04B6E7B408309ACA1495F9 /* ContentView.swift in Sources */,
+				994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */,
+				6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2AF98DF27CB0F77013A97456 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_FILE = FlightRisk/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		37BA7415B2777A9555979122 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_FILE = FlightRisk/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		8C6E02CAADA2A84C75139FAA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = FlightRisk/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		EDFBEA79B279543BFC4CFCB1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = FlightRisk/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		37854391229A03FCE9C84BEF /* Build configuration list for PBXNativeTarget "FlightRisk" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8C6E02CAADA2A84C75139FAA /* Debug */,
+				EDFBEA79B279543BFC4CFCB1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D42564AA596D673305D935AC /* Build configuration list for PBXProject "FlightRisk" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				37BA7415B2777A9555979122 /* Debug */,
+				2AF98DF27CB0F77013A97456 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = F88E9F64F2982F727627EBFC /* Project object */;
+}
