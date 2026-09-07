@@ -102,11 +102,7 @@ actor LocationProvider: NSObject, CLLocationManagerDelegate {
     /// Update the cached location from the delegate callback.
     private func setLastLocation(_ location: CLLocation) {
         lastLocation = location
-        logger.debug(
-            "Location updated: \(location.coordinate.latitude), "
-            + "\(location.coordinate.longitude) "
-            + "(accuracy: \(location.horizontalAccuracy)m)"
-        )
+        logger.debug("Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude) (accuracy: \(location.horizontalAccuracy)m)")
     }
 
     // MARK: - CLLocationManagerDelegate

@@ -7,31 +7,119 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		072F81DB42ED8D89DA07A0F0 /* SearchPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D1D57BD7A741121CBDF7FCB /* SearchPattern.swift */; };
+		0943748BB265E5E31CE74694 /* FlightRiskConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEAC6B2DF60702C1D9E456C1 /* FlightRiskConfig.swift */; };
+		0A3951ACE4CD960553699380 /* TargetPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */; };
+		0E41EC5FF8B1C65ADEAEFB5F /* TelloWifiChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BFFECE8B6C2CC474E63C574 /* TelloWifiChecker.swift */; };
+		1199DE250FB94739372DDEC1 /* HUDOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */; };
+		1EBEC24EB0A006D8F434E585 /* DroneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D524D2A77288771B4CBFB8F5 /* DroneManager.swift */; };
+		2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52439BABA6B78915E990592B /* SensitivityPreset.swift */; };
+		360899AE9ADA26DC67EB0720 /* AVCaptureFrameSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */; };
+		3815E56D62ADC0BFC796A83E /* MatchAlertBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F1A35C7E18DE766B9D604B /* MatchAlertBannerView.swift */; };
+		3B1BF5F74447F81F021A510C /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04024DAAE785D1928D97E9D5 /* SearchView.swift */; };
+		3C1E0E65DC0C93311D75AACE /* AlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8591AC23892D277F0A94595D /* AlertManager.swift */; };
+		3C9D7FD4AB84BFEFDA645FFC /* TelloStatusBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CD82790795E7BEE644F03EF /* TelloStatusBadgeView.swift */; };
+		4268CF24E9C5B65DB663F293 /* MatchAlertCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */; };
+		57D2434AAC2BC55FDA4B1A0B /* NoOpLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */; };
+		5DA46B2CA99BC2AD98FB2637 /* TelloConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E47D1F649EA7F941AD35557 /* TelloConnection.swift */; };
+		64FC4A97E2FAE8712E1BDC6A /* MatchScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD2E1ADD5D69C905B7E5D46 /* MatchScorer.swift */; };
+		6770A9A5B2C84BAA25064116 /* FlightControlsOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C180AFC046B192A58F1EDA8 /* FlightControlsOverlayView.swift */; };
 		6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */; };
+		76CE20839065DD97C67256DC /* MatchEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE5A8559D99E845C9AE19D2 /* MatchEntry.swift */; };
+		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
+		7DAC6BD9E3833E32C00B285F /* DroneConnectionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 693FCB9A3C43D51979B30E45 /* DroneConnectionCardView.swift */; };
+		8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */; };
+		869823426F8CFA34F6203938 /* TelloFrameSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 663FA4E8FABF1CF7E74A8A16 /* TelloFrameSource.swift */; };
+		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
+		91785B276FA44B045B246A82 /* TargetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38053A9FBEF419992A818002 /* TargetStore.swift */; };
+		92A4880AEFFA562E4467D3D0 /* DetectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */; };
+		96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFDA478D1331861625B42ED /* PersonDetector.swift */; };
 		994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */; };
+		A231005B1A366C4BCA3A95C6 /* ImageQualityScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59BFA7DF8E90AA1B5611D58A /* ImageQualityScorer.swift */; };
+		A617E36E19773432F46C8273 /* PersonReID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1719B00AAD50A040D415CFA2 /* PersonReID.swift */; };
+		A67E39174CC9A707A6D27F8E /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581C04115FE79D1192573A6D /* LocationProvider.swift */; };
+		A68102B7EDB361FA7EEBF233 /* FrameSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019FEBF52C9050AFA3152912 /* FrameSource.swift */; };
+		A85376CC6E452010EDDC7888 /* TelloState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F7ABC1390587ECC7E40C8B /* TelloState.swift */; };
+		AF3B98A2CC75019FF34B6A5C /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A483878F013177DA84B870B /* KeychainHelper.swift */; };
+		B26C3324809A7B3AE2C8F928 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FA34371D88E8E82BA143CA4 /* OnboardingView.swift */; };
+		C26661AB555F1F5FF39446AF /* FrameSourceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2285D4F5C68838B5EFACD85D /* FrameSourceMode.swift */; };
+		CE312B422E6D04F5F6610AD6 /* SearchPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1579D100580E363B8D28F94E /* SearchPipeline.swift */; };
+		D17815DB27EE996EC24CC0A6 /* DetectionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */; };
+		D8C1FB13C942A48596579DB4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */; };
+		E369F83B6FCE7E7437069D28 /* LlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */; };
+		E416DD29FF581A257C0DBA88 /* FaceRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6240A16E4B71AA353C43D80 /* FaceRecognizer.swift */; };
+		E5CDF1C6E2F903F5CD50057E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE4E56041DCFBA42ECD3227 /* Models.swift */; };
+		EAFD491B98C3BF821475FE5C /* ObstacleGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21BB1E68957956A6B4BE2352 /* ObstacleGuard.swift */; };
+		EDA308F45387DBFAF007819C /* LlmSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */; };
 		EE04B6E7B408309ACA1495F9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703EF934C8A58C9E09EF38A7 /* ContentView.swift */; };
+		EF70C4F0B8A94A5A261E534B /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8796F00CD5B575072807AE3A /* SearchViewModel.swift */; };
+		F547AAFCC9F6FE928C341DD4 /* ConfidenceProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74AD7FC8D8DF5C80E4A44593 /* ConfidenceProgressView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		00E19DB885E4EF6328E33EC7 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		019FEBF52C9050AFA3152912 /* FrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSource.swift; sourceTree = "<group>"; };
 		02E3F0A55F5DDD81B2A7D321 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		04024DAAE785D1928D97E9D5 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPreviewView.swift; sourceTree = "<group>"; };
 		0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskApp.swift; sourceTree = "<group>"; };
+		0BFFECE8B6C2CC474E63C574 /* TelloWifiChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloWifiChecker.swift; sourceTree = "<group>"; };
+		1579D100580E363B8D28F94E /* SearchPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchPipeline.swift; sourceTree = "<group>"; };
+		1719B00AAD50A040D415CFA2 /* PersonReID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonReID.swift; sourceTree = "<group>"; };
 		1DACFD81851A1FF8A832CCEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionTracker.swift; sourceTree = "<group>"; };
+		21BB1E68957956A6B4BE2352 /* ObstacleGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObstacleGuard.swift; sourceTree = "<group>"; };
+		2285D4F5C68838B5EFACD85D /* FrameSourceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSourceMode.swift; sourceTree = "<group>"; };
+		2A483878F013177DA84B870B /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudClaudeLlmBackend.swift; sourceTree = "<group>"; };
 		35792841BED0D09966745935 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		38053A9FBEF419992A818002 /* TargetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetStore.swift; sourceTree = "<group>"; };
+		38F7ABC1390587ECC7E40C8B /* TelloState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloState.swift; sourceTree = "<group>"; };
+		3C180AFC046B192A58F1EDA8 /* FlightControlsOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightControlsOverlayView.swift; sourceTree = "<group>"; };
 		3C18B10FC35D8511EDDFC931 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		3CD82790795E7BEE644F03EF /* TelloStatusBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloStatusBadgeView.swift; sourceTree = "<group>"; };
+		3D1D57BD7A741121CBDF7FCB /* SearchPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchPattern.swift; sourceTree = "<group>"; };
+		3E47D1F649EA7F941AD35557 /* TelloConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloConnection.swift; sourceTree = "<group>"; };
 		4ABE92EEEE51DF56E95D0159 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		4BE4E56041DCFBA42ECD3227 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionOverlayView.swift; sourceTree = "<group>"; };
 		51095A1B6253211E12D08740 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		52439BABA6B78915E990592B /* SensitivityPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitivityPreset.swift; sourceTree = "<group>"; };
+		581C04115FE79D1192573A6D /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
+		59BFA7DF8E90AA1B5611D58A /* ImageQualityScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageQualityScorer.swift; sourceTree = "<group>"; };
 		5C62204D4A923643A5EB39B4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		663FA4E8FABF1CF7E74A8A16 /* TelloFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloFrameSource.swift; sourceTree = "<group>"; };
 		66F0F05724180E94E78FA3F5 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		693FCB9A3C43D51979B30E45 /* DroneConnectionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneConnectionCardView.swift; sourceTree = "<group>"; };
+		6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlayView.swift; sourceTree = "<group>"; };
+		6FA34371D88E8E82BA143CA4 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		6FFDA478D1331861625B42ED /* PersonDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonDetector.swift; sourceTree = "<group>"; };
 		703EF934C8A58C9E09EF38A7 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		74AD7FC8D8DF5C80E4A44593 /* ConfidenceProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfidenceProgressView.swift; sourceTree = "<group>"; };
+		74F1A35C7E18DE766B9D604B /* MatchAlertBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertBannerView.swift; sourceTree = "<group>"; };
+		7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmBackend.swift; sourceTree = "<group>"; };
+		7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmSelector.swift; sourceTree = "<group>"; };
+		8591AC23892D277F0A94595D /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
+		8796F00CD5B575072807AE3A /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
+		8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetPickerView.swift; sourceTree = "<group>"; };
+		946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoOpLlmBackend.swift; sourceTree = "<group>"; };
 		B191F1BA99C2BE70899B22C8 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVCaptureFrameSource.swift; sourceTree = "<group>"; };
 		B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskTheme.swift; sourceTree = "<group>"; };
 		B69634E5AA5C105D3BEC3074 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertCardView.swift; sourceTree = "<group>"; };
+		D524D2A77288771B4CBFB8F5 /* DroneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneManager.swift; sourceTree = "<group>"; };
 		DB1B56CF1671883797BA7506 /* FlightRisk.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FlightRisk.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E207121F168B27516A42FBAC /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
+		E6240A16E4B71AA353C43D80 /* FaceRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceRecognizer.swift; sourceTree = "<group>"; };
 		EBBCE586F65491E560BBE3AC /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		EEAC6B2DF60702C1D9E456C1 /* FlightRiskConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskConfig.swift; sourceTree = "<group>"; };
 		F0487FADF5286091CD37A120 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		F461B964B446E0595A7168D1 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		FCD2E1ADD5D69C905B7E5D46 /* MatchScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchScorer.swift; sourceTree = "<group>"; };
+		FFE5A8559D99E845C9AE19D2 /* MatchEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchEntry.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -39,6 +127,8 @@
 			isa = PBXGroup;
 			children = (
 				B69634E5AA5C105D3BEC3074 /* .gitkeep */,
+				FFE5A8559D99E845C9AE19D2 /* MatchEntry.swift */,
+				1579D100580E363B8D28F94E /* SearchPipeline.swift */,
 			);
 			path = Pipeline;
 			sourceTree = "<group>";
@@ -55,6 +145,7 @@
 			isa = PBXGroup;
 			children = (
 				B191F1BA99C2BE70899B22C8 /* .gitkeep */,
+				31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -63,6 +154,8 @@
 			isa = PBXGroup;
 			children = (
 				BC27CB526DDAD7CAEA259FFB /* .gitkeep */,
+				055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */,
+				8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */,
 			);
 			path = Target;
 			sourceTree = "<group>";
@@ -84,6 +177,9 @@
 			isa = PBXGroup;
 			children = (
 				51095A1B6253211E12D08740 /* .gitkeep */,
+				EEAC6B2DF60702C1D9E456C1 /* FlightRiskConfig.swift */,
+				2A483878F013177DA84B870B /* KeychainHelper.swift */,
+				52439BABA6B78915E990592B /* SensitivityPreset.swift */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -92,6 +188,7 @@
 			isa = PBXGroup;
 			children = (
 				66F0F05724180E94E78FA3F5 /* .gitkeep */,
+				6FA34371D88E8E82BA143CA4 /* OnboardingView.swift */,
 			);
 			path = Onboarding;
 			sourceTree = "<group>";
@@ -100,6 +197,10 @@
 			isa = PBXGroup;
 			children = (
 				02E3F0A55F5DDD81B2A7D321 /* .gitkeep */,
+				317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */,
+				7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */,
+				7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */,
+				946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */,
 			);
 			path = LLM;
 			sourceTree = "<group>";
@@ -124,6 +225,7 @@
 			isa = PBXGroup;
 			children = (
 				5C62204D4A923643A5EB39B4 /* .gitkeep */,
+				8796F00CD5B575072807AE3A /* SearchViewModel.swift */,
 			);
 			path = State;
 			sourceTree = "<group>";
@@ -132,6 +234,14 @@
 			isa = PBXGroup;
 			children = (
 				00E19DB885E4EF6328E33EC7 /* .gitkeep */,
+				D524D2A77288771B4CBFB8F5 /* DroneManager.swift */,
+				2285D4F5C68838B5EFACD85D /* FrameSourceMode.swift */,
+				21BB1E68957956A6B4BE2352 /* ObstacleGuard.swift */,
+				3D1D57BD7A741121CBDF7FCB /* SearchPattern.swift */,
+				3E47D1F649EA7F941AD35557 /* TelloConnection.swift */,
+				663FA4E8FABF1CF7E74A8A16 /* TelloFrameSource.swift */,
+				38F7ABC1390587ECC7E40C8B /* TelloState.swift */,
+				0BFFECE8B6C2CC474E63C574 /* TelloWifiChecker.swift */,
 			);
 			path = Drone;
 			sourceTree = "<group>";
@@ -140,6 +250,14 @@
 			isa = PBXGroup;
 			children = (
 				F461B964B446E0595A7168D1 /* .gitkeep */,
+				1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */,
+				E6240A16E4B71AA353C43D80 /* FaceRecognizer.swift */,
+				59BFA7DF8E90AA1B5611D58A /* ImageQualityScorer.swift */,
+				FCD2E1ADD5D69C905B7E5D46 /* MatchScorer.swift */,
+				4BE4E56041DCFBA42ECD3227 /* Models.swift */,
+				6FFDA478D1331861625B42ED /* PersonDetector.swift */,
+				1719B00AAD50A040D415CFA2 /* PersonReID.swift */,
+				38053A9FBEF419992A818002 /* TargetStore.swift */,
 			);
 			path = Vision;
 			sourceTree = "<group>";
@@ -148,6 +266,9 @@
 			isa = PBXGroup;
 			children = (
 				EBBCE586F65491E560BBE3AC /* .gitkeep */,
+				B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */,
+				E207121F168B27516A42FBAC /* CameraPreviewView.swift */,
+				019FEBF52C9050AFA3152912 /* FrameSource.swift */,
 			);
 			path = Camera;
 			sourceTree = "<group>";
@@ -192,6 +313,15 @@
 			isa = PBXGroup;
 			children = (
 				1DACFD81851A1FF8A832CCEF /* .gitkeep */,
+				74AD7FC8D8DF5C80E4A44593 /* ConfidenceProgressView.swift */,
+				4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */,
+				693FCB9A3C43D51979B30E45 /* DroneConnectionCardView.swift */,
+				3C180AFC046B192A58F1EDA8 /* FlightControlsOverlayView.swift */,
+				6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */,
+				74F1A35C7E18DE766B9D604B /* MatchAlertBannerView.swift */,
+				D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */,
+				04024DAAE785D1928D97E9D5 /* SearchView.swift */,
+				3CD82790795E7BEE644F03EF /* TelloStatusBadgeView.swift */,
 			);
 			path = Search;
 			sourceTree = "<group>";
@@ -208,6 +338,7 @@
 			isa = PBXGroup;
 			children = (
 				35792841BED0D09966745935 /* .gitkeep */,
+				8591AC23892D277F0A94595D /* AlertManager.swift */,
 			);
 			path = Alert;
 			sourceTree = "<group>";
@@ -216,6 +347,7 @@
 			isa = PBXGroup;
 			children = (
 				3C18B10FC35D8511EDDFC931 /* .gitkeep */,
+				581C04115FE79D1192573A6D /* LocationProvider.swift */,
 			);
 			path = Location;
 			sourceTree = "<group>";
@@ -279,9 +411,53 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				360899AE9ADA26DC67EB0720 /* AVCaptureFrameSource.swift in Sources */,
+				3C1E0E65DC0C93311D75AACE /* AlertManager.swift in Sources */,
+				7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */,
+				8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */,
+				F547AAFCC9F6FE928C341DD4 /* ConfidenceProgressView.swift in Sources */,
 				EE04B6E7B408309ACA1495F9 /* ContentView.swift in Sources */,
+				D17815DB27EE996EC24CC0A6 /* DetectionOverlayView.swift in Sources */,
+				92A4880AEFFA562E4467D3D0 /* DetectionTracker.swift in Sources */,
+				7DAC6BD9E3833E32C00B285F /* DroneConnectionCardView.swift in Sources */,
+				1EBEC24EB0A006D8F434E585 /* DroneManager.swift in Sources */,
+				E416DD29FF581A257C0DBA88 /* FaceRecognizer.swift in Sources */,
+				6770A9A5B2C84BAA25064116 /* FlightControlsOverlayView.swift in Sources */,
 				994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */,
+				0943748BB265E5E31CE74694 /* FlightRiskConfig.swift in Sources */,
 				6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */,
+				A68102B7EDB361FA7EEBF233 /* FrameSource.swift in Sources */,
+				C26661AB555F1F5FF39446AF /* FrameSourceMode.swift in Sources */,
+				1199DE250FB94739372DDEC1 /* HUDOverlayView.swift in Sources */,
+				A231005B1A366C4BCA3A95C6 /* ImageQualityScorer.swift in Sources */,
+				AF3B98A2CC75019FF34B6A5C /* KeychainHelper.swift in Sources */,
+				E369F83B6FCE7E7437069D28 /* LlmBackend.swift in Sources */,
+				EDA308F45387DBFAF007819C /* LlmSelector.swift in Sources */,
+				A67E39174CC9A707A6D27F8E /* LocationProvider.swift in Sources */,
+				3815E56D62ADC0BFC796A83E /* MatchAlertBannerView.swift in Sources */,
+				4268CF24E9C5B65DB663F293 /* MatchAlertCardView.swift in Sources */,
+				76CE20839065DD97C67256DC /* MatchEntry.swift in Sources */,
+				64FC4A97E2FAE8712E1BDC6A /* MatchScorer.swift in Sources */,
+				E5CDF1C6E2F903F5CD50057E /* Models.swift in Sources */,
+				57D2434AAC2BC55FDA4B1A0B /* NoOpLlmBackend.swift in Sources */,
+				EAFD491B98C3BF821475FE5C /* ObstacleGuard.swift in Sources */,
+				B26C3324809A7B3AE2C8F928 /* OnboardingView.swift in Sources */,
+				96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */,
+				A617E36E19773432F46C8273 /* PersonReID.swift in Sources */,
+				876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */,
+				072F81DB42ED8D89DA07A0F0 /* SearchPattern.swift in Sources */,
+				CE312B422E6D04F5F6610AD6 /* SearchPipeline.swift in Sources */,
+				3B1BF5F74447F81F021A510C /* SearchView.swift in Sources */,
+				EF70C4F0B8A94A5A261E534B /* SearchViewModel.swift in Sources */,
+				2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */,
+				D8C1FB13C942A48596579DB4 /* SettingsView.swift in Sources */,
+				0A3951ACE4CD960553699380 /* TargetPickerView.swift in Sources */,
+				91785B276FA44B045B246A82 /* TargetStore.swift in Sources */,
+				5DA46B2CA99BC2AD98FB2637 /* TelloConnection.swift in Sources */,
+				869823426F8CFA34F6203938 /* TelloFrameSource.swift in Sources */,
+				A85376CC6E452010EDDC7888 /* TelloState.swift in Sources */,
+				3C9D7FD4AB84BFEFDA645FFC /* TelloStatusBadgeView.swift in Sources */,
+				0E41EC5FF8B1C65ADEAEFB5F /* TelloWifiChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

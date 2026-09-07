@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import CoreML
+import CoreText
 import os
 import Vision
 
@@ -46,7 +47,7 @@ final class PersonDetector {
     init(
         modelName: String = "YOLOPersonDetector",
         confidence: Float = FlightRiskConfig.shared.vision.detectorConfidence,
-        iouThreshold: Float = Self.nmsIouThreshold
+        iouThreshold: Float = 0.45
     ) {
         self.confidence = confidence
         self.iouThreshold = iouThreshold

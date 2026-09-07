@@ -346,8 +346,11 @@ actor DroneManager {
                 if !active { break }
 
                 // Wait while paused for match inspection
-                while await self.isSearchPaused() && await self.isSearchActive() {
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                while true {
+                    let paused = await self.isSearchPaused()
+                    let active2 = await self.isSearchActive()
+                    guard paused && active2 else { break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
                 }
                 let stillActive = await self.isSearchActive()
                 if !stillActive { break }
@@ -426,10 +429,7 @@ actor DroneManager {
             let check = await guard_.checkPath(frame: frame)
             if check.safe { return true }
 
-            Self.logger.warning(
-                "Obstacle at waypoint \(waypointIndex + 1): " +
-                "action=\(check.action), depth=\(check.centerDepth), retry=\(retry)"
-            )
+            Self.logger.warning("Obstacle at waypoint \(waypointIndex + 1): action=\(check.action), depth=\(check.centerDepth), retry=\(retry)")
             alertContinuation.yield(.obstacleDetected(action: check.action, confidence: check.confidence))
 
             if retry >= Self.maxAvoidanceRetries {

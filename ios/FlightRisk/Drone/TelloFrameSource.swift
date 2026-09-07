@@ -3,6 +3,7 @@ import Network
 import VideoToolbox
 import CoreImage
 import CoreVideo
+import QuartzCore
 import os.log
 
 /// Receives and decodes the Tello's H264 video stream using VideoToolbox.
@@ -391,7 +392,7 @@ final class TelloFrameSource: FrameSource {
         ]
 
         var callbackRecord = VTDecompressionOutputCallbackRecord(
-            decompressionOutputCallback: decompressionCallback,
+            decompressionOutputCallback: Self.decompressionCallback,
             decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque()
         )
 

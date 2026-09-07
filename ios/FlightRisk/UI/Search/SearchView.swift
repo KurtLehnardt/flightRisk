@@ -1,3 +1,4 @@
+import AVFoundation
 import MapKit
 import SwiftUI
 
@@ -25,6 +26,9 @@ struct SearchView: View {
 
     /// The view model driving all search screen state.
     @Bindable var viewModel: SearchViewModel
+
+    /// The camera capture session for the live preview layer.
+    var cameraSession: AVCaptureSession
 
     /// Whether the "models not loaded" banner should be shown.
     /// Delayed by 2 seconds after search starts to avoid flash.
@@ -114,7 +118,7 @@ struct SearchView: View {
 
         case .camera:
             if viewModel.isSearching {
-                CameraPreviewView()
+                CameraPreviewView(session: cameraSession)
             } else {
                 cameraPreviewPlaceholder
             }
