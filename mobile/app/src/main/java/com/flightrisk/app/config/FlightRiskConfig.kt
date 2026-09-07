@@ -2,6 +2,9 @@ package com.flightrisk.app.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
 /**
  * Centralized configuration for the FlightRisk mobile app.
@@ -35,9 +38,25 @@ data class FlightRiskConfig(
         fun getInstance(context: Context): FlightRiskConfig {
             return instance ?: synchronized(this) {
                 instance ?: fromPreferences(
-                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+                    getEncryptedPrefs(context),
                 ).also { instance = it }
             }
+        }
+
+        private const val SECURE_PREFS_NAME = "flightrisk_secure_prefs"
+
+        fun getEncryptedPrefs(context: Context): SharedPreferences {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            return EncryptedSharedPreferences.create(
+                context,
+                SECURE_PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
         }
 
         /**
@@ -47,8 +66,20 @@ data class FlightRiskConfig(
          * exposed via preferences, matching the Python `AmberConfig.from_env`
          * pattern.
          */
-        fun fromPreferences(prefs: SharedPreferences): FlightRiskConfig {
+        fun fromPreferences(
+            prefs: SharedPreferences,
+            securePrefs: SharedPreferences? = null,
+        ): FlightRiskConfig {
             val config = FlightRiskConfig()
+
+            // Migrate API key from plain prefs to encrypted prefs on first read
+            val apiKey: String? = securePrefs?.getString("FLIGHTRISK_API_KEY", null)
+                ?: prefs.getString("FLIGHTRISK_API_KEY", null)?.also { plainKey ->
+                    securePrefs?.edit()?.putString("FLIGHTRISK_API_KEY", plainKey)?.apply()
+                    prefs.edit().remove("FLIGHTRISK_API_KEY").apply()
+                    Log.i("FlightRiskConfig", "Migrated API key to encrypted storage")
+                }
+
             return config.copy(
                 vision = config.vision.copy(
                     detectorModel = prefs.getString("FLIGHTRISK_DETECTOR_MODEL", null)
@@ -69,8 +100,7 @@ data class FlightRiskConfig(
                 reasoning = config.reasoning.copy(
                     model = prefs.getString("FLIGHTRISK_GEMMA_MODEL", null)
                         ?: config.reasoning.model,
-                    apiKey = prefs.getString("FLIGHTRISK_API_KEY", null)
-                        ?: config.reasoning.apiKey,
+                    apiKey = apiKey ?: config.reasoning.apiKey,
                     alertCooldown = prefs.getFloat(
                         "FLIGHTRISK_ALERT_COOLDOWN",
                         config.reasoning.alertCooldown.toFloat()

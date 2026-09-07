@@ -685,10 +685,12 @@ class SearchPipeline(
                             val lastLlm = llmLastCall[trackKey]
                             if (llmAvailable && (lastLlm == null || (now - lastLlm) >= llmCooldownMs)) {
                                 llmLastCall[trackKey] = now
-                                val item = if (targetPhoto != null) {
-                                    ReasoningWorkItem.Analyze(trackKey, crop, targetPhoto!!)
-                                } else if (targetDescription != null) {
-                                    ReasoningWorkItem.Describe(trackKey, crop, targetDescription!!)
+                                val photo = targetPhoto
+                                val desc = targetDescription
+                                val item = if (photo != null) {
+                                    ReasoningWorkItem.Analyze(trackKey, crop, photo)
+                                } else if (desc != null) {
+                                    ReasoningWorkItem.Describe(trackKey, crop, desc)
                                 } else null
 
                                 item?.let { reasoningChannel.trySend(it) }

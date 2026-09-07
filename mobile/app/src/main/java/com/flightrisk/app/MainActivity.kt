@@ -556,7 +556,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleApiKeyChanged(apiKey: String) {
-        getSharedPreferences("flightrisk_config", MODE_PRIVATE)
+        FlightRiskConfig.getEncryptedPrefs(this)
             .edit()
             .putString("FLIGHTRISK_API_KEY", apiKey)
             .apply()
