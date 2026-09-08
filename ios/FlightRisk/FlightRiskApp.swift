@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct FlightRiskApp: App {
     @State private var viewModel = SearchViewModel()
+    @State private var gemmaModelManager = GemmaModelManager()
     private let config = FlightRiskConfig.shared
 
     var body: some Scene {
@@ -12,7 +13,8 @@ struct FlightRiskApp: App {
                 cameraSession: .init(),
                 config: config,
                 droneState: nil,
-                frameSourceMode: .camera
+                frameSourceMode: .camera,
+                gemmaModelManager: gemmaModelManager
             )
         }
     }
