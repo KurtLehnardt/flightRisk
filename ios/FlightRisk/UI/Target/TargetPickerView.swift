@@ -179,24 +179,11 @@ struct TargetPickerView: View {
 
         guard let data = try? await item.loadTransferable(type: Data.self),
               let uiImage = UIImage(data: data),
-              let cgImage = normalizedCGImage(from: uiImage) else {
+              let cgImage = uiImage.normalizedCGImage else {
             return
         }
 
         processImage(cgImage)
-    }
-
-    /// Re-draw the image into a bitmap with `.up` orientation so that
-    /// Vision's face detector sees correctly-oriented pixels.
-    private func normalizedCGImage(from uiImage: UIImage) -> CGImage? {
-        if uiImage.imageOrientation == .up {
-            return uiImage.cgImage
-        }
-        let renderer = UIGraphicsImageRenderer(size: uiImage.size)
-        let normalized = renderer.image { _ in
-            uiImage.draw(in: CGRect(origin: .zero, size: uiImage.size))
-        }
-        return normalized.cgImage
     }
 
     /// Analyze a `CGImage` and update state.
@@ -253,20 +240,9 @@ struct CameraCaptureView: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let uiImage = info[.originalImage] as? UIImage {
-                let cgImage: CGImage?
-                if uiImage.imageOrientation == .up {
-                    cgImage = uiImage.cgImage
-                } else {
-                    let renderer = UIGraphicsImageRenderer(size: uiImage.size)
-                    let normalized = renderer.image { _ in
-                        uiImage.draw(in: CGRect(origin: .zero, size: uiImage.size))
-                    }
-                    cgImage = normalized.cgImage
-                }
-                if let cg = cgImage {
-                    onCapture(cg)
-                }
+            if let uiImage = info[.originalImage] as? UIImage,
+               let cgImage = uiImage.normalizedCGImage {
+                onCapture(cgImage)
             }
             dismiss()
         }
@@ -276,5 +252,18 @@ struct CameraCaptureView: UIViewControllerRepresentable {
         ) {
             dismiss()
         }
+    }
+}
+
+// MARK: - UIImage Normalization
+
+private extension UIImage {
+    /// Redraw into a standard sRGB bitmap, normalizing orientation and pixel format
+    /// so Vision's face detector always sees correctly-oriented, standard-format pixels.
+    var normalizedCGImage: CGImage? {
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }.cgImage
     }
 }
