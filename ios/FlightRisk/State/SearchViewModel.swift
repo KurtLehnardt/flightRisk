@@ -78,6 +78,17 @@ final class SearchViewModel {
     /// Status message about drone connection (e.g. "Connecting...", "Connected").
     var droneConnectionMessage: String?
 
+    // MARK: - LLM Backend Status
+
+    /// Name of the currently active LLM backend for display.
+    var activeBackendName: String?
+
+    /// Whether the active backend is a local on-device model.
+    var activeBackendIsLocal: Bool = false
+
+    /// Status message about the backend (e.g., "Loading model...", thermal warning).
+    var backendStatusMessage: String?
+
     // MARK: - Search Pattern
 
     /// The currently selected search pattern for autonomous drone flight.
