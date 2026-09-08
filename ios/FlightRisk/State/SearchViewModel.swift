@@ -78,6 +78,17 @@ final class SearchViewModel {
     /// Status message about drone connection (e.g. "Connecting...", "Connected").
     var droneConnectionMessage: String?
 
+    // MARK: - Target Photo
+
+    /// The selected target reference photo, or nil if none chosen.
+    var targetPhoto: CGImage?
+
+    /// Quality report for the target photo.
+    var targetReport: QualityReport?
+
+    /// Whether a target photo has been set.
+    var hasTarget: Bool { targetPhoto != nil }
+
     // MARK: - Search Pattern
 
     /// The currently selected search pattern for autonomous drone flight.

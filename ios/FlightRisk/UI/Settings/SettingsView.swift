@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 
 /// Main settings screen for FlightRisk iOS.
@@ -24,6 +25,7 @@ struct SettingsView: View {
     @State private var llmBackend: String = "cloud_claude"
     @State private var advancedExpanded: Bool = false
     @State private var showApiKeySaved: Bool = false
+    @State private var hasInternet: Bool = true
 
     // MARK: - Derived State
 
@@ -44,6 +46,7 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onAppear {
             apiKeyInput = KeychainHelper.loadApiKey() ?? ""
+            checkNetworkConnectivity()
         }
     }
 
@@ -80,15 +83,18 @@ struct SettingsView: View {
     private var llmSection: some View {
         Section {
             Picker("Backend", selection: $llmBackend) {
-                Text("Cloud Claude").tag("cloud_claude")
+                Text("Claude (Cloud)").tag("cloud_claude")
+                Text("Gemini (Cloud)").tag("cloud_gemini")
+                Text("OpenAI (Cloud)").tag("cloud_openai")
+                Text("Gemma 4 (Local)").tag("local_gemma")
                 Text("None").tag("none")
             }
             .onChange(of: llmBackend) { _, newValue in
                 onLlmBackendChanged(newValue)
             }
 
-            if llmBackend == "cloud_claude" {
-                SecureField("sk-ant-...", text: $apiKeyInput)
+            if llmBackend.hasPrefix("cloud_") {
+                SecureField(apiKeyPlaceholder, text: $apiKeyInput)
                     .textContentType(.password)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -117,6 +123,18 @@ struct SettingsView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("LLM status: \(llmStatusText)")
+            } else if llmBackend == "local_gemma" {
+                Text("Runs on-device. No API key required.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(FlightRiskTheme.alertOrange)
+                        .frame(width: 8, height: 8)
+                    Text("Not yet installed")
+                        .font(.footnote)
+                        .foregroundStyle(FlightRiskTheme.alertOrange)
+                }
             } else {
                 Text("LLM reasoning disabled")
                     .font(.footnote)
@@ -266,6 +284,17 @@ struct SettingsView: View {
         activePresetRaw = ""
     }
 
+    private func checkNetworkConnectivity() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { path in
+            DispatchQueue.main.async {
+                hasInternet = path.status == .satisfied
+            }
+            monitor.cancel()
+        }
+        monitor.start(queue: DispatchQueue(label: "com.flightrisk.settings.netcheck"))
+    }
+
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -274,20 +303,35 @@ struct SettingsView: View {
 
     // LLM status helpers
     private var llmStatusColor: Color {
-        if llmAvailable {
+        if apiKeyInput.isEmpty {
+            return FlightRiskTheme.alertOrange
+        } else if !hasInternet {
+            return FlightRiskTheme.alertRed
+        } else if llmAvailable {
             return FlightRiskTheme.matchGreen
         } else {
-            return FlightRiskTheme.alertRed
+            return FlightRiskTheme.alertOrange
         }
     }
 
     private var llmStatusText: String {
-        if llmAvailable {
-            return "Available"
-        } else if apiKeyInput.isEmpty {
+        if apiKeyInput.isEmpty {
             return "No API key"
-        } else {
+        } else if !hasInternet {
             return "No internet"
+        } else if llmAvailable {
+            return "Available"
+        } else {
+            return "Ready"
+        }
+    }
+
+    private var apiKeyPlaceholder: String {
+        switch llmBackend {
+        case "cloud_claude": return "sk-ant-..."
+        case "cloud_gemini": return "AIza..."
+        case "cloud_openai": return "sk-..."
+        default: return "API Key"
         }
     }
 
