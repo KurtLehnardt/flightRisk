@@ -45,7 +45,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .onAppear {
-            apiKeyInput = KeychainHelper.loadApiKey() ?? ""
+            apiKeyInput = KeychainHelper.loadApiKey(provider: llmBackend) ?? ""
             checkNetworkConnectivity()
         }
     }
@@ -90,6 +90,8 @@ struct SettingsView: View {
                 Text("None").tag("none")
             }
             .onChange(of: llmBackend) { _, newValue in
+                apiKeyInput = KeychainHelper.loadApiKey(provider: newValue) ?? ""
+                showApiKeySaved = false
                 onLlmBackendChanged(newValue)
             }
 
@@ -269,7 +271,7 @@ struct SettingsView: View {
 
     private func saveApiKey() {
         do {
-            try KeychainHelper.saveApiKey(apiKeyInput)
+            try KeychainHelper.saveApiKey(apiKeyInput, provider: llmBackend)
             onApiKeyChanged(apiKeyInput)
             showApiKeySaved = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
