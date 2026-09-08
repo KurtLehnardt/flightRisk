@@ -230,38 +230,10 @@ final class CloudClaudeLlmBackend: LlmBackend {
 
     /// Parse the structured MATCH / CONFIDENCE / REASONING response.
     ///
-    /// Mirrors `FlightRiskAgent._parse_match_response()` from the Python
-    /// codebase.
+    /// Delegates to ``ReasoningResult.parse(_:confidenceDiscount:)`` which
+    /// centralises the parsing logic shared by all LLM backends.
     func parseMatchResponse(_ text: String) -> ReasoningResult {
-        var isMatch = false
-        var confidence = "unknown"
-        var reasoning = text
-
-        for line in text.split(separator: "\n") {
-            let upper = line.trimmingCharacters(in: .whitespaces).uppercased()
-            if upper.hasPrefix("MATCH:") {
-                isMatch = upper.contains("YES")
-            } else if upper.hasPrefix("CONFIDENCE:") {
-                confidence = upper
-                    .split(separator: ":", maxSplits: 1)
-                    .last
-                    .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                    ?? "unknown"
-            } else if upper.hasPrefix("REASONING:") {
-                reasoning = String(line)
-                    .trimmingCharacters(in: .whitespaces)
-                    .split(separator: ":", maxSplits: 1)
-                    .last
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    ?? text
-            }
-        }
-
-        return ReasoningResult(
-            isMatch: isMatch,
-            confidence: confidence,
-            reasoning: reasoning
-        )
+        return ReasoningResult.parse(text)
     }
 
     /// Encode a `CGImage` as a base64 JPEG string.
