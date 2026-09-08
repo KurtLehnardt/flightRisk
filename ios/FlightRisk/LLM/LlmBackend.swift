@@ -11,6 +11,48 @@ struct ReasoningResult {
     let confidence: String
     /// Free-text explanation from the LLM.
     let reasoning: String
+    /// Multiplier applied to scoring when the backend is less reliable (e.g. local models).
+    /// Defaults to 1.0 (no discount).
+    let confidenceDiscount: Float
+
+    init(isMatch: Bool, confidence: String, reasoning: String, confidenceDiscount: Float = 1.0) {
+        self.isMatch = isMatch
+        self.confidence = confidence
+        self.reasoning = reasoning
+        self.confidenceDiscount = confidenceDiscount
+    }
+}
+
+extension ReasoningResult {
+    /// Parse LLM response text in the format:
+    /// MATCH: yes/no
+    /// CONFIDENCE: high/medium/low
+    /// REASONING: ...
+    static func parse(_ text: String, confidenceDiscount: Float = 1.0) -> ReasoningResult {
+        let lines = text.components(separatedBy: "\n")
+        var isMatch = false
+        var confidence = "unknown"
+        var reasoning = text
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().hasPrefix("match:") {
+                let value = trimmed.dropFirst(6).trimmingCharacters(in: .whitespaces).lowercased()
+                isMatch = value == "yes" || value == "true"
+            } else if trimmed.lowercased().hasPrefix("confidence:") {
+                confidence = trimmed.dropFirst(11).trimmingCharacters(in: .whitespaces).lowercased()
+            } else if trimmed.lowercased().hasPrefix("reasoning:") {
+                reasoning = trimmed.dropFirst(10).trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        return ReasoningResult(
+            isMatch: isMatch,
+            confidence: confidence,
+            reasoning: reasoning,
+            confidenceDiscount: confidenceDiscount
+        )
+    }
 }
 
 /// Interface for LLM reasoning backends.

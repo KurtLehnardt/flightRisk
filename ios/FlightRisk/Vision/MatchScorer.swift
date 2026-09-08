@@ -197,20 +197,23 @@ struct MatchScorer {
         guard let result = result else { return 0.0 }
 
         let confidence = result.confidence.lowercased()
+        let score: Float
         if result.isMatch {
             switch confidence {
-            case "high": return 0.90
-            case "medium": return 0.65
-            case "low": return 0.40
-            default: return 0.50
+            case "high": score = 0.90
+            case "medium": score = 0.65
+            case "low": score = 0.40
+            default: score = 0.50
             }
         } else {
             switch confidence {
-            case "high": return 0.10
-            case "medium": return 0.20
-            case "low": return 0.30
-            default: return 0.30
+            case "high": score = 0.10
+            case "medium": score = 0.20
+            case "low": score = 0.30
+            default: score = 0.30
             }
         }
+
+        return score * result.confidenceDiscount
     }
 }
