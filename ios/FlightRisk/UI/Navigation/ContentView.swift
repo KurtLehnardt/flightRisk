@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @AppStorage("flightrisk_onboarding_complete") private var onboardingComplete = false
+    @State private var selectedTab = 0
 
     let viewModel: SearchViewModel
     let cameraSession: AVCaptureSession
@@ -12,15 +13,21 @@ struct ContentView: View {
 
     var body: some View {
         if onboardingComplete {
-            TabView {
+            TabView(selection: $selectedTab) {
                 SearchView(viewModel: viewModel, cameraSession: cameraSession)
                     .tabItem {
                         Label("Search", systemImage: "magnifyingglass")
                     }
-                TargetPickerView(onPhotoSelected: { _, _ in })
+                    .tag(0)
+                TargetPickerView { image, report in
+                    viewModel.targetPhoto = image
+                    viewModel.targetReport = report
+                    selectedTab = 0
+                }
                     .tabItem {
                         Label("Target", systemImage: "person.crop.circle")
                     }
+                    .tag(1)
                 SettingsView(
                     config: config,
                     onPresetSelected: { _ in },
@@ -34,6 +41,7 @@ struct ContentView: View {
                     .tabItem {
                         Label("Settings", systemImage: "gearshape")
                     }
+                    .tag(2)
             }
         } else {
             OnboardingView()
