@@ -5,6 +5,13 @@ options:
     iOS: "17.0"
   xcodeVersion: "15.0"
   generateEmptyDirectories: true
+packages:
+  MLX:
+    url: https://github.com/ml-explore/mlx-swift
+    branch: main
+  MLXSwiftExamples:
+    url: https://github.com/ml-explore/mlx-swift-examples
+    branch: main
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -17,6 +24,14 @@ targets:
     platform: iOS
     sources:
       - FlightRisk
+    dependencies:
+      - package: MLX
+      - package: MLXSwiftExamples
+        product: MLXLLM
+      - package: MLXSwiftExamples
+        product: MLXLMCommon
+      - package: MLXSwiftExamples
+        product: Tokenizers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
@@ -35,3 +50,13 @@ targets:
         NSLocationWhenInUseUsageDescription: "FlightRisk attaches GPS coordinates to match alerts so you can navigate to the location."
         NSLocalNetworkUsageDescription: "FlightRisk connects to the Tello drone over your local WiFi network."
         NSPhotoLibraryUsageDescription: "FlightRisk needs access to your photo library to select a target reference photo."
+  FlightRiskTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - FlightRiskTests
+    dependencies:
+      - target: FlightRisk
+    settings:
+      base:
+        INFOPLIST_FILE: FlightRiskTests/Info.plist

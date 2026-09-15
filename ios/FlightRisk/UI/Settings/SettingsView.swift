@@ -18,12 +18,15 @@ struct SettingsView: View {
     let llmAvailable: Bool
     let droneState: TelloState?
     let frameSourceMode: FrameSourceMode
+    let modelManager: (any GemmaModelManaging)?
 
     @AppStorage("flightrisk_active_preset") private var activePresetRaw: String = SensitivityPreset.balanced.rawValue
     @State private var apiKeyInput: String = ""
     @State private var llmBackend: String = "cloud_claude"
     @State private var advancedExpanded: Bool = false
     @State private var showApiKeySaved: Bool = false
+    @State private var gemmaState: GemmaDownloadState = .idle
+    @State private var showDeleteConfirmation: Bool = false
 
     // MARK: - Derived State
 
@@ -44,6 +47,23 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onAppear {
             apiKeyInput = KeychainHelper.loadApiKey() ?? ""
+        }
+        .alert("Delete AI Model?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                Task { try? await modelManager?.deleteModel() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will free ~1.5 GB. You'll need WiFi to re-download.")
+        }
+        .task(id: llmBackend) {
+            guard llmBackend == "local_gemma", let manager = modelManager else { return }
+            gemmaState = await manager.state
+            // Poll state periodically during download
+            while !Task.isCancelled && llmBackend == "local_gemma" {
+                try? await Task.sleep(for: .seconds(0.5))
+                gemmaState = await manager.state
+            }
         }
     }
 
@@ -81,6 +101,7 @@ struct SettingsView: View {
         Section {
             Picker("Backend", selection: $llmBackend) {
                 Text("Cloud Claude").tag("cloud_claude")
+                Text("Local Gemma").tag("local_gemma")
                 Text("None").tag("none")
             }
             .onChange(of: llmBackend) { _, newValue in
@@ -117,6 +138,91 @@ struct SettingsView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("LLM status: \(llmStatusText)")
+            } else if llmBackend == "local_gemma" {
+                Text("Runs on-device. No API key required.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Local Gemma model runs on-device. No API key required.")
+
+                // State-driven UI
+                switch gemmaState {
+                case .idle:
+                    Button("Download Model (~1.5 GB)") {
+                        Task { try? await modelManager?.download() }
+                    }
+                    .accessibilityHint("Downloads the Gemma AI model for on-device reasoning")
+                    Text("Requires WiFi. Model stored locally on device.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                case .downloading(let progress):
+                    ProgressView(value: progress) {
+                        Text("Downloading... \(Int(progress * 100))%")
+                            .font(.footnote)
+                    }
+                    .accessibilityLabel("Downloading model, \(Int(progress * 100)) percent complete")
+                    Button("Cancel", role: .destructive) {
+                        Task { await modelManager?.cancelDownload() }
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Cancel model download")
+
+                case .downloaded:
+                    HStack(spacing: 8) {
+                        Circle().fill(FlightRiskTheme.matchGreen).frame(width: 8, height: 8)
+                        Text("Downloaded").font(.footnote).foregroundStyle(FlightRiskTheme.matchGreen)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Model status: Downloaded")
+                    Button("Delete Model", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Delete downloaded AI model")
+
+                case .loading:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading model...").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Loading AI model")
+
+                case .ready:
+                    HStack(spacing: 8) {
+                        Circle().fill(FlightRiskTheme.matchGreen).frame(width: 8, height: 8)
+                        Text("Ready").font(.footnote).foregroundStyle(FlightRiskTheme.matchGreen)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("AI model status: Ready")
+                    Button("Unload Model") {
+                        Task { await modelManager?.unloadModel() }
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Unload AI model from memory")
+                    Button("Delete Model", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Delete AI model from device")
+
+                case .error(let message):
+                    HStack(spacing: 8) {
+                        Circle().fill(FlightRiskTheme.alertRed).frame(width: 8, height: 8)
+                        Text(message).font(.footnote).foregroundStyle(FlightRiskTheme.alertRed)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Model error: \(message)")
+                    Button("Retry") {
+                        Task { try? await modelManager?.download() }
+                    }
+                    .font(.footnote)
+                    .accessibilityLabel("Retry model download")
+                }
+
+                Text("Local analysis uses text descriptions. Match confidence is automatically adjusted.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             } else {
                 Text("LLM reasoning disabled")
                     .font(.footnote)
@@ -434,7 +540,8 @@ private struct ThresholdSliderRow: View {
                 connectionState: .connected,
                 telemetry: TelloTelemetry(battery: 72)
             ),
-            frameSourceMode: .camera
+            frameSourceMode: .camera,
+            modelManager: nil
         )
     }
 }

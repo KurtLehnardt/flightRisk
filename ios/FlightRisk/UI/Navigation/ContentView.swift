@@ -9,6 +9,7 @@ struct ContentView: View {
     let config: FlightRiskConfig
     let droneState: TelloState?
     let frameSourceMode: FrameSourceMode
+    let gemmaModelManager: (any GemmaModelManaging)?
 
     var body: some View {
         if onboardingComplete {
@@ -29,7 +30,8 @@ struct ContentView: View {
                     onApiKeyChanged: { _ in },
                     llmAvailable: false,
                     droneState: droneState,
-                    frameSourceMode: frameSourceMode
+                    frameSourceMode: frameSourceMode,
+                    modelManager: gemmaModelManager
                 )
                     .tabItem {
                         Label("Settings", systemImage: "gearshape")
