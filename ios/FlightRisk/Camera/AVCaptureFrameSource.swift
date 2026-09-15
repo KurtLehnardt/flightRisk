@@ -3,7 +3,7 @@ import CoreImage
 import CoreGraphics
 import os
 
-final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class AVCaptureFrameSource: NSObject, FrameSource, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let captureSession = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.flightrisk.camera.session")
     private let outputQueue = DispatchQueue(label: "com.flightrisk.camera.output")

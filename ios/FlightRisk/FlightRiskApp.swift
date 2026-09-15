@@ -14,6 +14,7 @@ struct FlightRiskApp: App {
     @State private var personDetector: PersonDetector
     @State private var personReID: PersonReID
     @State private var faceRecognizer: FaceRecognizer
+    @State private var frameSource = AVCaptureFrameSource()
     @State private var pipeline: SearchPipeline
 
     init() {
@@ -49,7 +50,7 @@ struct FlightRiskApp: App {
         WindowGroup {
             ContentView(
                 viewModel: viewModel,
-                cameraSession: .init(),
+                cameraSession: frameSource.session,
                 config: config,
                 droneState: nil,
                 frameSourceMode: .camera,
@@ -74,6 +75,9 @@ struct FlightRiskApp: App {
             reid: personReID,
             face: faceRecognizer
         )
+
+        // Set frame source for the pipeline
+        await pipeline.setFrameSource(frameSource)
 
         // Register LLM backends
         // Cloud Claude (loaded from Keychain)
@@ -113,8 +117,15 @@ extension SearchPipeline {
         self.faceCallback = face
     }
 
-    /// Set the target reference photo from outside the actor.
+    /// Set the frame source for camera frame acquisition.
+    func setFrameSource(_ source: FrameSource) {
+        self.frameSource = source
+    }
+
+    /// Set the target reference photo and compute ReID + face embeddings.
     func setTargetPhoto(_ image: CGImage) {
         self.targetPhoto = image
+        _ = reidCallback?.setTarget(photo: image)
+        _ = faceCallback?.setTarget(photo: image)
     }
 }
