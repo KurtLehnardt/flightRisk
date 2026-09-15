@@ -198,6 +198,21 @@ final class SearchViewModel {
         }
     }
 
+    /// Update the LLM backend status properties from the given selector.
+    ///
+    /// Called after pipeline setup and when connectivity changes so the
+    /// UI reflects which backend is active.
+    func updateBackendStatus(from llmSelector: LlmSelector) {
+        Task {
+            let backend = await llmSelector.getActiveBackend()
+            await MainActor.run {
+                self.activeBackendName = backend.name
+                self.activeBackendIsLocal = backend.name == "local_gemma"
+                self.backendStatusMessage = backend.isAvailable ? "Available" : "Unavailable"
+            }
+        }
+    }
+
     /// Stop observing and release the pipeline reference.
     func teardown() {
         eventTask?.cancel()

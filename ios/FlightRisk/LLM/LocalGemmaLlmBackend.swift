@@ -60,7 +60,9 @@ final class LocalGemmaLlmBackend: LlmBackend, @unchecked Sendable {
     private let logger = Logger(subsystem: "com.flightrisk.app", category: "LocalGemmaLlmBackend")
 
     /// Cached reference image description to avoid recomputing per call.
-    private var cachedRefDescription: (hash: Int, text: String)?
+    /// Protected by `OSAllocatedUnfairLock` to prevent data races across
+    /// concurrent callers.
+    private let _cache = OSAllocatedUnfairLock<(hash: Int, text: String)?>(initialState: nil)
 
     // MARK: - Init
 
@@ -107,12 +109,16 @@ final class LocalGemmaLlmBackend: LlmBackend, @unchecked Sendable {
 
         // Cache reference image description per session to avoid recomputation
         let refHash = referenceImage.width ^ referenceImage.height ^ (referenceImage.bytesPerRow << 16)
+        let cachedText = _cache.withLock { cached -> String? in
+            if let cached, cached.hash == refHash { return cached.text }
+            return nil
+        }
         let refDescription: String
-        if let cached = cachedRefDescription, cached.hash == refHash {
-            refDescription = cached.text
+        if let cachedText {
+            refDescription = cachedText
         } else {
             refDescription = await ImageDescriptionExtractor.describe(referenceImage)
-            cachedRefDescription = (hash: refHash, text: refDescription)
+            _cache.withLock { $0 = (hash: refHash, text: refDescription) }
         }
 
         let candDescription = await ImageDescriptionExtractor.describe(candidateImage)
@@ -200,7 +206,7 @@ final class LocalGemmaLlmBackend: LlmBackend, @unchecked Sendable {
     /// Clear the cached reference image description (e.g. when search
     /// session changes and a new target photo is set).
     func clearCache() {
-        cachedRefDescription = nil
+        _cache.withLock { $0 = nil }
     }
 
     // MARK: - Inference

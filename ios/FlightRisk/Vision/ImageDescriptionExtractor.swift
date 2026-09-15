@@ -42,10 +42,17 @@ enum ImageDescriptionExtractor {
         let textRequest = VNRecognizeTextRequest()
         textRequest.recognitionLevel = .fast
 
+        // Try batch first for efficiency; fall back to individual requests
+        // so one failure doesn't drop all results
         do {
             try handler.perform([classifyRequest, faceRequest, textRequest])
         } catch {
-            logger.debug("Vision requests failed: \(error.localizedDescription)")
+            logger.debug("Batch Vision request failed, trying individually: \(error.localizedDescription)")
+            // Run each independently — use fresh handlers after a batch failure
+            // to avoid reusing handler state from the failed batch
+            try? VNImageRequestHandler(cgImage: image, options: [:]).perform([classifyRequest])
+            try? VNImageRequestHandler(cgImage: image, options: [:]).perform([faceRequest])
+            try? VNImageRequestHandler(cgImage: image, options: [:]).perform([textRequest])
         }
 
         // 1. Scene/object classification
