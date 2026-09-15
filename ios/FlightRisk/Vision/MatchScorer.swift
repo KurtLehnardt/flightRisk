@@ -150,12 +150,17 @@ struct MatchScorer {
         // Round to 3 decimal places
         combined = Float(Int(combined * 1000)) / 1000.0
 
-        // Determine confidence level
-        let numSignals = activeWeights.count
+        // Count only signals with meaningfully positive scores for confidence
+        // level checks. Dampened "no match" reasoning (scores < 0.3) should
+        // drag down the combined score but not count as a positive signal
+        // that could promote confidence to "high".
+        let positiveSignalCount = rawScores.filter { $0.value >= 0.3 }.count
+
+        // Determine confidence level using positive signals only
         let confidenceLevel: String
-        if combined >= 0.65 && numSignals >= 2 {
+        if combined >= 0.65 && positiveSignalCount >= 2 {
             confidenceLevel = "high"
-        } else if combined >= 0.40 || (combined >= 0.35 && numSignals >= 2) {
+        } else if combined >= 0.40 || (combined >= 0.35 && positiveSignalCount >= 2) {
             confidenceLevel = "medium"
         } else {
             confidenceLevel = "low"
@@ -165,7 +170,7 @@ struct MatchScorer {
             combinedScore: combined,
             isMatch: combined >= matchThreshold,
             confidenceLevel: confidenceLevel,
-            signalsUsed: numSignals
+            signalsUsed: activeWeights.count  // total for transparency
         )
     }
 

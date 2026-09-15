@@ -11,6 +11,8 @@ struct ContentView: View {
     let droneState: TelloState?
     let frameSourceMode: FrameSourceMode
     let gemmaModelManager: (any GemmaModelManaging)?
+    let pipeline: SearchPipeline?
+    let llmSelector: LlmSelector?
 
     var body: some View {
         if onboardingComplete {
@@ -20,9 +22,13 @@ struct ContentView: View {
                         Label("Search", systemImage: "magnifyingglass")
                     }
                     .tag(0)
-                TargetPickerView { image, report in
+                TargetPickerView { [pipeline] image, report in
                     viewModel.targetPhoto = image
                     viewModel.targetReport = report
+                    // Forward target photo to pipeline
+                    if let image {
+                        Task { await pipeline?.setTargetPhoto(image) }
+                    }
                     selectedTab = 0
                 }
                     .tabItem {
@@ -31,17 +37,22 @@ struct ContentView: View {
                     .tag(1)
                 SettingsView(
                     config: config,
-                    onPresetSelected: { preset in
-                        // Config presets are read-only from FlightRiskConfig.shared
+                    onPresetSelected: { _ in
+                        // Config presets are read-only singletons; changes
+                        // apply on next pipeline start
                     },
-                    onThresholdChanged: { name, value in
-                        // Threshold changes are handled by FlightRiskConfig
+                    onThresholdChanged: { _, _ in
+                        // Config is a singleton; threshold changes apply
+                        // on next pipeline start
                     },
-                    onLlmBackendChanged: { backend in
-                        // Backend changes handled by LlmSelector via notification
+                    onLlmBackendChanged: { [llmSelector] _ in
+                        // Re-evaluate backend availability after user changes selection
+                        Task { await llmSelector?.refreshAsync() }
                     },
-                    onApiKeyChanged: { apiKey in
-                        // API key saved to Keychain by SettingsView itself
+                    onApiKeyChanged: { [llmSelector] _ in
+                        // API key saved to Keychain by SettingsView; refresh selector
+                        // so it picks up the new key's availability status
+                        Task { await llmSelector?.refreshAsync() }
                     },
                     llmAvailable: viewModel.activeBackendName != nil && viewModel.activeBackendName != "none",
                     droneState: droneState,

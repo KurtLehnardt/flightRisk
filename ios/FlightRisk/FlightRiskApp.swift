@@ -6,14 +6,15 @@ struct FlightRiskApp: App {
     @State private var gemmaModelManager = GemmaModelManager()
     private let config = FlightRiskConfig.shared
 
-    // Pipeline dependencies
-    private let llmSelector = LlmSelector()
-    @State private var alertManager = AlertManager()
-    private let locationProvider = LocationProvider()
-    private let personDetector = PersonDetector()
-    private let personReID: PersonReID
-    private let faceRecognizer: FaceRecognizer
-    private let pipeline: SearchPipeline
+    // Pipeline dependencies — @State for reference types with mutable state
+    // so SwiftUI manages their lifecycle correctly across view updates.
+    @State private var llmSelector: LlmSelector
+    @State private var alertManager: AlertManager
+    @State private var locationProvider: LocationProvider
+    @State private var personDetector: PersonDetector
+    @State private var personReID: PersonReID
+    @State private var faceRecognizer: FaceRecognizer
+    @State private var pipeline: SearchPipeline
 
     init() {
         let config = FlightRiskConfig.shared
@@ -21,22 +22,27 @@ struct FlightRiskApp: App {
         // Create vision components with config thresholds
         let reid = PersonReID(threshold: config.vision.reidThreshold)
         let face = FaceRecognizer(threshold: config.vision.faceMatchThreshold)
-        self.personReID = reid
-        self.faceRecognizer = face
+        _personReID = State(initialValue: reid)
+        _faceRecognizer = State(initialValue: face)
 
-        // Create pipeline
-        let llmSelector = self.llmSelector
-        let alertManager = AlertManager()
-        let locationProvider = self.locationProvider
+        // Create pipeline dependencies — each created once
+        let selector = LlmSelector()
+        _llmSelector = State(initialValue: selector)
+        let alert = AlertManager()
+        _alertManager = State(initialValue: alert)
+        let location = LocationProvider()
+        _locationProvider = State(initialValue: location)
+        let detector = PersonDetector()
+        _personDetector = State(initialValue: detector)
 
+        // Create pipeline with the same instances
         let pipeline = SearchPipeline(
             config: config,
-            llmSelector: llmSelector,
-            alertManager: alertManager,
-            locationProvider: locationProvider
+            llmSelector: selector,
+            alertManager: alert,
+            locationProvider: location
         )
-        self.pipeline = pipeline
-        self._alertManager = State(initialValue: alertManager)
+        _pipeline = State(initialValue: pipeline)
     }
 
     var body: some Scene {
@@ -47,7 +53,9 @@ struct FlightRiskApp: App {
                 config: config,
                 droneState: nil,
                 frameSourceMode: .camera,
-                gemmaModelManager: gemmaModelManager
+                gemmaModelManager: gemmaModelManager,
+                pipeline: pipeline,
+                llmSelector: llmSelector
             )
             .task {
                 await setupPipeline()
@@ -85,6 +93,9 @@ struct FlightRiskApp: App {
         await MainActor.run {
             viewModel.observe(pipeline: pipeline)
         }
+
+        // Set initial backend status on the view model
+        viewModel.updateBackendStatus(from: llmSelector)
     }
 }
 
@@ -100,5 +111,10 @@ extension SearchPipeline {
         self.detectionCallback = detection
         self.reidCallback = reid
         self.faceCallback = face
+    }
+
+    /// Set the target reference photo from outside the actor.
+    func setTargetPhoto(_ image: CGImage) {
+        self.targetPhoto = image
     }
 }
