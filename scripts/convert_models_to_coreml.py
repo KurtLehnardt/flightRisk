@@ -66,7 +66,7 @@ def convert_model(spec):
 
     print(f"  Converting {spec['onnx']} -> {spec['output']}.mlpackage ...")
 
-    model = ct.converters.convert(
+    model = ct.convert(
         onnx_path,
         convert_to="mlprogram",
         minimum_deployment_target=ct.target.iOS17,
