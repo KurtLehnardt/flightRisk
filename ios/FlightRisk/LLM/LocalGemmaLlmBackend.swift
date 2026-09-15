@@ -33,7 +33,7 @@ enum GemmaError: Error, LocalizedError {
 ///
 /// A confidence discount of 0.7 is applied to all results because
 /// the smaller local model is less reliable than cloud Claude.
-final class LocalGemmaLlmBackend: LlmBackend {
+final class LocalGemmaLlmBackend: LlmBackend, @unchecked Sendable {
 
     // MARK: - Constants
 
@@ -45,14 +45,22 @@ final class LocalGemmaLlmBackend: LlmBackend {
 
     let name = "local_gemma"
 
-    /// Cached synchronous availability state. Updated via
+    /// Thread-safe availability state. Updated via
     /// ``refreshAvailability()`` since ``LlmBackend/isAvailable``
     /// is a synchronous property and the underlying actor state
-    /// requires `await`.
-    private(set) var isAvailable: Bool = false
+    /// requires `await`. Protected by `OSAllocatedUnfairLock` to
+    /// avoid data races across actor boundaries.
+    private let _isAvailable = OSAllocatedUnfairLock(initialState: false)
+
+    var isAvailable: Bool {
+        _isAvailable.withLock { $0 }
+    }
 
     private let modelManager: any GemmaModelManaging
     private let logger = Logger(subsystem: "com.flightrisk.app", category: "LocalGemmaLlmBackend")
+
+    /// Cached reference image description to avoid recomputing per call.
+    private var cachedRefDescription: (hash: Int, text: String)?
 
     // MARK: - Init
 
@@ -71,7 +79,8 @@ final class LocalGemmaLlmBackend: LlmBackend {
     /// Update the cached ``isAvailable`` from the model manager's
     /// actor-isolated state.
     func refreshAvailability() async {
-        isAvailable = await modelManager.isReady
+        let ready = await modelManager.isReady
+        _isAvailable.withLock { $0 = ready }
     }
 
     // MARK: - LlmBackend
@@ -96,8 +105,16 @@ final class LocalGemmaLlmBackend: LlmBackend {
             }
         }
 
-        // Extract text descriptions from both images
-        let refDescription = await ImageDescriptionExtractor.describe(referenceImage)
+        // Cache reference image description per session to avoid recomputation
+        let refHash = referenceImage.width ^ referenceImage.height ^ (referenceImage.bytesPerRow << 16)
+        let refDescription: String
+        if let cached = cachedRefDescription, cached.hash == refHash {
+            refDescription = cached.text
+        } else {
+            refDescription = await ImageDescriptionExtractor.describe(referenceImage)
+            cachedRefDescription = (hash: refHash, text: refDescription)
+        }
+
         let candDescription = await ImageDescriptionExtractor.describe(candidateImage)
 
         // Build comparison prompt with Gemma turn markers
@@ -176,6 +193,14 @@ final class LocalGemmaLlmBackend: LlmBackend {
             """
 
         return await runInference(prompt: prompt)
+    }
+
+    // MARK: - Cache Management
+
+    /// Clear the cached reference image description (e.g. when search
+    /// session changes and a new target photo is set).
+    func clearCache() {
+        cachedRefDescription = nil
     }
 
     // MARK: - Inference

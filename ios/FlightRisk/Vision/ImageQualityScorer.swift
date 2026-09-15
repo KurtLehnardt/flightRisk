@@ -254,7 +254,8 @@ enum ImageQualityScorer {
     // MARK: - Face Presence Check
 
     /// Check for face presence using Vision framework's
-    /// `VNDetectFaceRectanglesRequest`.
+    /// `VNDetectFaceRectanglesRequest`, falling back to `CIDetector`
+    /// when Vision is unavailable (e.g. certain Simulator configurations).
     ///
     /// - Returns: 1.0 if at least one face is detected, 0.0 otherwise.
     private static func analyzeFacePresence(image: CGImage) -> Float {
@@ -263,14 +264,22 @@ enum ImageQualityScorer {
 
         do {
             try handler.perform([request])
-            guard let results = request.results, !results.isEmpty else {
-                return 0
+            if let results = request.results, !results.isEmpty {
+                return 1
             }
-            return 1
         } catch {
-            logger.error("Face detection failed: \(error.localizedDescription)")
-            return 0
+            logger.debug("VNDetectFaceRectanglesRequest unavailable, using CIDetector fallback")
         }
+
+        // CIDetector fallback
+        let ciImage = CIImage(cgImage: image)
+        guard let detector = CIDetector(
+            ofType: CIDetectorTypeFace,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        ) else { return 0 }
+        let faces = detector.features(in: ciImage)
+        return faces.isEmpty ? 0 : 1
     }
 
     // MARK: - Utilities

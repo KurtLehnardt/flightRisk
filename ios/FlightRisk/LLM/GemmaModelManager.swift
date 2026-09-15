@@ -40,8 +40,9 @@ actor GemmaModelManager: GemmaModelManaging {
 
     // MARK: - Download state
 
-    private var downloadTask: URLSessionDownloadTask?
-    private var resumeData: Data?
+    /// Flag checked after long-running download operations to support
+    /// cancellation of HubApi downloads (which don't expose a task handle).
+    private var isCancelled = false
 
     /// Minimum free disk space required for the model download (2 GB).
     private static let requiredDiskSpaceBytes: UInt64 = 2_000_000_000
@@ -59,15 +60,10 @@ actor GemmaModelManager: GemmaModelManaging {
             .appendingPathComponent("gemma-2-2b-it-4bit", isDirectory: true)
     }
 
-    private var resumeDataURL: URL {
-        modelDirectory.appendingPathComponent(".resume_data")
-    }
-
     // MARK: - Init / Deinit
 
     init() {
         setupNotifications()
-        loadPersistedResumeData()
         detectExistingDownload()
     }
 
@@ -78,12 +74,23 @@ actor GemmaModelManager: GemmaModelManaging {
             logger.debug("Download called in state \(String(describing: self.state)); ignoring")
             return
         }
+        isCancelled = false
 
         // Disk space check
-        try checkDiskSpace()
+        do {
+            try checkDiskSpace()
+        } catch {
+            state = .error(message: error.localizedDescription)
+            throw error
+        }
 
         // Cellular guard
-        try checkNotCellular()
+        do {
+            try await checkNotCellular()
+        } catch {
+            state = .error(message: error.localizedDescription)
+            throw error
+        }
 
         state = .downloading(progress: 0)
 
@@ -98,10 +105,16 @@ actor GemmaModelManager: GemmaModelManaging {
             logger.info("Starting model download: \(Self.modelId)")
             _ = try await hub.snapshot(from: config.name, matching: ["*.safetensors", "*.json", "tokenizer*"])
 
+            // Check cancellation after long-running download
+            guard !isCancelled else {
+                state = .idle
+                isCancelled = false
+                return
+            }
+
             // Calculate downloaded size
             modelSizeBytes = directorySize(modelDirectory)
             state = .downloaded
-            clearPersistedResumeData()
             logger.info("Model download complete")
         } catch {
             state = .error(message: "Download failed: \(error.localizedDescription)")
@@ -115,14 +128,13 @@ actor GemmaModelManager: GemmaModelManaging {
     }
 
     func cancelDownload() async {
-        downloadTask?.cancel()
-        downloadTask = nil
+        isCancelled = true
         state = .idle
         logger.info("Download cancelled")
     }
 
     func loadModel() async throws {
-        guard state == .downloaded || state == .idle else {
+        guard state == .downloaded else {
             if state == .ready {
                 logger.debug("Model already loaded")
                 return
@@ -176,7 +188,6 @@ actor GemmaModelManager: GemmaModelManaging {
             logger.info("Model directory removed")
         }
 
-        clearPersistedResumeData()
         modelSizeBytes = nil
         state = .idle
         logger.info("Model deleted")
@@ -196,7 +207,9 @@ actor GemmaModelManager: GemmaModelManaging {
         var output = [Int]()
 
         for try await token in try MLXLMCommon.generate(input: input, model: model, tokenizer: tokenizer) {
-            output.append(token.tokens.first ?? 0)
+            if Task.isCancelled { break }
+            guard let tokenId = token.tokens.first else { continue }
+            output.append(tokenId)
             if output.count >= maxTokens {
                 break
             }
@@ -230,51 +243,19 @@ actor GemmaModelManager: GemmaModelManaging {
 
     // MARK: - Cellular Guard
 
-    private func checkNotCellular() throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        var isCellular = false
-
-        let monitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "com.flightrisk.app.cellularCheck")
-        monitor.pathUpdateHandler = { path in
-            isCellular = path.usesInterfaceType(.cellular)
-            semaphore.signal()
-            monitor.cancel()
+    private func checkNotCellular() async throws {
+        let isCellular = await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            let queue = DispatchQueue(label: "com.flightrisk.app.cellularCheck")
+            monitor.pathUpdateHandler = { path in
+                continuation.resume(returning: path.usesInterfaceType(.cellular))
+                monitor.cancel()
+            }
+            monitor.start(queue: queue)
         }
-        monitor.start(queue: queue)
-
-        // Wait briefly for the path update
-        _ = semaphore.wait(timeout: .now() + 2)
-
         if isCellular {
             throw GemmaError.cellularDownloadBlocked
         }
-    }
-
-    // MARK: - Resume Data Persistence
-
-    private func loadPersistedResumeData() {
-        let fm = FileManager.default
-        let url = resumeDataURL
-        if fm.fileExists(atPath: url.path) {
-            resumeData = try? Data(contentsOf: url)
-            if resumeData != nil {
-                logger.debug("Loaded persisted resume data")
-            }
-        }
-    }
-
-    private func persistResumeData(_ data: Data) {
-        let fm = FileManager.default
-        let dirURL = modelDirectory
-        try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
-        try? data.write(to: resumeDataURL)
-        logger.debug("Persisted resume data")
-    }
-
-    private func clearPersistedResumeData() {
-        resumeData = nil
-        try? FileManager.default.removeItem(at: resumeDataURL)
     }
 
     // MARK: - Existing Download Detection

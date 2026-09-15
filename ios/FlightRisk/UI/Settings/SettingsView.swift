@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 
 /// Main settings screen for FlightRisk iOS.
@@ -25,6 +26,7 @@ struct SettingsView: View {
     @State private var llmBackend: String = "cloud_claude"
     @State private var advancedExpanded: Bool = false
     @State private var showApiKeySaved: Bool = false
+    @State private var hasInternet: Bool = true
     @State private var gemmaState: GemmaDownloadState = .idle
     @State private var showDeleteConfirmation: Bool = false
 
@@ -46,7 +48,8 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .onAppear {
-            apiKeyInput = KeychainHelper.loadApiKey() ?? ""
+            apiKeyInput = KeychainHelper.loadApiKey(provider: llmBackend) ?? ""
+            checkNetworkConnectivity()
         }
         .alert("Delete AI Model?", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
@@ -101,15 +104,18 @@ struct SettingsView: View {
         Section {
             Picker("Backend", selection: $llmBackend) {
                 Text("Cloud Claude").tag("cloud_claude")
+                Text("Cloud Gemini").tag("cloud_gemini")
+                Text("Cloud OpenAI").tag("cloud_openai")
                 Text("Local Gemma").tag("local_gemma")
                 Text("None").tag("none")
             }
             .onChange(of: llmBackend) { _, newValue in
+                apiKeyInput = KeychainHelper.loadApiKey(provider: newValue) ?? ""
                 onLlmBackendChanged(newValue)
             }
 
-            if llmBackend == "cloud_claude" {
-                SecureField("sk-ant-...", text: $apiKeyInput)
+            if llmBackend.hasPrefix("cloud_") {
+                SecureField(apiKeyPlaceholder, text: $apiKeyInput)
                     .textContentType(.password)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -357,7 +363,7 @@ struct SettingsView: View {
 
     private func saveApiKey() {
         do {
-            try KeychainHelper.saveApiKey(apiKeyInput)
+            try KeychainHelper.saveApiKey(apiKeyInput, provider: llmBackend)
             onApiKeyChanged(apiKeyInput)
             showApiKeySaved = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -378,9 +384,35 @@ struct SettingsView: View {
         return "\(version) (\(build))"
     }
 
+    private var apiKeyPlaceholder: String {
+        switch llmBackend {
+        case "cloud_claude": return "sk-ant-..."
+        case "cloud_gemini": return "AIza..."
+        case "cloud_openai": return "sk-..."
+        default: return "API Key"
+        }
+    }
+
+    private func checkNetworkConnectivity() {
+        let monitor = NWPathMonitor()
+        let queue = DispatchQueue(label: "com.flightrisk.settings.network")
+        monitor.pathUpdateHandler = { path in
+            let satisfied = path.status == .satisfied
+            DispatchQueue.main.async {
+                hasInternet = satisfied
+            }
+            monitor.cancel()
+        }
+        monitor.start(queue: queue)
+    }
+
     // LLM status helpers
     private var llmStatusColor: Color {
-        if llmAvailable {
+        if !hasInternet {
+            return FlightRiskTheme.alertOrange
+        } else if apiKeyInput.isEmpty {
+            return FlightRiskTheme.alertRed
+        } else if llmAvailable {
             return FlightRiskTheme.matchGreen
         } else {
             return FlightRiskTheme.alertRed
@@ -388,12 +420,14 @@ struct SettingsView: View {
     }
 
     private var llmStatusText: String {
-        if llmAvailable {
-            return "Available"
+        if !hasInternet {
+            return "No internet"
         } else if apiKeyInput.isEmpty {
             return "No API key"
+        } else if llmAvailable {
+            return "Available"
         } else {
-            return "No internet"
+            return "Unavailable"
         }
     }
 

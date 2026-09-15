@@ -531,3 +531,7 @@ final class PersonDetector {
         return union > 0 ? intersection / union : 0
     }
 }
+
+// MARK: - PipelineDetectionCallback
+
+extension PersonDetector: PipelineDetectionCallback {}
