@@ -72,25 +72,31 @@ enum KeychainHelper {
 
     // MARK: - API Key Convenience
 
-    private static let apiKeyAccount = "flightrisk_api_key"
-
-    /// Save an API key string to the Keychain.
-    static func saveApiKey(_ apiKey: String) throws {
+    /// Save an API key string to the Keychain for the given provider.
+    ///
+    /// - Parameters:
+    ///   - apiKey: The API key to save.
+    ///   - provider: Backend provider identifier (e.g. "cloud_claude", "cloud_gemini", "cloud_openai").
+    static func saveApiKey(_ apiKey: String, provider: String = "cloud_claude") throws {
         guard let data = apiKey.data(using: .utf8) else {
             throw KeychainError.invalidData
         }
-        try save(key: apiKeyAccount, data: data)
+        try save(key: "flightrisk_api_key_\(provider)", data: data)
     }
 
-    /// Load the stored API key from the Keychain.
-    /// Returns `nil` if no key has been saved.
-    static func loadApiKey() -> String? {
-        guard let data = load(key: apiKeyAccount) else { return nil }
+    /// Load the stored API key from the Keychain for the given provider.
+    /// Returns `nil` if no key has been saved for that provider.
+    ///
+    /// - Parameter provider: Backend provider identifier.
+    static func loadApiKey(provider: String = "cloud_claude") -> String? {
+        guard let data = load(key: "flightrisk_api_key_\(provider)") else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    /// Delete the stored API key from the Keychain.
-    static func deleteApiKey() {
-        delete(key: apiKeyAccount)
+    /// Delete the stored API key from the Keychain for the given provider.
+    ///
+    /// - Parameter provider: Backend provider identifier.
+    static func deleteApiKey(provider: String = "cloud_claude") {
+        delete(key: "flightrisk_api_key_\(provider)")
     }
 }

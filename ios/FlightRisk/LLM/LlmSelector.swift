@@ -67,6 +67,17 @@ actor LlmSelector {
         }
     }
 
+    /// Async version of ``refresh()`` that first updates each backend's
+    /// cached availability from its actor-isolated state, then re-evaluates.
+    func refreshAsync() async {
+        for backend in backends {
+            if let gemma = backend as? LocalGemmaLlmBackend {
+                await gemma.refreshAvailability()
+            }
+        }
+        refresh()
+    }
+
     /// Start monitoring network connectivity changes. When internet is
     /// lost or regained, ``refresh()`` is called automatically.
     ///
@@ -109,13 +120,13 @@ actor LlmSelector {
 
     // MARK: - Internals
 
-    private func handleConnectivityChange(hasInternet: Bool) {
+    private func handleConnectivityChange(hasInternet: Bool) async {
         let previous = self.hasInternet
         self.hasInternet = hasInternet
 
         if previous != hasInternet {
             logger.debug("Network \(hasInternet ? "available" : "lost")")
-            refresh()
+            await refreshAsync()
         }
     }
 }

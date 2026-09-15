@@ -34,18 +34,32 @@ enum ImageDescriptionExtractor {
     static func describe(_ image: CGImage) async -> String {
         var parts: [String] = ["Person description from camera image:"]
 
+        // Run all Vision requests with a single handler for efficiency
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+
+        let classifyRequest = VNClassifyImageRequest()
+        let faceRequest = VNDetectFaceLandmarksRequest()
+        let textRequest = VNRecognizeTextRequest()
+        textRequest.recognitionLevel = .fast
+
+        do {
+            try handler.perform([classifyRequest, faceRequest, textRequest])
+        } catch {
+            logger.debug("Vision requests failed: \(error.localizedDescription)")
+        }
+
         // 1. Scene/object classification
-        let classifications = classifyImage(image)
+        let classifications = parseClassifications(classifyRequest.results)
         if !classifications.isEmpty {
             parts.append("- Scene labels: \(classifications.joined(separator: ", "))")
         }
 
         // 2. Face detection
-        let faceInfo = detectFaces(image)
+        let faceInfo = parseFaceResults(faceRequest.results, image: image)
         parts.append("- Face visible: \(faceInfo)")
 
         // 3. Text recognition (logos, numbers on clothing)
-        let visibleText = recognizeText(image)
+        let visibleText = parseTextResults(textRequest.results)
         if !visibleText.isEmpty {
             parts.append("- Visible text on clothing: \(visibleText.joined(separator: ", "))")
         }
@@ -63,87 +77,54 @@ enum ImageDescriptionExtractor {
         return parts.joined(separator: "\n")
     }
 
-    // MARK: - Vision Requests
+    // MARK: - Vision Result Parsers
 
-    /// Classify the image using `VNClassifyImageRequest`.
+    /// Parse classification results.
     ///
     /// - Returns: Top 5 classification labels with confidence > 0.3.
-    private static func classifyImage(_ image: CGImage) -> [String] {
-        let request = VNClassifyImageRequest()
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-
-        do {
-            try handler.perform([request])
-            guard let results = request.results else { return [] }
-            return results
-                .filter { $0.confidence > 0.3 }
-                .prefix(5)
-                .map { $0.identifier.replacingOccurrences(of: "_", with: " ") }
-        } catch {
-            logger.debug("Classification failed: \(error.localizedDescription)")
-            return []
-        }
+    private static func parseClassifications(_ results: [VNClassificationObservation]?) -> [String] {
+        guard let results else { return [] }
+        return results
+            .filter { $0.confidence > 0.3 }
+            .prefix(5)
+            .map { $0.identifier.replacingOccurrences(of: "_", with: " ") }
     }
 
-    /// Detect faces and describe their size/proximity using
-    /// `VNDetectFaceLandmarksRequest`, with `CIDetector` fallback.
+    /// Parse face detection results with `CIDetector` fallback.
     ///
     /// - Returns: Human-readable face presence description.
-    private static func detectFaces(_ image: CGImage) -> String {
-        let request = VNDetectFaceLandmarksRequest()
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-
-        do {
-            try handler.perform([request])
-            guard let results = request.results, !results.isEmpty else {
-                return "no"
-            }
-            let face = results[0]
-            let bbox = face.boundingBox
-            let relativeSize = bbox.width * bbox.height
-            let sizeDesc: String
-            if relativeSize > 0.15 {
-                sizeDesc = "large (close-up)"
-            } else if relativeSize > 0.05 {
-                sizeDesc = "medium"
-            } else {
-                sizeDesc = "small (distant)"
-            }
-            return "yes, \(results.count) face(s), \(sizeDesc)"
-        } catch {
-            // Fallback to CIDetector (same pattern as ImageQualityScorer)
+    private static func parseFaceResults(_ results: [VNFaceObservation]?, image: CGImage) -> String {
+        guard let results, !results.isEmpty else {
+            // CIDetector fallback
             let ciImage = CIImage(cgImage: image)
             guard let detector = CIDetector(
                 ofType: CIDetectorTypeFace,
                 context: nil,
                 options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-            ) else {
-                return "detection unavailable"
-            }
+            ) else { return "detection unavailable" }
             let faces = detector.features(in: ciImage)
             return faces.isEmpty ? "no" : "yes, \(faces.count) face(s)"
         }
+        let face = results[0]
+        let bbox = face.boundingBox
+        let relativeSize = bbox.width * bbox.height
+        let sizeDesc: String
+        if relativeSize > 0.15 {
+            sizeDesc = "large (close-up)"
+        } else if relativeSize > 0.05 {
+            sizeDesc = "medium"
+        } else {
+            sizeDesc = "small (distant)"
+        }
+        return "yes, \(results.count) face(s), \(sizeDesc)"
     }
 
-    /// Recognize visible text (logos, jersey numbers, etc.) using
-    /// `VNRecognizeTextRequest`.
+    /// Parse text recognition results.
     ///
     /// - Returns: Array of recognized text strings.
-    private static func recognizeText(_ image: CGImage) -> [String] {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
-
-        do {
-            try handler.perform([request])
-            guard let results = request.results else { return [] }
-            return results.compactMap { observation in
-                observation.topCandidates(1).first?.string
-            }
-        } catch {
-            logger.debug("Text recognition failed: \(error.localizedDescription)")
-            return []
-        }
+    private static func parseTextResults(_ results: [VNRecognizedTextObservation]?) -> [String] {
+        guard let results else { return [] }
+        return results.compactMap { $0.topCandidates(1).first?.string }
     }
 
     // MARK: - Color Analysis

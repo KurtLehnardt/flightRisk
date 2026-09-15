@@ -29,6 +29,18 @@ actor TargetStore {
     init() {
         // swiftlint:disable:next force_unwrapping
         documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        ensureDirectoryProtection()
+    }
+
+    private nonisolated func ensureDirectoryProtection() {
+        do {
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: documentsDir.path
+            )
+        } catch {
+            logger.warning("Failed to set directory protection: \(error.localizedDescription)")
+        }
     }
 
     /// Whether any target data is currently stored.
@@ -108,6 +120,21 @@ actor TargetStore {
 
     // MARK: - Private Helpers
 
+    private func applyFileProtection(to url: URL) {
+        do {
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: url.path
+            )
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            var mutableUrl = url
+            try mutableUrl.setResourceValues(resourceValues)
+        } catch {
+            logger.warning("Failed to set file protection on \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+
     /// Save an embedding as binary: 4-byte Int32 count prefix, then N Float32 values.
     private func saveEmbedding(_ embedding: [Float], filename: String) {
         let url = documentsDir.appendingPathComponent(filename)
@@ -119,6 +146,7 @@ actor TargetStore {
                 data.append(Data(bytes: &value, count: MemoryLayout<Float>.size))
             }
             try data.write(to: url)
+            applyFileProtection(to: url)
         } catch {
             logger.warning("Failed to persist embedding to \(filename): \(error.localizedDescription)")
         }
@@ -162,7 +190,9 @@ actor TargetStore {
         CGImageDestinationAddImage(dest, image, nil)
         if !CGImageDestinationFinalize(dest) {
             logger.warning("Failed to write target image to \(filename)")
+            return
         }
+        applyFileProtection(to: url)
     }
 
     /// Load a CGImage from a PNG file.

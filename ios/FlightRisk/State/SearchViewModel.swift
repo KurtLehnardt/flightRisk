@@ -16,6 +16,17 @@ final class SearchViewModel {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "SearchViewModel")
 
+    // MARK: - Target Photo
+
+    /// The target reference photo selected by the user.
+    var targetPhoto: CGImage?
+
+    /// Quality report for the target photo.
+    var targetReport: QualityReport?
+
+    /// Whether a target photo has been set.
+    var hasTarget: Bool { targetPhoto != nil }
+
     // MARK: - Search State
 
     /// Whether the search is actively running.

@@ -152,6 +152,10 @@ actor SearchPipeline {
     // MARK: - Dependencies
 
     private let llmSelector: LlmSelector
+    // AlertManager is @MainActor — all access from this actor hops via
+    // Task { @MainActor in ... } so cross-actor usage is safe. The
+    // nonisolated(unsafe) annotation is required because Swift's type system
+    // cannot verify @MainActor references stored on other actors.
     nonisolated(unsafe) let alertManager: AlertManager
     private let locationProvider: LocationProvider
 

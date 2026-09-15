@@ -96,9 +96,9 @@ struct MatchScorer {
             "face": faceScore,
         ]
 
-        // Reasoning is excluded unless the LLM actually reported a match --
-        // a confident "no match" shouldn't be treated as a positive signal.
-        if reasoningScore > 0, reasoningResult == nil || reasoningResult!.isMatch {
+        // Reasoning is always included when positive — "no match" results
+        // use dampened scores (0.10-0.30) to avoid vetoing reliable signals.
+        if reasoningScore > 0 {
             rawScores["reasoning"] = reasoningScore
         }
 

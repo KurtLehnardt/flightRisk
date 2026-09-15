@@ -28,6 +28,9 @@ final class FaceRecognizer {
     /// Whether a target face embedding is currently set.
     var hasTarget: Bool { targetEmbedding != nil }
 
+    /// Public match threshold for protocol conformance.
+    var matchThreshold: Float { threshold }
+
     /// - Parameters:
     ///   - threshold: Cosine similarity threshold for a face match.
     ///   - detSize: Face detector input resolution (width, height).
@@ -504,6 +507,10 @@ final class FaceRecognizer {
 }
 
 // MARK: - Int Clamping
+
+// MARK: - PipelineFaceCallback
+
+extension FaceRecognizer: PipelineFaceCallback {}
 
 private extension Int {
     func clamped(to range: ClosedRange<Int>) -> Int {
