@@ -65,7 +65,13 @@ struct ContentView: View {
                     .tag(2)
             }
         } else {
-            OnboardingView()
+            OnboardingView { [pipeline] image, report in
+                viewModel.targetPhoto = image
+                viewModel.targetReport = report
+                if let pipeline {
+                    Task { await pipeline.setTargetPhoto(image) }
+                }
+            }
         }
     }
 }

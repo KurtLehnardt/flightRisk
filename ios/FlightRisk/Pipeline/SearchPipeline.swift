@@ -24,6 +24,10 @@ protocol PipelineReidCallback: AnyObject {
     /// ReID match threshold.
     var matchThreshold: Float { get }
 
+    /// Set the target reference photo and compute the ReID embedding.
+    /// - Returns: `true` if the embedding was computed successfully.
+    func setTarget(photo: CGImage) -> Bool
+
     /// Find the best ReID match among detections.
     /// - Returns: Tuple of (best index or nil, similarity score).
     func findMatch(detections: [Detection]) -> (index: Int?, score: Float)
@@ -43,6 +47,10 @@ protocol PipelineFaceCallback: AnyObject {
 
     /// Face match threshold.
     var matchThreshold: Float { get }
+
+    /// Set the target reference photo and compute the face embedding.
+    /// - Returns: `true` if the embedding was computed successfully.
+    func setTarget(photo: CGImage) -> Bool
 
     /// Find the best face match among detections.
     /// - Returns: Tuple of (best index or nil, similarity score).
@@ -306,6 +314,7 @@ actor SearchPipeline {
             return
         }
 
+        frameSource?.start()
         isRunning = true
         totalFrames = 0
         totalDetections = 0
@@ -335,6 +344,8 @@ actor SearchPipeline {
     func stop(reason: String = "user_stopped") {
         guard isRunning else { return }
         isRunning = false
+
+        frameSource?.stop()
 
         frameLoopTask?.cancel()
         frameLoopTask = nil

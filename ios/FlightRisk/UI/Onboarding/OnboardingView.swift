@@ -17,6 +17,8 @@ struct OnboardingView: View {
     @State private var selectedImage: CGImage?
     @State private var qualityReport: QualityReport?
 
+    var onPhotoSelected: ((CGImage, QualityReport?) -> Void)?
+
     var body: some View {
         ZStack {
             // Animated step transitions
@@ -261,6 +263,9 @@ struct OnboardingView: View {
         }
 
         Button {
+            if let image = selectedImage {
+                onPhotoSelected?(image, qualityReport)
+            }
             onboardingComplete = true
         } label: {
             Text("Start Searching")
