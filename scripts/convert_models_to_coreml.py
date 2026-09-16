@@ -2,10 +2,10 @@
 """Convert ONNX vision models to CoreML for iOS.
 
 Converts the 4 ONNX models from mobile/app/src/main/assets/ to .mlpackage
-format, then compiles them to .mlmodelc bundles ready for Xcode inclusion.
+format via PyTorch (ONNX→PyTorch→CoreML), then compiles to .mlmodelc bundles.
 
 Usage:
-    pip install coremltools onnx
+    pip install coremltools torch onnx onnx2torch
     python scripts/convert_models_to_coreml.py
 
 Output:
@@ -22,8 +22,12 @@ import subprocess
 
 try:
     import coremltools as ct
-except ImportError:
-    print("ERROR: coremltools not installed. Run: pip install coremltools onnx")
+    import torch
+    import onnx
+    from onnx2torch import convert as onnx_to_torch
+except ImportError as e:
+    print(f"ERROR: missing dependency: {e}")
+    print("Run: pip install coremltools torch onnx onnx2torch")
     sys.exit(1)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,26 +38,22 @@ MODELS = [
     {
         "onnx": "yolo11n.onnx",
         "output": "YOLOPersonDetector",
-        "description": "YOLOv11n person detector",
-        "compute": ct.precision.FLOAT16,
+        "input_shape": (1, 3, 640, 640),
     },
     {
         "onnx": "clip_visual.onnx",
         "output": "CLIPVisual",
-        "description": "CLIP visual encoder for person re-identification",
-        "compute": ct.precision.FLOAT16,
+        "input_shape": (1, 3, 224, 224),
     },
     {
         "onnx": "scrfd_500m.onnx",
         "output": "SCRFDFaceDetector",
-        "description": "SCRFD 500M face detector",
-        "compute": ct.precision.FLOAT16,
+        "input_shape": (1, 3, 640, 640),
     },
     {
         "onnx": "arcface_mobilefacenet.onnx",
         "output": "ArcFaceMobile",
-        "description": "ArcFace MobileFaceNet face recognition",
-        "compute": ct.precision.FLOAT16,
+        "input_shape": (1, 3, 112, 112),
     },
 ]
 
@@ -66,11 +66,18 @@ def convert_model(spec):
 
     print(f"  Converting {spec['onnx']} -> {spec['output']}.mlpackage ...")
 
+    torch_model = onnx_to_torch(onnx_path)
+    torch_model.eval()
+
+    example_input = torch.randn(*spec["input_shape"])
+    traced = torch.jit.trace(torch_model, example_input)
+
     model = ct.convert(
-        onnx_path,
+        traced,
+        inputs=[ct.TensorType(shape=spec["input_shape"])],
         convert_to="mlprogram",
         minimum_deployment_target=ct.target.iOS17,
-        compute_precision=spec["compute"],
+        compute_precision=ct.precision.FLOAT16,
     )
 
     mlpackage_path = os.path.join(OUTPUT_DIR, f"{spec['output']}.mlpackage")
