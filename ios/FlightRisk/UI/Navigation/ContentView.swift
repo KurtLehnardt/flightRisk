@@ -25,10 +25,7 @@ struct ContentView: View {
                 TargetPickerView { [pipeline] image, report in
                     viewModel.targetPhoto = image
                     viewModel.targetReport = report
-                    // Forward target photo to pipeline
-                    if let image {
-                        Task { await pipeline?.setTargetPhoto(image) }
-                    }
+                    Task { await pipeline?.setTargetPhoto(image) }
                     selectedTab = 0
                 }
                     .tabItem {

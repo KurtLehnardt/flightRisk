@@ -10,16 +10,6 @@ import MLXLLM
 import MLXLMCommon
 #endif
 
-/// Manages the lifecycle of a local Gemma 2 model via MLX: download,
-/// load, inference, and cleanup.
-///
-/// Wraps the MLXLLM framework so the rest of the app can treat the
-/// local model as a simple async service. Heavy operations (download,
-/// load, generate) are isolated inside the actor and will not block
-/// the main thread.
-///
-/// All MLX-specific code is behind `#if canImport(MLX)` so the
-/// project compiles on the iOS Simulator where MLX is unavailable.
 actor GemmaModelManager: GemmaModelManaging {
 
     private let logger = Logger(subsystem: "com.flightrisk.app", category: "GemmaModelManager")
@@ -34,22 +24,30 @@ actor GemmaModelManager: GemmaModelManaging {
     // MARK: - MLX model references
 
     #if canImport(MLX)
-    private var model: (any LanguageModel)?
-    private var tokenizer: (any Tokenizer)?
+    private var container: ModelContainer?
     #endif
 
     // MARK: - Download state
 
-    /// Flag checked after long-running download operations to support
-    /// cancellation of HubApi downloads (which don't expose a task handle).
     private var isCancelled = false
-
-    /// Minimum free disk space required for the model download (2 GB).
     private static let requiredDiskSpaceBytes: UInt64 = 2_000_000_000
+
+    // MARK: - Configuration
+
+    #if canImport(MLX)
+    private static let modelConfig = ModelConfiguration(
+        id: modelId,
+        overrideTokenizer: "PreTrainedTokenizer",
+        defaultPrompt: "What is the difference between lettuce and cabbage?"
+    )
+    #endif
 
     // MARK: - Directories
 
     private var modelDirectory: URL {
+        #if canImport(MLX)
+        return Self.modelConfig.modelDirectory()
+        #else
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -58,6 +56,12 @@ actor GemmaModelManager: GemmaModelManaging {
             .appendingPathComponent("FlightRisk", isDirectory: true)
             .appendingPathComponent("models", isDirectory: true)
             .appendingPathComponent("gemma-2-2b-it-4bit", isDirectory: true)
+        #endif
+    }
+
+    private func updateProgress(_ progress: Progress) {
+        let fraction = progress.fractionCompleted
+        state = .downloading(progress: fraction)
     }
 
     // MARK: - Init / Deinit
@@ -76,7 +80,6 @@ actor GemmaModelManager: GemmaModelManaging {
         }
         isCancelled = false
 
-        // Disk space check
         do {
             try checkDiskSpace()
         } catch {
@@ -84,7 +87,6 @@ actor GemmaModelManager: GemmaModelManaging {
             throw error
         }
 
-        // Cellular guard
         do {
             try await checkNotCellular()
         } catch {
@@ -96,24 +98,23 @@ actor GemmaModelManager: GemmaModelManaging {
 
         #if canImport(MLX)
         do {
-            // Use MLXLLM built-in download via ModelConfiguration
-            let config = ModelConfiguration(id: Self.modelId)
-            let hub = HubApi()
-
-            // Download to the default hub cache; MLXLLM handles
-            // incremental / resumable downloads internally.
+            let config = Self.modelConfig
             logger.info("Starting model download: \(Self.modelId)")
-            _ = try await hub.snapshot(from: config.name, matching: ["*.safetensors", "*.json", "tokenizer*"])
+            _ = try await downloadModel(
+                hub: defaultHubApi,
+                configuration: config
+            ) { [weak self] progress in
+                guard let self else { return }
+                Task { await self.updateProgress(progress) }
+            }
 
-            // Check cancellation after long-running download
             guard !isCancelled else {
                 state = .idle
                 isCancelled = false
                 return
             }
 
-            // Calculate downloaded size
-            modelSizeBytes = directorySize(modelDirectory)
+            modelSizeBytes = directorySize(config.modelDirectory())
             state = .downloaded
             logger.info("Model download complete")
         } catch {
@@ -148,10 +149,9 @@ actor GemmaModelManager: GemmaModelManaging {
 
         #if canImport(MLX)
         do {
-            let config = ModelConfiguration(id: Self.modelId)
-            let container = try await LLMModelFactory.shared.loadContainer(configuration: config)
-            self.model = container.model
-            self.tokenizer = container.tokenizer
+            let config = Self.modelConfig
+            self.container = try await LLMModelFactory.shared.loadContainer(
+                configuration: config)
             state = .ready
             logger.info("Model loaded and ready")
         } catch {
@@ -167,8 +167,7 @@ actor GemmaModelManager: GemmaModelManaging {
 
     func unloadModel() async {
         #if canImport(MLX)
-        model = nil
-        tokenizer = nil
+        container = nil
         MLX.GPU.clearCache()
         #endif
 
@@ -199,26 +198,30 @@ actor GemmaModelManager: GemmaModelManaging {
         }
 
         #if canImport(MLX)
-        guard let model, let tokenizer else {
+        guard let container else {
             throw GemmaError.modelNotAvailable
         }
 
-        let input = MLXLMInput(tokens: MLXArray(tokenizer.encode(text: prompt)))
-        var output = [Int]()
-
-        for try await token in try MLXLMCommon.generate(input: input, model: model, tokenizer: tokenizer) {
-            if Task.isCancelled { break }
-            guard let tokenId = token.tokens.first else { continue }
-            output.append(tokenId)
-            if output.count >= maxTokens {
-                break
+        let config = Self.modelConfig
+        let result = try await container.perform { model, tokenizer in
+            let promptTokens = tokenizer.encode(text: prompt)
+            let parameters = GenerateParameters(temperature: 0.6)
+            return try MLXLMCommon.generate(
+                promptTokens: promptTokens,
+                parameters: parameters,
+                model: model,
+                tokenizer: tokenizer,
+                extraEOSTokens: config.extraEOSTokens
+            ) { tokens in
+                if tokens.count >= maxTokens || Task.isCancelled {
+                    return .stop
+                }
+                return .more
             }
         }
 
         MLX.GPU.clearCache()
-
-        let text = tokenizer.decode(tokens: output)
-        return text
+        return result.output
         #else
         throw GemmaError.modelNotAvailable
         #endif
@@ -304,7 +307,7 @@ actor GemmaModelManager: GemmaModelManaging {
 
     private func handleThermalChange() async {
         let thermalState = ProcessInfo.processInfo.thermalState
-        if thermalState >= .serious {
+        if thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
             logger.warning("Thermal state \(String(describing: thermalState)) — unloading model")
             await unloadModel()
         }
