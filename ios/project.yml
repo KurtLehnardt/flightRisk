@@ -8,10 +8,10 @@ options:
 packages:
   MLX:
     url: https://github.com/ml-explore/mlx-swift
-    from: "0.21.2"
+    from: "0.29.1"
   MLXSwiftExamples:
     url: https://github.com/ml-explore/mlx-swift-examples
-    from: "1.18.1"
+    from: "2.29.1"
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -30,8 +30,6 @@ targets:
         product: MLXLLM
       - package: MLXSwiftExamples
         product: MLXLMCommon
-      - package: MLXSwiftExamples
-        product: Tokenizers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
