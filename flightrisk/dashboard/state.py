@@ -119,6 +119,9 @@ class AppState:
     # -- Target canon --
     canon: Any = None
 
+    # -- Configurable signal registry --
+    signal_registry: Any = None
+
 
 # ---------------------------------------------------------------------------
 # Module-level singleton + locks
