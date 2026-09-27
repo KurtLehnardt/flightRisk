@@ -29,6 +29,7 @@ struct SettingsView: View {
     @State private var hasInternet: Bool = true
     @State private var gemmaState: GemmaDownloadState = .idle
     @State private var showDeleteConfirmation: Bool = false
+    @State private var algorithmsExpanded: Bool = false
 
     // MARK: - Derived State
 
@@ -42,6 +43,7 @@ struct SettingsView: View {
         Form {
             sensitivitySection
             llmSection
+            matchingAlgorithmsSection
             droneSection
             advancedSection
             aboutSection
@@ -236,6 +238,79 @@ struct SettingsView: View {
             }
         } header: {
             Text("AI Reasoning")
+        }
+    }
+
+    // MARK: - Section: Matching Algorithms
+
+    private var matchingAlgorithmsSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $algorithmsExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Configure which matching signals are active and their relative weights.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .listRowSeparator(.hidden)
+
+                ForEach(FlightRiskConfig.SignalConfig.categories, id: \.name) { category in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(category.name)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.primary)
+                            .padding(.top, 8)
+
+                        ForEach(category.signals, id: \.self) { signalName in
+                            SignalConfigRow(
+                                signalName: signalName,
+                                displayName: FlightRiskConfig.SignalConfig.displayNames[signalName] ?? signalName,
+                                isEnabled: config.signalConfig.isEnabled(signalName),
+                                weight: config.signalConfig.weight(signalName),
+                                status: signalStatus(for: signalName),
+                                onEnabledChanged: { enabled in
+                                    config.signalConfig.setEnabled(signalName, enabled: enabled)
+                                    config.saveSignalConfig()
+                                },
+                                onWeightChanged: { weight in
+                                    config.signalConfig.setWeight(signalName, weight: weight)
+                                    config.saveSignalConfig()
+                                }
+                            )
+                        }
+                    }
+                }
+            } label: {
+                Text("Matching Algorithms")
+                    .font(.headline)
+            }
+        }
+    }
+
+    /// Determine the status of a signal for display.
+    private func signalStatus(for name: String) -> SignalStatus {
+        let enabled = config.signalConfig.isEnabled(name)
+
+        switch name {
+        case "osnetReid":
+            let modelExists = Bundle.main.url(forResource: "OSNetReID", withExtension: "mlmodelc") != nil
+            if !modelExists { return .notInstalled }
+            return enabled ? .active : .inactive
+        case "insightFace":
+            let modelExists = Bundle.main.url(forResource: "InsightFaceR18", withExtension: "mlmodelc") != nil
+            if !modelExists { return .notInstalled }
+            return enabled ? .active : .inactive
+        case "face":
+            let detectorExists = Bundle.main.url(forResource: "SCRFDFaceDetector", withExtension: "mlmodelc") != nil
+            let arcfaceExists = Bundle.main.url(forResource: "ArcFaceMobile", withExtension: "mlmodelc") != nil
+            if !detectorExists || !arcfaceExists { return .notInstalled }
+            return enabled ? .active : .inactive
+        case "reid":
+            let modelExists = Bundle.main.url(forResource: "CLIPVisual", withExtension: "mlmodelc") != nil
+            if !modelExists { return .notInstalled }
+            return enabled ? .active : .inactive
+        default:
+            // clothingColor, heightRatio, reasoning are always available
+            return enabled ? .active : .inactive
         }
     }
 
@@ -556,6 +631,122 @@ private struct ThresholdSliderRow: View {
             sliderValue = newValue
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Signal Status
+
+/// Status indicator for a matching signal.
+enum SignalStatus {
+    /// Model available and signal enabled.
+    case active
+    /// Model available but signal disabled.
+    case inactive
+    /// Required model not bundled.
+    case notInstalled
+
+    var label: String {
+        switch self {
+        case .active: return "Active"
+        case .inactive: return "Available"
+        case .notInstalled: return "Not Installed"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .active: return FlightRiskTheme.matchGreen
+        case .inactive: return .secondary
+        case .notInstalled: return FlightRiskTheme.alertOrange
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .active: return "checkmark.circle.fill"
+        case .inactive: return "circle"
+        case .notInstalled: return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+// MARK: - Signal Config Row
+
+/// A row for configuring a single matching signal: toggle, weight slider, status.
+private struct SignalConfigRow: View {
+    let signalName: String
+    let displayName: String
+    let isEnabled: Bool
+    let weight: Float
+    let status: SignalStatus
+    let onEnabledChanged: (Bool) -> Void
+    let onWeightChanged: (Float) -> Void
+
+    @State private var localEnabled: Bool = true
+    @State private var localWeight: Float = 0.5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Toggle(isOn: $localEnabled) {
+                    HStack(spacing: 8) {
+                        Text(displayName)
+                            .font(.subheadline)
+
+                        Image(systemName: status.iconName)
+                            .font(.caption)
+                            .foregroundStyle(status.color)
+
+                        Text(status.label)
+                            .font(.caption2)
+                            .foregroundStyle(status.color)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(FlightRiskTheme.matchGreen)
+                .disabled(status == .notInstalled)
+                .onChange(of: localEnabled) { _, newValue in
+                    onEnabledChanged(newValue)
+                }
+            }
+
+            if localEnabled && status != .notInstalled {
+                HStack {
+                    Text("Weight")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: $localWeight,
+                        in: 0.0...1.0,
+                        step: 0.05
+                    ) {
+                        Text("Weight")
+                    } onEditingChanged: { editing in
+                        if !editing {
+                            onWeightChanged(localWeight)
+                        }
+                    }
+                    .tint(FlightRiskTheme.detectionBlue)
+
+                    Text(String(format: "%.2f", localWeight))
+                        .font(.caption.monospacedDigit().bold())
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            localEnabled = isEnabled
+            localWeight = weight
+        }
+        .onChange(of: isEnabled) { _, newValue in
+            localEnabled = newValue
+        }
+        .onChange(of: weight) { _, newValue in
+            localWeight = newValue
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(displayName): \(status.label), weight \(String(format: "%.2f", localWeight))")
     }
 }
 
