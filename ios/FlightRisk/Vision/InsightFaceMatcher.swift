@@ -26,6 +26,7 @@ final class InsightFaceMatcher {
     private var mlModel: MLModel?
     private var targetEmbedding: [Float]?
     private let threshold: Float
+    private var inputName: String = "input"
 
     /// Whether the CoreML model is loaded and ready.
     private(set) var isAvailable: Bool = false
@@ -57,6 +58,9 @@ final class InsightFaceMatcher {
             let config = MLModelConfiguration()
             config.computeUnits = .all
             mlModel = try MLModel(contentsOf: modelURL, configuration: config)
+            if let firstInput = mlModel?.modelDescription.inputDescriptionsByName.keys.first {
+                inputName = firstInput
+            }
             isAvailable = true
             logger.info("InsightFace R18 model loaded successfully")
             return true
@@ -227,7 +231,7 @@ final class InsightFaceMatcher {
 
             // Run inference
             let inputFeature = try MLDictionaryFeatureProvider(
-                dictionary: ["input": MLFeatureValue(multiArray: inputArray)]
+                dictionary: [self.inputName: MLFeatureValue(multiArray: inputArray)]
             )
             let prediction = try model.prediction(from: inputFeature)
 
