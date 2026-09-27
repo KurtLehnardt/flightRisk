@@ -225,7 +225,7 @@ final class ClothingColorMatcher {
 
         let correlation = numerator / denom
 
-        // Remap from [-1, 1] to [0, 1]
-        return (correlation + 1.0) / 2.0
+        // Negative correlations map to 0 (matches Python/OpenCV HISTCMP_CORREL usage).
+        return max(0.0, correlation)
     }
 }
