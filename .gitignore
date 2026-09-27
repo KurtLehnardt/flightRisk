@@ -8,6 +8,7 @@ build/
 *.egg
 venv/
 .venv/
+.venv-model-convert/
 
 # Environment
 .env
@@ -26,6 +27,7 @@ models/
 *.mlpackage
 *.mlmodelc
 *.engine
+*.tflite
 
 # Video captures
 captures/
