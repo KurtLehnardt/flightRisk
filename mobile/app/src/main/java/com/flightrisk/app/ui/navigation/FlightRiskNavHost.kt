@@ -131,6 +131,8 @@ fun FlightRiskNavHost(
     onThresholdChanged: (String, Float) -> Unit,
     onLlmBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
+    onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     latestDroneFrame: Bitmap? = null,
@@ -241,6 +243,8 @@ fun FlightRiskNavHost(
                     onThresholdChanged = onThresholdChanged,
                     onLlmBackendChanged = onLlmBackendChanged,
                     onApiKeyChanged = onApiKeyChanged,
+                    onSignalEnabledChanged = onSignalEnabledChanged,
+                    onSignalWeightChanged = onSignalWeightChanged,
                     droneState = droneState,
                     frameSourceMode = frameSourceMode,
                 )

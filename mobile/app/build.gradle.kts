@@ -70,6 +70,9 @@ dependencies {
     // ONNX Runtime Mobile
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 
+    // TensorFlow Lite (for OSNet ReID and InsightFace R18 models)
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+
     // Location
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
