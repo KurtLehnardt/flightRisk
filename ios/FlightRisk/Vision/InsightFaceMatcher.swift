@@ -24,7 +24,6 @@ final class InsightFaceMatcher {
     private static let inputSize = 112
 
     private var mlModel: MLModel?
-    private var visionModel: VNCoreMLModel?
     private var targetEmbedding: [Float]?
     private let threshold: Float
 
@@ -58,7 +57,6 @@ final class InsightFaceMatcher {
             let config = MLModelConfiguration()
             config.computeUnits = .all
             mlModel = try MLModel(contentsOf: modelURL, configuration: config)
-            visionModel = try VNCoreMLModel(for: mlModel!)
             isAvailable = true
             logger.info("InsightFace R18 model loaded successfully")
             return true
