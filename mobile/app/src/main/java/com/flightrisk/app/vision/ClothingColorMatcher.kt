@@ -9,10 +9,14 @@ import kotlin.math.sqrt
  * HSV color histogram matching for clothing appearance.
  *
  * Splits a person crop into upper body (top 40%) and lower body (bottom 40%)
- * regions, computes normalized HSV histograms for each, and compares them
- * against a target reference using histogram correlation. This provides a
- * lightweight, model-free appearance signal that complements learned ReID
- * embeddings.
+ * regions, computes normalized joint hue x saturation (H x S) histograms for
+ * each, and compares them against a target reference using histogram
+ * correlation. This provides a lightweight, model-free appearance signal
+ * that complements learned ReID embeddings.
+ *
+ * Mirrors the Python/iOS implementation, which uses a single joint 2D
+ * histogram (not separate 1D hue and saturation histograms) so that
+ * hue/saturation combinations are compared jointly rather than marginally.
  *
  * Signal name: `clothing_color`
  * Default weight: 0.15
@@ -37,15 +41,13 @@ class ClothingColorMatcher {
         private const val LOWER_END = 1.0f
     }
 
-    /** Precomputed target histograms (upper and lower body). */
-    private var targetUpperHue: FloatArray? = null
-    private var targetUpperSat: FloatArray? = null
-    private var targetLowerHue: FloatArray? = null
-    private var targetLowerSat: FloatArray? = null
+    /** Precomputed target joint H x S histograms (upper and lower body). */
+    private var targetUpperHist: FloatArray? = null
+    private var targetLowerHist: FloatArray? = null
 
     /** Whether a target has been set. */
     val hasTarget: Boolean
-        get() = targetUpperHue != null
+        get() = targetUpperHist != null
 
     /**
      * Set the reference image of the person to match clothing colors against.
@@ -53,21 +55,15 @@ class ClothingColorMatcher {
      * @param photo RGB [Bitmap] of the target person.
      */
     fun setTarget(photo: Bitmap) {
-        val (upperHue, upperSat) = computeRegionHistograms(photo, UPPER_START, UPPER_END)
-        val (lowerHue, lowerSat) = computeRegionHistograms(photo, LOWER_START, LOWER_END)
-        targetUpperHue = upperHue
-        targetUpperSat = upperSat
-        targetLowerHue = lowerHue
-        targetLowerSat = lowerSat
+        targetUpperHist = computeRegionHistogram(photo, UPPER_START, UPPER_END)
+        targetLowerHist = computeRegionHistogram(photo, LOWER_START, LOWER_END)
         Log.d(TAG, "Target clothing histograms set")
     }
 
     /** Clear the current target histograms. */
     fun clearTarget() {
-        targetUpperHue = null
-        targetUpperSat = null
-        targetLowerHue = null
-        targetLowerSat = null
+        targetUpperHist = null
+        targetLowerHist = null
     }
 
     /**
@@ -78,23 +74,19 @@ class ClothingColorMatcher {
      *         Returns 0.0 if no target is set.
      */
     fun compare(crop: Bitmap): Float {
-        val tUH = targetUpperHue ?: return 0.0f
-        val tUS = targetUpperSat ?: return 0.0f
-        val tLH = targetLowerHue ?: return 0.0f
-        val tLS = targetLowerSat ?: return 0.0f
+        val tUpper = targetUpperHist ?: return 0.0f
+        val tLower = targetLowerHist ?: return 0.0f
 
         return try {
-            val (upperHue, upperSat) = computeRegionHistograms(crop, UPPER_START, UPPER_END)
-            val (lowerHue, lowerSat) = computeRegionHistograms(crop, LOWER_START, LOWER_END)
+            val upperHist = computeRegionHistogram(crop, UPPER_START, UPPER_END)
+            val lowerHist = computeRegionHistogram(crop, LOWER_START, LOWER_END)
 
-            // Correlation for each histogram pair
-            val upperHueCorr = histogramCorrelation(tUH, upperHue)
-            val upperSatCorr = histogramCorrelation(tUS, upperSat)
-            val lowerHueCorr = histogramCorrelation(tLH, lowerHue)
-            val lowerSatCorr = histogramCorrelation(tLS, lowerSat)
+            // Correlation for each region's joint histogram
+            val upperCorr = histogramCorrelation(tUpper, upperHist)
+            val lowerCorr = histogramCorrelation(tLower, lowerHist)
 
-            // Average across all four histograms, clamped to [0, 1]
-            val avg = (upperHueCorr + upperSatCorr + lowerHueCorr + lowerSatCorr) / 4f
+            // Average across both regions, clamped to [0, 1]
+            val avg = (upperCorr + lowerCorr) / 2f
             avg.coerceIn(0f, 1f)
         } catch (e: Exception) {
             Log.w(TAG, "Clothing color comparison failed", e)
@@ -103,62 +95,51 @@ class ClothingColorMatcher {
     }
 
     /**
-     * Compute normalized HSV histograms for a vertical region of the image.
+     * Compute a normalized joint hue x saturation histogram for a vertical
+     * region of the image.
      *
      * @param image Source bitmap.
      * @param startFraction Top of the region as a fraction of image height (0-1).
      * @param endFraction Bottom of the region as a fraction of image height (0-1).
-     * @return Pair of (hue histogram, saturation histogram), both normalized.
+     * @return Normalized joint H x S histogram of size [HUE_BINS] * [SAT_BINS].
      */
-    private fun computeRegionHistograms(
+    private fun computeRegionHistogram(
         image: Bitmap,
         startFraction: Float,
         endFraction: Float,
-    ): Pair<FloatArray, FloatArray> {
+    ): FloatArray {
+        val totalBins = HUE_BINS * SAT_BINS
+        val histogram = FloatArray(totalBins)
+        val hsv = FloatArray(3)
+        var count = 0
         val w = image.width
         val h = image.height
         val yStart = (h * startFraction).toInt().coerceAtLeast(0)
         val yEnd = (h * endFraction).toInt().coerceAtMost(h)
 
-        val hueHist = FloatArray(HUE_BINS)
-        val satHist = FloatArray(SAT_BINS)
-        val hsv = FloatArray(3)
-        var count = 0
-
         for (y in yStart until yEnd) {
             for (x in 0 until w) {
                 val pixel = image.getPixel(x, y)
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val b = Color.blue(pixel)
-
-                Color.RGBToHSV(r, g, b, hsv)
-
-                // H is 0-360, S is 0-1, V is 0-1
+                Color.RGBToHSV(Color.red(pixel), Color.green(pixel), Color.blue(pixel), hsv)
                 val hueBin = ((hsv[0] / 360f) * HUE_BINS).toInt().coerceIn(0, HUE_BINS - 1)
                 val satBin = (hsv[1] * SAT_BINS).toInt().coerceIn(0, SAT_BINS - 1)
-
-                hueHist[hueBin] += 1f
-                satHist[satBin] += 1f
+                histogram[hueBin * SAT_BINS + satBin] += 1f
                 count++
             }
         }
-
-        // Normalize
         if (count > 0) {
             val countF = count.toFloat()
-            for (i in hueHist.indices) hueHist[i] /= countF
-            for (i in satHist.indices) satHist[i] /= countF
+            for (i in histogram.indices) histogram[i] /= countF
         }
-
-        return Pair(hueHist, satHist)
+        return histogram
     }
 
     /**
      * Compute Pearson correlation coefficient between two histograms.
      *
      * Returns a value in [-1, 1]; we clamp negatives to 0 since
-     * anti-correlation is meaningless for clothing similarity.
+     * anti-correlation is meaningless for clothing similarity (matches
+     * Python's `max(0, correlation)`).
      */
     private fun histogramCorrelation(a: FloatArray, b: FloatArray): Float {
         val n = a.size
