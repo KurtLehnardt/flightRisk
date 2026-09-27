@@ -11,9 +11,15 @@ import com.flightrisk.app.observability.MetricsCollector
 import com.flightrisk.app.observability.StructuredLogger
 import com.flightrisk.app.persistence.SessionRepository
 import com.flightrisk.app.recording.SessionRecorder
+import com.flightrisk.app.config.MatchingAlgorithmConfig
+import com.flightrisk.app.config.SignalConfig
+import com.flightrisk.app.vision.ClothingColorMatcher
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectionTracker
+import com.flightrisk.app.vision.HeightRatioMatcher
+import com.flightrisk.app.vision.InsightFaceMatcher
 import com.flightrisk.app.vision.MatchScorer
+import com.flightrisk.app.vision.OSNetReIDMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -192,6 +198,68 @@ class SearchPipeline(
         reasoningWeight = config.vision.scorerReasoningWeight.toFloat(),
         matchThreshold = config.vision.scorerMatchThreshold.toFloat(),
     )
+
+    // ------------------------------------------------------------------
+    // Configurable matching signals
+    // ------------------------------------------------------------------
+
+    /** Per-signal configuration (loaded from SharedPreferences). */
+    var signalConfigs: Map<String, SignalConfig> = emptyMap()
+
+    /** Clothing color histogram matcher. */
+    var clothingColorMatcher: ClothingColorMatcher? = null
+
+    /** Bounding box height ratio matcher. */
+    var heightRatioMatcher: HeightRatioMatcher? = null
+
+    /** OSNet person ReID matcher (TFLite). */
+    var osnetReIDMatcher: OSNetReIDMatcher? = null
+
+    /** InsightFace R18 face matcher (TFLite). */
+    var insightFaceMatcher: InsightFaceMatcher? = null
+
+    /**
+     * Register the new configurable signals with the scorer.
+     *
+     * Call this after [signalConfigs] is populated and the matcher
+     * instances are set. Only registers signals that are both enabled
+     * and available.
+     */
+    fun registerConfigurableSignals() {
+        val configs = signalConfigs.ifEmpty { return }
+
+        // Register clothing_color if enabled
+        configs["clothing_color"]?.let { cfg ->
+            if (cfg.enabled && clothingColorMatcher != null) {
+                try { scorer.registerSignal("clothing_color", cfg.weight) }
+                catch (_: IllegalArgumentException) { /* already registered */ }
+            }
+        }
+
+        // Register height_ratio if enabled
+        configs["height_ratio"]?.let { cfg ->
+            if (cfg.enabled && heightRatioMatcher != null) {
+                try { scorer.registerSignal("height_ratio", cfg.weight) }
+                catch (_: IllegalArgumentException) { /* already registered */ }
+            }
+        }
+
+        // Register osnet_reid if enabled and model is available
+        configs["osnet_reid"]?.let { cfg ->
+            if (cfg.enabled && osnetReIDMatcher?.isAvailable == true) {
+                try { scorer.registerSignal("osnet_reid", cfg.weight) }
+                catch (_: IllegalArgumentException) { /* already registered */ }
+            }
+        }
+
+        // Register insightface if enabled and model is available
+        configs["insightface"]?.let { cfg ->
+            if (cfg.enabled && insightFaceMatcher?.isAvailable == true) {
+                try { scorer.registerSignal("insightface", cfg.weight) }
+                catch (_: IllegalArgumentException) { /* already registered */ }
+            }
+        }
+    }
 
     /** Async LLM reasoning queue. */
     private val reasoningChannel = Channel<ReasoningWorkItem>(capacity = config.reasoning.queueMaxSize)
@@ -553,9 +621,46 @@ class SearchPipeline(
                     val detReid = reid?.compare(crop) ?: 0f
                     val detFace = face?.compare(crop) ?: 0f
 
+                    // Collect extra signal scores from configurable matchers
+                    val extraSignals = mutableMapOf<String, Float>()
+
+                    // Clothing color
+                    val colorCfg = signalConfigs["clothing_color"]
+                    if (colorCfg != null && colorCfg.enabled && clothingColorMatcher?.hasTarget == true) {
+                        val colorScore = clothingColorMatcher?.compare(crop) ?: 0f
+                        if (colorScore > 0f) extraSignals["clothing_color"] = colorScore
+                    }
+
+                    // Height ratio
+                    val heightCfg = signalConfigs["height_ratio"]
+                    if (heightCfg != null && heightCfg.enabled && heightRatioMatcher?.hasTarget == true) {
+                        val heightScore = heightRatioMatcher?.compare(detections[matchIdx].bbox) ?: 0f
+                        if (heightScore > 0f) extraSignals["height_ratio"] = heightScore
+                    }
+
+                    // OSNet ReID
+                    val osnetCfg = signalConfigs["osnet_reid"]
+                    if (osnetCfg != null && osnetCfg.enabled && osnetReIDMatcher?.isAvailable == true
+                        && osnetReIDMatcher?.hasTarget == true) {
+                        val osnetScore = osnetReIDMatcher?.compare(crop) ?: 0f
+                        if (osnetScore > 0f) extraSignals["osnet_reid"] = osnetScore
+                    }
+
+                    // InsightFace R18
+                    val ifaceCfg = signalConfigs["insightface"]
+                    if (ifaceCfg != null && ifaceCfg.enabled && insightFaceMatcher?.isAvailable == true
+                        && insightFaceMatcher?.hasTarget == true) {
+                        val ifaceScore = insightFaceMatcher?.compare(crop) ?: 0f
+                        if (ifaceScore > 0f) extraSignals["insightface"] = ifaceScore
+                    }
+
                     // Use MatchScorer for proper weighted combination with
                     // dynamic weight redistribution for missing signals
-                    val scored = scorer.score(reidScore = detReid, faceScore = detFace)
+                    val scored = scorer.score(
+                        reidScore = detReid,
+                        faceScore = detFace,
+                        extraSignals = extraSignals,
+                    )
                     matchScore = scored.combinedScore
                     alertLevel = scorer.alertLevel(scored)
 

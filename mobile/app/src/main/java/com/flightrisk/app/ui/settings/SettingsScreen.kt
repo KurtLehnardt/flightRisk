@@ -32,6 +32,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,7 +53,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.BuildConfig
+import com.flightrisk.app.config.MatchingAlgorithmConfig
 import com.flightrisk.app.config.SensitivityPreset
+import com.flightrisk.app.config.SignalCategory
+import com.flightrisk.app.config.SignalConfig
+import com.flightrisk.app.config.SignalMetadata
+import com.flightrisk.app.config.SignalStatus
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
@@ -80,6 +87,8 @@ data class SettingsScreenState(
     val llmBackend: String = "cloud_claude",
     val llmApiKey: String = "",
     val llmAvailable: Boolean = false,
+    val signalConfigs: Map<String, SignalConfig> = emptyMap(),
+    val signalStatuses: Map<String, SignalStatus> = emptyMap(),
 )
 
 /**
@@ -103,6 +112,8 @@ fun SettingsScreen(
     onThresholdChanged: (String, Float) -> Unit,
     onLlmBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
+    onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     modifier: Modifier = Modifier,
@@ -129,6 +140,18 @@ fun SettingsScreen(
             SensitivitySection(
                 activePreset = state.activePreset,
                 onPresetSelected = onPresetSelected,
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Matching Algorithms section -----
+            MatchingAlgorithmsSection(
+                signalConfigs = state.signalConfigs,
+                signalStatuses = state.signalStatuses,
+                onSignalEnabledChanged = onSignalEnabledChanged,
+                onSignalWeightChanged = onSignalWeightChanged,
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -515,6 +538,295 @@ private fun DroneSection(
                 )
             }
         }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Matching Algorithms section
+// -----------------------------------------------------------------------
+
+/**
+ * Matching algorithm configuration with per-signal toggles and weight sliders.
+ * Signals are grouped by category: Face Recognition, Person Re-ID, Appearance, Other.
+ */
+@Composable
+private fun MatchingAlgorithmsSection(
+    signalConfigs: Map<String, SignalConfig>,
+    signalStatuses: Map<String, SignalStatus>,
+    onSignalEnabledChanged: (String, Boolean) -> Unit,
+    onSignalWeightChanged: (String, Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .sizeIn(minHeight = 48.dp)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Matching Algorithms",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Configure which signals contribute to match scoring.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            IconButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
+            ) {
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.Default.KeyboardArrowUp
+                    } else {
+                        Icons.Default.KeyboardArrowDown
+                    },
+                    contentDescription = if (expanded) {
+                        "Collapse matching algorithms"
+                    } else {
+                        "Expand matching algorithms"
+                    },
+                )
+            }
+        }
+
+        // Summary: count of active signals
+        val activeCount = signalConfigs.count { it.value.enabled }
+        val totalCount = MatchingAlgorithmConfig.SIGNALS.size
+        Text(
+            text = "$activeCount of $totalCount signals active",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (activeCount > 0) MatchGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        AnimatedVisibility(visible = expanded) {
+            Column {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Group signals by category
+                val signalsByCategory = MatchingAlgorithmConfig.SIGNALS.groupBy { it.category }
+
+                for (category in SignalCategory.entries) {
+                    val signals = signalsByCategory[category] ?: continue
+
+                    Text(
+                        text = category.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(vertical = 8.dp)
+                            .semantics { heading() },
+                    )
+
+                    for (signal in signals) {
+                        val config = signalConfigs[signal.key] ?: SignalConfig(
+                            enabled = signal.defaultEnabled,
+                            weight = signal.defaultWeight,
+                        )
+                        val status = signalStatuses[signal.key] ?: SignalStatus.AVAILABLE
+
+                        SignalConfigCard(
+                            metadata = signal,
+                            config = config,
+                            status = status,
+                            onEnabledChanged = { enabled ->
+                                onSignalEnabledChanged(signal.key, enabled)
+                            },
+                            onWeightChanged = { weight ->
+                                onSignalWeightChanged(signal.key, weight)
+                            },
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A single signal configuration card with toggle, status, weight slider,
+ * and description.
+ */
+@Composable
+private fun SignalConfigCard(
+    metadata: SignalMetadata,
+    config: SignalConfig,
+    status: SignalStatus,
+    onEnabledChanged: (Boolean) -> Unit,
+    onWeightChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val borderColor = when {
+        config.enabled && status == SignalStatus.ACTIVE -> MatchGreen
+        config.enabled && status == SignalStatus.AVAILABLE -> DetectionBlue
+        status == SignalStatus.NOT_INSTALLED -> AlertOrange
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    val bgColor = when {
+        config.enabled && status == SignalStatus.ACTIVE -> MatchGreen.copy(alpha = 0.05f)
+        config.enabled && status == SignalStatus.AVAILABLE -> DetectionBlue.copy(alpha = 0.05f)
+        else -> Color.Transparent
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(8.dp),
+            )
+            .background(
+                color = bgColor,
+                shape = RoundedCornerShape(8.dp),
+            )
+            .padding(12.dp),
+    ) {
+        Column {
+            // Header row: name + toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = metadata.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+
+                Switch(
+                    checked = config.enabled,
+                    onCheckedChange = onEnabledChanged,
+                    enabled = status != SignalStatus.NOT_INSTALLED,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MatchGreen,
+                        checkedTrackColor = MatchGreen.copy(alpha = 0.5f),
+                    ),
+                    modifier = Modifier.semantics {
+                        contentDescription = "${metadata.displayName}: ${if (config.enabled) "enabled" else "disabled"}"
+                    },
+                )
+            }
+
+            // Status badge
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val statusColor = when (status) {
+                    SignalStatus.ACTIVE -> MatchGreen
+                    SignalStatus.AVAILABLE -> DetectionBlue
+                    SignalStatus.NOT_INSTALLED -> AlertOrange
+                }
+                val statusText = when (status) {
+                    SignalStatus.ACTIVE -> "Active"
+                    SignalStatus.AVAILABLE -> "Available"
+                    SignalStatus.NOT_INSTALLED -> "Not Installed"
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(
+                            color = statusColor,
+                            shape = RoundedCornerShape(3.dp),
+                        ),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = statusColor,
+                )
+            }
+
+            // Description
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = metadata.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // Weight slider (only when enabled)
+            if (config.enabled && status != SignalStatus.NOT_INSTALLED) {
+                Spacer(modifier = Modifier.height(8.dp))
+                WeightSlider(
+                    label = "Weight",
+                    value = config.weight,
+                    onValueChange = onWeightChanged,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Weight slider for a signal (0.0 to 1.0, step 0.05).
+ */
+@Composable
+private fun WeightSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var sliderValue by remember(value) { mutableFloatStateOf(value) }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "%.2f".format(sliderValue),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics {
+                    contentDescription = "$label: ${"%.2f".format(sliderValue)}"
+                },
+            )
+        }
+
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onValueChange(sliderValue) },
+            valueRange = 0.0f..1.0f,
+            steps = 19, // 0.05 increments
+            modifier = Modifier
+                .fillMaxWidth()
+                .sizeIn(minHeight = 48.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+            ),
+        )
     }
 }
 
