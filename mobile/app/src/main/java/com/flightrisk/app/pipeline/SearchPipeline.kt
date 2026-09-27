@@ -165,6 +165,9 @@ class SearchPipeline(
     private var pipelineJob: Job? = null
     private val running = AtomicBoolean(false)
 
+    /** Dedicated scope for the fire-and-forget session cleanup launched from [stop]. */
+    private var cleanupJob: Job? = null
+
     /** Target reference photo (set before starting search). */
     var targetPhoto: Bitmap? = null
 
@@ -206,6 +209,9 @@ class SearchPipeline(
     /** Per-signal configuration (loaded from SharedPreferences). */
     var signalConfigs: Map<String, SignalConfig> = emptyMap()
 
+    /** Signal names already registered with [scorer], to avoid re-registration errors. */
+    private val registeredSignals = mutableSetOf<String>()
+
     /** Clothing color histogram matcher. */
     var clothingColorMatcher: ClothingColorMatcher? = null
 
@@ -230,33 +236,33 @@ class SearchPipeline(
 
         // Register clothing_color if enabled
         configs["clothing_color"]?.let { cfg ->
-            if (cfg.enabled && clothingColorMatcher != null) {
-                try { scorer.registerSignal("clothing_color", cfg.weight) }
-                catch (_: IllegalArgumentException) { /* already registered */ }
+            if (cfg.enabled && clothingColorMatcher != null && "clothing_color" !in registeredSignals) {
+                scorer.registerSignal("clothing_color", cfg.weight)
+                registeredSignals.add("clothing_color")
             }
         }
 
         // Register height_ratio if enabled
         configs["height_ratio"]?.let { cfg ->
-            if (cfg.enabled && heightRatioMatcher != null) {
-                try { scorer.registerSignal("height_ratio", cfg.weight) }
-                catch (_: IllegalArgumentException) { /* already registered */ }
+            if (cfg.enabled && heightRatioMatcher != null && "height_ratio" !in registeredSignals) {
+                scorer.registerSignal("height_ratio", cfg.weight)
+                registeredSignals.add("height_ratio")
             }
         }
 
         // Register osnet_reid if enabled and model is available
         configs["osnet_reid"]?.let { cfg ->
-            if (cfg.enabled && osnetReIDMatcher?.isAvailable == true) {
-                try { scorer.registerSignal("osnet_reid", cfg.weight) }
-                catch (_: IllegalArgumentException) { /* already registered */ }
+            if (cfg.enabled && osnetReIDMatcher?.isAvailable == true && "osnet_reid" !in registeredSignals) {
+                scorer.registerSignal("osnet_reid", cfg.weight)
+                registeredSignals.add("osnet_reid")
             }
         }
 
         // Register insightface if enabled and model is available
         configs["insightface"]?.let { cfg ->
-            if (cfg.enabled && insightFaceMatcher?.isAvailable == true) {
-                try { scorer.registerSignal("insightface", cfg.weight) }
-                catch (_: IllegalArgumentException) { /* already registered */ }
+            if (cfg.enabled && insightFaceMatcher?.isAvailable == true && "insightface" !in registeredSignals) {
+                scorer.registerSignal("insightface", cfg.weight)
+                registeredSignals.add("insightface")
             }
         }
     }
@@ -440,6 +446,10 @@ class SearchPipeline(
             return
         }
 
+        // Cancel any leftover cleanup job from a previous stop() before starting anew.
+        cleanupJob?.cancel()
+        cleanupJob = null
+
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         pipelineScope = scope
 
@@ -493,11 +503,14 @@ class SearchPipeline(
 
         val recordingPath = sessionRecorder?.stop()
 
-        // End persistence session
+        // End persistence session. Uses a dedicated cleanup scope (rather than
+        // pipelineScope, which is cancelled below) so the write isn't aborted
+        // mid-flight; the job is tracked in [cleanupJob] so it isn't leaked and
+        // is cancelled if a new search starts before it completes.
         val sessionId = currentSessionId
         if (sessionId != null && sessionRepository != null) {
-            val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            scope.launch {
+            cleanupJob?.cancel()
+            cleanupJob = CoroutineScope(Dispatchers.IO).launch {
                 try {
                     sessionRepository.endSession(
                         sessionId = sessionId,
