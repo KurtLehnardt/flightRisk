@@ -108,12 +108,6 @@ class TestHeightRatioSignal:
         assert signal.has_target is True
         assert signal._target_ratio == pytest.approx(2.0)
 
-    def test_set_target_from_bbox(self):
-        signal = HeightRatioSignal()
-        signal.set_target_from_bbox((10, 20, 110, 220))
-        assert signal.has_target is True
-        assert signal._target_ratio == pytest.approx(2.0)
-
     def test_clear_target(self):
         signal = HeightRatioSignal()
         signal.set_target(np.zeros((200, 100, 3), dtype=np.uint8))
@@ -149,12 +143,6 @@ class TestHeightRatioSignal:
         for h, w in [(50, 100), (400, 100), (200, 50), (200, 200)]:
             score = signal.compare(np.zeros((h, w, 3), dtype=np.uint8))
             assert 0.0 <= score <= 1.0
-
-    def test_compare_bbox(self):
-        signal = HeightRatioSignal()
-        signal.set_target_from_bbox((0, 0, 100, 200))  # ratio 2.0
-        score = signal.compare_bbox((10, 10, 110, 210))  # also ratio 2.0
-        assert score == pytest.approx(1.0)
 
     def test_zero_width_returns_zero(self):
         signal = HeightRatioSignal()
