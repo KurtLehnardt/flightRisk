@@ -16,7 +16,7 @@ import Vision
 /// and logs a warning rather than crashing.
 ///
 /// Registered as MatchScorer signal `insightFace`.
-final class InsightFaceMatcher {
+final class InsightFaceMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "insightFace")
 

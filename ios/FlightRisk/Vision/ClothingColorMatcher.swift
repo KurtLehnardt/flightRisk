@@ -8,7 +8,7 @@ import os
 /// target vs detection histograms using correlation.
 ///
 /// Registered as MatchScorer signal `clothingColor`.
-final class ClothingColorMatcher {
+final class ClothingColorMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "clothingColor")
 

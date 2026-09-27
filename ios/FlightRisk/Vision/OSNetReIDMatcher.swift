@@ -13,7 +13,7 @@ import Vision
 /// and logs a warning rather than crashing.
 ///
 /// Registered as MatchScorer signal `osnetReid`.
-final class OSNetReIDMatcher {
+final class OSNetReIDMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "osnetReid")
 
