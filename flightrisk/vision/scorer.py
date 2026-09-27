@@ -90,6 +90,25 @@ class MatchScorer:
             raise ValueError(f"Cannot override built-in signal '{name}'")
         self._signals[name] = {"weight": weight}
 
+    def update_weight(self, name: str, weight: float) -> None:
+        """Update the weight of an already-registered signal (built-in or custom).
+
+        Raises:
+            ValueError: If `name` has not been registered (built-in signals
+                are pre-registered in __init__; custom ones via
+                register_signal()).
+        """
+        if name not in self._signals:
+            raise ValueError(f"Unknown signal '{name}'")
+        self._signals[name]["weight"] = weight
+        # Keep the convenience attributes in sync for built-in signals
+        if name == "reid":
+            self.reid_weight = weight
+        elif name == "face":
+            self.face_weight = weight
+        elif name == "reasoning":
+            self.reasoning_weight = weight
+
     def score(
         self,
         reid_score: float = 0.0,

@@ -166,20 +166,6 @@ class HeightRatioSignal:
             self._target_ratio = None
         logger.info("height_ratio target set (ratio=%.2f)", self._target_ratio or 0)
 
-    def set_target_from_bbox(self, bbox: tuple[int, int, int, int]) -> None:
-        """Set the target ratio from a bounding box (x1, y1, x2, y2).
-
-        Args:
-            bbox: (x1, y1, x2, y2) of the target person.
-        """
-        x1, y1, x2, y2 = bbox
-        w = x2 - x1
-        h = y2 - y1
-        if w > 0:
-            self._target_ratio = h / w
-        else:
-            self._target_ratio = None
-
     def clear_target(self) -> None:
         self._target_ratio = None
 
@@ -196,29 +182,6 @@ class HeightRatioSignal:
             return 0.0
 
         h, w = crop.shape[:2]
-        if w == 0:
-            return 0.0
-        det_ratio = h / w
-        max_ratio = max(self._target_ratio, det_ratio)
-        if max_ratio == 0:
-            return 0.0
-        score = 1.0 - abs(self._target_ratio - det_ratio) / max_ratio
-        return float(max(0.0, min(1.0, score)))
-
-    def compare_bbox(self, bbox: tuple[int, int, int, int]) -> float:
-        """Compare a bounding box's aspect ratio against the target.
-
-        Args:
-            bbox: (x1, y1, x2, y2) of the detected person.
-
-        Returns:
-            Score in [0, 1]. 1.0 = identical ratio.
-        """
-        if self._target_ratio is None:
-            return 0.0
-        x1, y1, x2, y2 = bbox
-        w = x2 - x1
-        h = y2 - y1
         if w == 0:
             return 0.0
         det_ratio = h / w

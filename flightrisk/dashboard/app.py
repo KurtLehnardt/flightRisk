@@ -870,6 +870,8 @@ def on_revert_target(data):
     face_ok = False
     if app_state.face:
         face_ok = app_state.face.set_target(img)
+    if app_state.signal_registry:
+        app_state.signal_registry.set_target(img)
     emit("target_set", {"success": True, "face_detected": face_ok, "reverted_to": version_id})
 
 
@@ -975,22 +977,26 @@ def on_set_signal_config(data):
     if "weight" in data:
         sig_cfg.weight = max(0.0, min(1.0, float(data["weight"])))
 
-    # Update the scorer's registered weight if applicable
-    if app_state.scorer and name not in ("reid", "face", "reasoning"):
-        if name in app_state.scorer._signals:
-            app_state.scorer._signals[name]["weight"] = sig_cfg.weight
-
-    # Update built-in signal weights on the scorer
+    # Update the scorer's registered weight (built-in or custom signal)
     if app_state.scorer:
-        if name == "reid":
-            app_state.scorer.reid_weight = sig_cfg.weight
-            app_state.scorer._signals["reid"]["weight"] = sig_cfg.weight
-        elif name == "face":
-            app_state.scorer.face_weight = sig_cfg.weight
-            app_state.scorer._signals["face"]["weight"] = sig_cfg.weight
-        elif name == "reasoning":
-            app_state.scorer.reasoning_weight = sig_cfg.weight
-            app_state.scorer._signals["reasoning"]["weight"] = sig_cfg.weight
+        try:
+            app_state.scorer.update_weight(name, sig_cfg.weight)
+        except ValueError:
+            pass  # signal not registered
+
+    registry = app_state.signal_registry
+    if registry:
+        if sig_cfg.enabled:
+            if registry.enable_signal(name):
+                if app_state.scorer and name not in ("reid", "face", "reasoning"):
+                    scorer_cfg = getattr(get_config().vision, f"signal_{name}", None)
+                    if scorer_cfg:
+                        try:
+                            app_state.scorer.register_signal(name, weight=scorer_cfg.weight)
+                        except ValueError:
+                            pass
+        else:
+            registry.disable_signal(name)
 
     if app_state.logger:
         app_state.logger.info(

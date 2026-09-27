@@ -47,41 +47,75 @@ class SignalRegistry:
         cfg = get_config().vision
         self._providers: dict[str, object] = {}
 
-        # clothing_color -- pure CV
-        if cfg.signal_clothing_color.enabled:
+        for name in ("clothing_color", "height_ratio", "osnet_reid", "insightface_face"):
+            sig_cfg = getattr(cfg, f"signal_{name}")
+            if not sig_cfg.enabled:
+                continue
+            provider = self._create_provider(name)
+            if provider is not None:
+                self._providers[name] = provider
+                logger.info("signal enabled: %s (weight=%.2f)", name, sig_cfg.weight)
+            else:
+                logger.info("signal disabled: %s (unavailable)", name)
+
+    def _create_provider(self, name: str) -> object | None:
+        """Instantiate the provider for `name` if it's available.
+
+        Returns the provider instance, or None if the signal name is
+        unknown or the provider reports itself unavailable (e.g. missing
+        ONNX model file).
+        """
+        cfg = get_config().vision
+        if name == "clothing_color":
             from flightrisk.vision.signals import ClothingColorSignal
             provider = ClothingColorSignal()
-            if provider.available:
-                self._providers["clothing_color"] = provider
-                logger.info("signal enabled: clothing_color (weight=%.2f)", cfg.signal_clothing_color.weight)
+            return provider if provider.available else None
 
-        # height_ratio -- pure math
-        if cfg.signal_height_ratio.enabled:
+        if name == "height_ratio":
             from flightrisk.vision.signals import HeightRatioSignal
             provider = HeightRatioSignal()
-            if provider.available:
-                self._providers["height_ratio"] = provider
-                logger.info("signal enabled: height_ratio (weight=%.2f)", cfg.signal_height_ratio.weight)
+            return provider if provider.available else None
 
-        # osnet_reid -- ONNX model
-        if cfg.signal_osnet_reid.enabled:
+        if name == "osnet_reid":
             from flightrisk.vision.signals import OSNetReIDSignal
             provider = OSNetReIDSignal(model_path=cfg.osnet_model_path)
-            if provider.available:
-                self._providers["osnet_reid"] = provider
-                logger.info("signal enabled: osnet_reid (weight=%.2f)", cfg.signal_osnet_reid.weight)
-            else:
-                logger.info("signal disabled: osnet_reid (model not found)")
+            return provider if provider.available else None
 
-        # insightface_face -- ONNX model
-        if cfg.signal_insightface_face.enabled:
+        if name == "insightface_face":
             from flightrisk.vision.signals import InsightFaceR18Signal
             provider = InsightFaceR18Signal(model_path=cfg.insightface_r18_model_path)
-            if provider.available:
-                self._providers["insightface_face"] = provider
-                logger.info("signal enabled: insightface_face (weight=%.2f)", cfg.signal_insightface_face.weight)
-            else:
-                logger.info("signal disabled: insightface_face (model not found)")
+            return provider if provider.available else None
+
+        return None
+
+    def enable_signal(self, name: str) -> bool:
+        """Enable a signal that was disabled at runtime.
+
+        Returns True if the signal provider exists and was re-added.
+        """
+        cfg = get_config().vision
+        attr = f"signal_{name}"
+        if not hasattr(cfg, attr):
+            return False
+        sig_cfg = getattr(cfg, attr)
+        sig_cfg.enabled = True
+        # If provider already active, nothing to do
+        if name in self._providers:
+            return True
+        # Try to create the provider
+        provider = self._create_provider(name)
+        if provider is not None:
+            self._providers[name] = provider
+            return True
+        return False
+
+    def disable_signal(self, name: str) -> None:
+        """Disable a signal at runtime."""
+        cfg = get_config().vision
+        attr = f"signal_{name}"
+        if hasattr(cfg, attr):
+            getattr(cfg, attr).enabled = False
+        self._providers.pop(name, None)
 
     @property
     def active_signals(self) -> list[str]:
