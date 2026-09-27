@@ -25,6 +25,7 @@ from flightrisk.vision.detector import PersonDetector
 from flightrisk.vision.reid import PersonReID
 from flightrisk.vision.quality import ImageQualityScorer
 from flightrisk.vision.scorer import MatchScorer
+from flightrisk.vision.signal_registry import SignalRegistry
 from flightrisk.vision.threshold_tuner import ThresholdTuner
 from flightrisk.vision.tracker import DetectionTracker
 from flightrisk.config import get_config
@@ -351,6 +352,17 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     if app_state.scorer is None:
         app_state.scorer = MatchScorer(match_threshold=0.45)
 
+    if app_state.signal_registry is None:
+        try:
+            app_state.signal_registry = SignalRegistry()
+            app_state.signal_registry.register_all(app_state.scorer)
+            log.info(
+                "signal_registry_initialized",
+                active_signals=app_state.signal_registry.active_signals,
+            )
+        except Exception as e:
+            log.warning("signal_registry_init_failed", error=str(e))
+
     if app_state.tracker is None:
         app_state.tracker = DetectionTracker(max_age=30, iou_threshold=0.3)
 
@@ -380,6 +392,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         # Also set face recognition target
         if app_state.face:
             app_state.face.set_target_from_file(target_path)
+        # Set configurable signal targets
+        if app_state.signal_registry:
+            app_state.signal_registry.set_target(img)
 
     # Initialize session persistence
     if app_state.db is None:
@@ -613,6 +628,8 @@ def upload_target():
     face_ok = False
     if app_state.face:
         face_ok = app_state.face.set_target(img)
+    if app_state.signal_registry:
+        app_state.signal_registry.set_target(img)
     print(f"[upload-target] Target saved via HTTP POST ({len(img_data)//1024}KB)")
     return jsonify({"success": True, "face_detected": face_ok})
 
@@ -626,6 +643,8 @@ def clear_target():
         app_state.reid.clear_target()
     if app_state.face:
         app_state.face.clear_target()
+    if app_state.signal_registry:
+        app_state.signal_registry.clear_targets()
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
     if path.exists():
         path.unlink()
@@ -635,6 +654,7 @@ def clear_target():
 
 @app.route("/api/health")
 def health():
+    registry = app_state.signal_registry
     return jsonify({
         "status": "healthy",
         "version": "1.0.0",
@@ -644,7 +664,9 @@ def health():
             "face": app_state.face is not None,
             "reasoning": app_state.reasoning is not None,
             "db": app_state.db is not None,
-        }
+            "signal_registry": registry is not None,
+        },
+        "active_signals": registry.active_signals if registry else [],
     })
 
 
@@ -795,6 +817,9 @@ def on_set_target(data):
         face_ok = False
         if app_state.face:
             face_ok = app_state.face.set_target(img)
+        # Set configurable signal targets
+        if app_state.signal_registry:
+            app_state.signal_registry.set_target(img)
         # Edge mode: extract target embeddings from the reference photo and
         # push them down to the local GroundStation scorer + every connected
         # edge device. Mirrors how EdgeRunner extracts per-crop embeddings
@@ -897,6 +922,88 @@ def on_set_sensitivity_preset(data):
     if app_state.logger:
         app_state.logger.info("sensitivity_preset_applied", preset=preset_name, **preset)
     emit("threshold_updated", {"threshold": preset["scorer"], "preset": preset_name})
+
+
+@socketio.on("get_signal_config")
+def on_get_signal_config():
+    """Return the current signal configuration."""
+    cfg = get_config().vision
+    signal_names = [
+        "reid", "face", "reasoning", "clothing_color",
+        "height_ratio", "osnet_reid", "insightface_face",
+    ]
+    signals = {}
+    for name in signal_names:
+        sig_cfg = getattr(cfg, f"signal_{name}")
+        # Check actual runtime availability
+        runtime_available = True
+        if app_state.signal_registry:
+            if name in ("clothing_color", "height_ratio", "osnet_reid", "insightface_face"):
+                provider = app_state.signal_registry.get_provider(name)
+                runtime_available = provider is not None
+        signals[name] = {
+            "enabled": sig_cfg.enabled,
+            "weight": sig_cfg.weight,
+            "available": runtime_available,
+        }
+    emit("signal_config", {"signals": signals})
+
+
+@socketio.on("set_signal_config")
+def on_set_signal_config(data):
+    """Update signal enable/weight at runtime.
+
+    Args:
+        data: Dict with 'signal' (name), optional 'enabled' (bool),
+              optional 'weight' (float).
+    """
+    name = data.get("signal")
+    if not name:
+        emit("error", {"message": "Missing 'signal' name"})
+        return
+
+    cfg = get_config().vision
+    attr_name = f"signal_{name}"
+    if not hasattr(cfg, attr_name):
+        emit("error", {"message": f"Unknown signal: {name}"})
+        return
+
+    sig_cfg = getattr(cfg, attr_name)
+
+    if "enabled" in data:
+        sig_cfg.enabled = bool(data["enabled"])
+    if "weight" in data:
+        sig_cfg.weight = max(0.0, min(1.0, float(data["weight"])))
+
+    # Update the scorer's registered weight if applicable
+    if app_state.scorer and name not in ("reid", "face", "reasoning"):
+        if name in app_state.scorer._signals:
+            app_state.scorer._signals[name]["weight"] = sig_cfg.weight
+
+    # Update built-in signal weights on the scorer
+    if app_state.scorer:
+        if name == "reid":
+            app_state.scorer.reid_weight = sig_cfg.weight
+            app_state.scorer._signals["reid"]["weight"] = sig_cfg.weight
+        elif name == "face":
+            app_state.scorer.face_weight = sig_cfg.weight
+            app_state.scorer._signals["face"]["weight"] = sig_cfg.weight
+        elif name == "reasoning":
+            app_state.scorer.reasoning_weight = sig_cfg.weight
+            app_state.scorer._signals["reasoning"]["weight"] = sig_cfg.weight
+
+    if app_state.logger:
+        app_state.logger.info(
+            "signal_config_updated",
+            signal=name,
+            enabled=sig_cfg.enabled,
+            weight=sig_cfg.weight,
+        )
+    emit("signal_config_updated", {
+        "signal": name,
+        "enabled": sig_cfg.enabled,
+        "weight": sig_cfg.weight,
+    })
 
 
 @socketio.on("set_stream_video")

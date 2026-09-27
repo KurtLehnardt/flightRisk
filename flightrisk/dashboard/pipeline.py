@@ -159,7 +159,11 @@ def _frame_loop(socketio):
             if match_idx is not None and app_state.scorer:
                 det_reid = app_state.reid.compare(detections[match_idx]["crop"]) if has_target else 0.0
                 det_face = app_state.face.compare(detections[match_idx]["crop"]) if (app_state.face and app_state.face.has_target) else 0.0
-                scored = app_state.scorer.score(reid_score=det_reid, face_score=det_face)
+                # Gather scores from configurable signals (clothing_color, etc.)
+                extra_signals = {}
+                if app_state.signal_registry:
+                    extra_signals = app_state.signal_registry.score_detection(detections[match_idx]["crop"])
+                scored = app_state.scorer.score(reid_score=det_reid, face_score=det_face, **extra_signals)
                 match_score = scored["combined_score"]
                 current_alert_level = app_state.scorer.alert_level(scored)
                 # Face recognition alone is reliable enough for possible_match
