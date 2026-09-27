@@ -870,6 +870,8 @@ def on_revert_target(data):
     face_ok = False
     if app_state.face:
         face_ok = app_state.face.set_target(img)
+    if app_state.signal_registry:
+        app_state.signal_registry.set_target(img)
     emit("target_set", {"success": True, "face_detected": face_ok, "reverted_to": version_id})
 
 
