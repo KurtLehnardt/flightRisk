@@ -165,6 +165,9 @@ class SearchPipeline(
     private var pipelineJob: Job? = null
     private val running = AtomicBoolean(false)
 
+    /** Dedicated scope for the fire-and-forget session cleanup launched from [stop]. */
+    private var cleanupJob: Job? = null
+
     /** Target reference photo (set before starting search). */
     var targetPhoto: Bitmap? = null
 
@@ -443,6 +446,10 @@ class SearchPipeline(
             return
         }
 
+        // Cancel any leftover cleanup job from a previous stop() before starting anew.
+        cleanupJob?.cancel()
+        cleanupJob = null
+
         val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         pipelineScope = scope
 
@@ -496,11 +503,14 @@ class SearchPipeline(
 
         val recordingPath = sessionRecorder?.stop()
 
-        // End persistence session
+        // End persistence session. Uses a dedicated cleanup scope (rather than
+        // pipelineScope, which is cancelled below) so the write isn't aborted
+        // mid-flight; the job is tracked in [cleanupJob] so it isn't leaked and
+        // is cancelled if a new search starts before it completes.
         val sessionId = currentSessionId
         if (sessionId != null && sessionRepository != null) {
-            val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            scope.launch {
+            cleanupJob?.cancel()
+            cleanupJob = CoroutineScope(Dispatchers.IO).launch {
                 try {
                     sessionRepository.endSession(
                         sessionId = sessionId,
