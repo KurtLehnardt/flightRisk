@@ -13,7 +13,7 @@ import Vision
 /// and logs a warning rather than crashing.
 ///
 /// Registered as MatchScorer signal `osnetReid`.
-final class OSNetReIDMatcher {
+final class OSNetReIDMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "osnetReid")
 
@@ -28,6 +28,7 @@ final class OSNetReIDMatcher {
     private var mlModel: MLModel?
     private var targetEmbedding: [Float]?
     private let threshold: Float
+    private var inputName: String = "input"
 
     /// Whether the CoreML model is loaded and ready.
     private(set) var isAvailable: Bool = false
@@ -59,6 +60,9 @@ final class OSNetReIDMatcher {
             let config = MLModelConfiguration()
             config.computeUnits = .all
             mlModel = try MLModel(contentsOf: modelURL, configuration: config)
+            if let firstInput = mlModel?.modelDescription.inputDescriptionsByName.keys.first {
+                inputName = firstInput
+            }
             isAvailable = true
             logger.info("OSNetReID model loaded successfully")
             return true
@@ -123,7 +127,7 @@ final class OSNetReIDMatcher {
             let inputArray = try preprocess(image: image)
 
             let inputFeature = try MLDictionaryFeatureProvider(
-                dictionary: ["input": MLFeatureValue(multiArray: inputArray)]
+                dictionary: [self.inputName: MLFeatureValue(multiArray: inputArray)]
             )
             let prediction = try model.prediction(from: inputFeature)
 

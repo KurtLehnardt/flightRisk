@@ -16,7 +16,7 @@ import Vision
 /// and logs a warning rather than crashing.
 ///
 /// Registered as MatchScorer signal `insightFace`.
-final class InsightFaceMatcher {
+final class InsightFaceMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "insightFace")
 
@@ -24,9 +24,9 @@ final class InsightFaceMatcher {
     private static let inputSize = 112
 
     private var mlModel: MLModel?
-    private var visionModel: VNCoreMLModel?
     private var targetEmbedding: [Float]?
     private let threshold: Float
+    private var inputName: String = "input"
 
     /// Whether the CoreML model is loaded and ready.
     private(set) var isAvailable: Bool = false
@@ -58,7 +58,9 @@ final class InsightFaceMatcher {
             let config = MLModelConfiguration()
             config.computeUnits = .all
             mlModel = try MLModel(contentsOf: modelURL, configuration: config)
-            visionModel = try VNCoreMLModel(for: mlModel!)
+            if let firstInput = mlModel?.modelDescription.inputDescriptionsByName.keys.first {
+                inputName = firstInput
+            }
             isAvailable = true
             logger.info("InsightFace R18 model loaded successfully")
             return true
@@ -229,7 +231,7 @@ final class InsightFaceMatcher {
 
             // Run inference
             let inputFeature = try MLDictionaryFeatureProvider(
-                dictionary: ["input": MLFeatureValue(multiArray: inputArray)]
+                dictionary: [self.inputName: MLFeatureValue(multiArray: inputArray)]
             )
             let prediction = try model.prediction(from: inputFeature)
 

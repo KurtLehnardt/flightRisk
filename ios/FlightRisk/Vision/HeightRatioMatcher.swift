@@ -9,7 +9,7 @@ import os
 /// vs adults, or crouching vs standing).
 ///
 /// Registered as MatchScorer signal `heightRatio`.
-final class HeightRatioMatcher {
+final class HeightRatioMatcher: MatchingSignal {
 
     private let logger = Logger(subsystem: "com.flightrisk", category: "heightRatio")
 
