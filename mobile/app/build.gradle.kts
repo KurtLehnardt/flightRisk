@@ -73,6 +73,9 @@ dependencies {
     // TensorFlow Lite (for OSNet ReID and InsightFace R18 models)
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
 
+    // MediaPipe LLM Inference (on-device Gemma / local LLM)
+    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+
     // Location
     implementation("com.google.android.gms:play-services-location:21.3.0")
 

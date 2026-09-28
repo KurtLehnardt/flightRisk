@@ -133,6 +133,8 @@ fun FlightRiskNavHost(
     onApiKeyChanged: (String) -> Unit,
     onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
+    onLocalModelDownload: () -> Unit = {},
+    onLocalModelDelete: () -> Unit = {},
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     latestDroneFrame: Bitmap? = null,
@@ -245,6 +247,8 @@ fun FlightRiskNavHost(
                     onApiKeyChanged = onApiKeyChanged,
                     onSignalEnabledChanged = onSignalEnabledChanged,
                     onSignalWeightChanged = onSignalWeightChanged,
+                    onLocalModelDownload = onLocalModelDownload,
+                    onLocalModelDelete = onLocalModelDelete,
                     droneState = droneState,
                     frameSourceMode = frameSourceMode,
                 )

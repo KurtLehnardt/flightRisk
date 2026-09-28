@@ -23,7 +23,12 @@ import com.flightrisk.app.drone.TelloWifiChecker
 
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
+import com.flightrisk.app.llm.CloudClaudeLlmBackend
+import com.flightrisk.app.llm.LocalLlmBackend
 import com.flightrisk.app.llm.LlmSelector
+import com.flightrisk.app.llm.local.GemmaMediaPipeProvider
+import com.flightrisk.app.llm.local.LocalLlmProvider
+import com.flightrisk.app.llm.local.ModelState
 import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.persistence.SessionRepository
 import com.flightrisk.app.pipeline.SearchPipeline
@@ -97,6 +102,11 @@ class MainActivity : ComponentActivity() {
     private var sessionRepository: SessionRepository? = null
     private var sessionRecorder: SessionRecorder? = null
 
+    // Local LLM state
+    private var localLlmProvider: LocalLlmProvider? = null
+    private var localLlmBackend: LocalLlmBackend? = null
+    private var localModelStateJob: Job? = null
+
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -142,6 +152,35 @@ class MainActivity : ComponentActivity() {
         llmSelector = LlmSelector(applicationContext).also { it.startMonitoring() }
         locationProvider = LocationProvider(applicationContext)
 
+        // Initialize local LLM provider + backend
+        val provider = GemmaMediaPipeProvider(applicationContext)
+        localLlmProvider = provider
+        localLlmBackend = LocalLlmBackend(provider)
+
+        // Register cloud backend (priority 1) then local backend (priority 2)
+        if (savedApiKey.isNotBlank()) {
+            llmSelector!!.registerBackend(
+                CloudClaudeLlmBackend(applicationContext, savedApiKey)
+            )
+        }
+        llmSelector!!.registerBackend(localLlmBackend!!)
+
+        // Observe local model state for settings UI
+        localModelStateJob = lifecycleScope.launch {
+            provider.state.collect { modelState ->
+                settingsState = settingsState.copy(
+                    localModelState = modelState,
+                    localModelName = provider.modelInfo.displayName,
+                    localModelSizeMb = (provider.modelInfo.sizeBytes / 1_000_000).toInt(),
+                    llmAvailable = when (settingsState.llmBackend) {
+                        "cloud_claude" -> settingsState.llmApiKey.isNotBlank()
+                        "local" -> modelState is ModelState.Ready || modelState is ModelState.Downloaded
+                        else -> false
+                    },
+                )
+            }
+        }
+
         // Request permissions
         requestPermissionsIfNeeded()
 
@@ -169,6 +208,8 @@ class MainActivity : ComponentActivity() {
                         onThresholdChanged = ::handleThresholdChanged,
                         onLlmBackendChanged = ::handleLlmBackendChanged,
                         onApiKeyChanged = ::handleApiKeyChanged,
+                        onLocalModelDownload = ::handleLocalModelDownload,
+                        onLocalModelDelete = ::handleLocalModelDelete,
                         droneState = currentDroneState,
                         frameSourceMode = frameSourceMode,
                         latestDroneFrame = latestDroneFrame,
@@ -317,6 +358,9 @@ class MainActivity : ComponentActivity() {
 
             val pipeline = SearchPipeline(config, ls, am, lp, repo, recorder)
             searchPipeline = pipeline
+
+            // Adapt scorer weights based on active LLM backend
+            pipeline.adaptWeightsForBackend(settingsState.llmBackend == "local")
 
             // Wire frame source: pull from drone or camera based on active mode
             pipeline.frameSource = SearchPipeline.FrameSource {
@@ -545,14 +589,72 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleLlmBackendChanged(backend: String) {
+        val localState = localLlmProvider?.state?.value
         settingsState = settingsState.copy(
             llmBackend = backend,
             llmAvailable = when (backend) {
                 "cloud_claude" -> settingsState.llmApiKey.isNotBlank()
+                "local" -> localState is ModelState.Ready || localState is ModelState.Downloaded
                 else -> false
             },
         )
+
+        // Reorder backends in the selector based on user preference
+        val selector = llmSelector ?: return
+        selector.clear()
+        when (backend) {
+            "cloud_claude" -> {
+                val apiKey = settingsState.llmApiKey
+                if (apiKey.isNotBlank()) {
+                    selector.registerBackend(
+                        CloudClaudeLlmBackend(applicationContext, apiKey)
+                    )
+                }
+                localLlmBackend?.let { selector.registerBackend(it) }
+            }
+            "local" -> {
+                localLlmBackend?.let { selector.registerBackend(it) }
+                val apiKey = settingsState.llmApiKey
+                if (apiKey.isNotBlank()) {
+                    selector.registerBackend(
+                        CloudClaudeLlmBackend(applicationContext, apiKey)
+                    )
+                }
+            }
+            // "none" — only NoOp fallback
+        }
+
         Log.i(TAG, "LLM backend changed: $backend")
+    }
+
+    // ------------------------------------------------------------------
+    // Local model callbacks
+    // ------------------------------------------------------------------
+
+    private fun handleLocalModelDownload() {
+        val provider = localLlmProvider ?: return
+        lifecycleScope.launch {
+            try {
+                provider.download { progress ->
+                    settingsState = settingsState.copy(
+                        localModelState = ModelState.Downloading(progress),
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Local model download failed", e)
+            }
+        }
+    }
+
+    private fun handleLocalModelDelete() {
+        val provider = localLlmProvider ?: return
+        lifecycleScope.launch {
+            try {
+                provider.delete()
+            } catch (e: Exception) {
+                Log.e(TAG, "Local model delete failed", e)
+            }
+        }
     }
 
     private fun handleApiKeyChanged(apiKey: String) {
@@ -767,6 +869,13 @@ class MainActivity : ComponentActivity() {
             Log.w(TAG, "Error closing FaceRecognizer", e)
         }
         faceRecognizer = null
+
+        // Clean up local LLM
+        localModelStateJob?.cancel()
+        localModelStateJob = null
+        lifecycleScope.launch { localLlmProvider?.unload() }
+        localLlmProvider = null
+        localLlmBackend = null
 
         // Clean up supporting components
         alertManager?.release()

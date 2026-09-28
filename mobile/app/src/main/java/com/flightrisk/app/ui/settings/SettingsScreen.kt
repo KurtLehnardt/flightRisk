@@ -62,6 +62,7 @@ import com.flightrisk.app.config.SignalStatus
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.llm.local.ModelState
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.DetectionBlue
@@ -89,6 +90,9 @@ data class SettingsScreenState(
     val llmAvailable: Boolean = false,
     val signalConfigs: Map<String, SignalConfig> = emptyMap(),
     val signalStatuses: Map<String, SignalStatus> = emptyMap(),
+    val localModelState: ModelState = ModelState.Idle,
+    val localModelName: String = "",
+    val localModelSizeMb: Int = 0,
 )
 
 /**
@@ -114,6 +118,8 @@ fun SettingsScreen(
     onApiKeyChanged: (String) -> Unit,
     onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
+    onLocalModelDownload: () -> Unit = {},
+    onLocalModelDelete: () -> Unit = {},
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     modifier: Modifier = Modifier,
@@ -165,6 +171,11 @@ fun SettingsScreen(
                 isAvailable = state.llmAvailable,
                 onBackendChanged = onLlmBackendChanged,
                 onApiKeyChanged = onApiKeyChanged,
+                localModelState = state.localModelState,
+                localModelName = state.localModelName,
+                localModelSizeMb = state.localModelSizeMb,
+                onLocalModelDownload = onLocalModelDownload,
+                onLocalModelDelete = onLocalModelDelete,
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -321,6 +332,11 @@ private fun LlmBackendSection(
     isAvailable: Boolean,
     onBackendChanged: (String) -> Unit,
     onApiKeyChanged: (String) -> Unit,
+    localModelState: ModelState = ModelState.Idle,
+    localModelName: String = "",
+    localModelSizeMb: Int = 0,
+    onLocalModelDownload: () -> Unit = {},
+    onLocalModelDelete: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -347,6 +363,14 @@ private fun LlmBackendSection(
             backendId = "cloud_claude",
             isSelected = selectedBackend == "cloud_claude",
             onSelect = { onBackendChanged("cloud_claude") },
+        )
+
+        // Local Model
+        LlmBackendOption(
+            name = "Local Model (On-Device)",
+            backendId = "local",
+            isSelected = selectedBackend == "local",
+            onSelect = { onBackendChanged("local") },
         )
 
         // None (vision only)
@@ -397,7 +421,186 @@ private fun LlmBackendSection(
                 )
             }
         }
+
+        // Local model management (shown when local is selected)
+        if (selectedBackend == "local") {
+            Spacer(modifier = Modifier.height(12.dp))
+            LocalModelCard(
+                modelState = localModelState,
+                modelName = localModelName,
+                modelSizeMb = localModelSizeMb,
+                onDownload = onLocalModelDownload,
+                onDelete = onLocalModelDelete,
+            )
+        }
     }
+}
+
+@Composable
+private fun LocalModelCard(
+    modelState: ModelState,
+    modelName: String,
+    modelSizeMb: Int,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val borderColor = when (modelState) {
+        is ModelState.Ready -> MatchGreen
+        is ModelState.Downloaded, is ModelState.Loading -> DetectionBlue
+        is ModelState.Downloading -> AlertOrange
+        is ModelState.Error -> AlertRed
+        is ModelState.Idle -> MaterialTheme.colorScheme.outline
+    }
+
+    val bgColor = when (modelState) {
+        is ModelState.Ready -> MatchGreen.copy(alpha = 0.05f)
+        is ModelState.Downloaded, is ModelState.Loading -> DetectionBlue.copy(alpha = 0.05f)
+        else -> Color.Transparent
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .background(bgColor, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+    ) {
+        Column {
+            Text(
+                text = modelName.ifBlank { "Local LLM" },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            if (modelSizeMb > 0) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "~${modelSizeMb}MB download",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Slower than cloud but works offline. " +
+                    "Algorithm-based signals carry more weight when using local models.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Status + action
+            when (modelState) {
+                is ModelState.Idle -> {
+                    TextButton(
+                        onClick = onDownload,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Download Model")
+                    }
+                }
+
+                is ModelState.Downloading -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Downloading... ${(modelState.progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AlertOrange,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { modelState.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+
+                is ModelState.Downloaded -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(color = DetectionBlue)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Downloaded — will load on first use",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = DetectionBlue,
+                        )
+                    }
+                    TextButton(
+                        onClick = onDelete,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Delete Model", color = AlertRed)
+                    }
+                }
+
+                is ModelState.Loading -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(color = AlertOrange)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Loading model...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AlertOrange,
+                        )
+                    }
+                }
+
+                is ModelState.Ready -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(color = MatchGreen)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Ready",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MatchGreen,
+                        )
+                    }
+                    TextButton(
+                        onClick = onDelete,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Delete Model", color = AlertRed)
+                    }
+                }
+
+                is ModelState.Error -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(color = AlertRed)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = modelState.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AlertRed,
+                        )
+                    }
+                    TextButton(
+                        onClick = onDownload,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Retry Download")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusDot(color: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(8.dp)
+            .background(color, RoundedCornerShape(4.dp)),
+    )
 }
 
 /**
