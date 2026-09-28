@@ -42,7 +42,7 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq \
     python3 python3-venv python3-pip python3-dev \
     git curl wget \
-    libgl1-mesa-glx libglib2.0-0 libsm6 libxrender1 libxext6 \
+    libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
     ffmpeg \
     build-essential
 
