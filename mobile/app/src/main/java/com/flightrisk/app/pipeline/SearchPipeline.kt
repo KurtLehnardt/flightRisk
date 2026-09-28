@@ -202,6 +202,28 @@ class SearchPipeline(
         matchThreshold = config.vision.scorerMatchThreshold.toFloat(),
     )
 
+    /**
+     * Adapt scoring weights for the active LLM backend type.
+     *
+     * Local models are slower and less reliable, so their reasoning
+     * weight is reduced and the freed weight naturally redistributes
+     * to algorithmic signals via the scorer's normalization.
+     *
+     * @param isLocalBackend true if using an on-device LLM.
+     */
+    fun adaptWeightsForBackend(isLocalBackend: Boolean) {
+        if (isLocalBackend) {
+            scorer.updateWeight("reasoning", 0.05f)
+            scorer.updateWeight("reid", 0.45f)
+            scorer.updateWeight("face", 0.50f)
+        } else {
+            scorer.updateWeight("reasoning", config.vision.scorerReasoningWeight.toFloat())
+            scorer.updateWeight("reid", config.vision.scorerReidWeight.toFloat())
+            scorer.updateWeight("face", config.vision.scorerFaceWeight.toFloat())
+        }
+        Log.i(TAG, "Weights adapted for ${if (isLocalBackend) "local" else "cloud"} backend")
+    }
+
     // ------------------------------------------------------------------
     // Configurable matching signals
     // ------------------------------------------------------------------

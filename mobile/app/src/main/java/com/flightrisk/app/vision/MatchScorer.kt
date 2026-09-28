@@ -64,6 +64,19 @@ class MatchScorer(
     }
 
     /**
+     * Update the weight of any registered signal (including built-ins).
+     *
+     * Use this for runtime weight adjustment — e.g. reducing reasoning
+     * weight when the active LLM backend is a slow local model.
+     *
+     * @throws IllegalArgumentException if [name] is not registered.
+     */
+    fun updateWeight(name: String, weight: Float) {
+        require(name in signals) { "Unknown signal '$name'" }
+        signals[name] = weight
+    }
+
+    /**
      * Compute a combined match score.
      *
      * @param reidScore Cosine similarity from ReID (0-1).
