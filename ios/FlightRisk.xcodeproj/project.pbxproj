@@ -15,7 +15,6 @@
 		1199DE250FB94739372DDEC1 /* HUDOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */; };
 		1884829E3DF19EF87111C55C /* GemmaModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 528EE687C8CE5B766B01FBF9 /* GemmaModelManager.swift */; };
 		1EBEC24EB0A006D8F434E585 /* DroneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D524D2A77288771B4CBFB8F5 /* DroneManager.swift */; };
-		21187C8802B656DE1D35D327 /* YOLOPersonDetector.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 689AE5050B5904630426127D /* YOLOPersonDetector.mlmodelc */; };
 		2271A01C249E8FDB8488283B /* OSNetReIDMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */; };
 		2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52439BABA6B78915E990592B /* SensitivityPreset.swift */; };
 		28F69D71B8044264122D9BB4 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 2BC2DD3B880CCB5E5A65D306 /* MLXLLM */; };
@@ -43,7 +42,6 @@
 		8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */; };
 		91785B276FA44B045B246A82 /* TargetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38053A9FBEF419992A818002 /* TargetStore.swift */; };
 		92A4880AEFFA562E4467D3D0 /* DetectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */; };
-		93EC1B450C21A2C2D14B6D37 /* SCRFDFaceDetector.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 87D839549146814BD81FCD96 /* SCRFDFaceDetector.mlmodelc */; };
 		96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFDA478D1331861625B42ED /* PersonDetector.swift */; };
 		994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */; };
 		9E0DF391D376B1022810591A /* MatchingSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52F7753BE4176DC8ABBCADA2 /* MatchingSignal.swift */; };
@@ -64,10 +62,8 @@
 		DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */; };
 		E369F83B6FCE7E7437069D28 /* LlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */; };
 		E416DD29FF581A257C0DBA88 /* FaceRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6240A16E4B71AA353C43D80 /* FaceRecognizer.swift */; };
-		E45A479A99C3B26D0ABED022 /* CLIPVisual.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 51D25D4C1E72B57693242604 /* CLIPVisual.mlmodelc */; };
 		E5CDF1C6E2F903F5CD50057E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE4E56041DCFBA42ECD3227 /* Models.swift */; };
 		EAFD491B98C3BF821475FE5C /* ObstacleGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21BB1E68957956A6B4BE2352 /* ObstacleGuard.swift */; };
-		EC2E065255A33137059AB71E /* ArcFaceMobile.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = CF2F2F4FF686991140C2E71C /* ArcFaceMobile.mlmodelc */; };
 		EDA308F45387DBFAF007819C /* LlmSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */; };
 		EE04B6E7B408309ACA1495F9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703EF934C8A58C9E09EF38A7 /* ContentView.swift */; };
 		EF70C4F0B8A94A5A261E534B /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8796F00CD5B575072807AE3A /* SearchViewModel.swift */; };
@@ -119,7 +115,6 @@
 		4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionOverlayView.swift; sourceTree = "<group>"; };
 		51095A1B6253211E12D08740 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		518B2C833E229980A24769E8 /* GemmaModelManaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GemmaModelManaging.swift; sourceTree = "<group>"; };
-		51D25D4C1E72B57693242604 /* CLIPVisual.mlmodelc */ = {isa = PBXFileReference; path = CLIPVisual.mlmodelc; sourceTree = "<group>"; };
 		52439BABA6B78915E990592B /* SensitivityPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitivityPreset.swift; sourceTree = "<group>"; };
 		528EE687C8CE5B766B01FBF9 /* GemmaModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GemmaModelManager.swift; sourceTree = "<group>"; };
 		52F7753BE4176DC8ABBCADA2 /* MatchingSignal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchingSignal.swift; sourceTree = "<group>"; };
@@ -128,7 +123,6 @@
 		5C62204D4A923643A5EB39B4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		663FA4E8FABF1CF7E74A8A16 /* TelloFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloFrameSource.swift; sourceTree = "<group>"; };
 		66F0F05724180E94E78FA3F5 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
-		689AE5050B5904630426127D /* YOLOPersonDetector.mlmodelc */ = {isa = PBXFileReference; path = YOLOPersonDetector.mlmodelc; sourceTree = "<group>"; };
 		693FCB9A3C43D51979B30E45 /* DroneConnectionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneConnectionCardView.swift; sourceTree = "<group>"; };
 		6B4428E3DF406C0107B2594B /* ImageDescriptionExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDescriptionExtractor.swift; sourceTree = "<group>"; };
 		6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlayView.swift; sourceTree = "<group>"; };
@@ -142,7 +136,6 @@
 		7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmSelector.swift; sourceTree = "<group>"; };
 		8591AC23892D277F0A94595D /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
 		8796F00CD5B575072807AE3A /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
-		87D839549146814BD81FCD96 /* SCRFDFaceDetector.mlmodelc */ = {isa = PBXFileReference; path = SCRFDFaceDetector.mlmodelc; sourceTree = "<group>"; };
 		8943A4554AA1A516C8F35352 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8DE6FB61B6DB63745F6AB545 /* ClothingColorMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClothingColorMatcher.swift; sourceTree = "<group>"; };
 		8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetPickerView.swift; sourceTree = "<group>"; };
@@ -153,7 +146,6 @@
 		B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskTheme.swift; sourceTree = "<group>"; };
 		B69634E5AA5C105D3BEC3074 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
-		CF2F2F4FF686991140C2E71C /* ArcFaceMobile.mlmodelc */ = {isa = PBXFileReference; path = ArcFaceMobile.mlmodelc; sourceTree = "<group>"; };
 		D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertCardView.swift; sourceTree = "<group>"; };
 		D524D2A77288771B4CBFB8F5 /* DroneManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneManager.swift; sourceTree = "<group>"; };
 		DB1B56CF1671883797BA7506 /* FlightRisk.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FlightRisk.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -199,17 +191,6 @@
 				703EF934C8A58C9E09EF38A7 /* ContentView.swift */,
 			);
 			path = Navigation;
-			sourceTree = "<group>";
-		};
-		09E43E416057853E523A6E80 /* Models */ = {
-			isa = PBXGroup;
-			children = (
-				CF2F2F4FF686991140C2E71C /* ArcFaceMobile.mlmodelc */,
-				51D25D4C1E72B57693242604 /* CLIPVisual.mlmodelc */,
-				87D839549146814BD81FCD96 /* SCRFDFaceDetector.mlmodelc */,
-				689AE5050B5904630426127D /* YOLOPersonDetector.mlmodelc */,
-			);
-			path = Models;
 			sourceTree = "<group>";
 		};
 		131D972A15050BF78DFB92A6 /* Settings */ = {
@@ -375,7 +356,6 @@
 				8ACC0A7E11AFC1B14F7BA35C /* Drone */,
 				6A805EAE6AD9C200F0A71180 /* LLM */,
 				F370B9DEFAA9329A7AB428FC /* Location */,
-				09E43E416057853E523A6E80 /* Models */,
 				04B022B65D9C2F29DEF35A31 /* Pipeline */,
 				6D853C7BEF8E62CE9570AC19 /* Resources */,
 				727F9A14F792C536EE0EBFA1 /* State */,
@@ -472,7 +452,6 @@
 			buildConfigurationList = 37854391229A03FCE9C84BEF /* Build configuration list for PBXNativeTarget "FlightRisk" */;
 			buildPhases = (
 				657C6045B0A0DD0997C6553E /* Sources */,
-				59704F94E0566E88A5987A27 /* Resources */,
 				50918952C35F379446F3F3E8 /* Frameworks */,
 			);
 			buildRules = (
@@ -530,20 +509,6 @@
 			);
 		};
 /* End PBXProject section */
-
-/* Begin PBXResourcesBuildPhase section */
-		59704F94E0566E88A5987A27 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				EC2E065255A33137059AB71E /* ArcFaceMobile.mlmodelc in Resources */,
-				E45A479A99C3B26D0ABED022 /* CLIPVisual.mlmodelc in Resources */,
-				93EC1B450C21A2C2D14B6D37 /* SCRFDFaceDetector.mlmodelc in Resources */,
-				21187C8802B656DE1D35D327 /* YOLOPersonDetector.mlmodelc in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		657C6045B0A0DD0997C6553E /* Sources */ = {

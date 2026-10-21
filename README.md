@@ -82,6 +82,9 @@ Local LLM downloads Gemma 2 2B on-device (~1.4GB). Matching weights auto-adjust 
 
 Requires iOS 17+, iPhone with 6GB+ RAM for local model.
 
+To bundle the CoreML vision models, run `python scripts/convert_models_to_coreml.py` (see the script header for its pip dependencies; `scripts/download_matching_models.sh` also fetches the ReID and face models), then re-run `xcodegen` in `ios/`.
+The app builds and runs without them; person detection, ReID, and face recognition are skipped with a log message.
+
 ## Hardware
 
 - **Drone:** DJI Ryze Tello (TLW004, SDK 1.3)
