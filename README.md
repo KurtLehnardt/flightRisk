@@ -38,11 +38,13 @@ bash scripts/install_macos.sh
 
 ### Windows
 ```powershell
+# Python 3.13 required: 3.15 (choco install python3) has no onnxruntime/insightface wheels
+choco install python313 -y
 git clone https://github.com/KurtLehnardt/flightRisk.git
 cd flightRisk
-# Manual setup — see below
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+py -3.13 -m venv venv
+# Call the venv python directly; Activate.ps1 is unreliable in non-interactive shells
+venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
 # Install Ollama from https://ollama.com/download/windows
 ollama pull gemma3:1b
 ```

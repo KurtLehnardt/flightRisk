@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from flightrisk.config import reset_config
+from flightrisk.config import get_config, reset_config
 from flightrisk.vision.scorer import MatchScorer
 from flightrisk.vision.signal_registry import SignalRegistry
 
@@ -24,12 +24,18 @@ class TestSignalRegistryInit:
         assert "clothing_color" in signals
         assert "height_ratio" in signals
 
-    def test_onnx_signals_unavailable_without_models(self):
-        """osnet_reid and insightface_face should be absent when models
-        don't exist at the default paths."""
+    def test_onnx_signals_unavailable_without_models(self, tmp_path, monkeypatch):
+        """osnet_reid and insightface_face should be absent when their
+        model files do not exist, regardless of what is installed locally."""
+        cfg = get_config()
+        monkeypatch.setattr(
+            cfg.vision, "osnet_model_path", str(tmp_path / "missing_osnet.onnx")
+        )
+        monkeypatch.setattr(
+            cfg.vision, "insightface_r18_model_path", str(tmp_path / "missing_r18.onnx")
+        )
         registry = SignalRegistry()
         signals = registry.active_signals
-        # Models don't exist in the test env
         assert "osnet_reid" not in signals
         assert "insightface_face" not in signals
 
