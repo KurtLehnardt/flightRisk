@@ -38,12 +38,13 @@ bash scripts/install_macos.sh
 
 ### Windows
 ```powershell
-# Python 3.13 required: 3.15 (choco install python3) has no onnxruntime/insightface wheels
+# Python 3.13: onnxruntime has no 3.15 wheels yet (choco install python3 gives 3.15)
+# choco needs an admin PowerShell with Chocolatey installed
 choco install python313 -y
 git clone https://github.com/KurtLehnardt/flightRisk.git
 cd flightRisk
 py -3.13 -m venv venv
-# Call the venv python directly; Activate.ps1 is unreliable in non-interactive shells
+# Call the venv python directly (avoids the Activate.ps1 execution policy block)
 venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
 # Install Ollama from https://ollama.com/download/windows
 ollama pull gemma3:1b
@@ -55,6 +56,7 @@ source venv/bin/activate  # Linux/macOS
 
 # Webcam + web dashboard (no drone needed)
 python -m flightrisk --webcam --dashboard --target photo_of_child.jpg
+# Windows: venv\Scripts\python.exe -m flightrisk --webcam --dashboard --target photo_of_child.jpg
 # Open http://localhost:5555
 
 # Webcam + OpenCV window

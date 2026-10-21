@@ -28,6 +28,8 @@ class TestSignalRegistryInit:
         """osnet_reid and insightface_face should be absent when their
         model files do not exist, regardless of what is installed locally."""
         cfg = get_config()
+        monkeypatch.setattr(cfg.vision.signal_osnet_reid, "enabled", True)
+        monkeypatch.setattr(cfg.vision.signal_insightface_face, "enabled", True)
         monkeypatch.setattr(
             cfg.vision, "osnet_model_path", str(tmp_path / "missing_osnet.onnx")
         )
