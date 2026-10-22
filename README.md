@@ -80,11 +80,19 @@ python -m flightrisk --dashboard --target photo_of_child.jpg
 Local LLM downloads Gemma 2 2B on-device (~1.4GB). Matching weights auto-adjust when using local model.
 
 ### iOS
-1. Install [xcodegen](https://github.com/yonaskolb/XcodeGen), run `xcodegen` in `ios/`
-2. Open `ios/FlightRisk.xcodeproj` in Xcode
+1. Open `ios/FlightRisk.xcodeproj` in Xcode (regenerate it with [xcodegen](https://github.com/yonaskolb/XcodeGen) only after editing `ios/project.yml`)
+2. Select a signing team and run
 3. Settings → LLM Backend → choose Cloud (Claude) or Local (Gemma 4 via MLX Swift)
 
 Requires iOS 17+, iPhone with 6GB+ RAM for local model.
+
+To bundle the CoreML vision models, two scripts apply, and they produce different files:
+
+- `scripts/download_matching_models.sh` creates a venv, then converts OSNet and InsightFace to `ios/FlightRisk/Models/OSNetReID.mlpackage` and `ios/FlightRisk/Models/InsightFaceR18.mlpackage`. It needs no ONNX input.
+- `python scripts/convert_models_to_coreml.py` (pip dependencies are listed in its header) produces `YOLOPersonDetector`, `CLIPVisual`, `SCRFDFaceDetector`, and `ArcFaceMobile` as `.mlmodelc` bundles in `ios/FlightRisk/Models/`. It does nothing on a clean clone, because it reads `yolo11n.onnx`, `clip_visual.onnx`, `scrfd_500m.onnx`, and `arcface_mobilefacenet.onnx` from `mobile/app/src/main/assets/`, which is gitignored and holds only `.gitkeep`. Missing files are skipped and it reports 0/4 converted. You must place those four files there first. `scripts/export_yolo_onnx.py` and `scripts/export_arcface_onnx.py` write `yolo11n.onnx` and `arcface_mobilefacenet.onnx` to `models/`, which you can copy over. No script in this repo produces `clip_visual.onnx` (`export_clip_onnx.py` writes `mobileclip_s2.onnx` and `clip_vit_b32.onnx`) or `scrfd_500m.onnx`, so those two must be obtained separately.
+
+After adding models, regenerate the project with xcodegen in `ios/`. Do not commit the regenerated `ios/FlightRisk.xcodeproj/project.pbxproj`, because it will reference the gitignored model files. Run `git checkout ios/FlightRisk.xcodeproj` before committing.
+The app builds and runs without any models; person detection, ReID, and face recognition are skipped with a log message.
 
 ## Hardware
 
