@@ -61,6 +61,12 @@ class VisionConfig:
     tracker_max_missing: int = 15
     tracker_score_window: int = 8
 
+    # -- Appearance-only mode and tiled inference --
+    appearance_only: bool = False
+    detector_tiled: bool = False
+    detector_tile_size: int = 640
+    detector_tile_overlap: float = 0.2
+
     # -- Configurable signal toggles and weights --
     # Built-in signals default to enabled; new signals default to enabled
     # but will be skipped at runtime if their model is unavailable.
@@ -140,6 +146,17 @@ class DashboardConfig:
     frame_emit_interval: float = 0.05
     jpeg_quality: int = 70
     captures_dir: str = "captures"
+    save_captures: bool = False
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a boolean environment value, rejecting unrecognized strings."""
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off", ""):
+        return False
+    raise ValueError(f"not a boolean: {value!r}")
 
 
 @dataclass
@@ -166,6 +183,11 @@ class AmberConfig:
         env_map = {
             "FLIGHTRISK_DETECTOR_MODEL": ("vision", "detector_model", str),
             "FLIGHTRISK_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
+            "FLIGHTRISK_APPEARANCE_ONLY": ("vision", "appearance_only", _parse_bool),
+            "FLIGHTRISK_DETECTOR_TILED": ("vision", "detector_tiled", _parse_bool),
+            "FLIGHTRISK_DETECTOR_TILE_SIZE": ("vision", "detector_tile_size", int),
+            "FLIGHTRISK_DETECTOR_TILE_OVERLAP": ("vision", "detector_tile_overlap", float),
+            "FLIGHTRISK_SAVE_CAPTURES": ("dashboard", "save_captures", _parse_bool),
             "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
             "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
             "FLIGHTRISK_REASONING_PROVIDER": ("reasoning", "provider", str),

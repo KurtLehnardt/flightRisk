@@ -1,0 +1,204 @@
+{
+  "dataset": "HERIDAL",
+  "split": "test",
+  "n_gt": 337,
+  "tile_size": 640,
+  "overlap": 0.2,
+  "iou_threshold": 0.3,
+  "model": "heridal_yolo11s.pt",
+  "confidence": 0.5,
+  "tiled": true,
+  "n_images": 101,
+  "bins": [
+    {
+      "lo": 0,
+      "hi": 8,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 8,
+      "hi": 16,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 16,
+      "hi": 24,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 3,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 24,
+      "hi": 32,
+      "n_gt": 7,
+      "tp": 4,
+      "fp": 5,
+      "fn": 3,
+      "recall": 0.5714285714285714,
+      "precision": 0.4444444444444444
+    },
+    {
+      "lo": 32,
+      "hi": 48,
+      "n_gt": 108,
+      "tp": 66,
+      "fp": 9,
+      "fn": 42,
+      "recall": 0.6111111111111112,
+      "precision": 0.88
+    },
+    {
+      "lo": 48,
+      "hi": 64,
+      "n_gt": 111,
+      "tp": 61,
+      "fp": 14,
+      "fn": 50,
+      "recall": 0.5495495495495496,
+      "precision": 0.8133333333333334
+    },
+    {
+      "lo": 64,
+      "hi": null,
+      "n_gt": 111,
+      "tp": 72,
+      "fp": 10,
+      "fn": 39,
+      "recall": 0.6486486486486487,
+      "precision": 0.8780487804878049
+    }
+  ],
+  "min_person_px": 24,
+  "overall": {
+    "n_gt": 337,
+    "tp": 203,
+    "fp": 41,
+    "fn": 134,
+    "recall": 0.6023738872403561,
+    "precision": 0.8319672131147541,
+    "f1": 0.6987951807228915
+  },
+  "inference_seconds": 116.0,
+  "confidence_selection": {
+    "split": "val",
+    "n_images": 50,
+    "criterion": "highest overall F1 on validation images held out from training",
+    "candidates": [
+      {
+        "confidence": 0.1,
+        "overall": {
+          "n_gt": 73,
+          "tp": 66,
+          "fp": 156,
+          "fn": 7,
+          "recall": 0.9041095890410958,
+          "precision": 0.2972972972972973,
+          "f1": 0.4474576271186441
+        },
+        "min_person_px": 24
+      },
+      {
+        "confidence": 0.25,
+        "overall": {
+          "n_gt": 73,
+          "tp": 61,
+          "fp": 70,
+          "fn": 12,
+          "recall": 0.8356164383561644,
+          "precision": 0.46564885496183206,
+          "f1": 0.5980392156862746
+        },
+        "min_person_px": 24
+      },
+      {
+        "confidence": 0.4,
+        "overall": {
+          "n_gt": 73,
+          "tp": 57,
+          "fp": 38,
+          "fn": 16,
+          "recall": 0.7808219178082192,
+          "precision": 0.6,
+          "f1": 0.6785714285714285
+        },
+        "min_person_px": 24
+      },
+      {
+        "confidence": 0.5,
+        "overall": {
+          "n_gt": 73,
+          "tp": 54,
+          "fp": 23,
+          "fn": 19,
+          "recall": 0.7397260273972602,
+          "precision": 0.7012987012987013,
+          "f1": 0.7200000000000001
+        },
+        "min_person_px": 24
+      }
+    ]
+  },
+  "training": {
+    "weights": "heridal_yolo11s.pt",
+    "base_model": "yolo11s.pt",
+    "epochs": 20,
+    "imgsz": 640,
+    "batch": 16,
+    "device": "mps",
+    "seed": 0,
+    "train_seconds": 3050,
+    "dataset": {
+      "tile_size": 640,
+      "overlap": 0.2,
+      "empty_ratio": 1.0,
+      "min_visible": 0.5,
+      "seed": 0,
+      "train": {
+        "images": 400,
+        "boxes": 1054,
+        "positive_tiles": 1343,
+        "empty_tiles_available": 17636,
+        "empty_tiles_kept": 1343,
+        "labels": 1763
+      },
+      "val": {
+        "images": 50,
+        "boxes": 73,
+        "positive_tiles": 99,
+        "empty_tiles_available": 2292,
+        "empty_tiles_kept": 99,
+        "labels": 127
+      }
+    },
+    "last_epoch_val_metrics": {
+      "epoch": 20.0,
+      "time": 3028.4,
+      "train/box_loss": 1.19072,
+      "train/cls_loss": 0.81223,
+      "train/dfl_loss": 1.16485,
+      "metrics/precision(B)": 0.88784,
+      "metrics/recall(B)": 0.70079,
+      "metrics/mAP50(B)": 0.82446,
+      "metrics/mAP50-95(B)": 0.50594,
+      "val/box_loss": 1.35325,
+      "val/cls_loss": 0.83368,
+      "val/dfl_loss": 1.31242,
+      "lr/pg0": 0.000119,
+      "lr/pg1": 0.000119,
+      "lr/pg2": 0.000119
+    }
+  }
+}

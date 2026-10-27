@@ -20,7 +20,7 @@ venv/
 .vscode/
 .idea/
 
-# Models (downloaded at runtime)
+# Models (downloaded at runtime, and weights fine-tuned by scripts/finetune_heridal.py)
 models/
 *.pt
 *.onnx
@@ -50,3 +50,11 @@ ios/AmberDrone/Pods/
 eval_data/**/*.jpg
 eval_data/**/*.png
 !eval_data/sample/labels.json
+
+# Datasets and demo media (never committed; keep the READMEs)
+datasets/*
+!datasets/README.md
+demo/*.mp4
+demo/*.jpg
+demo/*.png
+demo/screenshots/

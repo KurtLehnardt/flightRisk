@@ -148,6 +148,75 @@ To bundle the CoreML vision models, two scripts apply, and they produce differen
 After adding models, regenerate the project with xcodegen in `ios/`. Do not commit the regenerated `ios/FlightRisk.xcodeproj/project.pbxproj`, because it will reference the gitignored model files. Run `git checkout ios/FlightRisk.xcodeproj` before committing.
 The app builds and runs without any models; person detection, ReID, and face recognition are skipped with a log message.
 
+## Hackathon demo (Nucleus bounty)
+
+Two Tello EDU drones search one floor area together under one ground station. The ground station splits the area into zones, gives neighbouring zones different altitude slots, synchronises every edge's clock, starts both drones at the same instant, merges their detections onto one map and re-tasks a lost drone's lanes to the other. The kickoff commit is `798f21a`, tagged `hackathon/kickoff`; everything built after it is listed in [docs/built-this-week.md](docs/built-this-week.md).
+
+### Hardware
+
+- 2 DJI Tello EDU drones (only an EDU supports the station-mode `ap` command).
+- A Mac that runs the ground station and edge 1 (drone 1).
+- A Windows laptop that runs edge 2 (drone 2). It installs without the face and LLM packages; see [docs/windows-edge-setup.md](docs/windows-edge-setup.md).
+- Station mode: one 2.4 GHz router or phone hotspot that allows client-to-client traffic.
+- AP mode: two USB Ethernet adapters (if a laptop has no RJ45 port) and one Cat5e or Cat6 cable between the laptops.
+- A clear floor area of about 4 m by 4 m.
+
+### Run it
+
+Pick one network path. Both use the same shared secret, which must be the same on both laptops, and the same launchers. Start the ground station first. Details, the hardware check and the Wi-Fi reset are in [docs/fleet-setup.md](docs/fleet-setup.md).
+
+```bash
+export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"
+
+# Path 1, station mode: the drones and both laptops join one router or hotspot.
+export FLIGHTRISK_FLEET_NET=station FLIGHTRISK_GROUND_IP=<mac lan ip> FLIGHTRISK_TELLO_HOST=<drone 1 ip>
+source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+
+# Path 2, AP mode: each laptop joins one drone's own Wi-Fi, the laptops share a cable (10.42.0.0/24).
+export FLIGHTRISK_FLEET_NET=ap
+source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+```
+
+On the Windows laptop, set `FLIGHTRISK_EDGE_TOKEN` and `FLIGHTRISK_FLEET_NET` (and in station mode `FLIGHTRISK_GROUND_IP` and `FLIGHTRISK_TELLO_HOST` for drone 2), then run:
+
+```powershell
+$env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
+```
+
+`DRONE_ID` 1 and 2 become the fleet ids `drone-1` and `drone-2`, which are the ids the ground station expects (`FLIGHTRISK_FLEET_DRONES`, default `drone-1,drone-2`). Each launcher refuses to start without `FLIGHTRISK_EDGE_TOKEN`. Open the dashboard at `http://127.0.0.1:5555` on the Mac. [docs/demo-script.md](docs/demo-script.md) is the minute-by-minute run sheet, including the fallbacks. Without hardware, `python scripts/demo_fake_fleet.py --n 4 --drive` runs the same ground station against fake edges.
+
+### Offline
+
+The demo needs no internet connection. The detector and appearance matcher run on the laptops, `--no-llm` starts no reasoning model, and station mode needs a local router but not an uplink. Install the packages and model files once while online, before the event.
+
+### Privacy defaults
+
+- The demo matches on appearance only (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the ground station and on the edge: faces are not resolvable at search altitude, the face model is never loaded, and no face embeddings are computed or sent. For flight sources (`tello`, `fake`) the edge is appearance-only by default; face matching on the edge needs `--with-face` or `FLIGHTRISK_APPEARANCE_ONLY=0`.
+- Match snapshots are not written to disk (`FLIGHTRISK_SAVE_CAPTURES=0`).
+- The dashboard binds `127.0.0.1` only, so Start and LAND ALL are not reachable from the network. Use the browser on the Mac itself. Binding another address with `FLIGHTRISK_DASHBOARD_HOST` needs `FLIGHTRISK_API_KEY`, and the web page does not send that key, so a keyed non-loopback bind locks the web UI out.
+- The edge link is the only thing on the LAN, and it needs the shared `FLIGHTRISK_EDGE_TOKEN`. Person crops (JPEG images of people in the camera view, one per detection) and ReID appearance embeddings do go from each edge to the ground station over that token-authenticated WebSocket link. They are not written to disk by default.
+- Socket.IO on the dashboard accepts same-origin pages only.
+
+See [docs/privacy-design.md](docs/privacy-design.md).
+
+### Fine-tuned weights
+
+The fine-tuned aerial person detector (`models/heridal_yolo11s.pt`) is not in git. It lives in the gitignored `models/` directory of the machine that trained it, and no download link is published yet. To reproduce it, run `scripts/finetune_heridal.py` (subcommands `fetch`, `build`, `train` and `evaluate`) as described in [docs/altitude-benchmark.md](docs/altitude-benchmark.md). Without it, the stock `yolo11n.pt` detector is used.
+
+### Documents
+
+- [docs/built-this-week.md](docs/built-this-week.md): what was built after kickoff, with commit evidence
+- [docs/pitch.md](docs/pitch.md): the pitch
+- [docs/one-page-plan.md](docs/one-page-plan.md): the one-page plan
+- [docs/demo-script.md](docs/demo-script.md): the demo run sheet
+- [docs/roadmap-budget.md](docs/roadmap-budget.md): roadmap and budget
+- [docs/privacy-design.md](docs/privacy-design.md): privacy design
+- [docs/fleet-setup.md](docs/fleet-setup.md): two-drone network setup
+- [docs/altitude-benchmark.md](docs/altitude-benchmark.md): altitude benchmark and fine-tuning
+- [docs/licensing.md](docs/licensing.md): licensing
+
+License: GPL-3.0-or-later.
+
 ## Hardware
 
 - **Drone:** DJI Ryze Tello (TLW004, SDK 1.3)

@@ -1585,6 +1585,23 @@
             .logo-tagline { display: none; }
             .telem-grid { grid-template-columns: 1fr 1fr; }
         }
+        /* build:t10 start */
+        #fleet-section { position: fixed; left: 12px; bottom: 12px; z-index: 900; width: 440px; max-width: calc(100vw - 24px);
+            background: var(--bg-secondary); border: 1px solid var(--bg-card); border-radius: 8px; padding: 8px; font-size: 12px; }
+        #fleet-section.collapsed #fleet-body { display: none; }
+        #fleet-section .fleet-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+        #fleet-section .fleet-head .spacer { flex: 1; }
+        #fleet-section button { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--text-muted);
+            border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 12px; }
+        #fleet-section button.active { border-color: var(--cyan); color: var(--cyan); }
+        #land-all { background: var(--red) !important; border-color: var(--red) !important; color: #fff !important; font-weight: 700; }
+        #search-map { height: 260px; width: 100%; background: #0b1220; border-radius: 4px; }
+        #fleet-panel { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; }
+        #fleet-panel th, #fleet-panel td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--bg-card); }
+        #fleet-banner { display: none; background: var(--red); color: #fff; padding: 4px 8px; border-radius: 4px; margin-bottom: 6px; font-weight: 600; }
+        #appearance-only-badge { display: none; margin-left: 10px; padding: 2px 8px; border-radius: 10px; font-size: 11px;
+            background: var(--bg-card); color: var(--cyan); border: 1px solid var(--cyan); }
+        /* build:t10 end */
     </style>
 </head>
 <body>
@@ -1601,6 +1618,7 @@
         <div class="header-center">
             <div id="status-dot" class="status-dot"></div>
             <span id="status-label" class="status-label">OFFLINE</span>
+            <span id="appearance-only-badge">APPEARANCE ONLY</span>
         </div>
         <div class="header-right">
             <div class="battery-widget">
@@ -2021,6 +2039,34 @@
             <div id="overlay-status" class="overlay-status"></div>
         </div>
     </div>
+
+    <!-- build:t10 start -->
+    <link rel="stylesheet" href="/static/leaflet/leaflet.css">
+    <div id="fleet-section">
+        <div class="fleet-head">
+            <strong>FLEET</strong>
+            <button id="map-mode-grid" class="active" onclick="setMapMode('grid')">Grid</button>
+            <button id="map-mode-latlon" onclick="setMapMode('latlon')">Lat/Lon</button>
+            <span class="spacer"></span>
+            <button id="fleet-plan" onclick="planFleet()">Plan search</button>
+            <button id="fleet-start" onclick="startFleet()" disabled>Start search</button>
+            <button id="land-all" onclick="landAll()" title="Shift+L">LAND ALL</button>
+            <button onclick="document.getElementById('fleet-section').classList.toggle('collapsed')">_</button>
+        </div>
+        <div id="fleet-body">
+            <div id="fleet-banner"></div>
+            <div id="fleet-error" style="display:none;color:var(--red);font-weight:600;margin-bottom:6px;"></div>
+            <!-- build:t25 start -->
+            <div id="fleet-uncovered" style="display:none;border:1px solid var(--red);color:var(--red);border-radius:4px;padding:4px 6px;margin-bottom:6px;max-height:120px;overflow-y:auto;font-family:var(--font-mono);font-size:11px;"></div>
+            <!-- build:t25 end -->
+            <div id="search-map"></div>
+            <table id="fleet-panel">
+                <thead><tr><th>Drone</th><th>Bat</th><th>Alt cm</th><th>Lane</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
+                <tbody id="fleet-panel-body"></tbody>
+            </table>
+        </div>
+    </div>
+    <!-- build:t10 end -->
 
     <!-- TOAST -->
     <div id="toast" class="toast"></div>
@@ -2745,6 +2791,9 @@
             const tag = e.target.tagName.toLowerCase();
             if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
+            // Shift+L is LAND ALL (handled separately, matched the same way); plain 'l' keeps landing the primary drone.
+            if ((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L')) return;
+
             const key = e.key.toLowerCase();
             const command = KEY_MAP[key];
             if (!command) return;
@@ -3250,5 +3299,399 @@
         refreshFeedbackStats();
         fetch('/api/sessions').catch(() => {});
     </script>
+    <!-- build:t10 start -->
+    <script src="/static/leaflet/leaflet.js"></script>
+    <script>
+        // ========== FLEET MAP AND PANEL (t10) ==========
+        // Tiny 1x1 transparent PNG so a missing tile never needs the network.
+        const OFFLINE_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+        let mapMode = 'grid';
+        let gridMap = null, geoMap = null;
+        const gridLayer = {}, geoLayer = {};
+        const droneMarkers = {}, seenPins = {};
+        const DRONE_COLORS = ['#22D3EE', '#F59E0B', '#A78BFA', '#34D399'];
+
+        function droneColor(id) {
+            const m = String(id).match(/(\d+)\s*$/);
+            return DRONE_COLORS[(m ? parseInt(m[1], 10) - 1 : 0) % DRONE_COLORS.length];
+        }
+
+        function initFleetMaps() {
+            if (typeof L === 'undefined') return;
+            const el = document.getElementById('search-map');
+            gridMap = L.map(el, { crs: L.CRS.Simple, minZoom: -4, maxZoom: 4, attributionControl: false });
+            Object.keys(droneMarkers).forEach(k => delete droneMarkers[k]);
+            gridMap.setView([0, 0], 0);
+            gridLayer.zones = L.layerGroup().addTo(gridMap);
+            gridLayer.pins = L.layerGroup().addTo(gridMap);
+            gridLayer.drones = L.layerGroup().addTo(gridMap);
+            fitGrid({ x_cm: 0, y_cm: 0, w_cm: 400, h_cm: 400 });
+            // The lat/lon map is created lazily when first shown, since Leaflet needs a visible container.
+        }
+
+        function ensureGeoMap() {
+            if (geoMap || typeof L === 'undefined') return;
+            const el = document.getElementById('search-map');
+            geoMap = L.map(el, { attributionControl: false }).setView([40.76, -111.89], 15);
+            // Tiles are served locally; a missing tile falls back to a blank image so the page works offline.
+            L.tileLayer('/static/tiles/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                errorTileUrl: OFFLINE_TILE
+            }).addTo(geoMap);
+            geoLayer.lanes = L.layerGroup().addTo(geoMap);
+            geoLayer.pins = L.layerGroup().addTo(geoMap);
+            geoLayer.drones = L.layerGroup().addTo(geoMap);
+        }
+
+        function setMapMode(mode) {
+            mapMode = mode;
+            document.getElementById('map-mode-grid').classList.toggle('active', mode === 'grid');
+            document.getElementById('map-mode-latlon').classList.toggle('active', mode === 'latlon');
+            if (typeof L === 'undefined') return;
+            // Leaflet binds one map to a container, so the other mode's map is removed first.
+            if (mode === 'latlon') {
+                if (gridMap) { gridMap.remove(); gridMap = null; }
+                ensureGeoMap();
+                if (geoMap) geoMap.invalidateSize();
+            } else {
+                if (geoMap) { geoMap.remove(); geoMap = null; }
+                initFleetMaps();
+                replayGridState();
+            }
+        }
+
+        let lastPlan = null;
+        const lastStatus = {}, lastPins = [];
+
+        function replayGridState() {
+            if (lastPlan) handleFleetPlan(lastPlan);
+            lastPins.forEach(addPin);
+            Object.keys(lastStatus).forEach(id => moveDrone(id, lastStatus[id]));
+        }
+
+        function fitGrid(ext) {
+            if (!gridMap) return;
+            const x = ext.x_cm || 0, y = ext.y_cm || 0, w = ext.w_cm || 400, h = ext.h_cm || 400;
+            gridMap.fitBounds([[y / 100, x / 100], [(y + h) / 100, (x + w) / 100]], { padding: [10, 10] });
+        }
+
+        // Cm on the relative grid become metres on the map; Leaflet Simple CRS is [y, x].
+        function gridPoint(xcm, ycm) { return [(ycm || 0) / 100, (xcm || 0) / 100]; }
+
+        const LANE_DIRS = { forward: [0, 1], back: [0, -1], left: [-1, 0], right: [1, 0] };
+
+        function lanePath(zone) {
+            if (Array.isArray(zone.path)) return zone.path.map(p => gridPoint(p[0], p[1]));
+            let x = zone.x_cm || 0, y = zone.y_cm || 0;
+            const pts = [gridPoint(x, y)];
+            (zone.lanes || []).forEach(l => {
+                const d = LANE_DIRS[l.direction];
+                if (!d) return;
+                x += d[0] * (l.distance_cm || 0);
+                y += d[1] * (l.distance_cm || 0);
+                pts.push(gridPoint(x, y));
+            });
+            return pts;
+        }
+
+        function handleFleetPlan(plan) {
+            lastPlan = plan;
+            if (!gridMap) return;
+            gridLayer.zones.clearLayers();
+            const zones = plan.zones || [];
+            zones.forEach(z => {
+                const color = droneColor(z.drone_id || '');
+                if (z.w_cm && z.h_cm) {
+                    L.rectangle([gridPoint(z.x_cm, z.y_cm), gridPoint((z.x_cm || 0) + z.w_cm, (z.y_cm || 0) + z.h_cm)],
+                        { color: color, weight: 1, fillOpacity: 0.08 })
+                        .bindTooltip(String(z.drone_id || 'zone') + (z.alt_cm ? ' @ ' + z.alt_cm + ' cm' : ''))
+                        .addTo(gridLayer.zones);
+                }
+                const pts = lanePath(z);
+                if (pts.length > 1) L.polyline(pts, { color: color, weight: 2, dashArray: '4 4' }).addTo(gridLayer.zones);
+            });
+            const ext = plan.grid || plan.extent;
+            if (ext) fitGrid(ext);
+            else if (zones.length) {
+                const xs = [], ys = [];
+                zones.forEach(z => { xs.push(z.x_cm || 0, (z.x_cm || 0) + (z.w_cm || 0)); ys.push(z.y_cm || 0, (z.y_cm || 0) + (z.h_cm || 0)); });
+                const x0 = Math.min.apply(null, xs), y0 = Math.min.apply(null, ys);
+                fitGrid({ x_cm: x0, y_cm: y0, w_cm: Math.max.apply(null, xs) - x0, h_cm: Math.max.apply(null, ys) - y0 });
+            }
+        }
+
+        function moveDrone(id, d) {
+            if (typeof d.rel_x_cm !== 'number' || typeof d.rel_y_cm !== 'number') return;
+            if (!gridMap) return;
+            const pos = gridPoint(d.rel_x_cm, d.rel_y_cm);
+            if (!droneMarkers[id]) {
+                droneMarkers[id] = L.circleMarker(pos, { radius: 8, color: droneColor(id), fillOpacity: 0.9 })
+                    .bindTooltip(String(id), { permanent: true, direction: 'top' }).addTo(gridLayer.drones);
+            } else {
+                droneMarkers[id].setLatLng(pos);
+            }
+        }
+
+        function dronesAsList(data) {
+            const d = data.drones || {};
+            if (Array.isArray(d)) return d.map(x => [x.drone_id, x]);
+            return Object.keys(d).map(id => [id, d[id]]);
+        }
+
+        function fmt(v) { return (v === undefined || v === null) ? '--' : (typeof v === 'number' ? Math.round(v * 10) / 10 : v); }
+
+        function renderFleetPanel(list) {
+            const body = document.getElementById('fleet-panel-body');
+            body.innerHTML = '';
+            list.forEach(([id, d]) => {
+                d = d || {};
+                const tr = document.createElement('tr');
+                const lane = (d.lane_index !== undefined && d.lanes_total !== undefined) ? d.lane_index + '/' + d.lanes_total : '--';
+                [id, d.battery !== undefined ? fmt(d.battery) + '%' : '--', fmt(d.height_cm), lane,
+                 fmt(d.offset_ms), fmt(d.rtt_ms), fmt(d.skew_ms)].forEach(v => {
+                    const td = document.createElement('td');
+                    td.textContent = v;
+                    tr.appendChild(td);
+                });
+                body.appendChild(tr);
+            });
+        }
+
+        socket.on('fleet_status', (data) => {
+            const list = dronesAsList(data || {});
+            renderFleetPanel(list);
+            list.forEach(([id, d]) => {
+                if (!d) return;
+                lastStatus[id] = d;
+                moveDrone(id, d);
+            });
+        });
+
+        socket.on('fleet_plan', handleFleetPlan);
+
+        function thumbSrc(t) {
+            if (!t) return null;
+            return String(t).startsWith('data:') ? t : 'data:image/jpeg;base64,' + t;
+        }
+
+        function addPin(p) {
+            let pos, layer;
+            if (typeof p.rel_x_cm === 'number' && typeof p.rel_y_cm === 'number') {
+                if (!gridMap || mapMode !== 'grid') return;
+                pos = gridPoint(p.rel_x_cm, p.rel_y_cm); layer = gridLayer.pins;
+            } else if (typeof p.lat === 'number' && typeof p.lon === 'number') {
+                if (!geoMap || mapMode !== 'latlon') return;
+                pos = [p.lat, p.lon]; layer = geoLayer.pins;
+            } else {
+                return;
+            }
+            const pin = L.circleMarker(pos, { radius: 6, color: droneColor(p.drone_id || ''), fillColor: '#EF4444', fillOpacity: 0.9 });
+            const box = document.createElement('div');
+            const title = document.createElement('div');
+            title.textContent = 'Detection from ' + (p.drone_id || 'unknown');
+            box.appendChild(title);
+            const src = thumbSrc(p.thumbnail || p.image || p.snapshot);
+            if (src) {
+                const img = document.createElement('img');
+                img.src = src; img.style.maxWidth = '160px';
+                box.appendChild(img);
+            }
+            pin.bindPopup(box).addTo(layer);
+        }
+
+        socket.on('fleet_detection', (p) => {
+            if (!p) return;
+            // The server already dedups; the id check only guards against replays.
+            if (p.id !== undefined) {
+                if (seenPins[p.id]) return;
+                seenPins[p.id] = true;
+            }
+            lastPins.push(p);
+            addPin(p);
+        });
+
+        socket.on('search_plan', (plan) => {
+            if (!plan) return;
+            setMapMode('latlon');
+            if (!geoMap) return;
+            geoLayer.lanes.clearLayers();
+            (plan.lanes || []).forEach(l => {
+                const pts = l.points || l.path || (l.start && l.end ? [l.start, l.end] : null);
+                if (pts) L.polyline(pts.map(p => Array.isArray(p) ? p : [p.lat, p.lon]), { color: '#22D3EE', weight: 2 }).addTo(geoLayer.lanes);
+            });
+            if (plan.center) geoMap.setView(plan.center, plan.zoom || 17);
+        });
+
+        function showFleetBanner(text) {
+            const b = document.getElementById('fleet-banner');
+            b.textContent = text;
+            b.style.display = 'block';
+            clearTimeout(showFleetBanner._t);
+            showFleetBanner._t = setTimeout(() => { b.style.display = 'none'; }, 8000);
+        }
+
+        socket.on('fleet_event', (ev) => {
+            if (!ev) return;
+            const kind = ev.event || ev.type || ev.kind;
+            const who = ev.drone_id ? ' ' + ev.drone_id : '';
+            if (kind === 'retask') showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
+            else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
+            else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
+            else if (kind) showFleetBanner(String(kind));
+        });
+
+        // build:t25 start
+        // Re-tasked lanes that no drone has accepted. Each stays listed until a
+        // retask event reports it accepted or a new plan replaces the mission,
+        // so a gap in the search is never silent.
+        let uncoveredLanes = {};
+
+        function markLanes(lostId, lanes, status) {
+            (lanes || []).forEach(l => {
+                if (!l || l.index === undefined) return;
+                const key = String(lostId) + ':' + l.index;
+                if (status === null) delete uncoveredLanes[key];
+                else uncoveredLanes[key] = Object.assign({}, l, { lost_id: lostId, status: status });
+            });
+        }
+
+        function renderUncovered() {
+            const box = document.getElementById('fleet-uncovered');
+            const keys = Object.keys(uncoveredLanes);
+            box.innerHTML = '';
+            box.style.display = keys.length ? 'block' : 'none';
+            if (!keys.length) return;
+            const failed = keys.filter(k => uncoveredLanes[k].status === 'uncovered').length;
+            const head = document.createElement('div');
+            head.style.fontWeight = '700';
+            head.textContent = 'NOT SEARCHED: ' + failed + ' lane' + (failed === 1 ? '' : 's') + ' uncovered, '
+                + (keys.length - failed) + ' awaiting a drone';
+            box.appendChild(head);
+            keys.forEach(k => {
+                const e = uncoveredLanes[k];
+                const row = document.createElement('div');
+                const where = '(' + fmt(e.x_cm) + ', ' + fmt(e.y_cm) + ') to (' + fmt(e.end_x_cm) + ', ' + fmt(e.end_y_cm) + ') cm';
+                const why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
+                row.textContent = e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why;
+                box.appendChild(row);
+            });
+        }
+
+        socket.on('fleet_event', (ev) => {
+            if (!ev) return;
+            const kind = ev.event || ev.type || ev.kind;
+            if (kind === 'retask_failed') {
+                markLanes(ev.drone_id, ev.lanes, 'uncovered');
+                showFleetBanner('RETASK FAILED: ' + (ev.detail || ev.drone_id || ''));
+            } else if (kind === 'retask') {
+                markLanes(ev.drone_id, ev.lanes, null);
+                markLanes(ev.drone_id, ev.awaiting, 'awaiting');
+            } else {
+                return;
+            }
+            renderUncovered();
+        });
+
+        socket.on('fleet_plan', (plan) => {
+            uncoveredLanes = {};
+            ((plan && plan.uncovered) || []).forEach(u => { if (u) markLanes(u.drone_id, [u], 'uncovered'); });
+            renderUncovered();
+        });
+        // build:t25 end
+
+        socket.on('status', (data) => {
+            const badge = document.getElementById('appearance-only-badge');
+            if (badge && data) badge.style.display = data.appearance_only ? 'inline-block' : 'none';
+        });
+
+        // Plan search and Start search. Start makes real drones take off, so it needs a received plan and a confirmation.
+        let fleetPlanReceived = false;
+        let fleetStartInFlight = false;
+        let fleetPlanDroneCount = 0;
+
+        function showFleetError(text) {
+            const e = document.getElementById('fleet-error');
+            e.textContent = text || '';
+            e.style.display = text ? 'block' : 'none';
+        }
+
+        function updateFleetStartButton() {
+            document.getElementById('fleet-start').disabled = !fleetPlanReceived || fleetStartInFlight;
+        }
+
+        function planFleet() {
+            showFleetError('');
+            fleetPlanReceived = false;
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+            socket.emit('plan_fleet');
+        }
+
+        function startFleet() {
+            if (!fleetPlanReceived || fleetStartInFlight) return;
+            const n = fleetPlanDroneCount;
+            const who = n > 0 ? n + ' drone' + (n === 1 ? '' : 's') : 'The drones';
+            if (!window.confirm(who + ' will take off. Start the search?')) return;
+            showFleetError('');
+            fleetStartInFlight = true;
+            updateFleetStartButton();
+            socket.emit('start_fleet');
+        }
+
+        socket.on('fleet_plan', (plan) => {
+            const ids = {};
+            ((plan && plan.zones) || []).forEach(z => { if (z && z.drone_id) ids[z.drone_id] = true; });
+            fleetPlanDroneCount = Object.keys(ids).length || Object.keys(lastStatus).length;
+            fleetPlanReceived = true;
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        });
+
+        socket.on('error', (data) => {
+            showFleetError('Fleet error: ' + ((data && data.message) || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        });
+
+        socket.on('fleet_event', (ev) => {
+            if (!ev || (ev.event || ev.type || ev.kind) !== 'start_refused') return;
+            showFleetError('Start refused: ' + (ev.detail || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        });
+
+        function landAll() {
+            socket.emit('land_all');
+            showFleetBanner('LAND ALL sent');
+        }
+
+        // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight
+        // control is off. Outside editable fields Shift+L alone is enough. Inside an editable field
+        // (input, textarea, select or contenteditable) it needs Ctrl or Cmd as well, so typing a
+        // capital L (for example "Levi's" in the target description) never lands the fleet and the
+        // letter is not swallowed. Auto-repeat is ignored, so holding the keys sends one land_all.
+        // It matches the physical L key (e.code), so Caps Lock cannot stop it, and also the key that
+        // types L, for keyboard layouts that put L on another key. It listens in the capture phase,
+        // so no other key handler can stop the event before it arrives.
+        function isEditableTarget(t) {
+            if (!t || !t.tagName) return false;
+            if (t.isContentEditable) return true;
+            var tag = t.tagName.toUpperCase();
+            if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+            if (tag !== 'INPUT') return false;
+            var nonText = ['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'color', 'file', 'image'];
+            return nonText.indexOf((t.type || 'text').toLowerCase()) === -1;
+        }
+        document.addEventListener('keydown', function(e) {
+            if (e.repeat) return;
+            if (!((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L'))) return;
+            if (isEditableTarget(e.target) && !(e.ctrlKey || e.metaKey)) return;
+            e.preventDefault();
+            landAll();
+        }, true);
+
+        initFleetMaps();
+    </script>
+    <!-- build:t10 end -->
 </body>
 </html>

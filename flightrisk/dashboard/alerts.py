@@ -28,8 +28,9 @@ from flightrisk.dashboard.state import (
 from flightrisk.dashboard.alert_latch import alert_latch
 
 # Match screenshots directory
+# The directory is created lazily when a snapshot is actually written, never at
+# import time, so importing this module has no filesystem side effects.
 CAPTURES_DIR = Path(__file__).parent.parent.parent / "captures"
-CAPTURES_DIR.mkdir(exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ def _is_within_alert_cooldown(track_key: str, now: float) -> bool:
 
 def _save_match_snapshot(frame, crop, match_score, reasoning_result):
     """Save a match screenshot and crop to disk."""
+    CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     frame_path = CAPTURES_DIR / f"match_{ts}_frame.jpg"
     crop_path = CAPTURES_DIR / f"match_{ts}_crop.jpg"
@@ -80,6 +82,43 @@ def _save_match_snapshot(frame, crop, match_score, reasoning_result):
 
     if app_state.logger:
         app_state.logger.info("snapshot_saved", file=frame_path.name, score=match_score)
+
+
+def _captures_enabled() -> bool:
+    """Return True only if saving match snapshots has been explicitly enabled.
+
+    Snapshots contain images of bystanders, so the default is off. The setting
+    is read from ``DashboardConfig.save_captures`` when that field exists, and
+    otherwise from the ``FLIGHTRISK_SAVE_CAPTURES`` environment variable.
+    """
+    import os
+
+    try:
+        from flightrisk.config import get_config
+
+        dashboard = get_config().dashboard
+        if hasattr(dashboard, "save_captures"):
+            return bool(dashboard.save_captures)
+    except Exception:
+        pass
+    return os.environ.get("FLIGHTRISK_SAVE_CAPTURES", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def maybe_save_match_snapshot(frame, crop, match_score, reasoning_result,
+                              save_captures: bool | None = None):
+    """Save a match snapshot only when captures are enabled; otherwise do nothing.
+
+    ``save_captures`` overrides the configured setting when given. Returns
+    ``None`` in every case and writes nothing to disk when captures are off.
+    """
+    if save_captures is None:
+        save_captures = _captures_enabled()
+    if not save_captures:
+        return None
+    _save_match_snapshot(frame, crop, match_score, reasoning_result)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +231,7 @@ def _gemma_worker(socketio):
                     # it (to avoid ballooning queue memory with full frames).
                     # So frame and crop are the same image here; this loses the
                     # wider scene context that the photo-match snapshot path has.
-                    _save_match_snapshot(crop, crop, match_score, result)
+                    maybe_save_match_snapshot(crop, crop, match_score, result)
             else:
                 # "analyze" -- photo-based reasoning
                 _, track_key, crop, reference = item
