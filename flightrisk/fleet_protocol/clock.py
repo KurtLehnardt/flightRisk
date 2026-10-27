@@ -7,18 +7,17 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from flightrisk.fleet_protocol.constants import (
-    CLOCK,
-    PONG,
-)
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_number,
 )
+from flightrisk.fleet_protocol.constants import (
+    CLOCK,
+    PONG,
+)
 from flightrisk.fleet_protocol.validate import (
     validate_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # Clock synchronisation

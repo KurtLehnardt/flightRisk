@@ -6,6 +6,11 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from flightrisk.fleet_protocol.checks import (
+    ProtocolError,
+    _is_int,
+    _short,
+)
 from flightrisk.fleet_protocol.constants import (
     DIRECTION_EDGE_TO_GROUND,
     DIRECTION_GROUND_TO_EDGE,
@@ -18,15 +23,9 @@ from flightrisk.fleet_protocol.constants import (
     LEGACY_MAX_BYTES,
     MAX_MESSAGE_BYTES,
 )
-from flightrisk.fleet_protocol.checks import (
-    ProtocolError,
-    _is_int,
-    _short,
-)
 from flightrisk.fleet_protocol.validate import (
     validate_for_direction,
 )
-
 
 # ---------------------------------------------------------------------------
 # Wire encoding

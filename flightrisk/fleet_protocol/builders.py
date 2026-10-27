@@ -6,6 +6,12 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from flightrisk.fleet_protocol.checks import (
+    ProtocolError,
+    _is_id,
+    _require_number,
+    _short,
+)
 from flightrisk.fleet_protocol.constants import (
     ACK,
     ASSIGN_LANES,
@@ -31,15 +37,6 @@ from flightrisk.fleet_protocol.constants import (
     TAKEOFF,
     TELEMETRY,
 )
-from flightrisk.fleet_protocol.checks import (
-    ProtocolError,
-    _is_id,
-    _require_number,
-    _short,
-)
-from flightrisk.fleet_protocol.validate import (
-    _checked,
-)
 from flightrisk.fleet_protocol.fencing import (
     EdgeHello,
     Fence,
@@ -47,7 +44,9 @@ from flightrisk.fleet_protocol.fencing import (
     new_cmd_id,
     next_epoch,
 )
-
+from flightrisk.fleet_protocol.validate import (
+    _checked,
+)
 
 # ---------------------------------------------------------------------------
 # Message builders

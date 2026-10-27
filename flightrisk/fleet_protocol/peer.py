@@ -5,21 +5,6 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from flightrisk.fleet_protocol.constants import (
-    GROUND_ROLES,
-    LATCH_PHASES,
-    MAX_DETECTIONS,
-    MAX_EPOCH,
-    MAX_NODE_STATE_BYTES,
-    MAX_ROSTER,
-    MISSION_STATES,
-    _DETECTION_FIELDS,
-    _LATCH_FIELDS,
-    _MAX_SAFE_INT,
-    _MISSION_FIELDS,
-    _NODE_STATE_FIELDS,
-    _ROSTER_FIELDS,
-)
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_id,
@@ -36,6 +21,21 @@ from flightrisk.fleet_protocol.checks import (
     _require_only,
     _short,
     _validate_proto_field,
+)
+from flightrisk.fleet_protocol.constants import (
+    _DETECTION_FIELDS,
+    _LATCH_FIELDS,
+    _MAX_SAFE_INT,
+    _MISSION_FIELDS,
+    _NODE_STATE_FIELDS,
+    _ROSTER_FIELDS,
+    GROUND_ROLES,
+    LATCH_PHASES,
+    MAX_DETECTIONS,
+    MAX_EPOCH,
+    MAX_NODE_STATE_BYTES,
+    MAX_ROSTER,
+    MISSION_STATES,
 )
 
 

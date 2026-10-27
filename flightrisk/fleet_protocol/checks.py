@@ -7,6 +7,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from flightrisk.fleet_protocol.constants import (
+    _BASE64_RE,
+    _DATA_URI_RE,
+    _ID_RE,
+    _KEY_SEPARATORS_RE,
+    _MAX_ABS_NUMBER,
+    _MAX_PROTO_FIELD,
+    _MAX_SAFE_INT,
     MAX_DEPTH,
     MAX_FIELDS,
     MAX_ID_LEN,
@@ -16,15 +23,8 @@ from flightrisk.fleet_protocol.constants import (
     MAX_NUMBERS_PER_LIST,
     MAX_TEXT_LEN,
     MIN_PROTOCOL_VERSION,
-    PRIVACY_FORBIDDEN_KEYS,
     PRIVACY_FORBIDDEN_KEY_PARTS,
-    _BASE64_RE,
-    _DATA_URI_RE,
-    _ID_RE,
-    _KEY_SEPARATORS_RE,
-    _MAX_ABS_NUMBER,
-    _MAX_PROTO_FIELD,
-    _MAX_SAFE_INT,
+    PRIVACY_FORBIDDEN_KEYS,
 )
 
 
@@ -48,7 +48,7 @@ def _short(value: Any) -> str:
         return f"<int of {value.bit_length()} bits>"
     try:
         text = repr(value)
-    except Exception:
+    except Exception:  # noqa: BLE001 - any repr failure becomes a placeholder
         return f"<unprintable {type(value).__name__}>"
     return text if len(text) <= 80 else text[:77] + "..."
 

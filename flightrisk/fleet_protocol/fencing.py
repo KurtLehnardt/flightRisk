@@ -6,7 +6,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from flightrisk.fleet_protocol.checks import (
+    ProtocolError,
+    _is_id,
+    _is_int,
+    _short,
+)
 from flightrisk.fleet_protocol.constants import (
+    _KNOWN_TYPES,
+    _MAX_PROTO_FIELD,
     EDGE_ROLE,
     FAILSAFE_TYPES,
     HELLO,
@@ -18,14 +26,6 @@ from flightrisk.fleet_protocol.constants import (
     PROTOCOL_VERSION,
     V2_FIELDS,
     V2_ONLY_COMMAND_TYPES,
-    _KNOWN_TYPES,
-    _MAX_PROTO_FIELD,
-)
-from flightrisk.fleet_protocol.checks import (
-    ProtocolError,
-    _is_id,
-    _is_int,
-    _short,
 )
 from flightrisk.fleet_protocol.validate import (
     _checked,
@@ -33,7 +33,6 @@ from flightrisk.fleet_protocol.validate import (
     _message_type,
     validate_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fencing, command ids and version negotiation
