@@ -132,6 +132,26 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   other message. The rule is that fencing applies to anything that moves a
   drone, never to landing. `fence_of` and `cmd_id_of` read the optional
   fields of a landing without ever raising.
+- **Fail-safe on the wire.** `decode` in the ground-to-edge direction never
+  refuses a landing that the pre-v2 edge executed. The pre-v2 edge ran
+  `json.loads` on each WebSocket frame (at most 1 MiB, the `websockets`
+  default) and landed when the result was an object whose `type` was a
+  landing type. When `decode`'s strict parser rejects an input (repeated
+  keys, `NaN`, numbers out of range, invalid UTF-8, more than 64 KiB, and so
+  on), it parses the input again with `failsafe_type_of`, which accepts
+  everything `json.loads` accepts and also repeated keys, invalid UTF-8,
+  huge integers, control characters in strings and a leading BOM. If the
+  result is an object whose top-level `type`, or any occurrence of a
+  repeated `type` key, is `land` or `emergency_land_all`, `decode` returns
+  just `{"type": "land"}` or `{"type": "emergency_land_all"}`
+  (`emergency_land_all` wins if both appear). Reading
+  `{"type": "heartbeat", "type": "land"}` as a landing is deliberate: it is
+  the safe reading of an ambiguous message. The fallback is bounded by
+  `FAILSAFE_MAX_BYTES` (1 MiB, or the caller's `max_bytes` if larger); it
+  does not accept input that is not one JSON object or that nests deeper
+  than the parser's recursion limit, neither of which the pre-v2 edge
+  accepted either. A test compares `decode` with the pre-v2 parser on
+  thousands of generated and mutated inputs.
 - **What the fields mean to the receiver.** Section 2.3 of the plan gives the
   edge's verdicts: adopt a higher epoch only on the ground, accept the
   authority's current epoch, and reject other motion with
@@ -215,8 +235,9 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
 - **Never anything but `ProtocolError`.** Every validator, `decode`,
   `shape_for_peer`, `parse_hello` and `negotiate_proto` raises
-  `ProtocolError` and nothing else, for any input. `fence_of` and
-  `cmd_id_of` never raise. The tests check this with seeded fuzzing.
+  `ProtocolError` and nothing else, for any input. `fence_of`, `cmd_id_of`
+  and `failsafe_type_of` never raise. The tests check this with seeded
+  fuzzing.
 - **Two v1 crashes fixed.** Before v2, `validate_message` raised `TypeError`
   for a lane `direction` that was a list, and `OverflowError` for a number too
   large for a float. Both are now `ProtocolError`.
@@ -241,14 +262,16 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   limit. The v2 identifiers must also match the identifier pattern.
 - **Wire format.** `decode` rejects invalid UTF-8, invalid JSON, repeated
   keys, `NaN` and `Infinity`, numbers that overflow a float, integers with
-  more digits than Python parses, and nesting too deep for the parser.
+  more digits than Python parses, and nesting too deep for the parser,
+  except that a ground-to-edge landing is accepted through the fail-safe
+  fallback described under "Fencing and the fail-safe exemption".
 - **Unknown fields.** Extra fields on a known type are allowed, so a later
   minor addition does not break older receivers, but they count toward the
   limits above and the privacy check below.
 - **Exempt types.** Landing messages are exempt from every check except
-  being an object with a `type`. Over the wire they are still subject to the
-  64 KiB limit and to being valid JSON; a real landing message is a few
-  dozen bytes.
+  being an object with a `type`. Over the wire, a landing that fails the
+  strict parse (including the 64 KiB limit) goes through the fail-safe
+  fallback, which only needs it to be one JSON object of at most 1 MiB.
 
 ## Privacy
 

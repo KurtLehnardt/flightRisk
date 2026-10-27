@@ -72,7 +72,20 @@ Protocol v2 additions (every v1 field is kept)::
 
 Fail-safe rule: ``land`` and ``emergency_land_all`` are never fenced and never
 refused for a malformed optional field, under any protocol version. Fencing
-applies to anything that can move a drone, never to landing.
+applies to anything that can move a drone, never to landing. Concretely:
+
+* ``validate_message``, ``validate_ground_to_edge`` and ``shape_for_peer``
+  accept any mapping whose ``type`` is ``land`` or ``emergency_land_all``,
+  whatever else it carries.
+* ``decode`` in the ground-to-edge direction accepts every input that the
+  pre-v2 edge (``json.loads`` in ``transport.py``) accepted as a landing, and
+  more. When its strict parser rejects an input, it parses the input again
+  leniently (see ``failsafe_type_of``): if that reads a JSON object whose
+  top-level ``type``, or any occurrence of a repeated ``type`` key, is a
+  landing type, ``decode`` returns ``{"type": <that type>}``. The lenient
+  parse is bounded by ``FAILSAFE_MAX_BYTES`` (1 MiB, the frame limit the
+  transport's WebSocket connections use), so it covers every message the
+  transport can deliver.
 
 An edge sends ``nack`` when it refuses a command, so the ground can hand lanes
 to another drone or report them as uncovered instead of counting them as
@@ -174,6 +187,7 @@ __all__ = [
     "MAX_ROSTER",
     "MAX_DETECTIONS",
     "MAX_MESSAGE_BYTES",
+    "FAILSAFE_MAX_BYTES",
     "LANE_DIRECTIONS",
     "NUDGE_DIRECTIONS",
     "TELEMETRY_FIELDS",
@@ -226,6 +240,7 @@ __all__ = [
     "validate_for_direction",
     "encode",
     "decode",
+    "failsafe_type_of",
     "sample_from_pong",
     "estimate_clock",
     "ground_to_edge_s",
@@ -431,6 +446,11 @@ MAX_NODES = 10_000
 MAX_ROSTER = 8
 MAX_DETECTIONS = 256
 MAX_MESSAGE_BYTES = 64 * 1024
+# Upper bound for the lenient fail-safe parse in ``decode`` (see
+# ``failsafe_type_of``). It equals the default ``max_size`` of the
+# ``websockets`` library, which ``transport.py`` uses on both ends, so every
+# message the transport can deliver is within it. Larger input is not parsed.
+FAILSAFE_MAX_BYTES = 1024 * 1024
 
 # Lanes are horizontal moves flown at the assigned altitude slot. Vertical
 # moves are not lane directions, because they would break the altitude
@@ -1105,19 +1125,93 @@ def encode(msg: Mapping[str, Any], *, direction: str, proto: int) -> str:
     return text
 
 
-def decode(
-    raw: str | bytes | bytearray,
-    *,
-    direction: str,
-    proto: int,
-    max_bytes: int = MAX_MESSAGE_BYTES,
-) -> dict[str, Any]:
-    """Parse and strictly validate one received control message.
+def _lenient_int(text: str) -> int | float:
+    try:
+        return int(text)
+    except ValueError:
+        # More digits than Python converts by default. The value is never
+        # used by the fail-safe parse, which only reads ``type``.
+        return math.inf
 
-    Rejects, with ``ProtocolError`` and nothing else: input over *max_bytes*,
-    invalid UTF-8 or JSON, repeated keys, ``NaN``/``Infinity``, nesting too
-    deep for the parser, and anything ``validate_for_direction`` rejects.
+
+def _top_level_types(source: str | bytes) -> list[Any] | None:
+    """Every value of the top-level ``type`` key, parsed as leniently as ``json`` allows.
+
+    Repeated keys are kept (each occurrence is returned), ``NaN``,
+    ``Infinity``, out-of-range numbers, huge integers and control characters
+    in strings are accepted. Returns ``None`` when *source* is not a JSON
+    object. Never raises.
     """
+    outermost: list[list[tuple[str, Any]]] = []
+
+    def keep_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        # Objects close innermost first, so the last call is the top-level
+        # object whenever the top-level value is an object.
+        outermost[:] = [pairs]
+        return dict(pairs)
+
+    try:
+        value = json.loads(source, object_pairs_hook=keep_pairs, parse_int=_lenient_int, strict=False)
+    except (ValueError, RecursionError, TypeError, OverflowError):
+        return None
+    if not isinstance(value, dict) or not outermost:
+        return None
+    return [item for key, item in outermost[0] if key == "type"]
+
+
+def failsafe_type_of(raw: Any, *, max_bytes: int = FAILSAFE_MAX_BYTES) -> str | None:
+    """The landing a received ground-to-edge message asks for, read leniently.
+
+    This is the fail-safe fallback ``decode`` uses after its strict parser
+    rejects an input. Returns ``"emergency_land_all"`` or ``"land"`` when
+    *raw* (``str``, ``bytes`` or ``bytearray`` of at most *max_bytes* bytes,
+    measured as UTF-8 for ``str``) is a JSON object whose top-level ``type``
+    key, or any occurrence of that key when it is repeated, is a landing type
+    (``emergency_land_all`` wins over ``land``). Otherwise returns ``None``.
+    Never raises.
+
+    The parse accepts everything ``json.loads`` accepts (which is what the
+    pre-v2 edge used, including bytes in UTF-16 or UTF-32 and a UTF-8 BOM),
+    and additionally: repeated keys, ``NaN``/``Infinity``, numbers out of
+    float range, integers with more digits than Python converts, control
+    characters inside strings, invalid UTF-8 (replaced with U+FFFD) and a
+    leading BOM in text. It does not accept input that is not a single JSON
+    object, nesting deeper than the parser's recursion limit, or input over
+    *max_bytes*. Treating ``{"type": "heartbeat", "type": "land"}`` as a
+    landing is deliberate: landing is the safe reading of an ambiguous
+    message.
+    """
+    if not (_is_int(max_bytes) and max_bytes > 0):
+        return None
+    sources: list[str | bytes] = []
+    if isinstance(raw, (bytes, bytearray)):
+        if len(raw) > max_bytes:
+            return None
+        data = bytes(raw)
+        # json.loads detects UTF-8/16/32 and a UTF-8 BOM itself; the second
+        # attempt replaces bytes that are not valid UTF-8.
+        sources = [data, data.decode("utf-8", "replace").removeprefix("﻿")]
+    elif isinstance(raw, str):
+        if len(raw) > max_bytes or len(raw.encode("utf-8", "surrogatepass")) > max_bytes:
+            return None
+        sources = [raw.removeprefix("﻿")]
+    else:
+        return None
+    for source in sources:
+        types = _top_level_types(source)
+        if types is None:
+            continue
+        found = {value for value in types if isinstance(value, str) and value in FAILSAFE_TYPES}
+        if EMERGENCY_LAND_ALL in found:
+            return EMERGENCY_LAND_ALL
+        if LAND in found:
+            return LAND
+        return None
+    return None
+
+
+def _parse_strict(raw: Any, max_bytes: int) -> Any:
+    """Parse *raw* as strict JSON, or raise ``ProtocolError``."""
     if isinstance(raw, (bytes, bytearray)):
         if len(raw) > max_bytes:
             raise ProtocolError(f"control message exceeds {max_bytes} bytes")
@@ -1132,7 +1226,7 @@ def decode(
     else:
         raise ProtocolError(f"control message must be text or bytes, got {type(raw).__name__}")
     try:
-        msg = json.loads(
+        return json.loads(
             text,
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_constant,
@@ -1142,6 +1236,37 @@ def decode(
         raise
     except (ValueError, RecursionError) as exc:
         raise ProtocolError(f"control message is not valid JSON: {_short(str(exc))}") from exc
+
+
+def decode(
+    raw: str | bytes | bytearray,
+    *,
+    direction: str,
+    proto: int,
+    max_bytes: int = MAX_MESSAGE_BYTES,
+) -> dict[str, Any]:
+    """Parse and strictly validate one received control message.
+
+    Rejects, with ``ProtocolError`` and nothing else: input over *max_bytes*,
+    invalid UTF-8 or JSON, repeated keys, ``NaN``/``Infinity``, nesting too
+    deep for the parser, and anything ``validate_for_direction`` rejects.
+
+    Fail-safe exception (ground-to-edge direction only): when the strict
+    parse rejects *raw* but ``failsafe_type_of`` reads it as a landing
+    (bounded by ``max(max_bytes, FAILSAFE_MAX_BYTES)``), the result is
+    ``{"type": "land"}`` or ``{"type": "emergency_land_all"}`` and nothing
+    else, so an edge never refuses a landing that the pre-v2 edge executed.
+    """
+    if not (_is_int(max_bytes) and max_bytes > 0):
+        raise ProtocolError(f"max_bytes must be a positive integer, got {_short(max_bytes)}")
+    try:
+        msg = _parse_strict(raw, max_bytes)
+    except ProtocolError:
+        if direction == DIRECTION_GROUND_TO_EDGE:
+            landing = failsafe_type_of(raw, max_bytes=max(max_bytes, FAILSAFE_MAX_BYTES))
+            if landing is not None:
+                return {"type": landing}
+        raise
     validate_for_direction(msg, direction, proto=proto)
     return msg
 
