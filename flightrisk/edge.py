@@ -8,6 +8,7 @@ import base64
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping
 
 import cv2
 import numpy as np
@@ -34,16 +35,43 @@ class DetectionMessage:
     # bboxes for rendering (esp. in detections-only mode over a canvas).
     frame_width: int = 0
     frame_height: int = 0
+    # Fleet fields (design section 3). They identify which drone saw the
+    # detections and where it was, so the ground can place and deduplicate
+    # detections from several drones on one map. All stay None outside fleet
+    # mode, and None fields are left out of the wire message.
+    drone_id: str | None = None
+    rel_x_cm: float | None = None
+    rel_y_cm: float | None = None
+    heading_deg: float | None = None
+    lat: float | None = None
+    lon: float | None = None
+
+
+# DetectionMessage fleet fields carried on the wire when set.
+FLEET_POSE_FIELDS = ("rel_x_cm", "rel_y_cm", "heading_deg", "lat", "lon")
 
 
 class EdgeRunner:
     """Produces detection messages from video frames."""
 
-    def __init__(self, detector=None, reid=None, face=None, stream_video: bool = False):
+    def __init__(
+        self,
+        detector=None,
+        reid=None,
+        face=None,
+        stream_video: bool = False,
+        drone_id: str | None = None,
+        pose_provider: Callable[[], Mapping[str, Any] | None] | None = None,
+    ):
         self._detector = detector
         self._reid = reid
         self._face = face
         self._frame_id = 0
+        # In fleet mode every DetectionMessage is stamped with this drone id
+        # and with the pose returned by pose_provider (a mapping with any of
+        # rel_x_cm, rel_y_cm, heading_deg, lat and lon) at capture time.
+        self.drone_id = drone_id
+        self._pose_provider = pose_provider
         # When False (the default), only detection metadata + per-detection
         # crops/embeddings are shipped -- no full-frame thumbnail -- to keep
         # bandwidth and battery use down. Flip on for live video streaming.
@@ -64,7 +92,9 @@ class EdgeRunner:
             frame_id=self._frame_id,
             frame_width=frame.shape[1],
             frame_height=frame.shape[0],
+            drone_id=self.drone_id,
         )
+        self._stamp_pose(msg)
 
         # Generate thumbnail only when streaming video is enabled. When off
         # (the default), thumbnail_jpeg stays None -- crops and embeddings
@@ -122,9 +152,25 @@ class EdgeRunner:
 
         return msg
 
+    def _stamp_pose(self, msg: DetectionMessage) -> None:
+        """Copy the current pose onto *msg*; a failing provider never drops a frame."""
+        if self._pose_provider is None:
+            return
+        try:
+            pose = self._pose_provider()
+        except Exception:
+            logger.warning("pose_provider_failed", exc_info=True)
+            return
+        if not pose:
+            return
+        for key in FLEET_POSE_FIELDS:
+            value = pose.get(key)
+            if value is not None:
+                setattr(msg, key, value)
+
     def to_dict(self, msg: DetectionMessage) -> dict:
         """Serialize a DetectionMessage to a dict for transport."""
-        return {
+        data = {
             "type": "detections",
             "timestamp": msg.timestamp,
             "frame_id": msg.frame_id,
@@ -142,6 +188,13 @@ class EdgeRunner:
                 for d in msg.detections
             ],
         }
+        if msg.drone_id is not None:
+            data["drone_id"] = msg.drone_id
+        for key in FLEET_POSE_FIELDS:
+            value = getattr(msg, key)
+            if value is not None:
+                data[key] = value
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> DetectionMessage:
@@ -152,6 +205,12 @@ class EdgeRunner:
             thumbnail_jpeg=base64.b64decode(data["thumbnail"]) if data.get("thumbnail") else None,
             frame_width=data.get("frame_width", 0),
             frame_height=data.get("frame_height", 0),
+            drone_id=data.get("drone_id"),
+            rel_x_cm=data.get("rel_x_cm"),
+            rel_y_cm=data.get("rel_y_cm"),
+            heading_deg=data.get("heading_deg"),
+            lat=data.get("lat"),
+            lon=data.get("lon"),
         )
         for d in data.get("detections", []):
             det = Detection(

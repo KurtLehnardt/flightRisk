@@ -171,3 +171,51 @@ def test_start_skews_relative_to_earliest_drone():
     skews = fp.start_skews_s({"drone-1": 10.00, "drone-2": 10.04})
     assert skews["drone-1"] == pytest.approx(0.0)
     assert skews["drone-2"] == pytest.approx(0.04)
+
+
+# ===========================================================================
+# Detections carry the drone id and pose (edge.py / ground.py)
+# ===========================================================================
+
+
+def test_detections_carry_drone_id_and_pose_round_trip():
+    import numpy as np
+
+    from flightrisk.edge import EdgeRunner
+    from flightrisk.ground import GroundStation
+
+    class FakeDetector:
+        def detect(self, frame):
+            return [{"bbox": [1, 1, 5, 5], "confidence": 0.9}]
+
+    pose = {"rel_x_cm": 120.0, "rel_y_cm": -40.0, "heading_deg": 90.0}
+    runner = EdgeRunner(detector=FakeDetector(), drone_id="drone-2", pose_provider=lambda: pose)
+    msg = runner.process_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+    data = runner.to_dict(msg)
+    assert data["drone_id"] == "drone-2"
+    assert (data["rel_x_cm"], data["rel_y_cm"], data["heading_deg"]) == (120.0, -40.0, 90.0)
+    # No GPS on a Tello: lat and lon stay off the wire.
+    assert "lat" not in data and "lon" not in data
+
+    restored = EdgeRunner.from_dict(json.loads(json.dumps(data)))
+    results = GroundStation().process_message(restored)
+    assert results[0]["drone_id"] == "drone-2"
+    assert results[0]["rel_x_cm"] == 120.0
+    assert results[0]["rel_y_cm"] == -40.0
+    assert results[0]["heading_deg"] == 90.0
+    assert results[0]["lat"] is None
+
+
+def test_detections_without_fleet_fields_keep_legacy_wire_format():
+    import numpy as np
+
+    from flightrisk.edge import EdgeRunner
+
+    def broken_pose():
+        raise RuntimeError("no pose yet")
+
+    runner = EdgeRunner(pose_provider=broken_pose)
+    data = runner.to_dict(runner.process_frame(np.zeros((4, 4, 3), dtype=np.uint8)))
+    for key in ("drone_id", "rel_x_cm", "rel_y_cm", "heading_deg", "lat", "lon"):
+        assert key not in data
+    assert EdgeRunner.from_dict(data).drone_id is None
