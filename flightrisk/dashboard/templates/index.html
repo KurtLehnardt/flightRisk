@@ -2017,7 +2017,7 @@
             <span class="spacer"></span>
             <button id="fleet-plan" onclick="planFleet()">Plan search</button>
             <button id="fleet-start" onclick="startFleet()" disabled>Start search</button>
-            <button id="land-all" onclick="landAll()" title="Shift+L">LAND ALL</button>
+            <button id="land-all" onclick="landAll()" title="Shift+L (Ctrl/Cmd+Shift+L inside text fields)">LAND ALL</button>
             <button onclick="document.getElementById('fleet-section').classList.toggle('collapsed')">_</button>
         </div>
         <div id="fleet-body">
@@ -3494,17 +3494,20 @@
 
         // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight
         // control is off. Outside editable fields Shift+L alone is enough. Inside an editable field
-        // (input, textarea, select or contenteditable) it needs Ctrl or Cmd as well, so typing a
+        // (a text input, textarea or contenteditable) it needs Ctrl or Cmd as well, so typing a
         // capital L (for example "Levi's" in the target description) never lands the fleet and the
-        // letter is not swallowed. Auto-repeat is ignored, so holding the keys sends one land_all.
-        // It matches the physical L key (e.code), so Caps Lock cannot stop it, and also the key that
-        // types L, for keyboard layouts that put L on another key. It listens in the capture phase,
-        // so no other key handler can stop the event before it arrives.
+        // letter is not swallowed. A focused select takes no typed text, so Shift+L alone still
+        // works there. Alt is never part of the hotkey: AltGr arrives as Ctrl+Alt on Windows, so
+        // without that check typing with AltGr in a text field could pass the Ctrl test. Auto-repeat
+        // is ignored, so holding the keys sends one land_all. It matches the physical L key
+        // (e.code), so Caps Lock cannot stop it, and also the key that types L, for keyboard layouts
+        // that put L on another key. It listens in the capture phase, so no other key handler can
+        // stop the event before it arrives.
         function isEditableTarget(t) {
             if (!t || !t.tagName) return false;
             if (t.isContentEditable) return true;
             var tag = t.tagName.toUpperCase();
-            if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+            if (tag === 'TEXTAREA') return true;
             if (tag !== 'INPUT') return false;
             var nonText = ['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'color', 'file', 'image'];
             return nonText.indexOf((t.type || 'text').toLowerCase()) === -1;
@@ -3512,6 +3515,7 @@
         document.addEventListener('keydown', function(e) {
             if (e.repeat) return;
             if (!((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L'))) return;
+            if (e.altKey) return;
             if (isEditableTarget(e.target) && !(e.ctrlKey || e.metaKey)) return;
             e.preventDefault();
             landAll();
