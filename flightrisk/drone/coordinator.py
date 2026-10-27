@@ -649,8 +649,8 @@ class FleetCoordinator:
         taken from telemetry no older than ``TELEMETRY_FRESH_S`` when there is
         some, and otherwise from the ``assign_lanes`` ack.
 
-        If any ``start_at`` cannot be sent, ``land_all()`` is issued to abort
-        and the result is not ok.
+        If a ``start_at`` cannot be sent, no further ``start_at`` is sent,
+        ``land_all()`` is issued to abort and the result is not ok.
         """
         if lead_s <= 0:
             raise ValueError(f"lead_s must be positive, got {lead_s!r}")
@@ -670,6 +670,7 @@ class FleetCoordinator:
             except Exception as exc:
                 logger.error("start_at to %s failed: %s", drone_id, exc)
                 failures[drone_id] = f"start_at send failed ({exc}); land_all sent to abort"
+                break
 
         if failures:
             self.land_all()
@@ -722,8 +723,11 @@ class FleetCoordinator:
         ignored, so a misrouted ack can never satisfy another drone's start
         gate. Unknown types are ignored.
         """
-        if drone_id not in self._drones or not isinstance(msg, dict):
+        if drone_id not in self._drones:
             logger.warning("Ignoring message for unknown drone %r", drone_id)
+            return
+        if not isinstance(msg, dict):
+            logger.warning("Ignoring non-object message from %s: %r", drone_id, msg)
             return
         claimed = msg.get("drone_id")
         if claimed is not None and claimed != drone_id:

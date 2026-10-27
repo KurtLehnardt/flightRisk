@@ -391,7 +391,7 @@ def test_start_aborts_with_land_all_when_a_start_at_send_fails():
     coord, edges, _, _ = make_fleet(n=2)
     coord.sync()
     coord.plan()
-    broken = edges["drone-2"]
+    broken = edges["drone-1"]
     original_send = broken.send
 
     def send(msg):
@@ -401,7 +401,9 @@ def test_start_aborts_with_land_all_when_a_start_at_send_fails():
 
     broken.send = send
     result = coord.start()
-    assert not result.ok and "drone-2" in result.refusals
+    assert not result.ok and set(result.refusals) == {"drone-1"}
+    # No other drone is given a takeoff time once one send has failed.
+    assert edges["drone-2"].of_type("start_at") == []
     for edge in edges.values():
         assert len(edge.of_type("emergency_land_all")) == 1
 
