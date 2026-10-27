@@ -151,13 +151,22 @@ class LaneExecutor:
         self._abort = threading.Event()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
+        # The thread running the current flight sequence, or None. A thread
+        # clears it (under ``_lock``) once it will send no more commands, so
+        # a re-task arriving as the last lane finishes still gets flown.
+        self._active_thread: threading.Thread | None = None
         self._monitor: threading.Thread | None = None
 
-        # Lane plan, flattened into Tello-sized moves: (lane_index, direction, cm).
-        self._moves: list[tuple[int, str, int]] = []
+        # Lane plan as received, and flattened into Tello-sized moves of
+        # (lane_index, chunk_index, direction, cm). ``_step`` indexes the next
+        # move to fly. ``_linked_gens`` holds earlier plan generations whose
+        # progress carried into the current plan.
+        self._lanes: list[tuple[str, int]] = []
+        self._moves: list[tuple[int, int, str, int]] = []
         self._step = 0
         self._lanes_total = 0
         self._plan_gen = 0
+        self._linked_gens: set[int] = set()
         self._zone: Any = None
 
         self._offset_s: float | None = None
@@ -215,7 +224,8 @@ class LaneExecutor:
         return not worker.is_alive()
 
     def _worker_alive(self) -> bool:
-        return self._worker is not None and self._worker.is_alive()
+        """True while a flight sequence may still send commands. Caller holds ``_lock``."""
+        return self._active_thread is not None
 
     def _is_flying(self) -> bool:
         return bool(getattr(self.drone.state, "is_flying", False))
@@ -327,6 +337,13 @@ class LaneExecutor:
         dead-reckoned path leaves the geofence. An ``alt_cm`` in the plan
         replaces the local altitude slot, because the coordinator assigns
         slots across the whole fleet.
+
+        Re-tasking: when the drone is already flying its lanes and the new
+        plan starts with the lanes flown so far (including the current one)
+        unchanged, progress carries over. The drone keeps its lane index and
+        continues into the appended lanes instead of starting again from
+        lane 0. Any other plan starts from its first lane at the current
+        position.
         """
         target = msg.get("drone_id")
         if target is not None and str(target) != self.drone_id:
@@ -344,25 +361,34 @@ class LaneExecutor:
             return False
 
         moves = [
-            (lane_index, direction, distance)
+            (lane_index, chunk_index, direction, distance)
             for lane_index, (direction, lane_cm) in enumerate(lanes)
-            for distance in split_lane_moves(lane_cm)
+            for chunk_index, distance in enumerate(split_lane_moves(lane_cm))
         ]
-        pose = self.envelope.pose_snapshot()
-        for _, direction, distance in moves:
-            pose.apply_move(direction, distance)
-            if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
-                self._log.warning(
-                    "edge_assign_lanes_refused",
-                    drone_id=self.drone_id,
-                    reason="geofence",
-                    geofence_cm=self.envelope.geofence_cm,
-                    x_cm=round(pose.x_cm, 1),
-                    y_cm=round(pose.y_cm, 1),
-                )
-                return False
 
         with self._lock:
+            carried_step = None
+            if self._flying_lanes and self._is_flying():
+                carried_step = self._carried_step(lanes, moves)
+            start_step = carried_step if carried_step is not None else 0
+
+            # Check the path still to be flown against the geofence before
+            # accepting anything. A move in progress is not in the pose yet,
+            # and it is still part of moves[start_step:].
+            pose = self.envelope.pose_snapshot()
+            for _, _, direction, distance in moves[start_step:]:
+                pose.apply_move(direction, distance)
+                if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
+                    self._log.warning(
+                        "edge_assign_lanes_refused",
+                        drone_id=self.drone_id,
+                        reason="geofence",
+                        geofence_cm=self.envelope.geofence_cm,
+                        x_cm=round(pose.x_cm, 1),
+                        y_cm=round(pose.y_cm, 1),
+                    )
+                    return False
+
             if alt_cm is not None and alt_cm != self.envelope.alt_slot_cm:
                 self._log.warning(
                     "edge_alt_slot_assigned",
@@ -371,11 +397,19 @@ class LaneExecutor:
                     assigned_cm=alt_cm,
                 )
                 self.envelope.set_alt_slot(alt_cm)
+            if carried_step is not None:
+                # A move of the old plan that is still in flight counts
+                # towards the new plan when it completes.
+                self._linked_gens.add(self._plan_gen)
+            else:
+                self._linked_gens.clear()
+            self._lanes = lanes
             self._moves = moves
-            self._step = 0
+            self._step = start_step
             self._lanes_total = len(lanes)
             self._plan_gen += 1
             self._zone = msg.get("zone")
+            lane_index = self.lane_index
             retask = (
                 self._flying_lanes
                 and self._is_flying()
@@ -388,6 +422,8 @@ class LaneExecutor:
             "edge_lanes_assigned",
             drone_id=self.drone_id,
             lanes_total=len(lanes),
+            lane_index=lane_index,
+            progress_carried=carried_step is not None,
             alt_slot_cm=self.envelope.alt_slot_cm,
             retask=retask,
         )
@@ -399,6 +435,27 @@ class LaneExecutor:
             "lanes_total": len(lanes),
         })
         return True
+
+    def _carried_step(
+        self, lanes: list[tuple[str, int]], moves: list[tuple[int, int, str, int]]
+    ) -> int | None:
+        """Step in a new plan that continues the current one, or None. Caller holds ``_lock``.
+
+        Progress carries over only if every lane flown so far, including the
+        lane in progress, is unchanged in the new plan.
+        """
+        if self._step < len(self._moves):
+            current = self._moves[self._step][:2]
+            lanes_fixed = current[0] + 1
+        else:
+            current = (self._lanes_total, 0)
+            lanes_fixed = self._lanes_total
+        if lanes[:lanes_fixed] != self._lanes[:lanes_fixed]:
+            return None
+        for index, move in enumerate(moves):
+            if move[:2] >= current:
+                return index
+        return len(moves)
 
     def handle_start_at(self, msg: dict[str, Any]) -> bool:
         """Schedule takeoff plus lanes at ``t_ground_s + offset_s`` on the edge clock."""
@@ -447,6 +504,22 @@ class LaneExecutor:
                 return False
             self._launch("takeoff")
         return True
+
+    def fail_safe(self, reason: str) -> None:
+        """React to an unexpected error: land unless the drone is idle on the ground.
+
+        An unreadable flight state counts as flying. A pending scheduled
+        start is cancelled either way.
+        """
+        try:
+            flying = self._is_flying()
+        except Exception:
+            flying = True
+        if flying or self.is_busy:
+            self.land_now(reason)
+        else:
+            self._abort.set()
+            self._log.warning("edge_fail_safe_idle", drone_id=self.drone_id, reason=reason)
 
     def land_now(self, reason: str) -> None:
         """Land immediately from the calling thread.
@@ -497,14 +570,7 @@ class LaneExecutor:
         except Exception as exc:
             self._log.error("edge_monitor_error", drone_id=self.drone_id, error=repr(exc))
             try:
-                # Land unless the drone is known to be on the ground; an
-                # unreadable state counts as flying.
-                try:
-                    flying = self._is_flying()
-                except Exception:
-                    flying = True
-                if flying:
-                    self.land_now("monitor_error")
+                self.fail_safe("monitor_error")
             except Exception:
                 pass
 
@@ -556,7 +622,13 @@ class LaneExecutor:
             daemon=True,
             name=f"{self.drone_id}-flight",
         )
+        self._active_thread = self._worker
         self._worker.start()
+
+    def _release_active(self) -> None:
+        """Mark the calling sequence as finished. Caller holds ``_lock``."""
+        if self._active_thread is threading.current_thread():
+            self._active_thread = None
 
     def _run_sequence(self, kind: str, t_edge: float | None, offset_s: float) -> None:
         try:
@@ -583,6 +655,9 @@ class LaneExecutor:
         except Exception as exc:
             self._log.error("edge_executor_error", drone_id=self.drone_id, kind=kind, error=repr(exc))
             self.land_now("executor_error")
+        finally:
+            with self._lock:
+                self._release_active()
 
     def _wait_until(self, t_edge: float) -> bool:
         """Wait for the edge clock to reach ``t_edge``. False if aborted first."""
@@ -663,6 +738,10 @@ class LaneExecutor:
             with self._lock:
                 gen = self._plan_gen
                 step = self._moves[self._step] if self._step < len(self._moves) else None
+                if step is None and climbed_gen == gen:
+                    # Done. Release under the lock so a plan that arrives
+                    # from now on starts a new sequence.
+                    self._release_active()
             if climbed_gen != gen:
                 # New plan (or first plan): make sure the drone is at its slot,
                 # which a re-task may have changed.
@@ -673,7 +752,7 @@ class LaneExecutor:
             if step is None:
                 self._log.info("edge_lanes_complete", drone_id=self.drone_id, lanes_total=self.lanes_total)
                 return
-            lane_index, direction, distance = step
+            lane_index, _, direction, distance = step
             if not self.envelope.check_move(direction, distance):
                 pose = self.envelope.pose_snapshot()
                 self._log.error(
@@ -690,5 +769,11 @@ class LaneExecutor:
             if not self._command_move(direction, distance, record=True):
                 return
             with self._lock:
-                if self._plan_gen == gen:
+                same_plan = self._plan_gen == gen or gen in self._linked_gens
+                if (
+                    same_plan
+                    and not self._abort.is_set()
+                    and self._step < len(self._moves)
+                    and self._moves[self._step][:2] == step[:2]
+                ):
                     self._step += 1
