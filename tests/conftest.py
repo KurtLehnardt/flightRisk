@@ -53,3 +53,18 @@ def clean_app_state():
         setattr(app_state, name, value)
     app_module._alerted_tracks.clear()
     app_module._alerted_tracks.update(original_alerted)
+
+
+@pytest.fixture(autouse=True)
+def _reset_match_alert_latch():
+    """Give every test a fresh single-alert latch and recovery runner.
+
+    The latch is a process-wide singleton: a test that raises an alert leaves
+    it ``AWAITING_RESPONSE``, which would (correctly) suppress alerts in the
+    next test. Resetting before and after keeps tests independent.
+    """
+    from flightrisk.dashboard.recovery import reset_alert_flow
+
+    reset_alert_flow()
+    yield
+    reset_alert_flow()

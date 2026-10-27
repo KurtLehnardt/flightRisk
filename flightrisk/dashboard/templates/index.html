@@ -1269,6 +1269,28 @@
             color: #fff;
             border-color: var(--red);
         }
+        .overlay-confirm {
+            border: 2px solid var(--green);
+            background: var(--green);
+            color: #000;
+        }
+        .overlay-confirm:hover {
+            background: #16A34A;
+            border-color: #16A34A;
+            color: #000;
+        }
+        .overlay-dismiss:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .overlay-status {
+            margin-top: 14px;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--cyan);
+            min-height: 1.2em;
+        }
         .overlay-timer {
             margin-top: 12px;
             height: 3px;
@@ -1991,12 +2013,11 @@
             <div id="overlay-score" class="overlay-score"></div>
             <div id="overlay-reasoning" class="overlay-reasoning"></div>
             <div class="overlay-actions">
-                <button class="overlay-dismiss" onclick="dismissOverlay()">DISMISS</button>
-                <button class="overlay-dismiss overlay-not-my-child" onclick="notMyChild()">NOT MY CHILD</button>
+                <button id="overlay-confirm-btn" class="overlay-dismiss overlay-confirm alert-response-btn" onclick="confirmMatch()">YES, THAT'S MY CHILD</button>
+                <button id="overlay-reject-btn" class="overlay-dismiss overlay-not-my-child alert-response-btn" onclick="notMyChild()">NOT MY CHILD</button>
+                <button class="overlay-dismiss" onclick="dismissOverlay()" title="Hide this pop-up; the alert stays pending and will be shown again">DECIDE LATER</button>
             </div>
-            <div class="overlay-timer">
-                <div id="overlay-timer-bar" class="overlay-timer-bar" style="width:100%"></div>
-            </div>
+            <div id="overlay-status" class="overlay-status"></div>
         </div>
     </div>
 
@@ -2050,6 +2071,7 @@
         let advancedOpen = false;
         let searchTotal = 0;
         let currentOverlayMatchId = null;
+        let currentOverlayAlertId = null;
 
         // ========== DOM REFS ==========
         const videoFeed = document.getElementById('video-feed');
@@ -2433,6 +2455,13 @@
         }
 
         // ========== MATCH ALERTS ==========
+        // Escape any server/LLM-provided text before it goes into innerHTML.
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = value == null ? '' : String(value);
+            return div.innerHTML;
+        }
+
         socket.on('match_alert', (data) => {
             matchCount++;
             document.getElementById('match-count').textContent = '(' + matchCount + ')';
@@ -2447,7 +2476,7 @@
             // Full-screen overlay for confirmed / possible
             if (alertLevel === 'confirmed_match') {
                 playAlertSound();
-                showMatchOverlay(data, 'confirmed', 8000);
+                showMatchOverlay(data, 'confirmed');
                 if (Notification.permission === 'granted') {
                     new Notification('FlightRisk — POSSIBLE MATCH', {
                         body: 'Score: ' + data.score + ' | ' + data.reasoning,
@@ -2456,7 +2485,7 @@
                 }
             } else if (alertLevel === 'possible_match') {
                 playSoftBeep();
-                showMatchOverlay(data, 'possible', 4000);
+                showMatchOverlay(data, 'possible');
             }
             // weak_signal: no overlay, no sound
 
@@ -2464,7 +2493,7 @@
             const log = document.getElementById('match-log');
             if (matchCount === 1) log.innerHTML = '';
 
-            const matchId = data.match_id;
+            const matchId = Number.isInteger(data.match_id) ? data.match_id : null;
             const entry = document.createElement('div');
             let entryClass = 'match-entry';
             if (alertLevel === 'confirmed_match') entryClass += ' alert-confirmed';
@@ -2480,7 +2509,7 @@
 
             let snapshotHtml = '';
             if (data.snapshot) {
-                snapshotHtml = '<img class="match-snapshot" src="data:image/jpeg;base64,' + data.snapshot + '">';
+                snapshotHtml = '<img class="match-snapshot" src="data:image/jpeg;base64,' + escapeHtml(data.snapshot) + '">';
             }
 
             let feedbackHtml = '';
@@ -2494,24 +2523,24 @@
             entry.innerHTML =
                 '<div class="match-header">' +
                     '<span class="alert-dot ' + dotClass + '"></span>' +
-                    '<span class="match-time">' + data.time + '</span>' +
+                    '<span class="match-time">' + escapeHtml(data.time) + '</span>' +
                     '<span class="match-level ' + levelClass + '">' + levelLabel + '</span>' +
                     feedbackHtml +
                 '</div>' +
                 '<div class="match-scores">' +
-                    'Score: <span class="score-val">' + data.score + '</span>' +
-                    ' | AI: ' + (data.gemma_confidence || '--') +
-                    (data.face_score ? ' | Face: ' + data.face_score : '') +
-                    (data.reid_score ? ' | ReID: ' + data.reid_score : '') +
+                    'Score: <span class="score-val">' + escapeHtml(data.score) + '</span>' +
+                    ' | AI: ' + escapeHtml(data.gemma_confidence || '--') +
+                    (data.face_score ? ' | Face: ' + escapeHtml(data.face_score) : '') +
+                    (data.reid_score ? ' | ReID: ' + escapeHtml(data.reid_score) : '') +
                 '</div>' +
-                '<div class="match-reasoning">' + (data.reasoning || '') + '</div>' +
+                '<div class="match-reasoning">' + escapeHtml(data.reasoning || '') + '</div>' +
                 snapshotHtml;
 
             log.insertBefore(entry, log.firstChild);
         });
 
         // ========== FULL-SCREEN OVERLAY ==========
-        function showMatchOverlay(data, type, duration) {
+        function showMatchOverlay(data, type) {
             const overlay = document.getElementById('match-overlay');
             const card = document.getElementById('match-overlay-card');
             const title = document.getElementById('overlay-title');
@@ -2519,7 +2548,6 @@
             const snapshot = document.getElementById('overlay-snapshot');
             const score = document.getElementById('overlay-score');
             const reasoning = document.getElementById('overlay-reasoning');
-            const timerBar = document.getElementById('overlay-timer-bar');
 
             if (type === 'confirmed') {
                 title.textContent = 'POSSIBLE MATCH — VERIFY IN PERSON';
@@ -2544,34 +2572,102 @@
             reasoning.textContent = data.reasoning || '';
 
             currentOverlayMatchId = data.match_id || null;
-
-            // Timer bar animation
-            timerBar.style.transition = 'none';
-            timerBar.style.width = '100%';
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    timerBar.style.transition = 'width ' + duration + 'ms linear';
-                    timerBar.style.width = '0%';
-                });
-            });
+            // The pop-up stays up until the operator answers (or hides it).
+            // Re-showing the same alert keeps any in-progress status text.
+            if (currentOverlayAlertId !== (data.alert_id || null)) {
+                currentOverlayAlertId = data.alert_id || null;
+                setAlertButtonsDisabled(!currentOverlayAlertId);
+                document.getElementById('overlay-status').textContent = '';
+            }
 
             overlay.classList.add('active');
-
             clearTimeout(overlayTimeout);
-            overlayTimeout = setTimeout(() => dismissOverlay(), duration);
         }
 
+        // Hide the pop-up without answering; the alert stays pending on the
+        // server and is re-announced after the re-notify interval.
         function dismissOverlay() {
             document.getElementById('match-overlay').classList.remove('active');
             clearTimeout(overlayTimeout);
         }
 
-        function notMyChild() {
-            // Submit rejected feedback for the current overlay match
-            if (currentOverlayMatchId) {
-                const btn = document.querySelector('.overlay-not-my-child');
-                submitFeedback(currentOverlayMatchId, 'rejected', btn);
+        function setAlertButtonsDisabled(disabled) {
+            document.querySelectorAll('.alert-response-btn').forEach(b => { b.disabled = disabled; });
+        }
+
+        function setOverlayStatus(text) {
+            document.getElementById('overlay-status').textContent = text || '';
+        }
+
+        function respondToAlert(action) {
+            if (!currentOverlayAlertId) {
+                showToast('No pending alert to answer');
+                return false;
             }
+            setAlertButtonsDisabled(true);  // prevent double submit
+            socket.emit('match_alert_response', { alert_id: currentOverlayAlertId, action: action });
+            return true;
+        }
+
+        function confirmMatch() {
+            if (!respondToAlert('confirm')) return;
+            setOverlayStatus('Confirming... stopping search');
+        }
+
+        // Re-announcement of the same, still-unanswered alert (not a new match).
+        socket.on('match_alert_reminder', (data) => {
+            if (!data || !data.alert_id) return;
+            playAlertSound();
+            showMatchOverlay(data, data.alert_level === 'confirmed_match' ? 'confirmed' : 'possible');
+            showToast('Match still awaiting your answer');
+        });
+
+        socket.on('match_alert_response_ack', (body) => {
+            if (body && body.ok) return;
+            // Stale or duplicate answer (e.g. already handled in another tab).
+            const phase = body && body.state ? body.state.phase : null;
+            showToast('Alert response not applied: ' + ((body && body.error) || 'unknown error'));
+            if (phase === 'awaiting_response' && body.state.alert_id === currentOverlayAlertId) {
+                setAlertButtonsDisabled(false);
+                setOverlayStatus('');
+            }
+        });
+
+        socket.on('match_alert_resolved', (body) => {
+            if (!body) return;
+            if (body.alert_id === currentOverlayAlertId) setAlertButtonsDisabled(true);
+            if (body.action === 'confirm') {
+                document.getElementById('overlay-title').textContent = 'MATCH CONFIRMED';
+                setOverlayStatus('Search stopped');
+                document.getElementById('match-overlay').classList.add('active');
+                document.getElementById('search-bar').classList.remove('active');
+                document.getElementById('search-status').textContent = 'Match confirmed. Search stopped.';
+            } else {
+                if (body.alert_id === currentOverlayAlertId) {
+                    currentOverlayAlertId = null;
+                    dismissOverlay();
+                }
+                document.getElementById('search-status').textContent = '';
+                showToast('Not a match. Search resuming.');
+            }
+        });
+
+        // Post-confirmation flight sequence status (returning home / landing).
+        socket.on('recovery_status', (data) => {
+            if (!data) return;
+            setOverlayStatus(data.message || data.stage || '');
+            document.getElementById('match-overlay').classList.add('active');
+            showToast(data.message || data.stage || '');
+        });
+
+        socket.on('search_paused', () => {
+            document.getElementById('search-status').textContent = 'Paused: match awaiting your answer';
+        });
+
+        function notMyChild() {
+            // Feedback ('rejected') is recorded server-side for the alert.
+            if (!respondToAlert('dismiss')) return;
+            setOverlayStatus('Dismissing...');
             // Bump threshold slightly to reduce re-alerts for similar people
             const slider = document.getElementById('threshold-slider');
             const currentVal = parseInt(slider.value, 10);
