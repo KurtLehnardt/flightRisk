@@ -3,12 +3,16 @@
 Real-time web UI showing drone video feed, detection overlays,
 match alerts, drone telemetry, and search controls.
 
-Runs on http://localhost:5555
+Runs on http://127.0.0.1:5555. It binds the loopback address unless
+``--host`` (or ``FLIGHTRISK_DASHBOARD_HOST``) names another one, and it
+refuses a non-loopback bind unless ``FLIGHTRISK_API_KEY`` is set, because
+anyone who can reach the dashboard can start and land the drones.
 """
 
 import base64
 import hmac
 import logging
+import math
 import os
 import secrets
 import threading
@@ -41,6 +45,9 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
+from flightrisk.drone.coordinator import FleetCoordinator
+from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
+from flightrisk import fleet_protocol as fp
 from flightrisk.canon import TargetCanon
 
 try:
@@ -91,10 +98,81 @@ app = Flask(
 app.config["SECRET_KEY"] = os.environ.get("FLIGHTRISK_SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
 
-# CORS: default "*" for dev, restrict via FLIGHTRISK_CORS_ORIGINS env var in production
-cors_origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
-_cors_allowed = cors_origins if cors_origins == "*" else cors_origins.split(",")
-socketio = SocketIO(app, cors_allowed_origins=_cors_allowed, async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
+# --- Socket.IO origins (CORS) ---
+#: Environment variable that replaces the Socket.IO allowed origins for
+#: development: a comma-separated list of origins, or ``*`` for any origin.
+CORS_ORIGINS_ENV = "FLIGHTRISK_CORS_ORIGINS"
+
+#: Bind addresses that listen on every interface of this machine.
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
+#: The host and port the dashboard serves, recorded by ``run_dashboard``.
+#: Until then the configured defaults are used.
+_dashboard_bind: tuple[str, int] | None = None
+
+
+def cors_origins_override() -> list[str] | None:
+    """The origins named in ``FLIGHTRISK_CORS_ORIGINS``, or ``None`` when it is unset or empty."""
+    raw = os.environ.get(CORS_ORIGINS_ENV, "")
+    origins = [part.strip() for part in raw.split(",") if part.strip()]
+    return origins or None
+
+
+def dashboard_origins(host: str, port: int) -> frozenset[str]:
+    """The browser origins of the dashboard page when it is served on ``host``:``port``.
+
+    They are the loopback spellings ``http://127.0.0.1:<port>``,
+    ``http://localhost:<port>`` and ``http://[::1]:<port>``, plus
+    ``http://<host>:<port>`` when ``host`` names one specific non-loopback
+    address.
+    """
+    origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"http://[::1]:{port}"}
+    if host not in _LOOPBACK_HOSTS and host not in _WILDCARD_HOSTS:
+        url_host = f"[{host}]" if ":" in host else host
+        origins.add(f"http://{url_host}:{port}")
+    return frozenset(origins)
+
+
+def socketio_origin_allowed(origin: str | None, environ: dict | None = None) -> bool:
+    """Whether a browser page from ``origin`` may open a Socket.IO connection.
+
+    By default only the dashboard's own origins are accepted (see
+    ``dashboard_origins``), so a page from another site that is open in this
+    machine's browser cannot connect and emit ``start_fleet`` or any other
+    control event. The list is fixed rather than taken from the request's
+    Host header, so a DNS-rebinding page cannot pass as the dashboard either.
+    A non-loopback bind is the one exception: there the page may be reached
+    under any name of this machine, so the origin of the Host the request was
+    sent to is also accepted. Such a bind always requires
+    ``FLIGHTRISK_API_KEY``, and every Socket.IO connection must present it
+    (``on_connect``).
+
+    ``FLIGHTRISK_CORS_ORIGINS`` replaces this check for development: its
+    listed origins are accepted, and ``*`` accepts any origin. Engine.IO
+    checks the origin only for requests that carry an ``Origin`` header,
+    which browsers send on every cross-origin request and WebSocket upgrade.
+    """
+    if not origin:
+        return False
+    override = cors_origins_override()
+    if override is not None:
+        return "*" in override or origin in override
+    host, port = _dashboard_bind or (resolve_dashboard_host(), get_config().dashboard.port)
+    if origin in dashboard_origins(host, port):
+        return True
+    if host in _LOOPBACK_HOSTS or not environ:
+        return False
+    request_host = environ.get("HTTP_HOST")
+    scheme = environ.get("wsgi.url_scheme", "http")
+    return bool(request_host) and origin == f"{scheme}://{request_host}"
+
+
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=lambda origin, environ=None: socketio_origin_allowed(origin, environ),
+    async_mode="threading",
+    max_http_buffer_size=10 * 1024 * 1024,
+)
 
 # --- API key authentication ---
 # Empty string is treated as "unset" so an accidental FLIGHTRISK_API_KEY="" never
@@ -142,6 +220,48 @@ def _require_api_key():
     if not hmac.compare_digest(auth.encode(), f"Bearer {_FLIGHTRISK_API_KEY}".encode()):
         return jsonify({"error": "unauthorized"}), 401
     return None
+
+# --- Bind address ---
+#: Environment variable naming the dashboard's bind address (``--host``).
+DASHBOARD_HOST_ENV = "FLIGHTRISK_DASHBOARD_HOST"
+
+#: The dashboard serves this machine only unless another host is named.
+DEFAULT_DASHBOARD_HOST = "127.0.0.1"
+
+#: Hosts that keep the dashboard on this machine: the same set the edge
+#: transport treats as loopback before it requires a token
+#: (``flightrisk/transport.py``).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def resolve_dashboard_host(host: str | None = None) -> str:
+    """The dashboard bind address: ``host``, else ``FLIGHTRISK_DASHBOARD_HOST``, else 127.0.0.1."""
+    for candidate in (host, os.environ.get(DASHBOARD_HOST_ENV)):
+        if candidate is not None and str(candidate).strip():
+            return str(candidate).strip()
+    return DEFAULT_DASHBOARD_HOST
+
+
+def check_dashboard_bind(host: str) -> None:
+    """Refuse a non-loopback bind unless the dashboard API key is configured.
+
+    This mirrors the edge transport, which refuses a non-loopback bind
+    without ``FLIGHTRISK_EDGE_TOKEN``. Anyone who can reach the dashboard
+    can press Start, which makes real drones take off, so exposing it to a
+    venue or hotspot network requires ``FLIGHTRISK_API_KEY``. With the key
+    set, every REST request (``_require_api_key``) and every Socket.IO
+    connection (``on_connect``) must present it. Raises ``ValueError`` with
+    an operator-facing message.
+    """
+    if host in _LOOPBACK_HOSTS or _FLIGHTRISK_API_KEY:
+        return
+    raise ValueError(
+        f"Refusing to bind the dashboard to non-loopback host {host!r} without "
+        f"authentication: anyone on that network could start or land the drones. "
+        f"Set FLIGHTRISK_API_KEY so every client must present the key, or bind a "
+        f"loopback host (the default, {DEFAULT_DASHBOARD_HOST})."
+    )
+
 
 # Flask auto-instrumentation (optional)
 try:
@@ -334,6 +454,581 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
 
 
 # ---------------------------------------------------------------------------
+# Multi-drone fleet (edge source with --fleet)
+# ---------------------------------------------------------------------------
+
+#: Seconds one fleet control send may wait on the ground transport.
+FLEET_SEND_TIMEOUT_S = 2.0
+
+#: Seconds one clock-sync round may wait for an edge's pong.
+FLEET_PING_TIMEOUT_S = 1.0
+
+#: Seconds the LAND ALL broadcast may wait on the ground transport.
+LAND_ALL_TIMEOUT_S = 2.0
+
+#: Seconds ``_land_all`` waits for all its paths together. Longer than the
+#: local fleet's own wait for its drones (``_CALL_DEADLINE_S`` in
+#: flightrisk/drone/fleet.py, 30 s), so the local path reports each drone that
+#: did not land itself. A path still running then is reported as not having
+#: reached any drone, so LAND ALL always answers.
+LAND_ALL_PATHS_DEADLINE_S = 35.0
+
+#: Interval of the fleet monitor, which refreshes ``fleet_status`` and
+#: checks for lost drones.
+FLEET_MONITOR_INTERVAL_S = 0.5
+
+#: A drone in a started mission that has sent nothing for this long is
+#: declared lost. It is longer than the edge's own link-loss watchdog
+#: (``FLIGHTRISK_LINK_LOSS_LAND_S``, 3 s), so a silent edge has already
+#: landed its drone by the time its lanes are handed to another drone.
+FLEET_LOSS_TIMEOUT_S = 5.0
+
+#: A drone in a started mission that has not reported flying this long after
+#: the scheduled start is declared lost (for example when its battery gate
+#: refused the takeoff).
+FLEET_TAKEOFF_GRACE_S = 15.0
+
+#: Seconds a re-task waits for the receiving drones to accept or refuse
+#: their new lanes before the ``retask`` event is sent. Later answers are
+#: reported in further ``retask`` or ``retask_failed`` events.
+FLEET_RETASK_WAIT_S = 2.0
+
+
+def fleet_geofence_cm() -> float:
+    """The edges' geofence half-width in cm, read like ``SafetyEnvelope.from_env``.
+
+    The ground station plans re-tasked lanes against the same
+    ``FLIGHTRISK_GEOFENCE_CM`` the edges enforce, so it only offers lanes a
+    drone can accept. Raises ``ValueError`` for a value that is not a
+    positive number.
+    """
+    raw = os.environ.get(GEOFENCE_CM_ENV, "").strip()
+    if not raw:
+        return float(DEFAULT_GEOFENCE_CM)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a positive number, got {raw!r}")
+    return value
+
+
+class TransportEdgeLink:
+    """``EdgeLink`` for one drone over the dashboard's ``GroundTransportSync``.
+
+    ``FleetCoordinator`` reaches each drone through ``send(dict)`` and
+    receives that drone's messages through ``on_message``. Control messages
+    go out with ``GroundTransportSync.send_to_drone``. A send that reaches no
+    connection raises ``ConnectionError``, so the coordinator records the
+    failure instead of assuming the drone got the message.
+
+    ``ping`` is handled differently. The edge transport answers pings itself
+    and the ground transport consumes the pongs, so a ping forwarded as-is
+    would never come back to the coordinator. Each coordinator ping is
+    therefore run as one real ping/pong round with
+    ``GroundTransportSync.sync_clock(drone_id, rounds=1)``, and the edge's
+    receive and send times from that round are returned to the coordinator
+    as a ``pong`` for the coordinator's own ``t1``. The coordinator stamps
+    ``t4`` itself when that pong arrives, so its offset and round-trip
+    estimates also include this adapter's short local hop in each direction.
+    ``sync_clock`` also sends the edge a provisional ``clock`` message after
+    each round; the coordinator sends the median offset last, and that is
+    the offset the edge keeps.
+    """
+
+    def __init__(
+        self,
+        transport,
+        drone_id: str,
+        send_timeout_s: float = FLEET_SEND_TIMEOUT_S,
+        ping_timeout_s: float = FLEET_PING_TIMEOUT_S,
+    ):
+        self.on_message = None
+        self.drone_id = drone_id
+        self._transport = transport
+        self._send_timeout_s = send_timeout_s
+        self._ping_timeout_s = ping_timeout_s
+
+    def send(self, msg: dict) -> None:
+        if msg.get("type") == fp.PING:
+            self._ping(msg)
+            return
+        if not self._transport.send_to_drone(self.drone_id, msg, timeout=self._send_timeout_s):
+            raise ConnectionError(
+                f"{msg.get('type')!r} was not delivered: drone {self.drone_id!r} "
+                f"is not connected to the ground transport"
+            )
+
+    def _ping(self, msg: dict) -> None:
+        estimate = self._transport.sync_clock(
+            self.drone_id,
+            rounds=1,
+            round_timeout_s=self._ping_timeout_s,
+            timeout=self._ping_timeout_s + self._send_timeout_s,
+        )
+        if not estimate.samples:
+            raise RuntimeError(f"clock sync with drone {self.drone_id!r} returned no sample")
+        sample = estimate.samples[-1]
+        self.deliver({"type": fp.PONG, "t1": msg["t1"], "t2": sample.t2, "t3": sample.t3})
+
+    def deliver(self, msg: dict) -> None:
+        """Hand one message from this drone's edge to the coordinator."""
+        callback = self.on_message
+        if callback is not None:
+            callback(msg)
+
+
+def _best_detection_thumbnail(msg) -> str | None:
+    """Base64 JPEG for a fleet map pin: the most confident crop, else the frame thumbnail."""
+    crops = [d for d in msg.detections if getattr(d, "crop_jpeg", None)]
+    if crops:
+        best = max(crops, key=lambda d: d.confidence or 0.0)
+        return base64.b64encode(best.crop_jpeg).decode("utf-8")
+    if msg.thumbnail_jpeg:
+        return base64.b64encode(msg.thumbnail_jpeg).decode("utf-8")
+    return None
+
+
+class FleetSupervisor:
+    """Runs one ``FleetCoordinator`` over the dashboard's ground transport.
+
+    The supervisor builds one ``TransportEdgeLink`` per configured drone id
+    and a coordinator over those links. It routes each edge's ``ack``,
+    ``nack`` and ``telemetry`` messages (the transport's ``on_control``) and its
+    detections (the transport's ``on_message``) to the coordinator, forwards
+    the coordinator's ``fleet_detection`` and ``fleet_event`` events to the
+    browser, emits ``fleet_status`` and ``fleet_plan``, declares a drone lost
+    when it drops out of a started mission so its lanes are re-tasked, and
+    carries the coordinator half of LAND ALL.
+
+    ``plan()`` and ``start()`` block on clock sync, and ``check_losses()``
+    blocks while a re-task waits for answers, so callers run them on a
+    worker thread, never on a transport delivery thread. Re-tasked lanes are
+    planned against ``geofence_cm`` (by default ``FLIGHTRISK_GEOFENCE_CM``,
+    the value the edges enforce).
+    """
+
+    def __init__(
+        self,
+        transport,
+        drone_ids,
+        socketio,
+        *,
+        area_cm=(400, 400),
+        strip_cm: int = 75,
+        net: str = "station",
+        alt_slots_cm: tuple[int, ...] = (100, 160),
+        clock=None,
+        loss_timeout_s: float = FLEET_LOSS_TIMEOUT_S,
+        takeoff_grace_s: float = FLEET_TAKEOFF_GRACE_S,
+        send_timeout_s: float = FLEET_SEND_TIMEOUT_S,
+        ping_timeout_s: float = FLEET_PING_TIMEOUT_S,
+        geofence_cm: float | None = None,
+        retask_wait_s: float = FLEET_RETASK_WAIT_S,
+    ):
+        self.net = net
+        self._transport = transport
+        self._socketio = socketio
+        self._clock = clock if clock is not None else transport.now
+        self._loss_timeout_s = loss_timeout_s
+        self._takeoff_grace_s = takeoff_grace_s
+        self.links = {
+            drone_id: TransportEdgeLink(transport, drone_id, send_timeout_s, ping_timeout_s)
+            for drone_id in drone_ids
+        }
+        self.coordinator = FleetCoordinator(
+            self.links,
+            area_cm=area_cm,
+            strip_cm=strip_cm,
+            alt_slots_cm=alt_slots_cm,
+            clock=self._clock,
+            on_event=self._on_coordinator_event,
+            geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
+            retask_wait_s=retask_wait_s,
+        )
+        self._lock = threading.Lock()
+        self._busy = threading.Lock()  # one plan() or start() at a time
+        self._flown: set[str] = set()  # reported flying since the start
+        self._flying: set[str] = set()  # flying in their latest telemetry
+        self._landed_early: set[str] = set()  # landed with lanes still to fly
+        self._start_t_ground_s: float | None = None
+        self._landed_all = False
+        self._stop = threading.Event()
+        self._monitor_thread: threading.Thread | None = None
+
+    # -- Browser events -----------------------------------------------------
+
+    def _emit(self, name: str, payload: dict) -> None:
+        try:
+            self._socketio.emit(name, payload)
+        except Exception:
+            log.warning("fleet emit %s failed", name, exc_info=True)
+
+    def _on_coordinator_event(self, name: str, payload: dict) -> None:
+        if name == "fleet_event" and payload.get("event") == "land_all":
+            with self._lock:
+                self._landed_all = True
+        self._emit(name, payload)
+
+    def status_payload(self) -> dict:
+        """The ``fleet_status`` event: per-drone telemetry, clock offset, RTT and skew."""
+        return {"drones": self.coordinator.status(), "net": self.net, "synced": self.synced}
+
+    def emit_status(self) -> None:
+        self._emit("fleet_status", self.status_payload())
+
+    def emit_plan(self) -> None:
+        plan = self.coordinator.current_plan()
+        if plan is not None:
+            self._emit("fleet_plan", plan)
+
+    @property
+    def synced(self) -> bool:
+        ids = self.coordinator.drone_ids
+        return bool(ids) and all(self.coordinator.clock_sync(d).synced for d in ids)
+
+    def summary(self) -> dict:
+        """The ``fleet`` field of the dashboard status."""
+        return {"drones": len(self.coordinator.drone_ids), "net": self.net, "synced": self.synced}
+
+    # -- Messages from the edges --------------------------------------------
+
+    def handle_control(self, msg: dict) -> None:
+        """Route one ``ack``, ``nack`` or ``telemetry`` message to its drone's link."""
+        drone_id = msg.get("drone_id")
+        link = self.links.get(drone_id)
+        if link is None:
+            log.warning("Ignoring %s from drone %r, which is not in the fleet", msg.get("type"), drone_id)
+            return
+        if msg.get("type") == fp.TELEMETRY and self.coordinator.started:
+            self._note_flight(drone_id, msg)
+        link.deliver(msg)
+
+    def _note_flight(self, drone_id: str, telemetry: dict) -> None:
+        """Track takeoffs and landings during a started mission.
+
+        Only a landing reported while lanes remain (``lane_index`` below
+        ``lanes_total`` in that telemetry) counts as landing early. A drone
+        that finished its lanes and landed, then receives more lanes, is not
+        treated as lost.
+        """
+        lane_index = telemetry.get("lane_index")
+        lanes_total = telemetry.get("lanes_total")
+        unfinished = (
+            isinstance(lane_index, int) and isinstance(lanes_total, int) and lane_index < lanes_total
+        )
+        with self._lock:
+            if telemetry.get("is_flying") is True:
+                self._flown.add(drone_id)
+                self._flying.add(drone_id)
+                self._landed_early.discard(drone_id)
+            elif drone_id in self._flying:
+                self._flying.discard(drone_id)
+                if unfinished:
+                    self._landed_early.add(drone_id)
+
+    def handle_detections(self, msg) -> None:
+        """Place one edge ``DetectionMessage`` on the shared map.
+
+        A message with at least one person and the drone's relative position
+        becomes one detection at that position; the coordinator merges it
+        with any detection within its dedup radius and emits
+        ``fleet_detection`` only for a new one.
+        """
+        drone_id = getattr(msg, "drone_id", None)
+        if drone_id not in self.links or not msg.detections:
+            return
+        payload = {
+            "type": "detections",
+            "drone_id": drone_id,
+            "rel_x_cm": msg.rel_x_cm,
+            "rel_y_cm": msg.rel_y_cm,
+        }
+        if msg.lat is not None and msg.lon is not None:
+            payload["lat"] = msg.lat
+            payload["lon"] = msg.lon
+        thumbnail = _best_detection_thumbnail(msg)
+        if thumbnail is not None:
+            payload["thumbnail"] = thumbnail
+        self.coordinator.on_detection(drone_id, payload)
+
+    # -- Operator actions ---------------------------------------------------
+
+    def plan(self):
+        """Sync every clock, split the area and send ``assign_lanes``.
+
+        Raises ``RuntimeError`` while a drone reports flying.
+        """
+        with self._busy:
+            self.coordinator.sync()
+            plan = self.coordinator.plan()
+            with self._lock:
+                self._flown.clear()
+                self._flying.clear()
+                self._landed_early.clear()
+                self._start_t_ground_s = None
+                self._landed_all = False
+        self.emit_plan()
+        self.emit_status()
+        return plan
+
+    def start(self, lead_s: float = 2.0):
+        """Re-sync every clock, then schedule one common start.
+
+        The coordinator refuses the start unless every drone is synced, has
+        acked its lanes and reports enough battery. The outcome is sent to
+        the browser as a ``fleet_event``.
+        """
+        with self._busy:
+            if not self.coordinator.started:
+                self.coordinator.sync()
+            result = self.coordinator.start(lead_s=lead_s)
+        if result.ok:
+            with self._lock:
+                self._start_t_ground_s = result.t_ground_s
+            self._emit("fleet_event", {"event": "start", "detail": f"start_at in {lead_s:g} s"})
+        else:
+            detail = "; ".join(f"{who}: {why}" for who, why in sorted(result.refusals.items()))
+            log.warning("Fleet start refused: %s", detail)
+            self._emit("fleet_event", {"event": "start_refused", "detail": detail})
+        self.emit_status()
+        return result
+
+    def land_all(self) -> dict:
+        """Send ``emergency_land_all`` to every drone through the coordinator.
+
+        Returns the coordinator's per-drone results (``None`` means sent).
+        """
+        with self._lock:
+            self._landed_all = True
+        return self.coordinator.land_all()
+
+    # -- Loss detection -----------------------------------------------------
+
+    def check_losses(self) -> list[str]:
+        """Declare lost every drone that dropped out of the started mission.
+
+        A drone is lost when its connection is gone, when it has sent nothing
+        for ``loss_timeout_s``, when it reports landed before finishing its
+        lanes (for example after its local land key), or when it has not
+        taken off ``takeoff_grace_s`` after the scheduled start. Its unflown
+        lanes are offered to the remaining drones by
+        ``FleetCoordinator.on_drone_lost``, which also emits the
+        ``drone_lost``, ``retask`` and ``retask_failed`` events and waits up
+        to ``retask_wait_s`` for the drones' answers. Returns the drones declared
+        lost by this call. The check is skipped while ``plan()`` or
+        ``start()`` runs, so it never marks a drone of a new plan lost.
+        """
+        if not self._busy.acquire(blocking=False):
+            return []
+        try:
+            return self._check_losses()
+        finally:
+            self._busy.release()
+
+    def _check_losses(self) -> list[str]:
+        with self._lock:
+            if self._landed_all or self._start_t_ground_s is None:
+                return []
+            start_t = self._start_t_ground_s
+            flown = set(self._flown)
+            landed_early = set(self._landed_early)
+        if not self.coordinator.started:
+            return []
+        links = self._transport.fleet_status(timeout=FLEET_SEND_TIMEOUT_S)
+        status = self.coordinator.status()
+        now = self._clock()
+        lost = []
+        for drone_id in self.links:
+            entry = status.get(drone_id) or {}
+            if entry.get("lost"):
+                continue
+            reason = self._loss_reason(
+                links.get(drone_id), drone_id in flown, drone_id in landed_early, now - start_t,
+            )
+            if reason is None:
+                continue
+            with self._lock:
+                if self._landed_all:
+                    break
+            log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
+            self.coordinator.on_drone_lost(drone_id)
+            lost.append(drone_id)
+        return lost
+
+    def _loss_reason(
+        self, link: dict | None, flown: bool, landed_early: bool, since_start_s: float,
+    ) -> str | None:
+        if link is None or not link.get("connected"):
+            return "disconnected"
+        age = link.get("link_age_s")
+        if age is not None and age > self._loss_timeout_s:
+            return f"silent for {age:.1f} s"
+        if landed_early:
+            return "landed before finishing its lanes"
+        if not flown and since_start_s > self._takeoff_grace_s:
+            return f"not flying {since_start_s:.0f} s after the scheduled start"
+        return None
+
+    # -- Monitor thread -----------------------------------------------------
+
+    def start_monitor(self, interval_s: float = FLEET_MONITOR_INTERVAL_S) -> None:
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            return
+        self._stop.clear()
+        self._monitor_thread = threading.Thread(
+            target=self._monitor, args=(interval_s,), daemon=True, name="fleet-monitor",
+        )
+        self._monitor_thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _monitor(self, interval_s: float) -> None:
+        while not self._stop.wait(interval_s):
+            try:
+                self.check_losses()
+            except Exception:
+                log.error("Fleet loss check failed", exc_info=True)
+            self.emit_status()
+
+
+def _run_land_all_path(report: dict, interrupts: list, name: str, what: str, send) -> None:
+    """Run one LAND ALL path and store how many drones it reached in ``report[name]``.
+
+    A failure is logged and leaves ``report[name]`` as ``None``. A
+    ``KeyboardInterrupt`` or ``SystemExit`` is logged and kept in
+    ``interrupts``, for ``_land_all`` to re-raise once every path has run.
+    """
+    try:
+        report[name] = send()
+    except Exception:
+        log.error("LAND ALL: %s failed", what, exc_info=True)
+    except BaseException as exc:
+        log.error("LAND ALL: %s was interrupted: %r", what, exc)
+        interrupts.append(exc)
+
+
+def _land_all() -> dict:
+    """Order every drone to land by every path available, whatever fails.
+
+    The paths are the ground transport's ``emergency_land_all`` broadcast,
+    written to every connected edge at once; the fleet coordinator, which
+    sends ``emergency_land_all`` to each fleet link in turn as belt and
+    braces; and ``land`` on every drone of a local fleet (Tello or MAVLink
+    source), all drones at once, so a drone whose land is never confirmed
+    does not delay the land to the others (``DroneFleet.broadcast_command``
+    still reports each drone's failure). The paths run at the same time, each on its own thread, and the
+    broadcast is started first. A coordinator send that waits out its
+    timeout on one stalled link therefore never delays the land order to any
+    other drone, and a failure on one path never stops another. This waits
+    for the paths at most ``LAND_ALL_PATHS_DEADLINE_S``; a path still
+    running then is logged and reported as ``None``, and its thread keeps
+    running in the background. A ``KeyboardInterrupt`` or ``SystemExit`` is
+    re-raised only after every path has finished or that wait has ended.
+    When no path reaches any drone, the failure is logged at CRITICAL and
+    sent to every browser.
+
+    Returns how many drones each path reached (``None`` for a path that is
+    not configured or that failed) and whether any path reached a drone.
+    """
+    supervisor = app_state.fleet_supervisor
+    transport = app_state.ground_transport
+    fleet = app_state.fleet
+    # Each path's thread stores its count here; the report returned is a
+    # copy taken when the wait ends, so a path that finishes later changes
+    # nothing the caller holds.
+    reached: dict = {"coordinator": None, "transport": None, "local": None}
+    interrupts: list[BaseException] = []
+
+    paths = []
+    if transport is not None:
+        paths.append((
+            "transport", "the ground transport emergency_land_all broadcast",
+            lambda: int(transport.emergency_land_all(timeout=LAND_ALL_TIMEOUT_S)),
+        ))
+    if supervisor is not None:
+        paths.append((
+            "coordinator", "the fleet coordinator path",
+            lambda: sum(1 for exc in supervisor.land_all().values() if exc is None),
+        ))
+    if fleet is not None:
+        paths.append((
+            "local", "landing the local drones",
+            lambda: sum(1 for exc in fleet.broadcast_command("land").values() if exc is None),
+        ))
+
+    deadline = time.monotonic() + LAND_ALL_PATHS_DEADLINE_S
+    threads = []
+    for name, what, send in paths:
+        thread = threading.Thread(
+            target=_run_land_all_path,
+            args=(reached, interrupts, name, what, send),
+            name=f"land-all-{name}",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except Exception:
+            # No thread could be started: run this path here rather than skip it.
+            log.error("LAND ALL: could not start a thread for %s; running it inline", what, exc_info=True)
+            _run_land_all_path(reached, interrupts, name, what, send)
+            continue
+        threads.append((name, what, thread))
+    for _, _, thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    # Which paths are still running is read before the copy, so a path that
+    # finished is always counted.
+    unfinished = [(name, what) for name, what, thread in threads if thread.is_alive()]
+    report: dict = dict(reached)
+    for name, what in unfinished:
+        report[name] = None
+        log.error("LAND ALL: %s did not finish within %g s", what, LAND_ALL_PATHS_DEADLINE_S)
+
+    report["reached_any"] = any(n for n in (report["coordinator"], report["transport"], report["local"]))
+    if report["reached_any"]:
+        log.warning("LAND ALL sent: %s", report)
+        if app_state.logger:
+            app_state.logger.warning("land_all_sent", **report)
+    else:
+        log.critical(
+            "LAND ALL REACHED NO DRONE (%s). Land every drone with its local control now.", report,
+        )
+        if app_state.logger:
+            app_state.logger.error("land_all_reached_no_drone", **report)
+        socketio.emit("error", {
+            "message": "LAND ALL reached no drone. Land every drone with its local control now.",
+        })
+
+    if interrupts:
+        raise interrupts[0]
+    return report
+
+
+def _detector_tiled() -> bool:
+    tiled = getattr(app_state.detector, "tiled", None)
+    if isinstance(tiled, bool):
+        return tiled
+    return bool(get_config().vision.detector_tiled)
+
+
+def _privacy_and_fleet_status() -> dict:
+    """Status fields shared by ``/api/status`` and the socket ``status`` event."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        fleet = supervisor.summary()
+    else:
+        net = getattr(app_state.source_config, "fleet_net", None)
+        fleet = {"drones": 0, "net": net if isinstance(net, str) else "station", "synced": False}
+    return {
+        "appearance_only": bool(app_state.appearance_only),
+        "tiled": _detector_tiled(),
+        "fleet": fleet,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Pipeline initialisation
 # ---------------------------------------------------------------------------
 
@@ -463,7 +1158,19 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         except Exception as e:
             log.warning("reid_unavailable", error=str(e))
 
-    if app_state.face is None:
+    # Appearance-only mode: faces are not resolvable at search altitude, so
+    # face recognition is never constructed and the face signal is disabled
+    # before the signal registry can load its model.
+    appearance_only = source_config.appearance_only
+    if appearance_only is None:
+        appearance_only = get_config().vision.appearance_only
+    appearance_only = bool(appearance_only)
+    app_state.appearance_only = appearance_only
+    if appearance_only:
+        app_state.face = None
+        get_config().vision.signal_insightface_face.enabled = False
+        log.info("appearance_only_mode", face_recognition=False)
+    elif app_state.face is None:
         try:
             from flightrisk.vision.face import FaceRecognizer
             app_state.face = FaceRecognizer(match_threshold=0.35)
@@ -483,11 +1190,17 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             )
         except Exception as e:
             log.warning("signal_registry_init_failed", error=str(e))
+    if appearance_only and app_state.signal_registry is not None:
+        app_state.signal_registry.disable_signal("insightface_face")
 
     if app_state.tracker is None:
         app_state.tracker = DetectionTracker(max_age=30, iou_threshold=0.3)
 
-    if app_state.reasoning is None:
+    if not source_config.enable_llm:
+        # --no-llm: no reasoning agent and no Gemma worker thread.
+        app_state.reasoning = None
+        log.info("reasoning_disabled", reason="no_llm")
+    elif app_state.reasoning is None:
         try:
             from flightrisk.reasoning import create_reasoning_agent
             app_state.reasoning = create_reasoning_agent(source_config.reasoning_provider)
@@ -559,6 +1272,13 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     stop_event = threading.Event()
     app_state.auto_connect_stop = stop_event
 
+    # Likewise stop the fleet monitor of a previous edge pipeline. Its
+    # coordinator belongs to the transport that the edge branch below stops.
+    old_supervisor = app_state.fleet_supervisor
+    if old_supervisor is not None:
+        old_supervisor.stop()
+        app_state.fleet_supervisor = None
+
     if drone_registry.is_registered(source):
         _start_drone_backend(source_config, stop_event, log)
     elif source == "file":
@@ -595,6 +1315,13 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         # _init_pipeline() call (e.g. via restart_dashboard) before binding a
         # new server on the same port -- otherwise start() fails with an
         # address-already-in-use error.
+        if source_config.fleet_net == "ap":
+            # AP mode joins each laptop to a Tello's open access point, so no
+            # wildcard or name may be bound, whoever built the config.
+            from flightrisk.transport import check_literal_hosts, parse_bind_hosts
+
+            check_literal_hosts(parse_bind_hosts(source_config.edge_host))
+
         old_transport = app_state.ground_transport
         if old_transport is not None:
             try:
@@ -607,6 +1334,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.ground_station = station
 
         _fps_state = {"last": None}
+        # The fleet supervisor needs the transport and the transport's
+        # callbacks need the supervisor, so the callbacks look it up here.
+        _fleet: dict = {"supervisor": None}
 
         def _on_edge_message(msg):
             # Runs in a GroundTransport executor thread -- plain socketio.emit
@@ -618,20 +1348,57 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     app_state.logger.error(
                         "edge_message_error", traceback=traceback.format_exc()
                     )
+            supervisor = _fleet["supervisor"]
+            if supervisor is not None:
+                try:
+                    supervisor.handle_detections(msg)
+                except Exception:
+                    if app_state.logger:
+                        app_state.logger.error(
+                            "fleet_detection_error", traceback=traceback.format_exc()
+                        )
 
+        def _on_edge_control(msg):
+            # Edge ack, nack and telemetry messages, on a transport executor thread.
+            supervisor = _fleet["supervisor"]
+            if supervisor is not None:
+                supervisor.handle_control(msg)
+
+        # Heartbeats are on in edge mode: a fleet edge lands its drone when
+        # ground messages stop for FLIGHTRISK_LINK_LOSS_LAND_S.
         transport = GroundTransportSync(
             host=source_config.edge_host,
             port=source_config.edge_port,
             on_message=_on_edge_message,
             token=os.environ.get("FLIGHTRISK_EDGE_TOKEN"),
+            on_control=_on_edge_control,
+            heartbeat_interval_s=fp.HEARTBEAT_INTERVAL_S,
         )
+        supervisor = None
+        if source_config.fleet_drones:
+            supervisor = FleetSupervisor(
+                transport,
+                source_config.fleet_drones,
+                socketio,
+                area_cm=source_config.fleet_area_cm,
+                strip_cm=source_config.fleet_strip_cm,
+                net=source_config.fleet_net,
+            )
+            _fleet["supervisor"] = supervisor
         transport.start()
         app_state.ground_transport = transport
+        if supervisor is not None:
+            app_state.fleet_supervisor = supervisor
+            supervisor.start_monitor()
         log.info(
             "edge_ground_station_started",
             host=source_config.edge_host,
+            bound_hosts=list(transport.bound_hosts),
+            unbound_hosts=list(transport.unbound_hosts),
             port=transport.port,
             stream_video=app_state.stream_video,
+            fleet=list(source_config.fleet_drones),
+            fleet_net=source_config.fleet_net,
         )
     else:
         # Backward-compat: treat any other source string as a video path
@@ -749,6 +1516,7 @@ def status():
         "has_face": app_state.face is not None and app_state.face.has_target if app_state.face else False,
         "match_history": app_state.match_history[-10:],
         "telemetry": app_state.drone_telemetry,
+        **_privacy_and_fleet_status(),
     })
 
 
@@ -863,7 +1631,7 @@ def on_connect(auth=None):
         provided = (auth or {}).get("api_key") if isinstance(auth, dict) else None
         if provided is None or not hmac.compare_digest(provided.encode(), _FLIGHTRISK_API_KEY.encode()):
             return False  # reject connection
-    emit("status", {"connected": True, "source": app_state.source})
+    emit("status", {"connected": True, "source": app_state.source, **_privacy_and_fleet_status()})
     if app_state.target_photo:
         emit("target_photo", {"image": app_state.target_photo})
     # A browser that (re)connects while an alert is pending gets it straight
@@ -1086,6 +1854,10 @@ def on_get_signal_config():
     emit("signal_config", {"signals": signals})
 
 
+#: Signals that match faces. Appearance-only mode refuses to enable them.
+_FACE_SIGNALS = frozenset({"face", "insightface_face"})
+
+
 @socketio.on("set_signal_config")
 def on_set_signal_config(data):
     """Update signal enable/weight at runtime.
@@ -1106,6 +1878,10 @@ def on_set_signal_config(data):
         return
 
     sig_cfg = getattr(cfg, attr_name)
+
+    if app_state.appearance_only and name in _FACE_SIGNALS and data.get("enabled"):
+        emit("error", {"message": f"Appearance-only mode: the {name!r} signal stays disabled"})
+        return
 
     if "enabled" in data:
         sig_cfg.enabled = bool(data["enabled"])
@@ -1228,6 +2004,54 @@ def on_drone_command(data):
     if app_state.logger:
         app_state.logger.drone_command(command=cmd)
     emit("command_ack", {"command": cmd})
+
+
+@socketio.on("land_all")
+def on_land_all(data=None):
+    """LAND ALL (button ``id="land-all"`` and Shift+L): land every drone now.
+
+    Runs ``_land_all()``, which tries the fleet coordinator, the ground
+    transport broadcast and the local fleet independently, and acks with
+    what each path reached.
+    """
+    report = _land_all()
+    emit("land_all_ack", report)
+
+
+def _run_fleet_action(action: str) -> None:
+    """Run the fleet ``plan`` or ``start`` action on a worker thread.
+
+    Both block on clock sync, which must never run on a transport delivery
+    thread or hold up other socket events such as ``land_all``.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "No fleet is configured (start the dashboard with --source edge --fleet ...)"})
+        return
+    if alert_latch.phase is AlertPhase.RESOLVED:
+        emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
+        return
+
+    def _work():
+        try:
+            getattr(supervisor, action)()
+        except Exception as exc:
+            log.error("Fleet %s failed", action, exc_info=True)
+            socketio.emit("error", {"message": f"Fleet {action} failed: {exc}"})
+
+    threading.Thread(target=_work, daemon=True, name=f"fleet-{action}").start()
+
+
+@socketio.on("plan_fleet")
+def on_plan_fleet(data=None):
+    """Sync clocks, split the search area and send each drone its lanes."""
+    _run_fleet_action("plan")
+
+
+@socketio.on("start_fleet")
+def on_start_fleet(data=None):
+    """Re-sync clocks and schedule one common start for the fleet."""
+    _run_fleet_action("start")
 
 
 @socketio.on("start_search")
@@ -1452,6 +2276,13 @@ def on_remove_all_drones():
 
 @socketio.on("get_fleet_status")
 def on_get_fleet_status():
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        emit("fleet_status", supervisor.status_payload())
+        plan = supervisor.coordinator.current_plan()
+        if plan is not None:
+            emit("fleet_plan", plan)
+        return
     fleet = app_state.fleet
     emit("fleet_status", {
         "drones": fleet.get_all_telemetry() if fleet else {},
@@ -1490,7 +2321,7 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host=None):
     """Start the dashboard server.
 
     Args:
@@ -1499,9 +2330,34 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
         port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
+        host: Bind address. Defaults to ``FLIGHTRISK_DASHBOARD_HOST``, then
+            127.0.0.1. A non-loopback address requires ``FLIGHTRISK_API_KEY``.
+
+    Raises:
+        ValueError: The bind address is not loopback and no API key is
+            configured. Nothing is started in that case.
     """
+    global _dashboard_bind
+    host = resolve_dashboard_host(host)
+    # Checked before anything starts, so a refused bind connects to no drone.
+    check_dashboard_bind(host)
+    if host not in _LOOPBACK_HOSTS:
+        log.warning(
+            "Dashboard bound to non-loopback host %s; every client must present FLIGHTRISK_API_KEY",
+            host,
+        )
     if port is None:
         port = get_config().dashboard.port
+    # Socket.IO accepts browser pages from the origins of this host and port.
+    _dashboard_bind = (host, int(port))
+    cors_override = cors_origins_override()
+    if cors_override is not None and "*" in cors_override:
+        log.warning(
+            "%s=* lets a page from any web site connect to the dashboard and control the drones; "
+            "use it for development only", CORS_ORIGINS_ENV,
+        )
+    elif cors_override is not None:
+        log.warning("%s replaces the dashboard's own Socket.IO origins with %s", CORS_ORIGINS_ENV, cors_override)
     app_state.running = True
     # Auto-load previous target photo if none specified
     if target_path is None:
@@ -1514,5 +2370,6 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
     frame_thread.start()
 
     if app_state.logger:
-        app_state.logger.info("dashboard_started", url=f"http://localhost:{port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+        url_host = f"[{host}]" if ":" in host else host
+        app_state.logger.info("dashboard_started", url=f"http://{url_host}:{port}", host=host)
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)

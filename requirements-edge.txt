@@ -1,0 +1,9 @@
+# Dependencies of the drone edge role only (python -m flightrisk.edge_device
+# --source tello|fake). Version floors match requirements.txt. InsightFace,
+# Ollama, open_clip and MediaPipe are deliberately absent, because they have
+# heavy or Windows-hostile builds and the edge does not need them.
+djitellopy>=2.5
+ultralytics>=8.3
+opencv-python>=4.10
+numpy>=1.26
+websockets>=12.0

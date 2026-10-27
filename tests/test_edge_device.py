@@ -9,6 +9,7 @@ thumbnail -- exactly the behaviour we assert on).
 """
 
 import numpy as np
+import pytest
 
 from flightrisk.edge import DetectionMessage, EdgeRunner
 from flightrisk.edge_device import run_edge_device
@@ -187,3 +188,29 @@ def test_stop_event_halts_loop():
     assert processed == 1
     assert len(transport.sent) == 1
     assert transport.disconnected is True
+
+
+# ---------------------------------------------------------------------------
+# --drone-id is checked at startup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("drone_id", ["drone-1", "Drone_2", "d.3", "lab:drone-4", "x" * 64])
+def test_drone_id_that_is_a_protocol_identifier_is_accepted(drone_id):
+    from flightrisk import fleet_protocol as fp
+    from flightrisk.edge_device import _build_parser
+
+    args = _build_parser().parse_args(["--source", "fake", "--drone-id", drone_id])
+    assert args.drone_id == drone_id
+    # The id the edge starts with is one every fleet message accepts.
+    fp.validate_message(fp.make_telemetry(drone_id, 80, 100, False, 0.0, 0.0, 0.0, None, None, 0.1, None))
+
+
+@pytest.mark.parametrize("drone_id", ["", "x" * 65, "drone 1", "drône-1", "-drone", "drone/1", "drone-1\n", "a;b"])
+def test_drone_id_that_the_protocol_would_refuse_fails_at_startup(drone_id, capsys):
+    from flightrisk.edge_device import _build_parser
+
+    with pytest.raises(SystemExit) as info:
+        _build_parser().parse_args(["--source", "fake", f"--drone-id={drone_id}"])
+    assert info.value.code == 2
+    assert "--drone-id must be 1 to 64 characters" in capsys.readouterr().err

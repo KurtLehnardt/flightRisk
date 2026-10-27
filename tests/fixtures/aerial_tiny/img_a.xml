@@ -1,0 +1,6 @@
+<annotation>
+<filename>img_a.png</filename>
+<size><width>160</width><height>120</height><depth>3</depth></size>
+<object><name>person</name><bndbox><xmin>20</xmin><ymin>20</ymin><xmax>24</xmax><ymax>26</ymax></bndbox></object>
+<object><name>person</name><bndbox><xmin>80</xmin><ymin>50</ymin><xmax>88</xmax><ymax>70</ymax></bndbox></object>
+</annotation>

@@ -1,5 +1,6 @@
 """Tests for flightrisk.drone.fleet multi-drone manager."""
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -208,6 +209,40 @@ class TestBroadcast:
 
         assert isinstance(results["d1"], Exception)
 
+    def test_broadcast_command_reaches_every_drone_at_once(self, mock_tello_connect):
+        """A drone whose land blocks does not delay the land to another drone (PR #91 review)."""
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
+        release = threading.Event()
+        d2_landed = threading.Event()
+        fleet.get("d1").land.side_effect = lambda: release.wait(10)
+        fleet.get("d2").land.side_effect = d2_landed.set
+
+        results: list = []
+        broadcaster = threading.Thread(target=lambda: results.append(fleet.broadcast_command("land")), daemon=True)
+        broadcaster.start()
+        try:
+            assert d2_landed.wait(2.0)
+            # The broadcast returns only once every drone's call has finished.
+            assert broadcaster.is_alive()
+        finally:
+            release.set()
+        broadcaster.join(10)
+        assert not broadcaster.is_alive()
+        assert results == [{"d1": None, "d2": None}]
+
+    # The SystemExit ends that drone's thread, which pytest would report as a warning.
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+    def test_broadcast_command_never_reports_an_unfinished_call_as_success(self, mock_tello_connect):
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.get("d1").land.side_effect = SystemExit
+
+        results = fleet.broadcast_command("land")
+
+        assert isinstance(results["d1"], RuntimeError)
+
 
 class TestDisconnectAll:
     def test_disconnect_all_clears_fleet(self, mock_tello_connect):
@@ -218,6 +253,28 @@ class TestDisconnectAll:
         assert fleet.count == 0
         assert fleet.primary is None
         assert fleet.drone_ids == []
+
+    def test_disconnect_all_disconnects_every_drone_at_once(self, mock_tello_connect):
+        """Each disconnect lands a flying drone first, so one stuck drone must not hold up the rest."""
+        fleet = DroneFleet(factory=mock_tello_connect)
+        fleet.register("d1", host="192.168.10.1")
+        fleet.register("d2", host="192.168.10.2")
+        d1, d2 = fleet.get("d1"), fleet.get("d2")
+        release = threading.Event()
+        d2_disconnected = threading.Event()
+        d1.disconnect.side_effect = lambda: release.wait(10)
+        d2.disconnect.side_effect = d2_disconnected.set
+
+        closer = threading.Thread(target=fleet.disconnect_all, daemon=True)
+        closer.start()
+        try:
+            assert d2_disconnected.wait(2.0)
+        finally:
+            release.set()
+        closer.join(10)
+        assert not closer.is_alive()
+        d1.disconnect.assert_called_once()
+        assert fleet.count == 0
 
 
 class TestFactoryPattern:

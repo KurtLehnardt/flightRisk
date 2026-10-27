@@ -12,6 +12,7 @@ import math
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 import cv2
@@ -61,6 +62,9 @@ _YAW_RATE = 60.0  # deg/s for rotate commands
 _RTSP_RECONNECT_DELAY = 5.0  # seconds before RTSP reconnect attempt
 _HEARTBEAT_TIMEOUT = 5.0  # seconds without telemetry -> disconnected
 _GPS_ARRIVAL_RADIUS = 2.0  # meters – how close is "arrived"
+_GIMBAL_ID = 0  # MAVSDK gimbal id of the primary gimbal
+_REPLAY_PREFIX = "dir://"  # rtsp_url scheme that selects aerial frame replay
+_REPLAY_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
 
 def _extract_ip(address: str) -> str:
@@ -108,6 +112,13 @@ class MavlinkController:
 
         host_ip = _extract_ip(host)
         self.rtsp_url = rtsp_url or f"rtsp://{host_ip}:8554/camera"
+
+        # Aerial frame replay: "dir://<path>" serves dataset images, in sorted
+        # order and looping, instead of reading an RTSP stream.
+        self._replay_files: list[str] | None = None
+        self._replay_index = 0
+        if self.rtsp_url.startswith(_REPLAY_PREFIX):
+            self._replay_files = self._list_replay_files(self.rtsp_url[len(_REPLAY_PREFIX):])
 
         # Async internals -- background event loop bridge shared with
         # flightrisk.transport's sync wrappers (see flightrisk.async_bridge.AsyncBridge).
@@ -499,8 +510,56 @@ class MavlinkController:
             self.state.is_flying = False
             logger.info("[%s] Disconnected", self.name)
 
+    def _list_replay_files(self, directory: str) -> list[str]:
+        """Return the image files in `directory` in sorted order."""
+        root = Path(directory)
+        if not root.is_dir():
+            logger.warning("[%s] Replay directory not found: %s", self.name, directory)
+            return []
+        files = sorted(
+            str(f) for f in root.iterdir() if f.is_file() and f.suffix.lower() in _REPLAY_EXTENSIONS
+        )
+        if not files:
+            logger.warning("[%s] Replay directory has no images: %s", self.name, directory)
+        return files
+
+    def _next_replay_frame(self) -> np.ndarray | None:
+        """Return the next readable replay image, wrapping around at the end."""
+        files = self._replay_files or []
+        with self._frame_lock:
+            for _ in range(len(files)):
+                path = files[self._replay_index % len(files)]
+                self._replay_index = (self._replay_index + 1) % len(files)
+                frame = cv2.imread(path)
+                if frame is not None:
+                    self._frame = frame
+                    self._last_frame_time = time.time()
+                    return frame
+                logger.warning("[%s] Could not read replay image: %s", self.name, path)
+        return None
+
+    def set_gimbal_pitch(self, pitch_deg: float) -> None:
+        """Point the gimbal at `pitch_deg` (MAVSDK convention: negative looks down)."""
+        with self._cmd_lock:
+            self._run(self._set_gimbal_pitch_async(pitch_deg))
+
+    async def _set_gimbal_pitch_async(self, pitch_deg: float) -> None:
+        system = self._system
+        if not system:
+            raise RuntimeError("Not connected")
+        # Imported lazily so the module still loads where the gimbal plugin is absent.
+        from mavsdk.gimbal import ControlMode, GimbalMode, SendMode
+
+        await system.gimbal.take_control(_GIMBAL_ID, ControlMode.PRIMARY)
+        await system.gimbal.set_angles(
+            _GIMBAL_ID, 0.0, float(pitch_deg), 0.0, GimbalMode.YAW_FOLLOW, SendMode.ONCE
+        )
+
     def get_frame(self) -> np.ndarray | None:
-        """Read a frame from the RTSP stream."""
+        """Read a frame from the RTSP stream, or the replay directory if configured."""
+        if self._replay_files is not None:
+            return self._next_replay_frame()
+
         if self._cap is None:
             self._cap = cv2.VideoCapture(self.rtsp_url)
             self._last_reconnect_time = time.time()
