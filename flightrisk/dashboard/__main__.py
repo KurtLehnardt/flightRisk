@@ -189,7 +189,7 @@ def main():
         # network. The fleet binds loopback and the link address only.
         # The list rules apply to a single host too: "0", "0x0" and names
         # that resolve to 0.0.0.0 would otherwise slip past a wildcard check.
-        if args.fleet and fleet_net == "ap":
+        if fleet_net == "ap":
             try:
                 check_literal_hosts(edge_hosts)
             except ValueError as exc:

@@ -802,6 +802,8 @@ class GroundTransport:
         bind_check_interval_s: float = _BIND_CHECK_INTERVAL_S,
         address_probe: Callable[[str], bool] = _address_is_local,
         event_log: Any = None,
+        bind_escalate_interval_s: float = 30.0,
+        bind_escalate_max: int = 20,
     ):
         self._hosts = parse_bind_hosts(host)
         self._hosts_list_form = _is_list_form(host)
@@ -812,9 +814,16 @@ class GroundTransport:
         # "server is running" flag.
         self._server = None
         self._servers: dict[str, Any] = {}
+        self._retired_servers: list[Any] = []
         self._bound_port: int | None = None
         self._bind_check_interval_s = bind_check_interval_s
         self._address_probe = address_probe
+        # A present address that keeps refusing the bind with EADDRINUSE means
+        # a stray listener owns it; repeat an error at this interval, at most
+        # ``bind_escalate_max`` times per host.
+        self._bind_escalate_interval_s = bind_escalate_interval_s
+        self._bind_escalate_max = bind_escalate_max
+        self._in_use_state: dict[str, tuple[float, int]] = {}
         self._event_log = event_log if event_log is not None else StructuredLogger(component="ground-transport")
         self._bind_watch_task: asyncio.Task | None = None
         self._address_present: dict[str, bool] = {}
@@ -1150,7 +1159,14 @@ class GroundTransport:
                 except OSError as exc:
                     if host in _LOOPBACK_HOSTS or not can_degrade:
                         raise
-                    if exc.errno not in _ADDRESS_MISSING_ERRNOS:
+                    # asyncio's create_server swallows EADDRNOTAVAIL for each
+                    # resolved address and raises a plain OSError with no errno
+                    # ("could not bind on any address"), so a missing address
+                    # shows up as errno None. Ask the probe in that case.
+                    missing = exc.errno in _ADDRESS_MISSING_ERRNOS or (
+                        exc.errno is None and not self._address_probe(host)
+                    )
+                    if not missing:
                         # Only a missing address (the link cable is out) is worth
                         # starting without. "In use" or "permission denied" mean
                         # something else owns the link address: an edge would
@@ -1203,10 +1219,12 @@ class GroundTransport:
 
     def _add_server(self, host: str, server, port: int) -> None:
         self._servers[host] = server
-        if self._server is None:
+        if self._server is None or all(self._server is not s for s in self._servers.values()):
+            # First listener, or the main one was closed by a failed rebind.
             self._server = server
         self._address_present[host] = True
         self._bind_errors.pop(host, None)
+        self._in_use_state.pop(host, None)
         actual = server.sockets[0].getsockname()[1] if server.sockets else port
         self._event_log.info(
             "ground_bind_listening",
@@ -1228,6 +1246,38 @@ class GroundTransport:
             errno=code,
             retry_s=self._bind_check_interval_s,
             listening=list(self.bound_hosts),
+        )
+
+    def _escalate_if_in_use(self, host: str, port: int, exc: OSError) -> None:
+        """Repeat an error while a present address keeps failing to bind with EADDRINUSE.
+
+        Called only when the address probe says the address is present, so
+        the failure is not the link being down: something else on this
+        machine listens on that address and port. The first failure is logged
+        by ``_note_bind_failure``; this repeats it every
+        ``bind_escalate_interval_s``, up to ``bind_escalate_max`` times. The
+        token is never logged.
+        """
+        if exc.errno != errno.EADDRINUSE:
+            self._in_use_state.pop(host, None)
+            return
+        now = asyncio.get_running_loop().time()
+        last, count = self._in_use_state.get(host, (None, 0))
+        if last is None:
+            self._in_use_state[host] = (now, 0)
+            return
+        if count >= self._bind_escalate_max or now - last < self._bind_escalate_interval_s:
+            return
+        self._in_use_state[host] = (now, count + 1)
+        self._event_log.error(
+            "ground_bind_address_in_use",
+            host=host,
+            port=port,
+            message=(
+                f"{host}:{port} is present but cannot be bound: another process on this "
+                f"machine is listening there. Edges on that link cannot connect until it is stopped."
+            ),
+            repeat=count + 1,
         )
 
     def _watched_hosts(self) -> list[str]:
@@ -1285,6 +1335,7 @@ class GroundTransport:
                 server = await self._serve_host(host, self._bound_port)
             except OSError as exc:
                 self._note_bind_failure(host, self._bound_port, exc)
+                self._escalate_if_in_use(host, self._bound_port, exc)
                 continue
             if self._server is None:
                 # stop() ran while the bind was in flight.
@@ -1324,12 +1375,23 @@ class GroundTransport:
             return
         self._event_log.warning("ground_bind_listener_unreachable", host=host, port=sockname[1])
         self._servers.pop(host, None)
-        old.close()
-        await old.wait_closed()
+        # Keep working link connections: only the listener is replaced. The
+        # underlying listening socket is closed at once so the port can be
+        # bound again. ``wait_closed`` is not awaited: with open connections
+        # it only returns when they all end. The retired server is kept so
+        # that ``stop()`` can close it and its connections.
+        old.server.close()
+        old.close(close_connections=False)
+        self._retired_servers.append(old)
         try:
             server = await self._serve_host(host, sockname[1])
         except OSError as exc:
             self._note_bind_failure(host, sockname[1], exc)
+            # ``_server`` is also the "running" flag, so it is not cleared;
+            # when no listener is left it keeps the closed one until the
+            # watcher's next successful bind replaces it (see _add_server).
+            if self._server is old:
+                self._server = next(iter(self._servers.values()), old)
             return
         if self._server is None:
             # stop() ran while the bind was in flight.
@@ -1337,12 +1399,11 @@ class GroundTransport:
             await server.wait_closed()
             return
         self._add_server(host, server, sockname[1])
-        if self._server is old:
-            self._server = server
         self._event_log.info("ground_bind_listener_rebound", host=host, port=sockname[1])
 
     async def _close_servers(self) -> None:
-        servers = list(self._servers.values())
+        servers = list(self._servers.values()) + self._retired_servers
+        self._retired_servers = []
         self._servers.clear()
         self._server = None
         for server in servers:

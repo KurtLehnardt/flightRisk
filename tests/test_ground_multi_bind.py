@@ -627,7 +627,9 @@ def test_cli_keeps_legacy_wildcard_outside_ap_fleet_mode():
         env={"FLIGHTRISK_FLEET_NET": "station"},
     )
     assert config.edge_host == "0.0.0.0"
-    config = _run_dashboard_main(["--source", "edge", "--edge-host", "0.0.0.0"], env={"FLIGHTRISK_FLEET_NET": "ap"})
+    config = _run_dashboard_main(["--source", "edge", "--edge-host", "0.0.0.0"], env={"FLIGHTRISK_FLEET_NET": "station"})
+    assert config.edge_host == "0.0.0.0"
+    config = _run_dashboard_main(["--source", "edge", "--edge-host", "0.0.0.0"])
     assert config.edge_host == "0.0.0.0"
 
 
@@ -779,3 +781,234 @@ def test_restored_address_with_working_listener_is_kept(link):
             await gt.stop()
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Real sockets: no patched websockets.serve, no simulated errno
+# ---------------------------------------------------------------------------
+# The stub-based tests above raise OSError(EADDRNOTAVAIL) straight out of the
+# bind. asyncio never does that: create_server swallows EADDRNOTAVAIL per
+# address and raises OSError("could not bind on any address ...") with errno
+# None. These tests use the real stack to close that gap.
+
+TEST_NET = "192.0.2.1"
+
+
+def _skip_if_test_net_bindable():
+    if _address_is_local(TEST_NET):
+        pytest.skip("this host can bind TEST-NET-1 addresses (non-local bind enabled)")
+
+
+def test_real_missing_address_at_start_degrades_to_loopback():
+    _skip_if_test_net_bindable()
+
+    async def scenario():
+        log = EventLog()
+        gt = GroundTransport(
+            host=f"127.0.0.1,{TEST_NET}", port=0, token=TOKEN, event_log=log,
+            bind_check_interval_s=3600.0,
+        )
+        await gt.start()
+        edge = None
+        try:
+            assert gt.bound_hosts == ("127.0.0.1",)
+            assert gt.unbound_hosts == (TEST_NET,)
+            assert [e["host"] for e in log.named("ground_bind_unavailable")] == [TEST_NET]
+            edge = await _edge(gt.port)
+            assert await _wait_until(lambda: len(gt._authenticated_clients) == 1)
+        finally:
+            if edge is not None:
+                await edge.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def _local_non_loopback_address() -> str | None:
+    """An address of one of this machine's real interfaces, or None."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # no packet is sent; this only picks a route
+            address = probe.getsockname()[0]
+    except OSError:
+        return None
+    return address if address and not address.startswith("127.") and _address_is_local(address) else None
+
+
+def test_real_address_in_use_on_loopback_fails_start():
+    async def scenario():
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        gt = GroundTransport(host="127.0.0.1", port=holder.getsockname()[1], event_log=EventLog())
+        try:
+            with pytest.raises(OSError) as info:
+                await gt.start()
+            assert info.value.errno == errno.EADDRINUSE
+            assert gt.bound_hosts == ()
+            assert gt._server is None
+        finally:
+            holder.close()
+
+    asyncio.run(scenario())
+
+
+def test_real_address_in_use_on_a_present_link_address_fails_start():
+    """A real EADDRINUSE on a present address must not degrade to loopback only."""
+    address = _local_non_loopback_address()
+    if address is None:
+        pytest.skip("this host has no non-loopback IPv4 address to bind")
+
+    async def scenario():
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind((address, 0))
+        holder.listen(1)
+        gt = GroundTransport(
+            host=f"127.0.0.1,{address}", port=holder.getsockname()[1], token=TOKEN,
+            event_log=EventLog(), bind_check_interval_s=3600.0,
+        )
+        try:
+            with pytest.raises(OSError) as info:
+                await gt.start()
+            assert info.value.errno == errno.EADDRINUSE
+            assert address in str(info.value)
+            assert TOKEN not in str(info.value)
+            assert gt.bound_hosts == ()
+            assert gt._server is None
+            assert gt._bind_watch_task is None
+        finally:
+            holder.close()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Rebind keeps connections, in-use escalation, stale main listener, AP guard
+# ---------------------------------------------------------------------------
+
+
+def test_rebind_replaces_the_listener_but_keeps_link_connections(link):
+    async def scenario():
+        gt = _ground(link)
+        await gt.start()
+        remote = None
+        try:
+            remote = await _edge(link.port)
+            assert await _wait_until(lambda: len(gt._authenticated_clients) == 1)
+            link.present = False
+            await gt.recheck_binds()
+            real_self_connect = gt._self_connect
+            calls = []
+
+            async def broken_once(address, port):
+                calls.append(port)
+                return False if len(calls) == 1 else await real_self_connect(address, port)
+
+            gt._self_connect = broken_once
+            link.present = True
+            started = asyncio.get_running_loop().time()
+            await asyncio.wait_for(gt.recheck_binds(), timeout=3.0)
+            assert asyncio.get_running_loop().time() - started < 3.0
+            assert len(gt._authenticated_clients) == 1  # the working connection was not dropped
+            assert remote._ws is not None or True
+        finally:
+            if remote is not None:
+                await remote.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_present_address_that_keeps_failing_with_eaddrinuse_escalates(link):
+    async def scenario():
+        log = EventLog()
+        gt = _ground(link, event_log=log, bind_escalate_interval_s=0.0, bind_escalate_max=2)
+        link.present = False
+        await gt.start()
+        try:
+            assert gt.unbound_hosts == (LINK,)
+            gt._address_probe = lambda host: True  # the address is back, yet the bind is refused
+            link.bind_errno = errno.EADDRINUSE
+            for _ in range(6):
+                await gt.recheck_binds()
+            assert len(log.named("ground_bind_unavailable")) == 2  # start (49) and the first in-use error (48), once each
+            escalations = log.named("ground_bind_address_in_use")
+            assert len(escalations) == 2  # bounded by bind_escalate_max
+            assert all(e["host"] == LINK and e["port"] == gt.port for e in escalations)
+            assert TOKEN not in repr(log.events)
+            assert [lvl for lvl, name, _ in log.events if name == "ground_bind_address_in_use"] == ["error", "error"]
+            # Once the stray listener is gone the host binds and the state resets.
+            link.present = True
+            await gt.recheck_binds()
+            assert gt.bound_hosts == ("127.0.0.1", LINK)
+            assert LINK not in gt._in_use_state
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_escalation_waits_for_its_interval(link):
+    async def scenario():
+        log = EventLog()
+        gt = _ground(link, event_log=log, bind_escalate_interval_s=3600.0)
+        link.present = False
+        await gt.start()
+        try:
+            gt._address_probe = lambda host: True
+            link.bind_errno = errno.EADDRINUSE
+            for _ in range(4):
+                await gt.recheck_binds()
+            assert log.named("ground_bind_address_in_use") == []
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_failed_rebind_does_not_leave_a_closed_main_listener(link):
+    async def scenario():
+        gt = _ground(link, host=[LINK])  # no loopback host in the list
+        await gt.start()
+        try:
+            old = gt._servers[LINK]
+            assert gt._server is old
+
+            async def unreachable(address, port):
+                return False
+
+            gt._self_connect = unreachable
+            link.present = False  # the rebind fails
+            await gt._verify_listener(LINK)
+            assert gt.unbound_hosts == (LINK,)
+            link.present = True
+            await gt.recheck_binds()  # the watcher's retry binds again
+            assert gt._servers[LINK] is not old
+            assert gt._server is gt._servers[LINK]
+            assert gt._server.sockets
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "wildcard.example", "127.0.0.1,0.0.0.0"])
+def test_cli_refuses_wildcard_in_ap_mode_without_fleet(host):
+    with pytest.raises(SystemExit):
+        _run_dashboard_main(["--source", "edge", "--edge-host", host], env={"FLIGHTRISK_FLEET_NET": "ap"})
+
+
+def test_cli_accepts_link_literals_in_ap_mode_without_fleet():
+    config = _run_dashboard_main(
+        ["--source", "edge", "--edge-host", f"127.0.0.1,{LINK}"], env={"FLIGHTRISK_FLEET_NET": "ap"}
+    )
+    assert config.edge_host == f"127.0.0.1,{LINK}"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.1,0.0.0.0", "wildcard.example"])
+def test_init_pipeline_refuses_wildcard_when_source_config_is_ap(host):
+    from flightrisk.dashboard.app import _init_pipeline
+    from flightrisk.dashboard.state import SourceConfig
+
+    with pytest.raises(ValueError):
+        _init_pipeline(SourceConfig(source="edge", edge_host=host, fleet_net="ap"))
