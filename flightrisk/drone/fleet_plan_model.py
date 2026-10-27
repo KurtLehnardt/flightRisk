@@ -3,13 +3,24 @@
 ``flightrisk.drone.fleet_patterns`` builds these objects and re-exports every
 public name here, so callers import from ``fleet_patterns`` only. The frame,
 the takeoff/zone contract and the separation rule are documented there.
+
+The ``assign_lanes`` gate fails closed. Plans, drone plans and their lanes
+are immutable (lanes are ``FrozenLane`` mappings). ``FleetSearchPlan.feasible``
+is true only for a plan whose content still matches what ``check_plan``
+passed when it was built (``checked_digest``), so a plan rebuilt with
+``dataclasses.replace`` or constructed by hand is not feasible until it is
+checked again. ``assign_lanes_message`` runs ``check_plan`` again itself and
+refuses on any problem, and also refuses a plan built with a safety check
+switched off (``FleetSearchPlan.unchecked``) unless the caller passes
+``allow_unchecked=True``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any
@@ -20,6 +31,7 @@ from flightrisk.drone.fleet_plan_check import (
     MAX_MOVES_PER_DRONE,
     SQUARE_FOOTPRINT,
     PlanningFootprint,
+    check_plan,
 )
 from flightrisk.drone.safety import MAX_MOVE_CM, MIN_MOVE_CM
 from flightrisk.fleet_protocol import make_assign_lanes
@@ -27,6 +39,7 @@ from flightrisk.fleet_protocol import make_assign_lanes
 __all__ = [
     "DronePlan",
     "FleetSearchPlan",
+    "FrozenLane",
     "PatternChoice",
     "PatternKind",
     "Point",
@@ -43,6 +56,31 @@ _VECTOR_FOR = {name: vector for vector, name in _DIRECTION_FOR.items()}
 _OPPOSITE = {"right": "left", "left": "right", "forward": "back", "back": "forward"}
 
 Point = tuple[int, int]
+
+
+class FrozenLane(dict):
+    """One immutable ``{"direction", "distance_cm"}`` lane.
+
+    A ``dict`` (so the executor's ``parse_lanes`` and JSON accept it) whose
+    mutating methods raise ``TypeError``. ``dict(lane)`` is a mutable copy.
+    """
+
+    def _refuse(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("plan lanes are immutable; build a new plan instead")
+
+    __setitem__ = __delitem__ = __ior__ = _refuse
+    clear = pop = popitem = setdefault = update = _refuse
+
+    def __hash__(self) -> int:  # type: ignore[override]
+        return hash(tuple(sorted(self.items())))
+
+    def __reduce__(self) -> tuple:
+        return (FrozenLane, (dict(self),))
+
+
+def _freeze(lane: Any) -> Any:
+    """A ``FrozenLane`` copy of a lane mapping; anything else is kept for ``check_plan`` to report."""
+    return FrozenLane(lane) if isinstance(lane, Mapping) else lane
 
 
 class PatternKind(str, Enum):
@@ -84,10 +122,11 @@ class DronePlan:
     """One drone's part of a fleet plan.
 
     ``lanes`` are ``{"direction", "distance_cm"}`` relative moves from
-    ``takeoff_cm``, each already within the Tello's 20-500 cm range. The
-    first ``transit_lanes`` of them fly from the takeoff point to the start
-    of the search pattern. ``start_offset_s`` is how long after the fleet
-    start this drone should start.
+    ``takeoff_cm``, each already within the Tello's 20-500 cm range; they are
+    stored as an immutable tuple of ``FrozenLane``. The first
+    ``transit_lanes`` of them fly from the takeoff point to the start of the
+    search pattern. ``start_offset_s`` is how long after the fleet start this
+    drone should start.
     """
 
     drone_id: str
@@ -97,6 +136,10 @@ class DronePlan:
     lanes: tuple[dict, ...]
     transit_lanes: int = 0
     start_offset_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "lanes", tuple(_freeze(lane) for lane in self.lanes))
+        object.__setattr__(self, "takeoff_cm", tuple(self.takeoff_cm))
 
     def waypoints(self) -> list[Point]:
         """Fleet-frame positions: the takeoff point, then the end of every lane."""
@@ -164,13 +207,15 @@ class DronePlan:
 class FleetSearchPlan:
     """A complete fleet search plan.
 
-    ``problems`` lists every reason the plan must not be flown (a path that
-    leaves its geofence, a separation below the required minimum, coverage
-    below 99.5% with the real footprint). A plan with problems is still
-    returned so the operator can see why it was refused; ``feasible`` is
-    false for it and ``assign_lanes_message`` refuses to build its messages.
-    ``standoff_cm`` is how far behind the area's near edge drones may fly;
-    ``coverage`` is the simulated fraction of the area the camera sees.
+    ``problems`` lists every reason ``check_plan`` found when the plan was
+    built (a path that leaves its geofence, a separation below the required
+    minimum, coverage below 99.5% with the gate cameras). A plan with
+    problems is still returned so the operator can see why it was refused.
+    ``checked_digest`` is the ``content_digest`` of what was checked, and
+    ``feasible`` is true only while it still matches and there were no
+    problems. ``standoff_cm`` is how far behind the area's near edge drones
+    fly, and ``max_standoff_cm`` the most that was allowed; ``coverage`` is
+    the fraction of the area the gate cameras see.
     """
 
     pattern: PatternKind
@@ -187,10 +232,47 @@ class FleetSearchPlan:
     min_separation_cm: float | None = None
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM
     coverage: float | None = None
+    max_standoff_cm: float | None = None
+    checked_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "drones", tuple(self.drones))
+        object.__setattr__(self, "problems", tuple(self.problems))
+
+    def content_digest(self) -> str:
+        """SHA-256 of everything ``check_plan`` reads (not ``reason``, ``lkp_cm``, ``problems`` or ``coverage``)."""
+        footprint = None
+        if self.footprint is not None:
+            footprint = (self.footprint.to_dict(), repr(self.footprint.source))
+        content = (
+            self.area_cm, self.sweep_cm, self.gap_cm, self.standoff_cm, self.geofence_cm, self.min_separation_cm,
+            self.placement_tolerance_cm, self.max_standoff_cm, footprint,
+            tuple(
+                (d.drone_id, d.takeoff_cm, d.region, d.alt_cm, d.transit_lanes, d.start_offset_s,
+                 tuple(tuple(sorted(lane.items())) if isinstance(lane, Mapping) else repr(lane) for lane in d.lanes))
+                for d in self.drones
+            ),
+        )
+        return hashlib.sha256(repr(content).encode("utf-8")).hexdigest()
 
     @property
     def feasible(self) -> bool:
-        return not self.problems
+        """No problems were found, and the plan has not changed since it was checked."""
+        return not self.problems and self.checked_digest is not None and self.checked_digest == self.content_digest()
+
+    @property
+    def unchecked(self) -> tuple[str, ...]:
+        """The safety checks this plan was built without; non-empty means not flyable by default."""
+        reasons = []
+        if self.footprint is None or self.footprint.kind == SQUARE_FOOTPRINT:
+            reasons.append("coverage is modelled with the idealised square footprint, not the real camera")
+        if self.geofence_cm is None:
+            reasons.append("geofence_cm is None (no geofence check)")
+        if self.min_separation_cm is None and len(self.drones) > 1:
+            reasons.append("min_separation_cm is None (no minimum separation check)")
+        if self.max_standoff_cm is None:
+            reasons.append("max_standoff_cm is None (no standoff check)")
+        return tuple(reasons)
 
     @property
     def footprint_kind(self) -> str:
@@ -212,7 +294,10 @@ class FleetSearchPlan:
         return Region(0, -self.standoff_cm, width, depth)
 
     def camera_footprints(self) -> list[cs.Footprint]:
-        """The real camera footprint of every drone, at its altitude slot."""
+        """The real camera footprint of every drone holding exactly its altitude slot (for estimates).
+
+        The coverage gate uses the smaller ``fleet_plan_check.gate_footprints`` instead.
+        """
         if self.footprint is None:
             return [cs.RectFootprint.square(self.sweep_cm)] * len(self.drones)
         return [self.footprint.camera(drone.alt_cm) for drone in self.drones]
@@ -227,14 +312,28 @@ class FleetSearchPlan:
         """Required takeoff pose ``(x_cm, y_cm, heading_deg)`` per drone; heading is always 0."""
         return {plan.drone_id: (plan.takeoff_cm[0], plan.takeoff_cm[1], 0) for plan in self.drones}
 
-    def assign_lanes_message(self, drone_id: str, *, allow_infeasible: bool = False) -> dict[str, Any]:
-        """A validated ``assign_lanes`` message for one drone of a feasible plan.
+    def assign_lanes_message(
+        self, drone_id: str, *, allow_unchecked: bool = False, allow_infeasible: bool = False
+    ) -> dict[str, Any]:
+        """A validated ``assign_lanes`` message for one drone of a flyable plan.
 
-        Raises ``ValueError`` for a plan with problems unless
-        ``allow_infeasible`` is true, which is only for previews and tests.
+        Runs ``check_plan`` on the plan as it is now (not the problems
+        recorded when it was built) and raises ``ValueError`` on any problem.
+        Also raises for a plan in ``unchecked`` (a safety check switched off,
+        or the square model) unless ``allow_unchecked`` is true, an explicit
+        override for a model study or a test. ``allow_infeasible`` skips every
+        check; it is only for previews and tests.
         """
-        if self.problems and not allow_infeasible:
-            raise ValueError(f"refusing assign_lanes for {drone_id}: the plan is infeasible: " + "; ".join(self.problems))
+        if not allow_infeasible:
+            problems = check_plan(self)
+            if problems:
+                raise ValueError(f"refusing assign_lanes for {drone_id}: the plan is infeasible: " + "; ".join(problems))
+            if self.unchecked and not allow_unchecked:
+                raise ValueError(
+                    f"refusing assign_lanes for {drone_id}: the plan was built without safety checks ("
+                    + "; ".join(self.unchecked)
+                    + "); pass allow_unchecked=True only for a model study or a test"
+                )
         fields = self.drone(drone_id).assign_lanes_fields()
         return make_assign_lanes(drone_id, fields["alt_cm"], fields["lanes"], fields["zone"])
 
@@ -252,8 +351,10 @@ class FleetSearchPlan:
             "geofence_cm": self.geofence_cm,
             "min_separation_cm": self.min_separation_cm,
             "placement_tolerance_cm": self.placement_tolerance_cm,
+            "max_standoff_cm": self.max_standoff_cm,
             "coverage": self.coverage,
             "feasible": self.feasible,
+            "unchecked": list(self.unchecked),
             "problems": list(self.problems),
             "reason": self.reason,
             "drones": [plan.to_dict() for plan in self.drones],
@@ -328,17 +429,30 @@ def _leg_moves(start: Point, end: Point, region: Region) -> list[dict]:
     raise ValueError(f"a {distance} cm leg from {start} cannot be flown inside region {region}")
 
 
+def _move_count(start: Point, end: Point) -> int:
+    """How many moves ``_leg_moves`` makes for one leg (an overshoot pair for a short one)."""
+    distance = abs(end[0] - start[0]) + abs(end[1] - start[1])
+    if distance == 0:
+        return 0
+    return 2 if distance < MIN_MOVE_CM else max(1, math.ceil(distance / MAX_MOVE_CM))
+
+
+def _check_move_cap(count: int) -> None:
+    if count > MAX_MOVES_PER_DRONE:
+        raise ValueError(
+            f"the pattern needs {count} moves for one drone, above the {MAX_MOVES_PER_DRONE} move cap; "
+            "use a wider sweep or a smaller area"
+        )
+
+
 def _polyline_lanes(points: Iterable[Point], region: Region) -> list[dict]:
     pts = _simplify(points)
     for point in pts:
         if not region.contains(point):
             raise AssertionError(f"internal error: waypoint {point} outside region {region}")
+    # Count before building, so an oversized pattern is refused without allocating it.
+    _check_move_cap(sum(_move_count(start, end) for start, end in itertools.pairwise(pts)))
     lanes: list[dict] = []
     for start, end in itertools.pairwise(pts):
         lanes.extend(_leg_moves(start, end, region))
-    if len(lanes) > MAX_MOVES_PER_DRONE:
-        raise ValueError(
-            f"the pattern needs {len(lanes)} moves for one drone, above the {MAX_MOVES_PER_DRONE} move cap; "
-            "use a wider sweep or a smaller area"
-        )
     return lanes

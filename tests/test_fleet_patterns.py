@@ -152,13 +152,16 @@ def test_feasible_plans_are_accepted_by_a_real_lane_executor():
     # lanes leave a 95 cm strip that neither may enter, which the coverage
     # gate refuses, so those square-model pairs are no longer feasible.
     room = tello_sweep_model(max_range_m=4.0)
+    # (plan, allow_unchecked): the square-model plan is a model study, which
+    # assign_lanes_message refuses without the explicit override.
     plans = [
-        fp.plan_search(["drone-1", "drone-2"], 400, None, footprint=room, geofence_cm=450),
-        fp.plan_search(["drone-1", "drone-2"], 400, None, (200, 200), footprint=room, geofence_cm=450),
-        fp.plan_search(["drone-1"], (400, 300), 60, (120, 90), footprint=SQUARE, geofence_cm=450),
+        (fp.plan_search(["drone-1", "drone-2"], 400, None, footprint=room, geofence_cm=450), False),
+        (fp.plan_search(["drone-1", "drone-2"], 400, None, (200, 200), footprint=room, geofence_cm=450), False),
+        (fp.plan_search(["drone-1"], (400, 300), 60, (120, 90), footprint=SQUARE, geofence_cm=450), True),
     ]
-    for plan in plans:
+    for plan, allow_unchecked in plans:
         assert plan.feasible, plan.problems
+        assert bool(plan.unchecked) == allow_unchecked, plan.unchecked
         for drone in plan.drones:
             fake = FakeTelloController(name=drone.drone_id, battery=90)
             fake.connect()
@@ -171,7 +174,9 @@ def test_feasible_plans_are_accepted_by_a_real_lane_executor():
                 logger=StructuredLogger(component="test-fleet-patterns"),
             )
             try:
-                assert executor.handle_assign_lanes(plan.assign_lanes_message(drone.drone_id))
+                assert executor.handle_assign_lanes(
+                    plan.assign_lanes_message(drone.drone_id, allow_unchecked=allow_unchecked)
+                )
             finally:
                 executor.shutdown(timeout=2.0)
             acks = [m for m in sent if m.get("type") == "ack" and m.get("for") == "assign_lanes"]

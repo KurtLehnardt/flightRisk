@@ -233,8 +233,14 @@ def test_lane_spacing_wider_than_the_view_is_refused_with_a_clear_error():
 
 
 def test_ring_pattern_falls_back_when_the_along_track_window_is_too_short():
-    shallow_view = cs.ForwardFootprint(near_cm=100, far_cm=130, half_tan=1.0)
-    plan = fp.plan_search(["a", "b"], 600, None, (300, 300), footprint=shallow_view, geofence_cm=None)
+    # A ForwardFootprint describes one altitude, so both drones fly the same
+    # slot. Within the altitude margin (near edge 130 cm at 130 cm height) and
+    # the 10 cm placement tolerance, the window is 140-170 cm: too short for rings.
+    shallow_view = cs.ForwardFootprint(near_cm=100, far_cm=180, half_tan=1.0)
+    plan = fp.plan_search(
+        ["a", "b"], 600, None, (300, 300), footprint=shallow_view, alt_slots_cm=(100, 100), geofence_cm=None
+    )
+    assert plan.footprint.along_cm < fp.MIN_SWEEP_CM
     assert plan.pattern is fp.PatternKind.PARALLEL_SPLIT
     assert "cannot be built here" in plan.reason
     assert plan.lkp_cm == (300, 300)
