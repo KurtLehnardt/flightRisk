@@ -29,8 +29,8 @@ import inspect
 import threading
 import time
 import types
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np

@@ -28,7 +28,7 @@ class SafetyPolicy:
     rth_min_battery_pct: int = DEFAULT_RTH_MIN_BATTERY_PCT
 
     @classmethod
-    def from_config(cls, config: AmberConfig | None = None, **overrides) -> "SafetyPolicy":
+    def from_config(cls, config: AmberConfig | None = None, **overrides) -> SafetyPolicy:
         """Thresholds from ``config.drone`` (``battery_warn_threshold`` and
         ``battery_critical_threshold``), with optional keyword overrides."""
         drone = (config or get_config()).drone

@@ -13,11 +13,11 @@ call below. See ``docs/drone-interface.md``.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from flightrisk.config import get_config
 from flightrisk.drone.registry import register
-
 
 # --- DJI Tello (djitellopy) -------------------------------------------------
 

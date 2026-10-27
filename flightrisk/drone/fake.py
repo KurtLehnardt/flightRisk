@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -79,7 +80,7 @@ class FakeDroneConfig:
     frame_width: int = 640
 
     @classmethod
-    def from_settings(cls, settings: Mapping[str, Any]) -> "FakeDroneConfig":
+    def from_settings(cls, settings: Mapping[str, Any]) -> FakeDroneConfig:
         """Build a config from loosely typed settings, ignoring unknown keys.
 
         Accepts the strings a command line produces: numbers, ``true``/
