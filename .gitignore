@@ -50,3 +50,11 @@ ios/AmberDrone/Pods/
 eval_data/**/*.jpg
 eval_data/**/*.png
 !eval_data/sample/labels.json
+
+# Datasets and demo media (never committed; keep the READMEs)
+datasets/*
+!datasets/README.md
+demo/*.mp4
+demo/*.jpg
+demo/*.png
+demo/screenshots/
