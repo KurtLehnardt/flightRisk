@@ -445,3 +445,70 @@ def test_resume_is_never_retried_automatically():
     assert "resume" not in fp.RETRYABLE_COMMAND_TYPES
     assert fp.RETRYABLE_COMMAND_TYPES == {"land", "emergency_land_all", "hold", "assign_lanes", "handover"}
     assert not {"takeoff", "start_at", "nudge", "resume"} & fp.RETRYABLE_COMMAND_TYPES
+
+
+# ===========================================================================
+# Refusing v1 in a v2-only deployment
+# ===========================================================================
+
+UNFENCED_V1_MOTION = [
+    fp.make_takeoff(),
+    fp.make_start_at(12.5),
+    fp.make_heartbeat(1),
+    fp.make_clock(0.25),
+    fp.make_assign_lanes("drone-1", 100, LANES, ZONE),
+]
+
+
+def test_negotiate_proto_can_refuse_v1():
+    assert fp.negotiate_proto(2, local_min=2) == 2
+    assert fp.negotiate_proto(3, local_min=2) == 2
+    with pytest.raises(fp.ProtocolError, match="requires at least v2"):
+        fp.negotiate_proto(1, local_min=2)  # the peer announces proto 1
+    assert fp.negotiate_proto(1) == 1  # the default still accepts v1
+    for bad in (0, 3, True, 2.0, None):
+        with pytest.raises(fp.ProtocolError):
+            fp.negotiate_proto(2, local_min=bad)
+    for bad in (0, True, "2", None):
+        with pytest.raises(fp.ProtocolError):
+            fp.negotiate_proto(2, local_max=bad)
+
+
+@pytest.mark.parametrize("msg", UNFENCED_V1_MOTION, ids=lambda m: m["type"])
+def test_require_fence_refuses_unfenced_motion_on_a_v1_link(msg):
+    # The ground never sent a hello, so the link is v1: by default this is
+    # accepted (single-ground legacy mode) ...
+    assert fp.validate_ground_to_edge(msg, proto=1) == msg["type"]
+    # ... and a v2-only edge refuses it.
+    with pytest.raises(fp.ProtocolError, match="unfenced"):
+        fp.validate_ground_to_edge(msg, proto=1, require_fence=True)
+    with pytest.raises(fp.ProtocolError):
+        fp.decode(json.dumps(msg), direction=G2E, proto=1, require_fence=True)
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_for_direction(msg, G2E, proto=1, require_fence=True)
+
+
+def test_require_fence_refuses_a_bare_heartbeat_as_the_first_message():
+    heartbeat = {"type": "heartbeat", "seq": 0}
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_ground_to_edge(heartbeat, proto=1, require_fence=True)
+    fenced = fp.make_heartbeat(0, fence=FENCE)
+    assert fp.validate_ground_to_edge(fenced, proto=1, require_fence=True) == "heartbeat"
+
+
+def test_require_fence_accepts_fenced_motion_and_never_fences_landing():
+    for msg in (fp.make_takeoff(fence=FENCE), fp.make_start_at(1.0, fence=FENCE, plan_id="p-1"),
+                fp.make_clock(0.1, fence=FENCE),
+                fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=1)):
+        for proto in (1, 2):
+            assert fp.validate_ground_to_edge(msg, proto=proto, require_fence=True) == msg["type"]
+    # A fence without a cmd_id is still unfenced motion for a command.
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_ground_to_edge({"type": "takeoff", **FENCE.fields()}, proto=1, require_fence=True)
+    for msg in ({"type": "land"}, {"type": "emergency_land_all", "epoch": "junk"}):
+        for proto in (1, 2):
+            assert fp.validate_ground_to_edge(msg, proto=proto, require_fence=True) == msg["type"]
+            assert fp.decode(json.dumps(msg), direction=G2E, proto=proto, require_fence=True) == msg
+    assert fp.decode('{"type":"land","x":NaN}', direction=G2E, proto=1, require_fence=True) == {"type": "land"}
+    # Unfenced read-only and legacy messages are the consumer's call.
+    assert fp.validate_ground_to_edge(fp.make_ping(1.0), proto=1, require_fence=True) == "ping"

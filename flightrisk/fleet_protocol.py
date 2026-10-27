@@ -1190,13 +1190,21 @@ def _message_type(msg: Any) -> str:
     return mtype
 
 
-def validate_ground_to_edge(msg: Any, *, proto: int) -> str:
+def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False) -> str:
     """Strict check for a message an edge received from a ground.
 
     Like ``validate_message`` with *proto*, but also rejects any type that
     is not a ground-to-edge type of that version: unknown commands, edge or
     peer messages, an edge-form ``hello``, and v2-only commands on a v1 link.
     The legacy ``set_target`` and ``stream_video`` messages pass by type only.
+
+    With *require_fence*, motion and control (``FENCED_COMMAND_TYPES`` and
+    ``FENCED_CONTROL_TYPES``) must carry a valid fence, and commands a
+    ``cmd_id``, whatever the link version. An edge in a v2-only or
+    multi-ground deployment sets it, so a ground that never sends ``hello``,
+    starts with a bare ``heartbeat`` or announces ``proto: 1`` cannot move
+    the drone or feed its watchdog with unfenced v1 messages. Landing is
+    still never fenced.
     """
     mtype = _message_type(msg)
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES:
@@ -1207,6 +1215,13 @@ def validate_ground_to_edge(msg: Any, *, proto: int) -> str:
     validate_message(msg, proto=proto)
     if mtype == HELLO and not _is_ground_hello(msg):
         raise ProtocolError("a ground-to-edge 'hello' must have role 'leader' or 'standby'")
+    if require_fence and (mtype in FENCED_COMMAND_TYPES or mtype in FENCED_CONTROL_TYPES):
+        try:
+            _validate_fence(msg, mtype, PROTOCOL_VERSION)
+        except ProtocolError as exc:
+            raise ProtocolError(
+                f"unfenced {mtype!r} refused: this edge requires a fence on every link ({exc})"
+            ) from exc
     return mtype
 
 
@@ -1235,10 +1250,14 @@ def validate_peer_message(msg: Any) -> str:
     return validate_message(msg, proto=PROTOCOL_VERSION)
 
 
-def validate_for_direction(msg: Any, direction: str, *, proto: int) -> str:
-    """Dispatch to the strict validator for *direction* (``DIRECTION_*``)."""
+def validate_for_direction(msg: Any, direction: str, *, proto: int, require_fence: bool = False) -> str:
+    """Dispatch to the strict validator for *direction* (``DIRECTION_*``).
+
+    *require_fence* applies to the ground-to-edge direction only (see
+    ``validate_ground_to_edge``).
+    """
     if direction == DIRECTION_GROUND_TO_EDGE:
-        return validate_ground_to_edge(msg, proto=proto)
+        return validate_ground_to_edge(msg, proto=proto, require_fence=require_fence)
     if direction == DIRECTION_EDGE_TO_GROUND:
         return validate_edge_to_ground(msg, proto=proto)
     if direction == DIRECTION_PEER:
@@ -1406,6 +1425,7 @@ def decode(
     direction: str,
     proto: int,
     max_bytes: int = MAX_MESSAGE_BYTES,
+    require_fence: bool = False,
 ) -> dict[str, Any]:
     """Parse and strictly validate one received control message.
 
@@ -1429,7 +1449,7 @@ def decode(
             if landing is not None:
                 return {"type": landing}
         raise
-    validate_for_direction(msg, direction, proto=proto)
+    validate_for_direction(msg, direction, proto=proto, require_fence=require_fence)
     return msg
 
 
@@ -1486,25 +1506,40 @@ def negotiate_proto(
     peer_proto: Any,
     *,
     local_max: int = PROTOCOL_VERSION,
+    local_min: int = MIN_PROTOCOL_VERSION,
     current: int | None = None,
 ) -> int:
     """The protocol version to use with a peer that announced *peer_proto*.
 
-    The agreed version is ``min(local_max, peer_proto)``. *current* is the
-    version an earlier ``hello`` on the same connection agreed, if any: the
-    version can never change on a live connection, so a repeated ``hello``
-    that would change it raises ``ProtocolError`` (the receiver should drop
-    the connection). This blocks a downgrade from v2 to the unfenced v1 rules
-    mid-connection.
+    The agreed version is ``min(local_max, peer_proto)``. *local_min* is the
+    lowest version this node accepts: a v2-only deployment (multi-ground
+    mode without ``FLIGHTRISK_FLEET_LEGACY=1``) passes 2, and then a peer
+    that announces ``proto: 1`` raises ``ProtocolError`` and the receiver
+    should close the connection. *current* is the version an earlier
+    ``hello`` on the same connection agreed, if any: the version can never
+    change on a live connection, so a repeated ``hello`` that would change
+    it raises ``ProtocolError`` (the receiver should drop the connection).
+    This blocks a downgrade from v2 to the unfenced v1 rules mid-connection.
+
+    A peer that never sends ``hello`` never reaches this function; a node
+    that requires v2 must treat such a link as unusable for motion (see
+    ``validate_ground_to_edge(..., require_fence=True)``).
     """
     if not (_is_int(peer_proto) and MIN_PROTOCOL_VERSION <= peer_proto <= _MAX_PROTO_FIELD):
         raise ProtocolError(
             f"peer protocol version must be an integer from {MIN_PROTOCOL_VERSION} to "
             f"{_MAX_PROTO_FIELD}, got {_short(peer_proto)}"
         )
+    if not (_is_int(local_max) and MIN_PROTOCOL_VERSION <= local_max <= _MAX_PROTO_FIELD):
+        raise ProtocolError(f"local_max must be a protocol version, got {_short(local_max)}")
+    if not (_is_int(local_min) and MIN_PROTOCOL_VERSION <= local_min <= local_max):
+        raise ProtocolError(f"local_min must be a protocol version from 1 to local_max, got {_short(local_min)}")
     agreed = min(local_max, peer_proto)
-    if agreed < MIN_PROTOCOL_VERSION:
-        raise ProtocolError(f"no common protocol version (local {local_max}, peer {peer_proto})")
+    if agreed < local_min:
+        raise ProtocolError(
+            f"peer speaks protocol v{peer_proto}, but this node requires at least v{local_min}; "
+            "close the connection (a v1 peer is accepted only in legacy mode, FLIGHTRISK_FLEET_LEGACY=1)"
+        )
     if current is not None and agreed != current:
         raise ProtocolError(
             f"protocol version cannot change on a live connection (was v{current}, hello says v{agreed})"

@@ -53,6 +53,16 @@ later pull requests, and the obligations they must meet are listed in
 - **Legacy mode.** Per the plan, the leader refuses to plan a mission that
   includes a v1 edge unless `FLIGHTRISK_FLEET_LEGACY=1` is set. That rule is
   implemented with the leader, not here.
+- **Refusing v1.** Two primitives let a v2-only deployment refuse v1:
+  - `negotiate_proto(peer_proto, local_min=2)` raises `ProtocolError` when
+    the peer announces `proto: 1`; the receiver closes the connection.
+  - `validate_ground_to_edge(msg, proto=..., require_fence=True)` (also
+    accepted by `validate_for_direction` and `decode`) refuses unfenced
+    motion and control (`takeoff`, `assign_lanes`, `start_at`, `hold`,
+    `resume`, `nudge`, `handover`, `heartbeat`, `clock`) whatever the link
+    version, so a ground that never sends `hello`, or whose first message is
+    a bare `heartbeat`, cannot move the drone or feed its watchdog. Landing
+    is still accepted unfenced.
 
 ## Message table
 
@@ -254,9 +264,10 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   passed for a retry.
 - **Downgrade protection.** An edge must not accept unfenced motion commands
   on any connection once it has adopted a v2 epoch, and must accept them on a
-  v1 link only in the single-ground legacy configuration. This is an
-  edge-authority rule (later pull request), recorded here because the
-  protocol depends on it.
+  v1 link only in the single-ground legacy configuration. The protocol
+  provides the primitives (`local_min`, `require_fence`; see "Versions and
+  negotiation"); using them is the edge authority's job (later pull
+  request).
 
 ## Caps and strictness
 
