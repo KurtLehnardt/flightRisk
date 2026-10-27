@@ -26,6 +26,7 @@ from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
 from flightrisk.vision.detector import PersonDetector
+from flightrisk.vision.face import TargetReport
 from flightrisk.vision.reid import PersonReID
 from flightrisk.vision.quality import ImageQualityScorer
 from flightrisk.vision.scorer import MatchScorer
@@ -458,6 +459,13 @@ FLEET_PING_TIMEOUT_S = 1.0
 
 #: Seconds the LAND ALL broadcast may wait on the ground transport.
 LAND_ALL_TIMEOUT_S = 2.0
+
+#: Seconds ``_land_all`` waits for all its paths together. Longer than the
+#: local fleet's own wait for its drones (``_CALL_DEADLINE_S`` in
+#: flightrisk/drone/fleet.py, 30 s), so the local path reports each drone that
+#: did not land itself. A path still running then is reported as not having
+#: reached any drone, so LAND ALL always answers.
+LAND_ALL_PATHS_DEADLINE_S = 35.0
 
 #: Interval of the fleet monitor, which refreshes ``fleet_status`` and
 #: checks for lost drones.
@@ -903,13 +911,18 @@ def _land_all() -> dict:
     written to every connected edge at once; the fleet coordinator, which
     sends ``emergency_land_all`` to each fleet link in turn as belt and
     braces; and ``land`` on every drone of a local fleet (Tello or MAVLink
-    source). The paths run at the same time, each on its own thread, and the
+    source), all drones at once, so a drone whose land is never confirmed
+    does not delay the land to the others (``DroneFleet.broadcast_command``
+    still reports each drone's failure). The paths run at the same time, each on its own thread, and the
     broadcast is started first. A coordinator send that waits out its
     timeout on one stalled link therefore never delays the land order to any
-    other drone, and a failure on one path never stops another. A
-    ``KeyboardInterrupt`` or ``SystemExit`` is re-raised only after every
-    path has finished. When no path reaches any drone, the failure is logged
-    at CRITICAL and sent to every browser.
+    other drone, and a failure on one path never stops another. This waits
+    for the paths at most ``LAND_ALL_PATHS_DEADLINE_S``; a path still
+    running then is logged and reported as ``None``, and its thread keeps
+    running in the background. A ``KeyboardInterrupt`` or ``SystemExit`` is
+    re-raised only after every path has finished or that wait has ended.
+    When no path reaches any drone, the failure is logged at CRITICAL and
+    sent to every browser.
 
     Returns how many drones each path reached (``None`` for a path that is
     not configured or that failed) and whether any path reached a drone.
@@ -917,7 +930,10 @@ def _land_all() -> dict:
     supervisor = app_state.fleet_supervisor
     transport = app_state.ground_transport
     fleet = app_state.fleet
-    report: dict = {"coordinator": None, "transport": None, "local": None}
+    # Each path's thread stores its count here; the report returned is a
+    # copy taken when the wait ends, so a path that finishes later changes
+    # nothing the caller holds.
+    reached: dict = {"coordinator": None, "transport": None, "local": None}
     interrupts: list[BaseException] = []
 
     paths = []
@@ -937,11 +953,12 @@ def _land_all() -> dict:
             lambda: sum(1 for exc in fleet.broadcast_command("land").values() if exc is None),
         ))
 
+    deadline = time.monotonic() + LAND_ALL_PATHS_DEADLINE_S
     threads = []
     for name, what, send in paths:
         thread = threading.Thread(
             target=_run_land_all_path,
-            args=(report, interrupts, name, what, send),
+            args=(reached, interrupts, name, what, send),
             name=f"land-all-{name}",
             daemon=True,
         )
@@ -950,11 +967,18 @@ def _land_all() -> dict:
         except Exception:
             # No thread could be started: run this path here rather than skip it.
             log.error("LAND ALL: could not start a thread for %s; running it inline", what, exc_info=True)
-            _run_land_all_path(report, interrupts, name, what, send)
+            _run_land_all_path(reached, interrupts, name, what, send)
             continue
-        threads.append(thread)
-    for thread in threads:
-        thread.join()
+        threads.append((name, what, thread))
+    for _, _, thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    # Which paths are still running is read before the copy, so a path that
+    # finished is always counted.
+    unfinished = [(name, what) for name, what, thread in threads if thread.is_alive()]
+    report: dict = dict(reached)
+    for name, what in unfinished:
+        report[name] = None
+        log.error("LAND ALL: %s did not finish within %g s", what, LAND_ALL_PATHS_DEADLINE_S)
 
     report["reached_any"] = any(n for n in (report["coordinator"], report["transport"], report["local"]))
     if report["reached_any"]:
@@ -1139,7 +1163,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.target_photo = base64.b64encode(buf).decode("utf-8")
         # Also set face recognition target
         if app_state.face:
-            app_state.face.set_target_from_file(target_path)
+            if not app_state.face.set_target_from_file(target_path):
+                log.warning("face_target_rejected_at_startup")
         # Set configurable signal targets
         if app_state.signal_registry:
             app_state.signal_registry.set_target(img)
@@ -1294,6 +1319,13 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         # _init_pipeline() call (e.g. via restart_dashboard) before binding a
         # new server on the same port -- otherwise start() fails with an
         # address-already-in-use error.
+        if source_config.fleet_net == "ap":
+            # AP mode joins each laptop to a Tello's open access point, so no
+            # wildcard or name may be bound, whoever built the config.
+            from flightrisk.transport import check_literal_hosts, parse_bind_hosts
+
+            check_literal_hosts(parse_bind_hosts(source_config.edge_host))
+
         old_transport = app_state.ground_transport
         if old_transport is not None:
             try:
@@ -1365,6 +1397,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         log.info(
             "edge_ground_station_started",
             host=source_config.edge_host,
+            bound_hosts=list(transport.bound_hosts),
+            unbound_hosts=list(transport.unbound_hosts),
             port=transport.port,
             stream_video=app_state.stream_video,
             fleet=list(source_config.fleet_drones),
@@ -1425,7 +1459,14 @@ def upload_target():
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
     print(f"[upload-target] Target saved via HTTP POST ({len(img_data)//1024}KB)")
-    return jsonify({"success": True, "face_detected": face_ok})
+    return jsonify({"success": True, "face_detected": face_ok,
+                    "face_report": _face_report()})
+
+
+def _face_report() -> dict | None:
+    """Operator-facing result of the last face enrolment (None without a recognizer)."""
+    rep = getattr(app_state.face, "target_report", None) if app_state.face else None
+    return rep.as_dict() if isinstance(rep, TargetReport) else None
 
 
 @app.route("/api/clear-target", methods=["POST"])
@@ -1661,7 +1702,15 @@ def on_set_target(data):
                 _r = app_state.reid.extract_embedding(img)
                 reid_emb = _r.tolist() if _r is not None else None
             if app_state.face is not None:
-                _f = app_state.face.extract_embedding(img)
+                _f = getattr(app_state.face, "target_embedding", None)
+                if not isinstance(_f, np.ndarray):
+                    # A real recognizer that rejected the photo has cleared its
+                    # target; do not push a face target to edge devices that the
+                    # local scorer does not have.
+                    if isinstance(getattr(app_state.face, "target_report", None), TargetReport):
+                        _f = None
+                    else:
+                        _f = app_state.face.extract_embedding(img)
                 face_emb = _f.tolist() if _f is not None else None
             if app_state.ground_station is not None:
                 app_state.ground_station.set_target(reid_emb, face_emb)
@@ -1672,6 +1721,7 @@ def on_set_target(data):
         emit("target_set", {
             "success": True,
             "face_detected": face_ok,
+            "face_report": _face_report(),
             "quality": {
                 "overall_score": quality_report.overall_score,
                 "grade": quality_report.grade,
@@ -1702,7 +1752,8 @@ def on_revert_target(data):
         face_ok = app_state.face.set_target(img)
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
-    emit("target_set", {"success": True, "face_detected": face_ok, "reverted_to": version_id})
+    emit("target_set", {"success": True, "face_detected": face_ok,
+                        "face_report": _face_report(), "reverted_to": version_id})
 
 
 @socketio.on("set_description")
@@ -1975,6 +2026,9 @@ def _run_fleet_action(action: str) -> None:
     supervisor = app_state.fleet_supervisor
     if supervisor is None:
         emit("error", {"message": "No fleet is configured (start the dashboard with --source edge --fleet ...)"})
+        return
+    if alert_latch.phase is AlertPhase.RESOLVED:
+        emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
         return
 
     def _work():

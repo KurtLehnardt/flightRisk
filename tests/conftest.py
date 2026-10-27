@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import threading
+import time
 from typing import Callable
 
 import numpy as np
@@ -103,7 +104,12 @@ class FakeTelloWire:
     20 a second, each carrying the current ``height_cm`` as ``h``. They are
     stored in djitellopy's per-drone ``"state"`` entry the way its state
     receiver thread stores them. Change ``height_cm`` to move the drone, and
-    call ``stop_state()`` to make the state stream go silent.
+    call ``stop_state()`` to make the state stream go silent. Each packet
+    also carries ``tof_cm`` as ``tof`` (10, a Tello on the ground, unless
+    changed) and the motor time as ``time``: whole seconds, starting at 5,
+    that go up in real time while ``motors_on`` is true (call
+    ``set_motors(on)`` to switch). A field named in ``omit_state_fields`` is
+    left out of every packet.
     """
 
     def __init__(
@@ -123,6 +129,11 @@ class FakeTelloWire:
         self.on_send: Callable[[str], None] | None = None
         self.script: Callable[[str], list[tuple[str, float]] | None] | None = None
         self.height_cm = 0
+        self.tof_cm = 10
+        self.omit_state_fields: set[str] = set()
+        self._motors_on = False
+        self._motor_time_s = 5.0
+        self._motors_since = 0.0
         self._lock = threading.Lock()
         # Delayed replies not yet given, as (command, timer).
         self._pending: list[tuple[str, threading.Timer]] = []
@@ -221,15 +232,37 @@ class FakeTelloWire:
             self._pending.append(entry)
         timer.start()
 
+    @property
+    def motors_on(self) -> bool:
+        return self._motors_on
+
+    def set_motors(self, on: bool) -> None:
+        """Start or stop the motors: the packet field ``time`` goes up in real time while they run."""
+        with self._lock:
+            now = time.monotonic()
+            if self._motors_on:
+                self._motor_time_s += now - self._motors_since
+            self._motors_on = on
+            self._motors_since = now
+
+    def motor_time(self) -> int:
+        """The motor time a state packet sent now carries, in whole seconds."""
+        with self._lock:
+            elapsed = time.monotonic() - self._motors_since if self._motors_on else 0.0
+            return int(self._motor_time_s + elapsed)
+
     def send_state(self) -> None:
         """Deliver one Tello state packet carrying ``height_cm``, as djitellopy's state receiver does."""
         import djitellopy.tello as djitello
 
-        packet = (
-            "mid:-1;x:0;y:0;z:0;mpry:0,0,0;pitch:0;roll:0;yaw:0;vgx:0;vgy:0;vgz:0;"
-            f"templ:40;temph:42;tof:10;h:{int(self.height_cm)};bat:90;baro:0.00;time:5;"
-            "agx:0.00;agy:0.00;agz:-1000.00;"
-        )
+        fields = [
+            ("mid", "-1"), ("x", "0"), ("y", "0"), ("z", "0"), ("mpry", "0,0,0"),
+            ("pitch", "0"), ("roll", "0"), ("yaw", "0"), ("vgx", "0"), ("vgy", "0"), ("vgz", "0"),
+            ("templ", "40"), ("temph", "42"), ("tof", str(int(self.tof_cm))),
+            ("h", str(int(self.height_cm))), ("bat", "90"), ("baro", "0.00"),
+            ("time", str(self.motor_time())), ("agx", "0.00"), ("agy", "0.00"), ("agz", "-1000.00"),
+        ]
+        packet = "".join(f"{key}:{value};" for key, value in fields if key not in self.omit_state_fields)
         udp = djitello.drones.get(self.host)
         if udp is not None:
             udp["state"] = djitello.Tello.parse_state(packet)

@@ -80,8 +80,10 @@ Start the ground station first. Mac, one terminal each:
 
 ```
 scripts/demo_ground.sh
-DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
+
+In AP mode the ground station binds `127.0.0.1,10.42.0.1`. `FLIGHTRISK_GROUND_LOCAL=1` tells the Mac's edge-1 that the ground station is on the same machine, so it connects over loopback (`ws://127.0.0.1:9000`). The expectation is that it keeps running if the cable is pulled; that is UNVERIFIED on hardware, and `docs/fleet-setup.md` step 8 measures it. The inline form above exports the variable to the launcher. If you source `scripts/fleet_env.sh` yourself first, use `export FLIGHTRISK_GROUND_LOCAL=1`, because a plain shell variable is not inherited by the launcher. Station mode ignores the variable.
 
 Windows:
 
@@ -175,6 +177,8 @@ Run `venv/bin/python -m flightrisk.drone.coverage --min-px 32` and show the tabl
 
 Each edge enforces its own limits, whatever the ground station says: a 450 cm geofence around its takeoff point by default, as set by the demo launchers (the code default is 500 cm; override with `FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard (Ctrl/Cmd+Shift+L while typing in a text field), `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
 
+Confirming a match with a fleet lands every drone in place (LAND ALL); the Tello has no return-to-home, so drones land wherever they are.
+
 ### E5 · Privacy (1:00)
 
 Faces are not resolvable at search altitude, so the demo runs appearance-only (`FLIGHTRISK_APPEARANCE_ONLY=1`) on the ground station and on both edges. The face recognizer is never built and no face embeddings are sent. The edges do send person crops (JPEG, one per detection) and ReID appearance embeddings to the ground station over the token-authenticated WebSocket link, so say that plainly if asked. Match snapshots are not written unless `FLIGHTRISK_SAVE_CAPTURES` is turned on, and `--no-llm` starts no reasoning model. Tests use only synthetic images. Beyond that edge-to-ground link, the one place images can leave a device is the mobile app's cloud model option, and only after the user picks it and enters a key (`docs/privacy-design.md`).
@@ -191,10 +195,11 @@ Drop one rung per failure. Spend no more than 30 seconds fixing anything on stag
 2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because the ground station refuses a second live edge that claims the same drone id, so the fake edge would be turned away while the real one is still connected. Then start a fake edge in place of the missing drone:
 
    ```
+   export FLIGHTRISK_GROUND_LOCAL=1; source scripts/fleet_env.sh
    venv/bin/python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 160 --ws-url "$FLIGHTRISK_EDGE_WS"
    ```
 
-   Replace `drone-2` with the id the fleet panel showed for the missing drone. The fake drone flies in process with no hardware, so planning, sync, the scheduled start, the merged map and the re-task all still show. Tell the judges that drone-2 is now a software drone. On the AP path this needs the Mac's 10.42.0.1 address to stay up; if it does not, go to rung 3.
+   Replace `drone-2` with the id the fleet panel showed for the missing drone. The fake drone flies in process with no hardware, so planning, sync, the scheduled start, the merged map and the re-task all still show. Tell the judges that drone-2 is now a software drone. The `export FLIGHTRISK_GROUND_LOCAL=1` line makes the fake edge use loopback on the AP path, since the ground station is on this Mac; station mode ignores it.
 3. **Recorded video of the fleet flight.** Play `demo/fleet.mp4` (2:00 at most, recorded in rehearsal from the shot list below, kept on local disk and never committed) and give the core talk over it.
 4. **The N-drone fake-edge demo.** No drones and no network needed. Stop the live ground station and edge-1 with Ctrl-C first, because this launcher starts its own ground station on 127.0.0.1 ports 5555 and 9000:
 

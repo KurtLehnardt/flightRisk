@@ -497,6 +497,43 @@ def test_land_all_paths_do_not_wait_for_each_other(clean_app_state, monkeypatch)
     assert outcome["report"] == {"coordinator": 1, "transport": 1, "local": 1, "reached_any": True}
 
 
+def test_land_all_answers_when_a_path_never_returns(clean_app_state, monkeypatch, caplog):
+    """PR #91 review 2, F4: a LAND ALL path that never returns does not hold up LAND ALL or its ack.
+
+    The coordinator path blocks forever; the local fleet lands its drone.
+    ``_land_all`` returns at its deadline, reporting the coordinator path
+    as having reached nothing and logging it, and the path finishing later
+    does not change the report.
+    """
+    monkeypatch.setattr(app_module, "LAND_ALL_PATHS_DEADLINE_S", 0.5, raising=False)
+    release = threading.Event()
+
+    def stuck_coordinator():
+        release.wait()
+        return {"drone-1": None}
+
+    app_state.ground_transport = None
+    app_state.fleet_supervisor = types.SimpleNamespace(land_all=stuck_coordinator)
+    app_state.fleet = types.SimpleNamespace(broadcast_command=lambda command: {"tello-1": None})
+    app_state.logger = None
+    monkeypatch.setattr(app_module, "socketio", _Emitter())
+
+    try:
+        with caplog.at_level(logging.ERROR):
+            started = time.monotonic()
+            thread, outcome = _land_all_in_background()
+            thread.join(WAIT_S)
+            assert not thread.is_alive(), "LAND ALL waited for a path that never returns"
+        assert time.monotonic() - started < 0.5 + 2.0
+        assert "error" not in outcome, outcome
+        assert outcome["report"] == {"coordinator": None, "transport": None, "local": 1, "reached_any": True}
+        assert "the fleet coordinator path did not finish" in caplog.text
+    finally:
+        release.set()
+    time.sleep(0.1)
+    assert outcome["report"]["coordinator"] is None
+
+
 def test_land_all_with_every_path_failing_is_still_critical(stalled_fleet, caplog):
     f = stalled_fleet
     f.transport.release.set()

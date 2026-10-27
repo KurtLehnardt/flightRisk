@@ -68,6 +68,7 @@ import threading
 import time
 from typing import Any, Callable, Iterable, TextIO
 
+from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import CONTROL_TYPES, LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.edge import EdgeRunner
@@ -96,6 +97,12 @@ _FLIGHT_SOURCES = ("tello", "fake")
 _FAKE_SPEED_CM_S = 100.0
 # How long the control thread waits in each ``recv`` call.
 _CONTROL_RECV_TIMEOUT_S = 0.1
+# Longest wait between reconnect attempts for a flying (fleet) edge. The
+# backoff still starts at 1 s but stops doubling at 2 s, so after a cable or
+# LAN blip the edge tries again at least every 2 s instead of backing off to
+# 30 s (each attempt can still take up to the connect timeout while the link
+# is down). Other sources keep the transport's 30 s default.
+_FLEET_RECONNECT_MAX_DELAY_S = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +611,22 @@ def _build_runner(
     )
 
 
+def _parse_drone_id(raw: str) -> str:
+    """Parse ``--drone-id``: it must be a fleet protocol identifier.
+
+    Every fleet message carries the drone id, and the protocol refuses one
+    that is longer than 64 characters (and the peer link one that is not an
+    identifier), so a bad id would leave the drone unable to report or be
+    commanded. Refusing it here gives a clear error at startup instead.
+    """
+    if not fp.is_identifier(raw):
+        raise argparse.ArgumentTypeError(
+            f"--drone-id must be 1 to {fp.MAX_ID_LEN} characters of letters, digits, '.', '_', ':' or '-', "
+            f"starting with a letter or digit (for example drone-1), got {raw!r}"
+        )
+    return raw
+
+
 def _parse_alt_slot(raw: str) -> float:
     """Parse ``--alt-slot`` as centimetres.
 
@@ -645,7 +668,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Tello IP address (when --source=tello; default from config, 192.168.10.1)",
     )
     parser.add_argument(
-        "--drone-id", type=str, default="drone-1",
+        "--drone-id", type=_parse_drone_id, default="drone-1",
         help="Drone id used in fleet messages (default: drone-1)",
     )
     parser.add_argument(
@@ -665,6 +688,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.set_defaults(appearance_only=None)
     return parser
+
+
+def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | None) -> EdgeTransportSync:
+    """Construct the ground link; a flying source reconnects with a 2 s backoff cap."""
+    if args.source in _FLIGHT_SOURCES:
+        return EdgeTransportSync(
+            ws_url=args.ws_url, runner=runner, token=token, max_delay=_FLEET_RECONNECT_MAX_DELAY_S,
+        )
+    return EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
 
 
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
@@ -695,7 +727,7 @@ def _run_flight_edge(
     drone = _build_drone(args, log)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
-    transport = EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
+    transport = _build_transport(args, runner, token)
     flight = LaneExecutor(drone, envelope, args.drone_id, send=_make_sender(transport, log), logger=log)
     if stop_event is None:
         stop_event = threading.Event()
@@ -718,6 +750,7 @@ def _run_flight_edge(
             alt_slot_cm=envelope.alt_slot_cm,
             geofence_cm=envelope.geofence_cm,
             link_loss_land_s=envelope.link_watchdog.timeout_s,
+            reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
             appearance_only=runner.appearance_only,
         )
         transport.connect()
@@ -773,7 +806,7 @@ def main(argv: list[str] | None = None) -> None:
     runner = _build_runner(args, log)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
-    transport = EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
+    transport = _build_transport(args, runner, token)
 
     log.info("edge_connect", ws_url=args.ws_url, authenticated=token is not None)
     transport.connect()

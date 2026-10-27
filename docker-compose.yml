@@ -16,7 +16,7 @@ services:
       - OTEL_EXPORTER=otlp-grpc
       - OTEL_ENDPOINT=http://jaeger:4317
       - OLLAMA_HOST=http://ollama:11434
-      - FLIGHTRISK_REASONING_PROVIDER=gemma    # local, uses the ollama service
+      - FLIGHTRISK_REASONING_PROVIDER=${FLIGHTRISK_REASONING_PROVIDER:-gemma}    # local, uses the ollama service
       # Claude (cloud) is opt-in: set FLIGHTRISK_REASONING_PROVIDER=claude and
       # FLIGHTRISK_ALLOW_CLOUD_LLM=1 on the host to send crops to Anthropic.
       - FLIGHTRISK_ALLOW_CLOUD_LLM             # inherited from the host; unset = no cloud
