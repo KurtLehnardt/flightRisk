@@ -10,6 +10,7 @@ from flightrisk.dashboard.app import (
     resolve_dashboard_host,
     run_dashboard,
 )
+from flightrisk.transport import check_literal_hosts, parse_bind_hosts
 
 _SOURCE_CHOICES = ("tello", "mavlink", "file", "edge")
 _FLEET_NET_CHOICES = ("station", "ap")
@@ -75,9 +76,11 @@ def main():
     parser.add_argument(
         "--edge-host", type=str,
         default=os.environ.get("FLIGHTRISK_EDGE_HOST", "127.0.0.1"),
-        help="Ground-station WebSocket bind host (when --source=edge). "
-             "Defaults to loopback; a non-loopback host requires "
-             "FLIGHTRISK_EDGE_TOKEN.",
+        help="Ground-station WebSocket bind host (when --source=edge), or a "
+             "comma-separated list such as 127.0.0.1,10.42.0.1 (loopback for "
+             "the edge on this laptop plus the link address for the other "
+             "laptop). Defaults to loopback; a non-loopback host requires "
+             "FLIGHTRISK_EDGE_TOKEN, and a list never accepts 0.0.0.0 or ::.",
     )
     parser.add_argument(
         "--edge-port", type=int,
@@ -175,6 +178,26 @@ def main():
         parser.error(
             f"FLIGHTRISK_FLEET_NET={fleet_net!r} is invalid; choose from {', '.join(_FLEET_NET_CHOICES)}"
         )
+
+    if args.source == "edge":
+        try:
+            edge_hosts = parse_bind_hosts(args.edge_host)
+        except ValueError as exc:
+            parser.error(f"--edge-host (or FLIGHTRISK_EDGE_HOST): {exc}")
+        # In AP mode each laptop's Wi-Fi is joined to a Tello's open access
+        # point, so a wildcard bind would put the edge socket on the drone's
+        # network. The fleet binds loopback and the link address only.
+        # The list rules apply to a single host too: "0", "0x0" and names
+        # that resolve to 0.0.0.0 would otherwise slip past a wildcard check.
+        if fleet_net == "ap":
+            try:
+                check_literal_hosts(edge_hosts)
+            except ValueError as exc:
+                parser.error(
+                    f"--edge-host {args.edge_host!r} is not allowed in AP fleet mode, where each "
+                    f"laptop joins a Tello's open Wi-Fi: {exc} Bind the loopback and link "
+                    f"addresses only, for example --edge-host 127.0.0.1,10.42.0.1."
+                )
 
     # Appearance-only is the default for this launcher. An explicit flag
     # wins, then an explicit FLIGHTRISK_APPEARANCE_ONLY.
