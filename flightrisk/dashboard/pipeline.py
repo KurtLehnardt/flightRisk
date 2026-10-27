@@ -28,10 +28,11 @@ from flightrisk.dashboard.state import (
     gemma_last_call,
     GEMMA_RATE_LIMIT,
 )
-from flightrisk.dashboard.alerts import (
+from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot is re-exported for backward compat
     _compute_track_key,
     _is_within_alert_cooldown,
     _save_match_snapshot,
+    maybe_save_match_snapshot,
 )
 
 
@@ -284,7 +285,9 @@ def _frame_loop(socketio):
                             app_state.match_history.append(match_entry)
                             app_state.match_history = app_state.match_history[-50:]
                         socketio.emit("match_alert", match_entry)
-                        _save_match_snapshot(frame, candidate_crop, match_score, None)
+                        # Snapshots hold bystander imagery, so they are written
+                        # only when captures are enabled (off by default).
+                        maybe_save_match_snapshot(frame, candidate_crop, match_score, None)
                         if otel_m:
                             otel_m.record_match(match_score, match_type=match_type)
 
