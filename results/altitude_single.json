@@ -1,0 +1,77 @@
+{
+  "n_images": 101,
+  "bins": [
+    {
+      "lo": 0,
+      "hi": 8,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 8,
+      "hi": 16,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 16,
+      "hi": 24,
+      "n_gt": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 24,
+      "hi": 32,
+      "n_gt": 7,
+      "tp": 0,
+      "fp": 0,
+      "fn": 7,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 32,
+      "hi": 48,
+      "n_gt": 108,
+      "tp": 0,
+      "fp": 0,
+      "fn": 108,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 48,
+      "hi": 64,
+      "n_gt": 111,
+      "tp": 0,
+      "fp": 0,
+      "fn": 111,
+      "recall": 0.0,
+      "precision": 0.0
+    },
+    {
+      "lo": 64,
+      "hi": null,
+      "n_gt": 111,
+      "tp": 0,
+      "fp": 0,
+      "fn": 111,
+      "recall": 0.0,
+      "precision": 0.0
+    }
+  ],
+  "tiled": false,
+  "min_person_px": null
+}
