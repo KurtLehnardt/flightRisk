@@ -3,7 +3,10 @@
 Real-time web UI showing drone video feed, detection overlays,
 match alerts, drone telemetry, and search controls.
 
-Runs on http://localhost:5555
+Runs on http://127.0.0.1:5555. It binds the loopback address unless
+``--host`` (or ``FLIGHTRISK_DASHBOARD_HOST``) names another one, and it
+refuses a non-loopback bind unless ``FLIGHTRISK_API_KEY`` is set, because
+anyone who can reach the dashboard can start and land the drones.
 """
 
 import base64
@@ -137,6 +140,48 @@ def _require_api_key():
     if not hmac.compare_digest(auth.encode(), f"Bearer {_FLIGHTRISK_API_KEY}".encode()):
         return jsonify({"error": "unauthorized"}), 401
     return None
+
+# --- Bind address ---
+#: Environment variable naming the dashboard's bind address (``--host``).
+DASHBOARD_HOST_ENV = "FLIGHTRISK_DASHBOARD_HOST"
+
+#: The dashboard serves this machine only unless another host is named.
+DEFAULT_DASHBOARD_HOST = "127.0.0.1"
+
+#: Hosts that keep the dashboard on this machine: the same set the edge
+#: transport treats as loopback before it requires a token
+#: (``flightrisk/transport.py``).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def resolve_dashboard_host(host: str | None = None) -> str:
+    """The dashboard bind address: ``host``, else ``FLIGHTRISK_DASHBOARD_HOST``, else 127.0.0.1."""
+    for candidate in (host, os.environ.get(DASHBOARD_HOST_ENV)):
+        if candidate is not None and str(candidate).strip():
+            return str(candidate).strip()
+    return DEFAULT_DASHBOARD_HOST
+
+
+def check_dashboard_bind(host: str) -> None:
+    """Refuse a non-loopback bind unless the dashboard API key is configured.
+
+    This mirrors the edge transport, which refuses a non-loopback bind
+    without ``FLIGHTRISK_EDGE_TOKEN``. Anyone who can reach the dashboard
+    can press Start, which makes real drones take off, so exposing it to a
+    venue or hotspot network requires ``FLIGHTRISK_API_KEY``. With the key
+    set, every REST request (``_require_api_key``) and every Socket.IO
+    connection (``on_connect``) must present it. Raises ``ValueError`` with
+    an operator-facing message.
+    """
+    if host in _LOOPBACK_HOSTS or _FLIGHTRISK_API_KEY:
+        return
+    raise ValueError(
+        f"Refusing to bind the dashboard to non-loopback host {host!r} without "
+        f"authentication: anyone on that network could start or land the drones. "
+        f"Set FLIGHTRISK_API_KEY so every client must present the key, or bind a "
+        f"loopback host (the default, {DEFAULT_DASHBOARD_HOST})."
+    )
+
 
 # Flask auto-instrumentation (optional)
 try:
@@ -1977,7 +2022,7 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host=None):
     """Start the dashboard server.
 
     Args:
@@ -1986,7 +2031,21 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
         port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
+        host: Bind address. Defaults to ``FLIGHTRISK_DASHBOARD_HOST``, then
+            127.0.0.1. A non-loopback address requires ``FLIGHTRISK_API_KEY``.
+
+    Raises:
+        ValueError: The bind address is not loopback and no API key is
+            configured. Nothing is started in that case.
     """
+    host = resolve_dashboard_host(host)
+    # Checked before anything starts, so a refused bind connects to no drone.
+    check_dashboard_bind(host)
+    if host not in _LOOPBACK_HOSTS:
+        log.warning(
+            "Dashboard bound to non-loopback host %s; every client must present FLIGHTRISK_API_KEY",
+            host,
+        )
     if port is None:
         port = get_config().dashboard.port
     app_state.running = True
@@ -2001,5 +2060,6 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
     frame_thread.start()
 
     if app_state.logger:
-        app_state.logger.info("dashboard_started", url=f"http://localhost:{port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+        url_host = f"[{host}]" if ":" in host else host
+        app_state.logger.info("dashboard_started", url=f"http://{url_host}:{port}", host=host)
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
