@@ -348,3 +348,16 @@ def _reset_match_alert_latch():
     reset_alert_flow()
     yield
     reset_alert_flow()
+
+
+# ---------------------------------------------------------------------------
+# Network simulator and two-node fleet harness (tests/support). The import
+# only registers extra fixtures; every fixture above is unchanged.
+# ---------------------------------------------------------------------------
+
+from tests.support.fixtures import (  # noqa: F401
+    error_watch,
+    netsim,
+    resource_baseline,
+    two_node_fleet,
+)
