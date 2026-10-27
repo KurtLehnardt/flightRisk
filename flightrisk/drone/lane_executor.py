@@ -24,7 +24,10 @@ accepts those control messages, flies the lanes through a drone controller
 
 A monitor thread calls ``tick`` every 50 ms. It lands the drone when the
 ground link has been silent past the threshold or the battery is low, retries
-a landing that did not take, and emits ``telemetry`` every 0.5 s.
+a landing that did not take, and emits ``telemetry`` every 0.5 s. The monitor
+never waits on the ground link: it hands telemetry to a sender thread through
+a small queue that drops its oldest message when full, so a stalled uplink
+cannot hold up the link-loss, battery and land-retry checks.
 
 Fail-safe rules: any unexpected exception while flying a sequence or running
 the monitor lands the drone. Takeoff is refused below the battery threshold,
@@ -34,9 +37,11 @@ dead-reckoned from the commanded moves (the frame is described in
 """
 from __future__ import annotations
 
+import inspect
 import math
 import threading
 import time
+from collections import deque
 from typing import Any, Callable
 
 from flightrisk.drone.safety import (
@@ -68,6 +73,12 @@ CONTROL_TYPES = frozenset({
 })
 
 TELEMETRY_INTERVAL_S = 0.5
+# Telemetry waiting for the sender thread. Only the newest matters, so when
+# the uplink stalls the oldest queued message is dropped.
+TELEMETRY_QUEUE_SIZE = 4
+# How long shutdown() waits for the telemetry sender, which may be stuck on
+# a stalled uplink. It is a daemon thread.
+_TELEMETRY_JOIN_S = 0.5
 MONITOR_INTERVAL_S = 0.05
 # A landing that has not taken effect is retried at this interval.
 LAND_RETRY_S = 2.0
@@ -133,6 +144,7 @@ class LaneExecutor:
         land_retry_s: float = LAND_RETRY_S,
         max_start_lead_s: float = MAX_START_LEAD_S,
         max_start_late_s: float = MAX_START_LATE_S,
+        telemetry_queue_size: int = TELEMETRY_QUEUE_SIZE,
     ):
         self.drone = drone
         self.envelope = envelope
@@ -189,6 +201,12 @@ class LaneExecutor:
         # both the transport callback and recv()) does not send another one.
         self._land_inflight = False
         self._next_telemetry_s: float | None = None
+        # Telemetry handed from the monitor to the sender thread. The deque
+        # drops its oldest entry when full.
+        self._telemetry_queue: deque[dict[str, Any]] = deque(maxlen=max(1, int(telemetry_queue_size)))
+        self._telemetry_cv = threading.Condition()
+        self._telemetry_sender: threading.Thread | None = None
+        self._telemetry_dropped = 0
 
     # ------------------------------------------------------------------
     # Introspection
@@ -255,11 +273,17 @@ class LaneExecutor:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start the monitor thread (watchdog, battery gate, telemetry)."""
+        """Start the monitor thread (watchdog, battery gate, telemetry) and the telemetry sender."""
         with self._lock:
             if self._monitor is not None and self._monitor.is_alive():
                 return
             self._stop.clear()
+            with self._telemetry_cv:
+                if self._telemetry_sender is None or not self._telemetry_sender.is_alive():
+                    self._telemetry_sender = threading.Thread(
+                        target=self._telemetry_loop, daemon=True, name=f"{self.drone_id}-telemetry"
+                    )
+                    self._telemetry_sender.start()
             self._monitor = threading.Thread(
                 target=self._monitor_loop, daemon=True, name=f"{self.drone_id}-monitor"
             )
@@ -274,6 +298,8 @@ class LaneExecutor:
             self._closed = True
         self._stop.set()
         self._abort.set()
+        with self._telemetry_cv:
+            self._telemetry_cv.notify_all()
         try:
             if self._is_flying():
                 self.land_now("shutdown")
@@ -284,6 +310,9 @@ class LaneExecutor:
         for thread in (worker, monitor):
             if thread is not None and thread is not threading.current_thread():
                 thread.join(timeout)
+        sender = self._telemetry_sender
+        if sender is not None and sender is not threading.current_thread():
+            sender.join(min(timeout, _TELEMETRY_JOIN_S))
 
     def _monitor_loop(self) -> None:
         while not self._stop.is_set():
@@ -611,7 +640,12 @@ class LaneExecutor:
     # ------------------------------------------------------------------
 
     def tick(self) -> None:
-        """Run one round of safety checks and send telemetry when due. Never raises."""
+        """Run one round of safety checks and send telemetry when due. Never raises.
+
+        Nothing here waits on the ground link: telemetry is queued for the
+        sender thread (see ``_post_telemetry``). The only blocking call is a
+        landing, which goes to the drone, not the ground.
+        """
         now = self._clock()
         try:
             flying = self._is_flying()
@@ -643,9 +677,43 @@ class LaneExecutor:
         if self._next_telemetry_s is None or now >= self._next_telemetry_s:
             self._next_telemetry_s = now + self.telemetry_interval_s
             try:
-                self._emit(self.telemetry())
+                self._post_telemetry(self.telemetry())
             except Exception as exc:
                 self._log.warning("edge_telemetry_error", drone_id=self.drone_id, error=repr(exc))
+
+    def _post_telemetry(self, msg: dict[str, Any]) -> None:
+        """Queue telemetry for the sender thread; never waits on the ground link.
+
+        When the queue is full the oldest message is dropped. Without a
+        running sender thread (``tick()`` called directly, before
+        ``start()``) the message is sent from the calling thread.
+        """
+        with self._telemetry_cv:
+            sender = self._telemetry_sender
+            if sender is not None and sender.is_alive():
+                if len(self._telemetry_queue) == self._telemetry_queue.maxlen:
+                    self._telemetry_dropped += 1
+                    if self._telemetry_dropped == 1 or self._telemetry_dropped % 20 == 0:
+                        self._log.warning(
+                            "edge_telemetry_dropped",
+                            drone_id=self.drone_id,
+                            dropped=self._telemetry_dropped,
+                        )
+                self._telemetry_queue.append(msg)
+                self._telemetry_cv.notify()
+                return
+        self._emit(msg)
+
+    def _telemetry_loop(self) -> None:
+        """Send queued telemetry until the executor stops. Runs on its own thread."""
+        while True:
+            with self._telemetry_cv:
+                while not self._telemetry_queue and not self._stop.is_set():
+                    self._telemetry_cv.wait(0.5)
+                if self._stop.is_set():
+                    return
+                msg = self._telemetry_queue.popleft()
+            self._emit(msg)
 
     def telemetry(self) -> dict[str, Any]:
         """Build a ``telemetry`` message (design section 3)."""
@@ -769,11 +837,33 @@ class LaneExecutor:
             return False
         with self._lock:
             self._flying_lanes = False
-        self.drone.takeoff()
+        if self._drone_takeoff() is False:
+            # A landing started after the check above. The controller checked
+            # the abort flag under its command lock and sent nothing.
+            self._log.warning("edge_takeoff_refused", drone_id=self.drone_id, reason="landing")
+            return False
         with self._lock:
             self._takeoff_at_local_s = t_exec
         self._log.info("edge_takeoff", drone_id=self.drone_id, battery=battery, at_local_s=t_exec)
         return not self._abort.is_set()
+
+    def _drone_takeoff(self) -> Any:
+        """Call ``drone.takeoff``, passing the abort flag when the controller takes one.
+
+        ``TelloController`` and ``FakeTelloController`` accept ``abort`` and
+        check it under their command lock immediately before sending the
+        takeoff, so a ``land_now`` that runs between the abort check in
+        ``_do_takeoff`` and the takeoff itself cannot be followed by a
+        takeoff. They return False when they refuse.
+        """
+        takeoff = self.drone.takeoff
+        try:
+            accepts_abort = "abort" in inspect.signature(takeoff).parameters
+        except (TypeError, ValueError):
+            accepts_abort = False
+        if accepts_abort:
+            return takeoff(abort=self._abort)
+        return takeoff()
 
     def _climb_to_slot(self) -> bool:
         """Move vertically to the altitude slot. Lands if the height is unknown."""

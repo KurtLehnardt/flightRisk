@@ -1,6 +1,7 @@
 """Tests for the edge safety envelope, link watchdog and Tello safety hooks.
 
-All flight tests use ``FakeTelloController`` or a mocked ``djitellopy.Tello``;
+All flight tests use ``FakeTelloController``, a mocked ``djitellopy.Tello``,
+or the real djitellopy client over a fake command socket (``tello_on_wire``);
 nothing here sends a packet to a real drone. Time is a fake clock wherever the
 behaviour depends on it.
 """
@@ -18,6 +19,7 @@ from flightrisk.drone.tello import FakeTelloController, TelloController
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_device import _handle_control
 from flightrisk.observability import StructuredLogger
+from tests.test_review_fixes_edge import tello_on_wire  # noqa: F401  (pytest fixture)
 
 WAIT_S = 10.0
 
@@ -307,46 +309,45 @@ def test_tello_keepalive_thread_starts_on_connect():
         ctrl._running = False
 
 
-def test_tello_land_interrupts_inflight_move():
-    tello = _mock_tello()
-    entered = threading.Event()
-    release = threading.Event()
+def test_tello_land_interrupts_inflight_move(tello_on_wire):
+    # Moves are sent as one raw command and never retried (R-110), so this
+    # runs the real djitellopy client over a fake command socket.
+    ctrl, wire = tello_on_wire(hold={"forward 200"})
+    assert ctrl.takeoff() is True
 
-    def slow_move(distance):
-        entered.set()
-        release.wait(WAIT_S)
+    mover_errors: list[Exception] = []
 
-    tello.move_forward.side_effect = slow_move
-    with patch("flightrisk.drone.tello.Tello", return_value=tello):
-        ctrl = TelloController(name="drone-1", host="192.0.2.1")
-    ctrl.state.is_flying = True
+    def fly():
+        try:
+            ctrl.move("forward", 200)
+        except Exception as exc:
+            mover_errors.append(exc)
 
-    mover = threading.Thread(target=ctrl.move, args=("forward", 200), daemon=True)
+    mover = threading.Thread(target=fly, daemon=True)
     mover.start()
-    assert entered.wait(WAIT_S)
+    assert wire.entered.wait(WAIT_S)
 
     lander = threading.Thread(target=ctrl.land, daemon=True)
     lander.start()
     # stop and land go out at once, without waiting for the move's reply.
-    assert wait_for(
-        lambda: [c.args[0] for c in tello.send_command_without_return.call_args_list] == ["stop", "land"]
-    )
-    assert tello.land.call_count == 0
+    assert wait_for(lambda: wire.sent[2:4] == ["stop", "land"])
     # Nothing new is sent behind the landing.
     assert ctrl.move("back", 100) is False
     assert ctrl.rotate(90) is False
 
-    release.set()
     mover.join(WAIT_S)
     lander.join(WAIT_S)
     assert not lander.is_alive()
-    assert tello.land.call_count == 1  # confirming land once the channel is free
+    # The interrupted move was answered "error" and not retried; the
+    # confirming land went out once the channel was free.
+    assert wire.sent == ["takeoff", "forward 200", "stop", "land", "land"]
+    assert len(mover_errors) == 1
     assert ctrl.state.is_flying is False
 
     # A new takeoff re-arms moves.
-    tello.move_forward.side_effect = None
-    ctrl.takeoff()
+    assert ctrl.takeoff() is True
     assert ctrl.move("forward", 50) is True
+    assert wire.sent[-2:] == ["takeoff", "forward 50"]
 
 
 def test_scheduled_start_refused_after_link_loss(make_executor):

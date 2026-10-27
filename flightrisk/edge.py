@@ -52,7 +52,13 @@ FLEET_POSE_FIELDS = ("rel_x_cm", "rel_y_cm", "heading_deg", "lat", "lon")
 
 
 class EdgeRunner:
-    """Produces detection messages from video frames."""
+    """Produces detection messages from video frames.
+
+    With ``appearance_only`` the runner never computes a face embedding, even
+    if a face model is passed, and ``to_dict`` leaves the ``face_embedding``
+    field out of every detection. Person crops and ReID (appearance)
+    embeddings are still produced.
+    """
 
     def __init__(
         self,
@@ -62,7 +68,12 @@ class EdgeRunner:
         stream_video: bool = False,
         drone_id: str | None = None,
         pose_provider: Callable[[], Mapping[str, Any] | None] | None = None,
+        appearance_only: bool = False,
     ):
+        self.appearance_only = bool(appearance_only)
+        if self.appearance_only and face is not None:
+            logger.warning("appearance_only: ignoring the face model passed to EdgeRunner")
+            face = None
         self._detector = detector
         self._reid = reid
         self._face = face
@@ -169,7 +180,22 @@ class EdgeRunner:
                 setattr(msg, key, value)
 
     def to_dict(self, msg: DetectionMessage) -> dict:
-        """Serialize a DetectionMessage to a dict for transport."""
+        """Serialize a DetectionMessage to a dict for transport.
+
+        An appearance-only runner leaves ``face_embedding`` out entirely.
+        """
+        detections = []
+        for d in msg.detections:
+            item = {
+                "bbox": list(d.bbox),
+                "confidence": d.confidence,
+                "reid_embedding": d.reid_embedding,
+                "face_embedding": d.face_embedding,
+                "crop": base64.b64encode(d.crop_jpeg).decode() if d.crop_jpeg else None,
+            }
+            if self.appearance_only:
+                del item["face_embedding"]
+            detections.append(item)
         data = {
             "type": "detections",
             "timestamp": msg.timestamp,
@@ -177,16 +203,7 @@ class EdgeRunner:
             "frame_width": msg.frame_width,
             "frame_height": msg.frame_height,
             "thumbnail": base64.b64encode(msg.thumbnail_jpeg).decode() if msg.thumbnail_jpeg else None,
-            "detections": [
-                {
-                    "bbox": list(d.bbox),
-                    "confidence": d.confidence,
-                    "reid_embedding": d.reid_embedding,
-                    "face_embedding": d.face_embedding,
-                    "crop": base64.b64encode(d.crop_jpeg).decode() if d.crop_jpeg else None,
-                }
-                for d in msg.detections
-            ],
+            "detections": detections,
         }
         if msg.drone_id is not None:
             data["drone_id"] = msg.drone_id
