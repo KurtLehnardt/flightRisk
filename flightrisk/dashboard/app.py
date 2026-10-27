@@ -32,8 +32,15 @@ from flightrisk.config import get_config
 from flightrisk.recorder import SessionRecorder
 from flightrisk.observability import StructuredLogger, MetricsCollector
 from flightrisk.persistence import SessionDB
+from flightrisk.drone import registry as drone_registry
 from flightrisk.drone.fleet import DroneFleet
-from flightrisk.drone.controller import DroneController
+from flightrisk.drone.controller import (
+    Capability,
+    CommandResult,
+    DroneController,
+    capabilities_of,
+    command_result,
+)
 from flightrisk.canon import TargetCanon
 
 try:
@@ -375,11 +382,67 @@ def _ensure_reasoning_worker():
             app_state.gemma_thread = t
 
 
+def _auto_connect_loop(fleet: DroneFleet, backend: str, host: str, stop_event: threading.Event, log):
+    """Keep ``drone-1`` registered: reconnect whenever it is missing or disconnected."""
+    retry_interval = get_config().drone.auto_connect_interval
+    while not stop_event.is_set() and app_state.running:
+        with fleet_lock:
+            primary: DroneController | None = fleet.primary
+        if primary and primary.state.is_connected:
+            if stop_event.wait(3):
+                break
+            continue
+        # Drone missing or disconnected -- clean up and retry
+        with fleet_lock:
+            has_drone = "drone-1" in fleet.drone_ids
+        if has_drone:
+            log.info(f"{backend}_disconnected", hint="cleaning up for reconnect")
+            with fleet_lock:
+                fleet.deregister("drone-1")
+            if stop_event.wait(2):  # let sockets release
+                break
+        with fleet_lock:
+            registered = fleet.register("drone-1", host=host)
+        if registered:
+            log.info(f"{backend}_connected")
+            socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
+        else:
+            log.info(f"{backend}_waiting", hint=f"retrying in {retry_interval:.0f}s")
+        if stop_event.wait(retry_interval):
+            break
+
+
+def _start_drone_backend(source_config: SourceConfig, stop_event: threading.Event, log) -> None:
+    """Build the fleet for a registered drone backend and start auto-connect.
+
+    The backend is looked up by name in ``flightrisk.drone.registry``; the
+    dashboard never imports a concrete drone module.
+    """
+    spec = drone_registry.get(source_config.source)
+    options = spec.options(source_config.drone_settings())
+    fleet = DroneFleet(factory=spec.fleet_factory(options))
+    app_state.fleet = fleet
+    host = spec.default_host(options)
+    threading.Thread(
+        target=_auto_connect_loop, args=(fleet, spec.name, host, stop_event, log), daemon=True,
+    ).start()
+
+
+def _report_command_result(emit_fn, result: CommandResult, **context) -> None:
+    """Surface a drone command that did not execute (for example dropped
+    because another command held the channel). Does not change control flow."""
+    if result.ok:
+        return
+    log.warning(
+        "drone_command_not_executed command=%s outcome=%s waypoint=%s",
+        result.command, result.outcome.value, context.get("waypoint"),
+    )
+    emit_fn("command_dropped", {"command": result.command, "outcome": result.outcome.value, **context})
+
+
 def _init_pipeline(source_config: SourceConfig, target_path=None):
     """Initialize the detection pipeline."""
     source = source_config.source
-    mavlink_address = source_config.mavlink_address
-    rtsp_url = source_config.rtsp_url
     edge_ws = source_config.edge_ws
     video_path = source_config.video_path
 
@@ -482,8 +545,6 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
     app_state.source_config = source_config
     app_state.source = source
-    app_state.mavlink_address = mavlink_address
-    app_state.rtsp_url = rtsp_url
     app_state.edge_ws = edge_ws
     app_state.video_path = video_path
 
@@ -498,71 +559,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     stop_event = threading.Event()
     app_state.auto_connect_stop = stop_event
 
-    if source == "tello":
-        from flightrisk.drone.tello import TelloController
-        fleet = DroneFleet(factory=lambda n, h: TelloController(n, h))
-        app_state.fleet = fleet
-        def _auto_connect_loop():
-            retry_interval = get_config().drone.auto_connect_interval
-            while not stop_event.is_set() and app_state.running:
-                with fleet_lock:
-                    primary: DroneController | None = fleet.primary
-                if primary and primary.state.is_connected:
-                    if stop_event.wait(3):
-                        break
-                    continue
-                # Drone missing or disconnected -- clean up and retry
-                with fleet_lock:
-                    has_drone = "drone-1" in fleet.drone_ids
-                if has_drone:
-                    log.info("tello_disconnected", hint="cleaning up for reconnect")
-                    with fleet_lock:
-                        fleet.deregister("drone-1")
-                    if stop_event.wait(2):  # let UDP sockets release
-                        break
-                with fleet_lock:
-                    registered = fleet.register("drone-1")
-                if registered:
-                    log.info("tello_connected")
-                    socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
-                else:
-                    log.info("tello_waiting", hint=f"retrying in {retry_interval:.0f}s")
-                if stop_event.wait(retry_interval):
-                    break
-        threading.Thread(target=_auto_connect_loop, daemon=True).start()
-    elif source == "mavlink":
-        # Imported lazily so `mavsdk` is only required when actually used.
-        from flightrisk.drone.mavlink import MavlinkController
-        fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
-        app_state.fleet = fleet
-        def _auto_connect_loop():
-            retry_interval = get_config().drone.auto_connect_interval
-            while not stop_event.is_set() and app_state.running:
-                with fleet_lock:
-                    primary: DroneController | None = fleet.primary
-                if primary and primary.state.is_connected:
-                    if stop_event.wait(3):
-                        break
-                    continue
-                # Drone missing or disconnected -- clean up and retry
-                with fleet_lock:
-                    has_drone = "drone-1" in fleet.drone_ids
-                if has_drone:
-                    log.info("mavlink_disconnected", hint="cleaning up for reconnect")
-                    with fleet_lock:
-                        fleet.deregister("drone-1")
-                    if stop_event.wait(2):
-                        break
-                with fleet_lock:
-                    registered = fleet.register("drone-1", host=mavlink_address)
-                if registered:
-                    log.info("mavlink_connected")
-                    socketio.emit("drone_registered", {"drone_id": "drone-1", "success": True})
-                else:
-                    log.info("mavlink_waiting", hint=f"retrying in {retry_interval:.0f}s")
-                if stop_event.wait(retry_interval):
-                    break
-        threading.Thread(target=_auto_connect_loop, daemon=True).start()
+    if drone_registry.is_registered(source):
+        _start_drone_backend(source_config, stop_event, log)
     elif source == "file":
         app_state.fleet = None
         if not video_path:
@@ -689,7 +687,7 @@ def upload_target():
         face_ok = app_state.face.set_target(img)
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
-    print(f"[upload-target] Target saved via HTTP POST ({len(img_data)//1024}KB)")
+    log.info("upload_target_saved size_kb=%d", len(img_data) // 1024)
     return jsonify({"success": True, "face_detected": face_ok})
 
 
@@ -707,7 +705,7 @@ def clear_target():
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
     if path.exists():
         path.unlink()
-    print("[clear-target] Target photo cleared")
+    log.info("target_cleared")
     return jsonify({"success": True})
 
 
@@ -892,7 +890,7 @@ def on_match_alert_response(data):
 @socketio.on("set_target")
 def on_set_target(data):
     """Receive a target photo as base64."""
-    print(f"[set_target] Received photo upload ({len(data.get('image', ''))//1024}KB)")
+    log.info("set_target_received size_kb=%d", len(data.get("image", "")) // 1024)
     img_data = base64.b64decode(data["image"])
     nparr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -903,7 +901,7 @@ def on_set_target(data):
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
         cv2.imwrite(str(path), img)
         app_state.target_photo_path = str(path)
-        print(f"[set_target] Target saved to {path}, ReID target set")
+        log.info("set_target_saved")
         # Store in target canon
         if app_state.canon:
             app_state.canon.set_target(img, operator_id=data.get("operator_id", "dashboard"))
@@ -1169,6 +1167,22 @@ def on_set_stream_video(data):
     emit("stream_video_state", {"enabled": app_state.stream_video})
 
 
+#: Capability each manual dashboard command needs.
+_COMMAND_CAPABILITY = {
+    "takeoff": Capability.TAKEOFF_LAND,
+    "land": Capability.TAKEOFF_LAND,
+    "hover": Capability.HOVER,
+    "up": Capability.RELATIVE_MOVE,
+    "down": Capability.RELATIVE_MOVE,
+    "forward": Capability.RELATIVE_MOVE,
+    "back": Capability.RELATIVE_MOVE,
+    "left": Capability.RELATIVE_MOVE,
+    "right": Capability.RELATIVE_MOVE,
+    "cw": Capability.ROTATE,
+    "ccw": Capability.ROTATE,
+}
+
+
 @socketio.on("drone_command")
 def on_drone_command(data):
     """Send a command to the drone."""
@@ -1183,6 +1197,11 @@ def on_drone_command(data):
         return
 
     cmd = data.get("command")
+
+    required = _COMMAND_CAPABILITY.get(cmd)
+    if required is not None and not capabilities_of(drone).supports(required):
+        emit("error", {"message": f"Command '{cmd}' is not supported by this drone"})
+        return
 
     commands = {
         "takeoff": lambda: drone.takeoff(),
@@ -1201,10 +1220,11 @@ def on_drone_command(data):
     action = commands.get(cmd)
     if action:
         try:
-            action()
+            result = command_result(action(), cmd)
         except Exception as e:
             emit("error", {"message": f"Command '{cmd}' failed: {e}"})
             return
+        _report_command_result(emit, result)
     if app_state.logger:
         app_state.logger.drone_command(command=cmd)
     emit("command_ack", {"command": cmd})
@@ -1234,6 +1254,11 @@ def on_start_search(data):
     def _execute_search():
         MAX_AVOIDANCE_RETRIES = 5
         obstacle_guard = app_state.obstacle_guard
+
+        def _surface(value, command):
+            # Report a move/rotate that was not executed; the pattern still
+            # advances exactly as before.
+            _report_command_result(socketio.emit, command_result(value, command), waypoint=i + 1)
 
         i = 0
         while i < len(waypoints):
@@ -1286,15 +1311,15 @@ def on_start_search(data):
 
                 try:
                     if check["action"] == "go_left":
-                        drone.move("left", 30)
+                        _surface(drone.move("left", 30), "move")
                         time.sleep(0.5)
                     elif check["action"] == "go_right":
-                        drone.move("right", 30)
+                        _surface(drone.move("right", 30), "move")
                         time.sleep(0.5)
                     elif check["action"] == "reverse":
-                        drone.move("back", 50)
+                        _surface(drone.move("back", 50), "move")
                         time.sleep(0.5)
-                        drone.rotate(90)
+                        _surface(drone.rotate(90), "rotate")
                         time.sleep(0.5)
                 except Exception as e:
                     socketio.emit("error", {"message": f"Avoidance error: {e}"})
@@ -1310,9 +1335,9 @@ def on_start_search(data):
                 "action": str(wp),
             })
             try:
-                drone.move(wp.direction, wp.distance_cm)
+                _surface(drone.move(wp.direction, wp.distance_cm), "move")
                 if wp.rotate_degrees:
-                    drone.rotate(wp.rotate_degrees)
+                    _surface(drone.rotate(wp.rotate_degrees), "rotate")
                 time.sleep(0.5)
             except Exception as e:
                 socketio.emit("error", {"message": f"Search error: {e}"})
@@ -1354,21 +1379,20 @@ def on_stop_recording():
 @socketio.on("register_drone")
 def on_register_drone(data):
     drone_id = data.get("drone_id", f"drone-{(app_state.fleet.count if app_state.fleet else 0) + 1}")
-    host = data.get("host", get_config().drone.tello_default_host)
     current_source = app_state.source
+    # Use the configured drone backend; fall back to the default backend when
+    # the dashboard is on a non-drone source (file/edge/unset).
+    backend = current_source if drone_registry.is_registered(current_source) else drone_registry.DEFAULT_BACKEND
+    spec = drone_registry.get(backend)
+    source_config = app_state.source_config
+    options = spec.options(source_config.drone_settings() if source_config is not None else {})
+    host = data.get("host", spec.default_host(options))
     with fleet_lock:
         fleet = app_state.fleet
         if not fleet:
             # Build a fleet whose backend matches the currently configured
-            # source, instead of always defaulting to Tello -- a manual
-            # registration on a mavlink deployment must build a
-            # MavlinkController, not silently create a Tello-backed fleet.
-            if current_source == "mavlink":
-                from flightrisk.drone.mavlink import MavlinkController
-                rtsp_url = app_state.rtsp_url
-                fleet = DroneFleet(factory=lambda n, h: MavlinkController(n, h, rtsp_url=rtsp_url))
-            else:
-                fleet = DroneFleet()
+            # source, instead of always defaulting to one drone type.
+            fleet = DroneFleet(factory=spec.fleet_factory(options))
             app_state.fleet = fleet
 
     # Check for duplicate host before attempting connection
@@ -1386,11 +1410,9 @@ def on_register_drone(data):
             socketio.emit("drone_registered", {"drone_id": drone_id, "success": True})
             # Switch source to a drone-backed source if we were on a
             # non-drone fallback (file/edge/unset). Never stomp an
-            # already-correct drone source -- unconditionally forcing
-            # "tello" here previously flipped mavlink deployments back to
-            # tello on every manual registration.
-            if app_state.source not in ("tello", "mavlink"):
-                new_source = "mavlink" if current_source == "mavlink" else "tello"
+            # already-correct drone source.
+            if not drone_registry.is_registered(app_state.source):
+                new_source = backend
                 app_state.source = new_source
                 if app_state.source_config is not None:
                     app_state.source_config.source = new_source
@@ -1459,9 +1481,7 @@ def on_restart_dashboard():
         cap.release()
         app_state.cap = None
     source_config = app_state.source_config or SourceConfig(
-        source=app_state.source or "tello",
-        mavlink_address=app_state.mavlink_address or get_config().drone.mavlink_default_address,
-        rtsp_url=app_state.rtsp_url,
+        source=app_state.source or drone_registry.DEFAULT_BACKEND,
         edge_ws=app_state.edge_ws or "ws://localhost:9000",
         video_path=app_state.video_path,
         stream_video=app_state.stream_video,
@@ -1475,7 +1495,7 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
 
     Args:
         source_config: Video/telemetry source configuration -- see
-            ``SourceConfig`` (source mode, MAVLink address, RTSP URL, edge
+            ``SourceConfig`` (source mode, per-backend drone options, edge
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
         port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.

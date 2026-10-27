@@ -9,18 +9,20 @@ Confirm flight sequence (runs on its own daemon thread, never on the socket
 handler or the frame loop):
 
 1. Stop the search pattern and hover.
-2. If the drone exposes a ``return_to_home()`` capability *and* the battery is
+2. If the drone declares ``Capability.RETURN_TO_HOME`` *and* the battery is
    at or above :data:`RTH_MIN_BATTERY_PCT`, fly home, then land.
 3. Otherwise land in place.
 4. Any exception at any step falls back to landing in place.
 
-No controller on ``main`` implements ``return_to_home()`` yet: the Tello has no
-GPS and the dashboard does not track a dead-reckoned pose, and the MAVLink
-controller does not wire up RTL. Until one does, Confirm stops the search and
-lands in place. The hook is duck-typed so a backend can opt in without any
-change here. Contract for implementers: ``return_to_home()`` must block until
-the drone is back over its takeoff point (raising on failure or timeout) and
-must not land by itself; this module issues the land command afterwards.
+No hardware controller on ``main`` implements ``return_to_home()`` yet: the
+Tello has no GPS and the dashboard does not track a dead-reckoned pose, and
+the MAVLink controller does not wire up RTL. Until one does, Confirm stops the
+search and lands in place. A backend opts in by declaring the capability and
+implementing the ``Navigation`` role (see :mod:`flightrisk.drone.controller`),
+with no change here. Contract for implementers: ``return_to_home()`` must
+block until the drone is back over its takeoff point (raising on failure or
+timeout) and must not land by itself; this module issues the land command
+afterwards. A non-OK :class:`CommandResult` from it counts as a failure.
 """
 
 from __future__ import annotations
@@ -31,7 +33,10 @@ from collections.abc import Callable
 from typing import Any
 
 from flightrisk.dashboard.alert_latch import alert_latch
+from flightrisk.dashboard.safety import DEFAULT_RTH_MIN_BATTERY_PCT, SafetyPolicy
 from flightrisk.dashboard.state import app_state, fleet_lock
+from flightrisk.drone.controller import Capability, capabilities_of, command_result
+from flightrisk.drone.snapshot import read_telemetry
 
 _log = logging.getLogger(__name__)
 
@@ -43,7 +48,7 @@ _log = logging.getLogger(__name__)
 #: 40 % leaves a large margin for the return leg plus wind and battery sag, so
 #: a return is never started that the critical-battery failsafe would have to
 #: abort mid-flight. An unknown battery reading (0) always lands in place.
-RTH_MIN_BATTERY_PCT = 40
+RTH_MIN_BATTERY_PCT = DEFAULT_RTH_MIN_BATTERY_PCT
 
 EmitFn = Callable[[str, dict], Any]
 
@@ -87,25 +92,28 @@ def run_confirm_recovery(
         _status(emit, "no_drone", "No drone connected. Search stopped.")
         return "no_drone"
 
-    state = getattr(drone, "state", None)
-    if not getattr(state, "is_flying", False):
+    policy = SafetyPolicy(rth_min_battery_pct=min_battery_pct)
+    capabilities = capabilities_of(drone)
+    snapshot = read_telemetry(drone)
+    if not snapshot.is_flying:
         _log.info("confirm_recovery: drone is not flying; nothing to do")
         _status(emit, "not_flying", "Drone is on the ground. Search stopped.")
         return "not_flying"
 
     try:
         drone.hover()
-        battery = int(getattr(state, "battery", 0) or 0)
-        rth = getattr(drone, "return_to_home", None)
-        has_rth = callable(rth)
+        battery = int(policy.battery_pct(snapshot) or 0)
+        has_rth = capabilities.supports(Capability.RETURN_TO_HOME)
 
-        if has_rth and battery >= min_battery_pct:
+        if policy.can_return_home(capabilities, battery):
             _log.info(
                 "confirm_recovery: battery %d%% >= %d%%, returning home before landing",
                 battery, min_battery_pct,
             )
             _status(emit, "returning_home", "Returning home...", battery=battery)
-            rth()
+            result = command_result(drone.return_to_home(), "return_to_home")
+            if not result.ok:
+                raise RuntimeError(f"return to home not executed ({result.outcome.value})")
             _log.info("confirm_recovery: reached home, landing")
             _status(emit, "landing", "Landing", battery=battery)
             drone.land()

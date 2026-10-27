@@ -28,8 +28,17 @@ class SourceConfig:
 
     Groups the source-selection parameters that used to be passed as five
     separate args to ``run_dashboard()`` / ``_init_pipeline()``.
+
+    ``source`` is either a registered drone backend name (see
+    ``flightrisk.drone.registry``) or one of the non-drone sources ``file``
+    and ``edge``. Backend-specific settings belong in ``drone_options``; the
+    dashboard passes them, unread, to the backend's registry entry.
     """
     source: str = "tello"
+    # Deprecated: MAVLink-specific settings kept as fields for backward
+    # compatibility with existing callers and the --mavlink-address /
+    # --rtsp-url flags. They reach the backend through drone_settings() like
+    # any other option; the dashboard itself no longer reads them.
     mavlink_address: str = "udp://:14540"
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
@@ -46,6 +55,18 @@ class SourceConfig:
     # -- Reasoning backend: "claude" | "gemma" | "off"; None = config default
     # (FLIGHTRISK_REASONING_PROVIDER, else "claude").
     reasoning_provider: str | None = None
+    # -- Per-backend settings (``--drone-opt key=value``), interpreted only by
+    # the selected backend's registry entry.
+    drone_options: dict[str, Any] = field(default_factory=dict)
+
+    def drone_settings(self) -> dict[str, Any]:
+        """Settings mapping handed to the drone backend's ``options_from``."""
+        settings: dict[str, Any] = {
+            "mavlink_address": self.mavlink_address,
+            "rtsp_url": self.rtsp_url,
+        }
+        settings.update(self.drone_options)
+        return settings
 
 
 @dataclass
@@ -77,8 +98,6 @@ class AppState:
     # -- Source configuration --
     source_config: SourceConfig | None = None
     source: str | None = None
-    mavlink_address: str | None = None
-    rtsp_url: str | None = None
     edge_ws: str | None = None
     video_path: str | None = None
 

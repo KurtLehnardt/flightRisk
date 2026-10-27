@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 
 from flightrisk.drone.controller import DroneController
+from flightrisk.drone.snapshot import TelemetrySnapshot, legacy_telemetry_payload, read_telemetry
 
 from flightrisk.dashboard.state import (
     app_state,
@@ -33,6 +34,7 @@ from flightrisk.dashboard.alerts import (
     _save_match_snapshot,
 )
 from flightrisk.dashboard.alert_latch import alert_latch
+from flightrisk.dashboard.safety import SafetyPolicy
 
 
 def _emit_due_reminder(socketio, log=None):
@@ -71,6 +73,30 @@ def _pause_search_for_alert(socketio, alert_level):
             if app_state.logger:
                 app_state.logger.warning("search_pause_hover_failed", error=str(e))
     socketio.emit("search_paused", {"reason": "match_found", "alert_level": alert_level})
+
+
+def _apply_battery_policy(socketio, drone, snapshot: TelemetrySnapshot, battery, log=None):
+    """Warn on low battery and land on critical battery, once each per session.
+
+    Thresholds come from ``config.drone`` through :class:`SafetyPolicy`.
+    ``battery`` is the value shown to the operator (legacy payload).
+    """
+    policy = SafetyPolicy.from_config()
+    if not policy.battery_monitored(snapshot):
+        return
+    if log:
+        log.battery(battery_level=battery, is_flying=snapshot.is_flying)
+    if policy.battery_critical(snapshot) and not app_state.battery_critical:
+        app_state.battery_critical = True
+        socketio.emit("battery_critical", {"battery": battery})
+        try:
+            drone.land()
+        except Exception as e:  # noqa: BLE001 -- reported; the frame loop must keep running
+            if log:
+                log.warning("battery_critical_land_failed", drone_id=snapshot.drone_id, error_type=type(e).__name__)
+    elif policy.battery_low(snapshot) and not app_state.battery_warned:
+        app_state.battery_warned = True
+        socketio.emit("battery_warning", {"battery": battery})
 
 
 def _build_track_id_by_bbox(tracked_detections, detections):
@@ -408,28 +434,9 @@ def _frame_loop(socketio):
 
             telemetry = {}
             if drone:
-                s = drone.state
-                telemetry = {
-                    "battery": s.battery,
-                    "height": s.height,
-                    "temperature": s.temperature,
-                    "flight_time": s.flight_time,
-                    "is_flying": s.is_flying,
-                }
-
-                if s.battery > 0 and s.is_flying:
-                    if log:
-                        log.battery(battery_level=s.battery, is_flying=s.is_flying)
-                    if s.battery <= 10 and not app_state.battery_critical:
-                        app_state.battery_critical = True
-                        socketio.emit("battery_critical", {"battery": s.battery})
-                        try:
-                            drone.land()
-                        except Exception:
-                            pass
-                    elif s.battery <= 20 and not app_state.battery_warned:
-                        app_state.battery_warned = True
-                        socketio.emit("battery_warning", {"battery": s.battery})
+                snapshot = read_telemetry(drone)
+                telemetry = legacy_telemetry_payload(snapshot)
+                _apply_battery_policy(socketio, drone, snapshot, telemetry["battery"], log)
 
                 if fleet and fleet.count > 1:
                     socketio.emit("fleet_telemetry", fleet.get_all_telemetry())

@@ -4,8 +4,22 @@ import argparse
 import os
 
 from flightrisk.dashboard.app import run_dashboard, SourceConfig
+from flightrisk.drone import registry as drone_registry
 
-_SOURCE_CHOICES = ("tello", "mavlink", "file", "edge")
+# Drone backends come from the registry, so a newly registered drone is a
+# valid --source without editing this file.
+_SOURCE_CHOICES = (*drone_registry.names(), "file", "edge")
+
+
+def _parse_drone_opts(pairs, parser):
+    """Turn repeated ``--drone-opt key=value`` into a dict."""
+    options = {}
+    for pair in pairs or ():
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            parser.error(f"argument --drone-opt: expected KEY=VALUE, got {pair!r}")
+        options[key.strip()] = value.strip()
+    return options
 
 
 def main():
@@ -24,6 +38,12 @@ def main():
         "--rtsp-url", type=str,
         default=os.environ.get("FLIGHTRISK_RTSP_URL"),
         help="RTSP camera URL for MAVLink drones",
+    )
+    parser.add_argument(
+        "--drone-opt", action="append", default=[], metavar="KEY=VALUE",
+        help="Backend-specific drone setting, repeatable (for example "
+             "--drone-opt battery_pct=15 with --source fake). Unknown keys "
+             "are ignored by the backend.",
     )
     parser.add_argument(
         "--edge-ws", type=str,
@@ -86,6 +106,7 @@ def main():
         edge_host=args.edge_host,
         edge_port=args.edge_port,
         reasoning_provider=args.reasoning,
+        drone_options=_parse_drone_opts(args.drone_opt, parser),
     )
     run_dashboard(source_config, target_path=args.target, port=args.port)
 
