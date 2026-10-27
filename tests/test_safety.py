@@ -347,3 +347,18 @@ def test_tello_land_interrupts_inflight_move():
     tello.move_forward.side_effect = None
     ctrl.takeoff()
     assert ctrl.move("forward", 50) is True
+
+
+def test_scheduled_start_refused_after_link_loss(make_executor):
+    executor, drone, sent, clock = make_executor()
+    executor.handle_clock({"type": "clock", "offset_s": 0.0})
+    executor.handle_assign_lanes(
+        {"type": "assign_lanes", "drone_id": "drone-1", "lanes": [{"direction": "forward", "distance_cm": 100}]}
+    )
+    executor.note_ground_message()
+    assert executor.handle_start_at({"type": "start_at", "t_ground_s": clock() + 5.0})
+
+    clock.advance(5.0)  # the ground has been silent for 5 s when the start fires
+    assert executor.wait_idle(WAIT_S)
+    assert drone.calls == []
+    assert [m for m in sent if m.get("for") == "start_at"] == []

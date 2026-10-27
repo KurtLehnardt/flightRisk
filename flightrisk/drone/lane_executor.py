@@ -712,6 +712,16 @@ class LaneExecutor:
                 min_takeoff_battery=self.envelope.min_takeoff_battery,
             )
             return False
+        if self.envelope.link_lost():
+            # The ground went silent while the start was pending; the
+            # watchdog would land the drone straight away, so do not lift.
+            self._log.warning(
+                "edge_takeoff_refused",
+                drone_id=self.drone_id,
+                reason="link_loss",
+                link_age_s=round(self.envelope.link_age_s(), 3),
+            )
+            return False
         if self._abort.is_set():
             return False
         with self._lock:
