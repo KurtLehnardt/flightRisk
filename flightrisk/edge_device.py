@@ -96,6 +96,12 @@ _FLIGHT_SOURCES = ("tello", "fake")
 _FAKE_SPEED_CM_S = 100.0
 # How long the control thread waits in each ``recv`` call.
 _CONTROL_RECV_TIMEOUT_S = 0.1
+# Longest wait between reconnect attempts for a flying (fleet) edge. The
+# backoff still starts at 1 s but stops doubling at 2 s, so after a cable or
+# LAN blip the edge tries again at least every 2 s instead of backing off to
+# 30 s (each attempt can still take up to the connect timeout while the link
+# is down). Other sources keep the transport's 30 s default.
+_FLEET_RECONNECT_MAX_DELAY_S = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +673,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | None) -> EdgeTransportSync:
+    """Construct the ground link; a flying source reconnects with a 2 s backoff cap."""
+    if args.source in _FLIGHT_SOURCES:
+        return EdgeTransportSync(
+            ws_url=args.ws_url, runner=runner, token=token, max_delay=_FLEET_RECONNECT_MAX_DELAY_S,
+        )
+    return EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
+
+
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
     """Construct the drone controller for a flying source."""
     if args.source == "fake":
@@ -695,7 +710,7 @@ def _run_flight_edge(
     drone = _build_drone(args, log)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
-    transport = EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
+    transport = _build_transport(args, runner, token)
     flight = LaneExecutor(drone, envelope, args.drone_id, send=_make_sender(transport, log), logger=log)
     if stop_event is None:
         stop_event = threading.Event()
@@ -718,6 +733,7 @@ def _run_flight_edge(
             alt_slot_cm=envelope.alt_slot_cm,
             geofence_cm=envelope.geofence_cm,
             link_loss_land_s=envelope.link_watchdog.timeout_s,
+            reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
             appearance_only=runner.appearance_only,
         )
         transport.connect()
@@ -773,7 +789,7 @@ def main(argv: list[str] | None = None) -> None:
     runner = _build_runner(args, log)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
-    transport = EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
+    transport = _build_transport(args, runner, token)
 
     log.info("edge_connect", ws_url=args.ws_url, authenticated=token is not None)
     transport.connect()
