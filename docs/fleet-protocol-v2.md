@@ -52,7 +52,8 @@ later pull requests, and the obligations they must meet are listed in
 - **Timeouts.** A v2 ground that receives no edge `hello` within
   `HELLO_TIMEOUT_S` (2 s) treats that edge as v1. A v2 edge whose first fleet
   message on a connection is anything other than a ground `hello` (a `ping`
-  excepted) treats that connection as v1.
+  or a landing excepted) treats that connection as v1. A landing that
+  arrives first is executed and does not decide the version.
 - **Legacy mode.** Per the plan, the leader refuses to plan a mission that
   includes a v1 edge unless `FLIGHTRISK_FLEET_LEGACY=1` is set. That rule is
   implemented with the leader, not here.
@@ -504,6 +505,62 @@ this layer.
   after `HELLO_TIMEOUT_S` (2 s) closes the connection when an edge `hello`
   arrives later, because the version cannot change on a live connection.
   The edge reconnects and negotiates afresh.
+- **Pass `proto=1`, never `None`, before `hello`.** A link that has
+  exchanged no `hello` is v1, so pass `proto=1` until the version is agreed.
+  This version of the module accepts a landing with any `proto`, but an
+  invalid one still refuses every other message, and an edge running a
+  build from before this rule refuses a landing given `proto=None`. Keep
+  passing `proto=1` until every edge runs this version.
+- **A connection's `node_id` never changes.** The `node_id` of the first
+  `hello` on a connection holds for its life; a later `hello` with a
+  different `node_id` is a protocol error and the receiver closes the
+  connection, as for a version change.
+- **No `hello`, no motion.** In a v2 deployment an edge refuses motion and
+  control from a connection that has not sent a ground `hello`, fenced or
+  not, because it has no `node_id` to check the message's `leader_id`
+  against. Landing is still executed.
+- **Two leaders at one epoch.** Two grounds that both claim the same epoch
+  with different `leader_id`s have no tie-break in the protocol. Each edge
+  obeys the first authority it accepted at that epoch and refuses the other
+  with `nack{reason: not_authority}`; the peer link (which elects one
+  leader per epoch) is what resolves the conflict, and the leader that
+  loses must step down and land or hand over its drones.
+- **The same plan with a new `cmd_id`.** An `assign_lanes` with the same
+  `(epoch, plan_seq, plan_id)` as the plan the edge holds but a new
+  `cmd_id` is the same plan resent as a new command: the edge acks it with
+  the new `cmd_id` and does not restart or re-execute the plan.
+- **Plans across a landing.** The edge keeps its last plan's
+  `(epoch, plan_seq, plan_id)` across a landing (plan section 2.8), so a
+  late or retried copy of that plan cannot restart the drone. After a
+  landing the leader must issue a new plan with a new `plan_id` (and a
+  higher `plan_seq` in the same epoch); the edge refuses the old plan with
+  `nack{reason: stale_plan}` or `plan_mismatch`.
+- **Let a landing through the first-message rule, and send `hello` first.**
+  The ground sends its `hello` before anything else on a connection and
+  must not broadcast `heartbeat` or `clock` to a connection that has not
+  yet been sent its `hello`: the edge would take that first message as
+  "no `hello`", lock the connection to v1, and refuse the later `hello` as
+  a version change. A landing is the exception in both directions: the
+  ground may send one at any time, and the edge executes it without letting
+  it decide the version.
+- **Landing acks clear landing retries.** An ack for `land` or
+  `emergency_land_all` may carry no `cmd_id` (a v1 edge, or a landing that
+  arrived without one). The ground must still clear its pending landing
+  retries for that drone on such an ack.
+- **The landing fallback drops `cmd_id`.** A landing that `decode` reads
+  through the fail-safe fallback is returned as just `{"type": ...}`, so
+  the edge's ack carries no `cmd_id`. With the rule above that is enough;
+  a ground that matches landing acks only by `cmd_id` keeps retrying the
+  landing until its retry budget runs out, which is harmless.
+- **Key names and the privacy screen.** The key-part denylist refuses any
+  key that contains a listed part, so some harmless names are refused too:
+  `surface` and `interface` (they contain `face`), `frame_id` and
+  `keyframe` (`frame`) and `embedded` (`embed`). An edge-to-ground message
+  with such a key fails validation, and the edge drops it with only a
+  warning, so the telemetry would vanish silently. Check every new field
+  name against `PRIVACY_FORBIDDEN_KEYS` and `PRIVACY_FORBIDDEN_KEY_PARTS`
+  (a test that builds the message and validates it is enough) before using
+  it.
 - **Guard `MAX_EPOCH`.** Use `next_epoch` to compute every new epoch, and
   surface its error to the operator. An edge should not adopt an epoch
   close to `MAX_EPOCH` from a ground it has not been told to expect,
