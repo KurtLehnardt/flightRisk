@@ -20,7 +20,7 @@ venv/
 .vscode/
 .idea/
 
-# Models (downloaded at runtime)
+# Models (downloaded at runtime, and weights fine-tuned by scripts/finetune_heridal.py)
 models/
 *.pt
 *.onnx
