@@ -29,20 +29,57 @@ __all__ = [
 ]
 
 # How long an interrupting land waits for an in-flight command to release the
-# command channel before it gives up on the confirming land. djitellopy waits
-# up to 7 s per attempt and retries three times, so 25 s covers a stuck move.
+# command channel before it gives up on the confirming land. A flight command
+# waits at most _TAKEOFF_REPLY_TIMEOUT_S for its single reply, so 25 s covers
+# a stuck takeoff or move.
 _LAND_CONFIRM_WAIT_S = 25.0
+# How long a flight command waits for the Tello's reply. These match
+# djitellopy's RESPONSE_TIMEOUT and TAKEOFF_TIMEOUT.
+_COMMAND_REPLY_TIMEOUT_S = 7.0
+_TAKEOFF_REPLY_TIMEOUT_S = 20.0
+# djitellopy leaves at least this long between a reply and the next command,
+# because the Tello ignores commands sent too close together.
+_TIME_BETWEEN_COMMANDS_S = 0.1
+_REPLY_POLL_S = 0.01
+# A land is sent up to this many times. Repeating a land is always safe.
+_LAND_ATTEMPTS = 3
+# Connect-time commands (``command``, ``streamon``) do not move the drone, so
+# they are tried up to this many times.
+_CONNECT_ATTEMPTS = 3
+# The keepalive runs every _KEEPALIVE_INTERVAL_S and waits up to
+# _KEEPALIVE_TIMEOUT_S for its reply while holding the command lock. A move
+# or rotate that finds the keepalive on the channel waits up to
+# _KEEPALIVE_WAIT_S for it instead of being dropped.
+_KEEPALIVE_INTERVAL_S = 10.0
+_KEEPALIVE_TIMEOUT_S = 5
+_KEEPALIVE_WAIT_S = _KEEPALIVE_TIMEOUT_S + 1.0
+# Directions accepted by the Tello's move commands.
+_MOVE_DIRECTIONS = ("up", "down", "left", "right", "forward", "back")
 
 
 class TelloController:
-    """Manages a single Tello drone connection and video stream."""
+    """Manages a single Tello drone connection and video stream.
+
+    Flight commands (takeoff, move, rotate) are sent exactly once and never
+    retried: djitellopy's ``send_control_command`` re-sends a command after
+    any reply other than ``ok``, which would re-send a move that a landing
+    has just interrupted. The djitellopy client is therefore built with
+    ``retry_count=1``, and flight commands go through
+    ``_send_flight_command``, which raises on any reply other than ``ok``.
+
+    Once ``land()`` starts, no move, rotate or takeoff reaches the wire until
+    a new ``takeoff()``: the landing flag is set, and every flight command
+    checks it, under ``_wire_lock``, in the same step that sends it.
+    """
 
     def __init__(self, name: str = "drone", host: str | None = None):
         if host is None:
             host = get_config().drone.tello_default_host
         self.name = name
         self.host = host
-        self.tello = Tello(host=host)
+        # retry_count=1: djitellopy sends every command once. A retried move
+        # could fly again after a landing interrupted it.
+        self.tello = Tello(host=host, retry_count=1)
         self.state = DroneState()
         self.capabilities = DroneCapabilities(
             has_gps=False,
@@ -63,20 +100,35 @@ class TelloController:
         self._stream_recovering = False
         self._frozen_count: int = 0
         self._last_frame_hash: int = 0
+        # Held only for the instant a flight command is checked and written
+        # to the socket, and while land() marks a landing as started. It
+        # orders the two: a flight command is either on the wire before the
+        # landing starts (and the landing interrupts it) or never sent.
+        self._wire_lock = threading.Lock()
         # Set by land() and cleared by takeoff(). While it is set, move() and
         # rotate() refuse to send anything, so a lane executor cannot push a
         # move in behind a landing.
         self._landing = False
+        # Number of land() calls running now, and the number ever started.
+        # takeoff() refuses while a land is running or when one started
+        # after the takeoff was called (for example while it waited for the
+        # command lock).
+        self._lands_in_progress = 0
+        self._land_seq = 0
+        # True while the keepalive holds _cmd_lock. Guarded by _owner_lock,
+        # which is also held while the keepalive takes or releases _cmd_lock.
+        self._owner_lock = threading.Lock()
+        self._keepalive_on_channel = False
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
         try:
-            self.tello.connect()
+            self._retry_ground_command(self.tello.connect)
             self.state.battery = self.tello.get_battery()
             self.state.is_connected = True
             print(f"[{self.name}] Connected. Battery: {self.state.battery}%")
 
-            self.tello.streamon()
+            self._retry_ground_command(self.tello.streamon)
             self._running = True
             self._start_keepalive()
             self._start_state_polling()
@@ -86,8 +138,18 @@ class TelloController:
             return False
 
     def disconnect(self):
-        """Stop streams, disconnect. Landing delegated to Tello.end()."""
+        """Land if flying, then stop streams and disconnect.
+
+        The land goes through ``land()``, which interrupts any command in
+        flight and retries the land; ``Tello.end()`` would land only once,
+        because the djitellopy client no longer retries.
+        """
         self._running = False
+        if self.state.is_flying:
+            try:
+                self.land()
+            except Exception as e:
+                print(f"[{self.name}] Land before disconnect failed: {e}")
         with self._cmd_lock:
             try:
                 self.tello.end()
@@ -159,94 +221,228 @@ class TelloController:
         self._frame_callbacks.append(callback)
 
     # --- Flight commands ---
-    # All movement commands are serialized through _cmd_lock to prevent
-    # concurrent UDP commands from saturating the Tello's single channel.
+    # All flight commands are serialized through _cmd_lock to prevent
+    # concurrent UDP commands from saturating the Tello's single channel,
+    # and because a Tello reply does not say which command it answers.
 
-    def takeoff(self):
+    def takeoff(self, abort: threading.Event | None = None) -> bool:
+        """Take off. Returns True once the Tello confirms the takeoff.
+
+        Refused, with nothing sent and False returned, while a ``land()``
+        is in progress, when a land started after this call began (a
+        takeoff never runs straight after a landing it waited behind), or
+        when ``abort`` is set. These are checked under the command lock in
+        the same step that sends the takeoff, so a landing that starts at
+        the same moment either stops the takeoff from being sent or finds
+        it in flight and interrupts it. The takeoff is sent once; a reply
+        other than ``ok``, or none, raises.
+        """
+        with self._wire_lock:
+            land_seq = self._land_seq
+            landing_now = self._lands_in_progress > 0
+        if landing_now:
+            print(f"[{self.name}] Takeoff refused: a landing is in progress.")
+            return False
         with self._cmd_lock:
-            self._landing = False
-            self.tello.takeoff()
+            if not self._send_flight_command(
+                "takeoff", _TAKEOFF_REPLY_TIMEOUT_S, abort=abort, rearm_after_land=land_seq
+            ):
+                print(f"[{self.name}] Takeoff refused: a landing is in progress or was requested.")
+                return False
             self.state.is_flying = True
+            # djitellopy's end() lands only when its own flag says flying.
+            self.tello.is_flying = True
             print(f"[{self.name}] Takeoff.")
+            return True
 
     def land(self):
         """Land now, interrupting any flight command that is still in progress.
 
-        If the command channel is free this is an ordinary ``land``. If a
-        move, rotate or takeoff is still waiting for its reply, the land does
-        not queue behind it: ``stop`` (hover, accepted at any time by SDK 2.0
-        and later) and ``land`` are sent straight away without waiting for a
-        reply, then a normal ``land`` confirms once the channel is free. The
-        confirming land raises like any other command failure, so callers can
-        retry.
+        From the moment this is called, no move, rotate or takeoff is sent
+        until the next ``takeoff()``, including a retry of the command that
+        was in flight (flight commands are never retried). If the command
+        channel is free this is an ordinary ``land``. If a move, rotate,
+        takeoff or keepalive is still waiting for its reply, the land does
+        not queue behind it: ``stop`` (hover, accepted at any time by SDK
+        2.0 and later) and ``land`` are sent straight away without waiting
+        for a reply, then a normal ``land`` confirms once the channel is
+        free. The land is sent up to ``_LAND_ATTEMPTS`` times; a land that
+        is never confirmed raises, so callers can retry.
         """
-        self._landing = True
-        if self._cmd_lock.acquire(blocking=False):
+        with self._wire_lock:
+            self._landing = True
+            self._lands_in_progress += 1
+            self._land_seq += 1
+        try:
+            if self._cmd_lock.acquire(blocking=False):
+                try:
+                    self._confirm_land()
+                    print(f"[{self.name}] Landing.")
+                finally:
+                    self._cmd_lock.release()
+                return
+
+            print(f"[{self.name}] Landing now (interrupting an in-flight command).")
+            for raw in ("stop", "land"):
+                try:
+                    self.tello.send_command_without_return(raw)
+                except Exception as e:
+                    print(f"[{self.name}] Immediate '{raw}' failed: {e}")
+            if not self._cmd_lock.acquire(timeout=_LAND_CONFIRM_WAIT_S):
+                raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
             try:
-                self.tello.land()
-                self.state.is_flying = False
-                print(f"[{self.name}] Landing.")
+                self._confirm_land()
+                print(f"[{self.name}] Landing confirmed.")
             finally:
                 self._cmd_lock.release()
-            return
-
-        print(f"[{self.name}] Landing now (interrupting an in-flight command).")
-        for raw in ("stop", "land"):
-            try:
-                self.tello.send_command_without_return(raw)
-            except Exception as e:
-                print(f"[{self.name}] Immediate '{raw}' failed: {e}")
-        if not self._cmd_lock.acquire(timeout=_LAND_CONFIRM_WAIT_S):
-            raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
-        try:
-            self.tello.land()
-            self.state.is_flying = False
-            print(f"[{self.name}] Landing confirmed.")
         finally:
-            self._cmd_lock.release()
+            with self._wire_lock:
+                self._lands_in_progress -= 1
+
+    def _confirm_land(self) -> None:
+        """Send ``land`` until the Tello confirms it. Caller holds ``_cmd_lock``."""
+        for attempt in range(1, _LAND_ATTEMPTS + 1):
+            try:
+                self.tello.land()
+            except Exception:
+                if attempt == _LAND_ATTEMPTS:
+                    raise
+                continue
+            self.state.is_flying = False
+            return
 
     def move(self, direction: str, distance_cm: int) -> bool:
         """Move in a direction. Drops command if another is in-flight.
 
         Returns True when the command was sent and acknowledged, and False
-        when it was dropped (another command is in flight, a landing is in
-        progress, or the direction is unknown). Command failures raise.
+        when it was dropped (another flight command is in flight, a landing
+        is in progress, or the direction is unknown). A move that finds only
+        the keepalive on the channel waits for it rather than being dropped.
+        The move is sent once and never retried; a reply other than ``ok``,
+        or none, raises.
         """
-        if self._landing:
+        if self._landing or direction not in _MOVE_DIRECTIONS:
             return False
-        if not self._cmd_lock.acquire(blocking=False):
+        if not self._acquire_for_flight():
             return False
         try:
-            if self._landing:
-                return False
-            distance_cm = max(20, min(500, distance_cm))
-            cmd = getattr(self.tello, f"move_{direction}", None)
-            if cmd:
-                cmd(distance_cm)
-                return True
-            return False
+            distance_cm = max(20, min(500, int(distance_cm)))
+            return self._send_flight_command(f"{direction} {distance_cm}", _COMMAND_REPLY_TIMEOUT_S)
         finally:
             self._cmd_lock.release()
 
     def rotate(self, degrees: int) -> bool:
         """Rotate clockwise/counter-clockwise. Drops if another command is in-flight.
 
-        Returns True when the command was sent, False when it was dropped.
+        Returns True when the command was sent and acknowledged, False when
+        it was dropped. Like ``move()``, it is sent once and never retried.
         """
         if self._landing:
             return False
-        if not self._cmd_lock.acquire(blocking=False):
+        if not self._acquire_for_flight():
             return False
         try:
-            if self._landing:
-                return False
             if degrees > 0:
-                self.tello.rotate_clockwise(min(360, degrees))
+                command = f"cw {min(360, int(degrees))}"
             else:
-                self.tello.rotate_counter_clockwise(min(360, abs(degrees)))
-            return True
+                command = f"ccw {min(360, abs(int(degrees)))}"
+            return self._send_flight_command(command, _COMMAND_REPLY_TIMEOUT_S)
         finally:
             self._cmd_lock.release()
+
+    def _acquire_for_flight(self) -> bool:
+        """Take ``_cmd_lock`` for a move or rotate; False if a flight command holds it.
+
+        The keepalive holds the channel for one short exchange, so a move
+        that finds it there waits for it instead of being dropped (a dropped
+        lane move makes the lane executor land).
+        """
+        with self._owner_lock:
+            if self._cmd_lock.acquire(blocking=False):
+                return True
+            behind_keepalive = self._keepalive_on_channel
+        if not behind_keepalive:
+            return False
+        return self._cmd_lock.acquire(timeout=_KEEPALIVE_WAIT_S)
+
+    def _send_flight_command(
+        self,
+        command: str,
+        timeout_s: float,
+        *,
+        abort: threading.Event | None = None,
+        rearm_after_land: int | None = None,
+    ) -> bool:
+        """Send one flight command exactly once and wait for its reply.
+
+        Caller holds ``_cmd_lock``. Returns False, sending nothing, when a
+        landing has started (or ``abort`` is set). For a takeoff,
+        ``rearm_after_land`` is the land count read when the takeoff was
+        called: a finished landing is then cleared, but a landing still in
+        progress, or one started since, refuses the command. The check and
+        the send happen under ``_wire_lock``, so a ``land()`` that starts at
+        the same moment is ordered either before the check or after the
+        command is on the wire. Returns True on an ``ok`` reply; raises
+        ``RuntimeError`` on any other reply or none within ``timeout_s``.
+        Nothing is retried.
+        """
+        tello = self.tello
+        self._pace_commands()
+        responses = tello.get_own_udp_object()["responses"]
+        with self._wire_lock:
+            if abort is not None and abort.is_set():
+                return False
+            if rearm_after_land is not None:
+                if self._lands_in_progress or self._land_seq != rearm_after_land:
+                    return False
+                self._landing = False
+            elif self._landing:
+                return False
+            # Queued replies belong to earlier exchanges, such as the stop
+            # and land of an interrupting landing. Drop them so this command
+            # reads its own reply.
+            del responses[:]
+            tello.send_command_without_return(command)
+        sent_at = time.monotonic()
+        while not responses:
+            if time.monotonic() - sent_at > timeout_s:
+                raise RuntimeError(
+                    f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
+                )
+            time.sleep(_REPLY_POLL_S)
+        tello.last_received_command_timestamp = time.time()
+        raw = responses.pop(0)
+        if isinstance(raw, (bytes, bytearray)):
+            reply = bytes(raw).decode("utf-8", "replace")
+        else:
+            reply = str(raw)
+        reply = reply.strip()
+        if reply.lower() != "ok":
+            raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r} (not retried)")
+        return True
+
+    def _pace_commands(self) -> None:
+        """Wait until djitellopy's minimum gap after the last reply has passed."""
+        try:
+            gap = time.time() - float(self.tello.last_received_command_timestamp)
+        except (TypeError, ValueError):
+            return
+        if 0 <= gap < _TIME_BETWEEN_COMMANDS_S:
+            time.sleep(_TIME_BETWEEN_COMMANDS_S - gap)
+
+    def _retry_ground_command(self, fn: Callable[[], object]) -> None:
+        """Run a connect-time command (``command``, ``streamon``) with retries.
+
+        These never move the drone, so retrying them is safe. djitellopy no
+        longer retries anything itself (``retry_count=1``).
+        """
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            try:
+                fn()
+                return
+            except Exception:
+                if attempt == _CONNECT_ATTEMPTS:
+                    raise
 
     def read_battery(self) -> int | None:
         """Battery percentage from the latest state packet, or None if unknown.
@@ -271,8 +467,15 @@ class TelloController:
         return height
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int):
-        """Send RC joystick control. Each value -100 to 100."""
-        self.tello.send_rc_control(lr, fb, ud, yaw)
+        """Send RC joystick control. Each value -100 to 100.
+
+        Once a landing has started, only an all-zero (hover) command is
+        sent until the next takeoff.
+        """
+        with self._wire_lock:
+            if self._landing and any((lr, fb, ud, yaw)):
+                return
+            self.tello.send_rc_control(lr, fb, ud, yaw)
 
     def hover(self):
         """Stop all movement and hover in place."""
@@ -290,17 +493,40 @@ class TelloController:
         """Send keepalive every 10s to prevent auto-landing."""
         def _keepalive():
             while self._running:
-                if not self._cmd_lock.locked():
-                    try:
-                        self.tello.send_control_command("command", timeout=5)
-                    except Exception:
-                        pass
-                time.sleep(10)
+                self._keepalive_once()
+                time.sleep(_KEEPALIVE_INTERVAL_S)
 
         self._keepalive_thread = threading.Thread(
             target=_keepalive, daemon=True, name=f"{self.name}-keepalive"
         )
         self._keepalive_thread.start()
+
+    def _keepalive_once(self) -> bool:
+        """Send one keepalive if the command channel is free. Returns True if it was answered.
+
+        The keepalive holds ``_cmd_lock`` for its whole exchange, so its
+        ``ok`` can never be read as the reply to a land or a flight command.
+        While a flight command holds the channel the keepalive is skipped;
+        that command keeps the link alive.
+        """
+        with self._owner_lock:
+            if not self._cmd_lock.acquire(blocking=False):
+                return False
+            self._keepalive_on_channel = True
+        try:
+            try:
+                # Replies queued while the channel was free are stale.
+                del self.tello.get_own_udp_object()["responses"][:]
+            except Exception:
+                pass
+            self.tello.send_control_command("command", timeout=_KEEPALIVE_TIMEOUT_S)
+            return True
+        except Exception:
+            return False
+        finally:
+            with self._owner_lock:
+                self._keepalive_on_channel = False
+                self._cmd_lock.release()
 
     def _start_state_polling(self):
         """Poll drone state every 2 seconds. Skips when a flight command is active."""
@@ -408,11 +634,16 @@ class FakeTelloController:
     def on_frame(self, callback: Callable[[np.ndarray], None]) -> None:
         self._frame_callbacks.append(callback)
 
-    def takeoff(self) -> None:
-        self._record("takeoff")
-        self._interrupt.clear()
-        self.state.is_flying = True
-        self.state.height = self.takeoff_height_cm
+    def takeoff(self, abort: threading.Event | None = None) -> bool:
+        """Take off unless ``abort`` is set, like ``TelloController.takeoff``."""
+        with self._lock:
+            if abort is not None and abort.is_set():
+                return False
+            self.calls.append(("takeoff",))
+            self._interrupt.clear()
+            self.state.is_flying = True
+            self.state.height = self.takeoff_height_cm
+        return True
 
     def land(self) -> None:
         self._interrupt.set()

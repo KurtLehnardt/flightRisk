@@ -29,6 +29,19 @@ behind frame processing. Safety controls on the edge laptop:
     * no ground message for ``FLIGHTRISK_LINK_LOSS_LAND_S`` seconds lands it;
     * any exit from the edge loop lands the drone first.
 
+A flying edge stamps every detection message with its ``drone_id`` and its
+dead-reckoned pose (``rel_x_cm``, ``rel_y_cm``, ``heading_deg``) from the
+safety envelope, so the ground can place it on the shared fleet map.
+
+Appearance-only: with ``--source tello`` or ``--source fake`` the edge never
+loads face recognition and never sends a ``face_embedding``, unless
+``--with-face`` is passed or ``FLIGHTRISK_APPEARANCE_ONLY=0`` is set. Person
+crops (JPEG) and ReID appearance embeddings are still sent to the ground over
+the edge WebSocket, which is authenticated with ``FLIGHTRISK_EDGE_TOKEN``.
+For ``--source webcam`` and ``--source file`` face recognition stays on by
+default; ``--appearance-only`` or ``FLIGHTRISK_APPEARANCE_ONLY=1`` turns it
+off there too. An explicit flag wins over the environment variable.
+
 Run it with::
 
     python -m flightrisk.edge_device --source webcam
@@ -73,6 +86,10 @@ __all__ = [
 _DEFAULT_WS_URL = "ws://localhost:9000"
 # Environment variable carrying the shared-secret auth token.
 _TOKEN_ENV_VAR = "FLIGHTRISK_EDGE_TOKEN"
+# Environment variable that turns face recognition off (1) or on (0).
+_APPEARANCE_ONLY_ENV_VAR = "FLIGHTRISK_APPEARANCE_ONLY"
+_TRUE_VALUES = ("1", "true", "yes", "on")
+_FALSE_VALUES = ("0", "false", "no", "off")
 # Sources that fly a drone (and therefore run the lane executor).
 _FLIGHT_SOURCES = ("tello", "fake")
 # Simulated speed of the fake drone, so lane progress is visible on the map.
@@ -499,8 +516,59 @@ def _build_source(args: argparse.Namespace, parser: argparse.ArgumentParser, log
     return CV2FrameSource(cv2.VideoCapture(args.video))
 
 
-def _build_runner(args: argparse.Namespace, log: StructuredLogger) -> EdgeRunner:
-    """Construct detector/reid/face + EdgeRunner the way the dashboard does."""
+def _resolve_appearance_only(args: argparse.Namespace, environ: Any = None) -> bool:
+    """Decide whether this edge runs appearance-only (no face recognition).
+
+    ``--appearance-only`` or ``--with-face`` wins. Otherwise an explicit
+    ``FLIGHTRISK_APPEARANCE_ONLY`` decides. Otherwise a flying source
+    (``tello``, ``fake``) is appearance-only and ``webcam``/``file`` are not.
+    Raises ``ValueError`` when the environment variable is not a boolean.
+    """
+    explicit = getattr(args, "appearance_only", None)
+    if explicit is not None:
+        return bool(explicit)
+    env = os.environ if environ is None else environ
+    raw = env.get(_APPEARANCE_ONLY_ENV_VAR, "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    if raw:
+        raise ValueError(
+            f"{_APPEARANCE_ONLY_ENV_VAR}={raw!r} is not a boolean (use 1/0, true/false, yes/no, on/off)"
+        )
+    return args.source in _FLIGHT_SOURCES
+
+
+def _envelope_pose_provider(envelope: SafetyEnvelope) -> Callable[[], dict[str, float]]:
+    """Return a pose provider for ``EdgeRunner`` that reads the envelope's dead-reckoned pose."""
+
+    def _pose() -> dict[str, float]:
+        pose = envelope.pose_snapshot()
+        return {
+            "rel_x_cm": round(pose.x_cm, 1),
+            "rel_y_cm": round(pose.y_cm, 1),
+            "heading_deg": round(pose.heading_deg, 1),
+        }
+
+    return _pose
+
+
+def _build_runner(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    pose_provider: Callable[[], Any] | None = None,
+) -> EdgeRunner:
+    """Construct detector/reid/face + EdgeRunner the way the dashboard does.
+
+    A flying source tags every detection message with ``args.drone_id`` and
+    the pose from ``pose_provider``. Face recognition is constructed only
+    when the edge is not appearance-only (see ``_resolve_appearance_only``).
+    """
+    # Decide first, so a bad FLIGHTRISK_APPEARANCE_ONLY fails before any
+    # model is loaded.
+    appearance_only = _resolve_appearance_only(args)
+
     # Lazy imports: these pull in ultralytics / torch / insightface, which are
     # heavy and unnecessary for importing this module or unit-testing the loop.
     from flightrisk.vision.detector import PersonDetector
@@ -515,13 +583,25 @@ def _build_runner(args: argparse.Namespace, log: StructuredLogger) -> EdgeRunner
         log.warning("reid_unavailable", error=str(e))
 
     face = None
-    try:
-        from flightrisk.vision.face import FaceRecognizer
-        face = FaceRecognizer(match_threshold=0.35)
-    except Exception as e:
-        log.warning("insightface_unavailable", error=str(e))
+    if appearance_only:
+        log.info("edge_appearance_only", source=args.source, face_embedding=False)
+    else:
+        try:
+            from flightrisk.vision.face import FaceRecognizer
+            face = FaceRecognizer(match_threshold=0.35)
+        except Exception as e:
+            log.warning("insightface_unavailable", error=str(e))
 
-    return EdgeRunner(detector=detector, reid=reid, face=face, stream_video=args.stream_video)
+    flying = args.source in _FLIGHT_SOURCES
+    return EdgeRunner(
+        detector=detector,
+        reid=reid,
+        face=face,
+        stream_video=args.stream_video,
+        drone_id=args.drone_id if flying else None,
+        pose_provider=pose_provider if flying else None,
+        appearance_only=appearance_only,
+    )
 
 
 def _parse_alt_slot(raw: str) -> float:
@@ -572,6 +652,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--alt-slot", type=_parse_alt_slot, default=100.0,
         help="Altitude slot in cm (default 100); values below 10 are metres, so 1.6 means 160 cm",
     )
+    face = parser.add_mutually_exclusive_group()
+    face.add_argument(
+        "--appearance-only", dest="appearance_only", action="store_true",
+        help="Never load face recognition or send face embeddings (the default for "
+             "--source tello and fake unless FLIGHTRISK_APPEARANCE_ONLY=0)",
+    )
+    face.add_argument(
+        "--with-face", dest="appearance_only", action="store_false",
+        help="Also compute and send face embeddings (close-range use only; faces are "
+             "not resolvable at search altitude)",
+    )
+    parser.set_defaults(appearance_only=None)
     return parser
 
 
@@ -589,16 +681,24 @@ def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
     return TelloController(name=args.drone_id, host=args.tello_host)
 
 
-def _run_flight_edge(args: argparse.Namespace, log: StructuredLogger) -> None:
-    """Run a flying edge: drone, lane executor, safety controls and the edge loop."""
+def _run_flight_edge(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Run a flying edge: drone, lane executor, safety controls and the edge loop.
+
+    Setting ``stop_event`` ends the edge loop; the drone lands first.
+    """
     envelope = SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot)
-    runner = _build_runner(args, log)
+    runner = _build_runner(args, log, pose_provider=_envelope_pose_provider(envelope))
     drone = _build_drone(args, log)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
     flight = LaneExecutor(drone, envelope, args.drone_id, send=_make_sender(transport, log), logger=log)
-    stop_event = threading.Event()
+    if stop_event is None:
+        stop_event = threading.Event()
 
     if not drone.connect():
         log.error("edge_drone_connect_failed", drone_id=args.drone_id)
@@ -618,6 +718,7 @@ def _run_flight_edge(args: argparse.Namespace, log: StructuredLogger) -> None:
             alt_slot_cm=envelope.alt_slot_cm,
             geofence_cm=envelope.geofence_cm,
             link_loss_land_s=envelope.link_watchdog.timeout_s,
+            appearance_only=runner.appearance_only,
         )
         transport.connect()
         run_edge_device(
@@ -657,6 +758,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.source == "file" and not args.video:
         parser.error("--video is required when --source=file")
+    try:
+        _resolve_appearance_only(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     log = StructuredLogger(component="edge-device")
 
