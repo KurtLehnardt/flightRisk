@@ -110,7 +110,7 @@ def test_ground_command_line():
     result = _run("demo_ground.sh", AP)
     assert result.returncode == 0, result.stderr
     command = result.stdout.strip().splitlines()[-1]
-    assert command.endswith("-m flightrisk.dashboard --source edge --edge-host 10.42.0.1 --fleet drone-1,drone-2 --no-llm")
+    assert command.endswith("-m flightrisk.dashboard --source edge --edge-host 127.0.0.1,10.42.0.1 --fleet drone-1,drone-2 --no-llm")
 
 
 def test_edge_ids_match_ground_fleet_list():
@@ -125,9 +125,23 @@ def test_edge_ids_match_ground_fleet_list():
         assert drone_id in fleet
         assert f"--alt-slot {alt}" in command
         assert "--source tello --tello-host 192.168.10.1" in command
-        assert "--ws-url ws://10.42.0.1:9000" in command
+        assert "--ws-url ws://10.42.0.1:9000" in command  # FLIGHTRISK_GROUND_LOCAL unset: cable address
         seen.append(drone_id)
     assert seen == fleet
+
+
+def test_edge_launcher_ground_local_uses_loopback_only_in_ap_mode():
+    result = _run("demo_edge.sh", {**AP, "DRONE_ID": "1", "FLIGHTRISK_GROUND_LOCAL": "1"})
+    assert result.returncode == 0, result.stderr
+    command = result.stdout.strip().splitlines()[-1]
+    assert "--ws-url ws://127.0.0.1:9000" in command
+    assert "--tello-host 192.168.10.1" in command
+    ground = _run("demo_ground.sh", {**AP, "FLIGHTRISK_GROUND_LOCAL": "1"}).stdout.strip().splitlines()[-1]
+    assert "--edge-host 127.0.0.1,10.42.0.1" in ground
+    station = {**AP, "FLIGHTRISK_FLEET_NET": "station", "FLIGHTRISK_GROUND_IP": "192.168.1.20",
+               "FLIGHTRISK_TELLO_HOST": "192.168.1.50", "FLIGHTRISK_GROUND_LOCAL": "1"}
+    edge = _run("demo_edge.sh", {**station, "DRONE_ID": "1"}).stdout.strip().splitlines()[-1]
+    assert "--ws-url ws://192.168.1.20:9000" in edge
 
 
 def test_edge_launcher_overrides_and_rejects_bad_input():
