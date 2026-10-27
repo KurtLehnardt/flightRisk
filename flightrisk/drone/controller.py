@@ -163,10 +163,14 @@ class CommandResult:
 def command_result(value: Any, command: str) -> CommandResult:
     """Normalize a command's return value to a :class:`CommandResult`.
 
-    Legacy controllers return ``None`` on success; that maps to ``OK``.
+    Legacy controllers return ``None`` on success; that maps to ``OK``. A
+    plain ``False`` (the "command was not sent" convention some controllers
+    use) maps to ``DROPPED_BUSY`` so it is reported rather than ignored.
     """
     if isinstance(value, CommandResult):
         return value
+    if value is False:
+        return CommandResult(command, CommandOutcome.DROPPED_BUSY, "controller returned False")
     return CommandResult(command=command)
 
 

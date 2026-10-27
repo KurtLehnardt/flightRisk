@@ -137,6 +137,8 @@ class TestCapabilities:
         dropped = CommandResult("move", CommandOutcome.DROPPED_BUSY)
         assert command_result(dropped, "move") is dropped
         assert not dropped.ok
+        assert command_result(True, "move").ok
+        assert command_result(False, "move").outcome is CommandOutcome.DROPPED_BUSY
 
 
 # ---------------------------------------------------------------------------
