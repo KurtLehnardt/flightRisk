@@ -10,7 +10,11 @@
 * N7: ``takeoff()`` refuses while a land is in progress.
 * R-116: a Tello land is confirmed by fresh state packets showing the drone
   on the ground, whatever the command replies were; with no fresh state the
-  R-114 reply-based confirmation applies.
+  R-114 reply-based confirmation applies. From the PR #91 review: state
+  confirms only with the motors off (the motor time has stopped going up),
+  ``|h|`` and ``tof`` near zero; nothing confirms a land that interrupted a
+  takeoff until the lift guard after it is over; one deadline bounds each
+  ``land()`` call; and LAND ALL lands every local drone at once.
 * B3: a flying edge tags every detection with its drone id and pose.
 * B4: a flying edge is appearance-only by default: no ``FaceRecognizer`` and
   no ``face_embedding`` unless ``--with-face`` or
@@ -963,6 +967,347 @@ def test_raw_land_not_blocked_by_channel_holder(tello_on_wire):
     assert not lander.is_alive()
     assert wire.sent == ["takeoff", "stop", "land", "land"]
     assert ctrl.state.is_flying is False
+
+
+# ---------------------------------------------------------------------------
+# R-116 (PR #91 review): motors off, |h| and tof, the lift guard, a bounded
+# land, and LAND ALL on every local drone at once
+# ---------------------------------------------------------------------------
+
+# Longer than the motor-off span (_MOTOR_OFF_S, 2 s) a land needs before the
+# state stream may confirm it. Written out, not read from the module, so
+# these tests fail on their assertions against code that predates it.
+MOTORS_SETTLED_S = 2.3
+
+
+def _run_takeoff(ctrl: TelloController) -> tuple[threading.Thread, list]:
+    """Start ``ctrl.takeoff()`` on a thread; the list collects its result or the exception it raised."""
+    outcome: list = []
+
+    def take_off() -> None:
+        try:
+            outcome.append(ctrl.takeoff())
+        except RuntimeError as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=take_off, daemon=True)
+    thread.start()
+    return thread, outcome
+
+
+def test_land_during_takeoff_spinup_not_confirmed_when_the_tello_lifts(tello_on_wire, monkeypatch):
+    """Review finding 1: a land that interrupts a takeoff still spinning up is not confirmed, and the Tello lifts.
+
+    The Tello is on the ground, motors off, when the takeoff goes out; it
+    spins up and answers the takeoff only once it hovers. LAND interrupts:
+    the Tello answers the stop and every land "error" and ignores them, and
+    lifts to 80 cm 1.2 s after the takeoff. Before the fix, the stop's
+    reply ended the takeoff's wait, the confirming land went out, and three
+    state packets at height 0 confirmed the land while the drone was about
+    to lift: is_flying false, the land flag cleared and the keepalive
+    resumed (defeating the Tello's own 15 s auto-land).
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.5)
+    ctrl, wire = tello_on_wire()
+    wire.start_state(0)
+    # Long enough on the ground that the motor time has been still for
+    # longer than the motor-off span: only the lift guard can tell.
+    time.sleep(MOTORS_SETTLED_S)
+    lifted = threading.Event()
+
+    def lift() -> None:
+        wire.height_cm = 80
+        wire.tof_cm = 90
+        lifted.set()
+
+    def spinning_up(command: str):
+        word = command.split()[0]
+        if word == "takeoff":
+            wire.set_motors(True)
+            timer = threading.Timer(1.2, lift)
+            timer.daemon = True
+            timer.start()
+            return []
+        if word in ("stop", "land"):
+            return [("error", 0.02)]
+        return None
+
+    wire.script = spinning_up
+    taker, _ = _run_takeoff(ctrl)
+    assert wait_for(lambda: "takeoff" in wire.sent)
+    time.sleep(0.05)
+
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    taker.join(WAIT_S)
+    assert not taker.is_alive()
+    assert lifted.wait(WAIT_S)
+    assert wire.height_cm == 80
+
+    # The land was never taken as confirmed: callers treat the drone as
+    # flying and retry, and nothing restarts the Tello's auto-land timer.
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+    assert ctrl._stream_command_once("streamon") is False
+    assert "command" not in wire.sent and "streamon" not in wire.sent
+
+
+@pytest.mark.parametrize("with_state, land_reply", [(True, "error"), (False, "ok")])
+def test_land_during_takeoff_spinup_confirmed_only_after_lift_guard(
+    tello_on_wire, monkeypatch, with_state, land_reply
+):
+    """Review finding 1: a Tello that obeys the stop and stays down is confirmed, but only after the lift guard.
+
+    With state, the lands are answered "error" (there is nothing to land)
+    and the state stream confirms once the guard is over. Without state,
+    the lands are answered "ok"; an "ok" read during the guard may be the
+    stop's or the takeoff's, so only a land answered after it confirms.
+    """
+    guard_s = 1.5
+    monkeypatch.setattr(tello_module, "_TAKEOFF_LIFT_GUARD_S", guard_s, raising=False)
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 2.0)
+    ctrl, wire = tello_on_wire()
+    if with_state:
+        wire.start_state(0)
+        time.sleep(MOTORS_SETTLED_S)
+    takeoff_sent: list[float] = []
+
+    def obeys_stop(command: str):
+        word = command.split()[0]
+        if word == "takeoff":
+            takeoff_sent.append(time.monotonic())
+            wire.set_motors(True)
+            return []
+        if word == "stop":
+            wire.set_motors(False)
+            return [("ok", 0.02)]
+        if word == "land":
+            return [(land_reply, 0.02)]
+        return None
+
+    wire.script = obeys_stop
+    taker, _ = _run_takeoff(ctrl)
+    assert wait_for(lambda: "takeoff" in wire.sent)
+    time.sleep(0.05)
+
+    ctrl.land()
+    returned_at = time.monotonic()
+    taker.join(WAIT_S)
+    assert not taker.is_alive()
+    assert returned_at - takeoff_sent[0] >= guard_s
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+    assert ctrl._keepalive_once() is True
+
+
+def test_poller_reports_no_crash_during_the_lift_guard(tello_on_wire, monkeypatch):
+    """Height 0 while a land that interrupted a takeoff is unconfirmed is not a crash: the Tello may still lift."""
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.2)
+    ctrl, wire = tello_on_wire()
+
+    def lossy(command: str):
+        word = command.split()[0]
+        if word == "takeoff":
+            return []
+        if word == "stop":
+            return [("error", 0.02)]
+        if word == "land":
+            return []
+        return None
+
+    wire.script = lossy
+    taker, _ = _run_takeoff(ctrl)
+    assert wait_for(lambda: "takeoff" in wire.sent)
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    taker.join(WAIT_S)
+    assert ctrl.state.is_flying is True
+
+    ctrl.state.height = 0
+    for _ in range(3 * tello_module._ZERO_HEIGHT_POLLS):
+        ctrl._check_zero_height()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+
+
+def test_state_confirms_a_land_only_with_the_motors_off(tello_on_wire, monkeypatch):
+    """Ground-like height and distance while the motors run confirm nothing; once they stop, state confirms."""
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.3)
+    ctrl, wire = tello_on_wire(drop={"land"})
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    # Every height and distance reading looks like ground; only the motor
+    # time, going up once a second, says the drone is flying.
+    wire.set_motors(True)
+    time.sleep(MOTORS_SETTLED_S)
+    assert ctrl._ground_by_state() is False
+
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+    # The motors stop (the Tello's own auto-land, say). Once the motor time
+    # has been still for the motor-off span, state confirms the next land
+    # even though its packet is lost.
+    wire.set_motors(False)
+    time.sleep(MOTORS_SETTLED_S)
+    ctrl.land()
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+    assert ctrl._keepalive_once() is True
+
+
+@pytest.mark.parametrize("omit, tof_cm", [({"time"}, 10), ({"tof"}, 10), (set(), 0)])
+def test_state_without_motor_time_or_tof_needs_a_fresh_ok(tello_on_wire, monkeypatch, omit, tof_cm):
+    """A state stream missing the motor time or a usable tof cannot confirm a land alone; a fresh "ok" must too."""
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.3)
+    ctrl, wire = tello_on_wire()
+    wire.omit_state_fields = omit
+    wire.tof_cm = tof_cm
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    time.sleep(MOTORS_SETTLED_S)
+
+    # The height says ground, but the lands are answered "error".
+    wire.script = lambda command: [("error", 0.02)] if command == "land" else None
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+
+    # Ground height and a fresh "ok" together confirm it.
+    wire.script = None
+    ctrl.land()
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+
+
+@pytest.mark.parametrize(
+    "height_cm, tof_cm, motors_on",
+    [
+        (-100, 100, True),  # hovering 1 m below a takeoff point on a ledge: what a Tello reports
+        (-100, 10, False),  # only |h| tells
+        (0, 120, False),  # h drifted to 0 in the air: only tof tells
+        (5, 6553, False),  # tof out of range, as over a drop: only tof tells
+    ],
+)
+def test_hover_below_takeoff_point_or_high_tof_is_not_ground(tello_on_wire, monkeypatch, height_cm, tof_cm, motors_on):
+    """Review finding 2: a negative h, or a tof well above the ground, never counts as ground with every land lost."""
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.3)
+    ctrl, wire = tello_on_wire(drop={"land"})
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    wire.set_motors(motors_on)
+    wire.tof_cm = tof_cm
+    wire.height_cm = height_cm
+    time.sleep(MOTORS_SETTLED_S)
+    assert ctrl._ground_by_state() is False
+
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+
+def test_one_deadline_bounds_the_whole_land_call(tello_on_wire, monkeypatch):
+    """Review finding 3: reply waits, state waits and the channel wait all come out of one land() budget."""
+    deadline_s = 1.5
+    monkeypatch.setattr(tello_module, "_LAND_DEADLINE_S", deadline_s, raising=False)
+    # The default per-attempt waits: 7 s for a reply, 6 s for the state stream.
+    ctrl, wire = tello_on_wire()
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    wire.set_motors(True)
+    wire.height_cm = 80
+    wire.tof_cm = 90
+    # The Tello answers every land "error" and stays in the air.
+    wire.script = lambda command: [("error", 0.02)] if command == "land" else None
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert time.monotonic() - started < deadline_s + 1.0
+
+    # A command that never lets go of the channel: the land sends its stop
+    # and land at once and gives up on the confirming land at the deadline.
+    assert ctrl._cmd_lock.acquire(timeout=WAIT_S)
+    try:
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="land not confirmed"):
+            ctrl.land()
+        assert time.monotonic() - started < deadline_s + 1.0
+        assert wire.sent[-2:] == ["stop", "land"]
+    finally:
+        ctrl._cmd_lock.release()
+    assert ctrl.state.is_flying is True
+
+
+def test_local_land_all_lands_every_drone_at_once(tello_on_wire, monkeypatch, caplog):
+    """Review finding 3: a local drone whose land never confirms does not delay the land to the others.
+
+    drone-1 answers every land "error" and stays in the air; drone-2 lands
+    normally. drone-2's land goes out within a second of the broadcast, and
+    the result still names drone-1 as not landed.
+    """
+    import logging
+
+    from flightrisk.drone.fleet import DroneFleet
+
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 1.0)
+    stuck, stuck_wire = tello_on_wire()
+    stuck_wire.start_state(0)
+    assert stuck.takeoff() is True
+    stuck_wire.set_motors(True)
+    stuck_wire.height_cm = 80
+    stuck_wire.tof_cm = 90
+    stuck_wire.script = lambda command: [("error", 0.02)] if command == "land" else None
+    good, good_wire = tello_on_wire()
+    # djitellopy sends every drone's commands on one module-level socket:
+    # route each command to the fake wire of the drone it is addressed to.
+    import djitellopy.tello as djitello
+
+    wires = {stuck_wire.host: stuck_wire, good_wire.host: good_wire}
+    monkeypatch.setattr(
+        djitello,
+        "client_socket",
+        types.SimpleNamespace(sendto=lambda data, address: wires[address[0]].sendto(data, address)),
+        raising=False,
+    )
+    assert good.takeoff() is True
+    good.name = "drone-2"
+
+    first_land: dict[str, float] = {}
+    stuck_wire.on_send = lambda command: command == "land" and first_land.setdefault("drone-1", time.monotonic())
+    good_wire.on_send = lambda command: command == "land" and first_land.setdefault("drone-2", time.monotonic())
+    controllers = {"drone-1": stuck, "drone-2": good}
+    for ctrl in controllers.values():
+        monkeypatch.setattr(ctrl, "connect", lambda: True)
+    fleet = DroneFleet(factory=lambda name, host: controllers[name])
+    assert fleet.register("drone-1", host=stuck.host)
+    assert fleet.register("drone-2", host=good.host)
+
+    started = time.monotonic()
+    with caplog.at_level(logging.ERROR, logger="flightrisk.drone.fleet"):
+        results = fleet.broadcast_command("land")
+
+    assert first_land["drone-2"] - started < 1.0
+    assert first_land["drone-1"] - started < 1.0
+    assert isinstance(results["drone-1"], RuntimeError)
+    assert results["drone-2"] is None
+    assert "Command land failed on drone-1" in caplog.text
+    assert stuck.state.is_flying is True
+    assert good.state.is_flying is False
 
 
 # ---------------------------------------------------------------------------
