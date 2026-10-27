@@ -655,3 +655,40 @@ def test_no_takeoff_after_shutdown(make_executor):
     clock.advance(1.0)
     time.sleep(0.1)
     assert drone.calls == []
+
+
+def test_emergency_callback_lands_once_with_recv_duplicate(make_executor):
+    from flightrisk.edge_device import _wire_emergency_callback
+
+    class CallbackTransport(FlightTransport):
+        on_emergency_land = None
+
+    executor, drone, _, _ = make_executor()
+    drone.takeoff()
+
+    # Hold the first land in progress, as a real Tello land blocks for seconds.
+    entered, release = threading.Event(), threading.Event()
+    real_land = drone.land
+
+    def slow_land():
+        entered.set()
+        release.wait(WAIT_S)
+        real_land()
+
+    drone.land = slow_land
+    transport = CallbackTransport([])
+    assert _wire_emergency_callback(transport, executor)
+    assert _wire_emergency_callback(FlightTransport([]), executor) is False
+
+    callback_thread = threading.Thread(target=transport.on_emergency_land, args=({"type": "emergency_land_all"},))
+    callback_thread.start()
+    assert entered.wait(WAIT_S)
+    # The same message then arrives through recv() on the control thread.
+    _handle_control(
+        {"type": "emergency_land_all"}, EdgeRunner(detector=None),
+        StructuredLogger(component="test-lane-executor"), flight=executor,
+    )
+    release.set()
+    callback_thread.join(WAIT_S)
+    assert drone.calls.count(("land",)) == 1
+    assert not drone.state.is_flying

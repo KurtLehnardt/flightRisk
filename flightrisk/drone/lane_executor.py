@@ -182,6 +182,10 @@ class LaneExecutor:
         # and new takeoffs are refused.
         self._land_reason: str | None = None
         self._last_land_attempt_s = 0.0
+        # True while some thread is inside drone.land(). A second land
+        # request meanwhile (for example emergency_land_all arriving through
+        # both the transport callback and recv()) does not send another one.
+        self._land_inflight = False
         self._next_telemetry_s: float | None = None
 
     # ------------------------------------------------------------------
@@ -535,20 +539,29 @@ class LaneExecutor:
         """Land immediately from the calling thread.
 
         Sets the abort flag first so a running sequence sends nothing more,
-        then calls ``drone.land()`` directly; nothing is queued. A failed
-        land is logged and retried by the monitor while the drone still
-        reports flying.
+        then calls ``drone.land()`` directly; nothing is queued. If another
+        thread is already inside ``drone.land()``, this call returns without
+        sending a second land. A failed land is logged and retried by the
+        monitor while the drone still reports flying.
         """
         self._abort.set()
         with self._lock:
             self._land_reason = reason
             self._last_land_attempt_s = self._clock()
             self._flying_lanes = False
+            duplicate = self._land_inflight
+            self._land_inflight = True
+        if duplicate:
+            self._log.info("edge_land_already_in_progress", drone_id=self.drone_id, reason=reason)
+            return
         self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
         try:
             self.drone.land()
         except Exception as exc:
             self._log.error("edge_land_error", drone_id=self.drone_id, reason=reason, error=repr(exc))
+        finally:
+            with self._lock:
+                self._land_inflight = False
 
     # ------------------------------------------------------------------
     # Monitor: watchdog, battery, land retries, telemetry

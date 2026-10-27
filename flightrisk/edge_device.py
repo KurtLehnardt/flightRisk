@@ -321,6 +321,21 @@ def start_local_land_key(
     return thread
 
 
+def _wire_emergency_callback(transport: Any, flight: LaneExecutor) -> bool:
+    """Land straight from the transport's emergency callback when it has one.
+
+    A transport exposing an ``on_emergency_land`` attribute calls it on its
+    own thread the moment ``emergency_land_all`` arrives, ahead of
+    ``recv()``. The same message still reaches the control thread through
+    ``recv()``; the executor ignores the second land while the first is in
+    progress. Returns True if the callback was installed.
+    """
+    if not hasattr(transport, "on_emergency_land"):
+        return False
+    transport.on_emergency_land = lambda msg: flight.land_now("emergency_land_all")
+    return True
+
+
 def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger) -> Any:
     """Make Ctrl+C land the drone before the process exits.
 
@@ -590,6 +605,7 @@ def _run_flight_edge(args: argparse.Namespace, log: StructuredLogger) -> None:
     previous_sigint = None
     try:
         flight.start()
+        _wire_emergency_callback(transport, flight)
         start_local_land_key(flight, sys.stdin, log)
         previous_sigint = _install_sigint_land(flight, log)
         log.info(
