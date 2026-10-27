@@ -112,7 +112,7 @@ from edge to ground and is let through by type only.
 
 | Type | Fields |
 |---|---|
-| `node_state` | `node_id`, `role`, `epoch`, `proto`, `roster` (at most 8 entries of `drone_id`, `node_id`, `connected`, `is_flying`, `epoch_seen`), `mission` (or null: `plan_id`, `pattern`, `state` one of `idle`, `planned`, `running`, `holding`, `complete`, `area_cm` [w, h], `lkp_cm` [x, y] or null, `placements` mapping a drone id to [x, y, heading]), `latch` (or null: `phase` one of `searching`, `awaiting_response`, `resolved`, and `alert_id`), `detections` (at most 256 entries of `id`, `x_cm`, `y_cm`, `drone_ids`, `first_seen_s`) |
+| `node_state` | Only these fields, at every level (see "Privacy"): `node_id`, `role`, `epoch`, `proto`, `roster` (at most 8 entries of `drone_id`, `node_id`, `connected`, `is_flying`, `epoch_seen`), `mission` (or null: `plan_id`, `pattern`, `state` one of `idle`, `planned`, `running`, `holding`, `complete`, `area_cm` [w, h], `lkp_cm` [x, y] or null, `placements` mapping a drone id to [x, y, heading]), `latch` (or null: `phase` one of `searching`, `awaiting_response`, `resolved`, and `alert_id`), `detections` (at most 256 entries of `id`, `x_cm`, `y_cm`, `drone_ids`, `first_seen_s`) |
 | `handover_offer` | `epoch_next`, `snapshot` (the leader's `node_state`; its role must be `leader` and `epoch_next` must equal its epoch plus 1) |
 | `handover_accept` | `epoch_next` |
 | `handover_reject` | `reason` (printable text up to 200 characters), optional `epoch_next` |
@@ -301,7 +301,7 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
   | Limit | Value |
   |---|---|
-  | Encoded message (`decode`/`encode`) | 64 KiB |
+  | Encoded message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
   | Top-level fields | 32 |
   | Nesting depth | 8 |
   | Values in one message | 10,000 |
