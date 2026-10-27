@@ -86,3 +86,7 @@ def test_lawnmower_lane_count_and_bounds():
 def test_demo_origin_in_utah():
     assert UTAH_LAT_RANGE[0] <= LAT <= UTAH_LAT_RANGE[1]
     assert UTAH_LON_RANGE[0] <= LON <= UTAH_LON_RANGE[1]
+
+
+def test_demo_origin_is_millcreek_canyon_design_value():
+    assert UTAH_DEMO_ORIGIN == (40.6894, -111.7310)

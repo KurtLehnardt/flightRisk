@@ -14,9 +14,10 @@ from flightrisk.drone.search import PatternType, Waypoint, get_search_pattern
 
 EARTH_RADIUS_M = 6_371_008.8
 
-# Demo origin near Salt Lake City, Utah. ASSUMPTION: a placeholder start point
-# for demos and simulation, not a real search area.
-UTAH_DEMO_ORIGIN = (40.7608, -111.8910)
+# Demo origin in Millcreek Canyon, Utah, as specified in the design. The
+# coordinates are approximate: a placeholder start point for demos and
+# simulation, not a surveyed search area.
+UTAH_DEMO_ORIGIN = (40.6894, -111.7310)
 
 # Rough bounding box of Utah, used to sanity check demo coordinates.
 UTAH_LAT_RANGE = (36.998, 42.001)
