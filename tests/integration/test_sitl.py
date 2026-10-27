@@ -255,8 +255,7 @@ class TestSITLCoverageFlight:
             plan = script.build_plan(args)
             assert len(plan.waypoints) == 4
             controller = script._make_sitl_controller_class()("sitl-coverage-it", host=script.sitl_address(0))
-            if not controller.connect():
-                pytest.skip("SITL not available")
+            assert controller.connect(), "SITL not reachable on tcpout://127.0.0.1:5760 (run scripts/start_sitl.sh)"
             try:
                 lines: list[str] = []
                 script.fly(controller, plan, out=lines.append, climb_timeout=300.0, leg_timeout=300.0)

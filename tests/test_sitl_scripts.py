@@ -303,10 +303,13 @@ def test_sitl_doc_sections():
 
 
 def test_sitl_controller_overrides_connect_with_long_timeout(monkeypatch):
-    monkeypatch.setattr(mavlink_mod, "HAS_MAVSDK", True)
+    # Other tests may swap the mavlink module, so resolve the live one the script sees.
+    from flightrisk.drone import mavlink as live
+
+    monkeypatch.setattr(live, "HAS_MAVSDK", True)
     cls = fly_script._make_sitl_controller_class()
-    assert issubclass(cls, MavlinkController)
-    assert cls.connect is not MavlinkController.connect
+    assert issubclass(cls, live.MavlinkController)
+    assert cls.connect is not live.MavlinkController.connect
     assert cls.connect_timeout_s > 30.0
     ctrl = cls("sitl-test", host=fly_script.sitl_address(0))
     assert ctrl.host == "tcpout://127.0.0.1:5760"
