@@ -191,8 +191,11 @@ def test_video_check_counts_packets_and_probes_port(capsys):
     doc = json.loads(capsys.readouterr().out)
     checks = {c["name"]: c for c in doc["checks"]}
     assert checks["video"]["status"] == "PASS"
-    # Intended de-flake: UDP delivery under load can drop packets, so assert only that some arrived.
-    assert checks["video"]["value"]["packets"] > 0
+    # UDP delivery under load can drop packets, so assert only that some arrived. The fake sends 10
+    # full datagrams and one short one, so at most 11 packets and one completed frame can arrive.
+    packets = checks["video"]["value"]["packets"]
+    frames = checks["video"]["value"]["frames"]
+    assert 0 < packets <= 11 and frames <= 1
     assert checks["port-probe"]["value"] == "unknown command"
     assert rc == 0
 

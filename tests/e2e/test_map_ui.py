@@ -73,14 +73,16 @@ def test_land_all_button_and_hotkey():
     assert "'l': 'land'" in INDEX
 
 
-def test_land_all_hotkey_works_in_text_fields():
-    """The LAND ALL handler has no text-field exclusion and listens in the capture phase (R-111)."""
+def test_land_all_hotkey_needs_modifier_in_text_fields():
+    """Inside an editable field the hotkey needs Ctrl or Cmd; outside, Shift+L alone works (R-115).
+
+    Intended change from R-111, which let a bare Shift+L land the fleet from inside a text field.
+    """
     guard = "if (!((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L'))) return;"
     start = INDEX.index(guard)
-    end = INDEX.index("}", start + len(guard))
+    end = INDEX.index("}, true);", start)
     body = INDEX[start:end]
+    assert "if (isEditableTarget(e.target) && !(e.ctrlKey || e.metaKey)) return;" in body
     assert "landAll();" in body
-    assert "tagName" not in body and "isContentEditable" not in body
-    assert INDEX[end:].startswith("}, true);")
     # Caps Lock cannot stop it: the physical key is matched, never only e.key.
     assert "e.code === 'KeyL'" in guard

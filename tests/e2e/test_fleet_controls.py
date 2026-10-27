@@ -42,3 +42,18 @@ def test_land_all_always_enabled():
     assert 'onclick="landAll()"' in tag
     assert "document.getElementById('land-all')" not in INDEX
     assert "e.shiftKey && e.key === 'L'" in INDEX
+
+
+def test_land_all_hotkey_ignores_repeat_and_text_fields_without_modifier():
+    start = INDEX.index("document.addEventListener('keydown', function(e) {\n            if (e.repeat) return;")
+    end = INDEX.index("}, true);", start)
+    handler = INDEX[start:end]
+    assert handler.index("if (e.repeat) return;") < handler.index("landAll();")
+    assert "isEditableTarget(e.target) && !(e.ctrlKey || e.metaKey)" in handler
+    assert handler.index("isEditableTarget(e.target)") < handler.index("e.preventDefault()")
+    editable = _function_body("isEditableTarget")
+    for token in ("isContentEditable", "TEXTAREA", "INPUT"):
+        assert token in editable
+    # The button is unchanged and the handler still runs in the capture phase.
+    assert 'onclick="landAll()"' in INDEX
+    assert INDEX[end:].startswith("}, true);")
