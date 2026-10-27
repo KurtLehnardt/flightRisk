@@ -21,10 +21,11 @@ Finish this before the slot starts (ASSUMPTION: the organizers let us set up in 
 
 Both paths:
 
-1. Floor: a clear 4 m × 4 m area with a ceiling of at least 2.5 m (ASSUMPTION; organizer question). The fleet plan's default area is 400 cm square (`FLIGHTRISK_FLEET_AREA_CM`), and the drones fly at altitude slots of 100 cm and 160 cm.
-2. Batteries: a fresh battery in each drone, and each at 30% or more. The edge refuses takeoff below 30% and lands below 15%. Read the level in the hardware check report and again on the fleet panel.
-3. The same token on both laptops: `export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"` on the Mac and `$env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"` on Windows.
-4. Run the hardware check for your path (below) and keep its report on screen until both drones pass.
+1. Placement and heading (do this before every flight). Mark the 4 m × 4 m area and a takeoff line along its near edge. Put drone-1 at the near-left corner. Put drone-2 250 cm to its right on the same line. Point both noses into the area along the 4 m depth (the +y direction the coordinator assumes). Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence, never in a flight path. The launchers set the edge geofence to 450 cm; override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
+2. Floor: a clear 4 m × 4 m area with a ceiling of at least 2.5 m (ASSUMPTION; organizer question). The fleet plan's default area is 400 cm square (`FLIGHTRISK_FLEET_AREA_CM`), and the drones fly at altitude slots of 100 cm and 160 cm.
+3. Batteries: a fresh battery in each drone, and each at 30% or more. The edge refuses takeoff below 30% and lands below 15%. Read the level in the hardware check report and again on the fleet panel.
+4. The same token on both laptops: `export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"` on the Mac and `$env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"` on Windows.
+5. Run the hardware check for your path (below) and keep its report on screen until both drones pass.
 
 ### Path 1: station mode (`FLIGHTRISK_FLEET_NET=station`)
 
@@ -112,7 +113,7 @@ Figures: recall 0.000, 0.142 and 0.602, precision 0.832, 32 px on 108 people (`d
 - 0:35 Say: "Show it working. Before kickoff, commit 798f21a, this repository had a single-drone pipeline and 676 tests. This week I added the benchmark, the fine-tune, a coverage planner and the fleet. Every new file is listed in docs/built-this-week.md."
 - 0:50 Do: switch to the dashboard. The fleet panel lists drone-1 (Mac) and drone-2 (Windows) with battery, clock offset and round-trip time. Press **Plan search**. Say: "The coordinator splits the floor into two zones, one per drone, at two altitude slots, 100 and 160 centimetres, so they share neither a zone nor an altitude."
 - 1:05 Do: press **Start search** and confirm the prompt for two drones. Say: "Each drone's clock is synced to the ground over the WebSocket, eight ping rounds each, and both get one scheduled start time two seconds out. The skew column shows how far apart they actually started."
-- 1:20 Do: let the lanes run and step into a drone's camera view. Say: "Each laptop stands in for a computer on board. Detections from both drones go onto one map, tagged with the drone that saw them, and pins within 80 centimetres of each other merge."
+- 1:20 Do: let the lanes run. The presenter walks to a spot at least 1.5 m beyond the far edge of the area, outside the geofence and never in a flight path, where a drone camera can see them. Say: "Each laptop stands in for a computer on board. Detections from both drones go onto one map, tagged with the drone that saw them, and pins within 80 centimetres of each other merge."
 - 1:55 Do: at the Windows laptop, type `l` and Enter in the edge-2 terminal; drone-2 lands. Say: "Now I take drone-2 out of the search. The ground marks it lost and hands its unflown lanes to drone-1. Watch the map redraw." The `drone_lost` and `retask` banners appear.
 - 2:15 Say: "The same code ran four fake drones against one ground station. I killed one, and its lanes moved to the other three 0.7 seconds later. Every drone also carries its own safety envelope: no takeoff below 30 percent battery, land below 15, land by itself after 3 seconds without hearing the ground, and stay inside its geofence." Do: press **LAND ALL** (or Shift+L). Both drones are down by 2:35.
 
@@ -176,7 +177,7 @@ Each edge enforces its own limits, whatever the ground station says: a 500 cm ge
 
 ### E5 · Privacy (1:00)
 
-Faces are not resolvable at search altitude, so the demo runs appearance-only (`FLIGHTRISK_APPEARANCE_ONLY=1`) and never builds the face recognizer. Match snapshots are not written unless `FLIGHTRISK_SAVE_CAPTURES` is turned on, and `--no-llm` starts no reasoning model. Tests use only synthetic images. The one place images can leave a device is the mobile app's cloud model option, and only after the user picks it and enters a key (`docs/privacy-design.md`).
+Faces are not resolvable at search altitude, so the demo runs appearance-only (`FLIGHTRISK_APPEARANCE_ONLY=1`) on the ground station and on both edges. The face recognizer is never built and no face embeddings are sent. The edges do send person crops to the ground station over the token-authenticated WebSocket link, so say that plainly if asked. Match snapshots are not written unless `FLIGHTRISK_SAVE_CAPTURES` is turned on, and `--no-llm` starts no reasoning model. Tests use only synthetic images. The one place images can leave a device is the mobile app's cloud model option, and only after the user picks it and enters a key (`docs/privacy-design.md`).
 
 ### E6 · Licensing and the path to reality (1:00)
 
@@ -187,7 +188,7 @@ FlightRisk is GPL-3.0-or-later. Ultralytics YOLO11 is AGPL-3.0; GPLv3 section 13
 Drop one rung per failure. Spend no more than 30 seconds fixing anything on stage; say which rung is running and why.
 
 1. **Two Tellos live** (station or AP path). The core as written.
-2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, start a fake edge in place of the missing drone:
+2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because two edges claiming one drone id swap routing. Then start a fake edge in place of the missing drone:
 
    ```
    venv/bin/python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 160 --ws-url "$FLIGHTRISK_EDGE_WS"
@@ -211,7 +212,7 @@ If the Mac itself fails, present `docs/pitch.md` from any machine; the plots are
 - Spare batteries: at least 2 per drone (ASSUMPTION), so three per drone with the installed one. Charge every battery the night before (ASSUMPTION: a charger and an outlet are available).
 - Battery A in each drone: rehearsal 1 and the recording. Battery B: rehearsal 2. Battery C, untouched until then: the live demo. Battery A or B, recharged, is the spare for a retry. Never launch a battery under 30%; the edge refuses anyway.
 - Two rehearsals of the full demo, each timed against 4:00:
-  - Rehearsal 1, on the network path the hardware check chose: run the core, record `demo/fleet.mp4` from the shot list, and check on the real drones what the automated tests only cover with fakes: LAND ALL, the local `l` key, and the link-loss landing (stop the ground station while both hover low and confirm both land within about 3 s).
+  - Rehearsal 1, on the network path the hardware check chose: run the core, record `demo/fleet.mp4` from the shot list, and check on the real drones what the automated tests only cover with fakes: LAND ALL, the local `l` key, and the link-loss landing (stop the ground station while both hover low and confirm both land within about 3 s). Also drop edge-2's Wi-Fi (turn off its laptop or router link, not the ground station) while people are in its camera view and confirm drone-2 lands within about 3 s. Stopping the ground station closes the connection cleanly and cannot reveal a stalled uplink.
   - Rehearsal 2: run the core again with a drill midway, dropping to rung 2 (stop edge-2, start the fake edge) and then running rung 4 once end to end.
 
 ## Backup video shot list
@@ -243,7 +244,7 @@ A: It is measured, not hoped: 0.602 recall at 0.832 precision on 337 people in t
 
 Q: Do you do face recognition? What about bystanders' privacy?
 
-A: No face matching in the search demo. Faces are not resolvable at search altitude, so the system is appearance-only by default (`FLIGHTRISK_APPEARANCE_ONLY=1`) and never loads the face model. Match snapshots are off by default, so no bystander imagery is written to disk. The InsightFace face packs are licensed for non-commercial research only, which is another reason not to rely on them. Details are in `docs/privacy-design.md`.
+A: No face matching in the search demo. Faces are not resolvable at search altitude, so the system is appearance-only by default (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the edge too, and never loads the face model or sends face embeddings. The edges do send person crops to the ground station over the token-authenticated link. Match snapshots are off by default, so no bystander imagery is written to disk. The InsightFace face packs are licensed for non-commercial research only, which is another reason not to rely on them. Details are in `docs/privacy-design.md`.
 
 Q: What does the FAA require?
 

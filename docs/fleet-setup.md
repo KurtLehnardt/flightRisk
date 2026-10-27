@@ -14,6 +14,18 @@ Layout in both paths: the ground station and edge-1 run on the Mac, and edge-2 r
 
 Station mode is the default if the hardware check passes. AP mode is the fully designed fallback.
 
+## Placement and heading
+
+Do this before every flight, in both paths. The coordinator assumes this layout, so a different one sends a drone toward the audience or a wall.
+
+1. Mark a 4 m × 4 m area and a takeoff line along its near edge.
+2. Put drone-1 at the near-left corner of the area.
+3. Put drone-2 250 cm to its right on the takeoff line.
+4. Point both noses into the area along the 4 m depth.
+5. Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence and never in a flight path.
+
+The launchers set the edge geofence to 450 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
+
 ## Video port verdict
 
 Each Tello streams video to UDP port 11111 on whichever host sent `streamon`, and djitellopy binds one video capture per port, so two drones streaming to one host would collide. The SDK command `port <state> <video>` could move the video port, but whether Tello EDU firmware accepts it is unverified, because the SDK 2.0 and 3.0 documents could not be text-extracted when this was designed. The design therefore does not depend on `port`: run one edge process per host. Drone 1 gets `streamon` from the Mac and drone 2 gets it from the Windows laptop, so each drone's video goes to a different IP. This holds in both paths. The hardware check probes `port 8890 11112` on drone 2 and reports `ok` or `unknown command`. If it reports `ok`, a one-host two-edge layout becomes an option, still with one edge process per drone, but nothing here requires it.
@@ -57,6 +69,14 @@ Do this once per drone, one drone at a time, with the other drone powered off. O
 
 ```
 venv/bin/python scripts/tello_hw_check.py --drones 192.168.10.1 --station-mode "YourSSID" "YourPassword" --i-understand-this-reconfigures-the-drone
+```
+
+   The Wi-Fi password lands in your shell history if you type it on the command line. Keep it out: start the line with a space after `export HISTCONTROL=ignorespace` in bash (zsh: `setopt HIST_IGNORE_SPACE`), or read it into a variable without echo and pass the variable:
+
+```
+read -rs WIFI_PASS
+venv/bin/python scripts/tello_hw_check.py --drones 192.168.10.1 --station-mode "YourSSID" "$WIFI_PASS" --i-understand-this-reconfigures-the-drone
+unset WIFI_PASS
 ```
 
 3. The drone restarts and joins the router. Rejoin your laptop to the router, then repeat for drone 2.
@@ -248,7 +268,7 @@ On Windows, for edge-2:
 $env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
 ```
 
-The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
+Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 
 ## Quick reference
 
