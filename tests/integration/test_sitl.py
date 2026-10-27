@@ -225,3 +225,45 @@ class TestSITLFlight:
         finally:
             ctrl.land()
             _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
+
+
+class TestSITLCoverageFlight:
+    """Fly two lanes of the planned lawnmower with scripts/sitl_fly_coverage.py.
+
+    Needs SITL started with ./scripts/start_sitl.sh (instance 0, TCP port 5760).
+    """
+
+    def test_fly_two_lanes(self):
+        import importlib.util
+        from pathlib import Path
+
+        _import_real_mavlink_controller()  # Skips when the real mavsdk is missing.
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("sitl_fly_coverage_it", root / "scripts" / "sitl_fly_coverage.py")
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+
+        # Re-import the real controller for the script, then restore the fakes
+        # that the unit tests rely on once this test is done.
+        saved = {n: m for n, m in sys.modules.items() if n == "mavsdk" or n.startswith("mavsdk.") or n == "flightrisk.drone.mavlink"}
+        for name in saved:
+            del sys.modules[name]
+        try:
+            from flightrisk.drone.mavlink import MavlinkController  # noqa: F401  (real module)
+
+            args = script.build_parser().parse_args(["--max-lanes", "2", "--area", "300x300"])
+            plan = script.build_plan(args)
+            assert len(plan.waypoints) == 4
+            controller = script._make_sitl_controller_class()("sitl-coverage-it", host=script.sitl_address(0))
+            if not controller.connect():
+                pytest.skip("SITL not available")
+            try:
+                lines: list[str] = []
+                script.fly(controller, plan, out=lines.append, climb_timeout=300.0, leg_timeout=300.0)
+                assert sum(1 for line in lines if line.startswith("Waypoint")) == 4
+            finally:
+                controller.disconnect()
+        finally:
+            for name in [n for n in sys.modules if n == "mavsdk" or n.startswith("mavsdk.") or n == "flightrisk.drone.mavlink"]:
+                del sys.modules[name]
+            sys.modules.update(saved)
