@@ -46,7 +46,8 @@ cd flightRisk
 py -3.13 -m venv venv
 # Call the venv python directly (avoids the Activate.ps1 execution policy block)
 venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
-# Install Ollama from https://ollama.com/download/windows
+# Optional, only for the local Gemma backend (see "Reasoning backend" below):
+# install Ollama from https://ollama.com/download/windows, then
 ollama pull gemma3:1b
 ```
 
@@ -54,17 +55,56 @@ ollama pull gemma3:1b
 ```bash
 source venv/bin/activate  # Linux/macOS
 
-# Webcam + web dashboard (no drone needed)
-python -m flightrisk --webcam --dashboard --target photo_of_child.jpg
-# Windows: venv\Scripts\python.exe -m flightrisk --webcam --dashboard --target photo_of_child.jpg
+# Tello drone + web dashboard
+python -m flightrisk --dashboard --target photo_of_child.jpg
+# Windows: venv\Scripts\python.exe -m flightrisk --dashboard --target photo_of_child.jpg
 # Open http://localhost:5555
 
-# Webcam + OpenCV window
-python -m flightrisk --webcam --target photo_of_child.jpg
+# Tello drone + OpenCV window
+python -m flightrisk --target photo_of_child.jpg
 
-# Tello drone + dashboard
-python -m flightrisk --dashboard --target photo_of_child.jpg
+# Recorded video file (no drone needed)
+python -m flightrisk --dashboard --video test.mp4 --target photo_of_child.jpg
 ```
+
+## Reasoning backend (Claude or Gemma)
+
+A second opinion confirms ReID/face matches. It can come from **Claude** (Anthropic API, the
+default) or **Gemma** (local Ollama). Claude reads its key from the `CLAUDE_API_KEY` environment
+variable (`ANTHROPIC_API_KEY` also works). The key is never logged.
+
+```bash
+# Windows (persists for new terminals; restart the app afterwards)
+setx CLAUDE_API_KEY "sk-ant-..."
+
+python -m flightrisk --dashboard                      # default: claude
+python -m flightrisk --dashboard --reasoning gemma    # local Ollama
+python -m flightrisk --dashboard --reasoning off      # ReID/face scores only
+```
+
+You can also switch while it runs from the **AI Reasoning** selector in the dashboard sidebar. If a
+switch fails (for example, no API key), the previous backend stays active and the reason is shown.
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `FLIGHTRISK_REASONING_PROVIDER` | `claude` | `claude`, `gemma` or `off` |
+| `FLIGHTRISK_CLAUDE_MODEL` | `claude-opus-5-5` | any vision-capable Claude model, e.g. `claude-sonnet-5-5` to cut cost |
+| `FLIGHTRISK_CLAUDE_EFFORT` | `medium` | `low` to `max`; lower is faster and cheaper |
+| `FLIGHTRISK_GEMMA_MODEL` | `gemma4:latest` | Ollama model when using `gemma` |
+
+Each confirmation sends the reference photo and the detected person's crop to the chosen backend
+(for Claude, to the Anthropic API). Calls are rate-limited per tracked person.
+
+## Observability (Grafana)
+
+Traces, metrics and logs can be sent to a local Grafana stack with a ready-made dashboard:
+
+```bash
+docker compose -f docker-compose.grafana.yml up -d   # Grafana at http://localhost:3000
+```
+
+Then start the app with `FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://localhost:4317`.
+See [observability/README.md](observability/README.md).
 
 ## Keyboard Controls (OpenCV window)
 

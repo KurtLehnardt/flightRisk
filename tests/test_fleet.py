@@ -351,19 +351,21 @@ class TestSourceFactorySelection:
                 "drone-1", "udp://:14540", rtsp_url="rtsp://1.2.3.4:8554/camera"
             )
 
-    def test_webcam_source_builds_no_fleet(self):
-        """webcam/file/edge sources must not construct a DroneFleet at
+    def test_file_source_builds_no_fleet(self, tmp_path):
+        """file/edge sources must not construct a DroneFleet at
         all — they only wire up local capture (or nothing, for edge)."""
         from flightrisk.dashboard.app import SourceConfig, _init_pipeline, _state
 
         self._stub_heavy_components(_state)
         _state["running"] = False
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"")
 
         with patch("cv2.VideoCapture") as MockCap:
-            _init_pipeline(SourceConfig(source="webcam"))
+            _init_pipeline(SourceConfig(source="file", video_path=str(video)))
 
         assert _state["fleet"] is None
-        MockCap.assert_called_once_with(0)
+        MockCap.assert_called_once_with(str(video))
 
     def test_file_source_without_video_path_logs_error_and_no_capture(self):
         """PR #26 review fix: --source=file with no video path must not

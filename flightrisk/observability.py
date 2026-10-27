@@ -13,6 +13,22 @@ from typing import Any, Optional
 from flightrisk.config import get_config
 
 
+# StructuredLogger loggers don't propagate, so a handler on a parent logger
+# never sees their records. Extra handlers (e.g. the OTel log exporter) are
+# registered here and attached to every StructuredLogger, old and new.
+_structured_loggers: list[logging.Logger] = []
+_extra_handlers: list[logging.Handler] = []
+
+
+def register_log_handler(handler: logging.Handler) -> None:
+    """Attach ``handler`` to all existing and future StructuredLoggers."""
+    if handler not in _extra_handlers:
+        _extra_handlers.append(handler)
+    for lg in _structured_loggers:
+        if handler not in lg.handlers:
+            lg.addHandler(handler)
+
+
 class StructuredLogger:
     """JSON-formatted structured logger with component context.
 
@@ -30,6 +46,12 @@ class StructuredLogger:
             handler.setFormatter(logging.Formatter("%(message)s"))
             self._logger.addHandler(handler)
             self._logger.propagate = False
+
+        if self._logger not in _structured_loggers:
+            _structured_loggers.append(self._logger)
+        for extra in _extra_handlers:
+            if extra not in self._logger.handlers:
+                self._logger.addHandler(extra)
 
     def _emit(self, level: str, event: str, **kwargs: Any) -> None:
         entry = {

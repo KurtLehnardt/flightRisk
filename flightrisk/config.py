@@ -93,9 +93,14 @@ class VisionConfig:
 
 @dataclass
 class ReasoningConfig:
-    """Gemma reasoning worker: model, queueing, and timing parameters."""
+    """LLM reasoning worker: provider, models, queueing, and timing parameters."""
 
-    model: str = "gemma4:latest"
+    # Which backend confirms matches: "claude" (Anthropic API), "gemma"
+    # (local Ollama), or "off".
+    provider: str = "claude"
+    model: str = "gemma4:latest"  # Ollama model, used when provider == "gemma"
+    claude_model: str = "claude-opus-5-5"
+    claude_effort: str = "medium"  # low | medium | high | xhigh | max
     queue_maxsize: int = 10
     alert_cooldown: float = 10.0
     gemma_rate_limit: float = 5.0
@@ -154,7 +159,10 @@ class AmberConfig:
             "FLIGHTRISK_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
             "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
             "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
+            "FLIGHTRISK_REASONING_PROVIDER": ("reasoning", "provider", str),
             "FLIGHTRISK_GEMMA_MODEL": ("reasoning", "model", str),
+            "FLIGHTRISK_CLAUDE_MODEL": ("reasoning", "claude_model", str),
+            "FLIGHTRISK_CLAUDE_EFFORT": ("reasoning", "claude_effort", str),
             "FLIGHTRISK_ALERT_COOLDOWN": ("reasoning", "alert_cooldown", float),
             "FLIGHTRISK_QUEUE_SIZE": ("reasoning", "queue_maxsize", int),
             "FLIGHTRISK_PORT": ("dashboard", "port", int),

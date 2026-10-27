@@ -5,14 +5,14 @@ import os
 
 from flightrisk.dashboard.app import run_dashboard, SourceConfig
 
-_SOURCE_CHOICES = ("tello", "mavlink", "webcam", "file", "edge")
+_SOURCE_CHOICES = ("tello", "mavlink", "file", "edge")
 
 
 def main():
     parser = argparse.ArgumentParser(description="FlightRisk Dashboard")
     parser.add_argument(
         "--source", choices=_SOURCE_CHOICES,
-        default=os.environ.get("FLIGHTRISK_SOURCE", "webcam"),
+        default=os.environ.get("FLIGHTRISK_SOURCE", "tello"),
         help="Video/drone source",
     )
     parser.add_argument(
@@ -49,6 +49,13 @@ def main():
         help="Request live full-frame video from edge devices (when --source=edge)",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
+    parser.add_argument(
+        "--reasoning", choices=("claude", "gemma", "off"),
+        default=None,
+        help="Reasoning backend that confirms matches (default: "
+             "FLIGHTRISK_REASONING_PROVIDER, else claude). claude uses the "
+             "CLAUDE_API_KEY env var; gemma uses local Ollama.",
+    )
     parser.add_argument("--target", type=str, help="Path to target reference photo")
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("FLIGHTRISK_PORT", "5555")),
@@ -77,6 +84,7 @@ def main():
         stream_video=args.stream_video,
         edge_host=args.edge_host,
         edge_port=args.edge_port,
+        reasoning_provider=args.reasoning,
     )
     run_dashboard(source_config, target_path=args.target, port=args.port)
 

@@ -26,7 +26,7 @@ COPY pytest.ini .
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import requests; r=requests.get('http://localhost:5555/api/health'); r.raise_for_status()"
 
-ENV FLIGHTRISK_SOURCE=webcam
+ENV FLIGHTRISK_SOURCE=tello
 ENV FLIGHTRISK_PORT=5555
 # Reserved for flightrisk.dashboard.__main__ --source flag (PR #26)
 ENV FLIGHTRISK_MAVLINK_ADDRESS=udp://:14540

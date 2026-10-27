@@ -1795,6 +1795,17 @@
                         </div>
                     </div>
 
+                    <!-- AI Reasoning backend -->
+                    <div class="panel-section">
+                        <div class="panel-title">AI Reasoning</div>
+                        <select id="reasoning-provider" class="search-select" onchange="setReasoningProvider(this.value)">
+                            <option value="claude">Claude (Anthropic API)</option>
+                            <option value="gemma">Gemma (local Ollama)</option>
+                            <option value="off">Off</option>
+                        </select>
+                        <div id="reasoning-status" class="search-status"></div>
+                    </div>
+
                     <!-- Search Pattern -->
                     <div class="panel-section">
                         <div class="panel-title">Autonomous Search</div>
@@ -2172,6 +2183,7 @@
             lbl.classList.add('live');
             showToast('Connected to FlightRisk');
             socket.emit('get_fleet_status');
+            socket.emit('get_reasoning_provider');
         });
 
         socket.on('disconnect', () => {
@@ -2324,6 +2336,28 @@
             // silent update
         });
 
+        // ========== AI REASONING BACKEND ==========
+        function setReasoningProvider(provider) {
+            document.getElementById('reasoning-status').textContent = 'Switching...';
+            socket.emit('set_reasoning_provider', { provider: provider });
+        }
+
+        socket.on('reasoning_provider', (data) => {
+            const sel = document.getElementById('reasoning-provider');
+            const status = document.getElementById('reasoning-status');
+            // Always reflect the backend that is actually active, so a failed
+            // switch (e.g. no API key) snaps the selector back.
+            sel.value = data.provider;
+            if (data.error) {
+                status.textContent = data.error;
+                showToast('Reasoning switch failed');
+            } else {
+                status.textContent = data.provider === 'off'
+                    ? 'Reasoning off -- matches use ReID/face scores only'
+                    : data.label + ' (' + data.model + ')';
+            }
+        });
+
         // Target upload via HTTP POST (reliable, no WebSocket size limits)
         document.getElementById('target-upload').addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -2466,7 +2500,7 @@
                 '</div>' +
                 '<div class="match-scores">' +
                     'Score: <span class="score-val">' + data.score + '</span>' +
-                    ' | Gemma: ' + (data.gemma_confidence || '--') +
+                    ' | AI: ' + (data.gemma_confidence || '--') +
                     (data.face_score ? ' | Face: ' + data.face_score : '') +
                     (data.reid_score ? ' | ReID: ' + data.reid_score : '') +
                 '</div>' +
@@ -2506,7 +2540,7 @@
                 snapshot.style.display = 'none';
             }
 
-            score.textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | Gemma: ' + data.gemma_confidence : '');
+            score.textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
             reasoning.textContent = data.reasoning || '';
 
             currentOverlayMatchId = data.match_id || null;
@@ -3015,7 +3049,7 @@
                         '<div class="session-match-item">' +
                             '<span class="sm-type">' + m.match_type + '</span> ' +
                             '<span class="sm-score">Score: ' + (m.combined_score || 0).toFixed(3) + '</span>' +
-                            (m.gemma_confidence ? ' | Gemma: ' + m.gemma_confidence : '') +
+                            (m.gemma_confidence ? ' | AI: ' + m.gemma_confidence : '') +
                             (m.reasoning ? '<div class="sm-reasoning">' + m.reasoning + '</div>' : '') +
                         '</div>'
                     ).join('');

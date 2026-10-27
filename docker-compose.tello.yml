@@ -10,3 +10,5 @@ services:
       - OTEL_EXPORTER=otlp-grpc
       - OTEL_ENDPOINT=http://localhost:4317
       - OLLAMA_HOST=http://localhost:11434
+      - FLIGHTRISK_REASONING_PROVIDER=claude   # or gemma (local Ollama)
+      - CLAUDE_API_KEY                         # inherited from the host environment

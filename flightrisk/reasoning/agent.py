@@ -3,6 +3,10 @@
 Provides higher-level reasoning about detected persons — called
 periodically on cropped detections, NOT every frame.
 
+This is also the base class for other reasoning backends (see
+``claude_agent.ClaudeReasoningAgent``): subclasses only override ``_ask``.
+Use ``flightrisk.reasoning.create_reasoning_agent`` to pick one by config.
+
 Usage:
     1. Install Ollama: https://ollama.com
     2. Pull Gemma 4: `ollama pull gemma4`
@@ -27,6 +31,9 @@ except ImportError:
 
 class FlightRiskAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
+
+    provider = "gemma"
+    label = "Gemma"  # shown in the dashboard ("Awaiting Gemma reasoning...")
 
     def __init__(self, model: str | None = None):
         """Initialize the reasoning agent.
@@ -69,6 +76,21 @@ class FlightRiskAgent:
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return base64.b64encode(buffer).decode("utf-8")
 
+    def _ask(self, prompt: str, images_b64: list[str]) -> str:
+        """Send one prompt with JPEG images (base64) and return the reply text.
+
+        The only backend-specific call; raises on failure. Subclasses override.
+        """
+        response = self._client.chat(
+            model=self.model,
+            messages=[{
+                "role": "user",
+                "content": prompt,
+                "images": images_b64,
+            }],
+        )
+        return response.message.content.strip()
+
     def analyze_match(
         self, reference: np.ndarray, candidate: np.ndarray
     ) -> dict[str, Any]:
@@ -99,15 +121,7 @@ class FlightRiskAgent:
         )
 
         try:
-            response = self._client.chat(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": prompt,
-                    "images": [ref_b64, cand_b64],
-                }],
-            )
-            text = response.message.content.strip()
+            text = self._ask(prompt, [ref_b64, cand_b64])
             return self._parse_match_response(text)
         except Exception as e:
             return {"match": False, "confidence": "error", "reasoning": str(e)}
@@ -119,19 +133,12 @@ class FlightRiskAgent:
 
         b64 = self._image_to_base64(image)
         try:
-            response = self._client.chat(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Describe this person's appearance in one sentence. "
-                        "Include: clothing colors, hair, approximate age, "
-                        "and any visible accessories (backpack, hat, etc)."
-                    ),
-                    "images": [b64],
-                }],
+            return self._ask(
+                "Describe this person's appearance in one sentence. "
+                "Include: clothing colors, hair, approximate age, "
+                "and any visible accessories (backpack, hat, etc).",
+                [b64],
             )
-            return response.message.content.strip()
         except Exception as e:
             return f"Error: {e}"
 
@@ -142,20 +149,13 @@ class FlightRiskAgent:
 
         b64 = self._image_to_base64(image)
         try:
-            response = self._client.chat(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Briefly describe this aerial/drone view scene. "
-                        "Is it a park, field, forest, crowd, parking lot? "
-                        "How many people are visible? Any obstacles? "
-                        "One short paragraph."
-                    ),
-                    "images": [b64],
-                }],
+            return self._ask(
+                "Briefly describe this aerial/drone view scene. "
+                "Is it a park, field, forest, crowd, parking lot? "
+                "How many people are visible? Any obstacles? "
+                "One short paragraph.",
+                [b64],
             )
-            return response.message.content.strip()
         except Exception as e:
             return f"Error: {e}"
 
@@ -185,15 +185,7 @@ class FlightRiskAgent:
         )
 
         try:
-            response = self._client.chat(
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": prompt,
-                    "images": [b64],
-                }],
-            )
-            text = response.message.content.strip()
+            text = self._ask(prompt, [b64])
             return self._parse_match_response(text)
         except Exception as e:
             return {"match": False, "confidence": "error", "reasoning": str(e)}
@@ -203,12 +195,13 @@ class FlightRiskAgent:
         result = {"match": False, "confidence": "unknown", "reasoning": text}
 
         for line in text.split("\n"):
-            line = line.strip().upper()
-            if line.startswith("MATCH:"):
-                result["match"] = "YES" in line
-            elif line.startswith("CONFIDENCE:"):
+            line = line.strip()
+            upper = line.upper()  # match keys case-insensitively, keep the text's own case
+            if upper.startswith("MATCH:"):
+                result["match"] = "YES" in upper
+            elif upper.startswith("CONFIDENCE:"):
                 result["confidence"] = line.split(":", 1)[1].strip().lower()
-            elif line.startswith("REASONING:"):
+            elif upper.startswith("REASONING:"):
                 result["reasoning"] = line.split(":", 1)[1].strip()
 
         return result

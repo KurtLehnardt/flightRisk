@@ -33,7 +33,7 @@ def _stub_state(app_mod):
     """Stub heavy pipeline components so routes don't crash under test."""
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
-    app_mod._state["source"] = "webcam"
+    app_mod._state["source"] = "tello"
     app_mod._state["running"] = False
     app_mod._state["target_photo"] = None
     app_mod._state["target_description"] = None

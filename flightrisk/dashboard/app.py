@@ -317,6 +317,33 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
 # Pipeline initialisation
 # ---------------------------------------------------------------------------
 
+def _reasoning_state() -> dict:
+    """Current reasoning backend, as shown in the dashboard."""
+    agent = app_state.reasoning
+    return {
+        "provider": agent.provider if agent else "off",
+        "label": agent.label if agent else None,
+        "model": agent.model if agent else None,
+        "available": ["claude", "gemma", "off"],
+    }
+
+
+def _ensure_reasoning_worker():
+    """Start the async reasoning worker if reasoning is on and it isn't running.
+
+    Safe to call repeatedly (restart_dashboard, provider switches): the worker
+    reads ``app_state.reasoning`` per item, so swapping backends needs no restart.
+    """
+    if app_state.reasoning is None:
+        return
+    with _gemma_thread_lock:
+        existing = app_state.gemma_thread
+        if existing is None or not existing.is_alive():
+            t = threading.Thread(target=_gemma_worker, args=(socketio,), daemon=True)
+            t.start()
+            app_state.gemma_thread = t
+
+
 def _init_pipeline(source_config: SourceConfig, target_path=None):
     """Initialize the detection pipeline."""
     source = source_config.source
@@ -368,20 +395,20 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
     if app_state.reasoning is None:
         try:
-            from flightrisk.reasoning.agent import FlightRiskAgent
-            app_state.reasoning = FlightRiskAgent(model="gemma4:latest")
+            from flightrisk.reasoning import create_reasoning_agent
+            app_state.reasoning = create_reasoning_agent(source_config.reasoning_provider)
+            if app_state.reasoning is not None:
+                log.info(
+                    "reasoning_enabled",
+                    provider=app_state.reasoning.provider,
+                    model=app_state.reasoning.model,
+                )
         except Exception as e:
-            log.warning("gemma4_unavailable", error=str(e))
+            log.warning("reasoning_unavailable", error=str(e))
 
-    # Start the async Gemma worker thread (only if reasoning is available and
-    # not already running from a previous init call, e.g. restart_dashboard).
-    if app_state.reasoning is not None:
-        with _gemma_thread_lock:
-            existing = app_state.gemma_thread
-            if existing is None or not existing.is_alive():
-                t = threading.Thread(target=_gemma_worker, args=(socketio,), daemon=True)
-                t.start()
-                app_state.gemma_thread = t
+    # Start the async reasoning worker thread (only if reasoning is available
+    # and not already running from a previous init call, e.g. restart_dashboard).
+    _ensure_reasoning_worker()
 
     if target_path and os.path.exists(target_path):
         app_state.reid.set_target_from_file(target_path)
@@ -505,9 +532,6 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                 if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
-    elif source == "webcam":
-        app_state.fleet = None
-        app_state.cap = cv2.VideoCapture(0)
     elif source == "file":
         app_state.fleet = None
         if not video_path:
@@ -666,6 +690,7 @@ def health():
             "db": app_state.db is not None,
             "signal_registry": registry is not None,
         },
+        "reasoning_provider": _reasoning_state()["provider"],
         "active_signals": registry.active_signals if registry else [],
     })
 
@@ -687,6 +712,7 @@ def status():
         "has_target": app_state.target_photo is not None,
         "has_description": app_state.target_description is not None,
         "has_reasoning": app_state.reasoning is not None,
+        "reasoning_provider": _reasoning_state()["provider"],
         "has_face": app_state.face is not None and app_state.face.has_target if app_state.face else False,
         "match_history": app_state.match_history[-10:],
         "telemetry": app_state.drone_telemetry,
@@ -884,6 +910,34 @@ def on_set_description(data):
         if app_state.logger:
             app_state.logger.info("target_description_set", description=desc)
         emit("description_set", {"description": desc})
+
+
+@socketio.on("get_reasoning_provider")
+def on_get_reasoning_provider():
+    emit("reasoning_provider", _reasoning_state())
+
+
+@socketio.on("set_reasoning_provider")
+def on_set_reasoning_provider(data):
+    """Switch the reasoning backend at runtime (claude / gemma / off)."""
+    from flightrisk.reasoning import create_reasoning_agent, normalize_provider
+
+    requested = data.get("provider") if isinstance(data, dict) else None
+    try:
+        if not requested:
+            raise ValueError("provider is required")
+        provider = normalize_provider(requested)
+        agent = create_reasoning_agent(provider)
+    except Exception as e:
+        # Keep the current backend and tell the operator why the switch failed.
+        emit("reasoning_provider", {**_reasoning_state(), "error": str(e)})
+        return
+
+    app_state.reasoning = agent
+    _ensure_reasoning_worker()
+    if app_state.logger:
+        app_state.logger.info("reasoning_provider_changed", provider=provider)
+    socketio.emit("reasoning_provider", _reasoning_state())
 
 
 @socketio.on("set_threshold")
@@ -1239,7 +1293,7 @@ def on_register_drone(data):
         if success:
             socketio.emit("drone_registered", {"drone_id": drone_id, "success": True})
             # Switch source to a drone-backed source if we were on a
-            # non-drone fallback (webcam/file/edge/unset). Never stomp an
+            # non-drone fallback (file/edge/unset). Never stomp an
             # already-correct drone source -- unconditionally forcing
             # "tello" here previously flipped mavlink deployments back to
             # tello on every manual registration.
@@ -1307,7 +1361,7 @@ def on_restart_dashboard():
     if fleet:
         fleet.disconnect_all()
     # Release any existing capture device before re-initializing -- leaving
-    # it open leaks the webcam/video-file handle across restarts.
+    # it open leaks the video-file handle across restarts.
     cap = app_state.cap
     if cap:
         cap.release()

@@ -7,9 +7,6 @@ Usage:
     # With a real drone connected via WiFi:
     python -m flightrisk.main --target reference_photo.jpg
 
-    # Test with webcam (no drone needed):
-    python -m flightrisk.main --target reference_photo.jpg --webcam
-
     # Test with a video file:
     python -m flightrisk.main --target reference_photo.jpg --video test.mp4
 """
@@ -29,14 +26,16 @@ def run_pipeline(
     target_photo: str | None = None,
     match_threshold: float = 0.55,
     show_window: bool = True,
+    reasoning_provider: str | None = None,
 ):
     """Run the Amber detection pipeline.
 
     Args:
-        source: 'tello', 'webcam', or a path to a video file.
+        source: 'tello', or a path to a video file.
         target_photo: Path to reference photo of the person to find.
         match_threshold: ReID cosine similarity threshold.
         show_window: Whether to display the OpenCV window.
+        reasoning_provider: 'claude', 'gemma', or 'off' (default: config).
     """
     # --- Initialize detector ---
     print("Loading YOLO detector...")
@@ -49,13 +48,13 @@ def run_pipeline(
         reid = PersonReID(match_threshold=match_threshold)
         reid.set_target_from_file(target_photo)
 
-    # --- Initialize Gemma 4 reasoning (optional, lazy) ---
+    # --- Initialize LLM reasoning (optional, lazy) ---
     reasoning_agent = None
     try:
-        from flightrisk.reasoning.agent import FlightRiskAgent
-        reasoning_agent = FlightRiskAgent(model="gemma4:latest")
+        from flightrisk.reasoning import create_reasoning_agent
+        reasoning_agent = create_reasoning_agent(reasoning_provider)
     except Exception as e:
-        print(f"[reasoning] Gemma 4 not available ({e}). Running without LLM reasoning.")
+        print(f"[reasoning] Not available ({e}). Running without LLM reasoning.")
 
     # --- Connect to video source ---
     cap = None
@@ -66,11 +65,6 @@ def run_pipeline(
         drone = TelloController()
         if not drone.connect():
             print("Failed to connect to Tello. Exiting.")
-            sys.exit(1)
-    elif source == "webcam":
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("Cannot open webcam. Exiting.")
             sys.exit(1)
     else:
         cap = cv2.VideoCapture(source)
@@ -83,7 +77,7 @@ def run_pipeline(
     frame_count = 0
     fps_start = time.time()
     last_reasoning_time = 0
-    REASONING_INTERVAL = 5  # seconds between Gemma 4 calls
+    REASONING_INTERVAL = 5  # seconds between LLM calls
 
     try:
         while True:
@@ -92,10 +86,8 @@ def run_pipeline(
                 frame = drone.get_frame()
             else:
                 ret, frame = cap.read()
-                if not ret:
-                    if source != "webcam":  # video file ended
-                        break
-                    continue
+                if not ret:  # video file ended
+                    break
 
             if frame is None:
                 time.sleep(0.01)
@@ -110,7 +102,7 @@ def run_pipeline(
             if reid and detections:
                 match_idx, match_score = reid.find_match(detections)
 
-                # If we have a match and Gemma 4 is available, get reasoning
+                # If we have a match and LLM reasoning is available, get it
                 if (
                     match_idx is not None
                     and reasoning_agent
@@ -120,7 +112,7 @@ def run_pipeline(
                     candidate_crop = detections[match_idx]["crop"]
                     result = reasoning_agent.analyze_match(ref_img, candidate_crop)
                     last_reasoning_time = time.time()
-                    print(f"\n[Gemma 4] Match={result['match']}, "
+                    print(f"\n[{reasoning_agent.label}] Match={result['match']}, "
                           f"Confidence={result['confidence']}")
                     print(f"  Reasoning: {result['reasoning']}\n")
 
@@ -185,31 +177,38 @@ def run_pipeline(
 def main():
     parser = argparse.ArgumentParser(description="FlightRisk — AI lost child finder")
     parser.add_argument("--target", "-t", type=str, help="Path to reference photo of the child")
-    parser.add_argument("--webcam", action="store_true", help="Use webcam instead of Tello")
     parser.add_argument("--video", "-v", type=str, help="Path to a test video file")
     parser.add_argument("--threshold", type=float, default=0.55, help="ReID match threshold (0-1)")
     parser.add_argument("--no-window", action="store_true", help="Run headless (no OpenCV window)")
     parser.add_argument("--dashboard", action="store_true", help="Launch web dashboard instead of OpenCV window")
     parser.add_argument("--port", type=int, default=5555, help="Dashboard port (default: 5555)")
+    parser.add_argument(
+        "--reasoning", choices=("claude", "gemma", "off"), default=None,
+        help="Reasoning backend (default: FLIGHTRISK_REASONING_PROVIDER, else claude; "
+             "claude needs CLAUDE_API_KEY, gemma needs local Ollama)",
+    )
 
     args = parser.parse_args()
 
-    if args.webcam:
-        source = "webcam"
-    elif args.video:
+    if args.video:
         source = args.video
     else:
         source = "tello"
 
     if args.dashboard:
         from flightrisk.dashboard.app import run_dashboard, SourceConfig
-        run_dashboard(SourceConfig(source=source), target_path=args.target, port=args.port)
+        run_dashboard(
+            SourceConfig(source=source, reasoning_provider=args.reasoning),
+            target_path=args.target,
+            port=args.port,
+        )
     else:
         run_pipeline(
             source=source,
             target_photo=args.target,
             match_threshold=args.threshold,
             show_window=not args.no_window,
+            reasoning_provider=args.reasoning,
         )
 
 
