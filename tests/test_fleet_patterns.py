@@ -10,7 +10,13 @@ and any overshoot point) stays inside its own closed region, and regions are at
 least ``gap_cm`` apart, so two drones are at least ``gap_cm`` apart at every
 instant whatever the timing. The tests check the static rule, the exact
 simulated minimum distance under +/-30% per-move timing errors and the exact
-mirror symmetry of the split expanding square.
+mirror symmetry of the split expanding square when its seam is centred.
+
+Every builder now requires an explicit ``footprint``. The random cases here
+use ``fp.SQUARE_FOOTPRINT`` because they test geometry, separation and the
+square model's coverage; ``tests/test_fleet_plan_check.py`` covers the real
+forward camera, the coverage gate, the placement-tolerance margin, input
+validation and the takeoff contract.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import pytest
 
 from flightrisk.drone import coverage_sim as cs
 from flightrisk.drone import fleet_patterns as fp
+from flightrisk.drone.coverage import tello_sweep_model
 from flightrisk.drone.lane_executor import LaneExecutor, parse_lanes
 from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
@@ -36,6 +43,7 @@ from flightrisk.fleet_protocol import validate_message
 from flightrisk.observability import StructuredLogger
 
 CASES = 120
+SQUARE = fp.SQUARE_FOOTPRINT
 
 
 # ---------------------------------------------------------------------------
@@ -54,17 +62,23 @@ def _parallel_case(rng: random.Random) -> dict:
         "area_cm": (width, depth),
         "sweep_cm": sweep,
         "gap_cm": gap,
+        "footprint": SQUARE,
     }
 
 
 def _square_case(rng: random.Random) -> dict:
-    sweep = rng.randint(fp.MIN_SWEEP_CM, 400)
-    gap = rng.randint(1, 400)
-    offset = rng.choice((0, MIN_MOVE_CM, 50, 120))
-    s = (gap + 1) // 2
-    width = rng.randint(2 * (s + offset), 2000)
-    depth = rng.randint(2 * MIN_MOVE_CM, 2000)
-    lkp = (rng.randint(s + offset, width - s - offset), rng.randint(0, depth))
+    # Redraw until the two regions and their takeoff offsets fit; with a gap
+    # wider than one sweep the seam is off-centre, which needs more room.
+    while True:
+        sweep = rng.randint(fp.MIN_SWEEP_CM, 400)
+        gap = rng.randint(1, 400)
+        offset = rng.choice((0, MIN_MOVE_CM, 50, 120))
+        s = (gap + 1) // 2
+        width = rng.randint(2 * (s + offset), 2000)
+        depth = rng.randint(2 * MIN_MOVE_CM, 2000)
+        lkp = (rng.randint(s + offset, width - s - offset), rng.randint(0, depth))
+        if fp._split_square_seams(lkp[0], width, gap, sweep, offset) is not None:
+            break
     return {
         "drone_ids": ["drone-1", "drone-2"],
         "area_cm": (width, depth),
@@ -73,6 +87,7 @@ def _square_case(rng: random.Random) -> dict:
         "gap_cm": gap,
         "placement_offset_cm": offset,
         "stagger_s": rng.choice((0.0, 2.0)),
+        "footprint": SQUARE,
     }
 
 
@@ -90,6 +105,7 @@ def _all_plans(seed: int, cases: int = CASES):
             "area_cm": (width, depth),
             "lkp_cm": (rng.randint(0, width), rng.randint(0, depth)),
             "sweep_cm": rng.randint(fp.MIN_SWEEP_CM, 400),
+            "footprint": SQUARE,
         }
         yield case, fp.plan_square_spiral(**case)
 
@@ -113,9 +129,14 @@ def test_every_move_is_one_the_lane_executor_accepts():
                 assert MIN_MOVE_CM <= lane["distance_cm"] <= MAX_MOVE_CM, (case, lane)
             # parse_lanes is the executor's own validator; it must not change anything.
             assert parse_lanes(list(drone.lanes)) == [(lane["direction"], lane["distance_cm"]) for lane in drone.lanes]
-            msg = plan.assign_lanes_message(drone.drone_id)
+            # Every generated plan, feasible or not, must still produce a valid
+            # message shape; refused plans need the explicit preview override.
+            msg = plan.assign_lanes_message(drone.drone_id, allow_infeasible=True)
             assert validate_message(msg) == "assign_lanes"
-            assert msg["zone"] == drone.region.zone_dict()
+            # The zone now carries the takeoff point next to the region rectangle.
+            assert msg["zone"] == drone.zone_dict()
+            assert {k: msg["zone"][k] for k in ("x_cm", "y_cm", "w_cm", "h_cm")} == drone.region.zone_dict()
+            assert (msg["zone"]["takeoff_x_cm"], msg["zone"]["takeoff_y_cm"]) == drone.takeoff_cm
             assert MIN_MOVE_CM <= msg["alt_cm"] <= MAX_MOVE_CM
 
 
@@ -126,10 +147,15 @@ def test_no_rotation_or_vertical_move_is_ever_generated():
 
 
 def test_feasible_plans_are_accepted_by_a_real_lane_executor():
+    # The 4 m demo pairs now plan with the real Tello forward camera (walls at
+    # 4 m). With the 170 cm default gap, two drones on 75 cm square-model
+    # lanes leave a 95 cm strip that neither may enter, which the coverage
+    # gate refuses, so those square-model pairs are no longer feasible.
+    room = tello_sweep_model(max_range_m=4.0)
     plans = [
-        fp.plan_search(["drone-1", "drone-2"], 400, 75, geofence_cm=450),
-        fp.plan_search(["drone-1", "drone-2"], 400, 75, (200, 200), geofence_cm=450),
-        fp.plan_search(["drone-1"], (400, 300), 60, (120, 90), geofence_cm=450),
+        fp.plan_search(["drone-1", "drone-2"], 400, None, footprint=room, geofence_cm=450),
+        fp.plan_search(["drone-1", "drone-2"], 400, None, (200, 200), footprint=room, geofence_cm=450),
+        fp.plan_search(["drone-1"], (400, 300), 60, (120, 90), footprint=SQUARE, geofence_cm=450),
     ]
     for plan in plans:
         assert plan.feasible, plan.problems
@@ -164,9 +190,11 @@ def test_every_waypoint_stays_in_its_region_and_the_area():
             for point in drone.waypoints():
                 assert drone.region.contains(point), (case, drone.drone_id, point)
                 assert 0 <= point[0] <= width and 0 <= point[1] <= depth, (case, point)
-        # check_plan without a fence or a minimum separation finds nothing wrong,
-        # apart from a degenerate area that one footprint already covers.
-        assert [p for p in fp.check_plan(plan) if "no lanes" not in p] == [], case
+        # check_plan without a fence, a minimum separation or the coverage gate
+        # finds nothing wrong, apart from a degenerate area that one footprint
+        # already covers. (These checks now default to the plan's own limits.)
+        problems = fp.check_plan(plan, geofence_cm=None, min_separation_cm=None, min_coverage=None)
+        assert [p for p in problems if "no lanes" not in p] == [], case
 
 
 def test_parallel_split_strips_partition_the_width_with_exact_gaps():
@@ -193,7 +221,17 @@ def test_split_square_half_planes_are_disjoint_and_cover_the_area_but_the_seam()
         width, depth = plan.area_cm
         lx, _ = case["lkp_cm"]
         s = (case["gap_cm"] + 1) // 2
-        assert (left.x0, left.x1, right.x0, right.x1) == (0, lx - s, lx + s, width), case
+        half = case["sweep_cm"] // 2
+        assert (left.x0, right.x1) == (0, width), case
+        if 2 * s <= case["sweep_cm"]:
+            # Centred seam: the two seam passes meet over the LKP.
+            assert (left.x1, right.x0) == (lx - s, lx + s), case
+        else:
+            # Off-centre seam (the centred one would leave the LKP unsearched):
+            # one region reaches half a sweep past the LKP, the other starts
+            # exactly one gap further on.
+            assert (left.x1, right.x0) in ((lx + half, lx + half + case["gap_cm"]),
+                                           (lx - half - case["gap_cm"], lx - half)), case
         assert left.y0 == right.y0 == 0 and left.y1 == right.y1 == depth, case
         assert right.x0 - left.x1 >= case["gap_cm"], case
 
@@ -248,12 +286,16 @@ def test_split_square_is_an_exact_mirror_when_the_lkp_is_centred():
     rng = random.Random(8)
     for _ in range(60):
         sweep = rng.randint(fp.MIN_SWEEP_CM, 400)
-        gap = rng.randint(1, 300)
+        # Only the centred seam (2 * ceil(gap / 2) <= sweep) is a mirror; a
+        # wider gap moves the seam to one side so the LKP is still searched
+        # (test_split_square_searches_the_lkp_* in test_fleet_plan_check.py).
+        gap = rng.randint(1, 2 * (sweep // 2))
         half_width = rng.randint((gap + 1) // 2 + 50, 1000)
         depth = rng.randint(100, 2000)
         lkp = (half_width, rng.randint(0, depth))
         plan = fp.plan_split_expanding_square(
-            ["a", "b"], (2 * half_width, depth), lkp, sweep, gap_cm=gap, stagger_s=0.0, min_separation_cm=None
+            ["a", "b"], (2 * half_width, depth), lkp, sweep, footprint=SQUARE, gap_cm=gap, stagger_s=0.0,
+            min_separation_cm=None,
         )
         a, b = plan.drones
         assert len(a.lanes) == len(b.lanes)
@@ -283,21 +325,37 @@ def test_two_drone_parallel_split_is_balanced_in_time():
 
 
 def test_plan_below_the_minimum_separation_is_refused():
-    plan = fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=100)
+    # A 20 m area needs a 20 m geofence to be flyable at all (the default is
+    # the edge's 500 cm). A 150 cm gap used to pass; it is now refused because
+    # D_min must survive 10 cm of placement error on each drone (170 cm).
+    kw = {"footprint": SQUARE, "geofence_cm": 2000}
+    plan = fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=100, **kw)
     assert not plan.feasible
     assert any("minimum" in p for p in plan.problems)
-    assert fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=150).feasible
-    square = fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, gap_cm=100)
+    for gap in (150, 169):
+        plan = fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=gap, **kw)
+        expected = (
+            f"guaranteed separation {gap} cm is below the 170 cm minimum "
+            "(150 cm D_min plus 2 x 10 cm placement tolerance)"
+        )
+        assert plan.problems == (expected,)
+    assert fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=170, **kw).feasible
+    assert fp.plan_parallel_split(["a", "b"], 2000, 400, **kw).feasible
+    square = fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, gap_cm=100, **kw)
     assert not square.feasible
-    assert fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400).feasible
+    assert fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, **kw).feasible
 
 
 def test_required_gap_grows_with_drift_and_path_length():
     assert fp.required_gap_cm(150, 0.0, 10_000, placement_tolerance_cm=0) == 150
     assert fp.required_gap_cm(150, 0.03, 2_000, placement_tolerance_cm=0) == 270
     assert fp.required_gap_cm(150, 0.03, 2_000) == 290
-    plan = fp.plan_parallel_split(["a", "b"], 2000, 400, gap_cm=200, min_separation_cm=fp.required_gap_cm(150, 0.03, 2_000))
+    plan = fp.plan_parallel_split(
+        ["a", "b"], 2000, 400, footprint=SQUARE, gap_cm=200, geofence_cm=2000,
+        min_separation_cm=fp.required_gap_cm(150, 0.03, 2_000, placement_tolerance_cm=0),
+    )
     assert not plan.feasible
+    assert any("290 cm minimum" in p for p in plan.problems)
     with pytest.raises(ValueError):
         fp.required_gap_cm(150, -0.01, 100)
 
@@ -323,6 +381,7 @@ def test_parallel_split_covers_the_whole_area_including_the_gaps():
             "area_cm": (width, rng.randint(MIN_MOVE_CM + 1, 1200)),
             "sweep_cm": sweep,
             "gap_cm": gap,
+            "footprint": SQUARE,
         }
         plan = fp.plan_parallel_split(min_separation_cm=None, **case)
         assert _coverage(plan) == 1.0, case
@@ -349,24 +408,28 @@ def test_square_spiral_covers_the_whole_area():
     for _ in range(60):
         width, depth = rng.randint(40, 1200), rng.randint(40, 1200)
         plan = fp.plan_square_spiral(
-            "a", (width, depth), (rng.randint(0, width), rng.randint(0, depth)), rng.randint(40, 400)
+            "a", (width, depth), (rng.randint(0, width), rng.randint(0, depth)), rng.randint(40, 400),
+            footprint=SQUARE,
         )
         assert _coverage(plan) == 1.0, plan.to_dict()
 
 
 def test_gap_wider_than_a_sweep_is_reported_as_uncovered_not_entered():
-    plan = fp.plan_parallel_split(["a", "b"], 1000, 100, gap_cm=300, min_separation_cm=None)
+    plan = fp.plan_parallel_split(["a", "b"], 1000, 100, footprint=SQUARE, gap_cm=300, min_separation_cm=None)
     assert plan.separation_cm == 300
     coverage = _coverage(plan)
     assert coverage < 1.0
     # Only the middle 200 cm of the 300 cm gap is out of reach of both drones.
     assert coverage == pytest.approx(0.8, abs=0.011)
+    # The coverage gate refuses it.
+    assert plan.coverage == pytest.approx(coverage)
+    assert any("sees only 80.0% of the area" in p for p in plan.problems)
 
 
 def test_parallel_lane_count_rounds_up_so_the_remainder_strip_is_searched():
     # search.generate_parallel_track uses width // strip and would fly 2 lanes
     # here; the third is needed to reach the far edge.
-    plan = fp.plan_parallel_split(["a"], (400, 300), 150, min_separation_cm=None)
+    plan = fp.plan_parallel_split(["a"], (400, 300), 150, footprint=SQUARE, min_separation_cm=None)
     lane_xs = sorted({x for x, _ in plan.drones[0].waypoints()})
     assert lane_xs == [75, 200, 325]
     assert _coverage(plan) == 1.0
@@ -379,7 +442,7 @@ def test_parallel_lane_count_rounds_up_so_the_remainder_strip_is_searched():
 
 def test_split_square_matches_the_plan_example_geometry():
     plan = fp.plan_split_expanding_square(
-        ["drone-1", "drone-2"], 2000, (1000, 1000), 400, gap_cm=100, min_separation_cm=100
+        ["drone-1", "drone-2"], 2000, (1000, 1000), 400, footprint=SQUARE, gap_cm=100, min_separation_cm=100
     )
     left, right = plan.drones
     assert plan.placements() == {"drone-1": (900, 1000, 0), "drone-2": (1100, 1000, 0)}
@@ -398,7 +461,7 @@ def test_split_square_matches_the_plan_example_geometry():
 
 
 def test_parallel_split_takes_off_at_the_first_lane_and_needs_no_transit():
-    plan = fp.plan_parallel_split(["drone-1", "drone-2"], 2000, 400, gap_cm=150)
+    plan = fp.plan_parallel_split(["drone-1", "drone-2"], 2000, 400, footprint=SQUARE, gap_cm=150)
     for drone in plan.drones:
         assert drone.transit_lanes == 0
         assert drone.takeoff_cm == drone.waypoints()[0]
@@ -407,8 +470,8 @@ def test_parallel_split_takes_off_at_the_first_lane_and_needs_no_transit():
 
 
 def test_end_inset_shortens_the_lanes():
-    full = fp.plan_parallel_split(["a"], (400, 1000), 200, min_separation_cm=None)
-    inset = fp.plan_parallel_split(["a"], (400, 1000), 200, end_inset_cm=100, min_separation_cm=None)
+    full = fp.plan_parallel_split(["a"], (400, 1000), 200, footprint=SQUARE, min_separation_cm=None)
+    inset = fp.plan_parallel_split(["a"], (400, 1000), 200, footprint=SQUARE, end_inset_cm=100, min_separation_cm=None)
     assert inset.drones[0].path_length_cm < full.drones[0].path_length_cm
     ys = [y for _, y in inset.drones[0].waypoints()]
     assert (min(ys), max(ys)) == (100, 900)
@@ -488,7 +551,7 @@ def test_choose_pattern_follows_the_decision_table(n, lkp, expected):
     choice = fp.choose_pattern(n, 2000, lkp)
     assert choice.kind is expected
     assert choice.reason
-    plan = fp.plan_search([f"d{i}" for i in range(n)], 2000, 400, lkp)
+    plan = fp.plan_search([f"d{i}" for i in range(n)], 2000, 400, lkp, footprint=SQUARE)
     assert plan.pattern is expected
     assert plan.reason == choice.reason
     if lkp is not None:
@@ -496,7 +559,7 @@ def test_choose_pattern_follows_the_decision_table(n, lkp, expected):
 
 
 def test_lkp_with_an_area_beyond_the_geofence_is_refused_not_silently_flown():
-    plan = fp.plan_search(["a", "b"], 2000, 400, (1000, 1000), geofence_cm=450)
+    plan = fp.plan_search(["a", "b"], 2000, 400, (1000, 1000), footprint=SQUARE, geofence_cm=450)
     assert plan.pattern is fp.PatternKind.SPLIT_EXPANDING_SQUARE
     assert not plan.feasible
     assert any("geofence" in p for p in plan.problems)
@@ -505,19 +568,23 @@ def test_lkp_with_an_area_beyond_the_geofence_is_refused_not_silently_flown():
 def test_invalid_inputs_are_rejected():
     with pytest.raises(ValueError):
         fp.choose_pattern(2, 2000, (2500, 100))
+    kw = {"footprint": SQUARE}
     with pytest.raises(ValueError):
-        fp.plan_split_expanding_square(["a"], 2000, (1000, 1000), 400)
+        fp.plan_split_expanding_square(["a"], 2000, (1000, 1000), 400, **kw)
     with pytest.raises(ValueError):
-        fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, gap_cm=0)
+        fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, gap_cm=0, **kw)
     with pytest.raises(ValueError):
-        fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, placement_offset_cm=10)
+        fp.plan_split_expanding_square(["a", "b"], 2000, (1000, 1000), 400, placement_offset_cm=10, **kw)
     with pytest.raises(ValueError):
-        fp.plan_parallel_split(["a", "b"], 2000, fp.MIN_SWEEP_CM - 1)
+        fp.plan_parallel_split(["a", "b"], 2000, fp.MIN_SWEEP_CM - 1, **kw)
     with pytest.raises(ValueError):
-        fp.plan_parallel_split(["a", "a"], 2000, 400)
+        fp.plan_parallel_split(["a", "a"], 2000, 400, **kw)
     with pytest.raises(ValueError):
-        fp.plan_parallel_split(["a", "b"], 2000, 400, alt_slots_cm=(10,))
+        fp.plan_parallel_split(["a", "b"], 2000, 400, alt_slots_cm=(10,), **kw)
     with pytest.raises(ValueError):
-        fp.plan_parallel_split(["a", "b"], (2000, 30), 400, end_inset_cm=10)
+        fp.plan_parallel_split(["a", "b"], (2000, 30), 400, end_inset_cm=10, **kw)
     with pytest.raises(ValueError):
-        fp.plan_parallel_split(["a", "b", "c"], 100, 400, gap_cm=40)
+        fp.plan_parallel_split(["a", "b", "c"], 100, 400, gap_cm=40, **kw)
+    # The footprint is a required, explicit choice.
+    with pytest.raises(TypeError):
+        fp.plan_parallel_split(["a", "b"], 2000, 400)

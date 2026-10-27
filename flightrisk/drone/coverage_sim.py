@@ -27,17 +27,26 @@ a forward-facing camera from ``coverage.SweepModel``. The camera always faces
 ``+y`` because fleet drones never rotate. First-detection times are exact for
 piecewise-linear flight, not sampled.
 
-Given a prior ``p`` over cells, the expected time to first detection is
-``sum(p_c * t_c) / POD`` over the cells the plan covers, normalised by the
-prior mass it covers (``prob_covered``). It is therefore conditional on the
-person being inside the covered part, and equals the plan's
-``E[T_det] = sum(p_c * t_first(c)) / POD`` when coverage is complete. POD is
-1 until rung L1 calibrates it.
+Given a prior ``p`` over cells, the expected time to first detection is the
+plan's ``E[T_det] = sum(p_c * t_first(c)) / POD``. A cell the plan never sees
+has ``t_first = inf``, so whenever any prior mass is left unsearched
+``expected_time_to_detection_s`` is infinite: an incomplete plan never reports
+a finite time that hides the area it skipped. ``prob_covered`` (the prior mass
+the plan sees) is always reported next to it, and
+``conditional_time_to_detection_s`` is the same sum restricted to the covered
+cells and divided by ``prob_covered``, which is only the expected time given
+that the person is inside the searched part. POD is 1 until rung L1
+calibrates it.
+
+``covered_cells`` answers only "is this cell ever seen" for axis-aligned
+polylines, in time linear in the number of legs times the raster side, so the
+planner can afford to check every plan it builds.
 
 Separation
 ----------
 ``min_separation_cm`` computes the exact minimum horizontal distance between
-two piecewise-linear tracks. ``min_separation_under_jitter`` repeats it with
+two piecewise-linear tracks, walking both timelines once (linear in their
+length). ``min_separation_under_jitter`` repeats it with
 every move's duration scaled by a random factor within ``1 +/- jitter``
 (plan section 3.5 uses 30%), plus the all-fast and all-slow extremes.
 """
@@ -57,6 +66,7 @@ from flightrisk.drone.lane_executor import split_lane_moves
 
 __all__ = [
     "DEFAULT_TIMING",
+    "MAX_RASTER_CELLS",
     "DroneEstimate",
     "ForwardFootprint",
     "Raster",
@@ -64,6 +74,7 @@ __all__ = [
     "SearchEstimate",
     "Segment",
     "TimingModel",
+    "covered_cells",
     "estimate_plan",
     "first_detection_times",
     "gaussian_prior",
@@ -75,6 +86,10 @@ __all__ = [
 ]
 
 _VECTORS = {"forward": (0.0, 1.0), "back": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
+
+MAX_RASTER_CELLS = 4_000_000
+"""Largest raster accepted: a 200 m x 200 m area at 10 cm cells. Larger rasters
+are refused with an error rather than left to stall the caller."""
 
 
 @dataclass(frozen=True)
@@ -280,14 +295,35 @@ class Raster:
     cell_cm: float = 10.0
 
     def __post_init__(self) -> None:
+        values = (self.width_cm, self.depth_cm, self.cell_cm)
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+            raise ValueError("raster dimensions and cell size must be finite numbers")
         if self.width_cm <= 0 or self.depth_cm <= 0 or self.cell_cm <= 0:
             raise ValueError("raster dimensions and cell size must be positive")
+        cells = self.shape[0] * self.shape[1]
+        if cells > MAX_RASTER_CELLS:
+            raise ValueError(
+                f"a {self.width_cm:g} x {self.depth_cm:g} cm raster of {self.cell_cm:g} cm cells has {cells} cells, "
+                f"above the {MAX_RASTER_CELLS} limit; use a larger cell_cm"
+            )
 
-    def centres(self) -> tuple[np.ndarray, np.ndarray]:
+    @property
+    def shape(self) -> tuple[int, int]:
+        """``(nx, ny)``: cells across the width and along the depth."""
         nx = max(1, math.ceil(self.width_cm / self.cell_cm - 1e-9))
         ny = max(1, math.ceil(self.depth_cm / self.cell_cm - 1e-9))
+        return nx, ny
+
+    def axes(self) -> tuple[np.ndarray, np.ndarray]:
+        """Cell-centre coordinates along ``x`` and along ``y``."""
+        nx, ny = self.shape
         xs = np.minimum((np.arange(nx) + 0.5) * self.cell_cm, self.width_cm)
         ys = np.minimum((np.arange(ny) + 0.5) * self.cell_cm, self.depth_cm)
+        return xs, ys
+
+    def centres(self) -> tuple[np.ndarray, np.ndarray]:
+        """Every cell centre, flattened with ``x`` as the slow index (cell ``i * ny + j``)."""
+        xs, ys = self.axes()
         cx, cy = np.meshgrid(xs, ys, indexing="ij")
         return cx.ravel(), cy.ravel()
 
@@ -344,19 +380,86 @@ def _entry_times(seg: Segment, cx: np.ndarray, cy: np.ndarray, footprint: Footpr
     return np.where(ok, seg.t0 + frac * duration, inf)
 
 
+def _per_track(footprint: Footprint | Sequence[Footprint], count: int) -> list[Footprint]:
+    if isinstance(footprint, (list, tuple)):
+        if len(footprint) != count:
+            raise ValueError(f"expected {count} footprints, one per track, got {len(footprint)}")
+        return list(footprint)
+    return [footprint] * count
+
+
 def first_detection_times(
     raster: Raster,
     tracks: Iterable[Sequence[Segment]],
-    footprint: Footprint,
+    footprint: Footprint | Sequence[Footprint],
 ) -> np.ndarray:
-    """Per cell, the first time any airborne drone's footprint contains its centre (inf if never)."""
+    """Per cell, the first time any airborne drone's footprint contains its centre (inf if never).
+
+    ``footprint`` is one footprint for every track, or a list with one per
+    track (drones at different altitudes see different ground).
+    """
+    tracks = list(tracks)
+    footprints = _per_track(footprint, len(tracks))
     cx, cy = raster.centres()
     times = np.full(cx.shape, np.inf)
-    for track in tracks:
+    for track, fp in zip(tracks, footprints):
         for seg in track:
             if seg.airborne:
-                np.minimum(times, _entry_times(seg, cx, cy, footprint), out=times)
+                np.minimum(times, _entry_times(seg, cx, cy, fp), out=times)
     return times
+
+
+def covered_cells(
+    raster: Raster,
+    paths: Iterable[Sequence[Sequence[float]]],
+    footprint: Footprint | Sequence[Footprint],
+) -> np.ndarray:
+    """Per cell, whether any drone flying these axis-aligned polylines ever sees its centre.
+
+    ``paths`` are waypoint lists (takeoff first); consecutive waypoints must
+    share ``x`` or ``y``. The result equals ``np.isfinite`` of
+    ``first_detection_times`` for the same flight, without the timing: a leg
+    along ``y`` at ``x = X`` sees, in each column, the closed interval of
+    ``y`` from its low end plus the footprint's nearest visible distance to
+    its high end plus the farthest; a leg along ``x`` sees, in each row, an
+    interval of ``x``. Intervals are accumulated in two difference arrays, so
+    the cost is the number of legs times the raster side plus one pass over
+    the cells.
+    """
+    paths = [list(path) for path in paths]
+    footprints = _per_track(footprint, len(paths))
+    xs, ys = raster.axes()
+    nx, ny = xs.size, ys.size
+    columns = np.zeros((nx, ny + 1), dtype=np.int32)
+    rows = np.zeros((ny, nx + 1), dtype=np.int32)
+    col_index = np.arange(nx)
+    row_index = np.arange(ny)
+    for path, fp in zip(paths, footprints):
+        if not path:
+            continue
+        legs = list(itertools.pairwise(path)) or [(path[0], path[0])]
+        for (x0, y0), (x1, y1) in legs:
+            if x0 == x1:
+                lo, hi = fp.along_interval(np.abs(xs - x0))
+                with np.errstate(invalid="ignore"):
+                    first = np.searchsorted(ys, min(y0, y1) + lo, side="left")
+                    last = np.searchsorted(ys, max(y0, y1) + hi, side="right")
+                ok = last > first
+                np.add.at(columns, (col_index[ok], first[ok]), 1)
+                np.add.at(columns, (col_index[ok], last[ok]), -1)
+            elif y0 == y1:
+                half = fp.lateral_halfwidth(ys - y0)
+                visible = half >= 0
+                first = np.searchsorted(xs, min(x0, x1) - half, side="left")
+                last = np.searchsorted(xs, max(x0, x1) + half, side="right")
+                ok = visible & (last > first)
+                np.add.at(rows, (row_index[ok], first[ok]), 1)
+                np.add.at(rows, (row_index[ok], last[ok]), -1)
+            else:
+                raise ValueError(f"leg ({x0}, {y0}) -> ({x1}, {y1}) is not axis-aligned")
+    seen = np.cumsum(columns, axis=1)[:, :ny] > 0
+    seen |= (np.cumsum(rows, axis=1)[:, :nx] > 0).T
+    return seen.ravel()
 
 
 # ----------------------------------------------------------------------
@@ -384,6 +487,7 @@ class SearchEstimate:
     prob_covered: float
     expected_time_to_detection_s: float
     time_to_coverage_s: dict
+    conditional_time_to_detection_s: float = math.inf
 
     def drone(self, drone_id: str) -> DroneEstimate:
         for estimate in self.drones:
@@ -410,15 +514,21 @@ def estimate_plan(
 ) -> SearchEstimate:
     """Makespan, per-drone times, coverage and expected time to first detection for a plan.
 
-    ``footprint`` defaults to the square of the plan's sweep width. ``prior``
-    is ``"uniform"``, ``"lkp"`` (a Gaussian of ``sigma_cm`` on the plan's
-    LKP) or an array over the raster cells.
+    ``footprint`` defaults to the plan's own camera footprints (one per drone,
+    at its altitude slot; ``FleetSearchPlan.camera_footprints``), or to the
+    square of the plan's sweep width for a plan without them. ``prior`` is
+    ``"uniform"``, ``"lkp"`` (a Gaussian of ``sigma_cm`` on the plan's LKP)
+    or an array over the raster cells. ``expected_time_to_detection_s`` is
+    infinite unless the plan sees every cell with prior mass; see the module
+    docstring.
     """
-    if not 0 < pod <= 1:
+    if not (isinstance(pod, (int, float)) and math.isfinite(pod) and 0 < pod <= 1):
         raise ValueError("pod must be within (0, 1]")
     width, depth = plan.area_cm
     raster = Raster(width, depth, cell_cm)
-    footprint = footprint if footprint is not None else RectFootprint.square(plan.sweep_cm)
+    if footprint is None:
+        cameras = getattr(plan, "camera_footprints", None)
+        footprint = cameras() if callable(cameras) else RectFootprint.square(plan.sweep_cm)
     tracks = plan_tracks(plan, timing, include_transit=include_transit)
     drones = []
     for drone in plan.drones:
@@ -454,12 +564,17 @@ def estimate_plan(
         if weights.shape != times.shape:
             raise ValueError("prior must have one weight per raster cell")
         weights = weights / weights.sum()
+    if not (np.all(np.isfinite(weights)) and np.all(weights >= 0) and weights.sum() > 0):
+        raise ValueError("prior weights must be finite, non-negative and not all zero")
     covered = np.isfinite(times)
     prob_covered = float(weights[covered].sum())
     if prob_covered > 0:
-        expected = float((weights[covered] * times[covered]).sum() / prob_covered / pod)
+        conditional = float((weights[covered] * times[covered]).sum() / prob_covered / pod)
     else:
-        expected = math.inf
+        conditional = math.inf
+    # The plan's formula sums p_c * t_first(c) over every cell; an unseen cell
+    # with prior mass has t_first = inf, so the expectation is infinite.
+    expected = conditional if not np.any(weights[~covered] > 0) else math.inf
     finite = np.sort(times[covered])
     levels = {}
     for level in coverage_levels:
@@ -472,6 +587,7 @@ def estimate_plan(
         prob_covered=prob_covered,
         expected_time_to_detection_s=expected,
         time_to_coverage_s=levels,
+        conditional_time_to_detection_s=conditional,
     )
 
 
@@ -480,17 +596,35 @@ def estimate_plan(
 # ----------------------------------------------------------------------
 
 
+class _Walker:
+    """Position along one timeline at non-decreasing times, advancing a segment pointer."""
+
+    def __init__(self, track: Sequence[Segment]) -> None:
+        self._track = track
+        self._index = 0
+
+    def at(self, t: float) -> tuple[float, float]:
+        track = self._track
+        if t <= track[0].t0:
+            return track[0].x0, track[0].y0
+        while self._index < len(track) and track[self._index].t1 < t:
+            self._index += 1
+        if self._index == len(track):
+            return track[-1].x1, track[-1].y1
+        return _interpolate(track[self._index], t)
+
+
+def _interpolate(seg: Segment, t: float) -> tuple[float, float]:
+    if seg.t1 == seg.t0:
+        return seg.x1, seg.y1
+    # Clamped, so a gap between two segments holds the drone where the next one starts.
+    f = min(1.0, max(0.0, (t - seg.t0) / (seg.t1 - seg.t0)))
+    return seg.x0 + f * (seg.x1 - seg.x0), seg.y0 + f * (seg.y1 - seg.y0)
+
+
 def _position(track: Sequence[Segment], t: float) -> tuple[float, float]:
     """Position at time ``t``; before the first segment and after the last the drone stays put."""
-    if t <= track[0].t0:
-        return track[0].x0, track[0].y0
-    for seg in track:
-        if t <= seg.t1:
-            if seg.t1 == seg.t0:
-                return seg.x1, seg.y1
-            f = (t - seg.t0) / (seg.t1 - seg.t0)
-            return seg.x0 + f * (seg.x1 - seg.x0), seg.y0 + f * (seg.y1 - seg.y0)
-    return track[-1].x1, track[-1].y1
+    return _Walker(track).at(t)
 
 
 def _segment_origin_distance(ax: float, ay: float, bx: float, by: float) -> float:
@@ -508,13 +642,16 @@ def min_separation_cm(track_a: Sequence[Segment], track_b: Sequence[Segment]) ->
 
     Between consecutive breakpoints of either timeline both drones move
     linearly, so their offset moves along a straight segment and its
-    smallest length is found in closed form.
+    smallest length is found in closed form. The breakpoints are visited in
+    order with one pointer per timeline, so the cost is linear in the number
+    of segments (after sorting the breakpoints).
     """
     times = sorted({0.0} | {s.t0 for s in track_a} | {s.t1 for s in track_a}
                    | {s.t0 for s in track_b} | {s.t1 for s in track_b})
+    walk_a, walk_b = _Walker(track_a), _Walker(track_b)
     offsets = []
     for t in times:
-        (xa, ya), (xb, yb) = _position(track_a, t), _position(track_b, t)
+        (xa, ya), (xb, yb) = walk_a.at(t), walk_b.at(t)
         offsets.append((xa - xb, ya - yb))
     best = math.hypot(*offsets[0])
     for (ax, ay), (bx, by) in itertools.pairwise(offsets):

@@ -15,6 +15,14 @@ computes the first-detection instant exactly. The plan's parallel-split
 layout (reconstructed below) puts the shared middle lane on each zone's inner
 edge; ``plan_parallel_split`` spaces lanes evenly instead and is 1.5 s faster
 (87.0 s), so its expected times differ (38.6 s uniform, 38.7 s LKP).
+
+The worked example is a model study, so these tests opt into its assumptions
+explicitly: ``footprint=SQUARE`` (the idealised square footprint; real Tello
+plans pass a ``SweepModel``), ``gap_cm=100`` with ``min_separation_cm=100``
+and ``placement_tolerance_cm=0`` (the example's 1 m gap with no placement
+error; the planner's default is a 170 cm gap, D_min 150 cm plus 2 x 10 cm of
+placement tolerance), and ``geofence_cm=None`` (the 20 m area is beyond the
+edge's 500 cm geofence, as the plan itself notes).
 """
 
 from __future__ import annotations
@@ -34,6 +42,10 @@ LKP = (1000, 1000)
 SIGMA = 400
 TIMING = cs.TimingModel(speed_cm_s=100.0, move_overhead_s=1.5)
 E_TOL = 0.15
+SQUARE = fp.SQUARE_FOOTPRINT
+# The worked example's assumptions; see the module docstring.
+EXAMPLE = {"footprint": SQUARE, "gap_cm": 100, "min_separation_cm": 100, "placement_tolerance_cm": 0,
+           "geofence_cm": None}
 
 
 def _estimates(plan, **kwargs):
@@ -63,7 +75,8 @@ def _plan_example_parallel_split() -> fp.FleetSearchPlan:
 
 
 def test_single_drone_parallel_track_reproduces_the_plan():
-    plan = fp.plan_search(["drone-1"], AREA, SWEEP, min_separation_cm=None)
+    plan = fp.plan_search(["drone-1"], AREA, SWEEP, footprint=SQUARE, min_separation_cm=None, geofence_cm=None)
+    assert plan.feasible
     plan = fp.FleetSearchPlan(plan.pattern, plan.area_cm, plan.sweep_cm, plan.gap_cm, plan.drones, lkp_cm=LKP)
     uniform, lkp = _estimates(plan)
     assert uniform.makespan_s == pytest.approx(152.0)
@@ -83,8 +96,9 @@ def test_plan_layout_of_the_parallel_split_reproduces_the_plan():
 
 
 def test_generated_parallel_split_is_no_slower_than_the_plan():
-    plan = fp.plan_search(["drone-1", "drone-2"], AREA, SWEEP, gap_cm=100, min_separation_cm=100)
+    plan = fp.plan_search(["drone-1", "drone-2"], AREA, SWEEP, **EXAMPLE)
     assert plan.pattern is fp.PatternKind.PARALLEL_SPLIT
+    assert plan.feasible
     plan = fp.FleetSearchPlan(plan.pattern, plan.area_cm, plan.sweep_cm, plan.gap_cm, plan.drones, lkp_cm=LKP)
     uniform, lkp = _estimates(plan)
     assert uniform.makespan_s == pytest.approx(87.0)
@@ -96,8 +110,9 @@ def test_generated_parallel_split_is_no_slower_than_the_plan():
 
 
 def test_split_expanding_square_reproduces_the_plan():
-    plan = fp.plan_search(["drone-1", "drone-2"], AREA, SWEEP, LKP, gap_cm=100, min_separation_cm=100)
+    plan = fp.plan_search(["drone-1", "drone-2"], AREA, SWEEP, LKP, **EXAMPLE)
     assert plan.pattern is fp.PatternKind.SPLIT_EXPANDING_SQUARE
+    assert plan.feasible
     # The plan's numbers exclude the takeoff transit and the 2 s stagger.
     uniform, lkp = _estimates(plan, include_transit=False)
     assert uniform.makespan_s == pytest.approx(97.0)
@@ -115,7 +130,7 @@ def test_split_expanding_square_reproduces_the_plan():
 
 
 def test_split_square_halves_time_to_detection_against_the_parallel_split():
-    square = fp.plan_search(["a", "b"], AREA, SWEEP, LKP, gap_cm=100, min_separation_cm=100)
+    square = fp.plan_search(["a", "b"], AREA, SWEEP, LKP, **EXAMPLE)
     _, square_lkp = _estimates(square, include_transit=False)
     _, parallel_lkp = _estimates(_plan_example_parallel_split())
     assert square_lkp.expected_time_to_detection_s < 0.6 * parallel_lkp.expected_time_to_detection_s
@@ -160,7 +175,7 @@ def test_invalid_timing_is_rejected():
 
 
 def test_transit_time_is_reported_separately():
-    plan = fp.plan_split_expanding_square(["a", "b"], AREA, LKP, SWEEP, gap_cm=100, min_separation_cm=100)
+    plan = fp.plan_split_expanding_square(["a", "b"], AREA, LKP, SWEEP, **EXAMPLE)
     estimate = cs.estimate_plan(plan, timing=TIMING)
     for drone in estimate.drones:
         assert drone.transit_s == pytest.approx(2.0 + 0.5 + 2 * 1.5)
@@ -202,10 +217,17 @@ def test_forward_footprint_from_the_tello_sweep_model():
     assert footprint.near_cm == pytest.approx(model.near_m * 100)
     assert footprint.far_cm == pytest.approx(400)
     assert footprint.max_half_width_cm == pytest.approx(model.sweep_width_m * 50)
-    plan = fp.plan_parallel_split(["a"], (400, 400), model.lane_spacing_cm(), min_separation_cm=None)
+    plan = fp.plan_parallel_split(["a"], (400, 400), model.lane_spacing_cm(), footprint=SQUARE, min_separation_cm=None)
     estimate = cs.estimate_plan(plan, footprint=footprint)
-    # A forward camera never sees the band just ahead of the near edge at the start of the first lane.
+    # A plan made for the square model and flown with a forward camera never
+    # sees the band just ahead of the near edge at the start of the first lane.
     assert 0 < estimate.coverage < 1
+    # Planned for the forward camera itself, the lanes start behind the near
+    # edge and the whole area is seen.
+    forward = fp.plan_parallel_split(["a"], (400, 400), None, footprint=model, alt_slots_cm=(100,))
+    assert forward.feasible, forward.problems
+    assert forward.standoff_cm > 0
+    assert cs.estimate_plan(forward).coverage == 1.0
 
 
 def test_priors_are_normalised():
@@ -219,7 +241,7 @@ def test_priors_are_normalised():
 
 
 def test_coverage_levels_are_ordered():
-    plan = fp.plan_parallel_split(["a", "b"], 1000, 200)
+    plan = fp.plan_parallel_split(["a", "b"], 1000, 200, footprint=SQUARE)
     estimate = cs.estimate_plan(plan)
     levels = [estimate.time_to_coverage_s[k] for k in (0.5, 0.9, 0.99)]
     assert levels == sorted(levels)
@@ -227,10 +249,14 @@ def test_coverage_levels_are_ordered():
 
 
 def test_uncovered_prior_mass_is_reported():
-    plan = fp.plan_parallel_split(["a", "b"], 1000, 100, gap_cm=300, min_separation_cm=None)
+    plan = fp.plan_parallel_split(["a", "b"], 1000, 100, footprint=SQUARE, gap_cm=300, min_separation_cm=None)
     estimate = cs.estimate_plan(plan)
     assert estimate.prob_covered == pytest.approx(estimate.coverage)
     assert estimate.prob_covered < 1
+    # 20% of the prior is never searched, so the plan's E[T_det] is infinite;
+    # only the time conditional on the covered part is finite.
+    assert math.isinf(estimate.expected_time_to_detection_s)
+    assert math.isfinite(estimate.conditional_time_to_detection_s)
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +281,9 @@ def test_min_separation_holds_positions_before_start_and_after_landing():
 
 
 def test_jitter_never_reports_more_than_the_nominal_separation():
-    plan = fp.plan_parallel_split(["a", "b"], 1000, 200)
+    plan = fp.plan_parallel_split(["a", "b"], 1000, 200, footprint=SQUARE)
     tracks = cs.plan_tracks(plan)
     nominal = cs.min_separation_cm(tracks["a"], tracks["b"])
     jittered = cs.min_separation_under_jitter(plan, trials=5)
     assert plan.separation_cm <= jittered <= nominal
-    assert math.isinf(cs.min_separation_under_jitter(fp.plan_parallel_split(["a"], 1000, 200)))
+    assert math.isinf(cs.min_separation_under_jitter(fp.plan_parallel_split(["a"], 1000, 200, footprint=SQUARE)))
