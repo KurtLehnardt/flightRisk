@@ -27,8 +27,9 @@ rides on the same connection:
   ``start_at``, ``takeoff``, ``land``, ``emergency_land_all`` and
   ``heartbeat`` messages, runs the eight-round clock sync per edge
   (``sync_clock``), learns which socket belongs to which ``drone_id`` from the
-  edge's messages, and hands validated ``ack``, ``nack`` and ``telemetry``
-  messages to an ``on_control`` callback.
+  edge's messages (refusing a second live connection that claims a
+  ``drone_id`` already in use), and hands validated ``ack``, ``nack`` and
+  ``telemetry`` messages to an ``on_control`` callback.
 * ``EdgeTransport`` runs a background reader once connected. The reader
   answers ``ping`` with ``pong`` immediately (the frame loop never sees
   pings), stores the ``clock`` offset in ``EdgeTransport.clock``, fires the
@@ -88,6 +89,17 @@ _CONTROL_BACKLOG = 256
 
 # Default wait for one pong during clock sync.
 _PING_ROUND_TIMEOUT_S = 1.0
+
+# Default wait for the WebSocket pong of a drone's current connection when a
+# second connection claims the same drone_id. A connection that answers in
+# time is live, so the second one is refused; one that does not is treated as
+# dropped, so the second one is a reconnect and takes over.
+_DUPLICATE_PING_TIMEOUT_S = 1.0
+
+# Close code for a connection that loses a drone_id conflict: a second
+# connection refused while the first is live, or a dropped connection that a
+# reconnect replaced.
+_CLOSE_DRONE_ID_CONFLICT = 4009
 
 
 class ClockSyncError(RuntimeError):
@@ -556,6 +568,9 @@ class GroundTransport:
             messages stop.
         clock: The ground's monotonic clock (injectable for tests). It stamps
             ping ``t1`` and pong ``t4``; ``start_at`` times must use it too.
+        duplicate_ping_timeout_s: How long a drone's current connection has
+            to answer a WebSocket ping when a second connection claims the
+            same ``drone_id`` (see ``_claim_drone``).
     """
 
     def __init__(
@@ -567,6 +582,7 @@ class GroundTransport:
         on_control: Callable[[dict[str, Any]], None] | None = None,
         heartbeat_interval_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
+        duplicate_ping_timeout_s: float = _DUPLICATE_PING_TIMEOUT_S,
     ):
         self._host = host
         self._port = port
@@ -589,6 +605,8 @@ class GroundTransport:
         self._last_seen_s: dict[str, float] = {}
         self._telemetry: dict[str, dict[str, Any]] = {}
         self._start_acks: dict[str, float] = {}  # drone_id -> executed_at_ground_s
+        self._duplicate_ping_timeout_s = duplicate_ping_timeout_s
+        self._closing_tasks: set[asyncio.Task] = set()
 
     @property
     def clients(self) -> set:
@@ -675,7 +693,8 @@ class GroundTransport:
                     except (KeyError, TypeError, ValueError):
                         logger.warning("Malformed detections message, ignoring", exc_info=True)
                         continue
-                    self._note_drone(websocket, data.get("drone_id"), received_at)
+                    if not await self._claim_drone(websocket, data.get("drone_id"), received_at):
+                        return
                     if self._on_message:
                         # Dispatch off the event loop thread so a slow
                         # scoring callback doesn't block other clients, and
@@ -690,7 +709,8 @@ class GroundTransport:
                     except fp.ProtocolError as exc:
                         logger.warning("Malformed %s message, ignoring: %s", msg_type, exc)
                         continue
-                    self._note_drone(websocket, data["drone_id"], received_at)
+                    if not await self._claim_drone(websocket, data["drone_id"], received_at):
+                        return
                     self._record_control(data)
                     if self._on_control:
                         await controls.submit(self._on_control, data)
@@ -716,6 +736,88 @@ class GroundTransport:
             self._forget_socket(websocket)
             await detections.close()
             await controls.close()
+
+    async def _claim_drone(self, websocket, drone_id: Any, received_at: float) -> bool:
+        """Bind *drone_id* to *websocket*, unless another live connection carries it.
+
+        Routing for a ``drone_id`` stays with the connection that claimed it
+        first while that connection is live. A second connection claiming
+        the same ``drone_id`` (for example a fake edge started while the real
+        edge is still running) is refused: a warning is logged and the second
+        connection is closed with code 4009, so the two edges never take
+        turns receiving that drone's commands. The current connection is live
+        when it answers a WebSocket ping within ``duplicate_ping_timeout_s``.
+
+        A reconnect is never refused. When the previous connection has
+        closed, it no longer holds the ``drone_id``. When it is still open
+        but does not answer the ping (a link that dropped without a TCP
+        reset), the new connection takes over the ``drone_id`` and the old
+        one is closed. Returns ``False`` when the claim was refused; the
+        caller then stops reading from *websocket*.
+        """
+        if not isinstance(drone_id, str) or not drone_id:
+            return True
+        while True:
+            previous = self._drone_sockets.get(drone_id)
+            if previous is None or previous is websocket:
+                break
+            live = await self._answers_ping(previous)
+            if self._drone_sockets.get(drone_id) is not previous:
+                # The drone's connection changed while the ping was out: check again.
+                continue
+            if live:
+                logger.warning(
+                    "Refusing a second connection for drone %r: its current connection is "
+                    "still live. Stop the other edge that uses drone_id %r.",
+                    drone_id, drone_id,
+                )
+                try:
+                    await websocket.close(code=_CLOSE_DRONE_ID_CONFLICT, reason="drone_id already connected")
+                except ConnectionClosed:
+                    pass
+                return False
+            logger.warning(
+                "Drone %r reconnected; its previous connection did not answer a ping, "
+                "so the new connection takes over and the old one is closed",
+                drone_id,
+            )
+            del self._drone_sockets[drone_id]
+            self._socket_drones.pop(previous, None)
+            self._close_in_background(previous, "drone_id reconnected on a new connection")
+            break
+        self._note_drone(websocket, drone_id, received_at)
+        return True
+
+    async def _answers_ping(self, websocket) -> bool:
+        """Whether *websocket* answers a WebSocket ping within ``duplicate_ping_timeout_s``."""
+        if websocket not in self._clients:
+            return False
+
+        async def round_trip() -> None:
+            pong = await websocket.ping()
+            await pong
+
+        try:
+            await asyncio.wait_for(round_trip(), timeout=self._duplicate_ping_timeout_s)
+        except (asyncio.TimeoutError, TimeoutError, ConnectionClosed):
+            return False
+        except Exception:
+            logger.warning("Could not ping %s", self._describe(websocket), exc_info=True)
+            return False
+        return True
+
+    def _close_in_background(self, websocket, reason: str) -> None:
+        """Close *websocket* without waiting: a dropped link can take seconds to close."""
+
+        async def close() -> None:
+            try:
+                await websocket.close(code=_CLOSE_DRONE_ID_CONFLICT, reason=reason)
+            except Exception:
+                logger.debug("Closing a replaced edge connection failed", exc_info=True)
+
+        task = asyncio.ensure_future(close())
+        self._closing_tasks.add(task)
+        task.add_done_callback(self._closing_tasks.discard)
 
     def _note_drone(self, websocket, drone_id: Any, received_at: float) -> None:
         """Remember which socket carries *drone_id* and when it was last heard."""
@@ -801,6 +903,11 @@ class GroundTransport:
                 await task
             except asyncio.CancelledError:
                 pass
+        closing = list(self._closing_tasks)
+        for task in closing:
+            task.cancel()
+        if closing:
+            await asyncio.gather(*closing, return_exceptions=True)
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -1172,6 +1279,7 @@ class GroundTransportSync:
         on_control: Callable[[dict[str, Any]], None] | None = None,
         heartbeat_interval_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
+        duplicate_ping_timeout_s: float = _DUPLICATE_PING_TIMEOUT_S,
     ):
         self._transport = GroundTransport(
             host=host,
@@ -1181,6 +1289,7 @@ class GroundTransportSync:
             on_control=on_control,
             heartbeat_interval_s=heartbeat_interval_s,
             clock=clock,
+            duplicate_ping_timeout_s=duplicate_ping_timeout_s,
         )
         self._bridge = AsyncBridge(name="ground-transport", cmd_timeout=_CMD_TIMEOUT)
 

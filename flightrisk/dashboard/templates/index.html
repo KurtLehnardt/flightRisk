@@ -2639,9 +2639,8 @@
             const tag = e.target.tagName.toLowerCase();
             if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
-            // Shift+L is LAND ALL (handled separately); plain 'l' keeps landing the primary drone.
-            // The physical key is matched, so Caps Lock and keyboard layouts do not matter.
-            if (e.shiftKey && e.code === 'KeyL') return;
+            // Shift+L is LAND ALL (handled separately, matched the same way); plain 'l' keeps landing the primary drone.
+            if ((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L')) return;
 
             const key = e.key.toLowerCase();
             const command = KEY_MAP[key];
@@ -3495,10 +3494,11 @@
 
         // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight
         // control is off and even while a text field has focus (the L is not typed there). It matches
-        // the physical key (e.code), so Caps Lock and the keyboard layout cannot stop it, and it listens
-        // in the capture phase, so no other key handler can stop the event before it arrives.
+        // the physical L key (e.code), so Caps Lock cannot stop it, and also the key that types L, for
+        // keyboard layouts that put L on another key. It listens in the capture phase, so no other key
+        // handler can stop the event before it arrives.
         document.addEventListener('keydown', function(e) {
-            if (!(e.shiftKey && e.code === 'KeyL')) return;
+            if (!((e.shiftKey && e.code === 'KeyL') || (e.shiftKey && e.key === 'L'))) return;
             e.preventDefault();
             landAll();
         }, true);
