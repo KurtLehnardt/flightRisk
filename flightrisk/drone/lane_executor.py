@@ -684,11 +684,16 @@ class LaneExecutor:
     def _post_telemetry(self, msg: dict[str, Any]) -> None:
         """Queue telemetry for the sender thread; never waits on the ground link.
 
-        When the queue is full the oldest message is dropped. Without a
-        running sender thread (``tick()`` called directly, before
-        ``start()``) the message is sent from the calling thread.
+        When the queue is full the oldest message is dropped. Once the
+        executor is stopping the message is dropped: the sender thread is
+        exiting or gone, and sending from the calling thread could block the
+        monitor on a stalled uplink. Without a running sender thread
+        (``tick()`` called directly, before ``start()``) the message is sent
+        from the calling thread.
         """
         with self._telemetry_cv:
+            if self._stop.is_set():
+                return
             sender = self._telemetry_sender
             if sender is not None and sender.is_alive():
                 if len(self._telemetry_queue) == self._telemetry_queue.maxlen:

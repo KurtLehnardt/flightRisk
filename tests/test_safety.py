@@ -19,7 +19,6 @@ from flightrisk.drone.tello import FakeTelloController, TelloController
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_device import _handle_control
 from flightrisk.observability import StructuredLogger
-from tests.test_review_fixes_edge import tello_on_wire  # noqa: F401  (pytest fixture)
 
 WAIT_S = 10.0
 
@@ -309,7 +308,7 @@ def test_tello_keepalive_thread_starts_on_connect():
         ctrl._running = False
 
 
-def test_tello_land_interrupts_inflight_move(tello_on_wire):  # noqa: F811  (fixture)
+def test_tello_land_interrupts_inflight_move(tello_on_wire):
     # Moves are sent as one raw command and never retried (R-110), so this
     # runs the real djitellopy client over a fake command socket.
     ctrl, wire = tello_on_wire(hold={"forward 200"})
