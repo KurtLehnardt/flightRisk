@@ -19,7 +19,21 @@ import numpy as np
 
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.config import get_config
-from flightrisk.drone.controller import DroneCapabilities, DroneState
+from flightrisk.drone.controller import (
+    BASIC_FLIGHT,
+    Capability,
+    CommandResult,
+    DroneCapabilities,
+    DroneState,
+)
+from flightrisk.drone.snapshot import (
+    DEGREE,
+    IS_FLYING_COMMANDED,
+    METRE,
+    PERCENT,
+    TelemetrySnapshot,
+    reading,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +103,7 @@ class MavlinkController:
             max_move_cm=50000,
             max_altitude_m=120,
             supports_missions=True,
+            features=BASIC_FLIGHT | {Capability.GOTO_GPS},
         )
 
         host_ip = _extract_ip(host)
@@ -115,6 +130,9 @@ class MavlinkController:
 
         # Telemetry heartbeat
         self._last_telemetry_time: float = 0.0
+        # Wall-clock time each telemetry stream last delivered a value, used
+        # by snapshot() to stamp readings (stream name -> epoch seconds).
+        self._measured_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Async event loop management
@@ -164,16 +182,19 @@ class MavlinkController:
             self.state.latitude = position.latitude_deg
             self.state.longitude = position.longitude_deg
             self.state.altitude_msl = position.absolute_altitude_m
+            self._measured_at["position"] = time.time()
             self._last_telemetry_time = time.monotonic()
 
     async def _subscribe_heading(self, system: System) -> None:
         async for heading in system.telemetry.heading():
             self.state.heading = int(heading.heading_deg) % 360
+            self._measured_at["heading"] = time.time()
             self._last_telemetry_time = time.monotonic()
 
     async def _subscribe_battery(self, system: System) -> None:
         async for battery in system.telemetry.battery():
             self.state.battery = int(battery.remaining_percent * 100)
+            self._measured_at["battery"] = time.time()
             self._last_telemetry_time = time.monotonic()
 
     async def _subscribe_flight_mode(self, system: System) -> None:
@@ -526,29 +547,38 @@ class MavlinkController:
             else:
                 time.sleep(0.03)  # ~30fps pacing on empty reads
 
-    def takeoff(self) -> None:
+    # Commands block on the command lock (they are queued, never dropped)
+    # and return a CommandResult once the backend accepted them; errors and
+    # timeouts still raise.
+
+    def takeoff(self) -> CommandResult:
         with self._cmd_lock:
             self._run(self._takeoff_async())
+        return CommandResult("takeoff")
 
-    def land(self) -> None:
+    def land(self) -> CommandResult:
         with self._cmd_lock:
             self._run(self._land_async())
+        return CommandResult("land")
 
-    def move(self, direction: str, distance_cm: int) -> None:
+    def move(self, direction: str, distance_cm: int) -> CommandResult:
         with self._cmd_lock:
             duration = (distance_cm / 100.0) / _MOVE_SPEED
             self._run(self._move_async(direction, distance_cm, duration), timeout=duration + 10)
+        return CommandResult("move")
 
-    def rotate(self, degrees: int) -> None:
+    def rotate(self, degrees: int) -> CommandResult:
         with self._cmd_lock:
             duration = abs(degrees) / _YAW_RATE
             self._run(self._rotate_async(degrees, duration), timeout=duration + 10)
+        return CommandResult("rotate")
 
-    def hover(self) -> None:
+    def hover(self) -> CommandResult:
         with self._cmd_lock:
             self._run(self._hover_async())
+        return CommandResult("hover")
 
-    def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> None:
+    def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> CommandResult:
         """Send manual control input.
 
         lr, fb, yaw: -100..100 mapped to -1.0..1.0
@@ -574,7 +604,38 @@ class MavlinkController:
                     _norm(yaw),           # yaw
                 )
             )
+        return CommandResult("rc_control")
 
-    def goto_gps(self, lat: float, lon: float, alt_m: float, timeout: float = 300.0) -> None:
+    def goto_gps(self, lat: float, lon: float, alt_m: float, timeout: float = 300.0) -> CommandResult:
         with self._cmd_lock:
             self._run(self._goto_gps_async(lat, lon, alt_m), timeout=timeout)
+        return CommandResult("goto_gps")
+
+    # ------------------------------------------------------------------
+    # Telemetry (TelemetrySource role)
+    # ------------------------------------------------------------------
+
+    def snapshot(self) -> TelemetrySnapshot:
+        """Normalized telemetry from the MAVSDK subscriptions.
+
+        Height above takeoff, speed, attitude, temperature and flight time
+        are not subscribed to yet, so they are ``None``. ``is_flying``
+        follows takeoff/land commands.
+        """
+        s = self.state
+        at = self._measured_at
+        position_at = at.get("position")
+        return TelemetrySnapshot(
+            backend="mavlink",
+            drone_id=self.name,
+            captured_at=time.time(),
+            connected=s.is_connected,
+            is_flying=s.is_flying,
+            is_flying_source=IS_FLYING_COMMANDED,
+            flight_mode=s.flight_mode,
+            battery_pct=reading(s.battery, PERCENT, "mavlink.battery", at.get("battery")),
+            latitude_deg=reading(s.latitude, DEGREE, "mavlink.position", position_at),
+            longitude_deg=reading(s.longitude, DEGREE, "mavlink.position", position_at),
+            altitude_msl_m=reading(s.altitude_msl, METRE, "mavlink.position", position_at),
+            heading_deg=reading(s.heading, DEGREE, "mavlink.heading", at.get("heading")),
+        )

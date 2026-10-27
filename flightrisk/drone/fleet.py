@@ -13,13 +13,18 @@ import threading
 from typing import Callable
 
 from flightrisk.drone.controller import DroneController
+from flightrisk.drone.snapshot import legacy_telemetry_payload, read_telemetry
 
 logger = logging.getLogger(__name__)
 
 
 def _default_factory(name: str, host: str) -> DroneController:
     """Build a TelloController. Imported lazily so DroneFleet has no hard
-    dependency on the Tello backend (or its djitellopy dependency)."""
+    dependency on the Tello backend (or its djitellopy dependency).
+
+    Deprecated fallback for callers that construct ``DroneFleet()`` without
+    a factory; the dashboard always passes one from
+    ``flightrisk.drone.registry``."""
     from flightrisk.drone.tello import TelloController
     return TelloController(name=name, host=host)
 
@@ -94,17 +99,11 @@ class DroneFleet:
         return list(self._drones.keys())
 
     def get_all_telemetry(self) -> dict[str, dict]:
-        result = {}
-        for did, ctrl in self._drones.items():
-            result[did] = {
-                "battery": ctrl.state.battery,
-                "height": ctrl.state.height,
-                "temperature": ctrl.state.temperature,
-                "flight_time": ctrl.state.flight_time,
-                "is_flying": ctrl.state.is_flying,
-                "is_connected": ctrl.state.is_connected,
-            }
-        return result
+        # Legacy UI shape, built by the single snapshot adapter.
+        return {
+            did: legacy_telemetry_payload(read_telemetry(ctrl), include_connected=True)
+            for did, ctrl in self._drones.items()
+        }
 
     def broadcast_command(self, command: str, *args, **kwargs) -> dict[str, Exception | None]:
         """Call `command` on every registered drone.
