@@ -205,6 +205,7 @@ __all__ = [
     "ClockEstimate",
     "EdgeClock",
     "new_cmd_id",
+    "next_epoch",
     "fence_of",
     "cmd_id_of",
     "negotiate_proto",
@@ -1145,8 +1146,10 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
     elif mtype == HANDOVER:
         _require_id(msg, "to_node")
         epoch_next = _require_int_range(msg, "epoch_next", 2, MAX_EPOCH)
-        if epoch_next <= msg["epoch"]:
-            raise ProtocolError("'handover' field 'epoch_next' must be above 'epoch'")
+        if epoch_next != msg["epoch"] + 1:
+            # Same rule as handover_offer: leadership passes to exactly the
+            # next epoch, so no epochs are skipped or burned.
+            raise ProtocolError("'handover' field 'epoch_next' must be 'epoch' + 1")
         if msg["to_node"] == msg["leader_id"]:
             raise ProtocolError("'handover' must name another node as 'to_node'")
     elif mtype == HELLO:
@@ -1473,6 +1476,26 @@ class Fence:
 
     def fields(self) -> dict[str, Any]:
         return {"epoch": self.epoch, "leader_id": self.leader_id}
+
+
+def next_epoch(epoch: Any) -> int:
+    """The epoch a new leader takes after *epoch*: ``epoch + 1``.
+
+    A new leader computes ``next_epoch(max(stored, highest reported))``, and
+    a handover offers ``next_epoch(current)``. Raises ``ProtocolError`` for
+    an *epoch* that is not an integer from 0 to ``MAX_EPOCH``, and, with a
+    message meant for the operator, when *epoch* is already ``MAX_EPOCH``
+    and no successor epoch exists.
+    """
+    if not (_is_int(epoch) and 0 <= epoch <= MAX_EPOCH):
+        raise ProtocolError(f"epoch must be an integer from 0 to {MAX_EPOCH}, got {_short(epoch)}")
+    if epoch == MAX_EPOCH:
+        raise ProtocolError(
+            f"The fleet epoch has reached its maximum ({MAX_EPOCH}), so no ground station can take "
+            "leadership after it. Land every drone, stop both ground stations and every edge, reset "
+            "the stored leader epoch on both ground stations, then start again; epochs restart at 1."
+        )
+    return epoch + 1
 
 
 def new_cmd_id() -> str:
@@ -1954,12 +1977,16 @@ def make_handover(
     epoch_next: int | None = None,
     cmd_id: str | None = None,
 ) -> dict[str, Any]:
-    """Ground -> edge (v2): leadership passes to *to_node* at *epoch_next* (default ``epoch + 1``)."""
+    """Ground -> edge (v2): leadership passes to *to_node* at *epoch_next*.
+
+    *epoch_next* defaults to ``next_epoch(fence.epoch)`` and must equal it;
+    at ``MAX_EPOCH`` there is none, and this raises ``ProtocolError``.
+    """
     fence = _need_fence(fence)
     msg: dict[str, Any] = {
         "type": HANDOVER,
         "to_node": to_node,
-        "epoch_next": fence.epoch + 1 if epoch_next is None else epoch_next,
+        "epoch_next": next_epoch(fence.epoch) if epoch_next is None else epoch_next,
     }
     return _checked(msg, _fenced(msg, fence, cmd_id))
 
@@ -2044,7 +2071,10 @@ def make_node_state(
 
 
 def make_handover_offer(epoch_next: int, snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    """Leader -> standby: offer leadership at *epoch_next* with the leader's ``node_state``."""
+    """Leader -> standby: offer leadership at *epoch_next* with the leader's ``node_state``.
+
+    *epoch_next* must be ``next_epoch(snapshot["epoch"])``.
+    """
     return _checked({"type": HANDOVER_OFFER, "epoch_next": epoch_next, "snapshot": dict(snapshot)}, 2)
 
 

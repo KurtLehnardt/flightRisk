@@ -512,3 +512,47 @@ def test_require_fence_accepts_fenced_motion_and_never_fences_landing():
     assert fp.decode('{"type":"land","x":NaN}', direction=G2E, proto=1, require_fence=True) == {"type": "land"}
     # Unfenced read-only and legacy messages are the consumer's call.
     assert fp.validate_ground_to_edge(fp.make_ping(1.0), proto=1, require_fence=True) == "ping"
+
+
+# ===========================================================================
+# Handover epochs and next_epoch
+# ===========================================================================
+
+
+def test_handover_must_offer_exactly_the_next_epoch():
+    msg = fp.make_handover(FENCE, "win", cmd_id=CMD)
+    assert msg["epoch_next"] == 8
+    for epoch_next in (9, 7, 2, fp.MAX_EPOCH):
+        with pytest.raises(fp.ProtocolError, match=r"'epoch' \+ 1"):
+            fp.validate_message(dict(msg, epoch_next=epoch_next), proto=2)
+    with pytest.raises(fp.ProtocolError):
+        fp.make_handover_offer(9, fp.make_node_state("mac", "leader", 7))
+    assert fp.make_handover_offer(8, fp.make_node_state("mac", "leader", 7))["epoch_next"] == 8
+
+
+def test_next_epoch():
+    assert fp.next_epoch(0) == 1
+    assert fp.next_epoch(7) == 8
+    assert fp.next_epoch(fp.MAX_EPOCH - 1) == fp.MAX_EPOCH
+    with pytest.raises(fp.ProtocolError, match="reached its maximum") as info:
+        fp.next_epoch(fp.MAX_EPOCH)
+    assert "Land every drone" in str(info.value)
+    for bad in (-1, True, 7.0, "7", None, fp.MAX_EPOCH + 1):
+        with pytest.raises(fp.ProtocolError):
+            fp.next_epoch(bad)
+
+
+def test_epochs_at_the_maximum_are_handled():
+    top = fp.Fence(fp.MAX_EPOCH, "mac")
+    hello = fp.make_ground_hello("mac", "leader", fp.MAX_EPOCH)
+    assert fp.validate_ground_to_edge(hello, proto=2) == "hello"
+    assert fp.validate_ground_to_edge(fp.make_heartbeat(1, fence=top), proto=2) == "heartbeat"
+    with pytest.raises(fp.ProtocolError, match="reached its maximum"):
+        fp.make_handover(top, "win")
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_message({"type": "handover", "to_node": "win", "epoch_next": fp.MAX_EPOCH + 1,
+                             **top.fields(), "cmd_id": CMD}, proto=2)
+    with pytest.raises(fp.ProtocolError):
+        fp.make_handover_offer(fp.MAX_EPOCH + 1, fp.make_node_state("mac", "leader", fp.MAX_EPOCH))
+    with pytest.raises(fp.ProtocolError):
+        fp.make_ground_hello("mac", "leader", fp.MAX_EPOCH + 1)

@@ -398,7 +398,9 @@ def test_handover_rules():
         fp.make_handover(FENCE, "mac")
     with pytest.raises(fp.ProtocolError):
         fp.make_handover(FENCE, "")
-    assert fp.make_handover(FENCE, "win", epoch_next=9)["epoch_next"] == 9
+    assert fp.make_handover(FENCE, "win", epoch_next=8)["epoch_next"] == 8
+    with pytest.raises(fp.ProtocolError):
+        fp.make_handover(FENCE, "win", epoch_next=9)  # must be exactly epoch + 1, as in handover_offer
     with pytest.raises(fp.ProtocolError):
         fp.make_hold(None)
 

@@ -84,7 +84,7 @@ kept; v2 fields are in addition to them.
 | `hold` | v2 | `epoch`, `leader_id`, `cmd_id`; optional `reason` (`alert`, `operator` or `handover`) | yes | yes | yes |
 | `resume` | v2 | `plan_id` (required; the edge answers a plan it does not hold with `nack{reason: plan_mismatch}`), `epoch`, `leader_id`, `cmd_id` | yes | yes | **no** |
 | `nudge` | v2 | `direction` (`forward`, `back`, `left` or `right`), `distance_cm` (integer from 20 to 500), `epoch`, `leader_id`, `cmd_id` | yes | yes | no |
-| `handover` | v2 | `to_node` (not the sender), `epoch_next` (above `epoch`; the handover flow uses `epoch + 1`), `epoch`, `leader_id`, `cmd_id` | yes | yes | yes |
+| `handover` | v2 | `to_node` (not the sender), `epoch_next` (exactly `epoch + 1`, as in `handover_offer`), `epoch`, `leader_id`, `cmd_id` | yes | yes | yes |
 | `land` | v1 | optional `cmd_id`, `epoch`, `leader_id` (informational only) | **never** | optional | yes |
 | `emergency_land_all` | v1 | unchanged; optional fields are ignored | **never** | optional | yes |
 
@@ -120,10 +120,19 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
 ## Fencing and the fail-safe exemption
 
-- **Epoch.** An `epoch` is an integer from 1 to 2^53 - 1 (the largest integer
-  every JSON implementation represents exactly). A leader's first epoch is
-  1, because a new leader takes `max(stored, highest reported) + 1` and
-  nothing stored counts as 0. `epoch_seen` and a standby's `epoch` may be 0.
+- **Epoch.** An `epoch` is an integer from 1 to 2^53 - 1 (`MAX_EPOCH`, the
+  largest integer every JSON implementation represents exactly). A leader's
+  first epoch is 1, because a new leader takes
+  `next_epoch(max(stored, highest reported))` and nothing stored counts as
+  0. `epoch_seen` and a standby's `epoch` may be 0.
+- **The last epoch.** A `hello` or fence at `MAX_EPOCH` is valid, but no
+  successor exists: `next_epoch(MAX_EPOCH)`, and so `make_handover` and a
+  takeover, raise `ProtocolError` with instructions for the operator (land
+  every drone, stop both ground stations and every edge, reset the stored
+  leader epoch, start again). A real fleet never gets near it, because the
+  epoch grows by one per leadership change; reaching it means a bug or a
+  hostile ground, and the consumer must guard against acting on it (see
+  "What PR-4/5 consumers must do").
 - **Fence pair.** `epoch` and `leader_id` always travel together. A message
   with one and not the other is malformed under every version.
 - **Fenced commands.** `takeoff`, `assign_lanes`, `start_at`, `hold`,
