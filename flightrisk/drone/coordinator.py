@@ -1074,6 +1074,7 @@ class FleetCoordinator:
             if state is None or state.lost:
                 return {}
             state.lost = True
+            logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
             if state.offer is not None:
                 self._withdraw_offer_locked(drone_id, None)
             if state.zone is not None:
@@ -1089,7 +1090,6 @@ class FleetCoordinator:
             messages = self._dispatch_locked()
             events = self._settle_and_collect_locked()
 
-        logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
         self._send_logged(drone_id, {"type": "land"})
         self._emit("fleet_event", {"event": "drone_lost", "drone_id": drone_id})
         self._emit_all(events)
@@ -1257,8 +1257,8 @@ class FleetCoordinator:
         chunk.status = "failed"
         chunk.receiver = None
         chunk.reason = reason
-        logger.error("Re-tasked lanes %d-%d of %s are uncovered: %s",
-                     chunk.first_index, chunk.first_index + len(chunk.lanes) - 1, chunk.lost_id, reason)
+        logger.error("Re-tasked lanes %s of %s are uncovered: %s",
+                     ", ".join(str(entry["index"]) for entry in chunk.lane_entries()), chunk.lost_id, reason)
 
     def _withdraw_offer_locked(self, drone_id: str, reason: str | None) -> None:
         """Take back a drone's pending offer and queue its chunks again.
