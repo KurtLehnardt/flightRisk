@@ -480,6 +480,7 @@ class TelloController:
         if self._lift_guard_left() > 0:
             return False
         ground: list[_StateReading] = []
+        height_off = False
         for reading in reversed(readings):
             if len(ground) == _GROUND_READINGS:
                 break
@@ -488,14 +489,16 @@ class TelloController:
             if ground and ground[-1].at - reading.at > _STATE_FRESH_S:
                 break
             if not _shows_ground(reading):
-                break
+                if not (_tof_valid(reading.tof) and reading.tof <= _GROUND_TOF_CM):
+                    break
+                height_off = True
             ground.append(reading)
         if len(ground) < _GROUND_READINGS:
             return False
         motors_off = _motors_off(readings)
         if motors_off is False:
             return False
-        if motors_off is None or not all(_tof_valid(r.tof) for r in ground):
+        if motors_off is None or height_off or not all(_tof_valid(r.tof) for r in ground):
             return ok_seen
         return True
 
@@ -1060,7 +1063,7 @@ class TelloController:
             # The state stream is lost: the land's own reply decides, unless
             # the last packet since the land was sent showed the drone in the
             # air, or the takeoff it follows may still be answered.
-            if ok_alone and not self._airborne_since(sent_at):
+            if ok_alone and not self._airborne_since(sent_at - _STATE_LOST_S):
                 self._mark_land_confirmed(f"the state stream is lost and the land was {outcome}")
                 return _LandAttempt("confirmed", outcome, sent_at, ok_seen, ok_alone)
             if self._reply_guard_left() > 0:
@@ -1099,7 +1102,7 @@ class TelloController:
                 and self._reply_guard_left() <= 0
                 and self._state_lost()
             ):
-                if ok_alone and not self._airborne_since(since):
+                if ok_alone and not self._airborne_since(since - _STATE_LOST_S):
                     self._mark_land_confirmed("the state stream is lost and the land was answered 'ok'")
                     return True
                 return False
