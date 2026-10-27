@@ -309,7 +309,7 @@ def test_tello_keepalive_thread_starts_on_connect():
         ctrl._running = False
 
 
-def test_tello_land_interrupts_inflight_move(tello_on_wire):
+def test_tello_land_interrupts_inflight_move(tello_on_wire):  # noqa: F811  (fixture)
     # Moves are sent as one raw command and never retried (R-110), so this
     # runs the real djitellopy client over a fake command socket.
     ctrl, wire = tello_on_wire(hold={"forward 200"})

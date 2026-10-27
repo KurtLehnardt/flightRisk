@@ -363,3 +363,272 @@ def test_executor_takeoff_refused_when_land_lands_first():
         assert drone.state.is_flying is False
     finally:
         executor.shutdown(timeout=2.0)
+
+
+# ---------------------------------------------------------------------------
+# B1: a stalled uplink cannot delay the link-loss landing
+# ---------------------------------------------------------------------------
+
+
+class StalledUplink:
+    """Edge transport whose ``send`` blocks, like ``EdgeTransportSync.send``
+    (30 s timeout) when the link drops without a TCP reset."""
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.sent: list[dict] = []
+
+    def send(self, message: dict, timeout: float = 30.0) -> bool:
+        self.entered.set()
+        self.release.wait(timeout)
+        self.sent.append(message)
+        return False
+
+
+def test_watchdog_lands_within_3_5s_when_uplink_blocks():
+    log = StructuredLogger(component="test-review-fixes-edge")
+    drone = FakeTelloController(name="drone-1", battery=90)
+    drone.connect()
+    land_times: list[float] = []
+    real_land = drone.land
+
+    def timed_land() -> None:
+        land_times.append(time.monotonic())
+        real_land()
+
+    drone.land = timed_land
+    uplink = StalledUplink()
+    executor = LaneExecutor(
+        drone,
+        SafetyEnvelope(alt_slot_cm=100, link_loss_land_s=3.0),
+        "drone-1",
+        send=_make_sender(uplink, log),
+        logger=log,
+    )
+    try:
+        drone.takeoff()
+        executor.start()
+        executor.note_ground_message()
+        last_ground_message = time.monotonic()
+
+        # The first telemetry message is stuck in the uplink...
+        assert uplink.entered.wait(WAIT_S)
+        # ...but the monitor keeps checking and lands on link loss in time.
+        assert wait_for(lambda: land_times, timeout=WAIT_S)
+        landed_after = land_times[0] - last_ground_message
+        assert 2.9 <= landed_after <= 3.5, landed_after
+        assert drone.state.is_flying is False
+
+        # The queue is bounded and drops the oldest telemetry, so the newest
+        # (showing the landing) is what goes out once the uplink recovers.
+        assert len(executor._telemetry_queue) <= executor._telemetry_queue.maxlen
+        assert wait_for(lambda: executor._telemetry_dropped > 0)
+        assert wait_for(
+            lambda: executor._telemetry_queue and executor._telemetry_queue[-1]["is_flying"] is False
+        )
+        uplink.release.set()
+        assert wait_for(
+            lambda: any(m["type"] == "telemetry" and m["is_flying"] is False for m in uplink.sent)
+        )
+    finally:
+        uplink.release.set()
+        executor.shutdown(timeout=2.0)
+
+
+def test_tick_without_sender_thread_sends_inline():
+    """Before start() there is no sender thread, so tick() sends telemetry itself."""
+    sent: list[dict] = []
+    drone = FakeTelloController(name="drone-1", battery=90)
+    executor = LaneExecutor(
+        drone, SafetyEnvelope(alt_slot_cm=100), "drone-1", send=sent.append,
+        logger=StructuredLogger(component="test-review-fixes-edge"),
+    )
+    executor.tick()
+    assert [m["type"] for m in sent] == ["telemetry"]
+
+
+# ---------------------------------------------------------------------------
+# B4: appearance-only by default on a flying edge
+# ---------------------------------------------------------------------------
+
+
+class FakeDetector:
+    """Stands in for YOLO: one person in every frame."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def detect(self, frame):
+        return [{"bbox": [100, 100, 160, 260], "confidence": 0.9}]
+
+
+class FakeReID:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def extract_embedding(self, crop):
+        return np.ones(4, np.float32)
+
+
+@pytest.fixture
+def fake_vision(monkeypatch):
+    """Replace the vision models with fakes; return the list of FaceRecognizers built."""
+    built: list[object] = []
+
+    class RecordingFaceRecognizer:
+        def __init__(self, *args, **kwargs):
+            built.append(self)
+
+        def extract_embedding(self, crop):
+            return np.full(4, 0.5, np.float32)
+
+    for name, attr, cls in (
+        ("flightrisk.vision.detector", "PersonDetector", FakeDetector),
+        ("flightrisk.vision.reid", "PersonReID", FakeReID),
+        ("flightrisk.vision.face", "FaceRecognizer", RecordingFaceRecognizer),
+    ):
+        module = types.ModuleType(name)
+        setattr(module, attr, cls)
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.delenv("FLIGHTRISK_APPEARANCE_ONLY", raising=False)
+    return built
+
+
+def _wire_detections(runner: EdgeRunner) -> list[dict]:
+    message = runner.process_frame(np.zeros((360, 480, 3), np.uint8))
+    return runner.to_dict(message)["detections"]
+
+
+def test_flight_edge_appearance_only_by_default_never_builds_face(fake_vision, monkeypatch):
+    parser = _build_parser()
+    log = StructuredLogger(component="test-review-fixes-edge")
+    for source in ("tello", "fake"):
+        args = parser.parse_args(["--source", source, "--drone-id", "drone-2"])
+        runner = _build_runner(args, log)
+        assert fake_vision == []
+        assert runner.appearance_only is True and runner._face is None
+        detections = _wire_detections(runner)
+        assert len(detections) == 1
+        assert "face_embedding" not in detections[0]
+        # Person crops and appearance (ReID) embeddings still go to the ground.
+        assert detections[0]["crop"]
+        assert detections[0]["reid_embedding"] == [1.0, 1.0, 1.0, 1.0]
+
+    # A face model handed to an appearance-only runner is ignored.
+    runner = EdgeRunner(detector=FakeDetector(), face=object(), appearance_only=True)
+    assert runner._face is None
+
+    # An explicit FLIGHTRISK_APPEARANCE_ONLY=1 also covers webcam and file.
+    monkeypatch.setenv("FLIGHTRISK_APPEARANCE_ONLY", "1")
+    for argv in (["--source", "webcam"], ["--source", "file", "--video", "clip.mp4"]):
+        runner = _build_runner(parser.parse_args(argv), log)
+        assert fake_vision == []
+        assert "face_embedding" not in _wire_detections(runner)[0]
+
+
+def test_with_face_flag_enables_face(fake_vision, monkeypatch):
+    parser = _build_parser()
+    log = StructuredLogger(component="test-review-fixes-edge")
+
+    runner = _build_runner(parser.parse_args(["--source", "tello", "--with-face"]), log)
+    assert len(fake_vision) == 1
+    assert runner.appearance_only is False
+    assert _wire_detections(runner)[0]["face_embedding"] == [0.5, 0.5, 0.5, 0.5]
+
+    # The flag wins over the environment.
+    monkeypatch.setenv("FLIGHTRISK_APPEARANCE_ONLY", "1")
+    _build_runner(parser.parse_args(["--source", "fake", "--with-face"]), log)
+    assert len(fake_vision) == 2
+
+    # FLIGHTRISK_APPEARANCE_ONLY=0 enables it without the flag.
+    monkeypatch.setenv("FLIGHTRISK_APPEARANCE_ONLY", "0")
+    runner = _build_runner(parser.parse_args(["--source", "fake"]), log)
+    assert len(fake_vision) == 3
+    assert "face_embedding" in _wire_detections(runner)[0]
+
+    # Webcam keeps face recognition by default, as before.
+    monkeypatch.delenv("FLIGHTRISK_APPEARANCE_ONLY")
+    _build_runner(parser.parse_args(["--source", "webcam"]), log)
+    assert len(fake_vision) == 4
+
+    # --appearance-only and --with-face cannot be combined, and a value of
+    # FLIGHTRISK_APPEARANCE_ONLY that is not a boolean is refused.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--source", "fake", "--with-face", "--appearance-only"])
+    monkeypatch.setenv("FLIGHTRISK_APPEARANCE_ONLY", "maybe")
+    with pytest.raises(ValueError):
+        _build_runner(parser.parse_args(["--source", "fake"]), log)
+
+
+# ---------------------------------------------------------------------------
+# B3: a flying edge tags detections with drone id and pose
+# ---------------------------------------------------------------------------
+
+
+class FakeSocketIO:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.events: list[tuple[str, dict]] = []
+
+    def emit(self, event, payload=None, *args, **kwargs):
+        with self._lock:
+            self.events.append((event, payload))
+
+    def named(self, name: str) -> list[dict]:
+        with self._lock:
+            return [payload for event, payload in self.events if event == name]
+
+
+def test_flight_edge_tags_detections_with_drone_and_pose(fake_vision, monkeypatch):
+    token = secrets.token_hex(16)
+    monkeypatch.setenv("FLIGHTRISK_EDGE_TOKEN", token)
+
+    # Hold on to the envelope the edge builds, and give it a pose that is
+    # not the origin, so the test proves the pose comes from it.
+    envelope = SafetyEnvelope(alt_slot_cm=100)
+    envelope.record_move("forward", 120)
+    envelope.record_move("right", 40)
+    with envelope._lock:
+        envelope.pose.apply_rotation(90)
+    monkeypatch.setattr(
+        "flightrisk.edge_device.SafetyEnvelope.from_env", lambda alt_slot_cm, **kwargs: envelope
+    )
+
+    received: list = []
+    ground = GroundTransportSync(host="127.0.0.1", port=0, token=token, on_message=received.append)
+    ground.start()
+    stop = threading.Event()
+    edge: threading.Thread | None = None
+    try:
+        args = _build_parser().parse_args([
+            "--source", "fake", "--drone-id", "drone-1", "--ws-url", f"ws://127.0.0.1:{ground.port}",
+        ])
+        edge = threading.Thread(
+            target=_run_flight_edge,
+            args=(args, StructuredLogger(component="test-review-fixes-edge"), stop),
+            daemon=True,
+        )
+        edge.start()
+        assert wait_for(lambda: any(m.detections for m in list(received)), timeout=20.0)
+        message = next(m for m in list(received) if m.detections)
+
+        assert message.drone_id == "drone-1"
+        assert (message.rel_x_cm, message.rel_y_cm, message.heading_deg) == (40.0, 120.0, 90.0)
+        assert message.detections[0].crop_jpeg
+        assert message.detections[0].face_embedding is None
+        assert fake_vision == []  # appearance-only by default
+
+        # The dashboard's fleet path accepts it and places it on the map.
+        socketio = FakeSocketIO()
+        supervisor = FleetSupervisor(ground, ["drone-1"], socketio)
+        supervisor.handle_detections(message)
+        placed = socketio.named("fleet_detection")
+        assert len(placed) == 1
+        assert placed[0]["drone_id"] == "drone-1"
+    finally:
+        stop.set()
+        if edge is not None:
+            edge.join(20.0)
+        ground.stop()
+    assert edge is not None and not edge.is_alive()
