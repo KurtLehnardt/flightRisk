@@ -177,7 +177,7 @@ Each edge enforces its own limits, whatever the ground station says: a 500 cm ge
 
 ### E5 · Privacy (1:00)
 
-Faces are not resolvable at search altitude, so the demo runs appearance-only (`FLIGHTRISK_APPEARANCE_ONLY=1`) on the ground station and on both edges. The face recognizer is never built and no face embeddings are sent. The edges do send person crops to the ground station over the token-authenticated WebSocket link, so say that plainly if asked. Match snapshots are not written unless `FLIGHTRISK_SAVE_CAPTURES` is turned on, and `--no-llm` starts no reasoning model. Tests use only synthetic images. The one place images can leave a device is the mobile app's cloud model option, and only after the user picks it and enters a key (`docs/privacy-design.md`).
+Faces are not resolvable at search altitude, so the demo runs appearance-only (`FLIGHTRISK_APPEARANCE_ONLY=1`) on the ground station and on both edges. The face recognizer is never built and no face embeddings are sent. The edges do send person crops (JPEG, one per detection) and ReID appearance embeddings to the ground station over the token-authenticated WebSocket link, so say that plainly if asked. Match snapshots are not written unless `FLIGHTRISK_SAVE_CAPTURES` is turned on, and `--no-llm` starts no reasoning model. Tests use only synthetic images. Beyond that edge-to-ground link, the one place images can leave a device is the mobile app's cloud model option, and only after the user picks it and enters a key (`docs/privacy-design.md`).
 
 ### E6 · Licensing and the path to reality (1:00)
 
@@ -244,7 +244,7 @@ A: It is measured, not hoped: 0.602 recall at 0.832 precision on 337 people in t
 
 Q: Do you do face recognition? What about bystanders' privacy?
 
-A: No face matching in the search demo. Faces are not resolvable at search altitude, so the system is appearance-only by default (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the edge too, and never loads the face model or sends face embeddings. The edges do send person crops to the ground station over the token-authenticated link. Match snapshots are off by default, so no bystander imagery is written to disk. The InsightFace face packs are licensed for non-commercial research only, which is another reason not to rely on them. Details are in `docs/privacy-design.md`.
+A: No face matching in the search demo. Faces are not resolvable at search altitude, so the system is appearance-only by default (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the edge too, and never loads the face model or sends face embeddings. The edges do send person crops and ReID appearance embeddings to the ground station over the token-authenticated link. Match snapshots are off by default, so no bystander imagery is written to disk. The InsightFace face packs are licensed for non-commercial research only, which is another reason not to rely on them. Details are in `docs/privacy-design.md`.
 
 Q: What does the FAA require?
 
