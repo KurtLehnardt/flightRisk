@@ -2015,11 +2015,14 @@
             <button id="map-mode-grid" class="active" onclick="setMapMode('grid')">Grid</button>
             <button id="map-mode-latlon" onclick="setMapMode('latlon')">Lat/Lon</button>
             <span class="spacer"></span>
+            <button id="fleet-plan" onclick="planFleet()">Plan search</button>
+            <button id="fleet-start" onclick="startFleet()" disabled>Start search</button>
             <button id="land-all" onclick="landAll()" title="Shift+L">LAND ALL</button>
             <button onclick="document.getElementById('fleet-section').classList.toggle('collapsed')">_</button>
         </div>
         <div id="fleet-body">
             <div id="fleet-banner"></div>
+            <div id="fleet-error" style="display:none;color:var(--red);font-weight:600;margin-bottom:6px;"></div>
             <div id="search-map"></div>
             <table id="fleet-panel">
                 <thead><tr><th>Drone</th><th>Bat</th><th>Alt cm</th><th>Lane</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
@@ -3364,6 +3367,62 @@
         socket.on('status', (data) => {
             const badge = document.getElementById('appearance-only-badge');
             if (badge && data) badge.style.display = data.appearance_only ? 'inline-block' : 'none';
+        });
+
+        // Plan search and Start search. Start makes real drones take off, so it needs a received plan and a confirmation.
+        let fleetPlanReceived = false;
+        let fleetStartInFlight = false;
+        let fleetPlanDroneCount = 0;
+
+        function showFleetError(text) {
+            const e = document.getElementById('fleet-error');
+            e.textContent = text || '';
+            e.style.display = text ? 'block' : 'none';
+        }
+
+        function updateFleetStartButton() {
+            document.getElementById('fleet-start').disabled = !fleetPlanReceived || fleetStartInFlight;
+        }
+
+        function planFleet() {
+            showFleetError('');
+            fleetPlanReceived = false;
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+            socket.emit('plan_fleet');
+        }
+
+        function startFleet() {
+            if (!fleetPlanReceived || fleetStartInFlight) return;
+            const n = fleetPlanDroneCount;
+            const who = n > 0 ? n + ' drone' + (n === 1 ? '' : 's') : 'The drones';
+            if (!window.confirm(who + ' will take off. Start the search?')) return;
+            showFleetError('');
+            fleetStartInFlight = true;
+            updateFleetStartButton();
+            socket.emit('start_fleet');
+        }
+
+        socket.on('fleet_plan', (plan) => {
+            const ids = {};
+            ((plan && plan.zones) || []).forEach(z => { if (z && z.drone_id) ids[z.drone_id] = true; });
+            fleetPlanDroneCount = Object.keys(ids).length || Object.keys(lastStatus).length;
+            fleetPlanReceived = true;
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        });
+
+        socket.on('error', (data) => {
+            showFleetError('Fleet error: ' + ((data && data.message) || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        });
+
+        socket.on('fleet_event', (ev) => {
+            if (!ev || (ev.event || ev.type || ev.kind) !== 'start_refused') return;
+            showFleetError('Start refused: ' + (ev.detail || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
         });
 
         function landAll() {
