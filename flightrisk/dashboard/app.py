@@ -69,6 +69,8 @@ from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for ba
     _build_track_id_by_bbox,
     _frame_loop,
 )
+from flightrisk.dashboard.alert_latch import AlertPhase, alert_latch
+from flightrisk.dashboard.recovery import handle_alert_response, reset_alert_flow
 
 # ---------------------------------------------------------------------------
 # Flask / SocketIO app
@@ -161,18 +163,27 @@ def _sr_get(score_result, key, default=None):
 
 
 def _maybe_emit_edge_match(socketio, det, result, score_result, now):
-    """Emit a ``match_alert`` for one matched edge detection, respecting cooldown.
+    """Emit a ``match_alert`` for one matched edge detection via the alert latch.
 
-    Reuses the same spatial-track cooldown (``_alerted_tracks`` +
-    ``ALERT_COOLDOWN``) as the local frame-loop match path so we don't spam a
-    new alert + DB row for every frame the same person appears in.
+    Uses the same single-alert latch as the local frame-loop match path, so
+    only one alert is outstanding at a time and nothing new is emitted (or
+    written to the DB) until the operator confirms or dismisses it.
     """
+    # ``now`` is kept for call-site compatibility; the latch keeps its own clock.
     bbox = result["bbox"]
     track_key = _compute_track_key(bbox)
-    if _is_within_alert_cooldown(track_key, now):
+    alert_id = alert_latch.try_open([f"grid:{track_key}"])
+    if alert_id is None:
         return
-    _alerted_tracks[track_key] = now
+    try:
+        _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id)
+    except Exception:
+        alert_latch.abort(alert_id)
+        raise
 
+
+def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
+    """Build, persist and emit the single edge match alert claimed by ``alert_id``."""
     snapshot_b64 = None
     crop_jpeg = getattr(det, "crop_jpeg", None)
     if crop_jpeg:
@@ -205,6 +216,7 @@ def _maybe_emit_edge_match(socketio, det, result, score_result, now):
         "reid_score": round(reid_score, 3),
         "alert_level": alert_level,
         "track_id": track_key,
+        "alert_id": alert_id,
     }
 
     if app_state.db and app_state.session_id:
@@ -228,6 +240,7 @@ def _maybe_emit_edge_match(socketio, det, result, score_result, now):
         app_state.match_history.append(match_entry)
         app_state.match_history = app_state.match_history[-50:]
 
+    alert_latch.attach(alert_id, match_entry)
     socketio.emit("match_alert", match_entry)
 
 
@@ -587,6 +600,10 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = None
         app_state.cap = cv2.VideoCapture(source)
 
+    # A new session starts with a fresh alert latch (no pending or confirmed
+    # match carried over from the previous session).
+    reset_alert_flow()
+
     # Create a new search session
     app_state.session_id = app_state.db.create_session(
         source=app_state.source,
@@ -741,6 +758,20 @@ def api_match_feedback(match_id):
     return jsonify({"ok": True, "match_id": match_id, "feedback": feedback})
 
 
+@app.route("/api/alerts/<alert_id>/respond", methods=["POST"])
+def api_alert_respond(alert_id):
+    """Operator Confirm/Dismiss for the outstanding match alert (REST path).
+
+    Gated by the fail-closed ``before_request`` API-key check like every other
+    non-public route. Body: ``{"action": "confirm" | "dismiss", "notes": str?}``.
+    """
+    data = request.get_json(silent=True) or {}
+    body, status_code = handle_alert_response(
+        alert_id, data.get("action"), socketio, notes=data.get("notes"),
+    )
+    return jsonify(body), status_code
+
+
 @app.route("/api/feedback-stats")
 def api_feedback_stats():
     """Return aggregate feedback statistics."""
@@ -793,6 +824,25 @@ def on_connect(auth=None):
     emit("status", {"connected": True, "source": app_state.source})
     if app_state.target_photo:
         emit("target_photo", {"image": app_state.target_photo})
+    # A browser that (re)connects while an alert is pending gets it straight
+    # away instead of waiting for the next re-notification.
+    pending = alert_latch.pending_alert()
+    if pending is not None:
+        emit("match_alert_reminder", pending)
+
+
+@socketio.on("match_alert_response")
+def on_match_alert_response(data):
+    """Operator Confirm/Dismiss for the outstanding match alert (SocketIO path).
+
+    The SocketIO channel is authenticated at connect time (``on_connect``), so
+    only an authenticated dashboard can reach this handler.
+    """
+    data = data if isinstance(data, dict) else {}
+    body, _status = handle_alert_response(
+        data.get("alert_id"), data.get("action"), socketio, notes=data.get("notes"),
+    )
+    emit("match_alert_response_ack", body)
 
 
 @socketio.on("set_target")
@@ -1081,6 +1131,9 @@ def on_start_search(data):
     if not drone or not drone.state.is_flying:
         emit("error", {"message": "Drone must be flying to start search"})
         return
+    if alert_latch.phase is AlertPhase.RESOLVED:
+        emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
+        return
 
     from flightrisk.drone.search import get_search_pattern, PatternType
 
@@ -1099,6 +1152,12 @@ def on_start_search(data):
         while i < len(waypoints):
             if not app_state.search_active:
                 break
+            # Hold position between waypoints while a match alert awaits the
+            # operator. Dismiss resumes the pattern; Confirm clears
+            # search_active, which ends it.
+            if alert_latch.phase is AlertPhase.AWAITING_RESPONSE:
+                time.sleep(0.2)
+                continue
 
             wp = waypoints[i]
             avoidance_retries = 0
