@@ -214,6 +214,11 @@ class _LandAttempt(NamedTuple):
     ok_alone: bool  # answered "ok" outside the reply guard: may confirm with the state stream lost
 
 
+def _dropped_busy(command: str) -> CommandResult:
+    """The result of a move or rotate dropped because another flight command holds the channel."""
+    return CommandResult(command, CommandOutcome.DROPPED_BUSY, "another flight command holds the command channel")
+
+
 def _state_int(state: dict, key: str) -> int | None:
     """The state field ``key`` as an int, or None if it is missing or not a number."""
     try:
@@ -1163,10 +1168,12 @@ class TelloController:
         """Move in a direction. Drops command if another is in-flight.
 
         Returns True when the command was sent and acknowledged, and False
-        when it was dropped (another flight command is in flight or a
-        landing is in progress). An unknown direction sends nothing and
-        returns a ``REJECTED`` :class:`CommandResult`. Callers normalize the
-        return value with ``command_result()`` and act on ``.ok`` (see
+        when a landing is in progress (or starts before the move is sent).
+        When another flight command holds the channel the move is dropped
+        and a ``DROPPED_BUSY`` :class:`CommandResult` is returned; an
+        unknown direction sends nothing and returns a ``REJECTED`` one. Both
+        are falsy, like False. Callers normalize the return value with
+        ``command_result()`` and act on ``.ok`` (see
         ``docs/drone-interface.md``). A move that finds only the keepalive on
         the channel waits for it rather than being dropped. The move is sent
         once and never retried; a reply other than ``ok``, or none, raises.
@@ -1176,23 +1183,25 @@ class TelloController:
         if self._landing:
             return False
         if not self._acquire_for_flight():
-            return False
+            return _dropped_busy("move")
         try:
             distance_cm = max(20, min(500, int(distance_cm)))
             return self._send_flight_command(f"{direction} {distance_cm}", _COMMAND_REPLY_TIMEOUT_S)
         finally:
             self._cmd_lock.release()
 
-    def rotate(self, degrees: int) -> bool:
+    def rotate(self, degrees: int) -> bool | CommandResult:
         """Rotate clockwise/counter-clockwise. Drops if another command is in-flight.
 
         Returns True when the command was sent and acknowledged, False when
-        it was dropped. Like ``move()``, it is sent once and never retried.
+        a landing is in progress, and a ``DROPPED_BUSY``
+        :class:`CommandResult` when another flight command holds the
+        channel. Like ``move()``, it is sent once and never retried.
         """
         if self._landing:
             return False
         if not self._acquire_for_flight():
-            return False
+            return _dropped_busy("rotate")
         try:
             if degrees > 0:
                 command = f"cw {min(360, int(degrees))}"
@@ -1434,7 +1443,7 @@ class TelloController:
         for field_name, getter, scale, unit, source in _EXTENDED_FIELDS:
             try:
                 raw = getattr(self.tello, getter)()
-            except Exception:  # noqa: BLE001 -- optional field; absence is reported as None
+            except Exception:  # noqa: BLE001, S112 -- optional field; absence is reported as None
                 continue
             value = _reading(raw, unit, source, now, scale=scale)
             if value is not None:
@@ -1607,6 +1616,12 @@ class FakeTelloController:
     ``speed_cm_s`` makes moves take simulated time (distance divided by
     speed), which lets a fake edge show lane progress in the dashboard. A
     landing interrupts a move that is in progress.
+
+    This is the edge device's ``--source fake``. The dashboard's simulated
+    drone is a different class, ``FakeDrone`` in
+    :mod:`flightrisk.drone.fake`, registered as the ``sim`` backend. This one
+    satisfies the ``DroneController`` protocol and has no ``snapshot()``, so
+    ``read_telemetry`` adapts its ``state`` cache.
     """
 
     TAKEOFF_HEIGHT_CM = 80

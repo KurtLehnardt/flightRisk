@@ -145,11 +145,22 @@ class CommandOutcome(str, Enum):
     DROPPED_BUSY = "dropped_busy"
     #: The backend refused the command (unsupported or invalid argument).
     REJECTED = "rejected"
+    #: The command was not executed and the backend gave no reason. This is
+    #: what a bare ``False`` return means: for the Tello, a move or rotate
+    #: dropped because a flight command or a landing holds the channel, or
+    #: a takeoff refused because a landing is in progress or was requested.
+    NOT_EXECUTED = "not_executed"
 
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Reported outcome of one flight command."""
+    """Reported outcome of one flight command.
+
+    Truthiness follows :attr:`ok`, so a result that was not executed is
+    falsy like the bare ``False`` it replaces. Callers must still normalize
+    every return value with :func:`command_result` and read ``.ok``: a
+    legacy ``None`` return is falsy but means success.
+    """
 
     command: str
     outcome: CommandOutcome = CommandOutcome.OK
@@ -159,19 +170,53 @@ class CommandResult:
     def ok(self) -> bool:
         return self.outcome is CommandOutcome.OK
 
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+class CommandNotExecutedError(RuntimeError):
+    """Raised by callers that need a command to have taken effect when it did not.
+
+    Carries the non-OK :class:`CommandResult` as ``result``.
+    """
+
+    def __init__(self, result: CommandResult):
+        self.result = result
+        detail = f": {result.detail}" if result.detail else ""
+        super().__init__(f"{result.command} not executed ({result.outcome.value}){detail}")
+
 
 def command_result(value: Any, command: str) -> CommandResult:
     """Normalize a command's return value to a :class:`CommandResult`.
 
-    Legacy controllers return ``None`` on success; that maps to ``OK``. A
-    plain ``False`` (the "command was not sent" convention some controllers
-    use) maps to ``DROPPED_BUSY`` so it is reported rather than ignored.
+    This is the one way callers read a command's return value (see
+    ``docs/drone-interface.md``, "Command results"). Backends may return a
+    :class:`CommandResult` or one of the legacy values:
+
+    * ``None`` or ``True``: the command was executed (``OK``).
+    * ``False``: the command was not executed and the backend gave no
+      reason (``NOT_EXECUTED``).
+
+    Any other value counts as ``OK``, as it always has.
     """
     if isinstance(value, CommandResult):
         return value
     if value is False:
-        return CommandResult(command, CommandOutcome.DROPPED_BUSY, "controller returned False")
+        return CommandResult(command, CommandOutcome.NOT_EXECUTED, "controller returned False")
     return CommandResult(command=command)
+
+
+def require_executed(value: Any, command: str) -> CommandResult:
+    """Normalize ``value`` like :func:`command_result`, raising if it was not executed.
+
+    For callers whose next step assumes the command took effect, such as a
+    land that a fail-safe path counts as done. Raises
+    :class:`CommandNotExecutedError` for a non-OK result.
+    """
+    result = command_result(value, command)
+    if not result.ok:
+        raise CommandNotExecutedError(result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -203,17 +248,27 @@ class FlightControl(Protocol):
     motor-kill ``emergency`` command, which must never be one call away.
     ``land()`` must be idempotent: landing a drone that is already on the
     ground succeeds without error.
+
+    Neither ``land()`` nor ``takeoff()`` may ever report ``DROPPED_BUSY``: a
+    busy command channel is waited for (or, for a land, interrupted), never
+    a reason to drop the command. ``land()`` returns (``None`` or an ``OK``
+    result) only once the land was executed and raises otherwise; it never
+    returns a non-OK result. ``takeoff()`` returns ``True``/``None``/``OK``
+    once airborne, and may return ``False`` or a non-OK result only when it
+    deliberately sent nothing (for example because a landing is in
+    progress); errors raise. Callers still treat any non-OK land result as
+    a failed land (see ``require_executed``).
     """
 
-    def takeoff(self) -> CommandResult | None: ...
+    def takeoff(self) -> CommandResult | bool | None: ...
     def land(self) -> CommandResult | None: ...
     def hover(self) -> CommandResult | None: ...
 
 
 @runtime_checkable
 class Motion(Protocol):
-    def move(self, direction: str, distance_cm: int) -> CommandResult | None: ...
-    def rotate(self, degrees: int) -> CommandResult | None: ...
+    def move(self, direction: str, distance_cm: int) -> CommandResult | bool | None: ...
+    def rotate(self, degrees: int) -> CommandResult | bool | None: ...
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> CommandResult | None: ...
 
 
@@ -282,6 +337,7 @@ class GpsDroneController(DroneController, Protocol):
 __all__ = [
     "BASIC_FLIGHT",
     "Capability",
+    "CommandNotExecutedError",
     "CommandOutcome",
     "CommandResult",
     "DroneCapabilities",
@@ -296,4 +352,5 @@ __all__ = [
     "VideoSource",
     "capabilities_of",
     "command_result",
+    "require_executed",
 ]
