@@ -68,6 +68,7 @@ import threading
 import time
 from typing import Any, Callable, Iterable, TextIO
 
+from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import CONTROL_TYPES, LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.edge import EdgeRunner
@@ -610,6 +611,22 @@ def _build_runner(
     )
 
 
+def _parse_drone_id(raw: str) -> str:
+    """Parse ``--drone-id``: it must be a fleet protocol identifier.
+
+    Every fleet message carries the drone id, and the protocol refuses one
+    that is longer than 64 characters (and the peer link one that is not an
+    identifier), so a bad id would leave the drone unable to report or be
+    commanded. Refusing it here gives a clear error at startup instead.
+    """
+    if not fp.is_identifier(raw):
+        raise argparse.ArgumentTypeError(
+            f"--drone-id must be 1 to {fp.MAX_ID_LEN} characters of letters, digits, '.', '_', ':' or '-', "
+            f"starting with a letter or digit (for example drone-1), got {raw!r}"
+        )
+    return raw
+
+
 def _parse_alt_slot(raw: str) -> float:
     """Parse ``--alt-slot`` as centimetres.
 
@@ -651,7 +668,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Tello IP address (when --source=tello; default from config, 192.168.10.1)",
     )
     parser.add_argument(
-        "--drone-id", type=str, default="drone-1",
+        "--drone-id", type=_parse_drone_id, default="drone-1",
         help="Drone id used in fleet messages (default: drone-1)",
     )
     parser.add_argument(
