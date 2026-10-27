@@ -14,7 +14,13 @@
   confirms only with the motors off (the motor time has stopped going up),
   ``|h|`` and ``tof`` near zero; nothing confirms a land that interrupted a
   takeoff until the lift guard after it is over; one deadline bounds each
-  ``land()`` call; and LAND ALL lands every local drone at once.
+  ``land()`` call; and LAND ALL lands every local drone at once. From the
+  second PR #91 review: a reply read during a brief state gap confirms
+  nothing (only a lost stream lets the reply decide); with no state, no
+  reply confirms a land until the takeoff's reply window is over; a takeoff
+  that ended without "ok" starts the guards too; fresh state showing flight
+  blocks the poller's crash path; the motor-off run tolerates short gaps;
+  and LAND ALL never waits on a land that does not return.
 * B3: a flying edge tags every detection with its drone id and pose.
 * B4: a flying edge is appearance-only by default: no ``FaceRecognizer`` and
   no ``face_embedding`` unless ``--with-face`` or
@@ -1028,7 +1034,8 @@ def test_land_during_takeoff_spinup_not_confirmed_when_the_tello_lifts(tello_on_
             timer = threading.Timer(1.2, lift)
             timer.daemon = True
             timer.start()
-            return []
+            # A Tello answers its takeoff "ok" once it hovers.
+            return [("ok", 1.3)]
         if word in ("stop", "land"):
             return [("error", 0.02)]
         return None
@@ -1061,12 +1068,15 @@ def test_land_during_takeoff_spinup_confirmed_only_after_lift_guard(
     """Review finding 1: a Tello that obeys the stop and stays down is confirmed, but only after the lift guard.
 
     With state, the lands are answered "error" (there is nothing to land)
-    and the state stream confirms once the guard is over. Without state,
-    the lands are answered "ok"; an "ok" read during the guard may be the
-    stop's or the takeoff's, so only a land answered after it confirms.
+    and the state stream confirms once the lift guard is over. Without
+    state, the lands are answered "ok"; an "ok" read before the takeoff's
+    reply window has passed may be the stop's or the takeoff's own, so only
+    a land answered after that window confirms (PR #91 review 2, F2).
     """
     guard_s = 1.5
+    reply_window_s = 2.5
     monkeypatch.setattr(tello_module, "_TAKEOFF_LIFT_GUARD_S", guard_s, raising=False)
+    monkeypatch.setattr(tello_module, "_TAKEOFF_REPLY_TIMEOUT_S", reply_window_s)
     monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.5)
     monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 2.0)
     ctrl, wire = tello_on_wire()
@@ -1097,7 +1107,7 @@ def test_land_during_takeoff_spinup_confirmed_only_after_lift_guard(
     returned_at = time.monotonic()
     taker.join(WAIT_S)
     assert not taker.is_alive()
-    assert returned_at - takeoff_sent[0] >= guard_s
+    assert returned_at - takeoff_sent[0] >= (guard_s if with_state else reply_window_s)
     assert ctrl.state.is_flying is False
     assert ctrl._land_unconfirmed is False
     assert ctrl._keepalive_once() is True
@@ -1311,8 +1321,328 @@ def test_local_land_all_lands_every_drone_at_once(tello_on_wire, monkeypatch, ca
 
 
 # ---------------------------------------------------------------------------
-# PR #91 review 2, F4: LAND ALL never waits on a land that does not return
+# R-116 (PR #91 review 2): a state gap, a late takeoff "ok", the crash
+# heuristic, a jittery state stream, a takeoff misread as refused, and a
+# land that never returns
 # ---------------------------------------------------------------------------
+
+
+def _state_gap(wire, after_s: float, gap_s: float) -> None:
+    """Pause the wire's state stream for ``gap_s``, starting ``after_s`` from now, on a thread."""
+
+    def gap() -> None:
+        time.sleep(after_s)
+        wire.stop_state()
+        time.sleep(gap_s)
+        wire.start_state()
+
+    threading.Thread(target=gap, daemon=True).start()
+
+
+def _flying_with_motors(tello_on_wire, **wire_kwargs):
+    """A ``TelloController`` that has taken off, with state at 80 cm, tof 90 cm and the motors running."""
+    ctrl, wire = tello_on_wire(**wire_kwargs)
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    wire.height_cm, wire.tof_cm = 80, 90
+    wire.set_motors(True)
+    assert wait_for(lambda: ctrl._ground_by_state() is False)
+    return ctrl, wire
+
+
+@pytest.mark.parametrize("gap", [True, False])
+def test_stale_ok_during_a_state_gap_confirms_nothing(tello_on_wire, monkeypatch, gap):
+    """F1: the interrupting stop's late "ok" arrives while the state stream has paused; the drone hovers.
+
+    The drone hovers at 80 cm with its motors running and every land
+    packet is lost. The late "ok" is read as the confirming land's reply
+    0.65 s after it was sent, when the state stream has been silent for
+    0.55 s: more than ``_STATE_FRESH_S``, far less than a lost stream.
+    Before the fix the reply decided as soon as no packet was fresh, so the
+    land returned with the drone in the air. With ``gap`` False (the
+    control), the stream never pauses and fresh state refuses the "ok".
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.5)
+    ctrl, wire = _flying_with_motors(tello_on_wire)
+    lands = [0]
+
+    def lossy(command: str):
+        if command.split()[0] == "land":
+            lands[0] += 1
+            if lands[0] == 1:
+                if gap:
+                    _state_gap(wire, after_s=0.1, gap_s=0.9)
+                return [("ok", 0.65)]
+            return []
+        return None
+
+    wire.script = lossy
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert wire.height_cm == 80
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+
+@pytest.mark.parametrize("gap", [True, False])
+def test_move_ok_during_a_state_gap_confirms_nothing(tello_on_wire, monkeypatch, gap):
+    """F1: the land interrupts ``forward 100``; the move's own "ok" arrives in a state gap while the drone hovers.
+
+    The Tello (SDK 1.3 behaviour) answers the stop "error", ignores a land
+    while it moves, and answers the move "ok" when the move ends 1 s after
+    it was sent. The state stream is silent from 0.5 s to 1.3 s, so that
+    "ok", read as the confirming land's reply, arrives with no fresh state.
+    Before the fix it confirmed the land: is_flying false, the keepalive
+    resumed (defeating the Tello's own 15 s auto-land) and the drone hovered
+    until its battery ran out. ``gap`` False is the control.
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.5)
+    ctrl, wire = _flying_with_motors(tello_on_wire)
+    moving = threading.Event()
+
+    def sdk13(command: str):
+        word = command.split()[0]
+        if word == "forward":
+            moving.set()
+            timer = threading.Timer(1.0, moving.clear)
+            timer.daemon = True
+            timer.start()
+            if gap:
+                _state_gap(wire, after_s=0.5, gap_s=0.8)
+            return [("ok", 1.0)]
+        if word == "stop":
+            return [("error", 0.01)]
+        if word == "land":
+            # Obeyed only once the move is over, and then never answered in time.
+            return [] if moving.is_set() else [("ok", 3.0)]
+        return None
+
+    wire.script = sdk13
+    mover = threading.Thread(target=lambda: _move_ignoring_errors(ctrl, "forward", 100), daemon=True)
+    mover.start()
+    assert wait_for(lambda: "forward 100" in wire.sent)
+    time.sleep(0.1)
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    mover.join(WAIT_S)
+    assert not mover.is_alive()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+
+def test_ok_from_a_gap_does_not_outlive_state_showing_flight(tello_on_wire, monkeypatch, capsys):
+    """F1: an "ok" read in a state gap does not confirm once the stream showed the drone in the air and then was lost.
+
+    The late "ok" arrives in a gap; the stream comes back at 80 cm for a
+    moment and is then lost for good. The last word from the drone since
+    the land was sent is "in the air", so that "ok" confirms nothing. A
+    land sent after the stream was lost and answered "ok" still confirms,
+    as before the state stream was read.
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 6.0)
+    monkeypatch.setattr(tello_module, "_LAND_DEADLINE_S", 8.0)
+    ctrl, wire = _flying_with_motors(tello_on_wire)
+    lands = [0]
+
+    def back_then_lost() -> None:
+        time.sleep(0.1)
+        wire.stop_state()
+        time.sleep(0.9)
+        wire.start_state()
+        time.sleep(0.3)
+        wire.stop_state()
+
+    def lossy(command: str):
+        if command.split()[0] == "land":
+            lands[0] += 1
+            if lands[0] == 1:
+                threading.Thread(target=back_then_lost, daemon=True).start()
+                return [("ok", 0.65)]
+            return []
+        return None
+
+    wire.script = lossy
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert "the state stream is lost and last showed height 80 cm" in capsys.readouterr().out
+
+    # The stream stays lost; a land that gets through is answered "ok".
+    assert ctrl._state_lost()
+    wire.script = None
+    ctrl.land()
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+
+
+def test_late_takeoff_ok_without_state_confirms_nothing(tello_on_wire, monkeypatch):
+    """F2: with no state stream, the Tello's own takeoff "ok" after the lift guard does not confirm a land.
+
+    A land interrupts a takeoff; the Tello answers the stop "error",
+    ignores every land while it climbs, and answers the takeoff "ok" once
+    it hovers, after the lift guard but within the takeoff's reply window.
+    Before the fix that "ok", read as the confirming land's reply, confirmed
+    the land while the drone hovered.
+    """
+    guard_s = 1.5
+    reply_window_s = 4.0
+    monkeypatch.setattr(tello_module, "_TAKEOFF_LIFT_GUARD_S", guard_s)
+    monkeypatch.setattr(tello_module, "_TAKEOFF_REPLY_TIMEOUT_S", reply_window_s)
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.5)
+    ctrl, wire = tello_on_wire()
+    hovering = threading.Event()
+
+    def climb(command: str):
+        word = command.split()[0]
+        if word == "takeoff":
+            timer = threading.Timer(guard_s + 0.3, hovering.set)
+            timer.daemon = True
+            timer.start()
+            return [("ok", guard_s + 0.3)]
+        if word == "stop":
+            return [("error", 0.02)]
+        if word == "land":
+            return []
+        return None
+
+    wire.script = climb
+    taker, _ = _run_takeoff(ctrl)
+    assert wait_for(lambda: "takeoff" in wire.sent)
+    time.sleep(0.05)
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    taker.join(WAIT_S)
+    assert not taker.is_alive()
+    assert hovering.is_set()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+
+def test_land_right_after_a_takeoff_answered_error_waits_out_the_lift_guard(tello_on_wire, monkeypatch):
+    """F6: a takeoff whose wait ends on "error" may still lift; a land right after it is not confirmed by state.
+
+    The drone rests on the ground with its motors off. The takeoff's wait
+    ends at once on an "error" (say a late reply to an earlier command), but
+    the Tello acts on the takeoff and lifts to 80 cm 1.2 s later, its motor
+    time not yet going up (the worst case). A land sent at once is answered
+    "error" and ignored. Before the fix only a takeoff still waiting for its
+    reply started the lift guard, so state at ground height with the motor
+    time still confirmed the land at once, with is_flying false.
+    """
+    monkeypatch.setattr(tello_module, "_TAKEOFF_LIFT_GUARD_S", 2.0)
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 1.0)
+    ctrl, wire = tello_on_wire()
+    wire.start_state(0)
+    time.sleep(MOTORS_SETTLED_S)
+    lifted = threading.Event()
+
+    def lift() -> None:
+        wire.height_cm, wire.tof_cm = 80, 90
+        lifted.set()
+
+    def misread(command: str):
+        word = command.split()[0]
+        if word == "takeoff":
+            timer = threading.Timer(1.2, lift)
+            timer.daemon = True
+            timer.start()
+            return [("error", 0.02)]
+        if word == "land":
+            return [("error", 0.02)]
+        return None
+
+    wire.script = misread
+    with pytest.raises(RuntimeError, match="answered 'error'"):
+        ctrl.takeoff()
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert lifted.is_set()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+    assert ctrl._keepalive_once() is False
+
+
+@pytest.mark.parametrize("tof_cm, motors_on", [(100, True), (100, False), (10, True)])
+def test_poller_reports_no_crash_while_fresh_state_shows_flight(tello_on_wire, monkeypatch, tof_cm, motors_on):
+    """F3: height 0 for three polls is no crash while fresh state shows the motors running or tof above the ground.
+
+    A drone launched from a ledge hovers at the height of its takeoff point
+    (``h`` 0) and every land is lost. Before the fix the poller's crash
+    path cleared is_flying, so the lane executor stopped retrying the land.
+    Once fresh state shows it on the ground with the motors off, the
+    poller confirms the land.
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.2)
+    monkeypatch.setattr(tello_module, "_LAND_DEADLINE_S", 1.0)
+    ctrl, wire = tello_on_wire(drop={"land"})
+    wire.start_state(0)
+    assert ctrl.takeoff() is True
+    wire.set_motors(motors_on)
+    wire.tof_cm = tof_cm
+    # Long enough for the motor time to go up while the motors run.
+    time.sleep(MOTORS_SETTLED_S)
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert ctrl.state.is_flying is True
+
+    ctrl.state.height = 0
+    for _ in range(3 * tello_module._ZERO_HEIGHT_POLLS):
+        ctrl._check_zero_height()
+    assert ctrl.state.is_flying is True
+    assert ctrl._land_unconfirmed is True
+
+    wire.set_motors(False)
+    wire.tof_cm = 10
+    time.sleep(MOTORS_SETTLED_S)
+    for _ in range(tello_module._ZERO_HEIGHT_POLLS):
+        ctrl._check_zero_height()
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+
+
+def test_jittery_state_still_confirms_a_landed_drone(tello_on_wire, monkeypatch):
+    """F5: state at 10 Hz with a 0.6 s gap every 1.5 s still shows the motors off.
+
+    The drone is on the ground with its motors off, and a grounded Tello
+    answers every land "error". Before the fix the motor-off run had to be
+    unbroken by any gap over 0.5 s, so it never spanned 2 s and the land was
+    never confirmed (LAND ALL reported the drone as not reached).
+    """
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 1.0)
+    ctrl, wire = tello_on_wire()
+    assert ctrl.takeoff() is True
+    stop = threading.Event()
+
+    def jittery() -> None:
+        while not stop.is_set():
+            burst_started = time.monotonic()
+            while time.monotonic() - burst_started < 1.5 and not stop.is_set():
+                wire.send_state()
+                time.sleep(0.1)
+            stop.wait(0.6)
+
+    streamer = threading.Thread(target=jittery, daemon=True)
+    streamer.start()
+    wire.script = lambda command: [("error", 0.02)] if command == "land" else None
+    try:
+        time.sleep(1.0)
+        ctrl.land()
+    finally:
+        stop.set()
+        streamer.join(WAIT_S)
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
 
 
 def test_broadcast_land_reports_a_drone_whose_land_never_returns(monkeypatch):
