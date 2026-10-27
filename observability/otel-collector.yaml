@@ -1,0 +1,45 @@
+# Receives OTLP from the FlightRisk app and fans it out:
+#   traces  -> Tempo
+#   metrics -> exposed on :8889 for Prometheus to scrape
+#   logs    -> Loki (native OTLP ingest)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch: {}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Keep names as defined in flightrisk/telemetry.py (dots -> underscores)
+    # with no _total / unit suffixes, so dashboard queries stay predictable.
+    add_metric_suffixes: false
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

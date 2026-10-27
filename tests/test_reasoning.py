@@ -138,7 +138,7 @@ class TestAnalyzeMatch:
             agent._image_to_base64(candidate),
         ]
 
-        assert result == {"match": True, "confidence": "high", "reasoning": "SAME RED JACKET"}
+        assert result == {"match": True, "confidence": "high", "reasoning": "same red jacket"}
 
     def test_malformed_response_defaults_gracefully(self, make_agent, sample_image):
         text = "I think this might be the same person, hard to tell."
@@ -214,7 +214,7 @@ class TestMatchDescription:
         )
         result = agent.match_description(sample_image, "blonde hair, blue jacket")
 
-        assert result == {"match": False, "confidence": "low", "reasoning": "DIFFERENT HAIR COLOR"}
+        assert result == {"match": False, "confidence": "low", "reasoning": "different hair color"}
         _, kwargs = client.chat.call_args
         assert "blonde hair, blue jacket" in kwargs["messages"][0]["content"]
         assert kwargs["messages"][0]["images"] == [agent._image_to_base64(sample_image)]
@@ -243,7 +243,7 @@ class TestParseMatchResponse:
 
         result = agent._parse_match_response(text)
 
-        assert result == {"match": True, "confidence": "high", "reasoning": "MATCHING BACKPACK"}
+        assert result == {"match": True, "confidence": "high", "reasoning": "matching backpack"}
 
     def test_extra_whitespace_is_tolerated(self, make_agent):
         agent, _client = make_agent()
@@ -253,7 +253,7 @@ class TestParseMatchResponse:
 
         assert result["match"] is True
         assert result["confidence"] == "medium"
-        assert result["reasoning"] == "SAME BACKPACK VISIBLE"
+        assert result["reasoning"] == "Same backpack visible"
 
     def test_missing_fields_fall_back_to_defaults(self, make_agent):
         agent, _client = make_agent()

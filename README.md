@@ -46,7 +46,8 @@ cd flightRisk
 py -3.13 -m venv venv
 # Call the venv python directly (avoids the Activate.ps1 execution policy block)
 venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
-# Install Ollama from https://ollama.com/download/windows
+# Optional, only for the local Gemma backend (see "Reasoning backend" below):
+# install Ollama from https://ollama.com/download/windows, then
 ollama pull gemma3:1b
 ```
 
@@ -54,17 +55,70 @@ ollama pull gemma3:1b
 ```bash
 source venv/bin/activate  # Linux/macOS
 
-# Webcam + web dashboard (no drone needed)
-python -m flightrisk --webcam --dashboard --target photo_of_child.jpg
-# Windows: venv\Scripts\python.exe -m flightrisk --webcam --dashboard --target photo_of_child.jpg
+# Tello drone + web dashboard
+python -m flightrisk --dashboard --target photo_of_child.jpg
+# Windows: venv\Scripts\python.exe -m flightrisk --dashboard --target photo_of_child.jpg
 # Open http://localhost:5555
 
-# Webcam + OpenCV window
-python -m flightrisk --webcam --target photo_of_child.jpg
+# Tello drone + OpenCV window
+python -m flightrisk --target photo_of_child.jpg
 
-# Tello drone + dashboard
-python -m flightrisk --dashboard --target photo_of_child.jpg
+# Recorded video file (no drone needed)
+python -m flightrisk --dashboard --video test.mp4 --target photo_of_child.jpg
 ```
+
+## Reasoning backend (Gemma or Claude)
+
+A second opinion confirms ReID/face matches. By default it comes from **Gemma** running locally in
+Ollama, so nothing leaves the machine. **Claude** (Anthropic API) is an optional cloud backend and is
+off unless you explicitly opt in.
+
+Using Claude sends the detected person's crop and the missing child's reference photo to Anthropic.
+FlightRisk therefore refuses to start or switch to Claude unless both of these are set:
+
+- `FLIGHTRISK_ALLOW_CLOUD_LLM=1`, the explicit opt-in to cloud reasoning.
+- `FLIGHTRISK_CLAUDE_API_KEY`, the API key. `ANTHROPIC_API_KEY` is deliberately ignored, so a key
+  exported for other tools never turns on uploads by accident. The key is never logged; the startup
+  log only names the variable it came from.
+
+```bash
+python -m flightrisk --dashboard                      # default: gemma (local Ollama)
+python -m flightrisk --dashboard --reasoning off      # ReID/face scores only
+
+# Opt in to Claude (cloud). Windows: use setx for each variable and restart the terminal.
+export FLIGHTRISK_ALLOW_CLOUD_LLM=1
+export FLIGHTRISK_CLAUDE_API_KEY="sk-ant-..."
+python -m flightrisk --dashboard --reasoning claude
+```
+
+You can also switch while it runs from the **AI Reasoning** selector in the dashboard sidebar. Claude
+is shown as unavailable, with the reason, until cloud use is allowed and a key is set; the dashboard
+cannot opt itself in. If a switch fails (for example, Ollama is not running), the previous backend
+stays active and the reason is shown.
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `FLIGHTRISK_REASONING_PROVIDER` | `gemma` | `gemma`, `claude` or `off` |
+| `FLIGHTRISK_ALLOW_CLOUD_LLM` | unset (off) | `1` to allow the Claude cloud backend |
+| `FLIGHTRISK_CLAUDE_API_KEY` | unset | Anthropic API key used only when cloud use is allowed |
+| `FLIGHTRISK_CLAUDE_MODEL` | `claude-opus-5-5` | any vision-capable Claude model, e.g. `claude-sonnet-5-5` to cut cost |
+| `FLIGHTRISK_CLAUDE_EFFORT` | `medium` | `low` to `max`; lower is faster and cheaper |
+| `FLIGHTRISK_GEMMA_MODEL` | `gemma4:latest` | Ollama model when using `gemma` |
+
+Each confirmation sends the reference photo and the detected person's crop to the chosen backend
+(for Gemma, to the local Ollama server; for Claude, to the Anthropic API). Calls are rate-limited per
+tracked person.
+
+## Observability (Grafana)
+
+Traces, metrics and logs can be sent to a local Grafana stack with a ready-made dashboard:
+
+```bash
+docker compose -f docker-compose.grafana.yml up -d   # Grafana at http://localhost:3000
+```
+
+Then start the app with `FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://localhost:4317`.
+See [observability/README.md](observability/README.md).
 
 ## Keyboard Controls (OpenCV window)
 

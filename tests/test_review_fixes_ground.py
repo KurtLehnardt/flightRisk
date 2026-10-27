@@ -163,7 +163,7 @@ def test_allowed_origins_follow_the_dashboard_bind(clean_app_state, monkeypatch)
     monkeypatch.setattr(app_module, "_frame_loop", lambda socketio: None)
     monkeypatch.setattr(app_module.socketio, "run", MagicMock())
 
-    run_dashboard(SourceConfig(source="webcam"), port=5999)
+    run_dashboard(SourceConfig(source="file"), port=5999)
 
     assert socketio_origin_allowed("http://127.0.0.1:5999") is True
     assert socketio_origin_allowed("http://localhost:5999") is True
@@ -173,12 +173,12 @@ def test_allowed_origins_follow_the_dashboard_bind(clean_app_state, monkeypatch)
     # address, and a wildcard bind accepts the page under the Host it was
     # requested from, because every connection must then present the key.
     monkeypatch.setattr(app_module, "_FLIGHTRISK_API_KEY", "venue-key")
-    run_dashboard(SourceConfig(source="webcam"), port=5999, host="192.168.1.20")
+    run_dashboard(SourceConfig(source="file"), port=5999, host="192.168.1.20")
     assert socketio_origin_allowed("http://192.168.1.20:5999") is True
     assert socketio_origin_allowed("http://127.0.0.1:5999") is True
     assert socketio_origin_allowed("http://evil.example") is False
 
-    run_dashboard(SourceConfig(source="webcam"), port=5999, host="0.0.0.0")
+    run_dashboard(SourceConfig(source="file"), port=5999, host="0.0.0.0")
     environ = {"HTTP_HOST": "mac.local:5999", "wsgi.url_scheme": "http"}
     assert socketio_origin_allowed("http://mac.local:5999", environ) is True
     assert socketio_origin_allowed("http://evil.example", environ) is False

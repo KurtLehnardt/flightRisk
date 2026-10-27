@@ -2,6 +2,8 @@
 
 Provides distributed tracing, metrics, and structured logs exportable
 to any OTel-compatible backend (Jaeger, Grafana, Datadog, console).
+Logs are only exported in the otlp-* modes. For the bundled Grafana stack
+(Tempo + Prometheus + Loki) see ``observability/README.md``.
 
 Enable via env var: FLIGHTRISK_OTEL_ENABLED=true
 Configure exporter: OTEL_EXPORTER=console|otlp-grpc|otlp-http
@@ -28,6 +30,7 @@ try:
         ConsoleMetricExporter,
         PeriodicExportingMetricReader,
     )
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
     from opentelemetry.sdk.resources import Resource
 
     HAS_OTEL = True
@@ -37,6 +40,21 @@ except ImportError:
 # OTLP exporters are optional — only needed for otlp-grpc / otlp-http modes.
 _HAS_OTLP_GRPC = False
 _HAS_OTLP_HTTP = False
+_HAS_LOGS = False
+_log_handler = None
+
+# Match scores live in [0, 1]; the SDK's default histogram buckets
+# (0, 5, 10, ...) would put every observation in the first bucket.
+_MATCH_SCORE_BUCKETS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+try:
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+    _HAS_LOGS = True
+except ImportError:
+    pass
 
 if HAS_OTEL:
     try:
@@ -45,6 +63,9 @@ if HAS_OTEL:
         )
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
             OTLPMetricExporter as OTLPGrpcMetricExporter,
+        )
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+            OTLPLogExporter as OTLPGrpcLogExporter,
         )
         _HAS_OTLP_GRPC = True
     except ImportError:
@@ -56,6 +77,9 @@ if HAS_OTEL:
         )
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
             OTLPMetricExporter as OTLPHttpMetricExporter,
+        )
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter as OTLPHttpLogExporter,
         )
         _HAS_OTLP_HTTP = True
     except ImportError:
@@ -106,8 +130,20 @@ def init_telemetry(
         metric_exporter,
         export_interval_millis=10_000,
     )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=[metric_reader],
+        views=[
+            View(
+                instrument_name="flightrisk.match.score",
+                aggregation=ExplicitBucketHistogramAggregation(_MATCH_SCORE_BUCKETS),
+            ),
+        ],
+    )
     metrics.set_meter_provider(meter_provider)
+
+    # --- Log provider (OTLP only; console mode already prints to stdout) ---
+    _init_logs(resource, exporter_type, endpoint)
 
     logger.info(
         "OpenTelemetry enabled (exporter=%s, endpoint=%s)", exporter_type, endpoint
@@ -277,6 +313,36 @@ def _build_span_exporter(exporter_type: str, endpoint: str):
         http_endpoint = endpoint.replace(":4317", ":4318")
         return OTLPHttpSpanExporter(endpoint=f"{http_endpoint}/v1/traces")
     return ConsoleSpanExporter()
+
+
+def _build_log_exporter(exporter_type: str, endpoint: str):
+    """Return an OTLP log exporter, or None for console mode / missing deps."""
+    if exporter_type == "otlp-grpc" and _HAS_OTLP_GRPC:
+        return OTLPGrpcLogExporter(endpoint=endpoint, insecure=True)
+    if exporter_type == "otlp-http" and _HAS_OTLP_HTTP:
+        http_endpoint = endpoint.replace(":4317", ":4318")
+        return OTLPHttpLogExporter(endpoint=f"{http_endpoint}/v1/logs")
+    return None
+
+
+def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
+    """Ship StructuredLogger output to the OTLP backend alongside stdout."""
+    global _log_handler
+    # init_telemetry() runs again on every dashboard restart; a second handler
+    # would ship each record twice.
+    if not _HAS_LOGS or _log_handler is not None:
+        return
+    log_exporter = _build_log_exporter(exporter_type, endpoint)
+    if log_exporter is None:
+        return
+
+    from flightrisk.observability import register_log_handler
+
+    log_provider = LoggerProvider(resource=resource)
+    log_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+    set_logger_provider(log_provider)
+    _log_handler = LoggingHandler(level=logging.INFO, logger_provider=log_provider)
+    register_log_handler(_log_handler)
 
 
 def _build_metric_exporter(exporter_type: str, endpoint: str):

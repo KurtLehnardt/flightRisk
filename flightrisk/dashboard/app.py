@@ -76,6 +76,8 @@ from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for ba
     _build_track_id_by_bbox,
     _frame_loop,
 )
+from flightrisk.dashboard.alert_latch import AlertPhase, alert_latch
+from flightrisk.dashboard.recovery import handle_alert_response, reset_alert_flow
 
 # ---------------------------------------------------------------------------
 # Flask / SocketIO app
@@ -281,18 +283,27 @@ def _sr_get(score_result, key, default=None):
 
 
 def _maybe_emit_edge_match(socketio, det, result, score_result, now):
-    """Emit a ``match_alert`` for one matched edge detection, respecting cooldown.
+    """Emit a ``match_alert`` for one matched edge detection via the alert latch.
 
-    Reuses the same spatial-track cooldown (``_alerted_tracks`` +
-    ``ALERT_COOLDOWN``) as the local frame-loop match path so we don't spam a
-    new alert + DB row for every frame the same person appears in.
+    Uses the same single-alert latch as the local frame-loop match path, so
+    only one alert is outstanding at a time and nothing new is emitted (or
+    written to the DB) until the operator confirms or dismisses it.
     """
+    # ``now`` is kept for call-site compatibility; the latch keeps its own clock.
     bbox = result["bbox"]
     track_key = _compute_track_key(bbox)
-    if _is_within_alert_cooldown(track_key, now):
+    alert_id = alert_latch.try_open([f"grid:{track_key}"])
+    if alert_id is None:
         return
-    _alerted_tracks[track_key] = now
+    try:
+        _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id)
+    except Exception:
+        alert_latch.abort(alert_id)
+        raise
 
+
+def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
+    """Build, persist and emit the single edge match alert claimed by ``alert_id``."""
     snapshot_b64 = None
     crop_jpeg = getattr(det, "crop_jpeg", None)
     if crop_jpeg:
@@ -325,6 +336,7 @@ def _maybe_emit_edge_match(socketio, det, result, score_result, now):
         "reid_score": round(reid_score, 3),
         "alert_level": alert_level,
         "track_id": track_key,
+        "alert_id": alert_id,
     }
 
     if app_state.db and app_state.session_id:
@@ -348,6 +360,7 @@ def _maybe_emit_edge_match(socketio, det, result, score_result, now):
         app_state.match_history.append(match_entry)
         app_state.match_history = app_state.match_history[-50:]
 
+    alert_latch.attach(alert_id, match_entry)
     socketio.emit("match_alert", match_entry)
 
 
@@ -989,6 +1002,51 @@ def _privacy_and_fleet_status() -> dict:
 # Pipeline initialisation
 # ---------------------------------------------------------------------------
 
+def _reasoning_state() -> dict:
+    """Current reasoning backend, as shown in the dashboard.
+
+    ``unavailable`` maps each provider that can't be selected right now (for
+    example Claude without the cloud opt-in) to the reason, so the selector
+    can show it greyed out with an explanation.
+    """
+    from flightrisk.reasoning import (
+        PROVIDERS,
+        cloud_llm_allowed,
+        provider_unavailable_reason,
+    )
+
+    agent = app_state.reasoning
+    unavailable = {}
+    for name in PROVIDERS:
+        reason = provider_unavailable_reason(name)
+        if reason:
+            unavailable[name] = reason
+    return {
+        "provider": agent.provider if agent else "off",
+        "label": agent.label if agent else None,
+        "model": agent.model if agent else None,
+        "available": [name for name in PROVIDERS if name not in unavailable],
+        "unavailable": unavailable,
+        "cloud_allowed": cloud_llm_allowed(),
+    }
+
+
+def _ensure_reasoning_worker():
+    """Start the async reasoning worker if reasoning is on and it isn't running.
+
+    Safe to call repeatedly (restart_dashboard, provider switches): the worker
+    reads ``app_state.reasoning`` per item, so swapping backends needs no restart.
+    """
+    if app_state.reasoning is None:
+        return
+    with _gemma_thread_lock:
+        existing = app_state.gemma_thread
+        if existing is None or not existing.is_alive():
+            t = threading.Thread(target=_gemma_worker, args=(socketio,), daemon=True)
+            t.start()
+            app_state.gemma_thread = t
+
+
 def _init_pipeline(source_config: SourceConfig, target_path=None):
     """Initialize the detection pipeline."""
     source = source_config.source
@@ -1058,20 +1116,20 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         log.info("reasoning_disabled", reason="no_llm")
     elif app_state.reasoning is None:
         try:
-            from flightrisk.reasoning.agent import FlightRiskAgent
-            app_state.reasoning = FlightRiskAgent(model="gemma4:latest")
+            from flightrisk.reasoning import create_reasoning_agent
+            app_state.reasoning = create_reasoning_agent(source_config.reasoning_provider)
+            if app_state.reasoning is not None:
+                log.info(
+                    "reasoning_enabled",
+                    provider=app_state.reasoning.provider,
+                    model=app_state.reasoning.model,
+                )
         except Exception as e:
-            log.warning("gemma4_unavailable", error=str(e))
+            log.warning("reasoning_unavailable", error=str(e))
 
-    # Start the async Gemma worker thread (only if reasoning is available and
-    # not already running from a previous init call, e.g. restart_dashboard).
-    if app_state.reasoning is not None:
-        with _gemma_thread_lock:
-            existing = app_state.gemma_thread
-            if existing is None or not existing.is_alive():
-                t = threading.Thread(target=_gemma_worker, args=(socketio,), daemon=True)
-                t.start()
-                app_state.gemma_thread = t
+    # Start the async reasoning worker thread (only if reasoning is available
+    # and not already running from a previous init call, e.g. restart_dashboard).
+    _ensure_reasoning_worker()
 
     if target_path and os.path.exists(target_path):
         app_state.reid.set_target_from_file(target_path)
@@ -1202,9 +1260,6 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                 if stop_event.wait(retry_interval):
                     break
         threading.Thread(target=_auto_connect_loop, daemon=True).start()
-    elif source == "webcam":
-        app_state.fleet = None
-        app_state.cap = cv2.VideoCapture(0)
     elif source == "file":
         app_state.fleet = None
         if not video_path:
@@ -1322,6 +1377,10 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.fleet = None
         app_state.cap = cv2.VideoCapture(source)
 
+    # A new session starts with a fresh alert latch (no pending or confirmed
+    # match carried over from the previous session).
+    reset_alert_flow()
+
     # Create a new search session
     app_state.session_id = app_state.db.create_session(
         source=app_state.source,
@@ -1401,6 +1460,7 @@ def health():
             "db": app_state.db is not None,
             "signal_registry": registry is not None,
         },
+        "reasoning_provider": _reasoning_state()["provider"],
         "active_signals": registry.active_signals if registry else [],
     })
 
@@ -1422,6 +1482,7 @@ def status():
         "has_target": app_state.target_photo is not None,
         "has_description": app_state.target_description is not None,
         "has_reasoning": app_state.reasoning is not None,
+        "reasoning_provider": _reasoning_state()["provider"],
         "has_face": app_state.face is not None and app_state.face.has_target if app_state.face else False,
         "match_history": app_state.match_history[-10:],
         "telemetry": app_state.drone_telemetry,
@@ -1477,6 +1538,20 @@ def api_match_feedback(match_id):
     return jsonify({"ok": True, "match_id": match_id, "feedback": feedback})
 
 
+@app.route("/api/alerts/<alert_id>/respond", methods=["POST"])
+def api_alert_respond(alert_id):
+    """Operator Confirm/Dismiss for the outstanding match alert (REST path).
+
+    Gated by the fail-closed ``before_request`` API-key check like every other
+    non-public route. Body: ``{"action": "confirm" | "dismiss", "notes": str?}``.
+    """
+    data = request.get_json(silent=True) or {}
+    body, status_code = handle_alert_response(
+        alert_id, data.get("action"), socketio, notes=data.get("notes"),
+    )
+    return jsonify(body), status_code
+
+
 @app.route("/api/feedback-stats")
 def api_feedback_stats():
     """Return aggregate feedback statistics."""
@@ -1529,6 +1604,25 @@ def on_connect(auth=None):
     emit("status", {"connected": True, "source": app_state.source, **_privacy_and_fleet_status()})
     if app_state.target_photo:
         emit("target_photo", {"image": app_state.target_photo})
+    # A browser that (re)connects while an alert is pending gets it straight
+    # away instead of waiting for the next re-notification.
+    pending = alert_latch.pending_alert()
+    if pending is not None:
+        emit("match_alert_reminder", pending)
+
+
+@socketio.on("match_alert_response")
+def on_match_alert_response(data):
+    """Operator Confirm/Dismiss for the outstanding match alert (SocketIO path).
+
+    The SocketIO channel is authenticated at connect time (``on_connect``), so
+    only an authenticated dashboard can reach this handler.
+    """
+    data = data if isinstance(data, dict) else {}
+    body, _status = handle_alert_response(
+        data.get("alert_id"), data.get("action"), socketio, notes=data.get("notes"),
+    )
+    emit("match_alert_response_ack", body)
 
 
 @socketio.on("set_target")
@@ -1620,6 +1714,49 @@ def on_set_description(data):
         if app_state.logger:
             app_state.logger.info("target_description_set", description=desc)
         emit("description_set", {"description": desc})
+
+
+@socketio.on("get_reasoning_provider")
+def on_get_reasoning_provider():
+    emit("reasoning_provider", _reasoning_state())
+
+
+@socketio.on("set_reasoning_provider")
+def on_set_reasoning_provider(data):
+    """Switch the reasoning backend at runtime (claude / gemma / off).
+
+    Like every SocketIO handler, this is only reachable by a client that
+    passed the ``on_connect`` API-key check. A cloud backend is refused
+    unless cloud use was explicitly allowed at startup
+    (``FLIGHTRISK_ALLOW_CLOUD_LLM=1``); the dashboard cannot opt itself in.
+    """
+    from flightrisk.reasoning import (
+        cloud_block_reason,
+        create_reasoning_agent,
+        normalize_provider,
+    )
+
+    requested = data.get("provider") if isinstance(data, dict) else None
+    try:
+        if not requested:
+            raise ValueError("provider is required")
+        provider = normalize_provider(requested)
+        blocked = cloud_block_reason(provider)
+        if blocked:
+            if app_state.logger:
+                app_state.logger.warning("reasoning_provider_refused", provider=provider, reason="cloud_not_allowed")
+            raise PermissionError(blocked)
+        agent = create_reasoning_agent(provider)
+    except Exception as e:
+        # Keep the current backend and tell the operator why the switch failed.
+        emit("reasoning_provider", {**_reasoning_state(), "error": str(e)})
+        return
+
+    app_state.reasoning = agent
+    _ensure_reasoning_worker()
+    if app_state.logger:
+        app_state.logger.info("reasoning_provider_changed", provider=provider)
+    socketio.emit("reasoning_provider", _reasoning_state())
 
 
 @socketio.on("set_threshold")
@@ -1870,6 +2007,9 @@ def on_start_search(data):
     if not drone or not drone.state.is_flying:
         emit("error", {"message": "Drone must be flying to start search"})
         return
+    if alert_latch.phase is AlertPhase.RESOLVED:
+        emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
+        return
 
     from flightrisk.drone.search import get_search_pattern, PatternType
 
@@ -1888,6 +2028,12 @@ def on_start_search(data):
         while i < len(waypoints):
             if not app_state.search_active:
                 break
+            # Hold position between waypoints while a match alert awaits the
+            # operator. Dismiss resumes the pattern; Confirm clears
+            # search_active, which ends it.
+            if alert_latch.phase is AlertPhase.AWAITING_RESPONSE:
+                time.sleep(0.2)
+                continue
 
             wp = waypoints[i]
             avoidance_retries = 0
@@ -2028,7 +2174,7 @@ def on_register_drone(data):
         if success:
             socketio.emit("drone_registered", {"drone_id": drone_id, "success": True})
             # Switch source to a drone-backed source if we were on a
-            # non-drone fallback (webcam/file/edge/unset). Never stomp an
+            # non-drone fallback (file/edge/unset). Never stomp an
             # already-correct drone source -- unconditionally forcing
             # "tello" here previously flipped mavlink deployments back to
             # tello on every manual registration.
@@ -2103,7 +2249,7 @@ def on_restart_dashboard():
     if fleet:
         fleet.disconnect_all()
     # Release any existing capture device before re-initializing -- leaving
-    # it open leaks the webcam/video-file handle across restarts.
+    # it open leaks the video-file handle across restarts.
     cap = app_state.cap
     if cap:
         cap.release()

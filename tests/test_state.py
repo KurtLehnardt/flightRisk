@@ -13,7 +13,7 @@ class TestSourceConfig:
 
     def test_defaults(self):
         cfg = SourceConfig()
-        assert cfg.source == "webcam"
+        assert cfg.source == "tello"
         assert cfg.mavlink_address == "udp://:14540"
         assert cfg.rtsp_url is None
         assert cfg.edge_ws == "ws://localhost:9000"

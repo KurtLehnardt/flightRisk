@@ -1157,9 +1157,9 @@ def test_flight_edge_appearance_only_by_default_never_builds_face(fake_vision, m
     runner = EdgeRunner(detector=FakeDetector(), face=object(), appearance_only=True)
     assert runner._face is None
 
-    # An explicit FLIGHTRISK_APPEARANCE_ONLY=1 also covers webcam and file.
+    # An explicit FLIGHTRISK_APPEARANCE_ONLY=1 also covers camera and file.
     monkeypatch.setenv("FLIGHTRISK_APPEARANCE_ONLY", "1")
-    for argv in (["--source", "webcam"], ["--source", "file", "--video", "clip.mp4"]):
+    for argv in (["--source", "camera"], ["--source", "file", "--video", "clip.mp4"]):
         runner = _build_runner(parser.parse_args(argv), log)
         assert fake_vision == []
         assert "face_embedding" not in _wire_detections(runner)[0]
@@ -1185,9 +1185,9 @@ def test_with_face_flag_enables_face(fake_vision, monkeypatch):
     assert len(fake_vision) == 3
     assert "face_embedding" in _wire_detections(runner)[0]
 
-    # Webcam keeps face recognition by default, as before.
+    # The camera source keeps face recognition by default, as before.
     monkeypatch.delenv("FLIGHTRISK_APPEARANCE_ONLY")
-    _build_runner(parser.parse_args(["--source", "webcam"]), log)
+    _build_runner(parser.parse_args(["--source", "camera"]), log)
     assert len(fake_vision) == 4
 
     # --appearance-only and --with-face cannot be combined, and a value of

@@ -38,13 +38,13 @@ loads face recognition and never sends a ``face_embedding``, unless
 ``--with-face`` is passed or ``FLIGHTRISK_APPEARANCE_ONLY=0`` is set. Person
 crops (JPEG) and ReID appearance embeddings are still sent to the ground over
 the edge WebSocket, which is authenticated with ``FLIGHTRISK_EDGE_TOKEN``.
-For ``--source webcam`` and ``--source file`` face recognition stays on by
+For ``--source camera`` and ``--source file`` face recognition stays on by
 default; ``--appearance-only`` or ``FLIGHTRISK_APPEARANCE_ONLY=1`` turns it
 off there too. An explicit flag wins over the environment variable.
 
 Run it with::
 
-    python -m flightrisk.edge_device --source webcam
+    python -m flightrisk.edge_device --source camera
     python -m flightrisk.edge_device --source file --video path/to/clip.mp4
     FLIGHTRISK_EDGE_TOKEN=secret python -m flightrisk.edge_device --ws-url ws://ground:9000
     python -m flightrisk.edge_device --source tello --tello-host 192.168.10.1 \
@@ -106,7 +106,7 @@ _CONTROL_RECV_TIMEOUT_S = 0.1
 class CV2FrameSource:
     """Iterable adapter over an OpenCV ``VideoCapture``.
 
-    Yields BGR frames until the capture is exhausted (a webcam that drops
+    Yields BGR frames until the capture is exhausted (a camera that drops
     off, or the end of a video file), then stops. Exposes ``release()`` so
     the core loop can tear the capture down on exit. Kept deliberately thin
     so the heavy cv2 capture object itself is created in ``main()``.
@@ -505,8 +505,8 @@ def _build_source(args: argparse.Namespace, parser: argparse.ArgumentParser, log
     """Construct a real cv2-backed frame source from parsed args."""
     import cv2  # lazy: keep module import light for tests
 
-    if args.source == "webcam":
-        log.info("edge_source_webcam", index=0)
+    if args.source == "camera":
+        log.info("edge_source_camera", index=0)
         return CV2FrameSource(cv2.VideoCapture(0))
 
     # args.source == "file"
@@ -521,7 +521,7 @@ def _resolve_appearance_only(args: argparse.Namespace, environ: Any = None) -> b
 
     ``--appearance-only`` or ``--with-face`` wins. Otherwise an explicit
     ``FLIGHTRISK_APPEARANCE_ONLY`` decides. Otherwise a flying source
-    (``tello``, ``fake``) is appearance-only and ``webcam``/``file`` are not.
+    (``tello``, ``fake``) is appearance-only and ``camera``/``file`` are not.
     Raises ``ValueError`` when the environment variable is not a boolean.
     """
     explicit = getattr(args, "appearance_only", None)
@@ -626,9 +626,9 @@ def _parse_alt_slot(raw: str) -> float:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FlightRisk edge-device program")
     parser.add_argument(
-        "--source", choices=("webcam", "file", "tello", "fake"), default="webcam",
-        help="Frame source: local webcam (index 0), a video file, a Tello drone "
-             "(flies), or an in-process fake Tello (flies, no hardware)",
+        "--source", choices=("camera", "file", "tello", "fake"), default="camera",
+        help="Frame source: the drone's onboard camera (index 0), a video file, "
+             "a Tello drone (flies), or an in-process fake Tello (flies, no hardware)",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
     parser.add_argument(

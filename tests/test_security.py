@@ -55,7 +55,7 @@ def app_with_auth(monkeypatch):
     # Stub heavy components so routes don't crash
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
-    app_mod._state["source"] = "webcam"
+    app_mod._state["source"] = "tello"
     app_mod._state["running"] = False
     app_mod._state["target_photo"] = None
     app_mod._state["target_description"] = None
@@ -79,7 +79,7 @@ def app_no_auth(monkeypatch):
     monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", None)
     app_mod._state["db"] = MagicMock()
     app_mod._state["metrics"] = MagicMock()
-    app_mod._state["source"] = "webcam"
+    app_mod._state["source"] = "tello"
     app_mod._state["running"] = False
     app_mod._state["target_photo"] = None
     app_mod._state["target_description"] = None
@@ -323,7 +323,7 @@ class TestSocketIOAuth:
         monkeypatch.setattr(app_mod, "_FLIGHTRISK_API_KEY", "test-key-123")
         app_mod._state["db"] = MagicMock()
         app_mod._state["metrics"] = MagicMock()
-        app_mod._state["source"] = "webcam"
+        app_mod._state["source"] = "tello"
         app_mod._state["running"] = False
         app_mod._state["target_photo"] = None
         app_mod._state["target_description"] = None

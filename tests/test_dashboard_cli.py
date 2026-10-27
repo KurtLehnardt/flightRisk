@@ -39,10 +39,10 @@ class TestSourceFileRequiresVideo:
 
     def test_other_sources_do_not_require_video(self):
         with patch.object(dashboard_main, "run_dashboard") as mock_run:
-            _run_main(["--source", "webcam"])
+            _run_main(["--source", "edge"])
             mock_run.assert_called_once()
             source_config = mock_run.call_args[0][0]
-            assert source_config.source == "webcam"
+            assert source_config.source == "edge"
             assert source_config.video_path is None
 
 
