@@ -103,8 +103,10 @@ What callers do with a result that is not OK:
 * **LAND ALL and `DroneFleet.broadcast_command`:** a drone whose command was
   not executed is reported with a `CommandNotExecutedError`, so it is not
   counted as reached.
-* **Manual commands and the search pattern:** reported to the browser as a
-  `command_dropped` event; the search pattern still advances as before.
+* **Manual commands and the search pattern:** a dropped move is emitted over
+  the socket as a `command_dropped` event and logged. The browser UI does not
+  display this event yet, so the operator does not see it. The search pattern
+  still advances as before.
 
 Why this convention: the Tello controller's flight logic (from the edge
 fleet work) returns `True`/`False` from `takeoff()`, `move()` and `rotate()`
