@@ -11,7 +11,7 @@ def test_windows_setup_doc_and_script():
 
     assert "py -3.13" in script
     assert "venv\\Scripts\\python.exe" in script
-    assert "-m pip install -r requirements.txt -r requirements-dev.txt" in script
+    assert "-m pip install -r requirements-edge.txt -r requirements-dev.txt" in script
     assert "yolo11n.pt" in script
     assert "ollama pull" not in script.lower()
     assert "convert_insightface" not in script

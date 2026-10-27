@@ -1,8 +1,9 @@
 # FlightRisk - Windows edge install script (drone 2 edge process)
 #
 # Creates the Python 3.13 virtual environment, installs the Python
-# dependencies and downloads the yolo11n detection weights. It deliberately
-# skips Ollama and InsightFace model setup, because the edge role does not use
+# edge dependencies from requirements-edge.txt (not the full requirements.txt,
+# so InsightFace, Ollama, open_clip and MediaPipe are never installed) and
+# downloads the yolo11n detection weights. It also skips Ollama and InsightFace model setup, because the edge role does not use
 # the on-device language model or face matching.
 #
 # Usage (regular PowerShell, from the repository root):
@@ -52,7 +53,7 @@ if (-not (Test-Path $VenvPython)) {
 # Activate.ps1 execution policy block.
 Write-Step "Step 3/4: Installing Python dependencies"
 Invoke-Checked "Upgrading pip" { venv\Scripts\python.exe -m pip install --upgrade pip }
-Invoke-Checked "Installing requirements" { venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt }
+Invoke-Checked "Installing edge requirements" { venv\Scripts\python.exe -m pip install -r requirements-edge.txt -r requirements-dev.txt }
 
 # Step 4: yolo11n weights
 Write-Step "Step 4/4: Downloading yolo11n.pt"

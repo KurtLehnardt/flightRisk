@@ -18,7 +18,7 @@ cd flightRisk
 powershell -ExecutionPolicy Bypass -File scripts\install_windows.ps1
 ```
 
-The script runs `py -3.13 -m venv venv`, then `venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt`, and downloads `yolo11n.pt`. It calls the venv python directly, which avoids the `Activate.ps1` execution policy block. It does not install Ollama and does not set up InsightFace models.
+The script runs `py -3.13 -m venv venv`, then `venv\Scripts\python.exe -m pip install -r requirements-edge.txt -r requirements-dev.txt`, and downloads `yolo11n.pt`. It calls the venv python directly, which avoids the `Activate.ps1` execution policy block. It installs `requirements-edge.txt`, not `requirements.txt`, so InsightFace, Ollama, open_clip and MediaPipe are never installed, and it does not set up their models.
 
 ## 3. Wired link to the Mac (AP-path)
 
