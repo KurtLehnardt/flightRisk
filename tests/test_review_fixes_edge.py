@@ -539,6 +539,7 @@ def test_second_land_does_not_disturb_a_confirming_land(tello_on_wire):
 
     second = threading.Thread(target=ctrl.land, daemon=True)
     second.start()
+    assert wait_for(lambda: ctrl._lands_in_progress == 2)
     time.sleep(0.3)
     assert wire.sent == ["takeoff", "land"]
     wire.release("land")
