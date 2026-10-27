@@ -36,6 +36,8 @@ class CameraModel:
     flight_time_s: float
     source: str
     sweep_width_m: Optional[float] = None
+    max_alt_m: float = MAX_ALT_M  # Platform flight-height ceiling (AGL), at most the regulatory one.
+    max_range_m: Optional[float] = None  # Maximum distance from the operator, or None if not range-limited.
 
     @property
     def is_ground(self) -> bool:
@@ -50,7 +52,12 @@ TELLO = CameraModel(
     gimbal_pitch_deg=0.0,
     max_speed_mps=8.0,
     flight_time_s=13 * 60,
-    source="https://www.ryzerobotics.com/tello/specs",
+    source=(
+        "https://www.ryzerobotics.com/tello/specs "
+        "(published Max Flight Height 30 m and Max Flight Distance 100 m, checked 2026-10-27)"
+    ),
+    max_alt_m=30.0,  # Published Max Flight Height.
+    max_range_m=100.0,  # Published Max Flight Distance.
 )
 
 OPEN_QUAD_4K = CameraModel(
@@ -99,6 +106,13 @@ class CoveragePlan:
     time_per_km2_s: float
     battery_swaps_per_km2: int
     person_px_at_alt: float
+    feasible: bool = True
+    infeasible_reason: str = ""
+
+
+def required_range_m(area_m2: float) -> float:
+    """Distance from a launch point at the centre of a square area to its corner."""
+    return math.sqrt(area_m2) * math.sqrt(2) / 2
 
 
 def plan_coverage(
@@ -109,13 +123,20 @@ def plan_coverage(
     max_alt_m: float = MAX_ALT_M,
     turn_time_s: float = 6.0,
     swap_time_s: float = DEFAULT_SWAP_TIME_S,
+    area_m2: float = KM2_M2,
 ) -> CoveragePlan:
     """Plan a coverage sortie for one drone (or one ground team) over one km squared.
 
     min_person_px is the smallest person height in pixels the detector handles.
     It is a parameter so the measured value from the altitude benchmark can be
     fed in. The altitude is the highest one that keeps a person at least
-    min_person_px tall, capped at min(max_alt_m, 120 m).
+    min_person_px tall, capped at min(camera.max_alt_m, max_alt_m, 120 m).
+
+    The plan is marked infeasible when the platform has a range limit and the
+    search area (launch point at its centre) reaches beyond it. The time and
+    altitude are still computed so the number can be compared, but must not be
+    presented as achievable. area_m2 is used only for that range check; all
+    times stay per km squared.
     """
     if min_person_px <= 0:
         raise ValueError("min_person_px must be positive")
@@ -129,7 +150,7 @@ def plan_coverage(
         rate = lane * speed
         return CoveragePlan(camera.name, 0.0, 0.0, swath, lane, speed, rate, KM2_M2 / rate, 0, 0.0)
 
-    cap = min(max_alt_m, MAX_ALT_M)
+    cap = min(camera.max_alt_m, max_alt_m, MAX_ALT_M)
     half_tan = math.tan(math.radians(camera.hfov_deg) / 2)
     wanted_gsd = person_height_m / min_person_px
     alt = min(cap, wanted_gsd * camera.width_px / (2 * half_tan))
@@ -144,7 +165,14 @@ def plan_coverage(
     air_s = track_m / speed + n_lanes * turn_time_s
     swaps = max(0, math.ceil(air_s / camera.flight_time_s) - 1)
     total_s = air_s + swaps * swap_time_s
-    return CoveragePlan(camera.name, alt, gsd, swath, lane, speed, rate, total_s, swaps, person_height_m / gsd)
+    feasible = True
+    reason = ""
+    if camera.max_range_m is not None and required_range_m(area_m2) > camera.max_range_m:
+        feasible = False
+        reason = f"area needs {required_range_m(area_m2):.0f} m of range, platform limit is {camera.max_range_m:.0f} m"
+    return CoveragePlan(
+        camera.name, alt, gsd, swath, lane, speed, rate, total_s, swaps, person_height_m / gsd, feasible, reason
+    )
 
 
 def time_to_search_table(
@@ -154,10 +182,14 @@ def time_to_search_table(
     min_person_px: float = 24.0,
     **plan_kwargs,
 ) -> list[dict]:
-    """Return rows of preset, n, alt_m, lane_m and hours to search area_m2."""
+    """Return rows of preset, n, alt_m, lane_m, hours and feasibility for area_m2.
+
+    hours is the idealised time even for an infeasible row; callers show
+    feasible=False rows as infeasible instead of as a time.
+    """
     rows = []
     for camera in presets:
-        plan = plan_coverage(camera, min_person_px, **plan_kwargs)
+        plan = plan_coverage(camera, min_person_px, area_m2=area_m2, **plan_kwargs)
         for n in n_drones:
             hours = plan.time_per_km2_s * (area_m2 / KM2_M2) / n / 3600
             rows.append(
@@ -167,6 +199,8 @@ def time_to_search_table(
                     "alt_m": round(plan.alt_m, 1),
                     "lane_m": round(plan.lane_spacing_m, 1),
                     "hours": round(hours, 3),
+                    "feasible": plan.feasible,
+                    "reason": plan.infeasible_reason,
                 }
             )
     return rows
@@ -175,7 +209,8 @@ def time_to_search_table(
 def format_markdown_table(rows: list[dict]) -> str:
     lines = ["| preset | n | alt_m | lane_m | hours |", "|---|---|---|---|---|"]
     for r in rows:
-        lines.append(f"| {r['preset']} | {r['n']} | {r['alt_m']} | {r['lane_m']} | {r['hours']} |")
+        hours = r["hours"] if r.get("feasible", True) else f"INFEASIBLE ({r['reason']})"
+        lines.append(f"| {r['preset']} | {r['n']} | {r['alt_m']} | {r['lane_m']} | {hours} |")
     return "\n".join(lines)
 
 

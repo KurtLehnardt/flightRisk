@@ -27,8 +27,9 @@ def test_altitude_capped_at_120():
 
 
 def test_min_pixels_is_a_parameter():
-    low = plan_coverage(TELLO, min_person_px=40)
-    high = plan_coverage(TELLO, min_person_px=10)
+    # The open quad is used because the Tello's 30 m ceiling caps both of these.
+    low = plan_coverage(OPEN_QUAD_4K, min_person_px=40)
+    high = plan_coverage(OPEN_QUAD_4K, min_person_px=10)
     assert low.alt_m < high.alt_m
     assert low.person_px_at_alt == pytest.approx(40)
 
@@ -67,3 +68,33 @@ def test_cli_prints_markdown_table(capsys):
     assert "| preset | n | alt_m | lane_m | hours |" in out
     assert "|---|" in out
     assert "| Tello | 5 |" in out
+
+
+def test_tello_altitude_capped_by_platform():
+    assert TELLO.max_alt_m == 30.0
+    plan = plan_coverage(TELLO, min_person_px=24)
+    assert plan.alt_m == 30.0
+    plan = plan_coverage(TELLO, min_person_px=24, max_alt_m=500)
+    assert plan.alt_m == 30.0
+    plan = plan_coverage(TELLO, min_person_px=24, max_alt_m=10)
+    assert plan.alt_m == 10.0
+    assert plan_coverage(OPEN_QUAD_4K, min_person_px=2).alt_m == 120.0
+
+
+def test_range_limited_plan_marked_infeasible():
+    plan = plan_coverage(TELLO, min_person_px=24)
+    assert not plan.feasible
+    assert "range" in plan.infeasible_reason
+    small = plan_coverage(TELLO, min_person_px=24, area_m2=100 * 100)
+    assert small.feasible
+    assert plan_coverage(OPEN_QUAD_4K, min_person_px=24).feasible
+    assert plan_coverage(GROUND_TEAM, min_person_px=24).feasible
+
+
+def test_cli_shows_infeasible_instead_of_time(capsys):
+    assert coverage.main(["--min-px", "24"]) == 0
+    out = capsys.readouterr().out
+    tello_rows = [line for line in out.splitlines() if line.startswith("| Tello |")]
+    assert tello_rows and all("INFEASIBLE" in line for line in tello_rows)
+    quad_rows = [line for line in out.splitlines() if line.startswith("| Open quad 4K |")]
+    assert quad_rows and all("INFEASIBLE" not in line for line in quad_rows)
