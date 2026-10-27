@@ -7,11 +7,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from flightrisk.fleet_protocol.constants import (
+    DIRECTION_EDGE_TO_GROUND,
     DIRECTION_GROUND_TO_EDGE,
     EMERGENCY_LAND_ALL,
     FAILSAFE_MAX_BYTES,
     FAILSAFE_TYPES,
     LAND,
+    LEGACY_EDGE_TO_GROUND_TYPES,
+    LEGACY_GROUND_TO_EDGE_TYPES,
+    LEGACY_MAX_BYTES,
     MAX_MESSAGE_BYTES,
 )
 from flightrisk.fleet_protocol.checks import (
@@ -49,19 +53,39 @@ def _parse_finite_float(text: str) -> float:
     return value
 
 
+# The legacy non-fleet types that may travel in each direction. They are
+# allowed up to ``LEGACY_MAX_BYTES``; fleet messages up to ``MAX_MESSAGE_BYTES``.
+_LEGACY_TYPES_BY_DIRECTION = {
+    DIRECTION_GROUND_TO_EDGE: LEGACY_GROUND_TO_EDGE_TYPES,
+    DIRECTION_EDGE_TO_GROUND: LEGACY_EDGE_TO_GROUND_TYPES,
+}
+
+
+def _is_legacy(msg: Any, direction: str) -> bool:
+    """True when *msg* is an object whose ``type`` is a legacy type of *direction*."""
+    legacy = _LEGACY_TYPES_BY_DIRECTION.get(direction) if isinstance(direction, str) else None
+    if not legacy or not isinstance(msg, Mapping):
+        return False
+    mtype = msg.get("type")
+    return isinstance(mtype, str) and mtype in legacy
+
+
 def encode(msg: Mapping[str, Any], *, direction: str, proto: int) -> str:
     """Validate *msg* for *direction* and *proto*, then serialise it as compact JSON.
 
     Raises ``ProtocolError`` for an invalid message or one larger than
-    ``MAX_MESSAGE_BYTES`` encoded.
+    ``MAX_MESSAGE_BYTES`` encoded (``LEGACY_MAX_BYTES`` for a legacy
+    ``detections``, ``set_target`` or ``stream_video`` message in its own
+    direction).
     """
     validate_for_direction(msg, direction, proto=proto)
     try:
         text = json.dumps(msg, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise ProtocolError(f"control message cannot be encoded as JSON: {exc}") from exc
-    if len(text.encode("utf-8")) > MAX_MESSAGE_BYTES:
-        raise ProtocolError(f"encoded control message exceeds {MAX_MESSAGE_BYTES} bytes")
+    limit = LEGACY_MAX_BYTES if _is_legacy(msg, direction) else MAX_MESSAGE_BYTES
+    if len(text.encode("utf-8")) > limit:
+        raise ProtocolError(f"encoded control message exceeds {limit} bytes")
     return text
 
 
@@ -150,21 +174,29 @@ def failsafe_type_of(raw: Any, *, max_bytes: int = FAILSAFE_MAX_BYTES) -> str | 
     return None
 
 
+def _wire_size(raw: Any, limit: int) -> int:
+    """The size of *raw* in bytes (UTF-8 for ``str``), or more than *limit* if it is larger."""
+    if isinstance(raw, (bytes, bytearray)):
+        return len(raw)
+    if isinstance(raw, str):
+        if len(raw) > limit:
+            # Never fewer bytes than characters: skip encoding a huge string.
+            return len(raw)
+        return len(raw.encode("utf-8", "surrogatepass"))
+    raise ProtocolError(f"control message must be text or bytes, got {type(raw).__name__}")
+
+
 def _parse_strict(raw: Any, max_bytes: int) -> Any:
     """Parse *raw* as strict JSON, or raise ``ProtocolError``."""
+    if _wire_size(raw, max_bytes) > max_bytes:
+        raise ProtocolError(f"control message exceeds {max_bytes} bytes")
     if isinstance(raw, (bytes, bytearray)):
-        if len(raw) > max_bytes:
-            raise ProtocolError(f"control message exceeds {max_bytes} bytes")
         try:
             text = bytes(raw).decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ProtocolError("control message is not valid UTF-8") from exc
-    elif isinstance(raw, str):
-        if len(raw) > max_bytes or len(raw.encode("utf-8", "surrogatepass")) > max_bytes:
-            raise ProtocolError(f"control message exceeds {max_bytes} bytes")
-        text = raw
     else:
-        raise ProtocolError(f"control message must be text or bytes, got {type(raw).__name__}")
+        text = raw
     try:
         return json.loads(
             text,
@@ -192,6 +224,12 @@ def decode(
     invalid UTF-8 or JSON, repeated keys, ``NaN``/``Infinity``, nesting too
     deep for the parser, and anything ``validate_for_direction`` rejects.
 
+    *max_bytes* applies to fleet messages. A legacy message of the direction
+    (``detections`` from an edge, ``set_target`` or ``stream_video`` from a
+    ground) may be up to ``max(max_bytes, LEGACY_MAX_BYTES)`` (1 MiB, the
+    WebSocket frame limit), as before v2; it is parsed with the same strict
+    rules and passed through by type, so its own handler checks it.
+
     Fail-safe exception (ground-to-edge direction only): when the strict
     parse rejects *raw* but ``failsafe_type_of`` reads it as a landing
     (bounded by ``max(max_bytes, FAILSAFE_MAX_BYTES)``), the result is
@@ -202,8 +240,12 @@ def decode(
     """
     if not (_is_int(max_bytes) and max_bytes > 0):
         raise ProtocolError(f"max_bytes must be a positive integer, got {_short(max_bytes)}")
+    has_legacy = isinstance(direction, str) and direction in _LEGACY_TYPES_BY_DIRECTION
+    legacy_limit = max(max_bytes, LEGACY_MAX_BYTES) if has_legacy else max_bytes
     try:
-        msg = _parse_strict(raw, max_bytes)
+        msg = _parse_strict(raw, legacy_limit)
+        if legacy_limit > max_bytes and not _is_legacy(msg, direction) and _wire_size(raw, max_bytes) > max_bytes:
+            raise ProtocolError(f"control message exceeds {max_bytes} bytes")
     except ProtocolError:
         if direction == DIRECTION_GROUND_TO_EDGE:
             landing = failsafe_type_of(raw, max_bytes=max(max_bytes, FAILSAFE_MAX_BYTES))

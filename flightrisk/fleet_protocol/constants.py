@@ -271,6 +271,13 @@ MAX_MESSAGE_BYTES = 64 * 1024
 # ``websockets`` library, which ``transport.py`` uses on both ends, so every
 # message the transport can deliver is within it. Larger input is not parsed.
 FAILSAFE_MAX_BYTES = 1024 * 1024
+# Size limit for the legacy non-fleet messages in ``decode`` and ``encode``
+# (``LEGACY_GROUND_TO_EDGE_TYPES`` and ``LEGACY_EDGE_TO_GROUND_TYPES``, in
+# their own direction). ``MAX_MESSAGE_BYTES`` applies to fleet messages only:
+# a ``detections`` message with two crops and a thumbnail is over 100 KB, and
+# the pre-v2 transport accepted every legacy message up to the WebSocket
+# frame limit.
+LEGACY_MAX_BYTES = FAILSAFE_MAX_BYTES
 
 # Lanes are horizontal moves flown at the assigned altitude slot. Vertical
 # moves are not lane directions, because they would break the altitude

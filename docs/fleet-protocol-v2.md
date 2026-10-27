@@ -93,7 +93,9 @@ kept; v2 fields are in addition to them.
 
 The legacy `set_target` and `stream_video` messages also travel from ground
 to edge. They are not fleet control messages: the strict validators let them
-through by type, and their existing handlers check them.
+through by type, and their existing handlers check them. `decode` and
+`encode` allow them up to `LEGACY_MAX_BYTES` (1 MiB, the WebSocket frame
+limit), not the 64 KiB fleet limit (see "Caps and strictness").
 
 ### Edge to ground
 
@@ -106,7 +108,10 @@ through by type, and their existing handlers check them.
 | `nack` | v1 | `for`, `drone_id`, `reason`, **`cmd_id`** (required in v2), optional **`epoch_seen`**, **`plan_id`**, **`detail`** (printable text up to 200 characters). A nack for `assign_lanes` still needs `lanes_total` |
 
 The legacy `detections` message (crops, embeddings, thumbnails) also travels
-from edge to ground and is let through by type only.
+from edge to ground and is let through by type only. A real one is often
+over 64 KiB (two detections with crops and a thumbnail come to about
+115 KB), so `decode` and `encode` allow it up to `LEGACY_MAX_BYTES` (1 MiB,
+the WebSocket frame limit), as the pre-v2 transport did.
 
 ### Ground to ground (peer link, v2 only)
 
@@ -308,7 +313,8 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
   | Limit | Value |
   |---|---|
-  | Encoded message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
+  | Encoded fleet message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
+  | Encoded legacy message (`detections` from an edge, `set_target` or `stream_video` from a ground) | 1 MiB (`LEGACY_MAX_BYTES`, the WebSocket frame limit; a larger caller `max_bytes` raises it) |
   | Top-level fields | 32 |
   | Nesting depth | 8 |
   | Values in one message | 10,000 |
@@ -415,7 +421,11 @@ this layer.
 - **Use the fail-safe decoder.** An edge that parses frames itself must
   keep the landing guarantee: use `decode` in the ground-to-edge direction
   (or `failsafe_type_of` when its own parse fails), never a strict parse
-  alone.
+  alone. `decode` can take every frame of the shared socket: the legacy
+  `detections`, `set_target` and `stream_video` messages pass by type in
+  their own direction up to 1 MiB, so routing them through it does not
+  refuse a large `detections` frame. They are still parsed strictly, so a
+  legacy sender must not put `NaN` or repeated keys in them.
 - **Record `cmd_id` on arrival.** The edge records a command's `cmd_id` as
   pending when it arrives, before executing it, so a retry that arrives
   while the first copy is still running is recognised as a duplicate and

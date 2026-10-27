@@ -16,6 +16,7 @@ Everything here is pure; no socket, drone or file is touched.
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 
@@ -626,3 +627,101 @@ def test_decode_returns_a_strictly_parsed_landing_even_if_validation_fails(monke
         fp.decode('{"type":"land"}', direction=E2G, proto=2)
     with pytest.raises(fp.ProtocolError, match="validator refused"):
         fp.decode('{"type":"LAND"}', direction=G2E, proto=2)
+
+
+# ===========================================================================
+# Legacy messages keep the WebSocket frame limit
+# ===========================================================================
+
+
+def _legacy_detections() -> dict:
+    """A ``detections`` message as ``EdgeRunner.to_dict`` builds it: two crops and a thumbnail."""
+    rng = random.Random(7)
+
+    def jpeg_b64(size: int) -> str:
+        return base64.b64encode(bytes(rng.randrange(256) for _ in range(size))).decode()
+
+    detection = {
+        "bbox": [10, 20, 110, 220],
+        "confidence": 0.91,
+        "reid_embedding": [round(rng.uniform(-1, 1), 6) for _ in range(512)],
+        "crop": jpeg_b64(34_000),
+    }
+    return {
+        "type": "detections",
+        "timestamp": 1730000000.25,
+        "frame_id": 42,
+        "frame_width": 960,
+        "frame_height": 720,
+        "thumbnail": jpeg_b64(18_000),
+        "detections": [detection, dict(detection, crop=jpeg_b64(24_000))],
+        "drone_id": "drone-1",
+        "rel_x_cm": 120.5,
+        "rel_y_cm": -40.0,
+        "heading_deg": 90.0,
+    }
+
+
+def test_a_legacy_detections_message_over_64_kib_is_accepted():
+    msg = _legacy_detections()
+    raw = json.dumps(msg)
+    assert 110_000 < len(raw) < 120_000  # about 115 KB, like a real frame
+    for proto in (1, 2):
+        assert fp.decode(raw, direction=E2G, proto=proto) == msg
+        assert fp.decode(raw.encode(), direction=E2G, proto=proto) == msg
+        assert json.loads(fp.encode(msg, direction=E2G, proto=proto)) == msg
+    # It is still a legacy message only in its own direction.
+    for direction in (G2E, PEER):
+        with pytest.raises(fp.ProtocolError):
+            fp.decode(raw, direction=direction, proto=2)
+
+
+@pytest.mark.parametrize("mtype", sorted(fp.LEGACY_GROUND_TO_EDGE_TYPES))
+def test_legacy_ground_to_edge_messages_over_64_kib_are_accepted(mtype):
+    msg = {"type": mtype, "reid_embedding": [0.25] * 2048, "face_embedding": [0.5] * 512, "enabled": True}
+    big = dict(msg, note="x " * 60_000)
+    assert len(json.dumps(big)) > fp.MAX_MESSAGE_BYTES
+    for candidate in (msg, big):
+        assert fp.decode(json.dumps(candidate), direction=G2E, proto=2, require_fence=True) == candidate
+    with pytest.raises(fp.ProtocolError):
+        fp.decode(json.dumps(big), direction=E2G, proto=2)
+
+
+def test_the_64_kib_limit_still_applies_to_fleet_messages():
+    # Many short strings: valid apart from its size.
+    telemetry = dict(_telemetry(), notes=["geofence ok"] * 6_000)
+    raw = json.dumps(telemetry)
+    assert fp.MAX_MESSAGE_BYTES < len(raw) < fp.LEGACY_MAX_BYTES
+    with pytest.raises(fp.ProtocolError, match=f"exceeds {fp.MAX_MESSAGE_BYTES} bytes"):
+        fp.decode(raw, direction=E2G, proto=1)
+    with pytest.raises(fp.ProtocolError, match="exceeds"):
+        fp.encode(telemetry, direction=E2G, proto=1)
+    heartbeat = dict(fp.make_heartbeat(1, fence=FENCE), note="ok " * 25_000)
+    with pytest.raises(fp.ProtocolError, match=f"exceeds {fp.MAX_MESSAGE_BYTES} bytes"):
+        fp.decode(json.dumps(heartbeat), direction=G2E, proto=2)
+    state = dict(_node_state())
+    with pytest.raises(fp.ProtocolError, match="exceeds"):
+        fp.decode(json.dumps(state) + " " * fp.MAX_MESSAGE_BYTES, direction=PEER, proto=2)
+    # A caller's smaller max_bytes applies to fleet messages; legacy keep 1 MiB.
+    small = json.dumps(_telemetry())
+    with pytest.raises(fp.ProtocolError, match="exceeds 64 bytes"):
+        fp.decode(small, direction=E2G, proto=1, max_bytes=64)
+    assert fp.decode(json.dumps(_legacy_detections()), direction=E2G, proto=1, max_bytes=64)["type"] == "detections"
+
+
+def test_legacy_messages_over_the_frame_limit_are_refused():
+    huge = {"type": "detections", "thumbnail": "QUJD" * (fp.LEGACY_MAX_BYTES // 4 + 1)}
+    with pytest.raises(fp.ProtocolError, match="exceeds"):
+        fp.decode(json.dumps(huge), direction=E2G, proto=1)
+    with pytest.raises(fp.ProtocolError, match="exceeds"):
+        fp.encode(huge, direction=E2G, proto=1)
+    # A larger caller limit raises the legacy limit with it.
+    raw = json.dumps(huge)
+    assert fp.decode(raw, direction=E2G, proto=1, max_bytes=2 * fp.LEGACY_MAX_BYTES) == huge
+
+
+def test_landings_over_64_kib_still_land():
+    for mtype in sorted(fp.FAILSAFE_TYPES):
+        raw = json.dumps({"type": mtype, "pad": "a" * 100_000})
+        assert fp.decode(raw, direction=G2E, proto=2) == {"type": mtype}
+        assert fp.decode(raw, direction=G2E, proto=None, require_fence=True) == {"type": mtype}
