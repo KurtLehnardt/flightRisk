@@ -332,8 +332,13 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   | Any number | finite, magnitude at most 10^15 |
   | Integers (epochs, sequence numbers, counts) | 0 to 2^53 - 1 |
 
-  `drone_id` keeps its v1 rule (any non-empty string) apart from the length
-  limit. The v2 identifiers must also match the identifier pattern.
+  On the edge links `drone_id` keeps its v1 rule (any non-empty string)
+  apart from the length limit. The v2 identifiers must also match the
+  identifier pattern (`is_identifier`), and so must every drone id on the
+  peer link (see "Privacy"). The edge checks its `--drone-id` with
+  `is_identifier` at startup and exits with a clear error otherwise, because
+  a longer id would make the protocol drop its telemetry and acks and the
+  ground refuse to command it.
 - **Wire format.** `decode` rejects invalid UTF-8, invalid JSON, repeated
   keys, `NaN` and `Infinity`, numbers that overflow a float, integers with
   more digits than Python parses, and nesting too deep for the parser,

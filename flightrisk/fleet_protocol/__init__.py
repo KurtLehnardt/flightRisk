@@ -198,6 +198,7 @@ from flightrisk.fleet_protocol.constants import (
 )
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
+    is_identifier,
 )
 from flightrisk.fleet_protocol.validate import (
     validate_edge_to_ground,
@@ -349,6 +350,7 @@ __all__ = [
     "TELEMETRY_FIELDS",
     "TELEMETRY_FIELDS_V2",
     "ProtocolError",
+    "is_identifier",
     "Fence",
     "TelemetryV2",
     "GroundHello",

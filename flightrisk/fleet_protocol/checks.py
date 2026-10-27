@@ -67,6 +67,17 @@ def _is_id(value: Any) -> bool:
     return isinstance(value, str) and _ID_RE.fullmatch(value) is not None
 
 
+def is_identifier(value: Any) -> bool:
+    """True when *value* is a protocol identifier: 1 to ``MAX_ID_LEN`` characters
+    from letters, digits, ``.``, ``_``, ``:`` and ``-``, starting with a letter or digit.
+
+    Node ids, leader ids, plan ids and command ids must be identifiers, and so
+    must the drone ids a ground sends to its peer. An edge checks its
+    ``--drone-id`` with this at startup.
+    """
+    return _is_id(value)
+
+
 def _require(msg: Mapping[str, Any], key: str) -> Any:
     if key not in msg:
         raise ProtocolError(f"{_short(msg.get('type'))} message is missing {key!r}")
