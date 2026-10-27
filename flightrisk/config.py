@@ -52,6 +52,9 @@ class VisionConfig:
     reid_threshold: float = 0.55
     reid_model: str = "ViT-B-16"
     face_det_size: tuple[int, int] = (640, 640)
+    # InsightFace pack: buffalo_l (ResNet50, most accurate) or buffalo_s
+    # (MobileFaceNet, several times faster).
+    face_model: str = "buffalo_l"
     face_match_threshold: float = 0.45
     scorer_match_threshold: float = 0.45
     scorer_reid_weight: float = 0.35
@@ -183,6 +186,7 @@ class AmberConfig:
         env_map = {
             "FLIGHTRISK_DETECTOR_MODEL": ("vision", "detector_model", str),
             "FLIGHTRISK_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
+            "FLIGHTRISK_FACE_MODEL": ("vision", "face_model", str),
             "FLIGHTRISK_APPEARANCE_ONLY": ("vision", "appearance_only", _parse_bool),
             "FLIGHTRISK_DETECTOR_TILED": ("vision", "detector_tiled", _parse_bool),
             "FLIGHTRISK_DETECTOR_TILE_SIZE": ("vision", "detector_tile_size", int),

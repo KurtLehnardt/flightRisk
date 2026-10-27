@@ -19,12 +19,14 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from flightrisk import fleet_protocol
 from flightrisk.drone import coverage_sim as cs
 from flightrisk.drone import fleet_patterns as fp
+from flightrisk.drone import fleet_plan_check
 from flightrisk.drone.coverage import tello_sweep_model
 from flightrisk.drone.lane_executor import parse_lanes
 from flightrisk.drone.safety import MIN_MOVE_CM, SafetyEnvelope
-from flightrisk.fleet_protocol import validate_message
+from flightrisk.fleet_protocol import make_assign_lanes, validate_message
 
 SQUARE = fp.SQUARE_FOOTPRINT
 ROOM = tello_sweep_model(max_range_m=4.0)  # the 4 m demo: walls cap the view at 4 m; diagonal FOV by default
@@ -306,12 +308,11 @@ def test_fully_checked_plan_needs_no_override():
 # ---------------------------------------------------------------------------
 
 
-def test_lane_and_message_caps_match_the_fleet_protocol_v2():
-    # PR #96 (flightrisk/fleet_protocol.py, protocol v2): MAX_LANES = 1024 and
-    # MAX_MESSAGE_BYTES = 64 * 1024, measured as compact JSON. The planner
-    # keeps local copies until PR #96 is merged; change both together.
-    assert fp.MAX_LANES_PER_DRONE == fp.MAX_MOVES_PER_DRONE == 1024
-    assert fp.MAX_MESSAGE_BYTES == 65536
+def test_lane_and_message_caps_are_the_fleet_protocol_v2_caps():
+    # The planner takes both caps from flightrisk.fleet_protocol (PR #96), so a
+    # change there moves the planner with it; this pins the values and the link.
+    assert fp.MAX_LANES_PER_DRONE == fp.MAX_MOVES_PER_DRONE == fleet_protocol.MAX_LANES == 1024
+    assert fp.MAX_MESSAGE_BYTES == fleet_protocol.MAX_MESSAGE_BYTES == 65536
     assert 0 < fp.MESSAGE_RESERVE_BYTES < fp.MAX_MESSAGE_BYTES
 
 
@@ -326,13 +327,36 @@ def test_more_lanes_than_one_message_carries_are_refused():
         fp.plan_search(["a", "b"], 20_000, 200, footprint=SQUARE, geofence_cm=None)
 
 
-def test_message_above_the_size_cap_is_refused():
-    drone_id = "d" * (fp.MAX_MESSAGE_BYTES - fp.MESSAGE_RESERVE_BYTES)
-    plan = _hand_plan([fp.DronePlan(drone_id, (100, 0), fp.Region(0, 0, 200, 200), 100, (_lane("forward", 200),))])
+def _lane_plan(drone_id, count):
+    lanes = tuple(_lane("forward" if i % 2 == 0 else "back", 500) for i in range(count))
+    return _hand_plan([fp.DronePlan(drone_id, (100, 0), fp.Region(0, 0, 200, 600), 100, lanes)], area=(200, 600))
+
+
+def test_message_above_the_size_cap_is_refused(monkeypatch):
+    # The protocol bounds drone ids (64 chars) and lanes (1,024), so no plan the
+    # protocol accepts can exceed the real 64 KiB cap. Lower the planner's cap to
+    # just under the size of a valid 1,024-lane message to reach the size gate.
+    plan = _lane_plan("a", fp.MAX_LANES_PER_DRONE)
+    fields = plan.drones[0].assign_lanes_fields()
+    message = make_assign_lanes("a", fields["alt_cm"], fields["lanes"], fields["zone"])
+    size = len(json.dumps(message, separators=(",", ":")).encode())
+    assert fp.check_plan(plan, min_coverage=None) == []
+    monkeypatch.setattr(fleet_plan_check, "MAX_MESSAGE_BYTES", size - 1 + fp.MESSAGE_RESERVE_BYTES)
     problems = fp.check_plan(plan, min_coverage=None)
     assert any("byte limit" in p for p in problems), problems
-    short = _hand_plan([fp.DronePlan("d", (100, 0), fp.Region(0, 0, 200, 200), 100, (_lane("forward", 200),))])
-    assert fp.check_plan(short, min_coverage=None) == []
+    monkeypatch.setattr(fleet_plan_check, "MAX_MESSAGE_BYTES", size + fp.MESSAGE_RESERVE_BYTES)
+    assert fp.check_plan(plan, min_coverage=None) == []
+
+
+def test_largest_protocol_valid_message_fits_the_real_size_cap():
+    plan = _lane_plan("d" * fleet_protocol.MAX_ID_LEN, fp.MAX_LANES_PER_DRONE)
+    assert fp.check_plan(plan, min_coverage=None) == []
+
+
+def test_an_oversized_drone_id_is_refused_by_the_protocol_check():
+    drone_id = "d" * (fp.MAX_MESSAGE_BYTES - fp.MESSAGE_RESERVE_BYTES)
+    problems = fp.check_plan(_lane_plan(drone_id, 1), min_coverage=None)
+    assert any("assign_lanes message is invalid" in p for p in problems), [p[-120:] for p in problems]
 
 
 def test_every_feasible_plan_fits_the_protocol_caps():
