@@ -52,6 +52,7 @@ the local edge's connection. See ``GroundTransport`` and
 from __future__ import annotations
 
 import asyncio
+import errno
 import hmac
 import ipaddress
 import json
@@ -81,6 +82,7 @@ __all__ = [
     "parse_bind_hosts",
     "is_wildcard_host",
     "check_bind_hosts",
+    "check_literal_hosts",
 ]
 
 _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
@@ -102,6 +104,11 @@ _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
 # unplugged and the interface has no address) and logs when an address goes
 # away or comes back.
 _BIND_CHECK_INTERVAL_S = 2.0
+
+# Bind errors that mean "this address is not assigned to any interface here
+# (yet)": EADDRNOTAVAIL, and WSAEADDRNOTAVAIL on Windows. Only these let a
+# ground with a loopback listener start without its link address.
+_ADDRESS_MISSING_ERRNOS = frozenset({errno.EADDRNOTAVAIL, 10049})
 
 # Queued commands that an emergency_land_all supersedes: once the ground has
 # ordered every drone down, a takeoff or start_at that was still waiting in
@@ -189,8 +196,20 @@ def parse_bind_hosts(host: str | Iterable[str]) -> tuple[str, ...]:
                 "The list of bind hosts has an empty entry. Name each address, for example "
                 "127.0.0.1,10.42.0.1; an empty entry would listen on every interface."
             )
+        address = _ip_literal(entry)
+        if address is not None:
+            # Dedupe on the canonical form, so "::1" and "0:0:0:0:0:0:0:1"
+            # are one host; the canonical spelling is also what the
+            # loopback checks compare against.
+            entry = str(address)
         if entry not in hosts:
             hosts.append(entry)
+    if "localhost" in hosts and any(host in ("127.0.0.1", "::1") for host in hosts):
+        raise ValueError(
+            "The list of bind hosts names loopback twice: 'localhost' already covers 127.0.0.1 "
+            "and ::1, and listening on both would fail with 'address already in use'. "
+            "Name loopback once, for example 127.0.0.1,10.42.0.1."
+        )
     if not hosts:
         raise ValueError("No bind host was given. Name at least one address, for example 127.0.0.1.")
     return tuple(hosts)
@@ -203,7 +222,13 @@ def is_wildcard_host(host: str) -> bool:
         return True
     address = _ip_literal(host)
     if address is None:
-        return False
+        # The OS resolver also accepts legacy IPv4 spellings that
+        # ``ipaddress`` rejects ("0", "0.0", "0x0", "000.000.000.000"), and a
+        # bind to any of them listens on every interface.
+        try:
+            return socket.inet_aton(host) == b"\x00\x00\x00\x00"
+        except (OSError, ValueError):
+            return False
     if address.is_unspecified:
         return True
     mapped = getattr(address, "ipv4_mapped", None)
@@ -213,7 +238,34 @@ def is_wildcard_host(host: str) -> bool:
 def _has_token(token: str | None) -> bool:
     # An empty token would let any client pass the handshake with an empty
     # token, so it does not count as authentication for an exposed bind.
-    return token is not None and token != ""
+    # A whitespace-only token is as guessable as an empty one.
+    return token is not None and token.strip() != ""
+
+
+def check_literal_hosts(hosts: Iterable[str]) -> None:
+    """Apply the strict bind rules of a list of hosts; raises ``ValueError``.
+
+    No entry may be a wildcard address, and every entry that is not loopback
+    must be a literal IP address. Names and legacy spellings such as ``0`` or
+    ``0x0`` fail the second rule, because the OS resolver can turn them into
+    the wildcard or into more interfaces than intended.
+    """
+    hosts = tuple(hosts)
+    for host in hosts:
+        if is_wildcard_host(host):
+            raise ValueError(
+                f"Refusing to bind GroundTransport to the wildcard address {host!r} in a list of "
+                f"bind hosts: it listens on every interface, including a drone's open Wi-Fi. "
+                f"List the loopback address and the link address instead, for example "
+                f"127.0.0.1,10.42.0.1."
+            )
+    for host in hosts:
+        if host not in _LOOPBACK_HOSTS and _ip_literal(host) is None:
+            raise ValueError(
+                f"Refusing to bind GroundTransport to {host!r}: in a list of bind hosts every "
+                f"address other than loopback must be a literal IP address such as 10.42.0.1, "
+                f"because a name can resolve to more interfaces than intended."
+            )
 
 
 def check_bind_hosts(hosts: Iterable[str], token: str | None, *, list_form: bool = False) -> None:
@@ -233,21 +285,7 @@ def check_bind_hosts(hosts: Iterable[str], token: str | None, *, list_form: bool
     if not hosts:
         raise ValueError("No bind host was given. Name at least one address, for example 127.0.0.1.")
     if list_form:
-        for host in hosts:
-            if is_wildcard_host(host):
-                raise ValueError(
-                    f"Refusing to bind GroundTransport to the wildcard address {host!r} in a list of "
-                    f"bind hosts: it listens on every interface, including a drone's open Wi-Fi. "
-                    f"List the loopback address and the link address instead, for example "
-                    f"127.0.0.1,10.42.0.1."
-                )
-        for host in hosts:
-            if host not in _LOOPBACK_HOSTS and _ip_literal(host) is None:
-                raise ValueError(
-                    f"Refusing to bind GroundTransport to {host!r}: in a list of bind hosts every "
-                    f"address other than loopback must be a literal IP address such as 10.42.0.1, "
-                    f"because a name can resolve to more interfaces than intended."
-                )
+        check_literal_hosts(hosts)
     if not _has_token(token):
         for host in hosts:
             if host not in _LOOPBACK_HOSTS:
@@ -529,7 +567,10 @@ class EdgeTransport:
         while self._should_reconnect and (
             self._max_retries is None or self._retry_count < self._max_retries
         ):
-            delay = min(self._base_delay * (2**self._retry_count), self._max_delay)
+            # The exponent is capped so a long outage (an uncapped retry count
+            # reaches 2**1024 after about 34 minutes at a 2 s cap) cannot
+            # raise OverflowError and kill the reconnect task.
+            delay = min(self._base_delay * 2 ** min(self._retry_count, 16), self._max_delay)
             logger.info(
                 "[%s] Reconnecting in %.1fs (attempt %d)",
                 self._ws_url, delay, self._retry_count + 1,
@@ -762,7 +803,6 @@ class GroundTransport:
         address_probe: Callable[[str], bool] = _address_is_local,
         event_log: Any = None,
     ):
-        self._host = host
         self._hosts = parse_bind_hosts(host)
         self._hosts_list_form = _is_list_form(host)
         self._port = port
@@ -1110,6 +1150,18 @@ class GroundTransport:
                 except OSError as exc:
                     if host in _LOOPBACK_HOSTS or not can_degrade:
                         raise
+                    if exc.errno not in _ADDRESS_MISSING_ERRNOS:
+                        # Only a missing address (the link cable is out) is worth
+                        # starting without. "In use" or "permission denied" mean
+                        # something else owns the link address: an edge would
+                        # connect to it and hand over the token.
+                        raise OSError(
+                            exc.errno,
+                            f"Cannot bind the ground to {host}:{port}: {exc.strerror or exc}. "
+                            f"Only a missing address lets the ground start on loopback alone; "
+                            f"stop whatever already listens on {host}:{port} "
+                            f"(for example check_fleet_link.py --role server) and start again.",
+                        ) from exc
                     self._address_present[host] = False
                     self._note_bind_failure(host, port, exc)
                     continue
@@ -1142,8 +1194,8 @@ class GroundTransport:
         except asyncio.CancelledError:
             try:
                 server = await bind
-            except BaseException:
-                pass
+            except (Exception, asyncio.CancelledError):  # nothing to close if the bind failed; the cancellation is re-raised below
+                logger.debug("Bind cancelled mid-flight did not produce a listener", exc_info=True)
             else:
                 server.close()
                 await server.wait_closed()
@@ -1217,6 +1269,7 @@ class GroundTransport:
             if host in self._servers:
                 if present and was_present is False:
                     self._event_log.info("ground_bind_address_restored", host=host, port=self._bound_port)
+                    await self._verify_listener(host)
                 elif not present and was_present is not False:
                     self._event_log.warning(
                         "ground_bind_address_lost",
@@ -1240,6 +1293,53 @@ class GroundTransport:
                 return
             self._add_server(host, server, self._bound_port)
             self._event_log.info("ground_bind_recovered", host=host, port=self._bound_port)
+
+    async def _self_connect(self, address: str, port: int) -> bool:
+        """Whether a TCP connection to this machine's own listener at *address*:*port* succeeds."""
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=1.0)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+        return True
+
+    async def _verify_listener(self, host: str) -> None:
+        """After the address of a kept listener returns, check it still accepts and rebind if not.
+
+        A listener bound to an address that went away and came back may no
+        longer receive connections on some systems. The ground connects to
+        its own listener; when that fails the listener is closed and bound
+        again on the same port (``ground_bind_listener_rebound``). If the
+        new bind fails, the host counts as unbound and the watcher retries it.
+        """
+        old = self._servers.get(host)
+        if old is None or not old.sockets:
+            return
+        sockname = old.sockets[0].getsockname()
+        if await self._self_connect(sockname[0], sockname[1]):
+            return
+        self._event_log.warning("ground_bind_listener_unreachable", host=host, port=sockname[1])
+        self._servers.pop(host, None)
+        old.close()
+        await old.wait_closed()
+        try:
+            server = await self._serve_host(host, sockname[1])
+        except OSError as exc:
+            self._note_bind_failure(host, sockname[1], exc)
+            return
+        if self._server is None:
+            # stop() ran while the bind was in flight.
+            server.close()
+            await server.wait_closed()
+            return
+        self._add_server(host, server, sockname[1])
+        if self._server is old:
+            self._server = server
+        self._event_log.info("ground_bind_listener_rebound", host=host, port=sockname[1])
 
     async def _close_servers(self) -> None:
         servers = list(self._servers.values())
@@ -1660,6 +1760,16 @@ class GroundTransportSync:
     @property
     def port(self) -> int:
         return self._transport.port
+
+    @property
+    def bound_hosts(self) -> tuple[str, ...]:
+        """The bind hosts that currently have a listener."""
+        return self._transport.bound_hosts
+
+    @property
+    def unbound_hosts(self) -> tuple[str, ...]:
+        """While running, the bind hosts that have no listener yet (being retried)."""
+        return self._transport.unbound_hosts
 
     def now(self) -> float:
         """The ground's monotonic clock, the time base for ``start_at``."""

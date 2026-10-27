@@ -10,7 +10,7 @@ from flightrisk.dashboard.app import (
     resolve_dashboard_host,
     run_dashboard,
 )
-from flightrisk.transport import is_wildcard_host, parse_bind_hosts
+from flightrisk.transport import check_literal_hosts, parse_bind_hosts
 
 _SOURCE_CHOICES = ("tello", "mavlink", "file", "edge")
 _FLEET_NET_CHOICES = ("station", "ap")
@@ -187,12 +187,17 @@ def main():
         # In AP mode each laptop's Wi-Fi is joined to a Tello's open access
         # point, so a wildcard bind would put the edge socket on the drone's
         # network. The fleet binds loopback and the link address only.
-        if args.fleet and fleet_net == "ap" and any(is_wildcard_host(host) for host in edge_hosts):
-            parser.error(
-                f"--edge-host {args.edge_host!r} listens on every interface, including the "
-                f"Tello's open Wi-Fi. In AP fleet mode bind the loopback and link addresses "
-                f"only, for example --edge-host 127.0.0.1,10.42.0.1."
-            )
+        # The list rules apply to a single host too: "0", "0x0" and names
+        # that resolve to 0.0.0.0 would otherwise slip past a wildcard check.
+        if args.fleet and fleet_net == "ap":
+            try:
+                check_literal_hosts(edge_hosts)
+            except ValueError as exc:
+                parser.error(
+                    f"--edge-host {args.edge_host!r} is not allowed in AP fleet mode, where each "
+                    f"laptop joins a Tello's open Wi-Fi: {exc} Bind the loopback and link "
+                    f"addresses only, for example --edge-host 127.0.0.1,10.42.0.1."
+                )
 
     # Appearance-only is the default for this launcher. An explicit flag
     # wins, then an explicit FLIGHTRISK_APPEARANCE_ONLY.

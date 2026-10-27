@@ -164,7 +164,10 @@ def test_parse_bind_hosts_refuses_non_strings():
         parse_bind_hosts(["127.0.0.1", 9000])
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "", " ", "::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0"])
+@pytest.mark.parametrize(
+    "host",
+    ["0.0.0.0", "::", "", " ", "::0", "0:0:0:0:0:0:0:0", "::ffff:0.0.0.0", "0", "0.0", "0x0", "000.000.000.000"],
+)
 def test_wildcard_spellings(host):
     assert is_wildcard_host(host)
 
@@ -601,7 +604,14 @@ def test_cli_refuses_a_malformed_host_list():
         _run_dashboard_main(["--source", "edge", "--edge-host", "127.0.0.1,"])
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "127.0.0.1,0.0.0.0"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "0.0.0.0", "::", "127.0.0.1,0.0.0.0",
+        # Alternate spellings the OS resolver reads as 0.0.0.0, and a name that may resolve to it.
+        "0", "0.0", "0x0", "000.000.000.000", "127.0.0.1,0x0", "wildcard.example",
+    ],
+)
 def test_cli_refuses_wildcard_in_ap_fleet_mode(host):
     with pytest.raises(SystemExit):
         _run_dashboard_main(
@@ -619,3 +629,153 @@ def test_cli_keeps_legacy_wildcard_outside_ap_fleet_mode():
     assert config.edge_host == "0.0.0.0"
     config = _run_dashboard_main(["--source", "edge", "--edge-host", "0.0.0.0"], env={"FLIGHTRISK_FLEET_NET": "ap"})
     assert config.edge_host == "0.0.0.0"
+
+
+def test_cli_accepts_loopback_and_link_literals_in_ap_fleet_mode():
+    for host in ("127.0.0.1", LINK, f"127.0.0.1,{LINK}", "localhost"):
+        config = _run_dashboard_main(
+            ["--source", "edge", "--edge-host", host, "--fleet", "drone-1,drone-2"],
+            env={"FLIGHTRISK_FLEET_NET": "ap"},
+        )
+        assert config.edge_host == host
+
+
+@pytest.mark.parametrize("host", ["0", "0x0", "0.0", "000.000.000.000", "wildcard.example"])
+def test_alternate_wildcard_spellings_in_a_list_are_refused_before_binding(link, host):
+    async def scenario():
+        gt = _ground(link, host=["127.0.0.1", host])
+        with pytest.raises(ValueError):
+            await gt.start()
+        assert gt.bound_hosts == ()
+        assert link.serve_calls == []
+
+    asyncio.run(scenario())
+    with pytest.raises(ValueError):
+        check_bind_hosts((host,), TOKEN, list_form=True)
+
+
+def test_single_host_wildcard_spelling_keeps_the_token_rule():
+    # The single legacy form is unchanged: an explicit wildcard still works with a token.
+    check_bind_hosts(("0",), TOKEN)
+    with pytest.raises(ValueError, match="FLIGHTRISK_EDGE_TOKEN"):
+        check_bind_hosts(("0",), None)
+
+
+@pytest.mark.parametrize("token", ["", " ", "   ", "\t\n"])
+def test_blank_token_does_not_authorise_an_exposed_bind(token):
+    with pytest.raises(ValueError, match="FLIGHTRISK_EDGE_TOKEN"):
+        check_bind_hosts(("0.0.0.0",), token)
+    with pytest.raises(ValueError, match="FLIGHTRISK_EDGE_TOKEN"):
+        check_bind_hosts(("127.0.0.1", LINK), token, list_form=True)
+
+
+@pytest.mark.parametrize("err", [errno.EADDRINUSE, errno.EACCES, errno.EINVAL])
+def test_link_bind_error_other_than_missing_address_fails_start(link, err):
+    """Something else owns the link address: the ground must not start loopback-only."""
+    link.present = False
+    link.bind_errno = err
+
+    async def scenario():
+        log = EventLog()
+        gt = _ground(link, event_log=log)
+        with pytest.raises(OSError) as info:
+            await gt.start()
+        assert info.value.errno == err
+        assert LINK in str(info.value)
+        assert gt.bound_hosts == ()
+        assert gt._server is None
+        assert gt._bind_watch_task is None
+        assert log.named("ground_bind_unavailable") == []
+
+    asyncio.run(scenario())
+
+
+def test_windows_missing_address_code_still_degrades(link):
+    link.present = False
+    link.bind_errno = 10049  # WSAEADDRNOTAVAIL
+
+    async def scenario():
+        gt = _ground(link)
+        await gt.start()
+        try:
+            assert gt.bound_hosts == ("127.0.0.1",)
+            assert gt.unbound_hosts == (LINK,)
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_loopback_aliases_in_a_list_are_one_clear_error():
+    with pytest.raises(ValueError, match="loopback twice"):
+        parse_bind_hosts("127.0.0.1,localhost")
+    with pytest.raises(ValueError, match="loopback twice"):
+        parse_bind_hosts(["localhost", "::1", LINK])
+    assert parse_bind_hosts("::1,0:0:0:0:0:0:0:1") == ("::1",)
+
+
+def test_sync_wrapper_exposes_bound_and_unbound_hosts():
+    gts = GroundTransportSync(host="127.0.0.1", port=0)
+    assert gts.bound_hosts == ()
+    assert gts.unbound_hosts == ()
+    gts.start()
+    try:
+        assert gts.bound_hosts == ("127.0.0.1",)
+        assert gts.unbound_hosts == ()
+    finally:
+        gts._bridge.run(gts._transport.stop())
+
+
+def test_restored_address_with_unreachable_listener_is_rebound(link):
+    async def scenario():
+        log = EventLog()
+        gt = _ground(link, event_log=log)
+        await gt.start()
+        remote = None
+        try:
+            old = gt._servers[LINK]
+            link.present = False
+            await gt.recheck_binds()
+            real_self_connect = gt._self_connect
+            calls = []
+
+            async def broken_once(address, port):
+                calls.append((address, port))
+                return False if len(calls) == 1 else await real_self_connect(address, port)
+
+            gt._self_connect = broken_once
+            link.present = True
+            await gt.recheck_binds()
+            assert len(calls) == 1
+            assert gt._servers[LINK] is not old
+            assert len(log.named("ground_bind_listener_unreachable")) == 1
+            assert [e["host"] for e in log.named("ground_bind_listener_rebound")] == [LINK]
+            assert gt.bound_hosts == ("127.0.0.1", LINK)
+            remote = await _edge(link.port)
+            assert await _wait_until(lambda: len(gt._authenticated_clients) == 1)
+        finally:
+            if remote is not None:
+                await remote.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_restored_address_with_working_listener_is_kept(link):
+    async def scenario():
+        log = EventLog()
+        gt = _ground(link, event_log=log)
+        await gt.start()
+        try:
+            old = gt._servers[LINK]
+            link.present = False
+            await gt.recheck_binds()
+            link.present = True
+            await gt.recheck_binds()  # real self-connect to the simulated listener succeeds
+            assert gt._servers[LINK] is old
+            assert log.named("ground_bind_listener_rebound") == []
+            assert len(log.named("ground_bind_address_restored")) == 1
+        finally:
+            await gt.stop()
+
+    asyncio.run(scenario())

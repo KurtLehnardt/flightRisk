@@ -9,7 +9,11 @@ import asyncio
 
 import pytest
 
-from flightrisk.edge_device import _FLEET_RECONNECT_MAX_DELAY_S, _build_parser, _build_transport
+from flightrisk.edge_device import (
+    _FLEET_RECONNECT_MAX_DELAY_S,
+    _build_parser,
+    _build_transport,
+)
 from flightrisk.transport import EdgeTransport
 
 
@@ -49,12 +53,34 @@ def test_fleet_backoff_sequence(monkeypatch):
     assert delays == [1.0, 2.0, 2.0, 2.0, 2.0]
 
 
+@pytest.mark.parametrize("start_count", [2000, 1023, 1024, 10**6])
+def test_backoff_does_not_overflow_on_a_long_outage(monkeypatch, start_count):
+    delays = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def scenario():
+        edge = EdgeTransport(ws_url="ws://127.0.0.1:1", max_delay=_FLEET_RECONNECT_MAX_DELAY_S)
+        edge._should_reconnect = True
+        edge._retry_count = start_count
+        edge._max_retries = start_count + 2
+        assert await edge._reconnect() is False
+
+    asyncio.run(scenario())
+    assert delays == [2.0, 2.0]
+
+
 class _Built(Exception):
     """Raised by the patched transport builder to stop the program right after it."""
 
 
 def _capture_transport(monkeypatch):
-    import flightrisk.edge_device as edge_device
+    from flightrisk import edge_device
 
     built = []
     real_build = edge_device._build_transport

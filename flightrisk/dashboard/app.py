@@ -1365,6 +1365,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         log.info(
             "edge_ground_station_started",
             host=source_config.edge_host,
+            bound_hosts=list(transport.bound_hosts),
+            unbound_hosts=list(transport.unbound_hosts),
             port=transport.port,
             stream_video=app_state.stream_video,
             fleet=list(source_config.fleet_drones),
