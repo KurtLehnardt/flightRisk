@@ -13,7 +13,8 @@ import threading
 import time
 from typing import Callable
 
-from flightrisk.drone.controller import DroneController
+from flightrisk.drone.controller import DroneController, require_executed
+from flightrisk.drone.snapshot import legacy_telemetry_payload, read_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,11 @@ _CALL_DEADLINE_S = 30.0
 
 def _default_factory(name: str, host: str) -> DroneController:
     """Build a TelloController. Imported lazily so DroneFleet has no hard
-    dependency on the Tello backend (or its djitellopy dependency)."""
+    dependency on the Tello backend (or its djitellopy dependency).
+
+    Deprecated fallback for callers that construct ``DroneFleet()`` without
+    a factory; the dashboard always passes one from
+    ``flightrisk.drone.registry``."""
     from flightrisk.drone.tello import TelloController
     return TelloController(name=name, host=host)
 
@@ -105,17 +110,11 @@ class DroneFleet:
         return list(self._drones.keys())
 
     def get_all_telemetry(self) -> dict[str, dict]:
-        result = {}
-        for did, ctrl in self._drones.items():
-            result[did] = {
-                "battery": ctrl.state.battery,
-                "height": ctrl.state.height,
-                "temperature": ctrl.state.temperature,
-                "flight_time": ctrl.state.flight_time,
-                "is_flying": ctrl.state.is_flying,
-                "is_connected": ctrl.state.is_connected,
-            }
-        return result
+        # Legacy UI shape, built by the single snapshot adapter.
+        return {
+            did: legacy_telemetry_payload(read_telemetry(ctrl), include_connected=True)
+            for did, ctrl in self._drones.items()
+        }
 
     def broadcast_command(self, command: str, *args, **kwargs) -> dict[str, Exception | None]:
         """Call `command` on every registered drone, on every drone at once.
@@ -131,6 +130,11 @@ class DroneFleet:
         callers can surface partial failures (e.g. "land succeeded on
         drone-1 but drone-2 failed to respond").
 
+        A call that returns a result that was not executed (``False`` or a
+        non-OK ``CommandResult``, see ``command_result``) counts as a
+        failure, reported as a ``CommandNotExecutedError``, so LAND ALL never
+        counts a dropped land as delivered.
+
         Returns:
             Mapping of drone_id -> None (success) or the Exception raised.
         """
@@ -138,7 +142,7 @@ class DroneFleet:
             drones = list(self._drones.items())
 
         def call(drone: DroneController) -> None:
-            getattr(drone, command)(*args, **kwargs)
+            require_executed(getattr(drone, command)(*args, **kwargs), command)
 
         results = _call_each(drones, call, f"fleet-{command}")
         for drone_id, error in results.items():

@@ -44,6 +44,7 @@ import time
 from collections import deque
 from typing import Any, Callable
 
+from flightrisk.drone.controller import command_result
 from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
@@ -613,8 +614,9 @@ class LaneExecutor:
         Sets the abort flag first so a running sequence sends nothing more,
         then calls ``drone.land()`` directly; nothing is queued. If another
         thread is already inside ``drone.land()``, this call returns without
-        sending a second land. A failed land is logged and retried by the
-        monitor while the drone still reports flying.
+        sending a second land. A failed land (one that raised, or returned a
+        result that was not executed) is logged and retried by the monitor
+        while the drone still reports flying.
         """
         self._abort.set()
         with self._lock:
@@ -628,7 +630,16 @@ class LaneExecutor:
             return
         self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
         try:
-            self.drone.land()
+            result = command_result(self.drone.land(), "land")
+            if not result.ok:
+                # A land that was not executed is a failed land: the monitor
+                # retries it while the drone still reports flying.
+                self._log.error(
+                    "edge_land_not_executed",
+                    drone_id=self.drone_id,
+                    reason=reason,
+                    outcome=result.outcome.value,
+                )
         except Exception as exc:
             self._log.error("edge_land_error", drone_id=self.drone_id, reason=reason, error=repr(exc))
         finally:
@@ -842,10 +853,19 @@ class LaneExecutor:
             return False
         with self._lock:
             self._flying_lanes = False
-        if self._drone_takeoff() is False:
-            # A landing started after the check above. The controller checked
-            # the abort flag under its command lock and sent nothing.
-            self._log.warning("edge_takeoff_refused", drone_id=self.drone_id, reason="landing")
+        result = command_result(self._drone_takeoff(), "takeoff")
+        if not result.ok:
+            # Typically a landing started after the check above: the
+            # controller checked the abort flag under its command lock and
+            # sent nothing. Any other result that was not executed is
+            # treated the same way, so the drone is never recorded as
+            # airborne when it did not take off.
+            self._log.warning(
+                "edge_takeoff_refused",
+                drone_id=self.drone_id,
+                reason="landing",
+                outcome=result.outcome.value,
+            )
             return False
         with self._lock:
             self._takeoff_at_local_s = t_exec
@@ -859,7 +879,8 @@ class LaneExecutor:
         check it under their command lock immediately before sending the
         takeoff, so a ``land_now`` that runs between the abort check in
         ``_do_takeoff`` and the takeoff itself cannot be followed by a
-        takeoff. They return False when they refuse.
+        takeoff. They return False when they refuse. The raw return value is
+        passed back for ``command_result()`` to normalize.
         """
         takeoff = self.drone.takeoff
         try:
@@ -895,11 +916,17 @@ class LaneExecutor:
     def _command_move(self, direction: str, distance: int, record: bool) -> bool:
         if self._abort.is_set():
             return False
-        result = self.drone.move(direction, distance)
-        if result is False:
+        # Every return value is normalized (None/True: executed; False or a
+        # non-OK CommandResult: not executed), so a move the controller did
+        # not fly is never recorded in the dead-reckoned pose.
+        result = command_result(self.drone.move(direction, distance), "move")
+        if not result.ok:
             if self._abort.is_set():
                 return False
-            raise RuntimeError(f"move {direction} {distance} cm was dropped by the drone controller")
+            raise RuntimeError(
+                f"move {direction} {distance} cm was not executed by the drone controller "
+                f"({result.outcome.value})"
+            )
         if record:
             self.envelope.record_move(direction, distance)
         return not self._abort.is_set()

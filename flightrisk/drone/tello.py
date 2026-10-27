@@ -9,6 +9,7 @@ never touches the network, so the edge device can fly a simulated drone
 flight logic without hardware.
 """
 
+import math
 import threading
 import time
 import weakref
@@ -20,7 +21,26 @@ import numpy as np
 from djitellopy import Tello
 
 from flightrisk.config import get_config
-from flightrisk.drone.controller import DroneCapabilities, DroneController, DroneState
+from flightrisk.drone.controller import (
+    BASIC_FLIGHT,
+    CommandOutcome,
+    CommandResult,
+    DroneCapabilities,
+    DroneController,
+    DroneState,
+)
+from flightrisk.drone.snapshot import (
+    CELSIUS,
+    DEGREE,
+    IS_FLYING_COMMANDED,
+    METRE,
+    METRE_PER_SECOND,
+    PERCENT,
+    SECOND,
+    Reading,
+    TelemetrySnapshot,
+)
+from flightrisk.drone.snapshot import reading as _reading
 
 # Backward-compatible re-export so `from flightrisk.drone.tello import DroneState` still works
 __all__ = [
@@ -155,6 +175,25 @@ _STREAM_CHANNEL_POLL_S = 0.05
 # Directions accepted by the Tello's move commands.
 _MOVE_DIRECTIONS = ("up", "down", "left", "right", "forward", "back")
 
+#: Extra state-packet fields read on each state poll for ``snapshot()``.
+#: djitellopy serves these from the cached UDP state packet, so reading them
+#: sends nothing to the drone. (field, djitellopy getter, scale to SI, unit,
+#: source label) Units: vgx/vgy/vgz are decimetres per second, tof and baro
+#: (as returned by djitellopy) centimetres, attitude degrees. The speed unit
+#: follows the Tello SDK community documentation and has not been checked on
+#: hardware. Wi-Fi SNR is deliberately not read: it needs a ``wifi?`` query
+#: on the command channel, which would compete with flight commands.
+_EXTENDED_FIELDS: tuple[tuple[str, str, float, str, str], ...] = (
+    ("vx_mps", "get_speed_x", 0.1, METRE_PER_SECOND, "tello.vgx"),
+    ("vy_mps", "get_speed_y", 0.1, METRE_PER_SECOND, "tello.vgy"),
+    ("vz_mps", "get_speed_z", 0.1, METRE_PER_SECOND, "tello.vgz"),
+    ("tof_m", "get_distance_tof", 0.01, METRE, "tello.tof"),
+    ("baro_altitude_m", "get_barometer", 0.01, METRE, "tello.baro"),
+    ("pitch_deg", "get_pitch", 1.0, DEGREE, "tello.pitch"),
+    ("roll_deg", "get_roll", 1.0, DEGREE, "tello.roll"),
+    ("yaw_deg", "get_yaw", 1.0, DEGREE, "tello.yaw"),
+)
+
 
 class _StateReading(NamedTuple):
     """One Tello state packet as landing reads it. A field the packet lacks, or that is not a number, is None."""
@@ -173,6 +212,11 @@ class _LandAttempt(NamedTuple):
     sent_at: float  # time.monotonic() when the land was sent
     ok_seen: bool  # answered "ok" outside the lift guard: may back up ground state
     ok_alone: bool  # answered "ok" outside the reply guard: may confirm with the state stream lost
+
+
+def _dropped_busy(command: str) -> CommandResult:
+    """The result of a move or rotate dropped because another flight command holds the channel."""
+    return CommandResult(command, CommandOutcome.DROPPED_BUSY, "another flight command holds the command channel")
 
 
 def _state_int(state: dict, key: str) -> int | None:
@@ -311,6 +355,7 @@ class TelloController:
             max_move_cm=500,
             max_altitude_m=10,
             supports_missions=False,
+            features=BASIC_FLIGHT,
         )
         self._frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
@@ -382,6 +427,15 @@ class TelloController:
         self._lift_guard_until = 0.0
         self._reply_guard_until = 0.0
         self._zero_height_count = 0
+        # Telemetry bookkeeping for snapshot(). _measured_at maps each
+        # DroneState field ("battery", "height", "temperature",
+        # "flight_time") to the time.time() it was last read from the drone,
+        # by connect(), the state poller or read_battery()/read_height_cm().
+        # A field never read has no entry and shows up as None. _extended
+        # holds the extra state-packet readings of the last successful poll.
+        self._measured_at: dict[str, float] = {}
+        self._extended: dict[str, Reading] = {}
+        self._poll_failures = 0
         self._stamp_state_packets(host)
 
     def _stamp_state_packets(self, host: str) -> None:
@@ -517,7 +571,7 @@ class TelloController:
         """Connect to the Tello and start video stream."""
         try:
             self._retry_ground_command(self.tello.connect)
-            self.state.battery = self.tello.get_battery()
+            self._set_measured("battery", self.tello.get_battery())
             self.state.is_connected = True
             print(f"[{self.name}] Connected. Battery: {self.state.battery}%")
 
@@ -1110,36 +1164,44 @@ class TelloController:
                 return False
             time.sleep(_REPLY_POLL_S)
 
-    def move(self, direction: str, distance_cm: int) -> bool:
+    def move(self, direction: str, distance_cm: int) -> bool | CommandResult:
         """Move in a direction. Drops command if another is in-flight.
 
         Returns True when the command was sent and acknowledged, and False
-        when it was dropped (another flight command is in flight, a landing
-        is in progress, or the direction is unknown). A move that finds only
-        the keepalive on the channel waits for it rather than being dropped.
-        The move is sent once and never retried; a reply other than ``ok``,
-        or none, raises.
+        when a landing is in progress (or starts before the move is sent).
+        When another flight command holds the channel the move is dropped
+        and a ``DROPPED_BUSY`` :class:`CommandResult` is returned; an
+        unknown direction sends nothing and returns a ``REJECTED`` one. Both
+        are falsy, like False. Callers normalize the return value with
+        ``command_result()`` and act on ``.ok`` (see
+        ``docs/drone-interface.md``). A move that finds only the keepalive on
+        the channel waits for it rather than being dropped. The move is sent
+        once and never retried; a reply other than ``ok``, or none, raises.
         """
-        if self._landing or direction not in _MOVE_DIRECTIONS:
+        if direction not in _MOVE_DIRECTIONS:
+            return CommandResult("move", CommandOutcome.REJECTED, f"unknown direction {direction!r}")
+        if self._landing:
             return False
         if not self._acquire_for_flight():
-            return False
+            return _dropped_busy("move")
         try:
             distance_cm = max(20, min(500, int(distance_cm)))
             return self._send_flight_command(f"{direction} {distance_cm}", _COMMAND_REPLY_TIMEOUT_S)
         finally:
             self._cmd_lock.release()
 
-    def rotate(self, degrees: int) -> bool:
+    def rotate(self, degrees: int) -> bool | CommandResult:
         """Rotate clockwise/counter-clockwise. Drops if another command is in-flight.
 
         Returns True when the command was sent and acknowledged, False when
-        it was dropped. Like ``move()``, it is sent once and never retried.
+        a landing is in progress, and a ``DROPPED_BUSY``
+        :class:`CommandResult` when another flight command holds the
+        channel. Like ``move()``, it is sent once and never retried.
         """
         if self._landing:
             return False
         if not self._acquire_for_flight():
-            return False
+            return _dropped_busy("rotate")
         try:
             if degrees > 0:
                 command = f"cw {min(360, int(degrees))}"
@@ -1321,7 +1383,7 @@ class TelloController:
             battery = int(self.tello.get_battery())
         except Exception:
             return None
-        self.state.battery = battery
+        self._set_measured("battery", battery)
         return battery
 
     def read_height_cm(self) -> int | None:
@@ -1330,8 +1392,71 @@ class TelloController:
             height = int(self.tello.get_height())
         except Exception:
             return None
-        self.state.height = height
+        self._set_measured("height", height)
         return height
+
+    def _set_measured(self, field: str, value) -> None:
+        """Store a value read from the drone in ``state.<field>`` and stamp when it was read.
+
+        Every write of drone-reported telemetry into ``state`` goes through
+        here, so ``snapshot()`` can give each reading its true age.
+        """
+        setattr(self.state, field, value)
+        self._measured_at[field] = time.time()
+
+    # --- Telemetry (TelemetrySource role) ---
+
+    def snapshot(self) -> TelemetrySnapshot:
+        """Normalized telemetry from the state the controller has read.
+
+        Each reading keeps the time it was read from the drone (by
+        ``connect()``, the state poller or ``read_battery()`` /
+        ``read_height_cm()``), so a poll skipped while a flight command holds
+        the command lock shows up as a growing ``age_s`` rather than as fresh
+        data. A field never read is ``None``. ``is_flying`` follows takeoff
+        and confirmed lands, corrected by the poller's zero-height check.
+        Reading this sends nothing to the drone.
+        """
+        s = self.state
+        at = self._measured_at
+        return TelemetrySnapshot(
+            backend="tello",
+            drone_id=self.name,
+            captured_at=time.time(),
+            connected=s.is_connected,
+            is_flying=s.is_flying,
+            is_flying_source=IS_FLYING_COMMANDED,
+            battery_pct=_reading(s.battery, PERCENT, "tello.bat", at.get("battery")),
+            height_m=_reading(s.height, METRE, "tello.h", at.get("height"), scale=0.01),
+            temperature_c=_reading(s.temperature, CELSIUS, "tello.templ_temph_avg", at.get("temperature")),
+            flight_time_s=_reading(s.flight_time, SECOND, "tello.time", at.get("flight_time")),
+            **self._extended,
+        )
+
+    def _read_extended_state(self, now: float) -> dict[str, Reading]:
+        """Read the extra cached state-packet fields for ``snapshot()``. Never raises.
+
+        A field that is missing or not numeric is left out (``None`` in the
+        snapshot); it never counts as a poll failure.
+        """
+        extended: dict[str, Reading] = {}
+        for field_name, getter, scale, unit, source in _EXTENDED_FIELDS:
+            try:
+                raw = getattr(self.tello, getter)()
+            except Exception:  # noqa: BLE001, S112 -- optional field; absence is reported as None
+                continue
+            value = _reading(raw, unit, source, now, scale=scale)
+            if value is not None:
+                extended[field_name] = value
+        vx, vy = extended.get("vx_mps"), extended.get("vy_mps")
+        if vx is not None and vy is not None:
+            extended["ground_speed_mps"] = Reading(
+                value=math.hypot(vx.value, vy.value),
+                unit=METRE_PER_SECOND,
+                source="derived(tello.vgx,tello.vgy)",
+                measured_at=now,
+            )
+        return extended
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int):
         """Send RC joystick control. Each value -100 to 100.
@@ -1404,30 +1529,39 @@ class TelloController:
     def _start_state_polling(self):
         """Poll drone state every ``_STATE_POLL_INTERVAL_S``. Skips while a command holds the channel."""
         def _poll():
-            poll_failures = 0
+            self._poll_failures = 0
             while self._running:
                 if self._cmd_lock.locked():
                     time.sleep(_STATE_POLL_INTERVAL_S)
                     continue
-                try:
-                    self.state.battery = self.tello.get_battery()
-                    self.state.height = self.tello.get_height()
-                    self.state.temperature = self.tello.get_temperature()
-                    self.state.flight_time = self.tello.get_flight_time()
-                    poll_failures = 0
-                    self._check_zero_height()
-                except Exception:
-                    poll_failures += 1
-                    if poll_failures >= 3 and self.state.is_connected:
-                        self.state.is_connected = False
-                        self._running = False
-                        print(f"[{self.name}] Connection lost — {poll_failures} consecutive poll failures.")
+                self._poll_once()
                 time.sleep(_STATE_POLL_INTERVAL_S)
 
         self._state_thread = threading.Thread(
             target=_poll, daemon=True, name=f"{self.name}-state"
         )
         self._state_thread.start()
+
+    def _poll_once(self) -> None:
+        """One state poll: the body of the polling loop.
+
+        Each field is stamped as it is read, so a poll that fails part-way
+        still reports the fields it did read with their true age.
+        """
+        try:
+            self._set_measured("battery", self.tello.get_battery())
+            self._set_measured("height", self.tello.get_height())
+            self._set_measured("temperature", self.tello.get_temperature())
+            self._set_measured("flight_time", self.tello.get_flight_time())
+            self._poll_failures = 0
+            self._extended = self._read_extended_state(time.time())
+            self._check_zero_height()
+        except Exception:
+            self._poll_failures += 1
+            if self._poll_failures >= 3 and self.state.is_connected:
+                self.state.is_connected = False
+                self._running = False
+                print(f"[{self.name}] Connection lost — {self._poll_failures} consecutive poll failures.")
 
     def _check_zero_height(self) -> None:
         """The state poller's zero-height path, run after each successful poll.
@@ -1482,6 +1616,12 @@ class FakeTelloController:
     ``speed_cm_s`` makes moves take simulated time (distance divided by
     speed), which lets a fake edge show lane progress in the dashboard. A
     landing interrupts a move that is in progress.
+
+    This is the edge device's ``--source fake``. The dashboard's simulated
+    drone is a different class, ``FakeDrone`` in
+    :mod:`flightrisk.drone.fake`, registered as the ``sim`` backend. This one
+    satisfies the ``DroneController`` protocol and has no ``snapshot()``, so
+    ``read_telemetry`` adapts its ``state`` cache.
     """
 
     TAKEOFF_HEIGHT_CM = 80
