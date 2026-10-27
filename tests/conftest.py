@@ -93,6 +93,17 @@ class FakeTelloWire:
     answered ``ok`` at once, except ``rc`` commands, which a Tello never
     answers. Replies go into djitellopy's per-drone response list, as its
     UDP receiver thread does.
+
+    ``script``, when set, is called with each command after it is recorded.
+    If it returns a list of ``(reply, delay_s)`` pairs, the wire gives
+    exactly those replies (each after its delay) instead of its own; if it
+    returns None, the wire answers as above.
+
+    ``start_state(height_cm)`` makes the wire send Tello state packets, about
+    20 a second, each carrying the current ``height_cm`` as ``h``. They are
+    stored in djitellopy's per-drone ``"state"`` entry the way its state
+    receiver thread stores them. Change ``height_cm`` to move the drone, and
+    call ``stop_state()`` to make the state stream go silent.
     """
 
     def __init__(
@@ -110,9 +121,13 @@ class FakeTelloWire:
         self.held: list[str] = []
         self.entered = threading.Event()
         self.on_send: Callable[[str], None] | None = None
+        self.script: Callable[[str], list[tuple[str, float]] | None] | None = None
+        self.height_cm = 0
         self._lock = threading.Lock()
         # Delayed replies not yet given, as (command, timer).
         self._pending: list[tuple[str, threading.Timer]] = []
+        self._state_stop: threading.Event | None = None
+        self._state_thread: threading.Thread | None = None
 
     def _reply(self, text: str) -> None:
         import djitellopy.tello as djitello
@@ -143,6 +158,12 @@ class FakeTelloWire:
             self.sent.append(command)
         if self.on_send is not None:
             self.on_send(command)
+        if self.script is not None:
+            scripted = self.script(command)
+            if scripted is not None:
+                for text, delay_s in scripted:
+                    self._reply_after(text, delay_s)
+                return len(data)
         word = command.split()[0]
         if command in self.hold and command not in self.held:
             self.held.append(command)
@@ -180,6 +201,65 @@ class FakeTelloWire:
         for _, timer in pending:
             timer.cancel()
 
+    def _reply_after(self, text: str, delay_s: float) -> None:
+        """Give ``text`` as a reply after ``delay_s`` (at once if 0); cancelled by ``cancel_pending``."""
+        if delay_s <= 0:
+            self._reply(text)
+            return
+
+        def answer() -> None:
+            with self._lock:
+                if entry not in self._pending:
+                    return
+                self._pending.remove(entry)
+            self._reply(text)
+
+        timer = threading.Timer(delay_s, answer)
+        timer.daemon = True
+        entry = (f"script:{text}", timer)
+        with self._lock:
+            self._pending.append(entry)
+        timer.start()
+
+    def send_state(self) -> None:
+        """Deliver one Tello state packet carrying ``height_cm``, as djitellopy's state receiver does."""
+        import djitellopy.tello as djitello
+
+        packet = (
+            "mid:-1;x:0;y:0;z:0;mpry:0,0,0;pitch:0;roll:0;yaw:0;vgx:0;vgy:0;vgz:0;"
+            f"templ:40;temph:42;tof:10;h:{int(self.height_cm)};bat:90;baro:0.00;time:5;"
+            "agx:0.00;agy:0.00;agz:-1000.00;"
+        )
+        udp = djitello.drones.get(self.host)
+        if udp is not None:
+            udp["state"] = djitello.Tello.parse_state(packet)
+
+    def start_state(self, height_cm: int | None = None, interval_s: float = 0.05) -> None:
+        """Send a state packet every ``interval_s`` until ``stop_state()``."""
+        if height_cm is not None:
+            self.height_cm = height_cm
+        self.stop_state()
+        stop = threading.Event()
+
+        def stream() -> None:
+            while True:
+                self.send_state()
+                if stop.wait(interval_s):
+                    return
+
+        self._state_stop = stop
+        self._state_thread = threading.Thread(target=stream, daemon=True, name=f"fake-tello-state-{self.host}")
+        self._state_thread.start()
+
+    def stop_state(self) -> None:
+        """Stop sending state packets, like a state stream lost on Wi-Fi."""
+        if self._state_stop is not None:
+            self._state_stop.set()
+            if self._state_thread is not None:
+                self._state_thread.join(2.0)
+        self._state_stop = None
+        self._state_thread = None
+
 
 @pytest.fixture
 def tello_on_wire(monkeypatch):
@@ -208,6 +288,7 @@ def tello_on_wire(monkeypatch):
     yield _make
     for ctrl, wire in made:
         ctrl._running = False
+        wire.stop_state()
         wire.cancel_pending()
         # Keep djitellopy's end() (run when the client is garbage collected)
         # from sending anything after the fake socket is gone.
