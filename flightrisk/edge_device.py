@@ -18,7 +18,9 @@ With ``--source tello`` (a real Tello) or ``--source fake`` (an in-process
 simulated Tello) the edge also flies. A ``LaneExecutor`` handles the fleet
 control messages (``takeoff``, ``land``, ``emergency_land_all``,
 ``assign_lanes``, ``start_at``, ``ping``, ``clock``, ``heartbeat``) inside a
-``SafetyEnvelope`` and sends ``pong``, ``ack`` and ``telemetry`` back. In this
+``SafetyEnvelope`` and sends ``pong``, ``ack``, ``nack`` and ``telemetry``
+back. A refused lane assignment is always answered with a ``nack`` naming
+the reason, so the ground can give those lanes to another drone. In this
 mode a dedicated thread receives control messages, so a landing never waits
 behind frame processing. Safety controls on the edge laptop:
 
@@ -257,8 +259,8 @@ def _make_sender(transport: Any, log: StructuredLogger) -> Callable[[dict[str, A
     in that order). For an ``EdgeTransportSync`` without such a method it
     falls back to writing on the wrapped transport's WebSocket through the
     wrapper's event-loop bridge. If neither exists, messages are dropped
-    with a single error log, so the ground never receives acks and will not
-    start this drone.
+    with a single error log, so the ground never receives acks or nacks and
+    will not start this drone.
     """
     for name in ("send_json", "send_message", "send_control", "send"):
         method = getattr(transport, name, None)

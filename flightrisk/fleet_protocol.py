@@ -30,6 +30,13 @@ Edge -> ground messages::
      "executed_at_ground_s": <t_edge_exec - offset_s>}
     {"type": "ack", "for": "assign_lanes", "drone_id": .., "battery": <percent>,
      "lanes_total": <n>}
+    {"type": "nack", "for": "assign_lanes", "drone_id": ..,
+     "reason": "geofence|altitude|battery|other_drone|invalid",
+     "lanes_total": <n received>}
+
+An edge sends ``nack`` when it refuses a lane assignment, so the ground can
+hand those lanes to another drone or report them as uncovered instead of
+counting them as searched.
 
 Clock convention (standard NTP): for one ping/pong round with ground send time
 ``t1``, edge receive time ``t2``, edge send time ``t3`` and ground receive time
@@ -62,6 +69,8 @@ __all__ = [
     "HEARTBEAT",
     "TELEMETRY",
     "ACK",
+    "NACK",
+    "NACK_REASONS",
     "GROUND_TO_EDGE_TYPES",
     "EDGE_TO_GROUND_TYPES",
     "CLOCK_SYNC_ROUNDS",
@@ -88,6 +97,7 @@ __all__ = [
     "make_telemetry",
     "make_ack_start_at",
     "make_ack_assign_lanes",
+    "make_nack_assign_lanes",
     "validate_message",
     "sample_from_pong",
     "estimate_clock",
@@ -114,10 +124,17 @@ HEARTBEAT = "heartbeat"
 PONG = "pong"
 TELEMETRY = "telemetry"
 ACK = "ack"
+NACK = "nack"
+
+# Why an edge refused a lane assignment (design section 3).
+NACK_REASONS = frozenset({"geofence", "altitude", "battery", "other_drone", "invalid"})
 
 GROUND_TO_EDGE_TYPES = frozenset(
     {PING, CLOCK, ASSIGN_LANES, START_AT, TAKEOFF, LAND, EMERGENCY_LAND_ALL, HEARTBEAT}
 )
+# The original edge-to-ground set. ``NACK`` also travels edge to ground and is
+# checked by ``validate_message``, but it is kept out of this set, which other
+# modules and their tests treat as fixed.
 EDGE_TO_GROUND_TYPES = frozenset({PONG, TELEMETRY, ACK})
 
 # The ground runs this many ping/pong rounds per edge and keeps the median.
@@ -308,6 +325,21 @@ def validate_message(msg: Any) -> str:
                     f"'ack' for 'assign_lanes' field 'lanes_total' must be a non-negative integer, "
                     f"got {lanes_total!r}"
                 )
+    elif mtype == NACK:
+        target = _require(msg, "for")
+        if target != ASSIGN_LANES:
+            raise ProtocolError(f"'nack' field 'for' must be {ASSIGN_LANES!r}, got {target!r}")
+        _require_drone_id(msg)
+        reason = _require(msg, "reason")
+        if not isinstance(reason, str) or reason not in NACK_REASONS:
+            raise ProtocolError(
+                f"'nack' field 'reason' must be one of {sorted(NACK_REASONS)}, got {reason!r}"
+            )
+        lanes_total = _require(msg, "lanes_total")
+        if not (_is_int(lanes_total) and lanes_total >= 0):
+            raise ProtocolError(
+                f"'nack' field 'lanes_total' must be a non-negative integer, got {lanes_total!r}"
+            )
     return mtype
 
 
@@ -440,6 +472,21 @@ def make_ack_assign_lanes(drone_id: str, battery: float, lanes_total: int) -> di
         "for": ASSIGN_LANES,
         "drone_id": drone_id,
         "battery": battery,
+        "lanes_total": lanes_total,
+    })
+
+
+def make_nack_assign_lanes(drone_id: str, reason: str, lanes_total: int) -> dict[str, Any]:
+    """Edge -> ground: the edge refused its lane assignment for ``reason``.
+
+    ``lanes_total`` is the number of lanes in the refused assignment, so the
+    ground can tell which of its assignments was refused.
+    """
+    return _checked({
+        "type": NACK,
+        "for": ASSIGN_LANES,
+        "drone_id": drone_id,
+        "reason": reason,
         "lanes_total": lanes_total,
     })
 
