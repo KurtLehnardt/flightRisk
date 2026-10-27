@@ -255,6 +255,8 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   | One lane | 100,000 cm |
   | Roster entries and placements | 8 |
   | Detections in `node_state` | 256 |
+  | Any string, key or value, on the peer link | 200 characters |
+  | Numbers held in one list / in all lists of a message | 16 / 64 |
   | Any number | finite, magnitude at most 10^15 |
   | Integers (epochs, sequence numbers, counts) | 0 to 2^53 - 1 |
 
@@ -265,9 +267,10 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   more digits than Python parses, and nesting too deep for the parser,
   except that a ground-to-edge landing is accepted through the fail-safe
   fallback described under "Fencing and the fail-safe exemption".
-- **Unknown fields.** Extra fields on a known type are allowed, so a later
-  minor addition does not break older receivers, but they count toward the
-  limits above and the privacy check below.
+- **Unknown fields.** On the edge links, extra fields on a known type are
+  allowed, so a later minor addition does not break older receivers, but
+  they count toward the limits above and the privacy screen below. On the
+  peer link they are refused (see "Privacy").
 - **Exempt types.** Landing messages are exempt from every check except
   being an object with a `type`. Over the wire, a landing that fails the
   strict parse (including the 64 KiB limit) goes through the fail-safe
@@ -275,22 +278,54 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
 ## Privacy
 
-- **No imagery or biometrics.** No fleet control message, in either direction
-  or on the peer link, may contain a key named after imagery or biometric
-  data, at any depth, compared case-insensitively. The list is
-  `PRIVACY_FORBIDDEN_KEYS`: `face`, `face_embedding`, `embedding`,
-  `reid_embedding`, `crop`, `image`, `photo`, `thumbnail`, `jpeg`, `frame`,
-  `pixels` and their plurals and variants.
+What is enforced differs by link, and this section states exactly what the
+code checks.
+
+- **Peer link: allowlist.** Every ground-to-ground message is checked
+  against its schema at every level: the top-level message, each roster
+  entry, `mission`, `latch`, each detection and the `handover_offer`
+  snapshot. A field that is not in the schema is refused, every string
+  (keys included) is at most 200 characters, and every list has a fixed or
+  capped length (roster and placements 8, detections 256, a detection's
+  `drone_ids` 8, number pairs and triples exact). So a `node_state` or
+  handover snapshot can carry only ids, positions, states and times; it has
+  no field that could hold a crop, a thumbnail or an embedding.
+- **Every fleet message: denylist and payload screen.** All fleet control
+  messages, on the edge links and the peer link, are also screened:
+  - a key is refused when, after NFKC normalisation and case folding, it is
+    in `PRIVACY_FORBIDDEN_KEYS` or contains one of
+    `PRIVACY_FORBIDDEN_KEY_PARTS` (`face`, `embed`, `reid`, `vec`,
+    `feature`, `biometric`, `crop`, `image`, `img`, `photo`, `picture`,
+    `thumb`, `jpeg`, `jpg`, `png`, `frame`, `pixel`, `b64`, `base64`), with
+    separators removed, so `image_b64`, `faceEmbedding`, `Face-Embedding`
+    and a full-width `ＦＡＣＥ` all match;
+  - a string (key or value) is refused when it contains a data URI with a
+    media type or a `;base64,` marker, or is longer than 64 characters and
+    made only of base64, base64url or hex characters (with optional line
+    breaks);
+  - a list holding more than `MAX_NUMBERS_PER_LIST` (16) numbers is
+    refused, and so is a message whose lists hold more than
+    `MAX_LISTED_NUMBERS` (64) numbers in all;
+  - a bytes value is refused.
+- **What the edge-link screen does not do.** Edge-link messages may carry
+  extra fields, so that a later minor addition does not break older
+  receivers. The screen therefore guards against accidental leakage (a
+  developer adding an `image_b64` or an embedding field), not against a
+  sender that deliberately encodes data in permitted fields, for example as
+  many short strings or as numbers spread across objects. On the edge links
+  the real boundary is that the only senders are this project's builders,
+  which cannot add such fields.
 - **Opt-in rules unchanged.** Person crops, thumbnails and target embeddings
   travel only in the legacy `detections` and `set_target` messages, under
   their existing rules: appearance-only by default, and face embeddings only
   with `--with-face` or `FLIGHTRISK_APPEARANCE_ONLY=0`. Protocol v2 changes
   none of that.
 - **Handover snapshot.** `node_state` (and so the `handover_offer` snapshot)
-  carries only ids, positions, states and times. Replicating the target ReID
-  embedding on handover is decision D4 in the plan and is not decided. Until
-  it is, the privacy check refuses it, and enabling it needs an explicit
-  change to `PRIVACY_FORBIDDEN_KEYS` and `docs/privacy-design.md`.
+  carries only ids, positions, states and times, enforced by the peer
+  allowlist above. Replicating the target ReID embedding on handover is
+  decision D4 in the plan and is not decided. Until it is, both the
+  allowlist and the number-list limit refuse it, and enabling it needs an
+  explicit schema change here and in `docs/privacy-design.md`.
 - **Exception for landing.** A landing message is accepted even if it carries
   a forbidden key, because refusing a landing is the greater harm. The
   receiver uses only its `type`. Senders never add such keys, because the

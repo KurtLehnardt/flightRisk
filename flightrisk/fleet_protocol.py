@@ -108,6 +108,7 @@ import math
 import re
 import statistics
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -162,6 +163,9 @@ __all__ = [
     "MISSION_STATES",
     "LATCH_PHASES",
     "PRIVACY_FORBIDDEN_KEYS",
+    "PRIVACY_FORBIDDEN_KEY_PARTS",
+    "MAX_NUMBERS_PER_LIST",
+    "MAX_LISTED_NUMBERS",
     "DIRECTION_GROUND_TO_EDGE",
     "DIRECTION_EDGE_TO_GROUND",
     "DIRECTION_PEER",
@@ -371,12 +375,30 @@ EDGE_STATES = frozenset({"idle", "taking_off", "hovering", "flying_lanes", "hold
 MISSION_STATES = frozenset({"idle", "planned", "running", "holding", "complete"})
 LATCH_PHASES = frozenset({"searching", "awaiting_response", "resolved"})
 
-# Keys that would carry imagery or biometric data. No fleet control message
-# may contain one at any depth (compared case-insensitively). Detection crops,
-# thumbnails and the target embeddings travel only in the legacy
-# ``detections`` and ``set_target`` messages, under their existing opt-in
-# rules. Replicating the target ReID embedding on handover (decision D4) would
-# need an explicit change here.
+# Privacy checks. Detection crops, thumbnails and the target embeddings travel
+# only in the legacy ``detections`` and ``set_target`` messages, under their
+# existing opt-in rules; fleet control messages must not carry them. Two
+# layers enforce this:
+#
+# * Peer (ground-to-ground) messages are checked against an allowlist at
+#   every level: a field that is not in the schema is refused, every string
+#   is at most ``MAX_TEXT_LEN`` characters and every list is bounded. So the
+#   handover snapshot can only carry ids, positions, states and times.
+# * Every fleet message (edge links and peer link alike) is screened by a
+#   denylist and payload heuristics: a key that names imagery or biometric
+#   data, a data URI or a long base64-looking string, a bytes value, or a
+#   list of more than ``MAX_NUMBERS_PER_LIST`` numbers (or more than
+#   ``MAX_LISTED_NUMBERS`` in all) is refused. Edge-link messages may carry
+#   extra fields for forward compatibility, so on those links this is a
+#   guard against accidental leakage, not a guarantee against a sender that
+#   deliberately encodes data in permitted fields.
+#
+# Keys are compared after NFKC normalisation and case folding, both as they
+# are and with separators removed (so ``Face-Embedding``, ``faceEmbedding``
+# and a full-width ``ＦＡＣＥ`` all match). A key is refused when it is in
+# ``PRIVACY_FORBIDDEN_KEYS`` or contains any of ``PRIVACY_FORBIDDEN_KEY_PARTS``.
+# Replicating the target ReID embedding on handover (decision D4) would need
+# an explicit change here and in the peer allowlists.
 PRIVACY_FORBIDDEN_KEYS = frozenset({
     "face",
     "faces",
@@ -384,15 +406,27 @@ PRIVACY_FORBIDDEN_KEYS = frozenset({
     "face_embeddings",
     "embedding",
     "embeddings",
+    "reid",
     "reid_embedding",
+    "target_vec",
+    "target_vector",
+    "vector",
+    "vectors",
+    "feature",
+    "features",
     "crop",
     "crops",
     "crop_jpeg",
+    "crop_path",
+    "crop_file",
     "image",
     "images",
+    "image_b64",
+    "img",
     "photo",
     "photos",
     "picture",
+    "thumb",
     "thumbnail",
     "thumbnails",
     "jpeg",
@@ -402,6 +436,34 @@ PRIVACY_FORBIDDEN_KEYS = frozenset({
     "frames",
     "pixels",
 })
+PRIVACY_FORBIDDEN_KEY_PARTS = (
+    "face",
+    "embed",
+    "reid",
+    "vec",
+    "feature",
+    "biometric",
+    "crop",
+    "image",
+    "img",
+    "photo",
+    "picture",
+    "thumb",
+    "jpeg",
+    "jpg",
+    "png",
+    "frame",
+    "pixel",
+    "b64",
+    "base64",
+)
+# A list holding more numbers than this is refused anywhere in a fleet
+# message: the largest legitimate number list is a placement triple, and an
+# embedding is hundreds of floats.
+MAX_NUMBERS_PER_LIST = 16
+# Numbers held in lists across one message. A peer ``node_state`` holds at
+# most 28 (``area_cm``, ``lkp_cm`` and eight placement triples).
+MAX_LISTED_NUMBERS = 64
 
 DIRECTION_GROUND_TO_EDGE = "ground_to_edge"
 DIRECTION_EDGE_TO_GROUND = "edge_to_ground"
@@ -476,6 +538,30 @@ TELEMETRY_FIELDS = (
 TELEMETRY_FIELDS_V2 = TELEMETRY_FIELDS + ("epoch", "plan_id", "state", "plan_valid")
 
 _ZONE_FIELDS = ("x_cm", "y_cm", "w_cm", "h_cm")
+
+# Peer-link allowlists: the only fields each ground-to-ground object may have.
+_NODE_STATE_FIELDS = frozenset(
+    {"type", "node_id", "role", "epoch", "proto", "roster", "mission", "latch", "detections"}
+)
+_ROSTER_FIELDS = frozenset({"drone_id", "node_id", "connected", "is_flying", "epoch_seen"})
+_MISSION_FIELDS = frozenset({"plan_id", "pattern", "state", "area_cm", "lkp_cm", "placements"})
+_LATCH_FIELDS = frozenset({"phase", "alert_id"})
+_DETECTION_FIELDS = frozenset({"id", "x_cm", "y_cm", "first_seen_s", "drone_ids"})
+_PEER_MESSAGE_FIELDS = {
+    "handover_offer": frozenset({"type", "epoch_next", "snapshot"}),
+    "handover_accept": frozenset({"type", "epoch_next"}),
+    "handover_reject": frozenset({"type", "reason", "epoch_next"}),
+    "peer_heartbeat": frozenset({"type", "seq", "epoch", "node_id"}),
+}
+
+# Payload heuristics for the privacy screen. A data URI with a media type, or
+# any ``;base64,`` marker, anywhere in a string.
+_DATA_URI_RE = re.compile(r"data:[\w.+-]+/[\w.+-]+|;base64,", re.IGNORECASE)
+# A string longer than ``MAX_ID_LEN`` made only of base64 (or base64url, or
+# hex) characters, optionally wrapped in lines. Plain text has spaces and
+# punctuation, so it does not match.
+_BASE64_RE = re.compile(r"[A-Za-z0-9+/=_\-\r\n]+")
+_KEY_SEPARATORS_RE = re.compile(r"[\W_]+")
 
 # Identifiers introduced by v2 (node ids, leader ids, plan ids, command ids):
 # printable ASCII tokens, so they are safe in logs and file names.
@@ -629,39 +715,93 @@ def _require_object(msg: Mapping[str, Any], key: str, *, nullable: bool = False)
     return value
 
 
-def _check_structure(msg: Mapping[str, Any]) -> None:
-    """Caps on shape (fields, depth, size) plus the privacy key check.
+def _is_private_key(key: str) -> bool:
+    """True when *key* names imagery or biometric data (see ``PRIVACY_FORBIDDEN_KEYS``)."""
+    folded = unicodedata.normalize("NFKC", key).casefold()
+    compact = _KEY_SEPARATORS_RE.sub("", folded)
+    if folded in PRIVACY_FORBIDDEN_KEYS or compact in PRIVACY_FORBIDDEN_KEYS:
+        return True
+    return any(part in compact for part in PRIVACY_FORBIDDEN_KEY_PARTS)
+
+
+def _looks_like_encoded_media(text: str) -> bool:
+    """True for a data URI or a long base64-looking string (an encoded image or vector)."""
+    if _DATA_URI_RE.search(text):
+        return True
+    return len(text) > MAX_ID_LEN and _BASE64_RE.fullmatch(text) is not None
+
+
+def _is_plain_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_structure(msg: Mapping[str, Any], *, max_text: int = MAX_MESSAGE_BYTES) -> None:
+    """Caps on shape (fields, depth, size) plus the privacy screen.
 
     Walks the message iteratively, so a deeply nested value raises
-    ``ProtocolError`` instead of ``RecursionError``.
+    ``ProtocolError`` instead of ``RecursionError``. *max_text* caps every
+    string, keys included (the peer link passes ``MAX_TEXT_LEN``).
     """
+    mtype = _short(msg.get("type"))
     if len(msg) > MAX_FIELDS:
-        raise ProtocolError(f"{_short(msg.get('type'))} message has {len(msg)} fields; the limit is {MAX_FIELDS}")
+        raise ProtocolError(f"{mtype} message has {len(msg)} fields; the limit is {MAX_FIELDS}")
     stack: list[tuple[Any, int]] = [(msg, 1)]
     nodes = 0
+    listed_numbers = 0
+
+    def check_text(text: str, what: str) -> None:
+        if len(text) > max_text:
+            raise ProtocolError(f"{mtype} message has a {what} longer than {max_text} characters")
+        if _looks_like_encoded_media(text):
+            raise ProtocolError(
+                f"{mtype} message has a {what} that looks like encoded media (a data URI or "
+                "base64); fleet control messages never carry imagery or biometric data"
+            )
+
     while stack:
         value, depth = stack.pop()
         nodes += 1
         if nodes > MAX_NODES:
-            raise ProtocolError(f"{_short(msg.get('type'))} message has more than {MAX_NODES} values")
+            raise ProtocolError(f"{mtype} message has more than {MAX_NODES} values")
         if isinstance(value, Mapping):
             if depth > MAX_DEPTH:
-                raise ProtocolError(f"{_short(msg.get('type'))} message nests deeper than {MAX_DEPTH} levels")
+                raise ProtocolError(f"{mtype} message nests deeper than {MAX_DEPTH} levels")
             for key, item in value.items():
                 if not isinstance(key, str):
-                    raise ProtocolError(f"{_short(msg.get('type'))} message has a non-string key {_short(key)}")
-                if key.lower() in PRIVACY_FORBIDDEN_KEYS:
+                    raise ProtocolError(f"{mtype} message has a non-string key {_short(key)}")
+                check_text(key, "key")
+                if _is_private_key(key):
                     raise ProtocolError(
-                        f"{_short(msg.get('type'))} message has the field {_short(key)}; fleet control "
+                        f"{mtype} message has the field {_short(key)}; fleet control "
                         "messages never carry imagery or biometric data"
                     )
                 stack.append((item, depth + 1))
         elif isinstance(value, (list, tuple)):
             if depth > MAX_DEPTH:
-                raise ProtocolError(f"{_short(msg.get('type'))} message nests deeper than {MAX_DEPTH} levels")
+                raise ProtocolError(f"{mtype} message nests deeper than {MAX_DEPTH} levels")
+            numbers = sum(1 for item in value if _is_plain_number(item))
+            listed_numbers += numbers
+            if numbers > MAX_NUMBERS_PER_LIST or listed_numbers > MAX_LISTED_NUMBERS:
+                raise ProtocolError(
+                    f"{mtype} message has a list of {numbers} numbers ({listed_numbers} in all); the limits "
+                    f"are {MAX_NUMBERS_PER_LIST} per list and {MAX_LISTED_NUMBERS} per message, because "
+                    "fleet control messages never carry embeddings"
+                )
             stack.extend((item, depth + 1) for item in value)
-        elif isinstance(value, str) and len(value) > MAX_MESSAGE_BYTES:
-            raise ProtocolError(f"{_short(msg.get('type'))} message has a string longer than {MAX_MESSAGE_BYTES}")
+        elif isinstance(value, str):
+            check_text(value, "string")
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            raise ProtocolError(f"{mtype} message has a binary value; fleet control messages carry only JSON")
+
+
+def _require_only(obj: Mapping[str, Any], allowed: frozenset[str], what: str) -> None:
+    """Peer-link allowlist: refuse any field of *obj* that is not in *allowed*."""
+    for key in obj:
+        if key not in allowed:
+            raise ProtocolError(
+                f"{what} has the field {_short(key)}, which is not in its schema; peer messages "
+                "carry only the fields the protocol defines"
+            )
 
 
 def _validate_lanes(msg: Mapping[str, Any]) -> None:
@@ -867,6 +1007,7 @@ def _validate_number_pair(value: Any, name: str, *, positive: bool = False, size
 
 
 def _validate_node_state(msg: Mapping[str, Any]) -> None:
+    _require_only(msg, _NODE_STATE_FIELDS, "'node_state'")
     _require_id(msg, "node_id")
     _require_choice(msg, "role", GROUND_ROLES)
     _require_int_range(msg, "epoch", 0, MAX_EPOCH)
@@ -874,6 +1015,7 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
     for index, entry in enumerate(_require_list(msg, "roster", MAX_ROSTER)):
         if not isinstance(entry, Mapping):
             raise ProtocolError(f"'node_state' roster entry {index} must be an object")
+        _require_only(entry, _ROSTER_FIELDS, f"'node_state' roster entry {index}")
         _require_drone_id(entry)
         _require_id(entry, "node_id")
         _require_bool(entry, "connected")
@@ -881,6 +1023,7 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
         _require_int_range(entry, "epoch_seen", 0, MAX_EPOCH)
     mission = _require_object(msg, "mission", nullable=True)
     if mission is not None:
+        _require_only(mission, _MISSION_FIELDS, "'node_state' mission")
         _require_id(mission, "plan_id", nullable=True)
         _require_id(mission, "pattern")
         _require_choice(mission, "state", MISSION_STATES)
@@ -897,6 +1040,7 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
             _validate_number_pair(placement, f"'node_state' placement {drone_id!r}", size=3)
     latch = _require_object(msg, "latch", nullable=True)
     if latch is not None:
+        _require_only(latch, _LATCH_FIELDS, "'node_state' latch")
         _require_choice(latch, "phase", LATCH_PHASES)
         alert_id = _require(latch, "alert_id")
         if alert_id is not None and not (_is_int(alert_id) and 0 <= alert_id <= _MAX_SAFE_INT) \
@@ -905,6 +1049,7 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
     for index, det in enumerate(_require_list(msg, "detections", MAX_DETECTIONS)):
         if not isinstance(det, Mapping):
             raise ProtocolError(f"'node_state' detection {index} must be an object")
+        _require_only(det, _DETECTION_FIELDS, f"'node_state' detection {index}")
         _require_int_range(det, "id", 0, _MAX_SAFE_INT)
         _require_number(det, "x_cm")
         _require_number(det, "y_cm")
@@ -951,7 +1096,12 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
     if mtype not in _KNOWN_TYPES:
         return mtype
 
-    _check_structure(msg)
+    if mtype in PEER_TYPES:
+        _check_structure(msg, max_text=MAX_TEXT_LEN)
+        if mtype in _PEER_MESSAGE_FIELDS:
+            _require_only(msg, _PEER_MESSAGE_FIELDS[mtype], repr(mtype))
+    else:
+        _check_structure(msg)
     if mtype in FENCED_COMMAND_TYPES or mtype in FENCED_CONTROL_TYPES:
         _validate_fence(msg, mtype, proto)
 
