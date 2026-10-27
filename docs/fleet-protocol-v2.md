@@ -3,8 +3,11 @@
 This is the reference for the JSON control messages that travel between the
 ground stations and the edge devices of a FlightRisk fleet, and between two
 ground stations over the peer link. The code that defines and checks them is
-`flightrisk/fleet_protocol.py`, and its tests are `tests/test_fleet_protocol.py`
-(v1) and `tests/test_fleet_protocol_v2.py` (v2).
+`flightrisk/fleet_protocol/` (a package; every name is importable from
+`flightrisk.fleet_protocol`), and its tests are `tests/test_fleet_protocol.py`
+(v1), `tests/test_fleet_protocol_v2.py` (v2) and
+`tests/test_fleet_protocol_v2_hardening.py` (fail-safe decoding, privacy,
+plan ordering and the v2-only primitives).
 
 Protocol v2 belongs to the two-laptop plan (two laptops, two Tellos, one leader
 dashboard over a Thunderbolt link). This document covers only the protocol

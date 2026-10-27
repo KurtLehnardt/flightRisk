@@ -20,7 +20,7 @@ internals of ``flightrisk/edge.py`` or ``flightrisk/ground.py`` beyond their pub
 ``EdgeRunner``/``DetectionMessage``/``GroundStation`` API (``to_dict`` /
 ``from_dict`` / ``process_message``).
 
-Fleet control (design section 3, schemas in ``flightrisk/fleet_protocol.py``)
+Fleet control (design section 3, schemas in ``flightrisk/fleet_protocol/``)
 rides on the same connection:
 
 * ``GroundTransport`` sends ``ping``, ``clock``, ``assign_lanes``,
