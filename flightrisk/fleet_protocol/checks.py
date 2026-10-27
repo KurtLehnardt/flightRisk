@@ -38,8 +38,18 @@ class ProtocolError(ValueError):
 
 
 def _short(value: Any) -> str:
-    """``repr`` capped in length, so a huge hostile value cannot flood the log."""
-    text = repr(value)
+    """``repr`` capped in length, so a huge hostile value cannot flood the log.
+
+    Never raises: ``repr`` raises ``ValueError`` for an int of more than 4300
+    digits (and an object's own ``__repr__`` may raise anything), and the
+    validators that use this promise to raise only ``ProtocolError``.
+    """
+    if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > 256:
+        return f"<int of {value.bit_length()} bits>"
+    try:
+        text = repr(value)
+    except Exception:
+        return f"<unprintable {type(value).__name__}>"
     return text if len(text) <= 80 else text[:77] + "..."
 
 

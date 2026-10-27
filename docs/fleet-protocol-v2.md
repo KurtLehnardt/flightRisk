@@ -306,9 +306,10 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
 - **Never anything but `ProtocolError`.** Every validator, `decode`,
   `shape_for_peer`, `parse_hello` and `negotiate_proto` raises
-  `ProtocolError` and nothing else, for any input. `fence_of`, `cmd_id_of`
-  and `failsafe_type_of` never raise. The tests check this with seeded
-  fuzzing.
+  `ProtocolError` and nothing else, for any input, including in-process
+  values that `repr` cannot print (an integer of more than 4300 digits, or
+  an object whose `__repr__` raises). `fence_of`, `cmd_id_of` and
+  `failsafe_type_of` never raise. The tests check this with seeded fuzzing.
 - **Two v1 crashes fixed.** Before v2, `validate_message` raised `TypeError`
   for a lane `direction` that was a list, and `OverflowError` for a number too
   large for a float. Both are now `ProtocolError`.

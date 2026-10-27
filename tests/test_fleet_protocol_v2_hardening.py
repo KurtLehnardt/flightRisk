@@ -841,3 +841,56 @@ def test_node_state_size_cap_accepts_any_mapping():
     state = _node_state()
     proxy = MappingProxyType(dict(state, mission=MappingProxyType(state["mission"])))
     assert fp.validate_message(proxy, proto=2) == "node_state"
+
+
+# ===========================================================================
+# Values repr cannot print never escape as ValueError
+# ===========================================================================
+
+HUGE_INT = 10**5000  # repr() raises ValueError above 4300 digits
+
+
+class _BadRepr:
+    def __repr__(self):
+        raise RuntimeError("no repr")
+
+
+@pytest.mark.parametrize("value", [HUGE_INT, -HUGE_INT, _BadRepr()], ids=["huge", "-huge", "bad-repr"])
+def test_unprintable_values_raise_only_protocol_error(value):
+    for msg, proto in (
+        ({"type": "ping", "t1": value}, 1),
+        ({"type": value}, 1),
+        (dict(fp.make_heartbeat(1, fence=FENCE), epoch=value), 2),
+        (dict(fp.make_hold(FENCE, cmd_id=CMD), cmd_id=value), 2),
+        (dict(_node_state(), epoch=value), 2),
+        (dict(_telemetry(), drone_id=value), 1),
+    ):
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_message(msg, proto=proto)
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_for_direction(msg, G2E, proto=proto)
+        with pytest.raises(fp.ProtocolError):
+            fp.shape_for_peer(msg, proto)
+    bad_proto = -HUGE_INT if isinstance(value, int) else value
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_message(fp.make_ping(1.0), proto=bad_proto)
+    with pytest.raises(fp.ProtocolError):
+        fp.shape_for_peer(fp.make_ping(1.0), bad_proto)
+    with pytest.raises(fp.ProtocolError):
+        fp.negotiate_proto(value)
+    with pytest.raises(fp.ProtocolError):
+        fp.negotiate_proto(2, local_min=value)
+    with pytest.raises(fp.ProtocolError):
+        fp.next_epoch(value)
+    with pytest.raises(fp.ProtocolError):
+        fp.Fence(value, "mac")
+    with pytest.raises(fp.ProtocolError):
+        fp.parse_hello({"type": "hello", "role": "leader", "node_id": "mac", "epoch": value, "proto": 2})
+    with pytest.raises(fp.ProtocolError):
+        fp.decode('{"type":"ping","t1":1}', direction=G2E, proto=2, max_bytes=bad_proto)
+    # Documented as never raising.
+    assert fp.fence_of({"type": "land", "epoch": value, "leader_id": "mac"}) is None
+    assert fp.cmd_id_of({"type": "land", "cmd_id": value}) is None
+    assert fp.failsafe_type_of('{"type":"land"}', max_bytes=bad_proto) is None
+    # A landing is still accepted whatever it carries.
+    assert fp.validate_ground_to_edge({"type": "land", "epoch": value}, proto=value) == "land"
