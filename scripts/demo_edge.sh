@@ -10,7 +10,7 @@
 # ALT_CM is this drone's altitude slot in cm (at least 10). Default: 100 for odd ids and
 # 160 for even ids, the same alternation the coordinator uses.
 # The Tello address and ground URL come from scripts/fleet_env.sh. In ap mode, set
-# FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
+# export FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
 # ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
 # dials ws://10.42.0.1:9000, which is what the Windows laptop must do.
 # DEMO_DRY_RUN=1 prints the command instead of running it.
@@ -45,6 +45,10 @@ case "$number" in
 esac
 number=$((10#$number))
 drone_id="drone-$number"
+
+if [ "${FLIGHTRISK_GROUND_LOCAL:-}" = "1" ] && [ "$number" -ne 1 ]; then
+    echo "demo_edge.sh: warning: FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on THIS machine, but $drone_id is not the Mac's edge-1; unset it on the edge-only laptop." >&2
+fi
 
 if [ -z "${ALT_CM:-}" ]; then
     if [ $((number % 2)) -eq 1 ]; then ALT_CM=100; else ALT_CM=160; fi

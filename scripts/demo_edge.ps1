@@ -20,6 +20,10 @@ Set-Location $root
 
 . (Join-Path $PSScriptRoot "fleet_env.ps1")
 
+if ($env:FLIGHTRISK_GROUND_LOCAL -eq "1") {
+    Write-Warning "FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on THIS machine; unset it on the edge-only laptop."
+}
+
 if (-not $env:FLIGHTRISK_EDGE_TOKEN) {
     Write-Error @"
 demo_edge.ps1: FLIGHTRISK_EDGE_TOKEN is not set, so the edge cannot authenticate to the ground station.

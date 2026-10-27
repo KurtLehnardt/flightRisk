@@ -37,6 +37,10 @@ elseif ($fleetNet -eq "ap") {
     # Where an edge connects. FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on
     # this machine, so the edge uses loopback and survives the cable being pulled.
     # Otherwise (the Windows laptop, edge-2) it dials the cable address.
+    # $env: variables are inherited by child processes, so launchers that re-source this file see it.
+    if ($env:FLIGHTRISK_GROUND_LOCAL -and $env:FLIGHTRISK_GROUND_LOCAL -ne "1" -and $env:FLIGHTRISK_GROUND_LOCAL -ne "0") {
+        Write-Warning "fleet_env.ps1: FLIGHTRISK_GROUND_LOCAL='$($env:FLIGHTRISK_GROUND_LOCAL)' is ignored; only the exact value 1 enables loopback for edge-1, so the cable address is used."
+    }
     if ($env:FLIGHTRISK_GROUND_LOCAL -eq "1") {
         $env:FLIGHTRISK_EDGE_WS = "ws://127.0.0.1:9000"
     }

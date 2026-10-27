@@ -36,7 +36,13 @@ case "${FLIGHTRISK_FLEET_NET:-}" in
         # Where an edge connects. FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on
         # this machine (the Mac, edge-1), so the edge uses loopback and survives the cable
         # being pulled. Otherwise (the Windows laptop, edge-2) it dials the cable address.
+        # The variable must be exported: launchers such as demo_edge.sh run as child processes and
+        # source this file again, so a plain shell variable would be lost and the cable address used.
+        if [ -n "${FLIGHTRISK_GROUND_LOCAL:-}" ] && [ "${FLIGHTRISK_GROUND_LOCAL}" != "1" ] && [ "${FLIGHTRISK_GROUND_LOCAL}" != "0" ]; then
+            echo "fleet_env.sh: warning: FLIGHTRISK_GROUND_LOCAL='$FLIGHTRISK_GROUND_LOCAL' is ignored; only the exact value 1 enables loopback for edge-1, so the cable address is used." >&2
+        fi
         if [ "${FLIGHTRISK_GROUND_LOCAL:-}" = "1" ]; then
+            export FLIGHTRISK_GROUND_LOCAL
             export FLIGHTRISK_EDGE_WS="ws://127.0.0.1:9000"
         else
             export FLIGHTRISK_EDGE_WS="ws://10.42.0.1:9000"
