@@ -14,11 +14,12 @@ FlightRisk is an AI-powered tool designed to help parents and guardians locate a
 
 ## 2. On-Device Processing
 
-All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs entirely on your device using ONNX Runtime and/or CoreML. **No biometric data ever leaves your phone.** Specifically:
+All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device using ONNX Runtime and/or CoreML. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
 
 - Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.
-- No biometric templates, face embeddings, or detection crops are transmitted to any server, cloud service, or third party.
+- No biometric templates or embeddings are transmitted to any server, cloud service, or third party.
+- **Images are different from templates.** With the default settings, no image of any person leaves your device. Only if you select a cloud LLM backend and store an API key for it (Section 5) are images sent off the device: the reference photo you provided and the cropped image of each candidate person that is sent for analysis. Those images can show a face. See Section 5 for exactly what is sent and how to turn it off.
 
 ---
 
@@ -32,11 +33,13 @@ All biometric templates (face embeddings and appearance features) are **session-
 - They are discarded when the session ends or the app is closed.
 - They are never written to persistent storage, transmitted over the network, or shared with any party.
 
+This section covers templates and embeddings only. Images (the reference photo and person crops) are handled as described in Sections 4 and 5.
+
 ### Regulatory Compliance
 
-- **BIPA (Illinois Biometric Information Privacy Act):** No biometric identifiers or biometric information is collected, stored, or transmitted. All biometric processing is ephemeral and on-device. No consent for biometric storage is required because nothing is stored beyond the active session.
-- **GDPR (EU General Data Protection Regulation):** No personal biometric data is processed in a manner that requires a lawful basis for storage or transfer, as all processing is ephemeral, local, and under the sole control of the user. No data is transmitted to any data controller or processor.
-- **Other biometric privacy laws:** The same ephemeral, on-device-only architecture applies regardless of jurisdiction.
+- **BIPA (Illinois Biometric Information Privacy Act):** Biometric templates and embeddings are not stored beyond the active session and are not transmitted. If you enable a cloud LLM backend, images that may show a face are transmitted to the provider you chose (Section 5). Whether that transmission is subject to BIPA depends on the provider's processing and has not been determined; do not enable the feature for other people's images without that review.
+- **GDPR (EU General Data Protection Regulation):** Templates and embeddings are processed ephemerally and locally under your sole control. When you enable a cloud LLM backend, the provider you choose receives images and acts as a recipient of that data. You are responsible for having a lawful basis for that transfer.
+- **Other biometric privacy laws:** The same rule applies in every jurisdiction: templates and embeddings stay on the device; images leave the device only through the opt-in cloud LLM feature.
 
 ---
 
@@ -62,11 +65,12 @@ This data:
 
 FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, OpenAI, or Gemini) that provides additional analysis of potential matches.
 
-**When disabled (default):** No data is transmitted to any cloud service. All processing is entirely on-device.
+**When disabled (default):** No data is transmitted to any cloud service. All processing is entirely on-device. The feature stays disabled until you choose a cloud backend and store an API key for it; with no API key stored, the app falls back to the on-device model or to no reasoning at all.
 
 **When enabled:**
 
-- Only **cropped person images** are transmitted to the configured LLM endpoint. No face embeddings, biometric templates, GPS coordinates, or other session data are included.
+- The app sends **images** to the configured LLM endpoint (for Claude, `https://api.anthropic.com/v1/messages`): for a photo comparison, the **reference photo** you provided plus the **cropped image of the candidate person**; for a description comparison, the cropped image alone together with your text description. Images are JPEG-encoded. These images can show a face.
+- No face embeddings, appearance feature vectors, GPS coordinates, or other session data are included.
 - You are warned and must explicitly opt in before this feature is activated.
 - The data transmitted is subject to the privacy policy of the LLM provider you select (Anthropic, OpenAI, or Google).
 - You can disable this feature at any time, which immediately stops all cloud transmission.
@@ -85,7 +89,7 @@ FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, O
 ## 7. Camera Usage
 
 - The camera is used solely for real-time person detection and face matching to help locate a missing child.
-- Camera frames are processed on-device in real time and are not recorded, stored, or transmitted (except for match thumbnails stored locally as described in Section 4).
+- Camera frames are processed on-device in real time and are not recorded, stored, or transmitted, except for match thumbnails stored locally as described in Section 4 and the crops and reference photo sent when the optional cloud LLM feature is enabled (Section 5).
 
 ---
 
@@ -97,7 +101,7 @@ FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, O
 - No analytics, advertising, or tracking SDKs are included in the app.
 - No user accounts are created or required.
 
-The only exception is the optional Cloud LLM feature (Section 5), which transmits cropped images to the LLM provider you explicitly select and enable.
+The only exception is the optional Cloud LLM feature (Section 5), which transmits the reference photo and cropped person images to the LLM provider you explicitly select and enable.
 
 ---
 
@@ -107,13 +111,13 @@ The only exception is the optional Cloud LLM feature (Section 5), which transmit
 - The app does not target children as users.
 - The app does not collect any personal information from children.
 - No user accounts are created. No names, email addresses, or identifying information of any person (adult or child) are collected by the app.
-- The reference photo used for matching is provided by the parent/guardian, processed entirely on-device, and never transmitted or stored beyond the session.
+- The reference photo used for matching is provided by the parent/guardian and processed on-device. It is not stored beyond the session and is not transmitted unless the optional Cloud LLM feature (Section 5) is enabled, in which case it is sent to the provider you selected.
 
 ---
 
 ## 10. Data Retention and Deletion
 
-- **Biometric data:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
+- **Biometric templates and embeddings:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
 - **Session data (thumbnails, scores, locations):** Stored locally until the user deletes it. The user can delete all session data at any time from within the app.
 - **App deletion:** Uninstalling the app removes all locally stored data.
 
