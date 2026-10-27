@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import socket
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -53,12 +55,84 @@ def test_soak_summary_dead_link_and_empty():
     assert cfl.soak_summary([])["sent"] == 0
 
 
+async def _wait_for_port(port: int, timeout_s: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+        except OSError:
+            await asyncio.sleep(0.02)
+            continue
+        writer.close()
+        return
+    raise TimeoutError(f"port {port} never opened")
+
+
+def _pong(msg: dict) -> str:
+    t2 = time.monotonic()
+    return json.dumps({"type": "pong", "t1": msg.get("t1"), "t2": t2, "t3": time.monotonic()})
+
+
+def test_soak_stalled_server_counts_missed_slots_and_bounds_wall_time():
+    import websockets
+
+    port = _free_port()
+    answered = 0
+
+    async def handler(ws):
+        nonlocal answered
+        async for raw in ws:
+            if answered >= 5:
+                continue  # keep reading frames but never answer
+            answered += 1
+            await ws.send(_pong(json.loads(raw)))
+
+    async def scenario():
+        async with websockets.serve(handler, "127.0.0.1", port):
+            t0 = time.monotonic()
+            samples = await cfl.ws_soak(f"ws://127.0.0.1:{port}", 2.0, reply_timeout_s=0.5, source="127.0.0.1")
+            return samples, time.monotonic() - t0
+
+    samples, wall = asyncio.run(scenario())
+    s = cfl.soak_summary(samples)
+    assert s["sent"] >= 18  # about 20 slots in 2 s, stalled ones counted
+    assert s["received"] == 5
+    assert s["loss_pct"] >= 70.0
+    assert wall < 2.0 + 0.5 + 0.5
+
+
+def test_soak_reconnects_after_link_drop():
+    import websockets
+
+    port = _free_port()
+    served = 0
+
+    async def handler(ws):
+        nonlocal served
+        async for raw in ws:
+            served += 1
+            await ws.send(_pong(json.loads(raw)))
+            if served == 5:
+                await ws.close()  # drop the link once
+                return
+
+    async def scenario():
+        async with websockets.serve(handler, "127.0.0.1", port):
+            return await cfl.ws_soak(f"ws://127.0.0.1:{port}", 1.5, reply_timeout_s=0.5, source="127.0.0.1")
+
+    samples = asyncio.run(scenario())
+    s = cfl.soak_summary(samples)
+    assert s["lost"] >= 1
+    assert s["received"] > 5  # replies resumed after the drop
+    assert samples[-1][1] is not None
+
+
 def test_soak_over_local_socket():
     port = _free_port()
 
     async def scenario():
         server = asyncio.create_task(cfl.run_server("127.0.0.1", port, 3.0))
-        await asyncio.sleep(0.3)
+        await _wait_for_port(port)
         samples = await cfl.ws_soak(f"ws://127.0.0.1:{port}", 0.5, source="127.0.0.1")
         server.cancel()
         return samples

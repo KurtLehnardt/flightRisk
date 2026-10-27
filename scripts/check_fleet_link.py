@@ -181,27 +181,32 @@ async def ws_soak(
     start = time.monotonic()
     n = 0
     try:
-        while True:
-            due = start + n * interval_s
-            if due - start >= seconds:
+        while n * interval_s < seconds:
+            await asyncio.sleep(max(0.0, start + n * interval_s - time.monotonic()))
+            remaining = seconds - (time.monotonic() - start)
+            if remaining <= 0:
                 break
-            await asyncio.sleep(max(0.0, due - time.monotonic()))
+            timeout = min(reply_timeout_s, remaining)
+            slot_s = n * interval_s
             n += 1
             sent_at = time.monotonic()
             rtt: float | None = None
             try:
                 if ws is None:
-                    ws = await websockets.connect(
-                        url, open_timeout=reply_timeout_s, **_connect_kwargs(source)
-                    )
+                    ws = await websockets.connect(url, open_timeout=timeout, **_connect_kwargs(source))
                 await ws.send(json.dumps({"type": "ping", "t1": sent_at}))
-                reply = json.loads(await asyncio.wait_for(ws.recv(), reply_timeout_s))
+                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout))
                 if reply.get("type") == "pong":
                     rtt = ((time.monotonic() - sent_at) - (reply["t3"] - reply["t2"])) * 1000.0
             except Exception:  # noqa: BLE001 - any drop or timeout is a lost sample; reconnect next time
                 await _close_quietly(ws)
                 ws = None
-            samples.append((sent_at - start, rtt))
+            samples.append((slot_s, rtt))
+            # Slots that came due while this attempt was blocked were never sent: record each as lost.
+            due_slots = min(int((time.monotonic() - start) / interval_s), int(seconds / interval_s))
+            while n < due_slots:
+                samples.append((n * interval_s, None))
+                n += 1
     finally:
         await _close_quietly(ws)
     return samples
