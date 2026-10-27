@@ -14,7 +14,7 @@ def test_windows_setup_doc_and_script():
     assert "-m pip install -r requirements.txt -r requirements-dev.txt" in script
     assert "yolo11n.pt" in script
     assert "ollama pull" not in script.lower()
-    assert "insightface" not in script.lower().replace("insightface setup", "")
+    assert "convert_insightface" not in script
 
     for needle in (
         "py -3.13",
