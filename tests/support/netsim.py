@@ -10,8 +10,12 @@ each frame as a message, so it can apply faults per message:
 * latency and jitter (jitter never reorders, like TCP),
 * message loss,
 * reordering (a message is held back so later ones overtake it),
-* a one-way or full partition that either drops traffic or holds it until the
-  link heals, in both cases without closing any socket (a pulled cable),
+* a one-way or full partition that either drops traffic, holds it until the
+  link heals, or (``backpressure``) stops reading so the sender's own buffers
+  fill and its writes block. In every case nothing is closed while the
+  partition lasts, not even when an endpoint closes or dies: that FIN or reset
+  is held back too and arrives after the data sent before it, once the link
+  heals (a pulled cable),
 * sever (an abrupt close of the live connections, like a reset),
 * flapping (repeated partition and heal on a seeded schedule).
 
@@ -35,7 +39,10 @@ delayed and partitioned like data but never dropped by ``loss`` or reordered.
 from __future__ import annotations
 
 import asyncio
+import math
 import random
+import socket
+import struct
 import threading
 import time
 from collections import deque
@@ -50,7 +57,6 @@ DIRECTIONS = (UP, DOWN)
 
 LOOPBACK = "127.0.0.1"
 _MAX_FRAME_BYTES = 64 * 1024 * 1024
-_MAX_HANDSHAKE_BYTES = 64 * 1024
 _FIFO_EPSILON_S = 1e-6
 _RECORDS_KEPT = 20000
 
@@ -76,11 +82,13 @@ class Faults:
 
     def __post_init__(self) -> None:
         for name in ("latency_s", "jitter_s", "reorder_delay_s"):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name} must not be negative")
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite number that is not negative, got {value!r}")
         for name in ("loss", "reorder"):
-            if not 0.0 <= getattr(self, name) <= 1.0:
-                raise ValueError(f"{name} must be within 0 and 1")
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:  # false for NaN
+                raise ValueError(f"{name} must be within 0 and 1, got {value!r}")
 
     @property
     def clean(self) -> bool:
@@ -141,6 +149,13 @@ class _Frame:
         return self.fin and self.opcode in (0x1, 0x2)
 
 
+@dataclass(frozen=True)
+class _Close:
+    """The end of a connection as seen by one pump: a FIN (``abort`` False) or a reset."""
+
+    abort: bool = False
+
+
 async def _read_frame(reader: asyncio.StreamReader) -> _Frame:
     head = await reader.readexactly(2)
     fin = bool(head[0] & 0x80)
@@ -159,6 +174,17 @@ async def _read_frame(reader: asyncio.StreamReader) -> _Frame:
     mask = await reader.readexactly(4) if masked else b""
     payload = await reader.readexactly(length)
     return _Frame(head + ext + mask + payload, opcode, fin)
+
+
+def _reset(transport: asyncio.BaseTransport) -> None:
+    """Close a socket with a TCP reset (RST) instead of the orderly FIN that ``abort`` often sends."""
+    sock = transport.get_extra_info("socket")
+    if sock is not None:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        except OSError:
+            pass
+    transport.abort()
 
 
 def _strip_extensions(request: bytes) -> bytes:
@@ -181,6 +207,13 @@ class _Direction:
     records: deque = field(default_factory=lambda: deque(maxlen=_RECORDS_KEPT))
     #: Bumped on every change of this direction's fault settings or partition.
     version: int = 0
+    #: While True the pump of this direction does not read, so the sender's buffers fill.
+    stalled: bool = False
+    #: Set while the pump may read; cleared by a ``backpressure`` partition.
+    flowing: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def __post_init__(self) -> None:
+        self.flowing.set()
 
 
 class _Conn:
@@ -198,7 +231,7 @@ class _Conn:
         for writer in self.writers.values():
             transport = writer.transport
             if transport is not None and not transport.is_closing():
-                transport.abort()
+                _reset(transport)
 
 
 class NetLink:
@@ -274,19 +307,36 @@ class NetLink:
     # --- the data path (loop thread) ---
 
     async def _pump(self, conn: _Conn, direction: str, reader: asyncio.StreamReader) -> None:
+        d = self._dirs[direction]
+        end = _Close()
         try:
+            await d.flowing.wait()
             head = await reader.readuntil(b"\r\n\r\n")
             if direction == UP:
                 head = _strip_extensions(head)
             self._submit(conn, direction, _Frame(head, 0x0, True), handshake=True)
             while True:
+                await d.flowing.wait()  # a stalled direction is not read: the sender's buffers fill
                 self._submit(conn, direction, await _read_frame(reader))
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError, OSError):
-            pass
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            pass  # end of stream: the peer closed (FIN)
+        except OSError:
+            end = _Close(abort=True)  # a reset or another socket error
         finally:
-            loop = asyncio.get_running_loop()
-            at = max(conn.last_t[direction], loop.time())
-            loop.call_at(at, self._finish, conn, direction)
+            if not conn.closed:
+                self._submit_close(conn, direction, end)
+
+    def _submit_close(self, conn: _Conn, direction: str, end: _Close) -> None:
+        """The source of *direction* ended. During a partition the peer does not see it until the heal."""
+        d = self._dirs[direction]
+        if d.partitioned:
+            d.held.append((conn, end, asyncio.get_running_loop().time(), False))
+            return
+        self._close_later(conn, direction, end)
+
+    def _close_later(self, conn: _Conn, direction: str, end: _Close) -> None:
+        loop = asyncio.get_running_loop()
+        loop.call_at(max(conn.last_t[direction], loop.time()), self._finish, conn, direction, end)
 
     def _submit(self, conn: _Conn, direction: str, frame: _Frame, handshake: bool = False) -> None:
         d = self._dirs[direction]
@@ -316,6 +366,8 @@ class NetLink:
             d.stats.reordered += 1
         else:
             at = max(at, d.last_deliver + _FIFO_EPSILON_S)
+            if frame.opcode == 0x8:  # nothing may follow a close frame, so it waits for held-back messages
+                at = max(at, conn.last_t[d.name] + _FIFO_EPSILON_S)
             d.last_deliver = at
         conn.last_t[d.name] = max(conn.last_t[d.name], at)
         loop.call_at(at, self._write, conn, d, frame.raw, now, plain)
@@ -332,11 +384,17 @@ class NetLink:
         if plain:
             d.records.append((arrived, asyncio.get_running_loop().time()))
 
-    def _finish(self, conn: _Conn, direction: str) -> None:
-        """One side ended and its queued messages went out: close the peer socket."""
+    def _finish(self, conn: _Conn, direction: str, end: _Close) -> None:
+        """One side ended and its queued messages went out: close or reset the peer socket."""
+        if conn.closed:
+            return
         writer = conn.writers[direction]
-        if writer.transport is not None and not writer.transport.is_closing():
-            writer.close()
+        transport = writer.transport
+        if transport is not None and not transport.is_closing():
+            if end.abort:
+                _reset(transport)
+            else:
+                writer.close()
         other = conn.writers[DOWN if direction == UP else UP]
         if other.transport is None or other.transport.is_closing():
             conn.closed = True
@@ -369,14 +427,23 @@ class NetLink:
                 d.version += 1
         self._sim.run(apply)
 
-    def partition(self, direction: str = BOTH, hold: bool = False) -> None:
+    def partition(self, direction: str = BOTH, hold: bool = False, backpressure: bool = False) -> None:
         """Stop traffic in *direction* without closing any socket.
 
         With ``hold=False`` messages are discarded; with ``hold=True`` they are
-        queued and delivered, in order, when the link heals. New connections
-        are affected too, because their handshake is traffic.
+        queued and delivered, in order, when the link heals. With
+        ``backpressure=True`` the proxy stops reading, so nothing is dropped or
+        queued by the proxy: the sender's kernel and websockets buffers fill
+        and its ``send()`` blocks, exactly as on a pulled cable, and the data
+        flows again, in order, on heal. New connections are affected too,
+        because their handshake is traffic.
+
+        A close during the partition is not passed on either: if an endpoint
+        closes (FIN) or dies (reset), the other end learns of it only on
+        heal, after the data the closing endpoint sent first (all of it with
+        ``hold`` or ``backpressure``, none of what was dropped otherwise).
         """
-        self._sim.run(lambda: self._partition_now(direction, hold))
+        self._sim.run(lambda: self._partition_now(direction, hold, backpressure))
 
     def heal(self, direction: str = BOTH) -> None:
         """End a partition and release anything held, in arrival order."""
@@ -391,7 +458,7 @@ class NetLink:
         return self._sim.run(apply)
 
     def flap(self, down_s: float, up_s: float, cycles: int | None = None, *, direction: str = BOTH,
-             hold: bool = False, sever: bool = False, spread: float = 0.25) -> None:
+             hold: bool = False, sever: bool = False, spread: float = 0.25, backpressure: bool = False) -> None:
         """Alternate partition and heal. Durations vary by +-*spread* on the link's seeded schedule.
 
         ``cycles=None`` flaps until ``stop_flap()``. ``sever=True`` also resets
@@ -403,7 +470,7 @@ class NetLink:
                 while cycles is None or n < cycles:
                     n += 1
                     self.flap_history.append((time.monotonic(), "down"))
-                    self._partition_now(direction, hold)
+                    self._partition_now(direction, hold, backpressure)
                     if sever:
                         self._abort_all()
                     await asyncio.sleep(down_s * (1 + self._flap_rng.uniform(-spread, spread)))
@@ -429,10 +496,15 @@ class NetLink:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    def _partition_now(self, direction: str, hold: bool) -> None:
+    def _partition_now(self, direction: str, hold: bool, backpressure: bool = False) -> None:
         for name in _directions(direction):
             d = self._dirs[name]
-            d.partitioned, d.hold = True, hold
+            # The one frame being read as the partition starts is held, never lost, under backpressure.
+            d.partitioned, d.hold, d.stalled = True, hold or backpressure, backpressure
+            if backpressure:
+                d.flowing.clear()
+            else:
+                d.flowing.set()
             d.version += 1
 
     def _heal_now(self, direction: str) -> None:
@@ -440,12 +512,17 @@ class NetLink:
             d = self._dirs[name]
             if not d.partitioned:
                 continue
-            d.partitioned = False
+            d.partitioned, d.stalled = False, False
+            d.flowing.set()
             d.version += 1
             held, d.held = d.held, []
-            for conn, frame, arrived, handshake in held:
-                if not conn.closed:
-                    self._deliver_later(conn, d, frame, arrived, None, frame.is_plain_data and not handshake)
+            for conn, item, arrived, handshake in held:  # frames first, a close last, in arrival order
+                if conn.closed:
+                    continue
+                if isinstance(item, _Close):
+                    self._close_later(conn, d.name, item)
+                else:
+                    self._deliver_later(conn, d, item, arrived, None, item.is_plain_data and not handshake)
 
     # --- observation ---
 
@@ -575,9 +652,9 @@ class NetSim:
         """A deterministic generator for schedulers, independent of every link's stream."""
         return random.Random(f"{self.seed}/rng/{label}")
 
-    def partition_all(self, direction: str = BOTH, hold: bool = False) -> None:
+    def partition_all(self, direction: str = BOTH, hold: bool = False, backpressure: bool = False) -> None:
         for link in self.links.values():
-            link.partition(direction, hold)
+            link.partition(direction, hold, backpressure)
 
     def heal_all(self) -> None:
         for link in self.links.values():

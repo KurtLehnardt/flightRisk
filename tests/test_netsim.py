@@ -88,7 +88,11 @@ def test_decisions_match_the_configured_rates():
 
 
 def test_invalid_faults_are_rejected():
-    for bad in ({"loss": 1.5}, {"reorder": -0.1}, {"latency_s": -1}):
+    nan, inf = float("nan"), float("inf")
+    bad_settings = ({"loss": 1.5}, {"reorder": -0.1}, {"latency_s": -1}, {"loss": nan}, {"reorder": nan},
+                    {"latency_s": nan}, {"jitter_s": nan}, {"reorder_delay_s": nan}, {"jitter_s": -0.5},
+                    {"reorder_delay_s": -1}, {"latency_s": inf})
+    for bad in bad_settings:
         with pytest.raises(ValueError):
             Faults(**bad)
 
