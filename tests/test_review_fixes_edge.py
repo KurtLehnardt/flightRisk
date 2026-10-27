@@ -1332,6 +1332,54 @@ def test_steady_descent_after_error_reply_is_waited_out(tello_on_wire):
     assert wait_for(lambda: tello.touched_down_at is not None)
 
 
+def test_descent_begun_by_the_immediate_land_counts_as_falling(tello_on_wire):
+    """A confirming land sent mid-descent compares the height with the one when LAND was pressed."""
+    ctrl, wire = _flying_on_state(tello_on_wire)
+    # The immediate land drops the drone to 40 cm, where it stays for 1.5 s
+    # until touchdown; the confirming land, sent at 40 cm, is answered
+    # "error" because the drone is already landing.
+    tello = LandingTello(wire, descent_s=1.5)
+    wire.script = tello
+
+    mover = threading.Thread(target=lambda: _move_ignoring_errors(ctrl, "forward", 200), daemon=True)
+    mover.start()
+    assert wait_for(lambda: "forward 200" in wire.sent)
+    ctrl.land()
+    mover.join(WAIT_S)
+    # 40 cm is lower than the 80 cm when the land started, so the land kept
+    # waiting instead of being sent again.
+    assert tello.touched_down_at is not None
+    assert wire.sent == ["takeoff", "forward 200", "stop", "land", "land"]
+    assert ctrl._land_unconfirmed is False
+
+
+def test_state_stream_lost_during_a_land_hands_over_to_the_reply(tello_on_wire, monkeypatch, capsys):
+    """Once state has been silent for _STATE_SEEN_S, the wait ends and the next land's own reply decides."""
+    monkeypatch.setattr(tello_module, "_STATE_SEEN_S", 1.0)
+    ctrl, wire = _flying_on_state(tello_on_wire)
+
+    def state_lost(command: str):
+        if command == "land":
+            # The state stream dies as the land goes out (stopped from
+            # another thread, since the land is sent under _wire_lock); the
+            # Tello answers every land "ok".
+            threading.Thread(target=wire.stop_state, daemon=True).start()
+            return [("ok", 0.02)]
+        return None
+
+    wire.script = state_lost
+    started = time.monotonic()
+    ctrl.land()
+    elapsed = time.monotonic() - started
+
+    assert wire.sent == ["takeoff", "land", "land"]
+    assert "no state height for 1 s" in capsys.readouterr().out
+    # Well before _LAND_GROUND_WAIT_S.
+    assert elapsed < tello_module._LAND_GROUND_WAIT_S - 2.0
+    assert ctrl._land_unconfirmed is False
+    assert ctrl.state.is_flying is False
+
+
 def test_short_state_gap_does_not_hand_confirmation_to_a_stale_ok(tello_on_wire, monkeypatch, capsys):
     """N2: with state seen within _STATE_SEEN_S, a gap in the stream is waited out, not settled by a late 'ok'."""
     # Long enough that the stop's late "ok" is read as the land's reply even
@@ -1393,7 +1441,7 @@ def test_ground_readings_from_before_the_land_confirm_nothing(tello_on_wire):
     assert ctrl._ground_by_state(since=land_sent_at) is True
 
 
-def test_ground_readings_with_a_gap_between_them_confirm_nothing(tello_on_wire):
+def test_ground_readings_with_a_gap_between_them_confirm_no_land(tello_on_wire):
     ctrl, wire = tello_on_wire()
     wire.send_state()
     time.sleep(tello_module._STATE_FRESH_S + 0.2)
@@ -1421,7 +1469,7 @@ def test_one_or_two_ground_readings_confirm_nothing(tello_on_wire):
     assert ctrl._ground_by_state() is True
 
 
-def test_state_confirms_nothing_while_a_takeoff_holds_the_channel(tello_on_wire, monkeypatch):
+def test_state_confirms_no_land_while_a_takeoff_holds_the_channel(tello_on_wire, monkeypatch):
     """A takeoff still waiting for its reply may lift any moment, whatever state shows."""
     # A spin-up that outlasts the window, so only the channel guard holds.
     monkeypatch.setattr(tello_module, "_TAKEOFF_GROUND_IGNORE_S", 0.2)
