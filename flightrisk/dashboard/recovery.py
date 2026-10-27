@@ -21,6 +21,10 @@ lands in place. The hook is duck-typed so a backend can opt in without any
 change here. Contract for implementers: ``return_to_home()`` must block until
 the drone is back over its takeoff point (raising on failure or timeout) and
 must not land by itself; this module issues the land command afterwards.
+
+With no primary drone (an edge fleet), Confirm does not hover or return home.
+It lands every drone in place through LAND ALL. The Tello has no return-to-home,
+so each drone lands wherever it currently is.
 """
 
 from __future__ import annotations
@@ -164,12 +168,12 @@ def run_fleet_confirm_landing(emit: EmitFn | None = None) -> str:
         report = _land_all()
     except Exception as exc:  # noqa: BLE001 -- report, never raise from the flight thread
         _log.critical("confirm_recovery: fleet landing failed (%s)", exc, exc_info=True)
-        _status(emit, "landing", "Fleet landing failed. Land every drone manually now.", error=str(exc))
+        _status(emit, "error", "Fleet landing failed. Land every drone manually now.", error=str(exc))
         return "failsafe_land_failed"
     if report.get("reached_any"):
         _status(emit, "landed", "Landing order sent to the fleet.")
         return "fleet_landed"
-    _status(emit, "landing", "Landing order reached no drone. Land every drone manually now.")
+    _status(emit, "error", "Landing order reached no drone. Land every drone manually now.")
     return "failsafe_land_failed"
 
 

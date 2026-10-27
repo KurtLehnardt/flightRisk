@@ -56,3 +56,31 @@ def test_confirm_with_no_drone_and_no_fleet_still_reports_no_drone(clean_app_sta
     confirm_recovery.thread.join(timeout=2)
 
     assert [p["stage"] for n, p in sio.events if n == "recovery_status"] == ["no_drone"]
+
+
+def test_fleet_landing_failure_reports_error_stage(clean_app_state, monkeypatch):
+    app_state.fleet = None
+    app_state.fleet_supervisor = MagicMock()
+    app_state.db = None
+    monkeypatch.setattr(app_module, "_land_all", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    aid = _open_alert()
+    sio = _Sio()
+
+    handle_alert_response(aid, "confirm", sio)
+    confirm_recovery.thread.join(timeout=2)
+
+    assert [p["stage"] for n, p in sio.events if n == "recovery_status"] == ["landing", "error"]
+
+
+def test_fleet_landing_reaching_no_drone_reports_error_stage(clean_app_state, monkeypatch):
+    app_state.fleet = None
+    app_state.fleet_supervisor = MagicMock()
+    app_state.db = None
+    monkeypatch.setattr(app_module, "_land_all", lambda: {"reached_any": False})
+    aid = _open_alert()
+    sio = _Sio()
+
+    handle_alert_response(aid, "confirm", sio)
+    confirm_recovery.thread.join(timeout=2)
+
+    assert [p["stage"] for n, p in sio.events if n == "recovery_status"] == ["landing", "error"]

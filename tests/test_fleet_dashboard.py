@@ -456,6 +456,43 @@ def test_plan_and_start_events_without_a_fleet_report_an_error(clean_app_state):
     assert [r["name"] for r in received] == ["error", "error"]
 
 
+@pytest.mark.parametrize("event, method", [("plan_fleet", "plan"), ("start_fleet", "start")])
+def test_plan_and_start_refused_after_a_confirmed_match(clean_app_state, event, method):
+    from flightrisk.dashboard.alert_latch import alert_latch
+
+    supervisor = MagicMock()
+    aid = alert_latch.try_open(["grid:1_1"])
+    assert aid is not None
+    alert_latch.attach(aid, {"alert_id": aid})
+    alert_latch.confirm(aid)
+    try:
+        client = socketio.test_client(app)
+        client.get_received()
+        app_state.fleet_supervisor = supervisor
+        client.emit(event)
+        received = client.get_received()
+        client.disconnect()
+    finally:
+        alert_latch.reset()
+    assert [r["name"] for r in received] == ["error"]
+    assert "already confirmed" in received[0]["args"][0]["message"]
+    getattr(supervisor, method).assert_not_called()
+
+
+@pytest.mark.parametrize("event, method", [("plan_fleet", "plan"), ("start_fleet", "start")])
+def test_plan_and_start_still_run_when_no_match_is_confirmed(clean_app_state, event, method):
+    supervisor = MagicMock()
+    client = socketio.test_client(app)
+    client.get_received()
+    app_state.fleet_supervisor = supervisor
+    client.emit(event)
+    deadline = time.time() + 2
+    while time.time() < deadline and not getattr(supervisor, method).called:
+        time.sleep(0.01)
+    client.disconnect()
+    getattr(supervisor, method).assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # R-097: end to end over a real ground transport with two fake edges
 # ---------------------------------------------------------------------------
