@@ -244,6 +244,14 @@ class TestSnapshot:
         assert data["battery_pct"]["age_s"] == pytest.approx(1.0, abs=0.01)
         assert data["height_m"] is None
 
+    @pytest.mark.parametrize("height_cm, expected", [(29.0, 29), (29.6, 30), (0.4, 0), (100.0, 100)])
+    def test_legacy_height_is_a_rounded_int(self, height_cm, expected):
+        now = time.time()
+        snap = _snap(height_m=Reading(height_cm / 100, METRE, "test", now))
+        height = legacy_telemetry_payload(snap)["height"]
+        assert height == expected
+        assert type(height) is int
+
     def test_legacy_payload_unknown_is_zero(self):
         payload = legacy_telemetry_payload(_snap(), include_connected=True)
         assert payload == {
@@ -414,6 +422,22 @@ class TestTelloTelemetry:
         assert snap.height_m.measured_at == 1000.0
         assert snap.height_m.age_s(now=clock[0]) == pytest.approx(10.0)
 
+    def test_poll_refreshes_battery_measured_at(self, tello, monkeypatch):
+        import flightrisk.drone.tello as tello_mod
+
+        ctrl, _ = tello
+        clock = [2000.0]
+        monkeypatch.setattr(
+            tello_mod, "time", types.SimpleNamespace(time=lambda: clock[0], sleep=time.sleep, monotonic=time.monotonic)
+        )
+        before = ctrl.snapshot().battery_pct.measured_at
+        assert before != 2000.0
+        ctrl._poll_once()
+        assert ctrl.snapshot().battery_pct.measured_at == 2000.0
+        clock[0] = 2005.0
+        ctrl._poll_once()
+        assert ctrl.snapshot().battery_pct.measured_at == 2005.0
+
     def test_crash_heuristic_unchanged(self, tello):
         ctrl, wire = tello
         assert ctrl.takeoff() is True
@@ -539,6 +563,30 @@ class TestDashboardWiring:
         client.disconnect()
         assert [r["name"] for r in received] == ["error"]
         drone.rotate.assert_not_called()
+
+    def test_manual_land_is_never_gated_on_capabilities(self, clean_app_state):
+        from flightrisk.dashboard import app as app_mod
+
+        drone = MagicMock()
+        drone.capabilities = DroneCapabilities(features=frozenset({Capability.HOVER}))
+        drone.land.return_value = True
+        drone.takeoff.return_value = True
+        fleet = MagicMock()
+        fleet.primary = drone
+        app_mod._state["fleet"] = fleet
+        app_mod._state["logger"] = None
+        client = app_mod.socketio.test_client(app_mod.app)
+        client.get_received()
+        client.emit("drone_command", {"command": "land"})
+        land_received = client.get_received()
+        client.emit("drone_command", {"command": "takeoff"})
+        takeoff_received = client.get_received()
+        client.disconnect()
+        drone.land.assert_called_once()
+        assert "error" not in [r["name"] for r in land_received]
+        # Takeoff stays gated on the capability.
+        drone.takeoff.assert_not_called()
+        assert [r["name"] for r in takeoff_received] == ["error"]
 
     def test_manual_command_dropped_is_reported(self, clean_app_state):
         from flightrisk.dashboard import app as app_mod
