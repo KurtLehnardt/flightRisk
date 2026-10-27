@@ -66,7 +66,19 @@ def test_fleet_panel_present():
 
 def test_land_all_button_and_hotkey():
     assert 'id="land-all"' in INDEX
-    assert "e.shiftKey && e.key === 'L'" in INDEX
+    # Shift+L matches the physical key, so Caps Lock cannot stop LAND ALL (R-111).
+    assert "e.shiftKey && e.code === 'KeyL'" in INDEX
+    assert "e.key === 'L'" not in INDEX
     assert "socket.emit('land_all'" in INDEX
     # The existing plain 'l' binding must stay.
     assert "'l': 'land'" in INDEX
+
+
+def test_land_all_hotkey_works_in_text_fields():
+    """The LAND ALL handler has no text-field exclusion and listens in the capture phase (R-111)."""
+    start = INDEX.index("if (!(e.shiftKey && e.code === 'KeyL')) return;")
+    end = INDEX.index("}", start + len("if (!(e.shiftKey && e.code === 'KeyL')) return;"))
+    body = INDEX[start:end]
+    assert "landAll();" in body
+    assert "tagName" not in body and "isContentEditable" not in body
+    assert INDEX[end:].startswith("}, true);")

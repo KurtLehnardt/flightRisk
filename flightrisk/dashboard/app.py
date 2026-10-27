@@ -89,10 +89,81 @@ app = Flask(
 app.config["SECRET_KEY"] = os.environ.get("FLIGHTRISK_SECRET_KEY", secrets.token_hex(32))
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB upload limit
 
-# CORS: default "*" for dev, restrict via FLIGHTRISK_CORS_ORIGINS env var in production
-cors_origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
-_cors_allowed = cors_origins if cors_origins == "*" else cors_origins.split(",")
-socketio = SocketIO(app, cors_allowed_origins=_cors_allowed, async_mode="threading", max_http_buffer_size=10 * 1024 * 1024)
+# --- Socket.IO origins (CORS) ---
+#: Environment variable that replaces the Socket.IO allowed origins for
+#: development: a comma-separated list of origins, or ``*`` for any origin.
+CORS_ORIGINS_ENV = "FLIGHTRISK_CORS_ORIGINS"
+
+#: Bind addresses that listen on every interface of this machine.
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
+#: The host and port the dashboard serves, recorded by ``run_dashboard``.
+#: Until then the configured defaults are used.
+_dashboard_bind: tuple[str, int] | None = None
+
+
+def cors_origins_override() -> list[str] | None:
+    """The origins named in ``FLIGHTRISK_CORS_ORIGINS``, or ``None`` when it is unset or empty."""
+    raw = os.environ.get(CORS_ORIGINS_ENV, "")
+    origins = [part.strip() for part in raw.split(",") if part.strip()]
+    return origins or None
+
+
+def dashboard_origins(host: str, port: int) -> frozenset[str]:
+    """The browser origins of the dashboard page when it is served on ``host``:``port``.
+
+    They are the loopback spellings ``http://127.0.0.1:<port>``,
+    ``http://localhost:<port>`` and ``http://[::1]:<port>``, plus
+    ``http://<host>:<port>`` when ``host`` names one specific non-loopback
+    address.
+    """
+    origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"http://[::1]:{port}"}
+    if host not in _LOOPBACK_HOSTS and host not in _WILDCARD_HOSTS:
+        url_host = f"[{host}]" if ":" in host else host
+        origins.add(f"http://{url_host}:{port}")
+    return frozenset(origins)
+
+
+def socketio_origin_allowed(origin: str | None, environ: dict | None = None) -> bool:
+    """Whether a browser page from ``origin`` may open a Socket.IO connection.
+
+    By default only the dashboard's own origins are accepted (see
+    ``dashboard_origins``), so a page from another site that is open in this
+    machine's browser cannot connect and emit ``start_fleet`` or any other
+    control event. The list is fixed rather than taken from the request's
+    Host header, so a DNS-rebinding page cannot pass as the dashboard either.
+    A non-loopback bind is the one exception: there the page may be reached
+    under any name of this machine, so the origin of the Host the request was
+    sent to is also accepted. Such a bind always requires
+    ``FLIGHTRISK_API_KEY``, and every Socket.IO connection must present it
+    (``on_connect``).
+
+    ``FLIGHTRISK_CORS_ORIGINS`` replaces this check for development: its
+    listed origins are accepted, and ``*`` accepts any origin. Engine.IO
+    checks the origin only for requests that carry an ``Origin`` header,
+    which browsers send on every cross-origin request and WebSocket upgrade.
+    """
+    if not origin:
+        return False
+    override = cors_origins_override()
+    if override is not None:
+        return "*" in override or origin in override
+    host, port = _dashboard_bind or (resolve_dashboard_host(), get_config().dashboard.port)
+    if origin in dashboard_origins(host, port):
+        return True
+    if host in _LOOPBACK_HOSTS or not environ:
+        return False
+    request_host = environ.get("HTTP_HOST")
+    scheme = environ.get("wsgi.url_scheme", "http")
+    return bool(request_host) and origin == f"{scheme}://{request_host}"
+
+
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=lambda origin, environ=None: socketio_origin_allowed(origin, environ),
+    async_mode="threading",
+    max_http_buffer_size=10 * 1024 * 1024,
+)
 
 # --- API key authentication ---
 # Empty string is treated as "unset" so an accidental FLIGHTRISK_API_KEY="" never
@@ -796,16 +867,36 @@ class FleetSupervisor:
             self.emit_status()
 
 
+def _run_land_all_path(report: dict, interrupts: list, name: str, what: str, send) -> None:
+    """Run one LAND ALL path and store how many drones it reached in ``report[name]``.
+
+    A failure is logged and leaves ``report[name]`` as ``None``. A
+    ``KeyboardInterrupt`` or ``SystemExit`` is logged and kept in
+    ``interrupts``, for ``_land_all`` to re-raise once every path has run.
+    """
+    try:
+        report[name] = send()
+    except Exception:
+        log.error("LAND ALL: %s failed", what, exc_info=True)
+    except BaseException as exc:
+        log.error("LAND ALL: %s was interrupted: %r", what, exc)
+        interrupts.append(exc)
+
+
 def _land_all() -> dict:
     """Order every drone to land by every path available, whatever fails.
 
-    The paths are, in order: the fleet coordinator (``emergency_land_all``
-    to each fleet link), the ground transport's ``emergency_land_all``
-    broadcast to every connected edge as belt and braces, and ``land`` on
-    every drone of a local fleet (Tello or MAVLink source). A failure on one
-    path never stops the next. A ``KeyboardInterrupt`` or ``SystemExit`` is
-    re-raised only after every path has been tried. When no path reaches any
-    drone, the failure is logged at CRITICAL and sent to every browser.
+    The paths are the ground transport's ``emergency_land_all`` broadcast,
+    written to every connected edge at once; the fleet coordinator, which
+    sends ``emergency_land_all`` to each fleet link in turn as belt and
+    braces; and ``land`` on every drone of a local fleet (Tello or MAVLink
+    source). The paths run at the same time, each on its own thread, and the
+    broadcast is started first. A coordinator send that waits out its
+    timeout on one stalled link therefore never delays the land order to any
+    other drone, and a failure on one path never stops another. A
+    ``KeyboardInterrupt`` or ``SystemExit`` is re-raised only after every
+    path has finished. When no path reaches any drone, the failure is logged
+    at CRITICAL and sent to every browser.
 
     Returns how many drones each path reached (``None`` for a path that is
     not configured or that failed) and whether any path reached a drone.
@@ -814,36 +905,43 @@ def _land_all() -> dict:
     transport = app_state.ground_transport
     fleet = app_state.fleet
     report: dict = {"coordinator": None, "transport": None, "local": None}
-    interrupt: BaseException | None = None
+    interrupts: list[BaseException] = []
 
-    if supervisor is not None:
-        try:
-            results = supervisor.land_all()
-            report["coordinator"] = sum(1 for exc in results.values() if exc is None)
-        except Exception:
-            log.error("LAND ALL: the fleet coordinator path failed", exc_info=True)
-        except BaseException as exc:
-            log.error("LAND ALL: the fleet coordinator path was interrupted: %r", exc)
-            interrupt = exc
-
+    paths = []
     if transport is not None:
-        try:
-            report["transport"] = int(transport.emergency_land_all(timeout=LAND_ALL_TIMEOUT_S))
-        except Exception:
-            log.error("LAND ALL: the ground transport emergency_land_all broadcast failed", exc_info=True)
-        except BaseException as exc:
-            log.error("LAND ALL: the ground transport broadcast was interrupted: %r", exc)
-            interrupt = interrupt or exc
-
+        paths.append((
+            "transport", "the ground transport emergency_land_all broadcast",
+            lambda: int(transport.emergency_land_all(timeout=LAND_ALL_TIMEOUT_S)),
+        ))
+    if supervisor is not None:
+        paths.append((
+            "coordinator", "the fleet coordinator path",
+            lambda: sum(1 for exc in supervisor.land_all().values() if exc is None),
+        ))
     if fleet is not None:
+        paths.append((
+            "local", "landing the local drones",
+            lambda: sum(1 for exc in fleet.broadcast_command("land").values() if exc is None),
+        ))
+
+    threads = []
+    for name, what, send in paths:
+        thread = threading.Thread(
+            target=_run_land_all_path,
+            args=(report, interrupts, name, what, send),
+            name=f"land-all-{name}",
+            daemon=True,
+        )
         try:
-            results = fleet.broadcast_command("land")
-            report["local"] = sum(1 for exc in results.values() if exc is None)
+            thread.start()
         except Exception:
-            log.error("LAND ALL: landing the local drones failed", exc_info=True)
-        except BaseException as exc:
-            log.error("LAND ALL: landing the local drones was interrupted: %r", exc)
-            interrupt = interrupt or exc
+            # No thread could be started: run this path here rather than skip it.
+            log.error("LAND ALL: could not start a thread for %s; running it inline", what, exc_info=True)
+            _run_land_all_path(report, interrupts, name, what, send)
+            continue
+        threads.append(thread)
+    for thread in threads:
+        thread.join()
 
     report["reached_any"] = any(n for n in (report["coordinator"], report["transport"], report["local"]))
     if report["reached_any"]:
@@ -860,8 +958,8 @@ def _land_all() -> dict:
             "message": "LAND ALL reached no drone. Land every drone with its local control now.",
         })
 
-    if interrupt is not None:
-        raise interrupt
+    if interrupts:
+        raise interrupts[0]
     return report
 
 
@@ -2038,6 +2136,7 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host
         ValueError: The bind address is not loopback and no API key is
             configured. Nothing is started in that case.
     """
+    global _dashboard_bind
     host = resolve_dashboard_host(host)
     # Checked before anything starts, so a refused bind connects to no drone.
     check_dashboard_bind(host)
@@ -2048,6 +2147,16 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host
         )
     if port is None:
         port = get_config().dashboard.port
+    # Socket.IO accepts browser pages from the origins of this host and port.
+    _dashboard_bind = (host, int(port))
+    cors_override = cors_origins_override()
+    if cors_override is not None and "*" in cors_override:
+        log.warning(
+            "%s=* lets a page from any web site connect to the dashboard and control the drones; "
+            "use it for development only", CORS_ORIGINS_ENV,
+        )
+    elif cors_override is not None:
+        log.warning("%s replaces the dashboard's own Socket.IO origins with %s", CORS_ORIGINS_ENV, cors_override)
     app_state.running = True
     # Auto-load previous target photo if none specified
     if target_path is None:
