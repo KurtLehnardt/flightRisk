@@ -140,8 +140,12 @@ LATCH_PHASES = frozenset({"searching", "awaiting_response", "resolved"})
 #
 # * Peer (ground-to-ground) messages are checked against an allowlist at
 #   every level: a field that is not in the schema is refused, every string
-#   is at most ``MAX_TEXT_LEN`` characters and every list is bounded. So the
-#   handover snapshot can only carry ids, positions, states and times.
+#   is at most ``MAX_TEXT_LEN`` characters, every list is bounded, every id
+#   (drone ids included) must match ``_ID_RE``, and a ``node_state`` is at
+#   most ``MAX_NODE_STATE_BYTES`` as compact JSON. So the handover snapshot
+#   has no field for a crop, a thumbnail or an embedding, and the size cap
+#   bounds what a sender could deliberately encode in ids and numbers; it
+#   does not make such encoding impossible.
 # * Every fleet message (edge links and peer link alike) is screened by a
 #   denylist and payload heuristics: a key that names imagery or biometric
 #   data, a data URI or a long base64-looking string, a bytes value, or a
@@ -264,7 +268,11 @@ MAX_FIELDS = 32
 MAX_DEPTH = 8
 MAX_NODES = 10_000
 MAX_ROSTER = 8
-MAX_DETECTIONS = 256
+MAX_DETECTIONS = 128
+# Compact JSON size of one ``node_state`` (and so of a ``handover_offer``
+# snapshot). A two-drone state with 128 detections is about 15 KB; the cap
+# bounds how much data a peer message could hide in ids and numbers.
+MAX_NODE_STATE_BYTES = 16 * 1024
 MAX_MESSAGE_BYTES = 64 * 1024
 # Upper bound for the lenient fail-safe parse in ``decode`` (see
 # ``failsafe_type_of``). It equals the default ``max_size`` of the

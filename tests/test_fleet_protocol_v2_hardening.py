@@ -767,3 +767,77 @@ def test_require_fence_accepts_complete_v2_motion_on_a_v1_link_and_still_never_f
     for landing in LANDINGS:
         assert fp.validate_ground_to_edge(landing, proto=1, require_fence=True) == landing["type"]
         assert fp.decode(json.dumps(landing), direction=G2E, proto=1, require_fence=True) == landing
+
+
+# ===========================================================================
+# Peer drone ids are identifiers and node_state is size-capped
+# ===========================================================================
+
+
+def _full_node_state(detections: int, drones_per_detection: int = 2, drone_id=lambda i: f"drone-{i}") -> dict:
+    """A large but realistic node_state: eight drones, every field long."""
+    roster = [{"drone_id": drone_id(i), "node_id": "ground-win-01", "connected": True, "is_flying": True,
+               "epoch_seen": 123456} for i in range(fp.MAX_ROSTER)]
+    mission = {"plan_id": "0123456789abcdef0123456789abcdef", "pattern": "split_expanding_square",
+               "state": "running", "area_cm": [100000.5, 100000.5], "lkp_cm": [-12345.6, 23456.7],
+               "placements": {drone_id(i): [-12345.6, 23456.7, 359.9] for i in range(fp.MAX_ROSTER)}}
+    dets = [{"id": 100000 + i, "x_cm": -12345.6, "y_cm": 23456.7, "first_seen_s": 12345.678,
+             "drone_ids": [drone_id(j) for j in range(drones_per_detection)]} for i in range(detections)]
+    return {"type": "node_state", "node_id": "ground-mac-01", "role": "leader", "epoch": 123456, "proto": 2,
+            "roster": roster, "mission": mission,
+            "latch": {"phase": "awaiting_response", "alert_id": "0123456789abcdef0123456789abcdef"},
+            "detections": dets}
+
+
+def test_a_realistic_full_node_state_fits_the_size_cap():
+    state = _full_node_state(fp.MAX_DETECTIONS)
+    assert len(json.dumps(state, separators=(",", ":"))) <= fp.MAX_NODE_STATE_BYTES
+    assert fp.validate_peer_message(state) == "node_state"
+    snapshot = dict(state, role="leader", epoch=7)
+    assert fp.validate_peer_message(fp.make_handover_offer(8, snapshot)) == "handover_offer"
+    assert fp.decode(json.dumps(state), direction=PEER, proto=2) == state
+
+
+def test_node_state_carrying_data_in_long_drone_ids_is_refused():
+    """The review's case: 100 detections x 8 drone ids x 64 base64url characters (about 60 KB)."""
+    rng = random.Random(3)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+    def smuggled(_):
+        return "A" + "".join(rng.choice(alphabet) for _ in range(fp.MAX_ID_LEN - 1))
+
+    state = _full_node_state(100, drones_per_detection=fp.MAX_ROSTER, drone_id=smuggled)
+    assert len(json.dumps(state, separators=(",", ":"))) > 50_000
+    with pytest.raises(fp.ProtocolError, match="limit is 16384"):
+        fp.validate_peer_message(state)
+    with pytest.raises(fp.ProtocolError, match="limit is 16384"):
+        fp.validate_peer_message({"type": "handover_offer", "epoch_next": 123457, "snapshot": state})
+    with pytest.raises(fp.ProtocolError):
+        fp.make_node_state("mac", "leader", 7, detections=state["detections"])
+    # Just over the cap with ordinary ids is refused too.
+    over = _full_node_state(fp.MAX_DETECTIONS, drones_per_detection=fp.MAX_ROSTER)
+    with pytest.raises(fp.ProtocolError, match="compact JSON"):
+        fp.validate_peer_message(over)
+
+
+@pytest.mark.parametrize("bad", ["drone 1", "drône-1", "/9j/4AAQ", "a=b", "", "-drone", "x" * (fp.MAX_ID_LEN + 1), 7,
+                                 None])
+def test_peer_drone_ids_must_be_identifiers(bad):
+    def refused(mutate):
+        msg = _node_state()
+        mutate(msg)
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_peer_message(msg)
+
+    refused(lambda m: m["roster"][0].__setitem__("drone_id", bad))
+    refused(lambda m: m["detections"][0].__setitem__("drone_ids", [bad]))
+    if isinstance(bad, str):
+        refused(lambda m: m["mission"]["placements"].__setitem__(bad, [0, 0, 0]))
+
+
+def test_node_state_size_cap_accepts_any_mapping():
+    from types import MappingProxyType
+
+    state = _node_state()
+    proxy = MappingProxyType(dict(state, mission=MappingProxyType(state["mission"])))
+    assert fp.validate_message(proxy, proto=2) == "node_state"

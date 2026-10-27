@@ -120,7 +120,7 @@ the WebSocket frame limit), as the pre-v2 transport did.
 
 | Type | Fields |
 |---|---|
-| `node_state` | Only these fields, at every level (see "Privacy"): `node_id`, `role`, `epoch`, `proto`, `roster` (at most 8 entries of `drone_id`, `node_id`, `connected`, `is_flying`, `epoch_seen`), `mission` (or null: `plan_id`, `pattern`, `state` one of `idle`, `planned`, `running`, `holding`, `complete`, `area_cm` [w, h], `lkp_cm` [x, y] or null, `placements` mapping a drone id to [x, y, heading]), `latch` (or null: `phase` one of `searching`, `awaiting_response`, `resolved`, and `alert_id`), `detections` (at most 256 entries of `id`, `x_cm`, `y_cm`, `drone_ids`, `first_seen_s`) |
+| `node_state` | Only these fields, at every level (see "Privacy"): `node_id`, `role`, `epoch`, `proto`, `roster` (at most 8 entries of `drone_id`, `node_id`, `connected`, `is_flying`, `epoch_seen`), `mission` (or null: `plan_id`, `pattern`, `state` one of `idle`, `planned`, `running`, `holding`, `complete`, `area_cm` [w, h], `lkp_cm` [x, y] or null, `placements` mapping a drone id to [x, y, heading]), `latch` (or null: `phase` one of `searching`, `awaiting_response`, `resolved`, and `alert_id`), `detections` (at most 128 entries of `id`, `x_cm`, `y_cm`, `drone_ids`, `first_seen_s`). Every drone id (roster, placement keys, `drone_ids`) must be an identifier, and the whole message is at most 16 KiB as compact JSON |
 | `handover_offer` | `epoch_next`, `snapshot` (the leader's `node_state`; its role must be `leader` and `epoch_next` must equal its epoch plus 1) |
 | `handover_accept` | `epoch_next` |
 | `handover_reject` | `reason` (printable text up to 200 characters), optional `epoch_next` |
@@ -326,7 +326,8 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   | Lanes per plan | 1,024 |
   | One lane | 100,000 cm |
   | Roster entries and placements | 8 |
-  | Detections in `node_state` | 256 |
+  | Detections in `node_state` | 128 |
+  | One `node_state` (or `handover_offer` snapshot), as compact JSON | 16 KiB (`MAX_NODE_STATE_BYTES`) |
   | Any string, key or value, on the peer link | 200 characters |
   | Numbers held in one list / in all lists of a message | 16 / 64 |
   | Any number | finite, magnitude at most 10^15 |
@@ -361,12 +362,28 @@ code checks.
 - **Peer link: allowlist.** Every ground-to-ground message is checked
   against its schema at every level: the top-level message, each roster
   entry, `mission`, `latch`, each detection and the `handover_offer`
-  snapshot. A field that is not in the schema is refused, every string
-  (keys included) is at most 200 characters, and every list has a fixed or
-  capped length (roster and placements 8, detections 256, a detection's
-  `drone_ids` 8, number pairs and triples exact). So a `node_state` or
-  handover snapshot can carry only ids, positions, states and times; it has
-  no field that could hold a crop, a thumbnail or an embedding.
+  snapshot. Exactly this is enforced:
+  - a field that is not in the schema is refused;
+  - every string (keys included) is at most 200 characters;
+  - every list has a fixed or capped length (roster and placements 8,
+    detections 128, a detection's `drone_ids` 8, number pairs and triples
+    exact);
+  - every id, including every drone id (roster `drone_id`, placement keys
+    and a detection's `drone_ids`), must be an identifier: 1 to 64
+    characters from letters, digits, `.`, `_`, `:` and `-`, starting with a
+    letter or digit;
+  - a `node_state`, and so a `handover_offer` snapshot, is at most
+    `MAX_NODE_STATE_BYTES` (16 KiB) as compact JSON. A two-drone state with
+    128 detections is about 15 KB; a leader with more to share must send
+    the most recent detections that fit.
+
+  So a `node_state` has no field for a crop, a thumbnail or an embedding,
+  and the number-list limits below refuse an embedding. This does not make
+  it impossible for a sender to hide data deliberately: identifiers use a
+  base64url-compatible alphabet and numbers carry bits, so a hostile ground
+  could still encode up to a few kilobytes of data in one message. The size
+  cap bounds that amount; the boundary that excludes it is that the only
+  peer senders are this project's ground stations.
 - **Every fleet message: denylist and payload screen.** All fleet control
   messages, on the edge links and the peer link, are also screened:
   - a key is refused when, after NFKC normalisation and case folding, it is
@@ -398,8 +415,9 @@ code checks.
   with `--with-face` or `FLIGHTRISK_APPEARANCE_ONLY=0`. Protocol v2 changes
   none of that.
 - **Handover snapshot.** `node_state` (and so the `handover_offer` snapshot)
-  carries only ids, positions, states and times, enforced by the peer
-  allowlist above. Replicating the target ReID embedding on handover is
+  has fields only for ids, positions, states and times, enforced by the
+  peer allowlist above (with the limits it states on what a deliberate
+  sender could hide). Replicating the target ReID embedding on handover is
   decision D4 in the plan and is not decided. Until it is, both the
   allowlist and the number-list limit refuse it, and enabling it needs an
   explicit schema change here and in `docs/privacy-design.md`.

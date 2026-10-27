@@ -1,6 +1,7 @@
 """Schema checks for the ground-to-ground ``node_state`` message (peer link, v2 only)."""
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,7 +10,7 @@ from flightrisk.fleet_protocol.constants import (
     LATCH_PHASES,
     MAX_DETECTIONS,
     MAX_EPOCH,
-    MAX_ID_LEN,
+    MAX_NODE_STATE_BYTES,
     MAX_ROSTER,
     MISSION_STATES,
     _DETECTION_FIELDS,
@@ -27,7 +28,6 @@ from flightrisk.fleet_protocol.checks import (
     _require,
     _require_bool,
     _require_choice,
-    _require_drone_id,
     _require_id,
     _require_int_range,
     _require_list,
@@ -46,7 +46,24 @@ def _validate_number_pair(value: Any, name: str, *, positive: bool = False, size
         raise ProtocolError(f"{name} must be positive, got {_short(value)}")
 
 
+def _plain(value: Any) -> Any:
+    """JSON ``default`` hook: serialise a non-dict mapping as an object."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"{type(value).__name__} is not JSON")
+
+
+def _compact_size(msg: Mapping[str, Any]) -> int:
+    """Bytes of *msg* as compact JSON (as ``encode`` sends it)."""
+    try:
+        text = json.dumps(msg, separators=(",", ":"), allow_nan=False, default=_plain)
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ProtocolError(f"'node_state' cannot be encoded as JSON: {_short(str(exc))}") from exc
+    return len(text.encode("utf-8"))
+
+
 def _validate_node_state(msg: Mapping[str, Any]) -> None:
+    """Allowlisted fields, drone ids that are identifiers, and at most ``MAX_NODE_STATE_BYTES``."""
     _require_only(msg, _NODE_STATE_FIELDS, "'node_state'")
     _require_id(msg, "node_id")
     _require_choice(msg, "role", GROUND_ROLES)
@@ -56,7 +73,7 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
         if not isinstance(entry, Mapping):
             raise ProtocolError(f"'node_state' roster entry {index} must be an object")
         _require_only(entry, _ROSTER_FIELDS, f"'node_state' roster entry {index}")
-        _require_drone_id(entry)
+        _require_id(entry, "drone_id")
         _require_id(entry, "node_id")
         _require_bool(entry, "connected")
         _require_bool(entry, "is_flying")
@@ -75,8 +92,10 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
         if len(placements) > MAX_ROSTER:
             raise ProtocolError(f"'node_state' mission 'placements' has more than {MAX_ROSTER} drones")
         for drone_id, placement in placements.items():
-            if not isinstance(drone_id, str) or not drone_id or len(drone_id) > MAX_ID_LEN:
-                raise ProtocolError(f"'node_state' placement key {_short(drone_id)} is not a drone id")
+            if not _is_id(drone_id):
+                raise ProtocolError(
+                    f"'node_state' placement key {_short(drone_id)} is not a drone id (an identifier)"
+                )
             _validate_number_pair(placement, f"'node_state' placement {drone_id!r}", size=3)
     latch = _require_object(msg, "latch", nullable=True)
     if latch is not None:
@@ -98,5 +117,12 @@ def _validate_node_state(msg: Mapping[str, Any]) -> None:
         if not (isinstance(drone_ids, list) and len(drone_ids) <= MAX_ROSTER):
             raise ProtocolError(f"'node_state' detection {index} 'drone_ids' must be a list of drone ids")
         for drone_id in drone_ids:
-            if not isinstance(drone_id, str) or not drone_id or len(drone_id) > MAX_ID_LEN:
-                raise ProtocolError(f"'node_state' detection {index} has a bad drone id {_short(drone_id)}")
+            if not _is_id(drone_id):
+                raise ProtocolError(
+                    f"'node_state' detection {index} has a bad drone id {_short(drone_id)} (not an identifier)"
+                )
+    size = _compact_size(msg)
+    if size > MAX_NODE_STATE_BYTES:
+        raise ProtocolError(
+            f"'node_state' is {size} bytes as compact JSON; the limit is {MAX_NODE_STATE_BYTES}"
+        )
