@@ -1,15 +1,23 @@
-"""Deterministic simulated drone (backend name ``fake``).
+"""Deterministic simulated drone (dashboard backend name ``sim``).
 
 ``FakeDrone`` implements every role protocol without hardware, threads or
-randomness, so it can drive the dashboard (``--source fake``), unit and
+randomness, so it can drive the dashboard (``--source sim``), unit and
 contract tests, and telemetry/metrics harnesses. Its telemetry, command
 latency, dropped commands and failures are all configurable through
 :class:`FakeDroneConfig`, which can also be built from plain string settings
 (``--drone-opt key=value``) via :meth:`FakeDroneConfig.from_settings`.
+
+Not to be confused with ``FakeTelloController`` in
+:mod:`flightrisk.drone.tello`, the simulated Tello that the edge device flies
+with ``python -m flightrisk.edge_device --source fake``. That one mimics the
+Tello controller's own behaviour (moves take time, a land interrupts a move,
+``takeoff(abort=...)``) for the fleet and lane-executor paths; this one is a
+configurable backend for the dashboard and for testing the drone interfaces.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, fields, replace
 from typing import Any, Callable, Mapping
@@ -36,7 +44,7 @@ from flightrisk.drone.snapshot import (
     reading,
 )
 
-DEFAULT_HOST = "fake://drone"
+DEFAULT_HOST = "sim://drone"
 
 _DIRECTIONS = frozenset({"forward", "back", "left", "right", "up", "down"})
 
@@ -60,6 +68,9 @@ class FakeDroneConfig:
     #: Seconds every command and connect() takes.
     latency_s: float = 0.0
     #: Commands that are always reported as dropped (busy), never executed.
+    #: Fault injection: listing ``land`` or ``takeoff`` here makes the drone
+    #: break the FlightControl contract (they must never be dropped), to
+    #: test that callers still treat such a result as a failure.
     drop_commands: frozenset[str] = frozenset()
     #: Commands that raise FakeDroneError.
     fail_commands: frozenset[str] = frozenset()
@@ -111,7 +122,7 @@ class FakeDrone:
 
     def __init__(
         self,
-        name: str = "fake-1",
+        name: str = "sim-1",
         host: str = DEFAULT_HOST,
         config: FakeDroneConfig | None = None,
         clock: Callable[[], float] = time.time,
@@ -147,7 +158,13 @@ class FakeDrone:
     # --- test / harness controls ---
 
     def set_busy(self, busy: bool) -> None:
-        """Simulate another command holding the command channel."""
+        """Simulate another command holding the command channel.
+
+        While busy, move, rotate, hover, rc_control and return_to_home are
+        dropped (``DROPPED_BUSY``). Land and takeoff are not: per the
+        FlightControl contract a land interrupts whatever holds the channel
+        and a takeoff waits for it, which in this simulation takes no time.
+        """
         self._busy = busy
 
     def set_telemetry(self, **changes: Any) -> None:
@@ -185,33 +202,33 @@ class FakeDrone:
         attitude = cfg.attitude_deg
         vx = vy = vz = ground = None
         if speed is not None:
-            vx = reading(speed[0], METRE_PER_SECOND, "fake.vx", at)
-            vy = reading(speed[1], METRE_PER_SECOND, "fake.vy", at)
-            vz = reading(speed[2], METRE_PER_SECOND, "fake.vz", at)
-            ground = reading(float(np.hypot(speed[0], speed[1])), METRE_PER_SECOND, "fake.ground_speed", at)
+            vx = reading(speed[0], METRE_PER_SECOND, "sim.vx", at)
+            vy = reading(speed[1], METRE_PER_SECOND, "sim.vy", at)
+            vz = reading(speed[2], METRE_PER_SECOND, "sim.vz", at)
+            ground = reading(float(np.hypot(speed[0], speed[1])), METRE_PER_SECOND, "sim.ground_speed", at)
         pitch = roll = None
         if attitude is not None:
-            pitch = reading(attitude[0], DEGREE, "fake.pitch", at)
-            roll = reading(attitude[1], DEGREE, "fake.roll", at)
+            pitch = reading(attitude[0], DEGREE, "sim.pitch", at)
+            roll = reading(attitude[1], DEGREE, "sim.roll", at)
         return TelemetrySnapshot(
-            backend="fake",
+            backend="sim",
             drone_id=self.name,
             captured_at=self._clock(),
             connected=self.state.is_connected,
             is_flying=self.state.is_flying,
             is_flying_source=IS_FLYING_COMMANDED,
             flight_mode=cfg.flight_mode,
-            battery_pct=reading(cfg.battery_pct, PERCENT, "fake.battery", at),
-            height_m=reading(self._height_m, METRE, "fake.height", at),
-            temperature_c=reading(cfg.temperature_c, CELSIUS, "fake.temperature", at),
-            flight_time_s=reading(cfg.flight_time_s, SECOND, "fake.flight_time", at),
+            battery_pct=reading(cfg.battery_pct, PERCENT, "sim.battery", at),
+            height_m=reading(self._height_m, METRE, "sim.height", at),
+            temperature_c=reading(cfg.temperature_c, CELSIUS, "sim.temperature", at),
+            flight_time_s=reading(cfg.flight_time_s, SECOND, "sim.flight_time", at),
             vx_mps=vx,
             vy_mps=vy,
             vz_mps=vz,
             ground_speed_mps=ground,
             pitch_deg=pitch,
             roll_deg=roll,
-            yaw_deg=reading(self._yaw_deg, DEGREE, "fake.yaw", at) if attitude is not None else None,
+            yaw_deg=reading(self._yaw_deg, DEGREE, "sim.yaw", at) if attitude is not None else None,
         )
 
     # --- VideoSource ---
@@ -229,11 +246,15 @@ class FakeDrone:
 
     # --- FlightControl ---
 
-    def takeoff(self) -> CommandResult:
-        return self._command("takeoff", (), self._do_takeoff)
+    def takeoff(self, abort: threading.Event | None = None) -> CommandResult:
+        """Take off unless ``abort`` is set (checked before anything happens, like the Tello)."""
+        if abort is not None and abort.is_set():
+            self.calls.append(("takeoff",))
+            return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "abort requested")
+        return self._command("takeoff", (), self._do_takeoff, waits_for_channel=True)
 
     def land(self) -> CommandResult:
-        return self._command("land", (), self._do_land)
+        return self._command("land", (), self._do_land, waits_for_channel=True)
 
     def hover(self) -> CommandResult:
         return self._command("hover", (), None)
@@ -267,12 +288,19 @@ class FakeDrone:
         if self.config.latency_s > 0:
             self._sleep(self.config.latency_s)
 
-    def _command(self, name: str, args: tuple, action: Callable[[], None] | None) -> CommandResult:
+    def _command(
+        self,
+        name: str,
+        args: tuple,
+        action: Callable[[], None] | None,
+        waits_for_channel: bool = False,
+    ) -> CommandResult:
         self._delay()
         self.calls.append((name, *args))
         if name in self.config.fail_commands:
             raise FakeDroneError(f"simulated failure: {name}")
-        if self._busy or name in self.config.drop_commands:
+        busy = self._busy and not waits_for_channel
+        if busy or name in self.config.drop_commands:
             return CommandResult(name, CommandOutcome.DROPPED_BUSY, "another command in flight")
         if action is not None:
             action()
@@ -314,7 +342,7 @@ class FakeDrone:
 
 
 def create(drone_id: str, host: str, options: Mapping[str, Any]) -> FakeDrone:
-    """Registry factory for the ``fake`` backend."""
+    """Registry factory for the ``sim`` backend."""
     config = options.get("config")
     if not isinstance(config, FakeDroneConfig):
         config = FakeDroneConfig.from_settings(options)

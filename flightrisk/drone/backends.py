@@ -75,25 +75,27 @@ register(
 
 
 # --- Simulated drone ---------------------------------------------------------
+# Named "sim", not "fake": ``--source fake`` belongs to the edge device, where
+# it flies FakeTelloController (a simulated Tello). See flightrisk/drone/fake.py.
 
-def _fake_options(settings: Mapping[str, Any]) -> Mapping[str, Any]:
+def _sim_options(settings: Mapping[str, Any]) -> Mapping[str, Any]:
     fake = importlib.import_module("flightrisk.drone.fake")
     return {"config": fake.FakeDroneConfig.from_settings(settings), "host": settings.get("host")}
 
 
-def _fake_host(options: Mapping[str, Any]) -> str:
-    return options.get("host") or "fake://drone"
+def _sim_host(options: Mapping[str, Any]) -> str:
+    return options.get("host") or "sim://drone"
 
 
-def _create_fake(drone_id: str, host: str, options: Mapping[str, Any]):
+def _create_sim(drone_id: str, host: str, options: Mapping[str, Any]):
     fake = importlib.import_module("flightrisk.drone.fake")
     return fake.create(drone_id, host, options)
 
 
 register(
-    "fake",
-    _create_fake,
-    default_host=_fake_host,
-    options_from=_fake_options,
+    "sim",
+    _create_sim,
+    default_host=_sim_host,
+    options_from=_sim_options,
     description="Deterministic simulated drone for tests and demos (no hardware)",
 )

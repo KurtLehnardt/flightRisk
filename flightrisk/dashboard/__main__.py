@@ -85,7 +85,7 @@ def main():
     parser.add_argument(
         "--drone-opt", action="append", default=[], metavar="KEY=VALUE",
         help="Backend-specific drone setting, repeatable (for example "
-             "--drone-opt battery_pct=15 with --source fake). Unknown keys "
+             "--drone-opt battery_pct=15 with --source sim). Unknown keys "
              "are ignored by the backend.",
     )
     parser.add_argument(
