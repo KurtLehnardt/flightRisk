@@ -61,7 +61,7 @@ import socket
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -69,6 +69,13 @@ from websockets.exceptions import ConnectionClosed
 from flightrisk import fleet_protocol as fp
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
+from flightrisk.fleet_ground_link import (
+    CLOSE_PROTOCOL,
+    CommandTracker,
+    GroundIdentity,
+    GroundLinks,
+    PeerVersionError,
+)
 from flightrisk.observability import StructuredLogger
 
 logger = logging.getLogger(__name__)
@@ -111,9 +118,10 @@ _BIND_CHECK_INTERVAL_S = 2.0
 _ADDRESS_MISSING_ERRNOS = frozenset({errno.EADDRNOTAVAIL, 10049})
 
 # Queued commands that an emergency_land_all supersedes: once the ground has
-# ordered every drone down, a takeoff or start_at that was still waiting in
-# the edge's recv() queue must not fly the drone back up afterwards.
-_SUPERSEDED_BY_EMERGENCY = frozenset({fp.TAKEOFF, fp.START_AT})
+# ordered every drone down, a takeoff, start_at, resume or nudge that was
+# still waiting in the edge's recv() queue must not fly the drone back up or
+# move it afterwards.
+_SUPERSEDED_BY_EMERGENCY = frozenset({fp.TAKEOFF, fp.START_AT, fp.RESUME, fp.NUDGE})
 
 # Per-client callback backlogs on the ground. When a callback falls this far
 # behind, the client's read loop waits (backpressure) instead of buffering
@@ -337,6 +345,19 @@ class EdgeTransport:
             ``recv()``, ahead of everything else.
         clock: The edge's monotonic clock (injectable for tests). It stamps
             pong ``t2``/``t3`` and backs ``clock`` and ``link_age_s``.
+        on_frame: Raw mode, used by ``flightrisk.edge_uplink``. When set,
+            the reader hands every received frame to this coroutine as
+            ``(ws, raw, received_at)`` instead of parsing and dispatching it
+            itself (no pong, no clock, no queueing, no ``link_age_s``
+            update); the caller owns all of that.
+        on_connected: Called with each new WebSocket right after it opens,
+            before its reader starts (raw mode bookkeeping).
+        on_closed: Called with a WebSocket when its reader ends.
+
+    ``proto`` is the protocol version agreed on the current connection (1
+    until a ``hello`` is exchanged; reset to 1 on every new connection). It
+    is what ``send`` validates with unless told otherwise, so a v2 reply is
+    never checked against the v1 rules.
     """
 
     def __init__(
@@ -349,6 +370,9 @@ class EdgeTransport:
         max_delay: float = 30.0,
         on_emergency_land: Callable[[dict[str, Any]], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        on_frame: Callable[[Any, Any, float], Awaitable[None]] | None = None,
+        on_connected: Callable[[Any], None] | None = None,
+        on_closed: Callable[[Any], None] | None = None,
     ):
         self._ws_url = ws_url
         self._ws = None
@@ -380,10 +404,23 @@ class EdgeTransport:
         self._inbox: deque[dict[str, Any]] = deque()
         self._inbox_event = asyncio.Event()
         self._last_ground_msg_s: float | None = None
+        self._on_frame = on_frame
+        self._on_connected = on_connected
+        self._on_closed = on_closed
+        self.proto = 1
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def ws_url(self) -> str:
+        return self._ws_url
+
+    @property
+    def websocket(self) -> Any:
+        """The current connection's WebSocket, or ``None``."""
+        return self._ws if self._connected else None
 
     @property
     def on_emergency_land(self) -> Callable[[dict[str, Any]], None] | None:
@@ -406,8 +443,12 @@ class EdgeTransport:
             return None
         return max(0.0, self._clock() - last)
 
-    async def connect(self) -> None:
+    async def connect(self, *, retry_in_background: bool = False) -> None:
         """Connect to the ground station WebSocket.
+
+        With *retry_in_background*, a failed first attempt is logged and
+        retried with the usual backoff instead of raising (the multi-ground
+        uplink keeps trying every ground it was given).
 
         No-ops if already connected -- calling ``connect()`` twice without an
         intervening ``disconnect()`` would otherwise orphan the first
@@ -416,8 +457,17 @@ class EdgeTransport:
         ``connect()`` racing the background ``_reconnect()`` task) can't slip
         past the ``_connected`` check and open a second, orphaned socket.
         """
-        async with self._connect_lock:
-            await self._connect_locked()
+        if not retry_in_background:
+            async with self._connect_lock:
+                await self._connect_locked()
+            return
+        try:
+            async with self._connect_lock:
+                await self._connect_locked()
+        except Exception as exc:  # noqa: BLE001 - any connect failure is retried
+            logger.warning("[%s] Connect failed, retrying in the background: %s", self._ws_url, exc)
+            self._should_reconnect = True
+            self._schedule_reconnect()
 
     async def _connect_locked(self) -> None:
         """Connection logic, assumes ``_connect_lock`` is already held."""
@@ -427,6 +477,10 @@ class EdgeTransport:
         self._connected = True
         self._should_reconnect = True
         self._retry_count = 0
+        # A new connection has agreed no version yet.
+        self.proto = 1
+        if self._on_connected is not None:
+            self._on_connected(self._ws)
         # Nothing can be waiting in recv() while disconnected, so a fresh
         # event is safe here, and it binds to the loop this connection runs
         # on (the sync wrapper starts a new loop after a full disconnect).
@@ -443,6 +497,9 @@ class EdgeTransport:
         try:
             async for raw in ws:
                 received_at = self._clock()
+                if self._on_frame is not None:
+                    await self._on_frame(ws, raw, received_at)
+                    continue
                 if self._ws is ws:
                     self._last_ground_msg_s = received_at
                 try:
@@ -470,6 +527,11 @@ class EdgeTransport:
                     logger.warning("[%s] Connection to ground closed", self._ws_url)
                     self._schedule_reconnect()
             self._inbox_event.set()
+            if self._on_closed is not None:
+                try:
+                    self._on_closed(ws)
+                except Exception:
+                    logger.exception("[%s] on_closed callback raised", self._ws_url)
 
     def _dispatch_incoming(self, ws, data: dict[str, Any], received_at: float) -> None:
         """Handle one ground message without ever waiting, so the next is read at once."""
@@ -609,8 +671,12 @@ class EdgeTransport:
             return
         self._reconnect_task = asyncio.ensure_future(self._reconnect())
 
-    async def send_detections(self, msg: DetectionMessage) -> None:
+    async def send_detections(self, msg: DetectionMessage, *, ws: Any = None) -> None:
         """Serialize and send a DetectionMessage.
+
+        With *ws*, the message is sent only if *ws* is still the current
+        connection (the multi-ground uplink sends detections to one chosen
+        connection, never to whatever replaced it).
 
         No-ops if not currently connected, scheduling a background
         reconnection attempt first if one is warranted (i.e. a previous
@@ -621,6 +687,8 @@ class EdgeTransport:
         """
         if not self._connected or self._ws is None:
             self._schedule_reconnect()
+            return
+        if ws is not None and ws is not self._ws:
             return
         data = self._runner.to_dict(msg)
         try:
@@ -659,19 +727,24 @@ class EdgeTransport:
             except (asyncio.TimeoutError, TimeoutError):
                 return None
 
-    async def send(self, message: dict[str, Any]) -> bool:
+    async def send(self, message: dict[str, Any], *, proto: int | None = None, ws: Any = None) -> bool:
         """Send one edge -> ground control message (``pong``, ``ack``, ``nack``, ``telemetry``).
 
-        Fleet messages are validated against the protocol schema first and
-        raise ``fleet_protocol.ProtocolError`` when malformed, so a bad
-        message fails loudly at the sender. Returns ``True`` once the message
-        is written, or ``False`` when not connected or the connection drops
-        mid-send (a background reconnect is scheduled, as for
-        ``send_detections``).
+        Fleet messages are validated against the protocol schema first, with
+        *proto* or else the connection's agreed ``proto``, and raise
+        ``fleet_protocol.ProtocolError`` when malformed, so a bad message
+        fails loudly at the sender. With *ws*, the message is sent only if
+        *ws* is still the current connection (a reply meant for one
+        connection must never reach its replacement). Returns ``True`` once
+        the message is written, or ``False`` when not connected, the
+        connection changed, or it drops mid-send (a background reconnect is
+        scheduled, as for ``send_detections``).
         """
-        fp.validate_message(message)
+        fp.validate_message(message, proto=self.proto if proto is None else proto)
         if not self._connected or self._ws is None:
             self._schedule_reconnect()
+            return False
+        if ws is not None and ws is not self._ws:
             return False
         try:
             await self._ws.send(json.dumps(message))
@@ -681,6 +754,15 @@ class EdgeTransport:
             self._schedule_reconnect()
             return False
         return True
+
+    async def drop_connection(self, ws: Any, code: int, reason: str) -> None:
+        """Close *ws* if it is still the current connection; the edge then reconnects as usual."""
+        if ws is not self._ws or ws is None:
+            return
+        try:
+            await ws.close(code=code, reason=reason)
+        except ConnectionClosed:
+            pass
 
     async def disconnect(self) -> None:
         """Close the connection and suppress any further reconnection.
@@ -787,6 +869,17 @@ class GroundTransport:
         address_probe: Returns whether an address is currently assigned to
             this machine (injectable for tests).
         event_log: ``StructuredLogger`` for bind events (injectable for tests).
+        identity: This ground's node id, role and epoch. When given, the
+            ground speaks protocol v2 on every connection (see
+            ``flightrisk.fleet_ground_link``): it sends its ``hello`` first,
+            agrees a version per connection, validates and shapes messages
+            for it, fences its heartbeats and clock messages as a leader, and
+            sends nothing but a landing before its ``hello``. Without it the
+            ground behaves exactly as in protocol v1.
+        local_min_proto: 2 to close v1 links (only with ``identity``).
+        on_stale_epoch: Called with an edge's ``epoch_seen`` when an edge
+            reports a leader epoch above this ground's (in a stale-leader
+            nack or its ``hello``), so the leader logic can step down.
     """
 
     def __init__(
@@ -804,8 +897,14 @@ class GroundTransport:
         event_log: Any = None,
         bind_escalate_interval_s: float = 30.0,
         bind_escalate_max: int = 20,
+        identity: GroundIdentity | None = None,
+        local_min_proto: int = 1,
+        on_stale_epoch: Callable[[int], None] | None = None,
     ):
         self._hosts = parse_bind_hosts(host)
+        self._links = GroundLinks(identity, local_min_proto=local_min_proto) if identity is not None else None
+        self._commands = CommandTracker()
+        self._on_stale_epoch = on_stale_epoch
         self._hosts_list_form = _is_list_form(host)
         self._port = port
         self._on_message = on_message  # callback: (DetectionMessage) -> None
@@ -929,6 +1028,8 @@ class GroundTransport:
             if self._token is not None:
                 if not await self._authenticate(websocket):
                     return
+            if self._links is not None and not await self._open_v2_link(websocket):
+                return
 
             async for raw in websocket:
                 # Stamp arrival first: for a pong this is t4.
@@ -960,15 +1061,25 @@ class GroundTransport:
                         await detections.submit(self._on_message, msg)
                 elif msg_type == fp.PONG:
                     self._resolve_pong(websocket, data, received_at)
+                elif msg_type == fp.HELLO and self._links is not None:
+                    if not await self._on_edge_hello(websocket, data, received_at):
+                        return
                 elif msg_type in (fp.ACK, fp.NACK, fp.TELEMETRY):
+                    if self._links is not None and self._links.refuses(websocket, received_at):
+                        await self._close_protocol(websocket, "v1 link refused")
+                        return
+                    proto = self._links.proto(websocket, received_at) if self._links is not None else 1
                     try:
-                        fp.validate_message(data)
+                        fp.validate_message(data, proto=proto)
                     except fp.ProtocolError as exc:
                         logger.warning("Malformed %s message, ignoring: %s", msg_type, exc)
                         continue
                     if not await self._claim_drone(websocket, data["drone_id"], received_at):
                         return
                     self._record_control(data)
+                    self._commands.resolve(data)
+                    if self._links is not None:
+                        self._note_stale(self._links.stale_epoch_in(data))
                     if self._on_control:
                         await controls.submit(self._on_control, data)
                 elif msg_type == "set_target":
@@ -991,8 +1102,133 @@ class GroundTransport:
             self._clients.discard(websocket)
             self._authenticated_clients.discard(websocket)
             self._forget_socket(websocket)
+            if self._links is not None:
+                self._links.forget(websocket)
             await detections.close()
             await controls.close()
+
+    # -- Protocol v2 links (see flightrisk.fleet_ground_link) ---------------
+
+    @property
+    def identity(self) -> GroundIdentity | None:
+        return self._links.identity if self._links is not None else None
+
+    async def _open_v2_link(self, websocket) -> bool:
+        """Send this ground's ``hello`` as the first message on a new connection."""
+        self._links.opened(websocket, self._clock())
+        identity = self._links.identity
+        if not await self._send_json(websocket, json.dumps(identity.hello())):
+            return False
+        self._links.mark_hello_sent(websocket)
+        if self._links.identity is not identity:
+            # set_identity ran while this hello was being written and skipped
+            # this connection: announce the current role and epoch too.
+            return await self._send_json(websocket, json.dumps(self._links.identity.hello()))
+        return True
+
+    async def _on_edge_hello(self, websocket, data: dict[str, Any], received_at: float) -> bool:
+        verdict = self._links.on_edge_hello(websocket, data, received_at)
+        if verdict.close:
+            await self._close_protocol(websocket, verdict.reason)
+            return False
+        if verdict.reason:
+            logger.warning("Ignoring an edge hello: %s", verdict.reason)
+            return True
+        if not await self._claim_drone(websocket, data.get("drone_id"), received_at):
+            return False
+        if verdict.epoch_seen is not None and verdict.epoch_seen > self._links.identity.epoch:
+            self._note_stale(verdict.epoch_seen)
+        return True
+
+    async def _close_protocol(self, websocket, reason: str) -> None:
+        logger.warning("Closing %s: %s", self._describe(websocket), reason)
+        try:
+            await websocket.close(code=CLOSE_PROTOCOL, reason=reason)
+        except ConnectionClosed:
+            pass
+
+    def _note_stale(self, epoch_seen: int | None) -> None:
+        # Only a leader can be stale; a standby is expected to be behind.
+        if epoch_seen is None or self._links.identity.role != "leader":
+            return
+        logger.warning(
+            "An edge follows leader epoch %d, above this ground's epoch %d",
+            epoch_seen, self._links.identity.epoch,
+        )
+        if self._on_stale_epoch is not None:
+            try:
+                self._on_stale_epoch(epoch_seen)
+            except Exception:
+                logger.exception("on_stale_epoch callback raised")
+
+    async def set_identity(self, identity: GroundIdentity) -> int:
+        """Change this ground's role or epoch and announce it with a new ``hello``.
+
+        Only for a ground started with an ``identity``. Returns how many
+        connections the new ``hello`` reached.
+        """
+        if self._links is None:
+            raise RuntimeError("set_identity needs a ground started with an identity")
+        if identity.node_id != self._links.identity.node_id:
+            raise ValueError("a ground's node_id cannot change while it runs")
+        self._links.identity = identity
+        payload = json.dumps(identity.hello())
+        clients = [ws for ws in self._clients if self._links.hello_sent(ws)]
+        results = await asyncio.gather(*(self._send_json(ws, payload) for ws in clients), return_exceptions=True)
+        return sum(1 for result in results if result is True)
+
+    def _payload_for(self, websocket, message: dict[str, Any]) -> str | None:
+        """The JSON to send *message* on *websocket*, or ``None`` when it must not go there yet.
+
+        Raises ``PeerVersionError`` when the link's version cannot carry it.
+        """
+        if self._links is None:
+            return json.dumps(message)
+        if not self._links.may_send(websocket, message):
+            return None
+        return json.dumps(self._links.shape(websocket, message, self._clock()))
+
+    def peer_proto(self, drone_id: str) -> int | None:
+        """The protocol version agreed with *drone_id*'s edge (``None`` when not yet agreed or unknown)."""
+        websocket = self._drone_sockets.get(drone_id)
+        if websocket is None or self._links is None:
+            return None
+        return self._links.peer_proto(websocket)
+
+    async def send_command(
+        self,
+        drone_id: str,
+        message: dict[str, Any],
+        *,
+        timeout_s: float = 2.0,
+        attempts: int = 1,
+    ) -> dict[str, Any] | None:
+        """Send a command to *drone_id* and wait for its ack or nack, matched by ``(drone_id, cmd_id)``.
+
+        Only ``RETRYABLE_COMMAND_TYPES`` are sent more than once (up to
+        *attempts* times, with the same ``cmd_id``); every other command is
+        sent once. A newer command that supersedes this one (see
+        ``CommandTracker.supersede``) ends the wait. Returns the reply, or
+        ``None`` on timeout, supersession or when the drone is not
+        connected. Raises ``PeerVersionError`` when the drone's link cannot
+        carry the command (for example ``hold`` to a v1 edge): the caller
+        decides the fallback.
+        """
+        mtype = fp.validate_message(message, proto=self._validation_proto(message))
+        self._commands.supersede(drone_id, mtype)
+        tries = max(1, attempts) if mtype in fp.RETRYABLE_COMMAND_TYPES else 1
+        entry = self._commands.register(drone_id, message)
+        try:
+            for _ in range(tries):
+                if not await self.send_to_drone(drone_id, message):
+                    return None
+                try:
+                    return await asyncio.wait_for(asyncio.shield(entry.future), timeout=timeout_s)
+                except (asyncio.TimeoutError, TimeoutError):
+                    continue
+            return None
+        finally:
+            self._commands.unregister(entry)
 
     async def _claim_drone(self, websocket, drone_id: Any, received_at: float) -> bool:
         """Bind *drone_id* to *websocket*, unless another live connection carries it.
@@ -1456,6 +1692,8 @@ class GroundTransport:
             "reid_embedding": reid_embedding,
             "face_embedding": face_embedding,
         }
+        if self._links is not None and not self._links.may_send(websocket, msg):
+            return
         try:
             await websocket.send(json.dumps(msg))
         except ConnectionClosed:
@@ -1484,6 +1722,8 @@ class GroundTransport:
             "type": "stream_video",
             "enabled": enabled,
         }
+        if self._links is not None and not self._links.may_send(websocket, msg):
+            return
         try:
             await websocket.send(json.dumps(msg))
         except ConnectionClosed:
@@ -1531,13 +1771,17 @@ class GroundTransport:
         ``fleet_protocol.ProtocolError`` when malformed. Returns ``False``
         (and logs) when that drone is not connected or the send fails.
         """
-        mtype = fp.validate_message(message)
+        mtype = fp.validate_message(message, proto=self._validation_proto(message))
         level = logging.ERROR if mtype == fp.EMERGENCY_LAND_ALL else logging.WARNING
         websocket = self._drone_sockets.get(drone_id)
         if websocket is None:
             logger.log(level, "Cannot send %r: drone %r is not connected", mtype, drone_id)
             return False
-        if await self._send_json(websocket, json.dumps(message)):
+        payload = self._payload_for(websocket, message)
+        if payload is None:
+            logger.log(level, "Cannot send %r to drone %r before this ground's hello", mtype, drone_id)
+            return False
+        if await self._send_json(websocket, payload):
             return True
         logger.log(level, "Failed to send %r to drone %r: connection closed", mtype, drone_id)
         return False
@@ -1549,18 +1793,31 @@ class GroundTransport:
         as for ``broadcast_target``. An ``emergency_land_all`` is routed
         through ``emergency_land_all()``.
         """
-        mtype = fp.validate_message(message)
+        mtype = fp.validate_message(message, proto=self._validation_proto(message))
         if mtype == fp.EMERGENCY_LAND_ALL:
             return await self.emergency_land_all()
         clients = self._eligible_clients()
         if not clients:
             return 0
-        payload = json.dumps(message)
-        results = await asyncio.gather(
-            *(self._send_json(ws, payload) for ws in clients),
-            return_exceptions=True,
-        )
+        sends = []
+        for ws in clients:
+            try:
+                payload = self._payload_for(ws, message)
+            except PeerVersionError as exc:
+                logger.warning("Not sending %r to %s: %s", mtype, self._describe(ws), exc)
+                continue
+            if payload is not None:
+                sends.append(self._send_json(ws, payload))
+        if not sends:
+            return 0
+        results = await asyncio.gather(*sends, return_exceptions=True)
         return sum(1 for result in results if result is True)
+
+    def _validation_proto(self, message: dict[str, Any]) -> int:
+        """Validate a fenced message under v2 (it is shaped per link later), anything else under v1."""
+        if self._links is not None and ("epoch" in message or "cmd_id" in message):
+            return fp.PROTOCOL_VERSION
+        return 1
 
     async def emergency_land_all(self) -> int:
         """Order every connected edge to land now; returns how many it reached.
@@ -1598,7 +1855,11 @@ class GroundTransport:
         """Broadcast the next ``heartbeat`` message; returns how many edges it reached."""
         seq = self._heartbeat_seq
         self._heartbeat_seq += 1
-        return await self.broadcast_control(fp.make_heartbeat(seq))
+        fence = self._links.identity.fence if self._links is not None else None
+        if self._links is not None and fence is None:
+            # A standby sends no heartbeats: only the leader feeds watchdogs.
+            return 0
+        return await self.broadcast_control(fp.make_heartbeat(seq, fence=fence))
 
     async def _heartbeat_loop(self, interval_s: float) -> None:
         while True:
@@ -1624,6 +1885,9 @@ class GroundTransport:
         pending = self._pending_pings.setdefault(websocket, {})
         t1 = self._clock()
         pending[t1] = future
+        if self._links is not None and not self._links.hello_sent(websocket):
+            pending.pop(t1, None)
+            return None
         try:
             await websocket.send(json.dumps(fp.make_ping(t1)))
             return await asyncio.wait_for(future, timeout=timeout_s)
@@ -1667,7 +1931,12 @@ class GroundTransport:
         estimate = fp.estimate_clock(samples, measured_at_s=self._clock())
         if drone_id is not None:
             self._clock_estimates[drone_id] = estimate
-        if not await self._send_json(websocket, json.dumps(fp.make_clock(estimate.offset_s))):
+        fence = self._links.identity.fence if self._links is not None else None
+        try:
+            payload = self._payload_for(websocket, fp.make_clock(estimate.offset_s, fence=fence))
+        except PeerVersionError as exc:
+            raise ClockSyncError(f"cannot send the clock offset to {label}: {exc}") from exc
+        if payload is None or not await self._send_json(websocket, payload):
             raise ClockSyncError(f"connection to {label} closed before the clock offset was sent")
         logger.info(
             "Clock sync with %s: offset %.6f s, rtt %.6f s over %d rounds",
@@ -1805,6 +2074,9 @@ class GroundTransportSync:
         heartbeat_interval_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         duplicate_ping_timeout_s: float = _DUPLICATE_PING_TIMEOUT_S,
+        identity: GroundIdentity | None = None,
+        local_min_proto: int = 1,
+        on_stale_epoch: Callable[[int], None] | None = None,
     ):
         self._transport = GroundTransport(
             host=host,
@@ -1815,6 +2087,9 @@ class GroundTransportSync:
             heartbeat_interval_s=heartbeat_interval_s,
             clock=clock,
             duplicate_ping_timeout_s=duplicate_ping_timeout_s,
+            identity=identity,
+            local_min_proto=local_min_proto,
+            on_stale_epoch=on_stale_epoch,
         )
         self._bridge = AsyncBridge(name="ground-transport", cmd_timeout=_CMD_TIMEOUT)
 
@@ -1871,6 +2146,28 @@ class GroundTransportSync:
 
     def send_heartbeat(self, timeout: float = _CMD_TIMEOUT) -> int:
         return self._bridge.run(self._transport.send_heartbeat(), timeout=timeout)
+
+    def set_identity(self, identity: GroundIdentity, timeout: float = _CMD_TIMEOUT) -> int:
+        """Announce a new role or epoch; see ``GroundTransport.set_identity``."""
+        return self._bridge.run(self._transport.set_identity(identity), timeout=timeout)
+
+    def send_command(
+        self,
+        drone_id: str,
+        message: dict[str, Any],
+        *,
+        timeout_s: float = 2.0,
+        attempts: int = 1,
+        timeout: float = _CMD_TIMEOUT,
+    ) -> dict[str, Any] | None:
+        """Send a command and wait for its reply; see ``GroundTransport.send_command``."""
+        return self._bridge.run(
+            self._transport.send_command(drone_id, message, timeout_s=timeout_s, attempts=attempts),
+            timeout=timeout,
+        )
+
+    def peer_proto(self, drone_id: str, timeout: float = _CMD_TIMEOUT) -> int | None:
+        return self._bridge.run(_call_on_loop(lambda: self._transport.peer_proto(drone_id)), timeout=timeout)
 
     def sync_clock(
         self,
