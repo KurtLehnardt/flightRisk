@@ -41,7 +41,7 @@ TAG_RE = re.compile(r"<[A-Za-z/!]")
 # ---------------------------------------------------------------------------
 
 def _inline_scripts(html: str) -> list[str]:
-    return re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+    return re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
 
 
 def _segments(js: str) -> list[tuple[str, list[str]]]:
@@ -207,7 +207,7 @@ def _run_node(source: str) -> str:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    proc = subprocess.run([node, "-e", source], capture_output=True, text=True, timeout=30)
+    proc = subprocess.run([node, "-e", source], capture_output=True, text=True, timeout=30, check=False)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
 
@@ -215,7 +215,7 @@ def _run_node(source: str) -> str:
 @pytest.fixture(scope="module")
 def helpers_js() -> str:
     js = "\n".join(_inline_scripts(TEMPLATE.read_text(encoding="utf-8")))
-    consts = re.search(r"const HTML_ESCAPES = .*?;\n\s*const HTML_ESCAPE_RE = .*?;\n", js, flags=re.S)
+    consts = re.search(r"const HTML_ESCAPES = .*?;\n\s*const HTML_ESCAPE_RE = .*?;\n", js, flags=re.DOTALL)
     assert consts, "escapeHtml lookup tables not found"
     return consts.group(0) + _extract_function(js, "escapeHtml") + "\n" + _extract_function(js, "sessionMatchHtml")
 
