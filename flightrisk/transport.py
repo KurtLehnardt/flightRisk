@@ -94,6 +94,11 @@ class ClockSyncError(RuntimeError):
     """Clock sync with an edge failed (connection lost or too few pongs)."""
 
 
+def _is_superseded_by_emergency(msg: dict[str, Any]) -> bool:
+    mtype = msg.get("type")
+    return isinstance(mtype, str) and mtype in _SUPERSEDED_BY_EMERGENCY
+
+
 def _run_emergency_callback(callback: Callable[[dict[str, Any]], None], msg: dict[str, Any]) -> None:
     try:
         callback(msg)
@@ -296,27 +301,11 @@ class EdgeTransport:
 
     def _handle_emergency(self, data: dict[str, Any]) -> None:
         logger.warning("[%s] emergency_land_all received from ground", self._ws_url)
-        callback = self._on_emergency_land
-        if callback is not None:
-            # A dedicated thread, not the shared executor, so landing never
-            # waits behind other queued work.
-            threading.Thread(
-                target=_run_emergency_callback,
-                args=(callback, dict(data)),
-                name="edge-emergency-land",
-                daemon=True,
-            ).start()
-        else:
-            logger.warning(
-                "[%s] No on_emergency_land callback set; emergency_land_all is "
-                "delivered through recv() only",
-                self._ws_url,
-            )
-        superseded = [m for m in self._inbox if m.get("type") in _SUPERSEDED_BY_EMERGENCY]
+        # Queue it first (this cannot fail), ahead of everything else, and
+        # drop any takeoff or start_at that was waiting behind it.
+        superseded = [m for m in self._inbox if _is_superseded_by_emergency(m)]
         if superseded:
-            self._inbox = deque(
-                m for m in self._inbox if m.get("type") not in _SUPERSEDED_BY_EMERGENCY
-            )
+            self._inbox = deque(m for m in self._inbox if not _is_superseded_by_emergency(m))
             logger.warning(
                 "[%s] Discarded %d queued %s message(s) superseded by emergency_land_all",
                 self._ws_url,
@@ -325,6 +314,30 @@ class EdgeTransport:
             )
         self._inbox.appendleft(dict(data))
         self._inbox_event.set()
+
+        callback = self._on_emergency_land
+        if callback is None:
+            logger.warning(
+                "[%s] No on_emergency_land callback set; emergency_land_all is "
+                "delivered through recv() only",
+                self._ws_url,
+            )
+            return
+        try:
+            # A dedicated thread, not the shared executor, so landing never
+            # waits behind other queued work.
+            threading.Thread(
+                target=_run_emergency_callback,
+                args=(callback, dict(data)),
+                name="edge-emergency-land",
+                daemon=True,
+            ).start()
+        except Exception:
+            logger.exception(
+                "[%s] Could not start the emergency-land thread; emergency_land_all "
+                "is still delivered through recv()",
+                self._ws_url,
+            )
 
     async def _reconnect(self) -> bool:
         """Attempt to reconnect with exponential backoff.
