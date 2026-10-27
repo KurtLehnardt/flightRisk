@@ -161,7 +161,12 @@ def _gemma_worker(socketio):
                 continue
             if item_type == "describe":
                 _, track_key, crop, description = item
-                result = app_state.reasoning.match_description(crop, description)
+                # Read the provider once: the operator may switch reasoning
+                # to Off (app_state.reasoning = None) with work still queued.
+                agent = app_state.reasoning
+                if agent is None:
+                    continue
+                result = agent.match_description(crop, description)
                 socketio.emit("reasoning_result", {
                     "track_id": track_key,
                     "result": result,
@@ -235,12 +240,18 @@ def _gemma_worker(socketio):
             else:
                 # "analyze" -- photo-based reasoning
                 _, track_key, crop, reference = item
-                result = app_state.reasoning.analyze_match(reference, crop)
-                socketio.emit("reasoning_result", {
-                    "track_id": track_key,
-                    "result": result,
-                    "type": "analyze",
-                })
+                agent = app_state.reasoning
+                if agent is None:
+                    # Reasoning was switched off with this item queued: skip the
+                    # call but still back-fill the history entry and DB row.
+                    result = {"match": False, "confidence": "off", "reasoning": ""}
+                else:
+                    result = agent.analyze_match(reference, crop)
+                    socketio.emit("reasoning_result", {
+                        "track_id": track_key,
+                        "result": result,
+                        "type": "analyze",
+                    })
                 # Back-fill the most recent match_history entry for this track
                 mid = None
                 with match_history_lock:

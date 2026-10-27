@@ -1976,6 +1976,9 @@ def _run_fleet_action(action: str) -> None:
     if supervisor is None:
         emit("error", {"message": "No fleet is configured (start the dashboard with --source edge --fleet ...)"})
         return
+    if alert_latch.phase is AlertPhase.RESOLVED:
+        emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
+        return
 
     def _work():
         try:
