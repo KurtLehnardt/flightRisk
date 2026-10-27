@@ -59,7 +59,7 @@ Then run `scripts\check_fleet_link.py` with the options shown in the help text t
 powershell -ExecutionPolicy Bypass -File scripts\demo_edge.ps1
 ```
 
-`scripts\demo_edge.ps1` starts the drone 2 edge process against `ws://10.42.0.1:9000` using the token from step 4.
+`scripts\demo_edge.ps1` starts the drone 2 edge process against `ws://10.42.0.1:9000` (leave `FLIGHTRISK_GROUND_LOCAL` unset here, because the ground station is on the Mac) using the token from step 4.
 
 ## 7. Thunderbolt link to the Mac (optional, replaces the Ethernet cable in step 3)
 

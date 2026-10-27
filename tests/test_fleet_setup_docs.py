@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,7 +46,7 @@ def _source(net: str, extra: str = "") -> subprocess.CompletedProcess:
 def test_fleet_env_sh_ap_and_station():
     ap = _source("ap")
     assert ap.returncode == 0
-    assert ap.stdout.strip().splitlines()[-1] == "10.42.0.1 ws://10.42.0.1:9000 192.168.10.1"
+    assert ap.stdout.strip().splitlines()[-1] == "127.0.0.1,10.42.0.1 ws://10.42.0.1:9000 192.168.10.1"
 
     station = _source("station", "export FLIGHTRISK_GROUND_IP=192.168.1.20 FLIGHTRISK_TELLO_HOST=192.168.1.50;")
     assert station.returncode == 0
@@ -71,3 +74,62 @@ def test_thunderbolt_path_docs():
     for needle in ("Thunderbolt link to the Mac", "New-NetIPAddress", "-NlMtuBytes 1500", "--soak"):
         assert needle in windows, needle
     assert (ROOT / "docs" / "thunderbolt-link-results-template.md").is_file()
+
+
+def test_fleet_env_sh_ap_ground_local_uses_loopback():
+    local = _source("ap", "export FLIGHTRISK_GROUND_LOCAL=1;")
+    assert local.returncode == 0
+    assert local.stdout.strip().splitlines()[-1] == "127.0.0.1,10.42.0.1 ws://127.0.0.1:9000 192.168.10.1"
+    # Only the exact value 1 selects loopback; anything else keeps the cable address.
+    other = _source("ap", "export FLIGHTRISK_GROUND_LOCAL=yes;")
+    assert other.stdout.strip().splitlines()[-1] == "127.0.0.1,10.42.0.1 ws://10.42.0.1:9000 192.168.10.1"
+
+
+def test_fleet_env_sh_station_ignores_ground_local():
+    station = _source("station", "export FLIGHTRISK_GROUND_LOCAL=1 FLIGHTRISK_GROUND_IP=192.168.1.20 FLIGHTRISK_TELLO_HOST=192.168.1.50;")
+    assert station.stdout.strip().splitlines()[-1] == "192.168.1.20 ws://192.168.1.20:9000 192.168.1.50"
+
+
+def test_fleet_env_ap_never_binds_a_wildcard():
+    for name in ("fleet_env.sh", "fleet_env.ps1"):
+        assert "0.0.0.0" not in (ROOT / "scripts" / name).read_text(encoding="utf-8"), name
+
+
+def _ps1(net: str, extra: str = "") -> subprocess.CompletedProcess:
+    script = (
+        f'$env:FLIGHTRISK_FLEET_NET = "{net}"; {extra} . ./scripts/fleet_env.ps1 *> $null; '
+        'Write-Output "$($env:FLIGHTRISK_EDGE_HOST) $($env:FLIGHTRISK_EDGE_WS) $($env:FLIGHTRISK_TELLO_HOST)"'
+    )
+    return subprocess.run(["pwsh", "-NoProfile", "-Command", script], cwd=ROOT, capture_output=True, text=True, check=False)
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell not installed")
+def test_fleet_env_ps1_ap_output():
+    ap = _ps1("ap", '$env:FLIGHTRISK_GROUND_LOCAL = $null;')
+    assert ap.stdout.strip().splitlines()[-1] == "127.0.0.1,10.42.0.1 ws://10.42.0.1:9000 192.168.10.1"
+    local = _ps1("ap", '$env:FLIGHTRISK_GROUND_LOCAL = "1";')
+    assert local.stdout.strip().splitlines()[-1] == "127.0.0.1,10.42.0.1 ws://127.0.0.1:9000 192.168.10.1"
+
+
+def test_fleet_env_ps1_ap_text_matches_sh():
+    text = (ROOT / "scripts" / "fleet_env.ps1").read_text(encoding="utf-8")
+    for needle in ('"127.0.0.1,10.42.0.1"', "FLIGHTRISK_GROUND_LOCAL", '"ws://127.0.0.1:9000"', '"ws://10.42.0.1:9000"'):
+        assert needle in text, needle
+
+
+def test_loopback_edge1_docs():
+    fleet = (ROOT / "docs" / "fleet-setup.md").read_text(encoding="utf-8")
+    for needle in (
+        "127.0.0.1,10.42.0.1",
+        "FLIGHTRISK_GROUND_LOCAL",
+        "ws://127.0.0.1:9000",
+        "ground_bind_address_lost",
+        "ground_bind_address_restored",
+    ):
+        assert needle in fleet, needle
+    assert "--ws-url ws://127.0.0.1:9000" in fleet
+    assert "--drone-id drone-1 --ws-url ws://10.42.0.1:9000" not in fleet
+    demo = (ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
+    assert "FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1" in demo
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1" in readme

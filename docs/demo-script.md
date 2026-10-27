@@ -80,8 +80,10 @@ Start the ground station first. Mac, one terminal each:
 
 ```
 scripts/demo_ground.sh
-DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
+
+In AP mode the ground station binds `127.0.0.1,10.42.0.1`. `FLIGHTRISK_GROUND_LOCAL=1` tells the Mac's edge-1 that the ground station is on the same machine, so it connects over loopback (`ws://127.0.0.1:9000`) and keeps running if the cable is pulled. Station mode ignores the variable.
 
 Windows:
 

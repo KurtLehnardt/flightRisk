@@ -9,6 +9,12 @@
 # ap mode needs nothing else: the addresses are fixed by the wired-link plan.
 # Both modes need FLIGHTRISK_EDGE_TOKEN to be set, because the ground station binds
 # a non-loopback address.
+#
+# ap mode binds the ground station to "127.0.0.1,10.42.0.1" (FLIGHTRISK_EDGE_HOST). Set
+#   export FLIGHTRISK_GROUND_LOCAL=1
+# on the machine that runs the ground station (the Mac, which also flies edge-1) so its
+# edge connects to ws://127.0.0.1:9000. Leave it unset on the Windows laptop, whose edge-2
+# connects to ws://10.42.0.1:9000. Station mode ignores FLIGHTRISK_GROUND_LOCAL.
 
 _fleet_fail() {
     echo "fleet_env.sh: $1" >&2
@@ -25,8 +31,16 @@ case "${FLIGHTRISK_FLEET_NET:-}" in
     ap)
         export FLIGHTRISK_GROUND_IP="10.42.0.1"
         export FLIGHTRISK_TELLO_HOST="192.168.10.1"
-        export FLIGHTRISK_EDGE_HOST="10.42.0.1"
-        export FLIGHTRISK_EDGE_WS="ws://10.42.0.1:9000"
+        # Ground bind list: loopback first, then the wired-link address. Never a wildcard.
+        export FLIGHTRISK_EDGE_HOST="127.0.0.1,10.42.0.1"
+        # Where an edge connects. FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on
+        # this machine (the Mac, edge-1), so the edge uses loopback and survives the cable
+        # being pulled. Otherwise (the Windows laptop, edge-2) it dials the cable address.
+        if [ "${FLIGHTRISK_GROUND_LOCAL:-}" = "1" ]; then
+            export FLIGHTRISK_EDGE_WS="ws://127.0.0.1:9000"
+        else
+            export FLIGHTRISK_EDGE_WS="ws://10.42.0.1:9000"
+        fi
         ;;
     *)
         _fleet_fail "set FLIGHTRISK_FLEET_NET to station or ap (got '${FLIGHTRISK_FLEET_NET:-}')"

@@ -8,7 +8,9 @@
 # drone-2, which the ground station's --fleet list must contain. Default: 2.
 # ALT_CM is this drone's altitude slot in cm (at least 10). Default: 100 for odd ids and
 # 160 for even ids, the same alternation the coordinator uses.
-# The Tello address and ground URL come from scripts\fleet_env.ps1.
+# The Tello address and ground URL come from scripts\fleet_env.ps1. In ap mode, set
+# $env:FLIGHTRISK_GROUND_LOCAL = "1" only on a machine that runs the ground station itself, so
+# its edge connects to ws://127.0.0.1:9000; otherwise the edge dials ws://10.42.0.1:9000.
 # Set DEMO_DRY_RUN=1 to print the command instead of running it.
 
 $ErrorActionPreference = "Stop"

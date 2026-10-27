@@ -9,7 +9,10 @@
 # drone-2, which the ground station's --fleet list must contain. Default: 1.
 # ALT_CM is this drone's altitude slot in cm (at least 10). Default: 100 for odd ids and
 # 160 for even ids, the same alternation the coordinator uses.
-# The Tello address and ground URL come from scripts/fleet_env.sh.
+# The Tello address and ground URL come from scripts/fleet_env.sh. In ap mode, set
+# FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
+# ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
+# dials ws://10.42.0.1:9000, which is what the Windows laptop must do.
 # DEMO_DRY_RUN=1 prints the command instead of running it.
 set -euo pipefail
 
