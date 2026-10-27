@@ -60,3 +60,14 @@ def test_check_fleet_link_help():
     )
     assert result.returncode == 0
     assert "--role" in result.stdout
+
+
+def test_thunderbolt_path_docs():
+    fleet = (ROOT / "docs" / "fleet-setup.md").read_text(encoding="utf-8")
+    assert "## Path 3: Thunderbolt link" in fleet
+    for needle in ("Fallback ladder", "UNVERIFIED", "--soak", "10.42.0.2", "thunderbolt-link-results-template.md"):
+        assert needle in fleet, needle
+    windows = (ROOT / "docs" / "windows-edge-setup.md").read_text(encoding="utf-8")
+    for needle in ("Thunderbolt link to the Mac", "New-NetIPAddress", "-NlMtuBytes 1500", "--soak"):
+        assert needle in windows, needle
+    assert (ROOT / "docs" / "thunderbolt-link-results-template.md").is_file()
