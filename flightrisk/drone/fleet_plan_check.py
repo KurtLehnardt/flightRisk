@@ -103,6 +103,8 @@ from flightrisk.drone.safety import (
     MAX_MOVE_CM,
     MIN_MOVE_CM,
 )
+from flightrisk.fleet_protocol import MAX_LANES as _PROTOCOL_MAX_LANES
+from flightrisk.fleet_protocol import MAX_MESSAGE_BYTES as _PROTOCOL_MAX_MESSAGE_BYTES
 from flightrisk.fleet_protocol import make_assign_lanes
 
 __all__ = [
@@ -149,19 +151,19 @@ MIN_COVERAGE = 0.995
 MAX_AREA_SIDE_CM = 20_000
 """Largest area side accepted: twice the Tello's published 100 m range."""
 
-MAX_LANES_PER_DRONE = 1_024
+MAX_LANES_PER_DRONE = _PROTOCOL_MAX_LANES
 """Most lanes one drone's ``assign_lanes`` may carry: ``MAX_LANES`` of the fleet
-protocol v2 (``flightrisk.fleet_protocol``, PR #96). Not imported, because PR #96
-is not merged; ``tests/test_fleet_plan_check.py`` pins the value."""
+protocol v2, imported from ``flightrisk.fleet_protocol`` so the two cannot drift."""
 
 MAX_MOVES_PER_DRONE = MAX_LANES_PER_DRONE
 """Most executor moves one drone may be given. Every lane is already one Tello move
 (20-500 cm), so this equals the lane cap; at 1.5 s of overhead per move it is far
 beyond one battery."""
 
-MAX_MESSAGE_BYTES = 64 * 1024
-"""Largest encoded control message: ``MAX_MESSAGE_BYTES`` of the fleet protocol v2
-(PR #96), measured as compact JSON (``separators=(",", ":")``) in UTF-8."""
+MAX_MESSAGE_BYTES = _PROTOCOL_MAX_MESSAGE_BYTES
+"""Largest encoded control message: ``MAX_MESSAGE_BYTES`` of the fleet protocol v2,
+imported from ``flightrisk.fleet_protocol``, measured as compact JSON
+(``separators=(",", ":")``) in UTF-8."""
 
 MESSAGE_RESERVE_BYTES = 1_024
 """Bytes of ``MAX_MESSAGE_BYTES`` kept free for the fields protocol v2 adds to a
