@@ -268,3 +268,13 @@ def test_zip_members_read_from_local_ranges(tmp_path, monkeypatch):
     assert len(calls) == 1  # Contiguous small members come back in one request.
     assert finetune._read_member("http://fake", infos["root/JPEGImages/big.jpg"]) == bytes(range(256)) * 400
     assert [finetune.count_voc_objects(members[n]) for n in sorted(members)][:3] == [0, 1, 2]
+
+
+def test_fetch_refuses_the_test_split(tmp_path, monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("fetch touched the network")
+
+    monkeypatch.setattr(finetune, "_remote_size", no_network)
+    with pytest.raises(ValueError):
+        finetune.fetch_split(tmp_path / "test", "test", 5)
+    assert not (tmp_path / "test").exists()

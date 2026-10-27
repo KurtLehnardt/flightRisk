@@ -20,16 +20,17 @@ Subcommands:
               then score the weights tiled on the test split once and write
               results/altitude_finetuned.json plus a recall plot.
 
-The test split is never fetched, tiled or trained on by this script. Fetching
-train or val excludes every name in the official test list.
+The test split is never fetched, tiled or trained on by this script; t11's
+scripts/run_altitude_benchmark.sh fetches it. Fetching train or val excludes
+every name in the official test list.
 
 Typical run from the repository root:
 
     D=datasets/heridal
+    python scripts/finetune_heridal.py fetch --split val --limit 50 --out $D/val
     python scripts/finetune_heridal.py fetch --split train --limit 400 --positives-only --out $D/train
-    python scripts/finetune_heridal.py fetch --split val --limit 60 --out $D/val
     python scripts/finetune_heridal.py build --train $D/train --val $D/val --out $D/yolo_tiles
-    python scripts/finetune_heridal.py train --data $D/yolo_tiles/data.yaml --model yolo11s.pt --epochs 10
+    python scripts/finetune_heridal.py train --data $D/yolo_tiles/data.yaml --model models/yolo11s.pt --epochs 20
     python scripts/finetune_heridal.py evaluate --weights models/heridal_yolo11s.pt \\
         --val $D/val --test $D/test
 """
@@ -60,7 +61,7 @@ if str(SCRIPTS) not in sys.path:
 
 HERIDAL_URL = "https://zenodo.org/records/5662351/files/heridal_keras_retinanet_voc.zip?download=1"
 ZIP_ROOT = "heridal_keras_retinanet_voc/"
-SPLITS = ("train", "val", "test", "trainval")
+SPLITS = ("train", "val")
 
 Box = tuple[float, float, float, float]
 TileLabel = tuple[int, float, float, float, float]
@@ -222,6 +223,8 @@ def fetch_split(out_dir: Path, split: str, limit: int, seed: int = 0,
 
     Files already on disk are skipped, so an interrupted fetch can be resumed.
     """
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}, got {split!r}")
     size = _remote_size(url)
     archive = zipfile.ZipFile(io.BufferedReader(_RangeReader(url, size), buffer_size=1 << 20))
     info = {i.filename: i for i in archive.infolist()}
@@ -229,7 +232,7 @@ def fetch_split(out_dir: Path, split: str, limit: int, seed: int = 0,
     def split_names(name: str) -> list[str]:
         return archive.read(f"{ZIP_ROOT}ImageSets/Main/{name}.txt").decode().split()
 
-    exclude = set(split_names("test")) if split != "test" else set()
+    exclude = set(split_names("test"))
     if split == "train":
         # Keep the official validation images out of the training subset.
         exclude |= set(split_names("val"))
@@ -242,7 +245,7 @@ def fetch_split(out_dir: Path, split: str, limit: int, seed: int = 0,
         xml = _read_small_members(url, [info[f"{ZIP_ROOT}Annotations/{n}.xml"] for n in candidates])
         names = [n for n in candidates if count_voc_objects(xml[f"{ZIP_ROOT}Annotations/{n}.xml"]) > 0]
         print(f"[fetch] {len(names)} of {len(candidates)} {split} images have a person", flush=True)
-    chosen = select_subset(names, limit, seed, exclude) if split != "test" else names[:limit]
+    chosen = select_subset(names, limit, seed, exclude)
 
     for sub in ("JPEGImages", "Annotations"):
         (out_dir / sub).mkdir(parents=True, exist_ok=True)
@@ -600,8 +603,8 @@ def plot_before_after(results_dir: str | Path, output: str | Path) -> None:
                 if r["model"] == sweep["best"]["model"] and r["confidence"] == sweep["best"]["confidence"])
     base = tuned["training"]["base_model"] if tuned.get("training") else tuned["model"]
     plot_recall([
-        (f"Fine-tuned {base} on HERIDAL train tiles, tiled, conf {tuned['confidence']:g}", tuned),
-        (f"Best stock sweep: {best['model']}, tiled, conf {best['confidence']:g}", best),
+        (f"Fine-tuned {Path(base).stem} on HERIDAL train tiles, tiled, conf {tuned['confidence']:g}", tuned),
+        (f"Best stock sweep: {Path(best['model']).stem}, tiled, conf {best['confidence']:g}", best),
         ("Stock yolo11n, tiled, conf 0.4 (t11)", tiled),
         ("Stock yolo11n, single pass, conf 0.4 (t11)", single),
     ], output)
@@ -635,7 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p = sub.add_parser("train", help="fine-tune a YOLO model on the tiled dataset")
     p.add_argument("--data", type=Path, required=True)
     p.add_argument("--model", default="yolo11s.pt")
-    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--device", default="mps")
