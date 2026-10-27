@@ -453,6 +453,19 @@ this layer.
   their own direction up to 1 MiB, so routing them through it does not
   refuse a large `detections` frame. They are still parsed strictly, so a
   legacy sender must not put `NaN` or repeated keys in them.
+- **Decode off the event loop.** `decode` is CPU-bound and can take tens
+  of milliseconds on a hostile frame near the 1 MiB WebSocket limit: about
+  20 ms for the strict parse (frames over 64 KiB are parsed to see whether
+  they are legacy messages), and up to about 65 ms on the test machine
+  (80 ms in review) when the strict parse fails and the lenient fail-safe
+  parse runs as well. Run it in a worker thread (`asyncio.to_thread` or an
+  executor), not directly on the event loop that also runs the heartbeats
+  and the link watchdog, or put a cheap rate or size limit in front of it.
+  `failsafe_type_of` already skips the lenient parse when a frame cannot
+  name a landing (it contains neither `land` nor a backslash escape and,
+  for bytes, no NUL byte, which UTF-16 and UTF-32 text always has), so
+  accidental junk costs only the strict parse; a hostile sender can still
+  include `land` and pay for both parses.
 - **Record `cmd_id` on arrival.** The edge records a command's `cmd_id` as
   pending when it arrives, before executing it, so a retry that arrives
   while the first copy is still running is recognised as a duplicate and

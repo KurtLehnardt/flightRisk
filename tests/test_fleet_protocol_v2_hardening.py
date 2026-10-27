@@ -894,3 +894,54 @@ def test_unprintable_values_raise_only_protocol_error(value):
     assert fp.failsafe_type_of('{"type":"land"}', max_bytes=bad_proto) is None
     # A landing is still accepted whatever it carries.
     assert fp.validate_ground_to_edge({"type": "land", "epoch": value}, proto=value) == "land"
+
+
+# ===========================================================================
+# The fail-safe prefilter never hides a landing
+# ===========================================================================
+
+
+def _escape_some(text: str, rng: random.Random) -> str:
+    """Spell some characters of *text* as JSON ``\\uXXXX`` escapes."""
+    return "".join(f"\\u{ord(c):04{rng.choice('xX')}}" if rng.random() < 0.4 else c for c in text)
+
+
+def _prefilter_inputs(seed: int):
+    rng = random.Random(seed)
+    encodings = ["utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"]
+    for _ in range(300):
+        mtype = rng.choice(["land", "emergency_land_all", "heartbeat", "lan", "and", "Land"])
+        spelled = _escape_some(mtype, rng) if rng.random() < 0.5 else mtype
+        extra = rng.choice(['', ',"x":NaN', ',"type":"heartbeat"', ',"a":"\\n"', ',"x":1e400', ',"d":"\\"land\\""'])
+        text = rng.choice(['{"type":"%s"%s}', '{"t":1%s,"type":"%s"}', '﻿ {"type":"%s"%s}'])
+        text = text % ((spelled, extra) if text.index("%s") == text.index('"%s"') + 1 else (extra, spelled))
+        yield text
+        yield text.encode(rng.choice(encodings))
+        raw = bytearray(text.encode())
+        for _ in range(rng.randrange(3)):
+            raw[rng.randrange(len(raw))] = rng.randrange(256)
+        yield bytes(raw)
+    for _ in range(200):
+        yield bytes(rng.randrange(256) for _ in range(rng.randrange(1, 60)))
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_the_failsafe_prefilter_never_changes_the_result(seed, monkeypatch):
+    from flightrisk.fleet_protocol import wire
+
+    inputs = list(_prefilter_inputs(seed))
+    with_prefilter = [fp.failsafe_type_of(raw) for raw in inputs]
+    monkeypatch.setattr(wire, "_may_name_a_landing", lambda raw: True)
+    without_prefilter = [fp.failsafe_type_of(raw) for raw in inputs]
+    assert with_prefilter == without_prefilter
+    assert sum(result is not None for result in with_prefilter) > 50  # the inputs do contain landings
+
+
+def test_escaped_and_wide_landings_pass_the_prefilter():
+    for raw in ('{"type":"\\u006cand","x":NaN}', '{"type":"emergency_\\u006Cand_all","x":NaN}',
+                '{"type":"land","x":NaN}'.encode("utf-16"), '{"type":"land","x":NaN}'.encode("utf-32-le")):
+        assert fp.failsafe_type_of(raw) is not None
+        assert fp.decode(raw, direction=G2E, proto=2)["type"] in fp.FAILSAFE_TYPES
+    # A large frame that cannot name a landing is refused without the lenient parse.
+    junk = '{"type":"heartbeat","pad":"' + "x" * 900_000 + '","x":NaN}'
+    assert fp.failsafe_type_of(junk) is None

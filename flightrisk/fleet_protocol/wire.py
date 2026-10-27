@@ -123,6 +123,23 @@ def _top_level_types(source: str | bytes) -> list[Any] | None:
     return [item for key, item in outermost[0] if key == "type"]
 
 
+def _may_name_a_landing(raw: str | bytes | bytearray) -> bool:
+    """False only when no JSON string in *raw* can decode to ``land`` or ``emergency_land_all``.
+
+    A cheap prefilter for the lenient parse, which costs tens of
+    milliseconds on a hostile 1 MiB frame. Both landing types contain the
+    four characters ``land``. A JSON string can only decode to a value
+    containing them if the source has them literally, or spells some of
+    them with a backslash escape. ``json.loads`` reads bytes as UTF-8
+    unless they are UTF-16 or UTF-32, and ASCII text in those encodings
+    always contains NUL bytes, so bytes with a NUL are always parsed.
+    Replacing invalid UTF-8 only ever adds U+FFFD, never a letter.
+    """
+    if isinstance(raw, str):
+        return "land" in raw or "\\" in raw
+    return b"land" in raw or b"\\" in raw or b"\x00" in raw
+
+
 def failsafe_type_of(raw: Any, *, max_bytes: int = FAILSAFE_MAX_BYTES) -> str | None:
     """The landing a received ground-to-edge message asks for, read leniently.
 
@@ -160,6 +177,8 @@ def failsafe_type_of(raw: Any, *, max_bytes: int = FAILSAFE_MAX_BYTES) -> str | 
             return None
         sources = [raw.removeprefix("﻿")]
     else:
+        return None
+    if not _may_name_a_landing(raw):
         return None
     for source in sources:
         types = _top_level_types(source)
