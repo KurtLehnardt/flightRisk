@@ -2253,7 +2253,7 @@
             const t = document.getElementById('toast');
             t.textContent = msg;
             t.classList.add('active');
-            setTimeout(() => t.classList.remove('active'), 2500);
+            setTimeout(() => t.classList.remove('active'), msg.length > 60 ? 8000 : 2500);
         }
 
         // ========== CONNECTION ==========
@@ -2388,8 +2388,17 @@
             document.getElementById('clear-target-btn').style.display = '';
         });
 
+        // Face enrolment outcome. A rejected photo clears the face target, so
+        // the operator must be told that face matching is off.
+        function faceNotice(data) {
+            const r = data && data.face_report;
+            if (!r) return '';
+            if (!r.ok) return ' - FACE MATCHING OFF: ' + (r.message || 'face not usable');
+            return r.warnings && r.warnings.length ? ' - ' + r.warnings[0] : '';
+        }
+
         socket.on('target_set', (data) => {
-            showToast(data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set');
+            showToast((data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set') + faceNotice(data));
             if (targetHistoryOpen) loadTargetHistory();
 
             const qDiv = document.getElementById('quality-feedback');
@@ -2473,7 +2482,7 @@
                             document.getElementById('target-upload-zone').classList.add('has-image');
                         };
                         reader.readAsDataURL(file);
-                        showToast('Target photo set' + (data.face_detected ? ' (face detected)' : ''));
+                        showToast('Target photo set' + (data.face_detected ? ' (face detected)' : '') + faceNotice(data));
                         document.getElementById('clear-target-btn').style.display = '';
                     } else {
                         showToast('Upload failed: ' + (data.error || 'unknown'));

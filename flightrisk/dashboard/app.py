@@ -26,6 +26,7 @@ from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
 from flightrisk.vision.detector import PersonDetector
+from flightrisk.vision.face import TargetReport
 from flightrisk.vision.reid import PersonReID
 from flightrisk.vision.quality import ImageQualityScorer
 from flightrisk.vision.scorer import MatchScorer
@@ -1225,7 +1226,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.target_photo = base64.b64encode(buf).decode("utf-8")
         # Also set face recognition target
         if app_state.face:
-            app_state.face.set_target_from_file(target_path)
+            if not app_state.face.set_target_from_file(target_path):
+                log.warning("face_target_rejected_at_startup")
         # Set configurable signal targets
         if app_state.signal_registry:
             app_state.signal_registry.set_target(img)
@@ -1455,7 +1457,14 @@ def upload_target():
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
     log.info("upload_target_saved size_kb=%d", len(img_data) // 1024)
-    return jsonify({"success": True, "face_detected": face_ok})
+    return jsonify({"success": True, "face_detected": face_ok,
+                    "face_report": _face_report()})
+
+
+def _face_report() -> dict | None:
+    """Operator-facing result of the last face enrolment (None without a recognizer)."""
+    rep = getattr(app_state.face, "target_report", None) if app_state.face else None
+    return rep.as_dict() if isinstance(rep, TargetReport) else None
 
 
 @app.route("/api/clear-target", methods=["POST"])
@@ -1691,7 +1700,15 @@ def on_set_target(data):
                 _r = app_state.reid.extract_embedding(img)
                 reid_emb = _r.tolist() if _r is not None else None
             if app_state.face is not None:
-                _f = app_state.face.extract_embedding(img)
+                _f = getattr(app_state.face, "target_embedding", None)
+                if not isinstance(_f, np.ndarray):
+                    # A real recognizer that rejected the photo has cleared its
+                    # target; do not push a face target to edge devices that the
+                    # local scorer does not have.
+                    if isinstance(getattr(app_state.face, "target_report", None), TargetReport):
+                        _f = None
+                    else:
+                        _f = app_state.face.extract_embedding(img)
                 face_emb = _f.tolist() if _f is not None else None
             if app_state.ground_station is not None:
                 app_state.ground_station.set_target(reid_emb, face_emb)
@@ -1702,6 +1719,7 @@ def on_set_target(data):
         emit("target_set", {
             "success": True,
             "face_detected": face_ok,
+            "face_report": _face_report(),
             "quality": {
                 "overall_score": quality_report.overall_score,
                 "grade": quality_report.grade,
@@ -1732,7 +1750,8 @@ def on_revert_target(data):
         face_ok = app_state.face.set_target(img)
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
-    emit("target_set", {"success": True, "face_detected": face_ok, "reverted_to": version_id})
+    emit("target_set", {"success": True, "face_detected": face_ok,
+                        "face_report": _face_report(), "reverted_to": version_id})
 
 
 @socketio.on("set_description")
