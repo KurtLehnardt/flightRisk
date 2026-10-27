@@ -11,8 +11,11 @@ flight logic without hardware.
 
 import threading
 import time
-from typing import Callable
+import weakref
+from collections import deque
+from typing import Callable, NamedTuple
 
+import djitellopy.tello as _djitello
 import numpy as np
 from djitellopy import Tello
 
@@ -28,12 +31,15 @@ __all__ = [
     "DroneController",
 ]
 
-# How long an interrupting land waits for an in-flight command to release the
-# command channel before it gives up on the confirming land. A flight command
-# waits at most _TAKEOFF_REPLY_TIMEOUT_S for its single reply, and another
-# land confirming on the channel holds it for at most _LAND_ATTEMPTS times
-# (_LAND_REPLY_TIMEOUT_S plus the command gap), so 25 s covers either.
-_LAND_CONFIRM_WAIT_S = 25.0
+# The longest one land() call runs. The wait for the command channel, every
+# confirming land's wait for its reply and every wait for the state stream
+# all come out of this one budget, so a drone that never confirms a land
+# holds up its caller (the lane executor's monitor, LAND ALL) for at most
+# this long. A land that is not confirmed by then raises, and callers retry
+# while ``is_flying`` stays true. A flight command waits at most
+# _TAKEOFF_REPLY_TIMEOUT_S for its single reply, so 25 s still leaves time
+# for a confirming land after a takeoff that holds the channel to the end.
+_LAND_DEADLINE_S = 25.0
 # How long a flight command waits for the Tello's reply. These match
 # djitellopy's RESPONSE_TIMEOUT and TAKEOFF_TIMEOUT.
 _COMMAND_REPLY_TIMEOUT_S = 7.0
@@ -47,8 +53,83 @@ _REPLY_POLL_S = 0.01
 # A land is sent up to this many times. Repeating a land is always safe.
 _LAND_ATTEMPTS = 3
 # How long each confirming land waits for a fresh reply before it is sent
-# again. Only an ``ok`` that arrives after the land was sent confirms it.
+# again. Once the state stream is lost, only an ``ok`` that arrives after the
+# land was sent confirms it.
 _LAND_REPLY_TIMEOUT_S = _COMMAND_REPLY_TIMEOUT_S
+# The Tello sends a state packet (UDP 8890) about ten times a second. A
+# packet counts as fresh for this long after it arrives.
+_STATE_FRESH_S = 0.5
+# The state stream counts as lost once no state packet carrying a height has
+# arrived for this long (or none ever has). A shorter silence is a gap: Wi-Fi
+# often drops state packets for a moment while command replies still arrive,
+# and a reply read during a gap may be the late answer to an earlier command
+# (the interrupting ``stop``, or the move or takeoff it interrupted) while the
+# drone still hovers. So during a gap a land waits for the stream to come
+# back, and only once the stream is lost does a land's own ``ok`` confirm it.
+_STATE_LOST_S = 3.0
+# This many recent state packets are kept, enough to cover _MOTOR_OFF_S at
+# up to 20 packets a second.
+_STATE_READINGS_KEPT = 128
+# A state height ``h`` whose absolute value is at or below this, in cm,
+# counts as ground height. ``h`` is measured from the takeoff point, so a
+# drone launched from a ledge, roof or car and hovering below that point
+# reports a negative ``h``; the absolute value keeps it from counting as
+# ground.
+_GROUND_HEIGHT_CM = 10
+# The downward time-of-flight distance (state field ``tof``) of a Tello
+# resting on the ground reads about 10 cm. A reading above this, in cm,
+# (including the out-of-range value 6553) means the drone is not on the
+# ground.
+_GROUND_TOF_CM = 30
+# This many state packets in a row, each fresh when the next arrived, the
+# newest still fresh, and all received after the confirming land was sent,
+# must show ground height (and, when ``tof`` is present, ground distance)
+# before the state stream confirms a land.
+_GROUND_READINGS = 3
+# The state field ``time`` counts, in whole seconds, how long the motors
+# have run, so it goes up at least once a second while they spin. State
+# confirms a land only when ``time`` has stayed the same across this long
+# of consecutive fresh state packets: the motors are off. A drone that
+# hovers with a ground-like ``h`` (a takeoff point above the ground, or a
+# Tello still spinning up for a takeoff) has its motors running.
+_MOTOR_OFF_S = 2.0
+# Within a run of packets that shows the motors off (see ``_motors_off``),
+# each packet may arrive up to this long after the one before. The motor time
+# only goes up, and goes up at least once a second while the motors spin, so
+# packets that all carry the same motor time across _MOTOR_OFF_S prove the
+# motors off however they are spaced; a longer silence still ends the run,
+# so a stream that was mostly silent never counts as watched. A Tello's state
+# stream over Wi-Fi often pauses for half a second or so.
+_MOTOR_RUN_GAP_S = 1.0
+# A Tello answers ``takeoff`` only once it hovers, so a land can find a
+# takeoff still spinning up on the ground. If the Tello ignores the stop and
+# land, it lifts after them. A land that starts while a takeoff waits for its
+# reply, or after a takeoff whose wait ended without an ``ok`` (the reply
+# read may have been the late answer to some earlier command), starts two
+# guards, both measured from when that takeoff was sent:
+#
+# * The lift guard, this long: nothing (no state packet and no reply)
+#   confirms a land. A Tello that acts on a takeoff lifts within about 2 s
+#   and reaches its hover height within about 5 s. A reply cannot stand in
+#   for this wait: an ``ok`` read then may be the late answer to the
+#   interrupting ``stop`` or to the takeoff itself.
+# * The reply guard, _TAKEOFF_REPLY_TIMEOUT_S: the Tello's own ``ok`` to the
+#   takeoff, sent once it hovers, may still arrive and be read as a land's
+#   reply, so a reply alone (with the state stream lost) confirms nothing.
+#   Fresh state may confirm a land once the lift guard is over.
+#
+# A takeoff answered ``ok`` before the land started starts neither guard:
+# that ``ok`` has been read, and the Tello sends it only once it hovers.
+_TAKEOFF_LIFT_GUARD_S = 10.0
+# When a confirming land is answered (``ok`` or not) while fresh state still
+# shows the drone in the air (or a takeoff it interrupted may still lift),
+# the land waits up to this long, holding no lock, for fresh state to show
+# it on the ground before sending land again.
+_LAND_GROUND_WAIT_S = 6.0
+# The state poller reads battery, height and temperature this often.
+_STATE_POLL_INTERVAL_S = 2.0
+# The poller's zero-height path acts after this many polls in a row at height 0.
+_ZERO_HEIGHT_POLLS = 3
 # Connect-time commands (``command``, ``streamon``) do not move the drone, so
 # they are tried up to this many times.
 _CONNECT_ATTEMPTS = 3
@@ -75,6 +156,113 @@ _STREAM_CHANNEL_POLL_S = 0.05
 _MOVE_DIRECTIONS = ("up", "down", "left", "right", "forward", "back")
 
 
+class _StateReading(NamedTuple):
+    """One Tello state packet as landing reads it. A field the packet lacks, or that is not a number, is None."""
+
+    at: float  # time.monotonic() on arrival
+    height: int | None  # ``h``: cm above (or, negative, below) the takeoff point
+    tof: int | None  # ``tof``: downward time-of-flight distance in cm
+    motor_s: int | None  # ``time``: whole seconds the motors have run
+
+
+class _LandAttempt(NamedTuple):
+    """The result of one confirming land (see ``TelloController._send_confirming_land``)."""
+
+    verdict: str  # "confirmed", "watch" or "failed"
+    outcome: str  # the reply, for log messages
+    sent_at: float  # time.monotonic() when the land was sent
+    ok_seen: bool  # answered "ok" outside the lift guard: may back up ground state
+    ok_alone: bool  # answered "ok" outside the reply guard: may confirm with the state stream lost
+
+
+def _state_int(state: dict, key: str) -> int | None:
+    """The state field ``key`` as an int, or None if it is missing or not a number."""
+    try:
+        return int(state[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _tof_valid(tof: int | None) -> bool:
+    """Whether ``tof`` is a usable distance. A missing, zero or negative reading proves nothing."""
+    return tof is not None and tof > 0
+
+
+def _shows_ground(reading: _StateReading) -> bool:
+    """Whether one state packet is consistent with the drone resting on the ground.
+
+    ``|h|`` must be at most ``_GROUND_HEIGHT_CM`` (a drone hovering below
+    its takeoff point reports a negative ``h``), and a usable ``tof`` must
+    not be above ``_GROUND_TOF_CM``.
+    """
+    if reading.height is None or abs(reading.height) > _GROUND_HEIGHT_CM:
+        return False
+    return not (_tof_valid(reading.tof) and reading.tof > _GROUND_TOF_CM)
+
+
+def _motors_off(readings: list[_StateReading]) -> bool | None:
+    """Whether the newest state packets show the motors off.
+
+    The motor time (state field ``time``) goes up at least once a second
+    while the motors spin. True when it is the same in every packet of a run
+    (each packet within ``_MOTOR_RUN_GAP_S`` of the one before) that ends
+    with the newest packet and spans at least ``_MOTOR_OFF_S``. Any change
+    of the motor time ends the run. False when it changed within that span
+    or the run is shorter. None when the newest packet has no motor time.
+    """
+    newest = readings[-1]
+    if newest.motor_s is None:
+        return None
+    earliest = newest
+    for reading in reversed(readings[:-1]):
+        if reading.motor_s != newest.motor_s or earliest.at - reading.at > _MOTOR_RUN_GAP_S:
+            break
+        earliest = reading
+    return newest.at - earliest.at >= _MOTOR_OFF_S
+
+
+def _motors_running(readings: list[_StateReading]) -> bool:
+    """Whether the motor time changed within the last ``_MOTOR_OFF_S`` of state packets: the motors spin."""
+    newest = readings[-1]
+    if newest.motor_s is None:
+        return False
+    return any(
+        reading.motor_s is not None and reading.motor_s != newest.motor_s
+        for reading in readings
+        if newest.at - reading.at <= _MOTOR_OFF_S
+    )
+
+
+class _StateStampedUdpObject(dict):
+    """djitellopy's per-drone receive buffers, reporting each state packet as it arrives.
+
+    djitellopy's state receiver thread stores every parsed state packet with
+    ``drones[host]["state"] = ...`` and records no arrival time, so a height
+    read later may be seconds old. ``TelloController`` puts this dict in
+    place of that entry: every store of ``"state"`` also passes the packet
+    to the controller, which records when it arrived. The ``"responses"``
+    list is the same object as before, so command replies are unaffected. If
+    a future djitellopy stores state some other way, no arrival is recorded
+    and landing falls back to reply-based confirmation.
+    """
+
+    def __init__(self, base: dict, on_state: Callable[[object], None]):
+        super().__init__(base)
+        # A weak reference, so this module-level entry does not keep the
+        # controller alive.
+        self._on_state = weakref.WeakMethod(on_state)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if key == "state":
+            on_state = self._on_state()
+            if on_state is not None:
+                try:
+                    on_state(value)
+                except Exception:
+                    pass
+
+
 class TelloController:
     """Manages a single Tello drone connection and video stream.
 
@@ -89,7 +277,19 @@ class TelloController:
     a new ``takeoff()``: the landing flag is set, and every flight command
     checks it, under ``_wire_lock``, in the same step that sends it.
 
-    A land counts as done only when a fresh ``ok`` answers it. Until then
+    A land is confirmed by the drone's own state stream whenever it is
+    fresh: fresh state packets that arrive after the confirming ``land`` was
+    sent must show the drone on the ground (``|h|`` and ``tof`` near zero)
+    with its motors off (the motor time has stopped going up), whatever the
+    command replies were (see ``_confirm_land`` and ``_ground_by_state``).
+    A brief gap in the stream is waited out. Only once the stream is lost
+    (no packet for ``_STATE_LOST_S``) does a fresh ``ok`` to the confirming
+    land confirm it on its own. A land that finds a takeoff that may still
+    lift (one still waiting for its reply, or one whose wait ended without
+    an ``ok``) is confirmed by nothing until ``_TAKEOFF_LIFT_GUARD_S`` after
+    that takeoff, and by no reply alone until ``_TAKEOFF_REPLY_TIMEOUT_S``
+    after it, because the Tello may still be spinning up and lift after the
+    land and answer the takeoff once it hovers. Until a land is confirmed
     ``state.is_flying`` stays true, so callers keep retrying, and neither the
     keepalive nor stream recovery sends anything, so the Tello's own 15 s
     auto-land still fires if every land is lost.
@@ -139,7 +339,10 @@ class TelloController:
         self._lands_in_progress = 0
         self._land_seq = 0
         # Set by land() and cleared, under _wire_lock, only when a land is
-        # confirmed by a fresh "ok" or a takeoff succeeds with no land since.
+        # confirmed (by fresh state showing the drone on the ground with its
+        # motors off, or, with the state stream lost, by a fresh "ok"), when the
+        # state poller finds the drone on the ground the same way, or when a
+        # takeoff succeeds with no land since.
         # While it is set the keepalive and stream recovery send nothing:
         # any command the Tello receives restarts its 15 s auto-land timer,
         # which is the last resort when every land packet is lost.
@@ -157,6 +360,158 @@ class TelloController:
         self._keepalive_on_channel = False
         self._stream_on_channel = False
         self._land_on_channel = False
+        # The most recent state packets, appended by djitellopy's state
+        # receiver thread through _StateStampedUdpObject. Guarded by
+        # _state_lock.
+        self._state_lock = threading.Lock()
+        self._state_readings: deque[_StateReading] = deque(maxlen=_STATE_READINGS_KEPT)
+        # Takeoff bookkeeping for the lift and reply guards (see
+        # _TAKEOFF_LIFT_GUARD_S), all guarded by _wire_lock.
+        # _takeoff_in_flight is true from the moment a takeoff is sent until
+        # its reply wait ends (whatever reply it read, or none);
+        # _takeoff_sent_at is time.monotonic() when the last takeoff was sent
+        # (None before the first); _takeoff_answered_ok is whether that
+        # takeoff's wait ended on an "ok". A land that starts while a takeoff
+        # is in flight, or after one that was not answered "ok", sets
+        # _lift_guard_until, the time.monotonic() before which nothing
+        # confirms a land, and _reply_guard_until, before which no reply
+        # alone does. The next takeoff clears both.
+        self._takeoff_in_flight = False
+        self._takeoff_sent_at: float | None = None
+        self._takeoff_answered_ok = False
+        self._lift_guard_until = 0.0
+        self._reply_guard_until = 0.0
+        self._zero_height_count = 0
+        self._stamp_state_packets(host)
+
+    def _stamp_state_packets(self, host: str) -> None:
+        """Have djitellopy report each state packet for ``host`` to ``_note_state_packet``."""
+        try:
+            udp = _djitello.drones.get(host)
+            if type(udp) is dict:
+                _djitello.drones[host] = _StateStampedUdpObject(udp, self._note_state_packet)
+        except Exception:
+            # No arrival times: landing falls back to reply-based confirmation.
+            pass
+
+    def _note_state_packet(self, state: object) -> None:
+        """Record when a state packet arrived and the fields landing reads from it."""
+        if isinstance(state, dict):
+            reading = _StateReading(
+                time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time")
+            )
+        else:
+            reading = _StateReading(time.monotonic(), None, None, None)
+        with self._state_lock:
+            self._state_readings.append(reading)
+
+    def _lift_guard_left(self) -> float:
+        """Seconds until a land that found a takeoff that may still lift may be confirmed, or 0 (see ``_TAKEOFF_LIFT_GUARD_S``)."""
+        return max(0.0, self._lift_guard_until - time.monotonic())
+
+    def _reply_guard_left(self) -> float:
+        """Seconds until a reply alone may confirm such a land, or 0 (see ``_TAKEOFF_LIFT_GUARD_S``)."""
+        return max(0.0, self._reply_guard_until - time.monotonic())
+
+    def _height_readings(self) -> list[_StateReading]:
+        """The kept state packets that carry a height, oldest first."""
+        with self._state_lock:
+            return [reading for reading in self._state_readings if reading.height is not None]
+
+    def _state_lost(self) -> bool:
+        """Whether no state packet carrying a height has arrived for ``_STATE_LOST_S`` (or none ever has)."""
+        readings = self._height_readings()
+        return not readings or time.monotonic() - readings[-1].at > _STATE_LOST_S
+
+    def _airborne_since(self, since: float) -> bool:
+        """Whether the newest state packet carrying a height that arrived after ``since`` shows the drone off the ground.
+
+        False when no such packet arrived. Once the state stream is lost,
+        this is the last word the drone gave about where it is, so an ``ok``
+        read since then does not confirm a land on its own.
+        """
+        readings = self._height_readings()
+        return bool(readings) and readings[-1].at > since and not _shows_ground(readings[-1])
+
+    def _state_shows_flight(self) -> bool:
+        """Whether fresh state shows the drone flying: off the ground by ``|h|`` or ``tof``, or its motors running."""
+        with self._state_lock:
+            readings = list(self._state_readings)
+        if not readings or time.monotonic() - readings[-1].at > _STATE_FRESH_S:
+            return False
+        newest = readings[-1]
+        if newest.height is not None and not _shows_ground(newest):
+            return True
+        return _motors_running(readings)
+
+    def _ground_by_state(self, since: float | None = None, ok_seen: bool = False) -> bool | None:
+        """Whether fresh state shows the drone on the ground with its motors off.
+
+        None when there is no fresh height: no state packet has arrived, the
+        newest is older than ``_STATE_FRESH_S``, or it carries no height.
+        None does not mean the stream is lost: see ``_state_lost``.
+        Otherwise True only when all of these hold:
+
+        * The lift guard is over: no takeoff that a land found may still
+          lift (see ``_TAKEOFF_LIFT_GUARD_S``).
+        * The last ``_GROUND_READINGS`` packets, each arriving within
+          ``_STATE_FRESH_S`` of the one before and all after ``since`` (a
+          ``time.monotonic()`` value, when given), show ground: ``|h|`` at
+          most ``_GROUND_HEIGHT_CM``, and ``tof`` not above
+          ``_GROUND_TOF_CM``.
+        * The motor time has not changed for ``_MOTOR_OFF_S`` (see
+          ``_motors_off``).
+
+        A packet without a usable ``tof`` or motor time cannot prove the
+        drone is down, so when either is missing (or ``tof`` is not a
+        positive number) the result is ``ok_seen``: the confirming land
+        must also have been answered with a fresh ``ok``, the stricter
+        reply-based confirmation. False otherwise: fresh state shows the
+        drone in the air or its motors running, or not yet on the ground
+        for long enough.
+        """
+        with self._state_lock:
+            readings = list(self._state_readings)
+        if not readings:
+            return None
+        newest = readings[-1]
+        if newest.height is None or time.monotonic() - newest.at > _STATE_FRESH_S:
+            return None
+        if self._lift_guard_left() > 0:
+            return False
+        ground: list[_StateReading] = []
+        height_off = False
+        for reading in reversed(readings):
+            if len(ground) == _GROUND_READINGS:
+                break
+            if since is not None and reading.at <= since:
+                break
+            if ground and ground[-1].at - reading.at > _STATE_FRESH_S:
+                break
+            if not _shows_ground(reading):
+                if not (_tof_valid(reading.tof) and reading.tof <= _GROUND_TOF_CM):
+                    break
+                height_off = True
+            ground.append(reading)
+        if len(ground) < _GROUND_READINGS:
+            return False
+        motors_off = _motors_off(readings)
+        if motors_off is False:
+            return False
+        if motors_off is None or height_off or not all(_tof_valid(r.tof) for r in ground):
+            return ok_seen
+        return True
+
+    def _state_height_text(self) -> str:
+        """The newest state height, distance, motor time and age, for log messages."""
+        with self._state_lock:
+            newest = self._state_readings[-1] if self._state_readings else None
+        if newest is None or newest.height is None:
+            return "no state height"
+        return (
+            f"height {newest.height} cm, tof {newest.tof} cm, motor time {newest.motor_s} s "
+            f"({time.monotonic() - newest.at:.1f} s ago)"
+        )
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -411,46 +766,68 @@ class TelloController:
         wire, so this one sends nothing extra (whose replies could be taken
         for that land's) and confirms after it.
 
-        The confirming land is sent up to ``_LAND_ATTEMPTS`` times, and only
-        a fresh ``ok`` confirms it (see ``_confirm_land``). ``is_flying``
-        stays true until then, and a land that is never confirmed raises, so
-        callers keep retrying.
+        The confirming land is sent up to ``_LAND_ATTEMPTS`` times and is
+        confirmed by fresh state showing the drone on the ground with its
+        motors off, or, once the state stream is lost, by a fresh ``ok``
+        (see ``_confirm_land``). If this land finds a takeoff that has not
+        been answered, or one whose wait ended without an ``ok``, the drone
+        may still be spinning up and lift after the land, so ``is_flying``
+        is set, nothing confirms the land until ``_TAKEOFF_LIFT_GUARD_S``
+        after that takeoff was sent, and no reply alone confirms it until
+        ``_TAKEOFF_REPLY_TIMEOUT_S`` after it (this call may then raise, and
+        a retry confirms). ``is_flying`` stays true until the land is
+        confirmed. The whole call takes at most ``_LAND_DEADLINE_S``.
+
+        Contract (callers such as the lane executor and LAND ALL rely on
+        it): returns None once the land is confirmed, and raises
+        ``RuntimeError`` when it is not, so callers keep retrying. It never
+        returns False.
         """
+        deadline = time.monotonic() + _LAND_DEADLINE_S
         with self._wire_lock:
             self._landing = True
             self._land_unconfirmed = True
             self._lands_in_progress += 1
             self._land_seq += 1
+            # A takeoff still waiting for its reply, or one whose wait ended
+            # on a reply other than "ok" (or none), may still lift and may
+            # still be answered "ok" (see _TAKEOFF_LIFT_GUARD_S).
+            takeoff_sent_at = self._takeoff_sent_at
+            takeoff_may_lift = takeoff_sent_at is not None and (
+                self._takeoff_in_flight or not self._takeoff_answered_ok
+            )
+            if takeoff_may_lift:
+                self._lift_guard_until = max(self._lift_guard_until, takeoff_sent_at + _TAKEOFF_LIFT_GUARD_S)
+                self._reply_guard_until = max(
+                    self._reply_guard_until, takeoff_sent_at + _TAKEOFF_REPLY_TIMEOUT_S
+                )
+            guarded = self._reply_guard_left() > 0
+            if guarded:
+                # The drone may be about to lift: until this land is
+                # confirmed, callers must treat it as flying and retry.
+                self.state.is_flying = True
+                self.tello.is_flying = True
+        if guarded:
+            print(
+                f"[{self.name}] Landing follows a takeoff that may still lift: nothing confirms it "
+                f"for {self._lift_guard_left():.1f} s, and no reply alone for {self._reply_guard_left():.1f} s."
+            )
         try:
             with self._owner_lock:
                 took_channel = self._cmd_lock.acquire(blocking=False)
                 if took_channel:
                     self._land_on_channel = True
                 behind_land = not took_channel and self._land_on_channel
-            if took_channel:
-                try:
-                    self._confirm_land()
-                    print(f"[{self.name}] Landing.")
-                finally:
-                    self._leave_channel_after_land()
-                return
-
-            if behind_land:
-                print(f"[{self.name}] Landing: another land is confirming, waiting for it.")
-            else:
-                print(f"[{self.name}] Landing now (interrupting an in-flight command).")
-                self._send_land_raw("stop")
-                self._pace_land()
-                self._send_land_raw("land")
-            if not self._cmd_lock.acquire(timeout=_LAND_CONFIRM_WAIT_S):
-                raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
-            with self._owner_lock:
-                self._land_on_channel = True
-            try:
-                self._confirm_land()
-                print(f"[{self.name}] Landing confirmed.")
-            finally:
-                self._leave_channel_after_land()
+            if not took_channel:
+                if behind_land:
+                    print(f"[{self.name}] Landing: another land is confirming, waiting for it.")
+                else:
+                    print(f"[{self.name}] Landing now (interrupting an in-flight command).")
+                    self._send_land_raw("stop")
+                    self._pace_land()
+                    self._send_land_raw("land")
+            self._confirm_land(holding_channel=took_channel, deadline=deadline)
+            print(f"[{self.name}] Landing." if took_channel else f"[{self.name}] Landing confirmed.")
         finally:
             with self._wire_lock:
                 self._lands_in_progress -= 1
@@ -479,49 +856,259 @@ class TelloController:
             self._land_on_channel = False
             self._cmd_lock.release()
 
-    def _confirm_land(self) -> None:
-        """Send ``land`` until a fresh ``ok`` confirms it. Caller holds ``_cmd_lock``.
+    def _take_channel_for_land(self, deadline: float) -> bool:
+        """Take ``_cmd_lock`` for a confirming land. False if it stays busy or the land is confirmed meanwhile.
 
-        Each attempt waits out the command gap, then, under ``_wire_lock``,
-        drops every queued reply (for example the ``ok`` that answered an
-        interrupting ``stop``, which says nothing about the land) and sends
-        ``land``. It then waits up to ``_LAND_REPLY_TIMEOUT_S`` for a reply;
-        only ``ok`` confirms the land. On confirmation ``is_flying`` is
-        cleared and the keepalive may run again. Returns at once, sending
-        nothing, if another ``land()`` was confirmed since this one was
-        requested. Raises ``RuntimeError`` after ``_LAND_ATTEMPTS``
-        unconfirmed attempts, leaving ``is_flying`` true.
+        Polls, so the flag that marks the channel as a land's is set in the
+        same step that takes it. Waits until ``deadline`` (a
+        ``time.monotonic()`` value: the end of the whole ``land()`` call,
+        not of one attempt). State alone confirms nothing here: the command
+        holding the channel may be a takeoff the Tello has not yet acted on,
+        so the drone can still be on the ground and about to lift.
+        """
+        while True:
+            with self._owner_lock:
+                if self._cmd_lock.acquire(blocking=False):
+                    self._land_on_channel = True
+                    return True
+            if not self._land_unconfirmed or time.monotonic() >= deadline:
+                return False
+            time.sleep(_REPLY_POLL_S)
+
+    def _mark_land_confirmed(self, how: str | None = None) -> bool:
+        """Record a confirmed land. False, changing nothing, if none was waiting.
+
+        Clears ``_land_unconfirmed`` and ``is_flying`` under ``_wire_lock``,
+        so the keepalive and stream recovery may run again. ``how``, when
+        given, is logged.
+        """
+        with self._wire_lock:
+            if not self._land_unconfirmed:
+                return False
+            self._land_unconfirmed = False
+            self.state.is_flying = False
+            # djitellopy's end() lands only when its own flag says flying.
+            self.tello.is_flying = False
+        if how:
+            print(f"[{self.name}] Land confirmed: {how}.")
+        return True
+
+    def _confirm_land(self, holding_channel: bool, deadline: float) -> None:
+        """Send ``land`` until the drone is confirmed on the ground.
+
+        ``holding_channel`` says whether the caller already holds
+        ``_cmd_lock`` for this land; the lock is always released before this
+        returns. ``deadline`` (a ``time.monotonic()`` value) ends the whole
+        ``land()`` call: the waits for the channel, for each reply and for
+        the state stream all stop there. Each attempt holds the channel only
+        while it sends one ``land`` and waits for the reply
+        (``_send_confirming_land``). Any further wait for the state stream
+        happens with no lock held, so the state poller and other lands are
+        never held up by it.
+
+        A land is confirmed when either of these happens:
+
+        * Fresh state packets show the drone on the ground with its motors
+          off (see ``_ground_by_state``), whatever the replies were. This is
+          checked while waiting for the reply too, so a drone already on the
+          ground that never answers does not hold the channel for the reply
+          timeout.
+        * The state stream is lost (no packet for ``_STATE_LOST_S``, see
+          ``_state_lost``), a fresh ``ok`` answers the confirming land, and
+          no packet that arrived after that land was sent showed the drone
+          in the air last (the reply-only confirmation used before the state
+          stream was read). A gap shorter than ``_STATE_LOST_S`` is waited
+          out: a reply read during it may answer an earlier command while
+          the drone still hovers.
+
+        Neither applies while the lift guard runs, and the second not while
+        the reply guard runs (see ``_TAKEOFF_LIFT_GUARD_S``): the attempt
+        waits for them to end instead.
+
+        When the confirming land is answered (``ok``, ``error`` or anything
+        else) while fresh state still shows the drone in the air, or while
+        the state stream has paused but is not lost, the attempt waits up to
+        ``_LAND_GROUND_WAIT_S`` for fresh state to show it on the ground. A
+        Tello answers ``error`` to a land that arrives while it is already
+        landing, and a late ``ok`` may answer some earlier command, so
+        neither reply alone says the drone is down. If the drone is still in
+        the air after that wait, or the land got no reply, ``land`` is sent
+        again.
+
+        Returns at once, sending nothing, if another land was confirmed
+        since this one was requested. Raises ``RuntimeError`` after
+        ``_LAND_ATTEMPTS`` unconfirmed attempts or at ``deadline``, leaving
+        ``is_flying`` true.
+        """
+        outcome = "not sent"
+        attempt = 0
+        try:
+            while attempt < _LAND_ATTEMPTS:
+                attempt += 1
+                if not holding_channel:
+                    if not self._take_channel_for_land(deadline):
+                        if not self._land_unconfirmed:
+                            return
+                        raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
+                    holding_channel = True
+                try:
+                    land_attempt = self._send_confirming_land(deadline)
+                finally:
+                    self._leave_channel_after_land()
+                    holding_channel = False
+                outcome = land_attempt.outcome
+                if land_attempt.verdict == "confirmed":
+                    return
+                if land_attempt.verdict == "watch":
+                    wait_s = min(_LAND_GROUND_WAIT_S, deadline - time.monotonic())
+                    if self._wait_for_ground(
+                        land_attempt.sent_at, wait_s, land_attempt.ok_seen, land_attempt.ok_alone
+                    ):
+                        return
+                    if self._lift_guard_left() > 0:
+                        outcome = (
+                            f"{outcome}, but it follows a takeoff that may still lift, so nothing "
+                            f"confirms it for another {self._lift_guard_left():.1f} s"
+                        )
+                    elif self._ground_by_state() is not None:
+                        outcome = (
+                            f"{outcome}, but fresh state still shows {self._state_height_text()} "
+                            f"after {max(wait_s, 0.0):.1f} s"
+                        )
+                    elif not self._state_lost():
+                        outcome = (
+                            f"{outcome}, but the state stream paused ({self._state_height_text()}) "
+                            f"and did not show the drone on the ground within {max(wait_s, 0.0):.1f} s"
+                        )
+                    elif self._reply_guard_left() > 0:
+                        outcome = (
+                            f"{outcome}, but the state stream is lost and the takeoff it follows may "
+                            f"still be answered, so no reply confirms it for another "
+                            f"{self._reply_guard_left():.1f} s"
+                        )
+                    else:
+                        outcome = (
+                            f"{outcome}, but the state stream is lost and last showed "
+                            f"{self._state_height_text()}"
+                        )
+                print(f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} not confirmed: {outcome}.")
+                if time.monotonic() >= deadline:
+                    break
+            raise RuntimeError(
+                f"[{self.name}] land not confirmed after {attempt} attempt(s) "
+                f"within {_LAND_DEADLINE_S:g} s (last: {outcome})"
+            )
+        finally:
+            if holding_channel:
+                self._leave_channel_after_land()
+
+    def _send_confirming_land(self, deadline: float) -> _LandAttempt:
+        """Send one confirming ``land`` and wait for its reply. Caller holds ``_cmd_lock``.
+
+        Waits out the command gap, then, under ``_wire_lock``, drops every
+        queued reply (for example the ``ok`` that answered an interrupting
+        ``stop``, which says nothing about the land) and sends ``land``. Then
+        waits up to ``_LAND_REPLY_TIMEOUT_S`` (never past ``deadline``) for a
+        reply, stopping early if fresh state shows the drone on the ground.
+
+        Returns a ``_LandAttempt``. Its ``verdict`` is ``"confirmed"`` (the
+        land is confirmed), ``"watch"`` (the land was answered while fresh
+        state shows the drone not yet on the ground or the state stream has
+        paused without being lost, or a takeoff guard runs; the caller waits
+        for state with no lock held) or ``"failed"``. ``ok_seen`` is whether
+        the land was answered ``ok`` outside the lift guard, and
+        ``ok_alone`` whether outside the reply guard.
         """
         tello = self.tello
         responses = tello.get_own_udp_object()["responses"]
-        outcome = "not sent"
-        for attempt in range(1, _LAND_ATTEMPTS + 1):
-            self._pace_land()
-            with self._wire_lock:
-                if not self._land_unconfirmed:
-                    return
-                del responses[:]
-                try:
-                    tello.send_command_without_return("land")
-                    sent = True
-                except Exception as e:
-                    outcome = f"send failed: {e}"
-                    sent = False
-                self._land_sent_at = time.monotonic()
-            if sent:
-                reply = self._await_reply(responses, _LAND_REPLY_TIMEOUT_S)
-                if reply is not None and reply.lower() == "ok":
-                    with self._wire_lock:
-                        self._land_unconfirmed = False
-                        self.state.is_flying = False
-                        # djitellopy's end() lands only when its own flag says flying.
-                        tello.is_flying = False
-                    return
-                outcome = "no reply" if reply is None else f"answered {reply!r}"
-            print(f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} not confirmed: {outcome}.")
-        raise RuntimeError(
-            f"[{self.name}] land not confirmed after {_LAND_ATTEMPTS} attempts (last: {outcome})"
-        )
+        self._pace_land()
+        with self._wire_lock:
+            if not self._land_unconfirmed:
+                return _LandAttempt("confirmed", "confirmed by another land", self._land_sent_at, False, False)
+            del responses[:]
+            try:
+                tello.send_command_without_return("land")
+                sent = True
+                outcome = "no reply"
+            except Exception as e:
+                sent = False
+                outcome = f"send failed: {e}"
+            sent_at = self._land_sent_at = time.monotonic()
+        reply = None
+        if sent:
+            reply = self._await_reply(
+                responses,
+                max(0.0, min(_LAND_REPLY_TIMEOUT_S, deadline - time.monotonic())),
+                stop_waiting=lambda: self._ground_by_state(since=sent_at) is True,
+            )
+            if reply is not None:
+                outcome = f"answered {reply!r}"
+        is_ok = reply is not None and reply.lower() == "ok"
+        # During the lift guard an "ok" may be the late answer to the
+        # interrupting stop or to the takeoff itself, so it counts for
+        # nothing. During the reply guard it may still be the takeoff's own
+        # answer, so it never confirms a land on its own.
+        lift_guarded = self._lift_guard_left() > 0
+        ok_seen = is_ok and not lift_guarded
+        ok_alone = is_ok and self._reply_guard_left() <= 0
+        on_ground = self._ground_by_state(since=sent_at, ok_seen=ok_seen)
+        if on_ground:
+            self._mark_land_confirmed(f"fresh state shows the drone on the ground ({outcome})")
+            return _LandAttempt("confirmed", outcome, sent_at, ok_seen, ok_alone)
+        if not self._land_unconfirmed:
+            return _LandAttempt("confirmed", outcome, sent_at, ok_seen, ok_alone)
+        if lift_guarded:
+            return _LandAttempt("watch", outcome, sent_at, ok_seen, ok_alone)
+        if on_ground is None and self._state_lost():
+            # The state stream is lost: the land's own reply decides, unless
+            # the last packet since the land was sent showed the drone in the
+            # air, or the takeoff it follows may still be answered.
+            if ok_alone and not self._airborne_since(sent_at - _STATE_LOST_S):
+                self._mark_land_confirmed(f"the state stream is lost and the land was {outcome}")
+                return _LandAttempt("confirmed", outcome, sent_at, ok_seen, ok_alone)
+            if self._reply_guard_left() > 0:
+                return _LandAttempt("watch", outcome, sent_at, ok_seen, ok_alone)
+            return _LandAttempt("failed", outcome, sent_at, ok_seen, ok_alone)
+        # Fresh state shows the drone not yet on the ground, or the stream
+        # has paused but is not lost: a reply read now may answer an earlier
+        # command while the drone still hovers, so the state stream decides.
+        return _LandAttempt("watch" if reply is not None else "failed", outcome, sent_at, ok_seen, ok_alone)
+
+    def _wait_for_ground(self, since: float, timeout_s: float, ok_seen: bool = False, ok_alone: bool = False) -> bool:
+        """Wait, holding no lock, for fresh state to show the drone on the ground.
+
+        Only state packets that arrived after ``since`` count; ``ok_seen``
+        is passed to ``_ground_by_state``. Returns True once the land is
+        confirmed (by this wait, another land or the state poller) and False
+        if it is not within ``timeout_s``. A pause in the state stream
+        shorter than ``_STATE_LOST_S`` is waited out. Once the stream is lost
+        and both takeoff guards are over, the land's reply decides at once:
+        ``ok_alone`` (the land was answered ``ok`` outside the reply guard)
+        confirms it unless the last packet since ``since`` showed the drone
+        in the air; otherwise this returns False, so the next land's own
+        reply can decide.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if not self._land_unconfirmed:
+                return True
+            on_ground = self._ground_by_state(since=since, ok_seen=ok_seen)
+            if on_ground:
+                self._mark_land_confirmed("fresh state shows the drone on the ground")
+                return True
+            if (
+                on_ground is None
+                and self._lift_guard_left() <= 0
+                and self._reply_guard_left() <= 0
+                and self._state_lost()
+            ):
+                if ok_alone and not self._airborne_since(since - _STATE_LOST_S):
+                    self._mark_land_confirmed("the state stream is lost and the land was answered 'ok'")
+                    return True
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_REPLY_POLL_S)
 
     def move(self, direction: str, distance_cm: int) -> bool:
         """Move in a direction. Drops command if another is in-flight.
@@ -611,21 +1198,38 @@ class TelloController:
         tello = self.tello
         self._pace_commands()
         responses = tello.get_own_udp_object()["responses"]
-        with self._wire_lock:
-            if abort is not None and abort.is_set():
-                return False
-            if rearm_after_land is not None:
-                if self._lands_in_progress or self._land_seq != rearm_after_land:
+        is_takeoff = rearm_after_land is not None
+        reply = None
+        try:
+            with self._wire_lock:
+                if abort is not None and abort.is_set():
                     return False
-                self._landing = False
-            elif self._landing:
-                return False
-            # Queued replies belong to earlier exchanges, such as the stop
-            # and land of an interrupting landing. Drop them so this command
-            # reads its own reply.
-            del responses[:]
-            tello.send_command_without_return(command)
-        reply = self._await_reply(responses, timeout_s)
+                if is_takeoff:
+                    if self._lands_in_progress or self._land_seq != rearm_after_land:
+                        return False
+                    self._landing = False
+                    # A land that starts while this takeoff waits for its
+                    # reply, or after a wait that ends without an "ok",
+                    # starts the takeoff guards (see _TAKEOFF_LIFT_GUARD_S).
+                    self._takeoff_in_flight = True
+                    self._takeoff_answered_ok = False
+                    self._takeoff_sent_at = time.monotonic()
+                    self._lift_guard_until = 0.0
+                    self._reply_guard_until = 0.0
+                elif self._landing:
+                    return False
+                # Queued replies belong to earlier exchanges, such as the stop
+                # and land of an interrupting landing. Drop them so this command
+                # reads its own reply.
+                del responses[:]
+                tello.send_command_without_return(command)
+            reply = self._await_reply(responses, timeout_s)
+        finally:
+            if is_takeoff:
+                with self._wire_lock:
+                    if self._takeoff_in_flight:
+                        self._takeoff_answered_ok = reply is not None and reply.lower() == "ok"
+                    self._takeoff_in_flight = False
         if reply is None:
             raise RuntimeError(
                 f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
@@ -634,15 +1238,23 @@ class TelloController:
             raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r} (not retried)")
         return True
 
-    def _await_reply(self, responses: list, timeout_s: float) -> str | None:
+    def _await_reply(
+        self,
+        responses: list,
+        timeout_s: float,
+        stop_waiting: Callable[[], bool] | None = None,
+    ) -> str | None:
         """Read the reply to the command just sent, or None if none arrives within ``timeout_s``.
 
         Caller holds ``_cmd_lock``. Records the reply time, as djitellopy
-        does, so the next command keeps the minimum gap.
+        does, so the next command keeps the minimum gap. Also returns None,
+        without waiting further, as soon as ``stop_waiting()`` is true.
         """
         sent_at = time.monotonic()
         while not responses:
             if time.monotonic() - sent_at > timeout_s:
+                return None
+            if stop_waiting is not None and stop_waiting():
                 return None
             time.sleep(_REPLY_POLL_S)
         self.tello.last_received_command_timestamp = time.time()
@@ -790,12 +1402,12 @@ class TelloController:
                 self._cmd_lock.release()
 
     def _start_state_polling(self):
-        """Poll drone state every 2 seconds. Skips when a flight command is active."""
+        """Poll drone state every ``_STATE_POLL_INTERVAL_S``. Skips while a command holds the channel."""
         def _poll():
             poll_failures = 0
             while self._running:
                 if self._cmd_lock.locked():
-                    time.sleep(2)
+                    time.sleep(_STATE_POLL_INTERVAL_S)
                     continue
                 try:
                     self.state.battery = self.tello.get_battery()
@@ -803,27 +1415,58 @@ class TelloController:
                     self.state.temperature = self.tello.get_temperature()
                     self.state.flight_time = self.tello.get_flight_time()
                     poll_failures = 0
-                    if self.state.is_flying and self.state.height == 0:
-                        zero_height_count = getattr(self, '_zero_height_count', 0) + 1
-                        self._zero_height_count = zero_height_count
-                        if zero_height_count >= 3:
-                            self.state.is_flying = False
-                            self._zero_height_count = 0
-                            print(f"[{self.name}] Crash detected — height 0 for {zero_height_count} polls.")
-                    else:
-                        self._zero_height_count = 0
+                    self._check_zero_height()
                 except Exception:
                     poll_failures += 1
                     if poll_failures >= 3 and self.state.is_connected:
                         self.state.is_connected = False
                         self._running = False
                         print(f"[{self.name}] Connection lost — {poll_failures} consecutive poll failures.")
-                time.sleep(2)
+                time.sleep(_STATE_POLL_INTERVAL_S)
 
         self._state_thread = threading.Thread(
             target=_poll, daemon=True, name=f"{self.name}-state"
         )
         self._state_thread.start()
+
+    def _check_zero_height(self) -> None:
+        """The state poller's zero-height path, run after each successful poll.
+
+        Counts polls in a row that read height 0 while the drone is flying
+        or a land is unconfirmed. After ``_ZERO_HEIGHT_POLLS`` of them: if a
+        land is unconfirmed and fresh state shows the drone on the ground
+        with its motors off, the land is confirmed, which also clears
+        ``is_flying`` and lets the keepalive and stream recovery run again.
+        Otherwise a drone still marked flying is marked landed and reported
+        as a crash, except in two cases, where it stays marked flying (and
+        the lane executor keeps retrying an unconfirmed land): while the
+        lift guard of an unconfirmed land runs, because the drone may be
+        spinning up at height 0 and about to lift; and while fresh state
+        shows the drone flying (its motors running, or ``tof`` or ``|h|``
+        well above the ground), as for a drone hovering at the height of a
+        takeoff point above the ground. A stale height never clears an
+        unconfirmed land.
+        """
+        if not (self.state.is_flying or self._land_unconfirmed) or self.state.height != 0:
+            self._zero_height_count = 0
+            return
+        self._zero_height_count += 1
+        if self._zero_height_count < _ZERO_HEIGHT_POLLS:
+            return
+        polls, self._zero_height_count = self._zero_height_count, 0
+        if (
+            self._land_unconfirmed
+            and self._ground_by_state()
+            and self._mark_land_confirmed(f"height 0 for {polls} polls")
+        ):
+            return
+        if self._land_unconfirmed and self._lift_guard_left() > 0:
+            return
+        if self._state_shows_flight():
+            return
+        if self.state.is_flying:
+            self.state.is_flying = False
+            print(f"[{self.name}] Crash detected — height 0 for {polls} polls.")
 
 
 class FakeTelloController:

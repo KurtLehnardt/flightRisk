@@ -117,7 +117,7 @@ Figures: recall 0.000, 0.142 and 0.602, precision 0.832, 32 px on 108 people (`d
 - 1:05 Do: press **Start search** and confirm the prompt for two drones. Say: "Each drone's clock is synced to the ground over the WebSocket, eight ping rounds each, and both get one scheduled start time two seconds out. The skew column shows how far apart they actually started."
 - 1:20 Do: let the lanes run. The presenter walks to a spot at least 1.5 m beyond the far edge of the area, outside the geofence and never in a flight path, where a drone camera can see them. Say: "Each laptop stands in for a computer on board. Detections from both drones go onto one map, tagged with the drone that saw them, and pins within 80 centimetres of each other merge."
 - 1:55 Do: at the Windows laptop, type `l` and Enter in the edge-2 terminal; drone-2 lands. Say: "Now I take drone-2 out of the search. The ground marks it lost and hands its unflown lanes to drone-1. Watch the map redraw." The `drone_lost` and `retask` banners appear.
-- 2:15 Say: "The same code ran four fake drones against one ground station. I killed one, and its lanes moved to the other three 0.7 seconds later. Every drone also carries its own safety envelope: no takeoff below 30 percent battery, land below 15, land by itself after 3 seconds without hearing the ground, and stay inside its geofence." Do: press **LAND ALL** (or Shift+L). Both drones are down by 2:35.
+- 2:15 Say: "The same code ran four fake drones against one ground station. I killed one, and its lanes moved to the other three 0.7 seconds later. Every drone also carries its own safety envelope: no takeoff below 30 percent battery, land below 15, land by itself after 3 seconds without hearing the ground, and stay inside its geofence." Do: press **LAND ALL** (or Shift+L; Ctrl/Cmd+Shift+L if the cursor is in a text field). Both drones are down by 2:35.
 
 ### 2:35–3:20 · Who needs it?
 
@@ -175,7 +175,7 @@ Run `venv/bin/python -m flightrisk.drone.coverage --min-px 32` and show the tabl
 
 ### E4 · Safety envelope (1:30)
 
-Each edge enforces its own limits, whatever the ground station says: a 450 cm geofence around its takeoff point by default (`FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard, `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
+Each edge enforces its own limits, whatever the ground station says: a 450 cm geofence around its takeoff point by default, as set by the demo launchers (the code default is 500 cm; override with `FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard (Ctrl/Cmd+Shift+L while typing in a text field), `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
 
 Confirming a match with a fleet lands every drone in place (LAND ALL); the Tello has no return-to-home, so drones land wherever they are.
 
