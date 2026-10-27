@@ -28,6 +28,7 @@ later pull requests, and the obligations they must meet are listed in
 - Caps and strictness
 - Privacy
 - What PR-4/5 consumers must do
+- Edge authority and multi-ground links (PR-4)
 - Differences from the plan text
 
 ## Versions and negotiation
@@ -565,6 +566,146 @@ this layer.
   surface its error to the operator. An edge should not adopt an epoch
   close to `MAX_EPOCH` from a ground it has not been told to expect,
   because no leader could follow it.
+
+## Edge authority and multi-ground links (PR-4)
+
+The edge side of these rules is `flightrisk/fleet_authority.py`
+(`EdgeAuthority`, no I/O) and `flightrisk/edge_uplink.py` (`EdgeUplink`,
+one connection per ground station). The ground side of the version
+bookkeeping is `flightrisk/fleet_ground_link.py`, used by `GroundTransport`
+when it is given a `GroundIdentity`. Tests: `tests/test_fleet_authority.py`
+(rule tests and a model-based random walk), `tests/test_edge_uplink.py` (two
+real ground stations and one edge over loopback),
+`tests/test_fleet_ground_link.py` and `tests/test_edge_device_uplink.py`.
+
+### Turning it on
+
+- **Edge.** A flying edge (`--source tello` or `fake`) with
+  `FLIGHTRISK_GROUND_URLS` (or `--ground-urls`) set to a comma-separated
+  list, for example `ws://127.0.0.1:9000,ws://10.42.0.2:9000`, connects to
+  every listed ground and speaks v2. `FLIGHTRISK_NODE_ID` (or `--node-id`)
+  names the laptop in its `hello` (default: the host name).
+  `FLIGHTRISK_FLEET_LEGACY=1` keeps v1 grounds connected as monitor-only
+  links instead of closing them. `FLIGHTRISK_INFLIGHT_HANDOVER=1` enables the
+  in-flight adoption rule below (off by default; plan rung L6 first).
+- **Single ground, unchanged.** Without a ground list the edge uses
+  `--ws-url`/`FLIGHTRISK_EDGE_WS` exactly as before: one connection, protocol
+  v1, unfenced commands obeyed. That is the single-ground legacy
+  configuration.
+- **Ground.** `GroundTransport(identity=GroundIdentity(node_id, role, epoch))`
+  speaks v2; `local_min_proto=2` closes v1 edges; `set_identity` announces a
+  new role or epoch. Without an identity the ground is unchanged (v1). The
+  dashboard does not pass an identity yet; the leader logic (PR-6) will.
+
+### Edge rules
+
+- **Landing is never fenced.** `land` and `emergency_land_all` are executed
+  from any authenticated ground, at any epoch and on any link version, and
+  are never nacked. On a v2 link the edge acks them, without a `cmd_id` when
+  the landing carried none (including a landing read by the fail-safe
+  decoder). A landing feeds the link watchdog only when it comes from the
+  authority. Landing bypasses the command-id cache.
+- **Hello first.** A connection's first fleet message must be a ground
+  `hello`. Until then the connection cannot move the drone, feed the
+  watchdog, ping, set the target or toggle video, and receives nothing. A
+  connection whose first fleet message is anything else is a v1 link: it is
+  closed (code 4010) unless legacy mode keeps it as a monitor-only link
+  (v1-shaped telemetry out, landing in, nothing else obeyed). A later
+  `hello` on a v1 link, a `hello` that changes the connection's `node_id`,
+  one that changes the agreed version, and, without legacy mode, one that
+  announces v1, close the connection. A ping or a landing does not decide
+  the version.
+- **Decoding.** Every frame goes through `decode` in the ground-to-edge
+  direction with the connection's agreed version (1 before its `hello`).
+  Frames up to 4 KiB are decoded on the event loop; larger ones in a worker
+  thread, so a hostile frame near 1 MiB cannot stall the other ground's
+  link.
+- **Adopting an epoch.** The edge holds `epoch_seen` and the leader that
+  holds it. A ground `hello` with role `leader` (or a heartbeat matching
+  that `hello`) at a higher epoch is adopted only while the drone is
+  inactive: on the ground, no flight sequence pending, and no motion command
+  being handed to the executor. With in-flight handover enabled it is also
+  adopted in flight when the current authority announced exactly that node
+  and epoch in a `handover`. `epoch_seen` never decreases. An epoch within
+  1024 of `MAX_EPOCH` is adopted only when a handover announced it. Adoption
+  forgets the plan the edge had acked and calls the executor's
+  `invalidate_plan` when it has one.
+- **One authority per epoch.** At an epoch already adopted, the first leader
+  wins and another `leader_id` is refused (`not_authority`). The same leader
+  on a new connection takes the role over only when its previous connection
+  is gone (a reconnect, even in flight); a second live connection from the
+  same ground never steals it.
+- **Fenced commands** (`takeoff`, `assign_lanes`, `start_at`, `hold`,
+  `resume`, `nudge`, `handover`) are executed only from the authority's
+  connection, at `epoch_seen`, with `leader_id` equal to the authority and
+  to the `node_id` the connection announced. Otherwise: `stale_epoch` for an
+  older epoch, `not_authority` for anything else, unfenced motion included
+  on every link version. Every nack carries `drone_id`, the command's
+  `cmd_id` and `epoch_seen`. A command type the executor does not implement
+  (for example `hold` before PR-5) is refused with `invalid` and a `detail`.
+  `start_at` and `resume` must name the plan whose `assign_lanes` the
+  executor acked in the current epoch (`no_valid_plan`, `plan_mismatch`).
+- **Fenced control and authority-only messages.** `heartbeat` and `clock`
+  must be fenced by the authority at `epoch_seen`; `ping`, `set_target` and
+  `stream_video` are taken only from the authority's connection. Only these
+  authority messages (and the authority's landings, hellos and commands)
+  feed the link watchdog.
+- **Re-check at dispatch.** A message keeps the authority it was accepted
+  under. When the executor's thread takes it, it is dropped if a new epoch
+  was adopted since (`nack{stale_epoch}`), and a motion command other than
+  `hold` is dropped while the authority's connection is gone
+  (`nack{not_authority}`), so a takeoff is never started into a dead link.
+  An `emergency_land_all` also discards queued `takeoff`, `start_at`,
+  `resume` and `nudge`.
+- **At most once.** A command's `cmd_id` is recorded as pending when it is
+  accepted, before it is executed. A duplicate never runs again: it is
+  ignored while pending and answered with the cached reply afterwards. A
+  `cmd_id` reused for another type is refused with `invalid`. Refusals are
+  cached too.
+- **Outbound.** Telemetry, acks and nacks go to every ground that agreed a
+  version, shaped for it; detections (crops, embeddings, thumbnails) go to
+  the authority only and are dropped while there is none. The authority
+  completes executor messages for v2 until the executor does it itself:
+  telemetry gains `epoch`, `plan_id`, `state` and `plan_valid` (`false`
+  unless the executor reports otherwise), and acks and nacks gain the
+  `cmd_id` of the command they answer, `epoch_seen` and `result`.
+
+### Executor interface
+
+`EdgeAuthority` needs five hooks (`ExecutorHooks`), adapted for
+`LaneExecutor` by `edge_uplink.LaneExecutorHooks`, which uses PR-5's methods
+by name when they exist: `is_active()` (`LaneExecutor.is_active` if present,
+else the drone's `is_flying` or `is_busy`; an error counts as active),
+`supports(type)` (`type in LaneExecutor.CONTROL_TYPES`), `snapshot()` (from
+`telemetry()`), `fleet_status()` (`LaneExecutor.fleet_status` if present,
+returning `plan_id`, `state`, `plan_valid`) and `invalidate_plan(reason)`
+(`LaneExecutor.invalidate_plan` if present). Hooks are never called while
+the authority holds its lock.
+
+### Ground rules
+
+- The ground sends its `hello` first on every connection and nothing but a
+  landing before it, so a heartbeat never locks an edge to v1.
+- While the edge's answer is pending, messages keep their v2 fields (a v1
+  edge ignores them) and v2-only commands wait; after an edge `hello` they
+  are shaped for the agreed version, and after `HELLO_TIMEOUT_S` without one
+  for v1. A late edge `hello`, a version change and a `node_id` change close
+  the connection.
+- A leader fences its heartbeats and clock messages; a standby sends no
+  heartbeats. Incoming acks, nacks and telemetry are validated with the
+  agreed version.
+- `send_command` matches replies by `(drone_id, cmd_id)`; a landing ack
+  without a `cmd_id` completes that drone's pending landings. Only
+  `RETRYABLE_COMMAND_TYPES` are resent, with the same `cmd_id`; a newer
+  `hold`, `assign_lanes` or `land` ends a drone's pending `assign_lanes`
+  retries, and an `emergency_land_all` ends every pending motion retry.
+- An edge reporting a higher `epoch_seen` (in its `hello` or in a
+  `stale_epoch`/`not_authority` nack) to a leader triggers `on_stale_epoch`.
+- **`hold` to a v1 edge.** `send_to_drone` and `send_command` raise
+  `PeerVersionError` (a `ProtocolError`) for a v2-only command to a v1 link,
+  and `broadcast_control` skips such links with a warning. Choosing the
+  fallback (land that drone, or report it as unable to hold) is the
+  leader's policy and is left to PR-6/PR-8.
 
 ## Differences from the plan text
 
