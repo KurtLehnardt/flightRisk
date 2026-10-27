@@ -9,6 +9,7 @@ Runs on http://localhost:5555
 import base64
 import hmac
 import logging
+import math
 import os
 import secrets
 import threading
@@ -35,6 +36,7 @@ from flightrisk.persistence import SessionDB
 from flightrisk.drone.fleet import DroneFleet
 from flightrisk.drone.controller import DroneController
 from flightrisk.drone.coordinator import FleetCoordinator
+from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk.canon import TargetCanon
 
@@ -343,6 +345,31 @@ FLEET_LOSS_TIMEOUT_S = 5.0
 #: refused the takeoff).
 FLEET_TAKEOFF_GRACE_S = 15.0
 
+#: Seconds a re-task waits for the receiving drones to accept or refuse
+#: their new lanes before the ``retask`` event is sent. Later answers are
+#: reported in further ``retask`` or ``retask_failed`` events.
+FLEET_RETASK_WAIT_S = 2.0
+
+
+def fleet_geofence_cm() -> float:
+    """The edges' geofence half-width in cm, read like ``SafetyEnvelope.from_env``.
+
+    The ground station plans re-tasked lanes against the same
+    ``FLIGHTRISK_GEOFENCE_CM`` the edges enforce, so it only offers lanes a
+    drone can accept. Raises ``ValueError`` for a value that is not a
+    positive number.
+    """
+    raw = os.environ.get(GEOFENCE_CM_ENV, "").strip()
+    if not raw:
+        return float(DEFAULT_GEOFENCE_CM)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a positive number, got {raw!r}")
+    return value
+
 
 class TransportEdgeLink:
     """``EdgeLink`` for one drone over the dashboard's ``GroundTransportSync``.
@@ -424,16 +451,19 @@ class FleetSupervisor:
     """Runs one ``FleetCoordinator`` over the dashboard's ground transport.
 
     The supervisor builds one ``TransportEdgeLink`` per configured drone id
-    and a coordinator over those links. It routes each edge's ``ack`` and
-    ``telemetry`` messages (the transport's ``on_control``) and its
+    and a coordinator over those links. It routes each edge's ``ack``,
+    ``nack`` and ``telemetry`` messages (the transport's ``on_control``) and its
     detections (the transport's ``on_message``) to the coordinator, forwards
     the coordinator's ``fleet_detection`` and ``fleet_event`` events to the
     browser, emits ``fleet_status`` and ``fleet_plan``, declares a drone lost
     when it drops out of a started mission so its lanes are re-tasked, and
     carries the coordinator half of LAND ALL.
 
-    ``plan()`` and ``start()`` block on clock sync, so callers run them on a
-    worker thread, never on a transport delivery thread.
+    ``plan()`` and ``start()`` block on clock sync, and ``check_losses()``
+    blocks while a re-task waits for answers, so callers run them on a
+    worker thread, never on a transport delivery thread. Re-tasked lanes are
+    planned against ``geofence_cm`` (by default ``FLIGHTRISK_GEOFENCE_CM``,
+    the value the edges enforce).
     """
 
     def __init__(
@@ -451,6 +481,8 @@ class FleetSupervisor:
         takeoff_grace_s: float = FLEET_TAKEOFF_GRACE_S,
         send_timeout_s: float = FLEET_SEND_TIMEOUT_S,
         ping_timeout_s: float = FLEET_PING_TIMEOUT_S,
+        geofence_cm: float | None = None,
+        retask_wait_s: float = FLEET_RETASK_WAIT_S,
     ):
         self.net = net
         self._transport = transport
@@ -469,6 +501,8 @@ class FleetSupervisor:
             alt_slots_cm=alt_slots_cm,
             clock=self._clock,
             on_event=self._on_coordinator_event,
+            geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
+            retask_wait_s=retask_wait_s,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -518,7 +552,7 @@ class FleetSupervisor:
     # -- Messages from the edges --------------------------------------------
 
     def handle_control(self, msg: dict) -> None:
-        """Route one ``ack`` or ``telemetry`` message to its drone's link."""
+        """Route one ``ack``, ``nack`` or ``telemetry`` message to its drone's link."""
         drone_id = msg.get("drone_id")
         link = self.links.get(drone_id)
         if link is None:
@@ -636,9 +670,10 @@ class FleetSupervisor:
         for ``loss_timeout_s``, when it reports landed before finishing its
         lanes (for example after its local land key), or when it has not
         taken off ``takeoff_grace_s`` after the scheduled start. Its unflown
-        lanes are handed to the remaining drones by
+        lanes are offered to the remaining drones by
         ``FleetCoordinator.on_drone_lost``, which also emits the
-        ``drone_lost`` and ``retask`` events. Returns the drones declared
+        ``drone_lost``, ``retask`` and ``retask_failed`` events and waits up
+        to ``retask_wait_s`` for the drones' answers. Returns the drones declared
         lost by this call. The check is skipped while ``plan()`` or
         ``start()`` runs, so it never marks a drone of a new plan lost.
         """
@@ -1098,7 +1133,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                         )
 
         def _on_edge_control(msg):
-            # Edge ack and telemetry messages, on a transport executor thread.
+            # Edge ack, nack and telemetry messages, on a transport executor thread.
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 supervisor.handle_control(msg)

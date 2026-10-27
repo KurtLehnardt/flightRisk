@@ -18,7 +18,13 @@ Message shapes follow the binding contracts in design section 3:
 * ground to edge: ``ping``, ``clock``, ``assign_lanes``, ``start_at``,
   ``land`` and ``emergency_land_all``;
 * edge to ground: ``pong``, ``ack`` (for ``assign_lanes`` and ``start_at``),
-  ``telemetry`` and ``detections``.
+  ``nack`` (a refused ``assign_lanes``), ``telemetry`` and ``detections``.
+
+Re-tasking never reports lanes as covered before a drone has accepted them.
+When a drone is lost, its unflown lanes are offered only to drones whose
+geofence contains them, a ``nack`` sends the refused lanes on to another
+eligible drone, and lanes that no drone can take are reported as uncovered
+in a ``retask_failed`` event.
 
 Clock convention: the offset of a link is the median over the sync rounds of
 ``((t2 - t1) + (t3 - t4)) / 2``, which is the edge clock minus the ground
@@ -64,6 +70,13 @@ TELEMETRY_FRESH_S = 2.0
 
 TELLO_MIN_MOVE_CM = 20
 TELLO_MAX_MOVE_CM = 500
+
+RETASK_WAIT_S = 2.0
+"""How long ``on_drone_lost`` waits for the receiving drones to answer
+before it reports the re-task. Later answers are reported as they arrive."""
+
+# Floating-point slack in the geofence check, matching SafetyEnvelope.
+_FENCE_TOLERANCE_CM = 1e-6
 
 _DIRECTION_VECTORS = {
     "forward": (0, 1),
@@ -199,6 +212,79 @@ class FleetDetection:
         return out
 
 
+@dataclass(eq=False)
+class _Chunk:
+    """A contiguous run of a lost drone's unflown lanes, re-tasked as one piece.
+
+    ``points`` are the shared-grid positions along the run: its start, then
+    the end of each lane. ``status`` is ``queued`` (waiting for a drone),
+    ``offered`` (sent to ``receiver``, no answer yet), ``acked`` (accepted
+    by ``receiver``) or ``failed`` (no drone can take it, see ``reason``).
+    ``appended`` is what the offer added to the receiver's lanes for this
+    run: the transit to its start, then its lanes. ``refusals`` maps each
+    drone that refused the run to its reason, and ``reported`` is the status
+    last sent to the dashboard.
+    """
+
+    lost_id: str
+    first_index: int
+    lanes: list[dict]
+    points: list[tuple[int, int]]
+    status: str = "queued"
+    receiver: str | None = None
+    appended: list[dict] = field(default_factory=list)
+    refusals: dict[str, str] = field(default_factory=dict)
+    reason: str | None = None
+    reported: str | None = None
+
+    @property
+    def start(self) -> tuple[int, int]:
+        return self.points[0]
+
+    def lane_entries(self) -> list[dict]:
+        """One entry per lane: its index in the lost drone's lanes, move and grid ends."""
+        entries = []
+        for k, lane in enumerate(self.lanes):
+            (x0, y0), (x1, y1) = self.points[k], self.points[k + 1]
+            entries.append({
+                "index": self.first_index + k,
+                "direction": lane["direction"],
+                "distance_cm": lane["distance_cm"],
+                "x_cm": x0,
+                "y_cm": y0,
+                "end_x_cm": x1,
+                "end_y_cm": y1,
+            })
+        return entries
+
+
+@dataclass(eq=False)
+class _Offer:
+    """An ``assign_lanes`` that appends re-tasked chunks to one drone, awaiting its answer.
+
+    ``base_lanes`` and the saved ack fields restore the drone's state if it
+    refuses the offer, because the edge then keeps flying its previous plan.
+    """
+
+    receiver: str
+    chunks: list[_Chunk]
+    base_lanes: list[dict]
+    lanes_total: int
+    acked: bool
+    ack_battery: float | None
+    ack_lanes_total: int | None
+
+
+@dataclass(eq=False)
+class _Retask:
+    """The re-tasking of one lost drone's unflown lanes."""
+
+    lost_id: str
+    chunks: list[_Chunk]
+    settled: threading.Event = field(default_factory=threading.Event)
+    reported: bool = False
+
+
 @dataclass
 class _DroneState:
     """Mutable per-drone state, guarded by the coordinator lock."""
@@ -215,6 +301,8 @@ class _DroneState:
     telemetry_at: float | None = None
     executed_at_ground_s: float | None = None
     lost: bool = False
+    offer: _Offer | None = None
+    nack_reason: str | None = None
     ping_t1: float | None = None
     ping_event: threading.Event | None = None
     pong: tuple[float, float, float] | None = None
@@ -303,8 +391,16 @@ class FleetCoordinator:
         clock: Monotonic ground clock in seconds.
         on_event: Optional callback ``(event_name, payload)`` for the
             dashboard. It receives ``fleet_detection`` for each new merged
-            detection and ``fleet_event`` for ``drone_lost``, ``retask`` and
-            ``land_all``. Exceptions it raises are logged and ignored.
+            detection and ``fleet_event`` for ``drone_lost``, ``retask``,
+            ``retask_failed`` and ``land_all``. Exceptions it raises are
+            logged and ignored.
+        geofence_cm: Half-width of the square geofence each edge keeps
+            around its takeoff point (``FLIGHTRISK_GEOFENCE_CM`` on the
+            edge). Re-tasked lanes are offered only to drones whose geofence
+            contains their whole new path. ``None`` plans without a fence;
+            the edges still enforce their own and answer with a ``nack``.
+        retask_wait_s: How long ``on_drone_lost`` waits for the receiving
+            drones to answer before reporting the re-task.
     """
 
     def __init__(
@@ -319,6 +415,8 @@ class FleetCoordinator:
         min_battery: float = MIN_START_BATTERY,
         clock: Callable[[], float] = time.monotonic,
         on_event: Callable[[str, dict], None] | None = None,
+        geofence_cm: float | None = None,
+        retask_wait_s: float = RETASK_WAIT_S,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -334,6 +432,10 @@ class FleetCoordinator:
             raise ValueError(f"strip_cm must be positive, got {strip_cm!r}")
         if zone_gap_cm < 0:
             raise ValueError(f"zone_gap_cm must not be negative, got {zone_gap_cm!r}")
+        if geofence_cm is not None and (_number(geofence_cm) is None or geofence_cm <= 0):
+            raise ValueError(f"geofence_cm must be a positive number or None, got {geofence_cm!r}")
+        if _number(retask_wait_s) is None or retask_wait_s < 0:
+            raise ValueError(f"retask_wait_s must not be negative, got {retask_wait_s!r}")
 
         # The link set is fixed for the coordinator's lifetime, so land_all()
         # can iterate it without taking the state lock.
@@ -347,6 +449,8 @@ class FleetCoordinator:
         self._min_battery = float(min_battery)
         self._clock = clock
         self._on_event = on_event
+        self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
+        self._retask_wait_s = float(retask_wait_s)
 
         self._lock = threading.RLock()
         self._drones: dict[str, _DroneState] = {drone_id: _DroneState() for drone_id in self._links}
@@ -355,6 +459,7 @@ class FleetCoordinator:
         self._landed_all = False
         self._detections: list[FleetDetection] = []
         self._next_detection_id = 1
+        self._retasks: list[_Retask] = []
 
         for drone_id, link in self._links.items():
             link.on_message = self._make_callback(drone_id)
@@ -387,7 +492,12 @@ class FleetCoordinator:
             return [dict(lane) for lane in self._drones[drone_id].lanes]
 
     def current_plan(self) -> dict | None:
-        """The plan as a ``fleet_plan`` payload, with lanes as re-tasked so far."""
+        """The plan as a ``fleet_plan`` payload, with lanes as re-tasked so far.
+
+        ``uncovered`` lists every re-tasked lane that no drone could take, in
+        the shape of the ``retask_failed`` event's lanes plus the lost
+        drone's id.
+        """
         with self._lock:
             if self._plan is None:
                 return None
@@ -396,6 +506,13 @@ class FleetCoordinator:
                 state = self._drones[zone["drone_id"]]
                 zone["lanes"] = [dict(lane) for lane in state.lanes]
                 zone["lost"] = state.lost
+            out["uncovered"] = [
+                dict(entry, drone_id=chunk.lost_id, reason=chunk.reason)
+                for retask in self._retasks
+                for chunk in retask.chunks
+                if chunk.status == "failed"
+                for entry in chunk.lane_entries()
+            ]
             return out
 
     def detections(self) -> list[FleetDetection]:
@@ -526,11 +643,18 @@ class FleetCoordinator:
             self._landed_all = False
             self._detections = []
             self._next_detection_id = 1
+            for retask in self._retasks:
+                # A re-task of the previous mission is never reported again.
+                retask.reported = True
+                retask.settled.set()
+            self._retasks = []
             for zone in zones:
                 state = self._drones[zone.drone_id]
                 state.zone = zone
                 state.lanes = [dict(lane) for lane in zone.lanes]
                 state.lost = False
+                state.offer = None
+                state.nack_reason = None
                 state.executed_at_ground_s = None
                 self._clear_ack(state)
                 messages[zone.drone_id] = self._assign_message(zone.drone_id, state)
@@ -698,6 +822,9 @@ class FleetCoordinator:
             if state.offset_s is None:
                 refusals[drone_id] = "clock not synced"
                 continue
+            if state.nack_reason is not None:
+                refusals[drone_id] = f"assign_lanes refused ({state.nack_reason})"
+                continue
             if not state.acked:
                 refusals[drone_id] = "no assign_lanes ack"
                 continue
@@ -738,6 +865,8 @@ class FleetCoordinator:
             self._on_pong(drone_id, msg)
         elif msg_type == "ack":
             self._on_ack(drone_id, msg)
+        elif msg_type == "nack":
+            self._on_nack(drone_id, msg)
         elif msg_type == "telemetry":
             with self._lock:
                 state = self._drones[drone_id]
@@ -765,6 +894,8 @@ class FleetCoordinator:
 
     def _on_ack(self, drone_id: str, msg: dict) -> None:
         kind = msg.get("for")
+        messages: list[tuple[str, dict]] = []
+        events: list[tuple[str, dict]] = []
         with self._lock:
             state = self._drones[drone_id]
             if kind == "assign_lanes":
@@ -779,6 +910,17 @@ class FleetCoordinator:
                 state.acked = True
                 state.ack_battery = _number(msg.get("battery"))
                 state.ack_lanes_total = lanes_total if isinstance(lanes_total, int) else None
+                state.nack_reason = None
+                if state.offer is not None:
+                    # The acked plan is the one that carries the pending
+                    # re-task offer, so its lanes are now covered.
+                    offer, state.offer = state.offer, None
+                    for chunk in offer.chunks:
+                        chunk.status = "acked"
+                    logger.info("%s accepted %d re-tasked lanes", drone_id,
+                                sum(len(chunk.lanes) for chunk in offer.chunks))
+                    messages = self._dispatch_locked()
+                    events = self._settle_and_collect_locked()
             elif kind == "start_at":
                 executed = _number(msg.get("executed_at_ground_s"))
                 if executed is None:
@@ -787,6 +929,44 @@ class FleetCoordinator:
                 state.executed_at_ground_s = executed
             else:
                 logger.debug("Ignoring ack for %r from %s", kind, drone_id)
+        self._emit_all(events)
+        self._send_offers(messages)
+
+    def _on_nack(self, drone_id: str, msg: dict) -> None:
+        """A drone refused an ``assign_lanes``.
+
+        A refused re-task offer is withdrawn: the drone keeps its previous
+        lanes and the offered lanes go to another eligible drone, or are
+        reported uncovered. A refused plan from ``plan()`` blocks ``start()``
+        with the edge's reason.
+        """
+        if msg.get("for") != "assign_lanes":
+            logger.debug("Ignoring nack for %r from %s", msg.get("for"), drone_id)
+            return
+        reason = msg.get("reason")
+        reason = reason if isinstance(reason, str) and reason else "refused"
+        lanes_total = msg.get("lanes_total")
+        messages: list[tuple[str, dict]] = []
+        events: list[tuple[str, dict]] = []
+        with self._lock:
+            state = self._drones[drone_id]
+            if isinstance(lanes_total, int) and not isinstance(lanes_total, bool) \
+                    and lanes_total != len(state.lanes):
+                logger.warning(
+                    "Ignoring stale assign_lanes nack from %s: %d lanes refused, %d assigned",
+                    drone_id, lanes_total, len(state.lanes),
+                )
+                return
+            logger.warning("%s refused its assign_lanes (%s)", drone_id, reason)
+            if state.offer is not None:
+                self._withdraw_offer_locked(drone_id, reason)
+                messages = self._dispatch_locked()
+                events = self._settle_and_collect_locked()
+            else:
+                self._clear_ack(state)
+                state.nack_reason = reason
+        self._emit_all(events)
+        self._send_offers(messages)
 
     # ------------------------------------------------------------------
     # Detection dedup
@@ -852,78 +1032,354 @@ class FleetCoordinator:
     # Loss recovery
     # ------------------------------------------------------------------
 
-    def on_drone_lost(self, drone_id: str) -> dict[str, list[dict]]:
-        """Mark a drone lost and give its unflown lanes to the remaining drones.
+    def on_drone_lost(self, drone_id: str, wait_s: float | None = None) -> dict[str, list[dict]]:
+        """Mark a drone lost and offer its unflown lanes to the remaining drones.
 
         The unflown lanes start at the ``lane_index`` from the drone's last
         telemetry (0 without telemetry), so the lane it was flying is flown
         again in full. They are split into contiguous chunks, one per
-        remaining drone; each chunk goes to the remaining drone whose planned
-        end point is nearest the chunk's start. That drone receives an
-        ``assign_lanes`` whose lanes are its previous lanes unchanged, then a
-        transit to the chunk's start, then the chunk. An edge therefore keeps
-        its lane index and flies the appended lanes after its own.
+        remaining drone, and a chunk is split further where the set of drones
+        whose geofence contains it changes. Each chunk is offered to the
+        nearest remaining drone (by its planned end point) whose geofence
+        contains its whole new path, preferring drones not yet given a chunk.
+        That drone receives an ``assign_lanes`` whose lanes are its previous
+        lanes unchanged, then a transit to the chunk's start, then the chunk,
+        so an edge keeps its lane index and flies the appended lanes after its
+        own. A drone answers one offer at a time; further chunks for it wait.
+
+        An ``ack`` makes the offered lanes covered. A ``nack`` (or a failed
+        send) withdraws the offer, and the chunk is offered to another
+        eligible drone. A chunk that no remaining drone can take is uncovered.
+        Any offer the lost drone itself had pending is withdrawn and offered
+        again.
 
         The lost drone is also sent a best-effort ``land`` so it cannot keep
-        flying lanes that now belong to another drone.
+        flying lanes that now belong to another drone. The call emits
+        ``drone_lost``, then waits up to ``wait_s`` (default
+        ``retask_wait_s``) for the offers to be answered, and then emits one
+        ``retask`` event listing only the lanes that were accepted (with the
+        lanes still awaiting an answer under ``awaiting``) and, if any lanes
+        are uncovered, one ``retask_failed`` event listing them. Answers that
+        arrive later emit their own ``retask`` or ``retask_failed`` events.
+        Like ``sync()``, this call must not run on the thread that delivers
+        the links' incoming messages.
 
-        Returns the lanes appended per remaining drone.
+        Returns the lanes appended to each drone that accepted re-tasked
+        lanes by the time the call returns.
         """
+        wait_s = self._retask_wait_s if wait_s is None else max(0.0, float(wait_s))
+        retask = None
         with self._lock:
             state = self._drones.get(drone_id)
             if state is None or state.lost:
                 return {}
             state.lost = True
-            appended: dict[str, list[dict]] = {}
-            messages: dict[str, dict] = {}
+            if state.offer is not None:
+                self._withdraw_offer_locked(drone_id, None)
             if state.zone is not None:
                 index = 0
                 lane_index = (state.telemetry or {}).get("lane_index")
                 if isinstance(lane_index, int) and not isinstance(lane_index, bool):
                     index = max(0, min(lane_index, len(state.lanes)))
-                unflown = state.lanes[index:]
-                origin = self._origin(state)
-                state.lanes = state.lanes[:index]
-                remaining = [
-                    rid for rid, other in self._drones.items()
-                    if not other.lost and other.zone is not None
-                ]
-                if unflown and remaining:
-                    full_path = state.lanes + unflown
-                    for start, chunk in _split_contiguous(unflown, len(remaining)):
-                        chunk_start = _path_point(origin, full_path, index + start)
-                        rid = min(
-                            remaining,
-                            key=lambda r: math.dist(
-                                _path_point(self._origin(self._drones[r]), self._drones[r].lanes), chunk_start
-                            ),
-                        )
-                        remaining.remove(rid)
-                        receiver = self._drones[rid]
-                        end = _path_point(self._origin(receiver), receiver.lanes)
-                        added = _transit(end, chunk_start) + [dict(lane) for lane in chunk]
-                        receiver.lanes.extend(added)
-                        self._clear_ack(receiver)
-                        appended[rid] = added
-                        messages[rid] = self._assign_message(rid, receiver)
-                elif unflown:
-                    logger.error("Drone %s lost with %d unflown lanes and no drone left to take them",
-                                 drone_id, len(unflown))
+                full_path = state.lanes
+                state.lanes = full_path[:index]
+                if full_path[index:]:
+                    retask = _Retask(drone_id, self._make_chunks(drone_id, self._origin(state), full_path, index))
+                    self._retasks.append(retask)
+            messages = self._dispatch_locked()
+            events = self._settle_and_collect_locked()
 
-        logger.warning("Drone %s lost; re-tasking %s", drone_id, {k: len(v) for k, v in appended.items()})
+        logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
         self._send_logged(drone_id, {"type": "land"})
-        for rid, msg in messages.items():
-            self._send_logged(rid, msg)
         self._emit("fleet_event", {"event": "drone_lost", "drone_id": drone_id})
-        if appended:
-            detail = ", ".join(f"{len(v)} lanes to {rid}" for rid, v in appended.items())
-            self._emit("fleet_event", {
-                "event": "retask",
-                "drone_id": drone_id,
-                "detail": detail,
-                "to": {rid: len(v) for rid, v in appended.items()},
-            })
+        self._emit_all(events)
+        self._send_offers(messages)
+        if retask is None:
+            return {}
+        if wait_s > 0:
+            retask.settled.wait(wait_s)
+        with self._lock:
+            events, appended = self._summarise_locked(retask)
+        self._emit_all(events)
         return appended
+
+    # ------------------------------------------------------------------
+    # Re-task allocation (callers hold the lock unless noted)
+    # ------------------------------------------------------------------
+
+    def _receivers(self) -> list[str]:
+        """Drones that can still be given lanes: not lost and part of the plan."""
+        return [rid for rid, other in self._drones.items() if not other.lost and other.zone is not None]
+
+    def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
+        if self._geofence_cm is None:
+            return True
+        origin = self._origin(self._drones[drone_id])
+        limit = self._geofence_cm + _FENCE_TOLERANCE_CM
+        return abs(point[0] - origin[0]) <= limit and abs(point[1] - origin[1]) <= limit
+
+    def _path_inside_fence(self, drone_id: str, lanes: list[dict]) -> bool:
+        """True if every point of ``lanes`` flown from the drone's takeoff is inside its geofence.
+
+        Lanes are straight moves and the geofence is a square, so checking
+        the end of every move covers the whole path.
+        """
+        if self._geofence_cm is None:
+            return True
+        x, y = self._origin(self._drones[drone_id])
+        for lane in lanes:
+            dx, dy = _DIRECTION_VECTORS.get(lane["direction"], (0, 0))
+            x += dx * lane["distance_cm"]
+            y += dy * lane["distance_cm"]
+            if not self._inside_fence(drone_id, (x, y)):
+                return False
+        return True
+
+    def _make_chunks(
+        self, lost_id: str, origin: tuple[int, int], full_path: list[dict], index: int,
+    ) -> list[_Chunk]:
+        """Split ``full_path[index:]`` into chunks to offer.
+
+        The lanes are first split into one contiguous piece per remaining
+        drone. A piece is split again wherever no single drone's geofence
+        contains all of it, and lanes outside every geofence are kept
+        together so they are reported as one uncovered chunk.
+        """
+        unflown = full_path[index:]
+        points = [_path_point(origin, full_path, index)]
+        for lane in unflown:
+            points.append(_path_point(points[-1], [lane]))
+        receivers = self._receivers()
+        covers = [
+            frozenset(r for r in receivers if self._inside_fence(r, points[k]) and self._inside_fence(r, points[k + 1]))
+            for k in range(len(unflown))
+        ]
+
+        def chunk(run: list[int]) -> _Chunk:
+            return _Chunk(
+                lost_id=lost_id,
+                first_index=index + run[0],
+                lanes=[dict(unflown[k]) for k in run],
+                points=points[run[0]:run[-1] + 2],
+            )
+
+        chunks = []
+        for _, piece in _split_contiguous(list(range(len(unflown))), max(1, len(receivers))):
+            run: list[int] = []
+            common: frozenset = frozenset()
+            for k in piece:
+                if run:
+                    if common and common & covers[k]:
+                        run.append(k)
+                        common = common & covers[k]
+                        continue
+                    if not common and not covers[k]:
+                        run.append(k)
+                        continue
+                    chunks.append(chunk(run))
+                run, common = [k], covers[k]
+            if run:
+                chunks.append(chunk(run))
+        return chunks
+
+    def _dispatch_locked(self) -> list[tuple[str, dict]]:
+        """Offer every queued chunk to an eligible drone; return the messages to send.
+
+        A chunk whose eligible drones are all answering another offer stays
+        queued. A chunk with no eligible drone at all fails. Several chunks
+        offered to one drone in the same round go out in one
+        ``assign_lanes``.
+        """
+        planned: dict[str, list[dict]] = {}
+        batches: dict[str, list[_Chunk]] = {}
+        for retask in self._retasks:
+            for chunk in retask.chunks:
+                if chunk.status != "queued":
+                    continue
+                if self._landed_all:
+                    self._fail_locked(chunk, "LAND ALL issued")
+                    continue
+                fits = []
+                for rid in self._receivers():
+                    if rid in chunk.refusals:
+                        continue
+                    lanes = planned.get(rid, self._drones[rid].lanes)
+                    end = _path_point(self._origin(self._drones[rid]), lanes)
+                    added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
+                    if self._path_inside_fence(rid, lanes + added):
+                        fits.append((rid, end, added))
+                if not fits:
+                    self._fail_locked(chunk, self._failure_reason(chunk))
+                    continue
+                free = [fit for fit in fits if self._drones[fit[0]].offer is None]
+                if not free:
+                    continue
+                fresh = [fit for fit in free if fit[0] not in batches]
+                rid, _, added = min(fresh or free, key=lambda fit: math.dist(fit[1], chunk.start))
+                planned[rid] = planned.get(rid, self._drones[rid].lanes) + added
+                batches.setdefault(rid, []).append(chunk)
+                chunk.status = "offered"
+                chunk.receiver = rid
+                chunk.appended = [dict(lane) for lane in added]
+
+        messages = []
+        for rid, chunks in batches.items():
+            state = self._drones[rid]
+            state.offer = _Offer(
+                receiver=rid,
+                chunks=chunks,
+                base_lanes=state.lanes,
+                lanes_total=len(planned[rid]),
+                acked=state.acked,
+                ack_battery=state.ack_battery,
+                ack_lanes_total=state.ack_lanes_total,
+            )
+            state.lanes = [dict(lane) for lane in planned[rid]]
+            self._clear_ack(state)
+            messages.append((rid, self._assign_message(rid, state)))
+            logger.info("Offering %d re-tasked lanes to %s", sum(len(c.lanes) for c in chunks), rid)
+        return messages
+
+    def _failure_reason(self, chunk: _Chunk) -> str:
+        receivers = self._receivers()
+        if not receivers:
+            return "no drone left to take them"
+        parts = []
+        refused = [rid for rid in receivers if rid in chunk.refusals]
+        if refused:
+            parts.append("refused by " + ", ".join(f"{rid} ({chunk.refusals[rid]})" for rid in refused))
+        outside = [rid for rid in receivers if rid not in chunk.refusals]
+        if outside:
+            parts.append("outside the geofence of " + ", ".join(outside))
+        return "; ".join(parts)
+
+    def _fail_locked(self, chunk: _Chunk, reason: str) -> None:
+        chunk.status = "failed"
+        chunk.receiver = None
+        chunk.reason = reason
+        logger.error("Re-tasked lanes %d-%d of %s are uncovered: %s",
+                     chunk.first_index, chunk.first_index + len(chunk.lanes) - 1, chunk.lost_id, reason)
+
+    def _withdraw_offer_locked(self, drone_id: str, reason: str | None) -> None:
+        """Take back a drone's pending offer and queue its chunks again.
+
+        ``reason`` records a refusal, so the chunks are not offered to this
+        drone again; ``None`` (the drone was lost) records nothing. The
+        drone's lanes and ack state return to what they were before the
+        offer, because the edge keeps its previous plan.
+        """
+        state = self._drones[drone_id]
+        offer, state.offer = state.offer, None
+        if offer is None:
+            return
+        state.lanes = offer.base_lanes
+        state.acked = offer.acked
+        state.ack_battery = offer.ack_battery
+        state.ack_lanes_total = offer.ack_lanes_total
+        for chunk in offer.chunks:
+            chunk.status = "queued"
+            chunk.receiver = None
+            chunk.appended = []
+            if reason is not None:
+                chunk.refusals[drone_id] = reason
+
+    def _send_offers(self, messages: list[tuple[str, dict]]) -> None:
+        """Send offers without the lock. A failed send counts as a refusal. Lock not held."""
+        queue = list(messages)
+        while queue:
+            rid, msg = queue.pop(0)
+            if self._send_logged(rid, msg):
+                continue
+            with self._lock:
+                state = self._drones[rid]
+                if state.offer is None or state.offer.lanes_total != len(msg["lanes"]):
+                    continue
+                self._withdraw_offer_locked(rid, "not reachable")
+                queue.extend(self._dispatch_locked())
+                events = self._settle_and_collect_locked()
+            self._emit_all(events)
+
+    def _settle_and_collect_locked(self) -> list[tuple[str, dict]]:
+        """Wake waiters of settled re-tasks and build events for already reported ones.
+
+        A re-task is settled when every chunk is accepted or failed. Chunks
+        of a re-task whose summary was already emitted are reported as soon
+        as they are accepted or fail.
+        """
+        events = []
+        for retask in self._retasks:
+            if all(chunk.status in ("acked", "failed") for chunk in retask.chunks):
+                retask.settled.set()
+            if not retask.reported:
+                continue
+            acked = [c for c in retask.chunks if c.status == "acked" and c.reported != "acked"]
+            failed = [c for c in retask.chunks if c.status == "failed" and c.reported != "failed"]
+            if acked:
+                events.append(("fleet_event", self._retask_payload(retask.lost_id, acked, [])))
+            if failed:
+                events.append(("fleet_event", self._failed_payload(retask.lost_id, failed)))
+            for chunk in acked + failed:
+                chunk.reported = chunk.status
+        return events
+
+    def _summarise_locked(self, retask: _Retask) -> tuple[list[tuple[str, dict]], dict[str, list[dict]]]:
+        """Build the ``retask`` and ``retask_failed`` events that close ``on_drone_lost``."""
+        if retask.reported or not any(r is retask for r in self._retasks):
+            return [], {}
+        retask.reported = True
+        acked = [c for c in retask.chunks if c.status == "acked"]
+        failed = [c for c in retask.chunks if c.status == "failed"]
+        pending = [c for c in retask.chunks if c.status in ("queued", "offered")]
+        events = []
+        if acked or pending:
+            events.append(("fleet_event", self._retask_payload(retask.lost_id, acked, pending)))
+        if failed:
+            events.append(("fleet_event", self._failed_payload(retask.lost_id, failed)))
+        for chunk in acked + failed:
+            chunk.reported = chunk.status
+        appended: dict[str, list[dict]] = {}
+        for chunk in acked:
+            appended.setdefault(chunk.receiver, []).extend(dict(lane) for lane in chunk.appended)
+        return events, appended
+
+    @staticmethod
+    def _retask_payload(lost_id: str, acked: list[_Chunk], pending: list[_Chunk]) -> dict:
+        """A ``retask`` event. ``to`` and ``lanes`` cover accepted lanes only.
+
+        ``to`` counts the lanes appended to each accepting drone (transit
+        included) and ``lanes`` lists the lost drone's lanes it accepted.
+        Lanes still waiting for an answer are listed under ``awaiting``.
+        """
+        to: dict[str, int] = {}
+        lanes = []
+        for chunk in acked:
+            to[chunk.receiver] = to.get(chunk.receiver, 0) + len(chunk.appended)
+            lanes.extend(dict(entry, drone_id=chunk.receiver) for entry in chunk.lane_entries())
+        parts = [", ".join(f"{n} lanes to {rid}" for rid, n in to.items()) or "no lanes accepted yet"]
+        payload = {"event": "retask", "drone_id": lost_id, "to": to, "lanes": lanes}
+        if pending:
+            waiting: dict[str, int] = {}
+            awaiting = []
+            for chunk in pending:
+                who = chunk.receiver or "a free drone"
+                waiting[who] = waiting.get(who, 0) + len(chunk.lanes)
+                awaiting.extend(dict(entry, drone_id=chunk.receiver) for entry in chunk.lane_entries())
+            parts.append(", ".join(f"{n} lanes awaiting {who}" for who, n in waiting.items()))
+            payload["awaiting"] = awaiting
+        payload["detail"] = "; ".join(parts)
+        return payload
+
+    @staticmethod
+    def _failed_payload(lost_id: str, failed: list[_Chunk]) -> dict:
+        """A ``retask_failed`` event listing every uncovered lane and why."""
+        lanes = [dict(entry, reason=chunk.reason) for chunk in failed for entry in chunk.lane_entries()]
+        reasons = list(dict.fromkeys(chunk.reason for chunk in failed))
+        return {
+            "event": "retask_failed",
+            "drone_id": lost_id,
+            "detail": f"{len(lanes)} lanes of {lost_id} uncovered: " + "; ".join(reasons),
+            "lanes": lanes,
+        }
 
     # ------------------------------------------------------------------
     # Emergency landing
@@ -975,6 +1431,10 @@ class FleetCoordinator:
         except Exception:
             logger.error("Sending %s to %s failed", msg.get("type"), drone_id, exc_info=True)
             return False
+
+    def _emit_all(self, events: list[tuple[str, dict]]) -> None:
+        for name, payload in events:
+            self._emit(name, payload)
 
     def _emit(self, name: str, payload: dict) -> None:
         if self._on_event is None:
