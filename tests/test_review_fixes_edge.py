@@ -232,6 +232,16 @@ def test_move_error_reply_raises_without_retry(tello_on_wire):
     assert wire.sent.count("right 100") == 1
 
 
+def test_disconnect_lands_a_flying_drone_first(tello_on_wire):
+    # djitellopy's end() would land only once now that it never retries,
+    # so disconnect() lands through land() first.
+    ctrl, wire = tello_on_wire()
+    assert ctrl.takeoff() is True
+    ctrl.disconnect()
+    assert wire.sent == ["takeoff", "land"]
+    assert ctrl.state.is_flying is False
+
+
 # ---------------------------------------------------------------------------
 # N2: the keepalive takes the command lock
 # ---------------------------------------------------------------------------

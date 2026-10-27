@@ -565,6 +565,10 @@ def _build_runner(
     the pose from ``pose_provider``. Face recognition is constructed only
     when the edge is not appearance-only (see ``_resolve_appearance_only``).
     """
+    # Decide first, so a bad FLIGHTRISK_APPEARANCE_ONLY fails before any
+    # model is loaded.
+    appearance_only = _resolve_appearance_only(args)
+
     # Lazy imports: these pull in ultralytics / torch / insightface, which are
     # heavy and unnecessary for importing this module or unit-testing the loop.
     from flightrisk.vision.detector import PersonDetector
@@ -578,7 +582,6 @@ def _build_runner(
     except Exception as e:
         log.warning("reid_unavailable", error=str(e))
 
-    appearance_only = _resolve_appearance_only(args)
     face = None
     if appearance_only:
         log.info("edge_appearance_only", source=args.source, face_embedding=False)

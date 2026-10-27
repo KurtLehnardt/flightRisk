@@ -138,8 +138,18 @@ class TelloController:
             return False
 
     def disconnect(self):
-        """Stop streams, disconnect. Landing delegated to Tello.end()."""
+        """Land if flying, then stop streams and disconnect.
+
+        The land goes through ``land()``, which interrupts any command in
+        flight and retries the land; ``Tello.end()`` would land only once,
+        because the djitellopy client no longer retries.
+        """
         self._running = False
+        if self.state.is_flying:
+            try:
+                self.land()
+            except Exception as e:
+                print(f"[{self.name}] Land before disconnect failed: {e}")
         with self._cmd_lock:
             try:
                 self.tello.end()
@@ -370,11 +380,11 @@ class TelloController:
         ``rearm_after_land`` is the land count read when the takeoff was
         called: a finished landing is then cleared, but a landing still in
         progress, or one started since, refuses the command. The check and
-        the send happen under
-        ``_wire_lock``, so a ``land()`` that starts at the same moment is
-        ordered either before the check or after the command is on the
-        wire. Returns True on an ``ok`` reply; raises ``RuntimeError`` on
-        any other reply or none within ``timeout_s``. Nothing is retried.
+        the send happen under ``_wire_lock``, so a ``land()`` that starts at
+        the same moment is ordered either before the check or after the
+        command is on the wire. Returns True on an ``ok`` reply; raises
+        ``RuntimeError`` on any other reply or none within ``timeout_s``.
+        Nothing is retried.
         """
         tello = self.tello
         self._pace_commands()
