@@ -3,7 +3,13 @@
 import argparse
 import os
 
-from flightrisk.dashboard.app import run_dashboard, SourceConfig
+from flightrisk.dashboard.app import (
+    DEFAULT_DASHBOARD_HOST,
+    SourceConfig,
+    check_dashboard_bind,
+    resolve_dashboard_host,
+    run_dashboard,
+)
 
 _SOURCE_CHOICES = ("tello", "mavlink", "webcam", "file", "edge")
 _FLEET_NET_CHOICES = ("station", "ap")
@@ -123,7 +129,19 @@ def main():
         "--port", type=int, default=int(os.environ.get("FLIGHTRISK_PORT", "5555")),
         help="Dashboard port",
     )
+    parser.add_argument(
+        "--host", type=str, default=None,
+        help=f"Dashboard bind address (env FLIGHTRISK_DASHBOARD_HOST; default {DEFAULT_DASHBOARD_HOST}, "
+             "this machine only). Any other address exposes Start and LAND ALL to that network "
+             "and requires FLIGHTRISK_API_KEY.",
+    )
     args = parser.parse_args()
+
+    host = resolve_dashboard_host(args.host)
+    try:
+        check_dashboard_bind(host)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     # argparse's `choices=` only validates values passed on the command
     # line — it never checks a `default=` value, so a bad FLIGHTRISK_SOURCE env
@@ -177,7 +195,7 @@ def main():
         fleet_strip_cm=args.fleet_strip_cm,
         fleet_net=fleet_net,
     )
-    run_dashboard(source_config, target_path=args.target, port=args.port)
+    run_dashboard(source_config, target_path=args.target, port=args.port, host=host)
 
 
 if __name__ == "__main__":

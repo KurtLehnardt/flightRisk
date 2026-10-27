@@ -7,8 +7,10 @@ accepts those control messages, flies the lanes through a drone controller
 
 * ``assign_lanes`` stores a lane plan after checking it against the
   ``SafetyEnvelope`` and answers with an ``ack`` carrying the battery level.
-  A plan that arrives while the drone is flying replaces the current one
-  (re-tasking), and the drone switches to it after its current move.
+  A plan it refuses is answered with a ``nack`` giving the reason, so the
+  ground never counts refused lanes as searched. A plan that arrives while
+  the drone is flying replaces the current one (re-tasking), and the drone
+  switches to it after its current move.
 * ``clock`` stores the ground clock offset (edge clock minus ground clock).
 * ``start_at`` schedules takeoff for the moment the edge's monotonic clock
   reaches ``t_ground_s + offset_s``, then the drone climbs to its altitude
@@ -343,11 +345,15 @@ class LaneExecutor:
     def handle_assign_lanes(self, msg: dict[str, Any]) -> bool:
         """Validate and store a lane plan, then acknowledge it.
 
-        Refuses (logs, sends no ack) a plan addressed to another drone, with
-        malformed lanes, with an out-of-range altitude, or whose
-        dead-reckoned path leaves the geofence. An ``alt_cm`` in the plan
-        replaces the local altitude slot, because the coordinator assigns
-        slots across the whole fleet.
+        Refuses a plan addressed to another drone (``other_drone``), with
+        malformed lanes (``invalid``), with an out-of-range altitude
+        (``altitude``), whose dead-reckoned path leaves the geofence
+        (``geofence``), or while the battery level cannot be read
+        (``battery``), because the ``ack`` must carry it. A refused plan is
+        logged and answered with a ``nack`` carrying that reason and the
+        number of lanes received; the current plan is kept unchanged. An
+        ``alt_cm`` in the plan replaces the local altitude slot, because the
+        coordinator assigns slots across the whole fleet.
 
         Re-tasking: when the drone is already flying its lanes and the new
         plan starts with the lanes flown so far (including the current one)
@@ -356,20 +362,24 @@ class LaneExecutor:
         lane 0. Any other plan starts from its first lane at the current
         position.
         """
+        raw_lanes = msg.get("lanes")
+        lanes_received = len(raw_lanes) if isinstance(raw_lanes, list) else 0
         target = msg.get("drone_id")
         if target is not None and str(target) != self.drone_id:
-            self._log.warning(
-                "edge_assign_lanes_refused", drone_id=self.drone_id, reason="other_drone", target=target
-            )
-            return False
+            return self._refuse_lanes("other_drone", lanes_received, target=target)
         try:
-            lanes = parse_lanes(msg.get("lanes"))
-            alt_cm = msg.get("alt_cm")
-            if alt_cm is not None:
-                alt_cm = SafetyEnvelope.validate_alt_slot(alt_cm)
+            lanes = parse_lanes(raw_lanes)
         except ValueError as exc:
-            self._log.warning("edge_assign_lanes_refused", drone_id=self.drone_id, reason=str(exc))
-            return False
+            return self._refuse_lanes("invalid", lanes_received, error=str(exc))
+        alt_cm = msg.get("alt_cm")
+        if alt_cm is not None:
+            try:
+                alt_cm = SafetyEnvelope.validate_alt_slot(alt_cm)
+            except ValueError as exc:
+                return self._refuse_lanes("altitude", lanes_received, error=str(exc))
+        battery = self._read_battery()
+        if not is_finite_number(battery):
+            return self._refuse_lanes("battery", lanes_received, battery=battery)
 
         moves = [
             (lane_index, chunk_index, direction, distance)
@@ -387,48 +397,24 @@ class LaneExecutor:
             # accepting anything. A move in progress is not in the pose yet,
             # and it is still part of moves[start_step:].
             pose = self.envelope.pose_snapshot()
+            outside = None
             for _, _, direction, distance in moves[start_step:]:
                 pose.apply_move(direction, distance)
                 if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
-                    self._log.warning(
-                        "edge_assign_lanes_refused",
-                        drone_id=self.drone_id,
-                        reason="geofence",
-                        geofence_cm=self.envelope.geofence_cm,
-                        x_cm=round(pose.x_cm, 1),
-                        y_cm=round(pose.y_cm, 1),
-                    )
-                    return False
-
-            if alt_cm is not None and alt_cm != self.envelope.alt_slot_cm:
-                self._log.warning(
-                    "edge_alt_slot_assigned",
-                    drone_id=self.drone_id,
-                    local_cm=self.envelope.alt_slot_cm,
-                    assigned_cm=alt_cm,
-                )
-                self.envelope.set_alt_slot(alt_cm)
-            if carried_step is not None:
-                # A move of the old plan that is still in flight counts
-                # towards the new plan when it completes.
-                self._linked_gens.add(self._plan_gen)
-            else:
-                self._linked_gens.clear()
-            self._lanes = lanes
-            self._moves = moves
-            self._step = start_step
-            self._lanes_total = len(lanes)
-            self._plan_gen += 1
-            self._zone = msg.get("zone")
-            lane_index = self.lane_index
-            retask = (
-                self._flying_lanes
-                and self._is_flying()
-                and self._land_reason is None
-                and not self._worker_alive()
+                    outside = (pose.x_cm, pose.y_cm)
+                    break
+            if outside is None:
+                accepted = self._store_plan(msg, lanes, moves, alt_cm, carried_step, start_step)
+        if outside is not None:
+            # The nack is sent outside the lock, like every other message.
+            return self._refuse_lanes(
+                "geofence",
+                lanes_received,
+                geofence_cm=self.envelope.geofence_cm,
+                x_cm=round(outside[0], 1),
+                y_cm=round(outside[1], 1),
             )
-            if retask:
-                retask = self._launch("lanes")
+        lane_index, retask = accepted
         self._log.info(
             "edge_lanes_assigned",
             drone_id=self.drone_id,
@@ -442,10 +428,67 @@ class LaneExecutor:
             "type": "ack",
             "for": "assign_lanes",
             "drone_id": self.drone_id,
-            "battery": self._read_battery(),
+            "battery": battery,
             "lanes_total": len(lanes),
         })
         return True
+
+    def _store_plan(
+        self,
+        msg: dict[str, Any],
+        lanes: list[tuple[str, int]],
+        moves: list[tuple[int, int, str, int]],
+        alt_cm: float | None,
+        carried_step: int | None,
+        start_step: int,
+    ) -> tuple[int, bool]:
+        """Make an accepted plan current. Caller holds ``_lock``.
+
+        Returns the lane index to report and whether a re-task sequence was
+        launched.
+        """
+        if alt_cm is not None and alt_cm != self.envelope.alt_slot_cm:
+            self._log.warning(
+                "edge_alt_slot_assigned",
+                drone_id=self.drone_id,
+                local_cm=self.envelope.alt_slot_cm,
+                assigned_cm=alt_cm,
+            )
+            self.envelope.set_alt_slot(alt_cm)
+        if carried_step is not None:
+            # A move of the old plan that is still in flight counts
+            # towards the new plan when it completes.
+            self._linked_gens.add(self._plan_gen)
+        else:
+            self._linked_gens.clear()
+        self._lanes = lanes
+        self._moves = moves
+        self._step = start_step
+        self._lanes_total = len(lanes)
+        self._plan_gen += 1
+        self._zone = msg.get("zone")
+        lane_index = self.lane_index
+        retask = (
+            self._flying_lanes
+            and self._is_flying()
+            and self._land_reason is None
+            and not self._worker_alive()
+        )
+        if retask:
+            retask = self._launch("lanes")
+        return lane_index, retask
+
+    def _refuse_lanes(self, reason: str, lanes_total: int, **fields: Any) -> bool:
+        """Log a refused lane plan and tell the ground with a ``nack``. Returns False."""
+        self._log.warning("edge_assign_lanes_refused", drone_id=self.drone_id, reason=reason, **fields)
+        self._emit({
+            "type": "nack",
+            "for": "assign_lanes",
+            "drone_id": self.drone_id,
+            "reason": reason,
+            "lanes_total": lanes_total,
+        })
+        return False
 
     def _carried_step(
         self, lanes: list[tuple[str, int]], moves: list[tuple[int, int, str, int]]

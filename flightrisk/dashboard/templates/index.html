@@ -2023,6 +2023,9 @@
         <div id="fleet-body">
             <div id="fleet-banner"></div>
             <div id="fleet-error" style="display:none;color:var(--red);font-weight:600;margin-bottom:6px;"></div>
+            <!-- build:t25 start -->
+            <div id="fleet-uncovered" style="display:none;border:1px solid var(--red);color:var(--red);border-radius:4px;padding:4px 6px;margin-bottom:6px;max-height:120px;overflow-y:auto;font-family:var(--font-mono);font-size:11px;"></div>
+            <!-- build:t25 end -->
             <div id="search-map"></div>
             <table id="fleet-panel">
                 <thead><tr><th>Drone</th><th>Bat</th><th>Alt cm</th><th>Lane</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
@@ -3363,6 +3366,65 @@
             else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
             else if (kind) showFleetBanner(String(kind));
         });
+
+        // build:t25 start
+        // Re-tasked lanes that no drone has accepted. Each stays listed until a
+        // retask event reports it accepted or a new plan replaces the mission,
+        // so a gap in the search is never silent.
+        let uncoveredLanes = {};
+
+        function markLanes(lostId, lanes, status) {
+            (lanes || []).forEach(l => {
+                if (!l || l.index === undefined) return;
+                const key = String(lostId) + ':' + l.index;
+                if (status === null) delete uncoveredLanes[key];
+                else uncoveredLanes[key] = Object.assign({}, l, { lost_id: lostId, status: status });
+            });
+        }
+
+        function renderUncovered() {
+            const box = document.getElementById('fleet-uncovered');
+            const keys = Object.keys(uncoveredLanes);
+            box.innerHTML = '';
+            box.style.display = keys.length ? 'block' : 'none';
+            if (!keys.length) return;
+            const failed = keys.filter(k => uncoveredLanes[k].status === 'uncovered').length;
+            const head = document.createElement('div');
+            head.style.fontWeight = '700';
+            head.textContent = 'NOT SEARCHED: ' + failed + ' lane' + (failed === 1 ? '' : 's') + ' uncovered, '
+                + (keys.length - failed) + ' awaiting a drone';
+            box.appendChild(head);
+            keys.forEach(k => {
+                const e = uncoveredLanes[k];
+                const row = document.createElement('div');
+                const where = '(' + fmt(e.x_cm) + ', ' + fmt(e.y_cm) + ') to (' + fmt(e.end_x_cm) + ', ' + fmt(e.end_y_cm) + ') cm';
+                const why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
+                row.textContent = e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why;
+                box.appendChild(row);
+            });
+        }
+
+        socket.on('fleet_event', (ev) => {
+            if (!ev) return;
+            const kind = ev.event || ev.type || ev.kind;
+            if (kind === 'retask_failed') {
+                markLanes(ev.drone_id, ev.lanes, 'uncovered');
+                showFleetBanner('RETASK FAILED: ' + (ev.detail || ev.drone_id || ''));
+            } else if (kind === 'retask') {
+                markLanes(ev.drone_id, ev.lanes, null);
+                markLanes(ev.drone_id, ev.awaiting, 'awaiting');
+            } else {
+                return;
+            }
+            renderUncovered();
+        });
+
+        socket.on('fleet_plan', (plan) => {
+            uncoveredLanes = {};
+            ((plan && plan.uncovered) || []).forEach(u => { if (u) markLanes(u.drone_id, [u], 'uncovered'); });
+            renderUncovered();
+        });
+        // build:t25 end
 
         socket.on('status', (data) => {
             const badge = document.getElementById('appearance-only-badge');

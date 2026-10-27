@@ -3,12 +3,16 @@
 Real-time web UI showing drone video feed, detection overlays,
 match alerts, drone telemetry, and search controls.
 
-Runs on http://localhost:5555
+Runs on http://127.0.0.1:5555. It binds the loopback address unless
+``--host`` (or ``FLIGHTRISK_DASHBOARD_HOST``) names another one, and it
+refuses a non-loopback bind unless ``FLIGHTRISK_API_KEY`` is set, because
+anyone who can reach the dashboard can start and land the drones.
 """
 
 import base64
 import hmac
 import logging
+import math
 import os
 import secrets
 import threading
@@ -35,6 +39,7 @@ from flightrisk.persistence import SessionDB
 from flightrisk.drone.fleet import DroneFleet
 from flightrisk.drone.controller import DroneController
 from flightrisk.drone.coordinator import FleetCoordinator
+from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk.canon import TargetCanon
 
@@ -135,6 +140,48 @@ def _require_api_key():
     if not hmac.compare_digest(auth.encode(), f"Bearer {_FLIGHTRISK_API_KEY}".encode()):
         return jsonify({"error": "unauthorized"}), 401
     return None
+
+# --- Bind address ---
+#: Environment variable naming the dashboard's bind address (``--host``).
+DASHBOARD_HOST_ENV = "FLIGHTRISK_DASHBOARD_HOST"
+
+#: The dashboard serves this machine only unless another host is named.
+DEFAULT_DASHBOARD_HOST = "127.0.0.1"
+
+#: Hosts that keep the dashboard on this machine: the same set the edge
+#: transport treats as loopback before it requires a token
+#: (``flightrisk/transport.py``).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def resolve_dashboard_host(host: str | None = None) -> str:
+    """The dashboard bind address: ``host``, else ``FLIGHTRISK_DASHBOARD_HOST``, else 127.0.0.1."""
+    for candidate in (host, os.environ.get(DASHBOARD_HOST_ENV)):
+        if candidate is not None and str(candidate).strip():
+            return str(candidate).strip()
+    return DEFAULT_DASHBOARD_HOST
+
+
+def check_dashboard_bind(host: str) -> None:
+    """Refuse a non-loopback bind unless the dashboard API key is configured.
+
+    This mirrors the edge transport, which refuses a non-loopback bind
+    without ``FLIGHTRISK_EDGE_TOKEN``. Anyone who can reach the dashboard
+    can press Start, which makes real drones take off, so exposing it to a
+    venue or hotspot network requires ``FLIGHTRISK_API_KEY``. With the key
+    set, every REST request (``_require_api_key``) and every Socket.IO
+    connection (``on_connect``) must present it. Raises ``ValueError`` with
+    an operator-facing message.
+    """
+    if host in _LOOPBACK_HOSTS or _FLIGHTRISK_API_KEY:
+        return
+    raise ValueError(
+        f"Refusing to bind the dashboard to non-loopback host {host!r} without "
+        f"authentication: anyone on that network could start or land the drones. "
+        f"Set FLIGHTRISK_API_KEY so every client must present the key, or bind a "
+        f"loopback host (the default, {DEFAULT_DASHBOARD_HOST})."
+    )
+
 
 # Flask auto-instrumentation (optional)
 try:
@@ -343,6 +390,31 @@ FLEET_LOSS_TIMEOUT_S = 5.0
 #: refused the takeoff).
 FLEET_TAKEOFF_GRACE_S = 15.0
 
+#: Seconds a re-task waits for the receiving drones to accept or refuse
+#: their new lanes before the ``retask`` event is sent. Later answers are
+#: reported in further ``retask`` or ``retask_failed`` events.
+FLEET_RETASK_WAIT_S = 2.0
+
+
+def fleet_geofence_cm() -> float:
+    """The edges' geofence half-width in cm, read like ``SafetyEnvelope.from_env``.
+
+    The ground station plans re-tasked lanes against the same
+    ``FLIGHTRISK_GEOFENCE_CM`` the edges enforce, so it only offers lanes a
+    drone can accept. Raises ``ValueError`` for a value that is not a
+    positive number.
+    """
+    raw = os.environ.get(GEOFENCE_CM_ENV, "").strip()
+    if not raw:
+        return float(DEFAULT_GEOFENCE_CM)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{GEOFENCE_CM_ENV} must be a positive number, got {raw!r}")
+    return value
+
 
 class TransportEdgeLink:
     """``EdgeLink`` for one drone over the dashboard's ``GroundTransportSync``.
@@ -424,16 +496,19 @@ class FleetSupervisor:
     """Runs one ``FleetCoordinator`` over the dashboard's ground transport.
 
     The supervisor builds one ``TransportEdgeLink`` per configured drone id
-    and a coordinator over those links. It routes each edge's ``ack`` and
-    ``telemetry`` messages (the transport's ``on_control``) and its
+    and a coordinator over those links. It routes each edge's ``ack``,
+    ``nack`` and ``telemetry`` messages (the transport's ``on_control``) and its
     detections (the transport's ``on_message``) to the coordinator, forwards
     the coordinator's ``fleet_detection`` and ``fleet_event`` events to the
     browser, emits ``fleet_status`` and ``fleet_plan``, declares a drone lost
     when it drops out of a started mission so its lanes are re-tasked, and
     carries the coordinator half of LAND ALL.
 
-    ``plan()`` and ``start()`` block on clock sync, so callers run them on a
-    worker thread, never on a transport delivery thread.
+    ``plan()`` and ``start()`` block on clock sync, and ``check_losses()``
+    blocks while a re-task waits for answers, so callers run them on a
+    worker thread, never on a transport delivery thread. Re-tasked lanes are
+    planned against ``geofence_cm`` (by default ``FLIGHTRISK_GEOFENCE_CM``,
+    the value the edges enforce).
     """
 
     def __init__(
@@ -451,6 +526,8 @@ class FleetSupervisor:
         takeoff_grace_s: float = FLEET_TAKEOFF_GRACE_S,
         send_timeout_s: float = FLEET_SEND_TIMEOUT_S,
         ping_timeout_s: float = FLEET_PING_TIMEOUT_S,
+        geofence_cm: float | None = None,
+        retask_wait_s: float = FLEET_RETASK_WAIT_S,
     ):
         self.net = net
         self._transport = transport
@@ -469,6 +546,8 @@ class FleetSupervisor:
             alt_slots_cm=alt_slots_cm,
             clock=self._clock,
             on_event=self._on_coordinator_event,
+            geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
+            retask_wait_s=retask_wait_s,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -518,7 +597,7 @@ class FleetSupervisor:
     # -- Messages from the edges --------------------------------------------
 
     def handle_control(self, msg: dict) -> None:
-        """Route one ``ack`` or ``telemetry`` message to its drone's link."""
+        """Route one ``ack``, ``nack`` or ``telemetry`` message to its drone's link."""
         drone_id = msg.get("drone_id")
         link = self.links.get(drone_id)
         if link is None:
@@ -636,9 +715,10 @@ class FleetSupervisor:
         for ``loss_timeout_s``, when it reports landed before finishing its
         lanes (for example after its local land key), or when it has not
         taken off ``takeoff_grace_s`` after the scheduled start. Its unflown
-        lanes are handed to the remaining drones by
+        lanes are offered to the remaining drones by
         ``FleetCoordinator.on_drone_lost``, which also emits the
-        ``drone_lost`` and ``retask`` events. Returns the drones declared
+        ``drone_lost``, ``retask`` and ``retask_failed`` events and waits up
+        to ``retask_wait_s`` for the drones' answers. Returns the drones declared
         lost by this call. The check is skipped while ``plan()`` or
         ``start()`` runs, so it never marks a drone of a new plan lost.
         """
@@ -1098,7 +1178,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                         )
 
         def _on_edge_control(msg):
-            # Edge ack and telemetry messages, on a transport executor thread.
+            # Edge ack, nack and telemetry messages, on a transport executor thread.
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 supervisor.handle_control(msg)
@@ -1942,7 +2022,7 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host=None):
     """Start the dashboard server.
 
     Args:
@@ -1951,7 +2031,21 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
             WebSocket URL, video path).
         target_path: Path to a reference photo of the target.
         port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
+        host: Bind address. Defaults to ``FLIGHTRISK_DASHBOARD_HOST``, then
+            127.0.0.1. A non-loopback address requires ``FLIGHTRISK_API_KEY``.
+
+    Raises:
+        ValueError: The bind address is not loopback and no API key is
+            configured. Nothing is started in that case.
     """
+    host = resolve_dashboard_host(host)
+    # Checked before anything starts, so a refused bind connects to no drone.
+    check_dashboard_bind(host)
+    if host not in _LOOPBACK_HOSTS:
+        log.warning(
+            "Dashboard bound to non-loopback host %s; every client must present FLIGHTRISK_API_KEY",
+            host,
+        )
     if port is None:
         port = get_config().dashboard.port
     app_state.running = True
@@ -1966,5 +2060,6 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None):
     frame_thread.start()
 
     if app_state.logger:
-        app_state.logger.info("dashboard_started", url=f"http://localhost:{port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+        url_host = f"[{host}]" if ":" in host else host
+        app_state.logger.info("dashboard_started", url=f"http://{url_host}:{port}", host=host)
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
