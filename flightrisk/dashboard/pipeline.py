@@ -23,16 +23,53 @@ from flightrisk.dashboard.state import (
     app_state,
     fleet_lock,
     match_history_lock,
-    alerted_tracks,
     gemma_queue,
     gemma_last_call,
     GEMMA_RATE_LIMIT,
 )
 from flightrisk.dashboard.alerts import (
     _compute_track_key,
-    _is_within_alert_cooldown,
     _save_match_snapshot,
 )
+from flightrisk.dashboard.alert_latch import alert_latch
+
+
+def _emit_due_reminder(socketio, log=None):
+    """Re-announce the outstanding match alert if nobody has answered it.
+
+    Emits ``match_alert_reminder`` carrying the *same* alert id, so the UI
+    re-shows the existing pop-up instead of counting a new match.
+    """
+    reminder = alert_latch.due_renotify()
+    if reminder is None:
+        return
+    if log:
+        log.warning(
+            "match_alert_unanswered",
+            alert_id=reminder.get("alert_id"),
+            renotify_count=reminder.get("renotify_count"),
+        )
+    socketio.emit("match_alert_reminder", reminder)
+
+
+def _pause_search_for_alert(socketio, alert_level):
+    """Hover and pause the search pattern while the operator decides.
+
+    The search executor waits between waypoints while the latch is awaiting a
+    response; Dismiss resumes it, Confirm stops it.
+    """
+    if not app_state.search_active:
+        return
+    with fleet_lock:
+        fleet = app_state.fleet
+        drone = fleet.primary if fleet else None
+    if drone:
+        try:
+            drone.hover()
+        except Exception as e:  # noqa: BLE001 -- best effort; the executor also holds position
+            if app_state.logger:
+                app_state.logger.warning("search_pause_hover_failed", error=str(e))
+    socketio.emit("search_paused", {"reason": "match_found", "alert_level": alert_level})
 
 
 def _build_track_id_by_bbox(tracked_detections, detections):
@@ -83,6 +120,7 @@ def _frame_loop(socketio):
     while app_state.running:
         try:
             frame_start = time.time()
+            _emit_due_reminder(socketio, log)
 
             frame = None
             with fleet_lock:
@@ -125,15 +163,19 @@ def _frame_loop(socketio):
             reid_score = 0.0
             face_score = 0.0
             has_target = app_state.target_photo is not None
+            # While a match alert awaits the operator (or after a confirmed
+            # match) no matching, scoring or LLM work runs. Detection and
+            # tracking keep going so the video overlay stays live.
+            matching_on = alert_latch.matching_allowed()
 
-            if app_state.reid and has_target and detections:
+            if app_state.reid and has_target and detections and matching_on:
                 match_idx, reid_score = app_state.reid.find_match(detections)
                 if reid_score > 0 and log and time.time() - last_detection_log >= 5:
                     log.info("reid_score", score=round(reid_score, 3), matched=(match_idx is not None))
 
             # Face recognition matching
             face_match_idx = None
-            if app_state.face and app_state.face.has_target and detections:
+            if app_state.face and app_state.face.has_target and detections and matching_on:
                 face_match_idx, face_score = app_state.face.find_match(detections)
                 if metrics:
                     metrics.record_face_check(face_match_idx is not None)
@@ -200,18 +242,6 @@ def _frame_loop(socketio):
 
                 if log:
                     log.scoring(combined=match_score, reid=det_reid, face=det_face, alert=current_alert_level)
-                # Auto-stop search and hover on confirmed or possible match
-                if current_alert_level in ("confirmed_match", "possible_match") and app_state.search_active:
-                    app_state.search_active = False
-                    with fleet_lock:
-                        fleet = app_state.fleet
-                        drone = fleet.primary if fleet else None
-                    if drone:
-                        try:
-                            drone.hover()
-                        except Exception:
-                            pass
-                    socketio.emit("search_complete", {"reason": "match_found", "alert_level": current_alert_level})
 
                 # Fire the initial alert immediately from ReID + face scores alone --
                 # never wait on Gemma (2-5s per call) to tell the operator about a
@@ -223,67 +253,70 @@ def _frame_loop(socketio):
                     bbox = detections[match_idx]["bbox"]
                     track_key = _compute_track_key(bbox)
 
-                    # --- Alert throttle: skip writes / emits if we already
-                    # alerted for this spatial track within ALERT_COOLDOWN.
-                    now_alert = time.time()
-                    if _is_within_alert_cooldown(track_key, now_alert):
-                        # Still within cooldown -- only try to queue Gemma
-                        # reasoning (it has its own separate rate-limit).
-                        if app_state.reasoning:
-                            if now_alert - gemma_last_call.get(track_key, 0) >= GEMMA_RATE_LIMIT:
-                                ref_img = cv2.imread(app_state.target_photo_path)
-                                if ref_img is not None:
-                                    gemma_last_call[track_key] = now_alert
-                                    try:
-                                        gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy()))
-                                    except queue.Full:
-                                        pass
-                    else:
-                        # Cooldown expired (or first alert) -- full alert path.
-                        alerted_tracks[track_key] = now_alert
+                    # --- Single-alert latch: only the first unsuppressed match
+                    # opens an alert; everything else is dropped until the
+                    # operator confirms or dismisses it.
+                    candidate_keys = [f"grid:{track_key}"]
+                    if match_track_id is not None:
+                        candidate_keys.append(f"track:{match_track_id}")
+                    alert_id = alert_latch.try_open(candidate_keys)
+                    if alert_id is not None:
+                        try:
+                            now_alert = time.time()
+                            # Hover and pause the search pattern while the
+                            # operator decides (previously the search was stopped
+                            # outright on every match).
+                            _pause_search_for_alert(socketio, current_alert_level)
 
-                        snapshot_b64 = None
-                        if candidate_crop is not None and candidate_crop.size > 0:
-                            _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                            snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+                            snapshot_b64 = None
+                            if candidate_crop is not None and candidate_crop.size > 0:
+                                _, sbuf = cv2.imencode(".jpg", candidate_crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                                snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
 
-                        match_type = "face" if (face_score > reid_score and face_match_idx is not None) else "reid"
-                        if metrics:
-                            metrics.record_match(match_type, match_score)
-                        if log:
-                            log.match(score=match_score, match_type=match_type)
+                            match_type = "face" if (face_score > reid_score and face_match_idx is not None) else "reid"
+                            if metrics:
+                                metrics.record_match(match_type, match_score)
+                            if log:
+                                log.match(score=match_score, match_type=match_type)
 
-                        match_entry = {
-                            "time": time.strftime("%H:%M:%S"),
-                            "score": round(match_score, 3),
-                            "gemma_match": None,
-                            "gemma_confidence": "pending" if app_state.reasoning else None,
-                            "reasoning": "Awaiting Gemma reasoning..." if app_state.reasoning else None,
-                            "snapshot": snapshot_b64,
-                            "type": "photo",
-                            "face_score": round(face_score, 3),
-                            "reid_score": round(reid_score, 3),
-                            "alert_level": current_alert_level,
-                            "track_id": track_key,
-                        }
+                            match_entry = {
+                                "time": time.strftime("%H:%M:%S"),
+                                "score": round(match_score, 3),
+                                "gemma_match": None,
+                                "gemma_confidence": "pending" if app_state.reasoning else None,
+                                "reasoning": "Awaiting Gemma reasoning..." if app_state.reasoning else None,
+                                "snapshot": snapshot_b64,
+                                "type": "photo",
+                                "face_score": round(face_score, 3),
+                                "reid_score": round(reid_score, 3),
+                                "alert_level": current_alert_level,
+                                "track_id": track_key,
+                                "alert_id": alert_id,
+                            }
 
-                        if app_state.db and app_state.session_id:
-                            match_id = app_state.db.add_match(
-                                session_id=app_state.session_id,
-                                match_type=match_type,
-                                reid_score=reid_score,
-                                face_score=face_score,
-                                combined_score=match_score,
-                                gemma_match=False,
-                                gemma_confidence=None,
-                                reasoning=None,
-                            )
-                            match_entry["match_id"] = match_id
+                            if app_state.db and app_state.session_id:
+                                match_id = app_state.db.add_match(
+                                    session_id=app_state.session_id,
+                                    match_type=match_type,
+                                    reid_score=reid_score,
+                                    face_score=face_score,
+                                    combined_score=match_score,
+                                    gemma_match=False,
+                                    gemma_confidence=None,
+                                    reasoning=None,
+                                )
+                                match_entry["match_id"] = match_id
 
-                        with match_history_lock:
-                            app_state.match_history.append(match_entry)
-                            app_state.match_history = app_state.match_history[-50:]
-                        socketio.emit("match_alert", match_entry)
+                            with match_history_lock:
+                                app_state.match_history.append(match_entry)
+                                app_state.match_history = app_state.match_history[-50:]
+                            alert_latch.attach(alert_id, match_entry)
+                            socketio.emit("match_alert", match_entry)
+                        except Exception:
+                            # Never leave the latch claimed by an alert the
+                            # operator never saw; the next frame retries.
+                            alert_latch.abort(alert_id)
+                            raise
                         _save_match_snapshot(frame, candidate_crop, match_score, None)
                         if otel_m:
                             otel_m.record_match(match_score, match_type=match_type)
@@ -307,6 +340,7 @@ def _frame_loop(socketio):
             # never blocks the frame loop.
             if (
                 match_idx is None
+                and matching_on
                 and app_state.target_description
                 and app_state.reasoning
                 and detections
