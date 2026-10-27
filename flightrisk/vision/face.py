@@ -25,6 +25,7 @@ Requires: pip install insightface onnxruntime
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 
 import cv2
@@ -51,6 +52,12 @@ WARN_REF_BLUR = 60.0      # Laplacian variance of the aligned 112px face
 MIN_PROBE_SIDE = 24       # crops smaller than this cannot hold a usable face
 TOP_REGION_ASPECT = 1.5   # crops taller than this are searched in their top part
 TOP_REGION_FRACTION = 0.6
+
+# Per-track cache safety: a track id unseen for this many find_match calls is
+# treated as a new person (trackers can recycle ids), and a new observation that
+# is nearly orthogonal to the track's aggregate means the id switched people.
+TRACK_STALE_CALLS = 60
+TRACK_SWITCH_SIM = 0.1
 
 
 def _providers() -> list[str]:
@@ -196,6 +203,9 @@ class FaceRecognizer:
         self._tracks: dict[int, _TrackFace] = {}
         self._call = 0
         self._memo: dict[int, tuple[np.ndarray, float]] = {}
+        # Pipeline thread (find_match) and socket threads (set_target, ...)
+        # share this object and the single SCRFD detector.
+        self._lock = threading.RLock()
 
         # Detection + recognition only: landmark_3d_68 / landmark_2d_106 /
         # genderage are never used and cost ~2x the whole pipeline.
@@ -312,7 +322,8 @@ class FaceRecognizer:
             or extraction fails.
         """
         try:
-            return self._best_face_embedding(crop)
+            with self._lock:
+                return self._best_face_embedding(crop)
         except Exception:
             logger.warning("face_embedding_failed", exc_info=True)
             return None
@@ -344,8 +355,25 @@ class FaceRecognizer:
 
         Returns:
             True if a usable face was found and enrolled, False otherwise
-            (the previous target is kept on failure).
+            (the face target is cleared on failure).
         """
+        with self._lock:
+            try:
+                ok = self._enrol(image)
+            except Exception:
+                logger.warning("face_target_failed", exc_info=True)
+                rep = self.target_report
+                rep.ok, rep.reason = False, "error"
+                rep.message = "The reference photo could not be processed."
+                ok = False
+            if not ok:
+                # Other recognisers (ReID, canon) already switched to the new
+                # photo; keeping the previous child's face would silently match
+                # the wrong person, so a failed enrolment clears the face target.
+                self._reset_target()
+            return ok
+
+    def _enrol(self, image: np.ndarray) -> bool:
         rep = TargetReport()
         self.target_report = rep
         if image is None or getattr(image, "size", 0) == 0:
@@ -426,6 +454,10 @@ class FaceRecognizer:
 
     def clear_target(self):
         """Clear the current target embedding."""
+        with self._lock:
+            self._reset_target()
+
+    def _reset_target(self) -> None:
         self._target_embedding = None
         self._target_templates = None
         self._tracks.clear()
@@ -456,19 +488,22 @@ class FaceRecognizer:
         Returns:
             Cosine similarity (0-1), or 0.0 if no face found in crop.
         """
-        if self._target_embedding is None:
-            return 0.0
-        hit = self._memo.get(id(crop))
-        if hit is not None and hit[0] is crop:
-            return hit[1]
-        obs = self._observe(crop)
-        if obs is None:
-            return 0.0
-        return max(0.0, self._similarity(obs.embedding))
+        with self._lock:
+            if self._target_embedding is None:
+                return 0.0
+            hit = self._memo.get(id(crop))
+            if hit is not None and hit[0] is crop:
+                return hit[1]
+            obs = self._observe(crop)
+            if obs is None:
+                return 0.0
+            return max(0.0, self._similarity(obs.embedding))
 
     def _track_score(self, tid: int, crop: np.ndarray) -> float:
         """Score a crop through its track's aggregated face template."""
-        tr =self._tracks.get(tid)
+        tr = self._tracks.get(tid)
+        if tr is not None and self._call - tr.last_call > TRACK_STALE_CALLS:
+            tr = None  # recycled / long-gone id: start fresh
         if tr is None:
             if len(self._tracks) >= self.track_max:
                 oldest = min(self._tracks, key=lambda t: self._tracks[t].last_call)
@@ -487,6 +522,8 @@ class FaceRecognizer:
                 tr.misses += 1
             else:
                 tr.misses = 0
+                if tr.obs and float(_l2(np.sum([o[1] for o in tr.obs], axis=0)) @ obs.embedding) < TRACK_SWITCH_SIM:
+                    tr.obs.clear()  # track id jumped to a different person
                 tr.obs.append((obs.quality, obs.embedding))
                 tr.obs.sort(key=lambda o: -o[0])
                 del tr.obs[self.track_top_k:]
@@ -513,6 +550,10 @@ class FaceRecognizer:
         Returns:
             (index, score) of best face match, or (None, 0.0) if none.
         """
+        with self._lock:
+            return self._find_match(detections)
+
+    def _find_match(self, detections: list[dict]) -> tuple[int | None, float]:
         if self._target_embedding is None or not detections:
             return None, 0.0
 

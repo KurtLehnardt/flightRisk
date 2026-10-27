@@ -4,6 +4,8 @@ The InsightFace models are replaced by a stub `_observe`, so these run
 without any model download.
 """
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -44,6 +46,7 @@ def _make(target):
     r._tracks = {}
     r._call = 0
     r._memo = {}
+    r._lock = threading.RLock()
     r.calls = 0
     return r
 
@@ -178,3 +181,74 @@ class TestTargetReport:
         rep = TargetReport(ok=False, reason="no_face", message="m", warnings=["w"])
         d = rep.as_dict()
         assert d["reason"] == "no_face" and d["warnings"] == ["w"] and d["ok"] is False
+
+
+class TestRobustness:
+    def test_recycled_track_id_starts_fresh(self):
+        t = _unit(1)
+        r = _make(t)
+        r._observe = lambda c: _obs(t)
+        crop = np.zeros((80, 40, 3), np.uint8)
+        r.find_match([{"crop": crop, "track_id": 5}])
+        r._call += face_mod.TRACK_STALE_CALLS + 5
+        other = _unit(7)
+        r._observe = lambda c: _obs(other)
+        _, s = r.find_match([{"crop": crop, "track_id": 5}])
+        assert s < 0.2  # not contaminated by the old person's observation
+
+    def test_track_id_switching_person_drops_old_obs(self):
+        t = _unit(1)
+        r = _make(t)
+        crop = np.zeros((80, 40, 3), np.uint8)
+        r._observe = lambda c: _obs(t)
+        for _ in range(3):
+            r.find_match([{"crop": crop, "track_id": 2}])
+        other = _unit(9)
+        r._observe = lambda c: _obs(other)
+        for _ in range(4):  # refresh becomes due
+            _, s = r.find_match([{"crop": crop, "track_id": 2}])
+        assert s < 0.2 and len(r._tracks[2].obs) == 1
+
+    def test_failed_enrolment_clears_target(self):
+        r = _make(_unit(1))
+        r._detect_reference = lambda img: (np.empty((0, 5)), np.empty((0, 5, 2)))
+        assert r.set_target(np.zeros((100, 100, 3), np.uint8)) is False
+        assert not r.has_target and r._target_templates is None
+        assert r.target_report.reason == "no_face"
+
+    def test_enrolment_exception_clears_target(self):
+        r = _make(_unit(1))
+
+        def boom(img):
+            raise RuntimeError("onnx")
+
+        r._detect_reference = boom
+        assert r.set_target(np.zeros((100, 100, 3), np.uint8)) is False
+        assert not r.has_target and r.target_report.reason == "error"
+
+    def test_concurrent_clear_and_match_do_not_crash(self):
+        t = _unit(1)
+        r = _make(t)
+        r._observe = lambda c: _obs(t)
+        crop = np.zeros((80, 40, 3), np.uint8)
+        errs = []
+
+        def match():
+            try:
+                for i in range(300):
+                    r.find_match([{"crop": crop, "track_id": i % 3}])
+                    r.compare(crop)
+            except Exception as e:  # pragma: no cover
+                errs.append(e)
+
+        def churn():
+            for _ in range(300):
+                r.clear_target()
+                with r._lock:
+                    r._target_embedding = t
+                    r._target_templates = t[None, :]
+
+        th = [threading.Thread(target=match), threading.Thread(target=churn)]
+        [x.start() for x in th]
+        [x.join() for x in th]
+        assert not errs

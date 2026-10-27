@@ -95,16 +95,15 @@ class TestEnrolmentReport:
         assert any("faces found" in w for w in rep.warnings)
         assert np.isclose(np.linalg.norm(face.target_embedding), 1.0, atol=1e-4)
 
-    def test_tiny_face_is_rejected_with_message_and_keeps_old_target(self, face, sample_photo):
+    def test_tiny_face_is_rejected_with_message_and_clears_old_target(self, face, sample_photo):
         import cv2
 
         assert face.set_target(sample_photo)
-        before = face.target_embedding.copy()
         tiny = cv2.resize(sample_photo, None, fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
         assert face.set_target(tiny) is False
         assert face.target_report.reason in ("face_too_small", "no_face")
         assert face.target_report.message
-        assert np.allclose(face.target_embedding, before)
+        assert not face.has_target  # stale target must not linger
 
     def test_no_face_report(self, face):
         noise = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
