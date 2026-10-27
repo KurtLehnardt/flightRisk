@@ -131,7 +131,9 @@ The sweep's rule picks the lowest `min_person_px`, then the highest overall F1. 
 - Training: `yolo11s.pt` (COCO) fine-tuned for 20 epochs, imgsz 640, batch 16, on `mps`, with Ultralytics 8.4.101 defaults otherwise (AdamW chosen automatically, mosaic off for the last 10 epochs). It took 51 minutes on the M1 Max. At the last epoch, Ultralytics reported mAP50 0.824 and mAP50-95 0.506 on the val tiles. The weights are `models/heridal_yolo11s.pt`, which is gitignored and not committed.
 - Confidence: the evaluate step ran the 50 validation images tiled at 0.1, 0.25, 0.4 and 0.5, a list fixed before any test run, and kept the highest overall F1. It chose 0.5 (validation recall 0.740, precision 0.701, F1 0.720). F1 was still rising at 0.5, the top of the list. Higher thresholds were not tried, so the test split was scored once.
 
-**Coverage at the measured value.** This is `python -m flightrisk.drone.coverage --min-px 24`:
+**Coverage at the measured values.** Both tables are the real output of `python -m flightrisk.drone.coverage`, run at the two values from the evidence above.
+
+`--min-px 24` is the best fine-tuned result, but it rests on only 7 persons (4 found), so treat it as the optimistic reading:
 
 | preset | n | alt_m | lane_m | hours |
 |---|---|---|---|---|
@@ -139,16 +141,33 @@ The sweep's rule picks the lowest `min_person_px`, then the highest overall F1. 
 | Ground team | 2 | 0.0 | 30.0 | 28.778 |
 | Ground team | 3 | 0.0 | 30.0 | 19.185 |
 | Ground team | 5 | 0.0 | 30.0 | 11.511 |
-| Tello | 1 | 104.5 | 146.9 | 0.772 |
-| Tello | 2 | 104.5 | 146.9 | 0.386 |
-| Tello | 3 | 104.5 | 146.9 | 0.257 |
-| Tello | 5 | 104.5 | 146.9 | 0.154 |
+| Tello | 1 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 2 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 3 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 5 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
 | Open quad 4K | 1 | 120.0 | 202.3 | 0.318 |
 | Open quad 4K | 2 | 120.0 | 202.3 | 0.159 |
 | Open quad 4K | 3 | 120.0 | 202.3 | 0.106 |
 | Open quad 4K | 5 | 120.0 | 202.3 | 0.064 |
 
-Hours are for one square mile. At 24 px, the open quad reaches the planner's 120 m regulatory ceiling; its camera alone would allow a higher altitude. At the conservative 32 px (`--min-px 32`), one Tello flies at 78.4 m and takes 0.989 h, and one open quad flies at 96.8 m and takes 0.398 h. Ground team figures and the open quad's speed and endurance carry the assumptions the planner prints.
+`--min-px 32` is the solid value: the [32,48) bin has 108 persons and a 95% interval clear of 0.5, so treat it as the conservative reading:
+
+| preset | n | alt_m | lane_m | hours |
+|---|---|---|---|---|
+| Ground team | 1 | 0.0 | 30.0 | 57.555 |
+| Ground team | 2 | 0.0 | 30.0 | 28.778 |
+| Ground team | 3 | 0.0 | 30.0 | 19.185 |
+| Ground team | 5 | 0.0 | 30.0 | 11.511 |
+| Tello | 1 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 2 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 3 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 5 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Open quad 4K | 1 | 96.8 | 163.2 | 0.398 |
+| Open quad 4K | 2 | 96.8 | 163.2 | 0.199 |
+| Open quad 4K | 3 | 96.8 | 163.2 | 0.133 |
+| Open quad 4K | 5 | 96.8 | 163.2 | 0.08 |
+
+Hours are for one square mile. Tello rows are marked INFEASIBLE instead of given a time: the Tello's published maximum flight height is 30 m and its published maximum flight distance is 100 m (https://www.ryzerobotics.com/tello/specs, checked 2026-10-27), and covering a square mile from a central launch point needs about 1,138 m of range. The Tello's altitude is capped at 30 m, not the altitude the detector threshold alone would allow. Ground team figures and the open quad's speed and endurance carry the assumptions the planner prints. At 24 px the open quad reaches the planner's 120 m regulatory ceiling; its camera alone would allow a higher altitude.
 
 **What changed for the pitch.** t11 had no measured altitude. A yolo11s fine-tuned on 400 HERIDAL train images, run tiled, reaches 0.5 recall from 24 px on 7 persons, and from 32 px with a 95% interval clear of 0.5 on 108 persons, at precision 0.83. It still misses about 4 in 10 persons at every height. The coverage hours are therefore the time to sweep the area once at that recall, not the time to find everyone.
 
