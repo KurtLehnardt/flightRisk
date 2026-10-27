@@ -251,9 +251,11 @@ $env:FLIGHTRISK_FLEET_NET = "ap"
 
 In AP mode the script fixes `FLIGHTRISK_TELLO_HOST` to 192.168.10.1 on both hosts and `FLIGHTRISK_EDGE_HOST` to the bind list `127.0.0.1,10.42.0.1` (loopback first, then the cable address; never a wildcard). The ground station needs `FLIGHTRISK_EDGE_TOKEN` because one of those addresses is not loopback. If the cable address is missing at start, the ground station listens on loopback only and retries.
 
-`FLIGHTRISK_EDGE_WS` depends on where the edge runs, and you say so explicitly with `FLIGHTRISK_GROUND_LOCAL`. On the Mac, which runs the ground station and edge-1, set `FLIGHTRISK_GROUND_LOCAL=1` before sourcing the script (or before `scripts/demo_edge.sh`) and `FLIGHTRISK_EDGE_WS` becomes `ws://127.0.0.1:9000`. On Windows leave it unset and `FLIGHTRISK_EDGE_WS` is `ws://10.42.0.1:9000`. Nothing guesses: without the variable every edge dials `ws://10.42.0.1:9000`, as before. Station mode ignores the variable.
+`FLIGHTRISK_EDGE_WS` depends on where the edge runs, and you say so explicitly with `FLIGHTRISK_GROUND_LOCAL`. On the Mac, which runs the ground station and edge-1, run `export FLIGHTRISK_GROUND_LOCAL=1` before sourcing the script and `FLIGHTRISK_EDGE_WS` becomes `ws://127.0.0.1:9000`. The variable must be exported, not just set: `scripts/demo_edge.sh` runs as a child process and sources `fleet_env.sh` again, so an unexported variable is lost and the edge would dial the cable address even though the earlier output said loopback. Only the exact value `1` counts; any other non-empty value other than `0` prints a warning and uses the cable address. On the Windows edge-only laptop, never set it. On Windows leave it unset and `FLIGHTRISK_EDGE_WS` is `ws://10.42.0.1:9000`. Nothing guesses: without the variable every edge dials `ws://10.42.0.1:9000`, as before. Station mode ignores the variable.
 
-With this setup, pulling the cable leaves edge-1 on loopback, so it keeps flying or holding. Edge-2 loses its link, hits its watchdog and lands. The ground station logs `ground_bind_address_lost` when 10.42.0.1 disappears and `ground_bind_address_restored` when it returns.
+With this setup, pulling the cable is expected to leave edge-1 on loopback, so it should keep flying or holding, and edge-2 should lose its link, hit its watchdog and land. UNVERIFIED on hardware; step 8 measures it. If 10.42.0.1 goes away (step 6 shows whether it does), the ground station logs `ground_bind_address_lost`, and `ground_bind_address_restored` when it returns.
+
+Precondition: port 9000 on the Mac's 127.0.0.1 must be free, because a loopback bind failure stops the ground station (loudly, before flight). Homebrew's php-fpm is one default that uses it. Check with `lsof -nP -iTCP:9000 -sTCP:LISTEN`; no output means it is free.
 
 ## Path 3: Thunderbolt link
 
@@ -405,9 +407,9 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 - Mac: start the ground station with `scripts/demo_ground.sh` (it binds `127.0.0.1,10.42.0.1`), then fake edge-1 over loopback: `python -m flightrisk.edge_device --source fake --drone-id drone-1 --ws-url ws://127.0.0.1:9000`
 - Windows: start fake edge-2 with `--drone-id drone-2 --ws-url ws://10.42.0.1:9000`.
 - In the dashboard run Plan, then Start. Pull the cable while the fake drones fly their lanes.
-- Expected: edge-2 logs `edge_link_lost` and lands after about 3 seconds. The ground marks drone-2 lost after about 5 seconds and gives its lanes to drone-1. The ground logs `ground_bind_address_lost` when 10.42.0.1 goes away and `ground_bind_address_restored` after replugging.
-- Key observation: edge-1 is on `ws://127.0.0.1:9000`, so it should stay connected while the cable is out and keep flying or holding. Confirm that it does. If it drops anyway, record that; a cable pull then lands both drones, which is safe but not graceful. Do not work around it by binding the ground station to `0.0.0.0`.
-- After replugging, time how long edge-2 takes to rejoin. The reconnect delay doubles from 1 second up to a 30 second cap, so expect up to 30 seconds.
+- Expected: edge-2 logs `edge_link_lost` and lands after about 3 seconds. The ground marks drone-2 lost after about 5 seconds and gives its lanes to drone-1. If 10.42.0.1 goes away (step 6), the ground logs `ground_bind_address_lost`, and `ground_bind_address_restored` after replugging; if macOS keeps the address on an inactive interface, neither line appears.
+- Key observation: edge-1 is on `ws://127.0.0.1:9000`, so it should stay connected while the cable is out and keep flying or holding (UNVERIFIED on hardware; this step measures it). Confirm that it does. If it drops anyway, record that; a cable pull then lands both drones, which is safe but not graceful. Do not work around it by binding the ground station to `0.0.0.0`.
+- After replugging, time how long edge-2 takes to rejoin. The reconnect delay doubles from 1 second up to a 2 second cap for fleet edges, so expect a rejoin within a few seconds.
 
 **Step 9. Decide.** Choose a rung from the fallback ladder and write the decision in the results file.
 
@@ -437,7 +439,7 @@ scripts/demo_ground.sh
 FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
 
-(`FLIGHTRISK_GROUND_LOCAL=1` makes edge-1 connect over loopback in AP mode. Station mode ignores it.)
+(`FLIGHTRISK_GROUND_LOCAL=1` as a prefix on the command passes the variable to the launcher and makes edge-1 connect over loopback in AP mode. If you source `scripts/fleet_env.sh` yourself first, `export` the variable. Station mode ignores it.)
 
 On Windows, for edge-2:
 
@@ -457,6 +459,6 @@ Confirming a match on a fleet lands every drone in place with LAND ALL. The Tell
 | `FLIGHTRISK_TELLO_HOST` | discovered drone IP, set by you | 192.168.10.1 |
 | `FLIGHTRISK_EDGE_HOST` | Mac LAN IP | `127.0.0.1,10.42.0.1` |
 | `FLIGHTRISK_EDGE_WS` | `ws://<mac lan ip>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (Mac) |
-| `FLIGHTRISK_GROUND_LOCAL` | ignored | `1` on the Mac (ground station and edge-1), unset on Windows |
+| `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the Mac (ground station and edge-1), unset on Windows |
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |
