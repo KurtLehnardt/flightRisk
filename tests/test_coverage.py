@@ -166,3 +166,23 @@ def test_sweep_model_rejects_bad_parameters():
         SweepModel(height_m=1, width_px=960, height_px=720, hfov_deg=82.6, min_person_px=32, efficiency=1.5)
     with pytest.raises(ValueError):
         SweepModel.for_camera(GROUND_TEAM, 1.0, 32.0)
+
+
+def test_sweep_model_refuses_a_camera_that_is_not_forward_facing():
+    # The open quad's nadir gimbal (-90 degrees) must not be modelled as a forward trapezoid.
+    with pytest.raises(ValueError, match="gimbal pitch"):
+        SweepModel.for_camera(OPEN_QUAD_4K, 30.0, 32.0)
+    assert SweepModel.for_camera(TELLO, 1.0, 32.0).hfov_deg == TELLO.hfov_deg
+
+
+def test_diagonal_fov_reading_narrows_the_view():
+    # UNVERIFIED hardware question: if the Tello's 82.6 degrees is diagonal,
+    # the horizontal half-angle tangent shrinks by 4/5 on a 4:3 frame.
+    horizontal = tello_sweep_model(max_range_m=4.0)
+    diagonal = tello_sweep_model(max_range_m=4.0, fov_is_diagonal=True)
+    assert diagonal.half_tan == pytest.approx(horizontal.half_tan * 0.8)
+    assert horizontal.sweep_width_m / diagonal.sweep_width_m == pytest.approx(1.25)
+    assert diagonal.near_m == pytest.approx(1.9, abs=0.01)
+    assert horizontal.near_m == pytest.approx(1.52, abs=0.01)
+    # Uncapped, the far edge's width is resolution-limited and does not change.
+    assert tello_sweep_model(fov_is_diagonal=True).sweep_width_m == pytest.approx(tello_sweep_model().sweep_width_m)

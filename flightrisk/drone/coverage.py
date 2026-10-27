@@ -53,7 +53,7 @@ class CameraModel:
 
 TELLO = CameraModel(
     name="Tello",
-    width_px=2592,  # Photo mode is 2592x1936; video is 1280x720.
+    width_px=2592,  # Photo mode is 2592x1936. The live video stream is TELLO_VIDEO_WIDTH_PX x TELLO_VIDEO_HEIGHT_PX.
     height_px=1936,
     hfov_deg=82.6,
     gimbal_pitch_deg=0.0,
@@ -133,7 +133,16 @@ class SweepModel:
 
     ``hfov_deg`` is treated as the horizontal field of view and the vertical
     one is derived from the image aspect ratio. Whether the published Tello
-    82.6 degrees is horizontal or diagonal is UNVERIFIED.
+    82.6 degrees is horizontal or diagonal is an UNVERIFIED hardware question.
+    Set ``fov_is_diagonal=True`` to read ``hfov_deg`` as the diagonal field of
+    view instead: the horizontal half-angle tangent then shrinks by
+    ``width / hypot(width, height)`` (0.8 for 4:3). For the Tello at 1 m that
+    moves the near edge from about 1.5 m to about 1.9 m and, when the range is
+    capped (for example ``max_range_m=4`` for a room), makes the sweep about
+    1.25 times narrower. Uncapped, the far edge's width does not change,
+    because the focal length grows by the same factor as the half-angle
+    shrinks. Plans made with the horizontal reading would over-claim coverage
+    if the figure turns out to be diagonal. Rung L1 settles it.
     """
 
     height_m: float
@@ -145,6 +154,7 @@ class SweepModel:
     efficiency: float = 1.0
     max_range_m: float | None = None
     calibrated_sweep_width_m: float | None = None
+    fov_is_diagonal: bool = False
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.height_m) and self.height_m > 0):
@@ -179,9 +189,20 @@ class SweepModel:
         height_px: int | None = None,
         **kwargs,
     ) -> SweepModel:
-        """Build a sweep model from a camera preset, optionally with the video frame size."""
+        """Build a sweep model from a camera preset, optionally with the video frame size.
+
+        Only forward-facing cameras (gimbal pitch 0) are accepted: a nadir or
+        tilted camera does not have this footprint, so it is refused instead
+        of being modelled as forward-facing. Use ``plan_coverage`` for nadir
+        platforms.
+        """
         if camera.is_ground:
             raise ValueError(f"{camera.name} is a ground team and has no camera footprint")
+        if camera.gimbal_pitch_deg != 0:
+            raise ValueError(
+                f"{camera.name} has a gimbal pitch of {camera.gimbal_pitch_deg:g} degrees; SweepModel models only "
+                "a forward-facing camera (pitch 0). Use plan_coverage for a nadir camera."
+            )
         return cls(
             height_m=height_m,
             width_px=width_px if width_px is not None else camera.width_px,
@@ -194,7 +215,10 @@ class SweepModel:
     @property
     def half_tan(self) -> float:
         """tan(HFOV / 2): lateral half-width per metre of distance ahead."""
-        return math.tan(math.radians(self.hfov_deg) / 2)
+        half = math.tan(math.radians(self.hfov_deg) / 2)
+        if self.fov_is_diagonal:
+            half *= self.width_px / math.hypot(self.width_px, self.height_px)
+        return half
 
     @property
     def vfov_deg(self) -> float:
