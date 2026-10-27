@@ -1311,6 +1311,67 @@ def test_local_land_all_lands_every_drone_at_once(tello_on_wire, monkeypatch, ca
 
 
 # ---------------------------------------------------------------------------
+# PR #91 review 2, F4: LAND ALL never waits on a land that does not return
+# ---------------------------------------------------------------------------
+
+
+def test_broadcast_land_reports_a_drone_whose_land_never_returns(monkeypatch):
+    """F4: a land that blocks forever (a MAVLink land waits with no timeout) does not hang LAND ALL.
+
+    drone-1's land never returns; drone-2 lands at once. The broadcast
+    returns at its deadline with drone-1 reported as a RuntimeError and
+    drone-2 as landed, and drone-1's land finishing later does not change
+    the result.
+    """
+    from flightrisk.drone import fleet as fleet_module
+    from flightrisk.drone.fleet import DroneFleet
+
+    deadline_s = 0.5
+    monkeypatch.setattr(fleet_module, "_CALL_DEADLINE_S", deadline_s, raising=False)
+    release = threading.Event()
+
+    class Drone:
+        def __init__(self, name: str, blocks: bool):
+            self.host = name
+            self.blocks = blocks
+            self.landed = threading.Event()
+
+        def connect(self) -> bool:
+            return True
+
+        def land(self) -> None:
+            if self.blocks:
+                release.wait()
+            self.landed.set()
+
+    drones = {"drone-1": Drone("drone-1", blocks=True), "drone-2": Drone("drone-2", blocks=False)}
+    fleet = DroneFleet(factory=lambda name, host: drones[name])
+    assert fleet.register("drone-1", host="drone-1")
+    assert fleet.register("drone-2", host="drone-2")
+
+    outcome: dict = {}
+    broadcaster = threading.Thread(
+        target=lambda: outcome.setdefault("results", fleet.broadcast_command("land")), daemon=True
+    )
+    started = time.monotonic()
+    broadcaster.start()
+    try:
+        broadcaster.join(WAIT_S)
+        assert not broadcaster.is_alive(), "broadcast_command waited for a land that never returns"
+        assert time.monotonic() - started < deadline_s + 2.0
+        results = outcome["results"]
+        assert isinstance(results["drone-1"], RuntimeError)
+        assert "did not finish" in str(results["drone-1"])
+        assert results["drone-2"] is None
+        assert drones["drone-2"].landed.is_set()
+    finally:
+        release.set()
+    assert drones["drone-1"].landed.wait(WAIT_S)
+    time.sleep(0.05)
+    assert isinstance(outcome["results"]["drone-1"], RuntimeError)
+
+
+# ---------------------------------------------------------------------------
 # B1: a stalled uplink cannot delay the link-loss landing
 # ---------------------------------------------------------------------------
 
