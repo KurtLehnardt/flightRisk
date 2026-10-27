@@ -107,7 +107,12 @@ class DroneFleet:
         return result
 
     def broadcast_command(self, command: str, *args, **kwargs) -> dict[str, Exception | None]:
-        """Call `command` on every registered drone.
+        """Call `command` on every registered drone, on every drone at once.
+
+        Each drone's call runs on its own thread, so a drone whose call
+        blocks (for example a land that waits for a drone that never
+        confirms it) does not delay the command to any other drone. This
+        returns once every call has finished.
 
         Unlike a fire-and-forget broadcast, failures are neither raised
         nor silently swallowed — each drone's outcome is reported back so
@@ -117,23 +122,63 @@ class DroneFleet:
         Returns:
             Mapping of drone_id -> None (success) or the Exception raised.
         """
-        results: dict[str, Exception | None] = {}
-        for drone_id, drone in self._drones.items():
-            try:
-                getattr(drone, command)(*args, **kwargs)
-                results[drone_id] = None
-            except Exception as e:
-                logger.error("Command %s failed on %s: %s", command, drone_id, e)
-                results[drone_id] = e
+        with self._lock:
+            drones = list(self._drones.items())
+
+        def call(drone: DroneController) -> None:
+            getattr(drone, command)(*args, **kwargs)
+
+        results = _call_each(drones, call, f"fleet-{command}")
+        for drone_id, error in results.items():
+            if error is not None:
+                logger.error("Command %s failed on %s: %s", command, drone_id, error)
         return results
 
     def disconnect_all(self):
+        """Disconnect every drone, all at once (each disconnect lands a flying drone first)."""
         with self._lock:
-            drones = list(self._drones.values())
+            drones = list(self._drones.items())
             self._drones.clear()
             self._primary_id = None
-        for ctrl in drones:
-            try:
-                ctrl.disconnect()
-            except Exception:
-                pass
+        _call_each(drones, lambda ctrl: ctrl.disconnect(), "fleet-disconnect")
+
+
+def _call_each(
+    drones: list[tuple[str, DroneController]],
+    call: Callable[[DroneController], object],
+    thread_name: str,
+) -> dict[str, Exception | None]:
+    """Run ``call`` on every drone at once, one thread per drone, and wait for all of them.
+
+    Returns drone_id -> None when the call returned, or the exception it
+    raised. A call that ends any other way (a ``BaseException`` that is not
+    an ``Exception``) is reported as a ``RuntimeError``, never as success.
+    If a thread cannot be started, that drone's call runs on the calling
+    thread instead of being skipped.
+    """
+    results: dict[str, Exception | None] = {
+        drone_id: RuntimeError(f"{drone_id}: the call did not finish") for drone_id, _ in drones
+    }
+
+    def run(drone_id: str, drone: DroneController) -> None:
+        try:
+            call(drone)
+        except Exception as e:
+            results[drone_id] = e
+        else:
+            results[drone_id] = None
+
+    threads = []
+    for drone_id, drone in drones:
+        thread = threading.Thread(
+            target=run, args=(drone_id, drone), name=f"{thread_name}-{drone_id}", daemon=True
+        )
+        try:
+            thread.start()
+        except RuntimeError:
+            run(drone_id, drone)
+            continue
+        threads.append(thread)
+    for thread in threads:
+        thread.join()
+    return results

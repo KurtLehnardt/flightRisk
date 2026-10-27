@@ -903,7 +903,9 @@ def _land_all() -> dict:
     written to every connected edge at once; the fleet coordinator, which
     sends ``emergency_land_all`` to each fleet link in turn as belt and
     braces; and ``land`` on every drone of a local fleet (Tello or MAVLink
-    source). The paths run at the same time, each on its own thread, and the
+    source), all drones at once, so a drone whose land is never confirmed
+    does not delay the land to the others (``DroneFleet.broadcast_command``
+    still reports each drone's failure). The paths run at the same time, each on its own thread, and the
     broadcast is started first. A coordinator send that waits out its
     timeout on one stalled link therefore never delays the land order to any
     other drone, and a failure on one path never stops another. A
