@@ -29,7 +29,7 @@ class SourceConfig:
     Groups the source-selection parameters that used to be passed as five
     separate args to ``run_dashboard()`` / ``_init_pipeline()``.
     """
-    source: str = "webcam"
+    source: str = "tello"
     mavlink_address: str = "udp://:14540"
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
@@ -43,6 +43,9 @@ class SourceConfig:
     stream_video: bool = False
     edge_host: str = "127.0.0.1"
     edge_port: int = 9000
+    # -- Reasoning backend: "claude" | "gemma" | "off"; None = config default
+    # (FLIGHTRISK_REASONING_PROVIDER, else "claude").
+    reasoning_provider: str | None = None
 
 
 @dataclass
@@ -79,7 +82,7 @@ class AppState:
     edge_ws: str | None = None
     video_path: str | None = None
 
-    # -- Video capture (webcam / file) --
+    # -- Video capture (file) --
     cap: Any = None
 
     # -- Runtime flags --

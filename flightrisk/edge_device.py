@@ -16,7 +16,7 @@ control messages off the same connection and applies them:
 
 Run it with::
 
-    python -m flightrisk.edge_device --source webcam
+    python -m flightrisk.edge_device --source camera
     python -m flightrisk.edge_device --source file --video path/to/clip.mp4
     FLIGHTRISK_EDGE_TOKEN=secret python -m flightrisk.edge_device --ws-url ws://ground:9000
 
@@ -57,7 +57,7 @@ _TOKEN_ENV_VAR = "FLIGHTRISK_EDGE_TOKEN"
 class CV2FrameSource:
     """Iterable adapter over an OpenCV ``VideoCapture``.
 
-    Yields BGR frames until the capture is exhausted (a webcam that drops
+    Yields BGR frames until the capture is exhausted (a camera that drops
     off, or the end of a video file), then stops. Exposes ``release()`` so
     the core loop can tear the capture down on exit. Kept deliberately thin
     so the heavy cv2 capture object itself is created in ``main()``.
@@ -223,8 +223,8 @@ def _build_source(args: argparse.Namespace, parser: argparse.ArgumentParser, log
     """Construct a real cv2-backed frame source from parsed args."""
     import cv2  # lazy: keep module import light for tests
 
-    if args.source == "webcam":
-        log.info("edge_source_webcam", index=0)
+    if args.source == "camera":
+        log.info("edge_source_camera", index=0)
         return CV2FrameSource(cv2.VideoCapture(0))
 
     # args.source == "file"
@@ -263,8 +263,8 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point for ``python -m flightrisk.edge_device``."""
     parser = argparse.ArgumentParser(description="FlightRisk edge-device program")
     parser.add_argument(
-        "--source", choices=("webcam", "file"), default="webcam",
-        help="Frame source: local webcam (index 0) or a video file",
+        "--source", choices=("camera", "file"), default="camera",
+        help="Frame source: the drone's onboard camera (index 0) or a video file",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
     parser.add_argument(

@@ -55,14 +55,14 @@ class TestHealthRoute:
 class TestStatusRoute:
     def test_status_returns_match_history_and_source(self, client, clean_app_state):
         _state["match_history"] = [{"time": "12:00:00", "score": 0.9}]
-        _state["source"] = "webcam"
+        _state["source"] = "tello"
 
         resp = client.get("/api/status")
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["match_history"] == [{"time": "12:00:00", "score": 0.9}]
-        assert data["source"] == "webcam"
+        assert data["source"] == "tello"
 
 
 class TestSessionMatchesRoute:
@@ -71,7 +71,7 @@ class TestSessionMatchesRoute:
 
     def test_session_detail_returns_matches(self, client, clean_app_state):
         db = MagicMock()
-        db.get_session.return_value = {"id": "s1", "source": "webcam"}
+        db.get_session.return_value = {"id": "s1", "source": "tello"}
         db.get_session_matches.return_value = [{"id": 1, "match_type": "reid"}]
         _state["db"] = db
 
@@ -228,7 +228,7 @@ class TestRestartDashboardSocket:
         monkeypatch.setattr("flightrisk.dashboard.app._init_pipeline", fake_init_pipeline)
         _state["fleet"] = None
         _state["cap"] = None
-        _state["source"] = "webcam"
+        _state["source"] = "tello"
         _state["source_config"] = None
         _state["target_photo_path"] = None
 
@@ -240,7 +240,7 @@ class TestRestartDashboardSocket:
 
         names = [r["name"] for r in received]
         assert "dashboard_restarted" in names
-        assert calls["source"] == "webcam"
+        assert calls["source"] == "tello"
 
     def test_restart_dashboard_disconnects_existing_fleet(self, clean_app_state, monkeypatch):
         monkeypatch.setattr("flightrisk.dashboard.app._init_pipeline", MagicMock())

@@ -164,7 +164,7 @@ class TestSharedConnection:
         """Rows written via SessionDB and via the shared TargetCanon land in
         the same underlying SQLite file/connection."""
         canon = TargetCanon(session_db=session_db)
-        session_id = session_db.create_session(source="webcam")
+        session_id = session_db.create_session(source="tello")
         canon.set_target(_make_image())
 
         # Both should be readable back -- proof they share one connection
@@ -177,7 +177,7 @@ class TestSharedConnection:
         canon.close()
         # The SessionDB's connection must still be usable afterwards --
         # closing the canon must not have closed the shared connection.
-        session_id = session_db.create_session(source="webcam")
+        session_id = session_db.create_session(source="tello")
         assert session_db.get_session(session_id) is not None
 
     def test_close_on_standalone_canon_closes_its_own_connection(self, tmp_path):
