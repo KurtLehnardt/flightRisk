@@ -132,10 +132,11 @@ NACK_REASONS = frozenset({"geofence", "altitude", "battery", "other_drone", "inv
 GROUND_TO_EDGE_TYPES = frozenset(
     {PING, CLOCK, ASSIGN_LANES, START_AT, TAKEOFF, LAND, EMERGENCY_LAND_ALL, HEARTBEAT}
 )
-# The original edge-to-ground set. ``NACK`` also travels edge to ground and is
-# checked by ``validate_message``, but it is kept out of this set, which other
-# modules and their tests treat as fixed.
-EDGE_TO_GROUND_TYPES = frozenset({PONG, TELEMETRY, ACK})
+# Every edge-to-ground fleet message, including ``NACK``, which an edge sends
+# when it refuses a lane assignment. The ground transport delivers ``ACK``,
+# ``NACK`` and ``TELEMETRY`` to its ``on_control`` callback and consumes
+# ``PONG`` itself for clock sync.
+EDGE_TO_GROUND_TYPES = frozenset({PONG, TELEMETRY, ACK, NACK})
 
 # The ground runs this many ping/pong rounds per edge and keeps the median.
 CLOCK_SYNC_ROUNDS = 8

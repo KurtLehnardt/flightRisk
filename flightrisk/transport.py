@@ -27,8 +27,8 @@ rides on the same connection:
   ``start_at``, ``takeoff``, ``land``, ``emergency_land_all`` and
   ``heartbeat`` messages, runs the eight-round clock sync per edge
   (``sync_clock``), learns which socket belongs to which ``drone_id`` from the
-  edge's messages, and hands validated ``ack`` and ``telemetry`` messages to an
-  ``on_control`` callback.
+  edge's messages, and hands validated ``ack``, ``nack`` and ``telemetry``
+  messages to an ``on_control`` callback.
 * ``EdgeTransport`` runs a background reader once connected. The reader
   answers ``ping`` with ``pong`` immediately (the frame loop never sees
   pings), stores the ``clock`` offset in ``EdgeTransport.clock``, fires the
@@ -446,7 +446,7 @@ class EdgeTransport:
                 return None
 
     async def send(self, message: dict[str, Any]) -> bool:
-        """Send one edge -> ground control message (``pong``, ``ack``, ``telemetry``).
+        """Send one edge -> ground control message (``pong``, ``ack``, ``nack``, ``telemetry``).
 
         Fleet messages are validated against the protocol schema first and
         raise ``fleet_protocol.ProtocolError`` when malformed, so a bad
@@ -546,8 +546,9 @@ class GroundTransport:
     docstring).
 
     Args:
-        on_control: Called with each validated ``ack`` and ``telemetry``
-            message from an edge, off the event loop and in per-client order.
+        on_control: Called with each validated ``ack``, ``nack`` and
+            ``telemetry`` message from an edge, off the event loop and in
+            per-client order.
         heartbeat_interval_s: When set, ``heartbeat`` messages are broadcast
             at this interval while the server runs. Off by default; the fleet
             ground sets it to ``fleet_protocol.HEARTBEAT_INTERVAL_S`` (or calls
@@ -683,7 +684,7 @@ class GroundTransport:
                         await detections.submit(self._on_message, msg)
                 elif msg_type == fp.PONG:
                     self._resolve_pong(websocket, data, received_at)
-                elif msg_type in (fp.ACK, fp.TELEMETRY):
+                elif msg_type in (fp.ACK, fp.NACK, fp.TELEMETRY):
                     try:
                         fp.validate_message(data)
                     except fp.ProtocolError as exc:

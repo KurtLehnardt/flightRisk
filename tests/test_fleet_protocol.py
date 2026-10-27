@@ -74,7 +74,8 @@ def test_builders_produce_design_schemas():
     assert fp.GROUND_TO_EDGE_TYPES == {
         "takeoff", "land", "emergency_land_all", "assign_lanes", "start_at", "ping", "clock", "heartbeat",
     }
-    assert fp.EDGE_TO_GROUND_TYPES == {"pong", "ack", "telemetry"}
+    # R-108: ``nack`` joined the edge -> ground set (an intended change).
+    assert fp.EDGE_TO_GROUND_TYPES == {"pong", "ack", "nack", "telemetry"}
 
 
 @pytest.mark.parametrize(
@@ -444,6 +445,58 @@ def test_unknown_control_ignored(caplog):
             estimate = await gt.sync_clock("drone-1")
             assert estimate.rounds == fp.CLOCK_SYNC_ROUNDS
             assert et.connected is True
+        finally:
+            await et.disconnect()
+            await gt.stop()
+
+    asyncio.run(scenario())
+
+
+def test_nack_reaches_ground_on_control(caplog):
+    """R-108: an edge's refusal of a lane assignment reaches the ground.
+
+    A real ``GroundTransport`` and ``EdgeTransport`` talk over 127.0.0.1. The
+    nack passes the protocol validation on both ends, identifies the drone,
+    and is handed to ``on_control`` unchanged; a malformed nack is dropped at
+    the ground and never reaches ``on_control``.
+    """
+    caplog.set_level(logging.WARNING, logger="flightrisk.transport")
+    controls = []
+
+    async def scenario():
+        gt = await _start_ground(on_control=controls.append)
+        # The edge has sent nothing else yet, so the nack alone must identify it.
+        et = await _connect_edge(gt)
+        try:
+            nack = fp.make_nack_assign_lanes("drone-2", "geofence", 3)
+            assert fp.validate_message(nack) == fp.NACK
+
+            # A malformed nack fails loudly at the sender ...
+            with pytest.raises(fp.ProtocolError):
+                await et.send({"type": "nack", "for": "assign_lanes", "drone_id": "drone-2",
+                               "reason": "tired", "lanes_total": 3})
+            # ... and, when forced onto the wire, is rejected by the ground's
+            # validation instead of reaching on_control.
+            await et._ws.send(json.dumps({"type": "nack", "for": "assign_lanes",
+                                          "drone_id": "drone-2", "lanes_total": 3}))
+
+            assert await et.send(nack) is True
+            assert await _until(lambda: len(controls) >= 1)
+            # Delivery is in per-client order, so the malformed nack sent
+            # first would already be here had it not been dropped.
+            assert controls == [nack]
+            assert "drone-2" in gt.drone_ids
+            assert "Malformed nack message" in caplog.text
+            assert "Unknown message type: 'nack'" not in caplog.text
+
+            # A nack interleaved with ack and telemetry keeps its place.
+            ack = fp.make_ack_assign_lanes("drone-2", 88, 1)
+            other = fp.make_nack_assign_lanes("drone-2", "battery", 1)
+            for msg in (ack, other, _telemetry("drone-2", battery=20)):
+                assert await et.send(msg) is True
+            assert await _until(lambda: len(controls) >= 4)
+            assert [c["type"] for c in controls] == ["nack", "ack", "nack", "telemetry"]
+            assert controls[2] == other
         finally:
             await et.disconnect()
             await gt.stop()
