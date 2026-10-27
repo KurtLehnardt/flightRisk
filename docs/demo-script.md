@@ -173,7 +173,7 @@ Run `venv/bin/python -m flightrisk.drone.coverage --min-px 32` and show the tabl
 
 ### E4 · Safety envelope (1:30)
 
-Each edge enforces its own limits, whatever the ground station says: a 500 cm geofence around its takeoff point by default (`FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard, `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
+Each edge enforces its own limits, whatever the ground station says: a 450 cm geofence around its takeoff point by default (`FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard, `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
 
 ### E5 · Privacy (1:00)
 
@@ -188,7 +188,7 @@ FlightRisk is GPL-3.0-or-later. Ultralytics YOLO11 is AGPL-3.0; GPLv3 section 13
 Drop one rung per failure. Spend no more than 30 seconds fixing anything on stage; say which rung is running and why.
 
 1. **Two Tellos live** (station or AP path). The core as written.
-2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because two edges claiming one drone id swap routing. Then start a fake edge in place of the missing drone:
+2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because the ground station refuses a second live edge that claims the same drone id, so the fake edge would be turned away while the real one is still connected. Then start a fake edge in place of the missing drone:
 
    ```
    venv/bin/python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 160 --ws-url "$FLIGHTRISK_EDGE_WS"
