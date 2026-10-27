@@ -29,7 +29,7 @@ class SourceConfig:
     Groups the source-selection parameters that used to be passed as five
     separate args to ``run_dashboard()`` / ``_init_pipeline()``.
     """
-    source: str = "webcam"
+    source: str = "tello"
     mavlink_address: str = "udp://:14540"
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
@@ -62,6 +62,10 @@ class SourceConfig:
     fleet_area_cm: tuple[int, int] = (400, 400)
     fleet_strip_cm: int = 75
     fleet_net: str = "station"
+    # -- Reasoning backend: "claude" | "gemma" | "off"; None = config default
+    # (FLIGHTRISK_REASONING_PROVIDER, else "gemma"; claude needs the cloud
+    # opt-in). ``--no-llm`` passes "off" here as well as ``enable_llm=False``.
+    reasoning_provider: str | None = None
 
 
 @dataclass
@@ -102,7 +106,7 @@ class AppState:
     edge_ws: str | None = None
     video_path: str | None = None
 
-    # -- Video capture (webcam / file) --
+    # -- Video capture (file) --
     cap: Any = None
 
     # -- Runtime flags --

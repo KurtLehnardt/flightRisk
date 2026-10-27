@@ -44,7 +44,7 @@ def _bound_host(run):
 def test_default_bind_is_loopback(no_server, monkeypatch):
     monkeypatch.setattr(app_module, "_FLIGHTRISK_API_KEY", None)
 
-    run_dashboard(SourceConfig(source="webcam"), port=5999)
+    run_dashboard(SourceConfig(source="file"), port=5999)
     assert _bound_host(no_server) == "127.0.0.1"
     assert resolve_dashboard_host() == "127.0.0.1"
 
@@ -75,7 +75,7 @@ def test_non_loopback_without_key_refuses(no_server, monkeypatch, capsys, how):
         else:
             kwargs = {"host": "0.0.0.0"}
         with pytest.raises(ValueError) as exc_info:
-            run_dashboard(SourceConfig(source="webcam"), port=5999, **kwargs)
+            run_dashboard(SourceConfig(source="file"), port=5999, **kwargs)
         err = str(exc_info.value)
         # Refused before any drone, camera or transport was touched.
         no_server.init_pipeline.assert_not_called()
@@ -89,7 +89,7 @@ def test_non_loopback_without_key_refuses(no_server, monkeypatch, capsys, how):
 def test_non_loopback_with_key_allowed(no_server, monkeypatch):
     monkeypatch.setattr(app_module, "_FLIGHTRISK_API_KEY", "venue-key")
 
-    run_dashboard(SourceConfig(source="webcam"), port=5999, host="0.0.0.0")
+    run_dashboard(SourceConfig(source="file"), port=5999, host="0.0.0.0")
     assert _bound_host(no_server) == "0.0.0.0"
 
     monkeypatch.setenv("FLIGHTRISK_DASHBOARD_HOST", "192.168.1.20")

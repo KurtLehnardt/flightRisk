@@ -11,7 +11,7 @@ from flightrisk.dashboard.app import (
     run_dashboard,
 )
 
-_SOURCE_CHOICES = ("tello", "mavlink", "webcam", "file", "edge")
+_SOURCE_CHOICES = ("tello", "mavlink", "file", "edge")
 _FLEET_NET_CHOICES = ("station", "ap")
 _TRUE_VALUES = ("1", "true", "yes", "on")
 _FALSE_VALUES = ("0", "false", "no", "off")
@@ -54,7 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description="FlightRisk Dashboard")
     parser.add_argument(
         "--source", choices=_SOURCE_CHOICES,
-        default=os.environ.get("FLIGHTRISK_SOURCE", "webcam"),
+        default=os.environ.get("FLIGHTRISK_SOURCE", "tello"),
         help="Video/drone source",
     )
     parser.add_argument(
@@ -124,6 +124,14 @@ def main():
         help="Fleet lane spacing in cm",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
+    parser.add_argument(
+        "--reasoning", choices=("claude", "gemma", "off"),
+        default=None,
+        help="Reasoning backend that confirms matches (default: "
+             "FLIGHTRISK_REASONING_PROVIDER, else gemma). gemma uses local "
+             "Ollama; claude is cloud and opt-in: it needs "
+             "FLIGHTRISK_ALLOW_CLOUD_LLM=1 and FLIGHTRISK_CLAUDE_API_KEY.",
+    )
     parser.add_argument("--target", type=str, help="Path to target reference photo")
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("FLIGHTRISK_PORT", "5555")),
@@ -194,6 +202,9 @@ def main():
         fleet_area_cm=args.fleet_area_cm,
         fleet_strip_cm=args.fleet_strip_cm,
         fleet_net=fleet_net,
+        # --no-llm (and FLIGHTRISK_NO_LLM) force the reasoning provider off,
+        # so a cloud backend can never start behind it.
+        reasoning_provider="off" if args.no_llm else args.reasoning,
     )
     run_dashboard(source_config, target_path=args.target, port=args.port, host=host)
 

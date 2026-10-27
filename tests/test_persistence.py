@@ -22,7 +22,7 @@ def db(tmp_path):
 
 class TestCreateSession:
     def test_returns_valid_session_id(self, db):
-        session_id = db.create_session(source="webcam")
+        session_id = db.create_session(source="tello")
         assert isinstance(session_id, str)
         assert len(session_id) == 36  # canonical uuid4 string length
 
@@ -46,7 +46,7 @@ class TestCreateSession:
 
 class TestEndSession:
     def test_end_session_records_aggregate_stats(self, db):
-        session_id = db.create_session(source="webcam")
+        session_id = db.create_session(source="tello")
         db.end_session(
             session_id,
             total_frames=100,
@@ -64,7 +64,7 @@ class TestEndSession:
 
 class TestAddMatch:
     def test_stores_and_retrieves_match_data(self, db):
-        session_id = db.create_session(source="webcam")
+        session_id = db.create_session(source="tello")
         match_id = db.add_match(
             session_id=session_id,
             match_type="reid",
@@ -92,7 +92,7 @@ class TestAddMatch:
 
 class TestUpdateMatch:
     def test_updates_gemma_fields(self, db):
-        session_id = db.create_session(source="webcam")
+        session_id = db.create_session(source="tello")
         match_id = db.add_match(session_id=session_id, match_type="reid", reid_score=0.6)
 
         db.update_match(
@@ -121,7 +121,7 @@ class TestGetRecentSessions:
             "flightrisk.persistence.time.strftime",
             lambda *_args, **_kwargs: next(timestamps),
         )
-        id1 = db.create_session(source="webcam")
+        id1 = db.create_session(source="tello")
         id2 = db.create_session(source="tello")
         id3 = db.create_session(source="mavlink")
 
@@ -130,14 +130,14 @@ class TestGetRecentSessions:
 
     def test_respects_limit(self, db):
         for _ in range(5):
-            db.create_session(source="webcam")
+            db.create_session(source="tello")
         recent = db.get_recent_sessions(limit=2)
         assert len(recent) == 2
 
 
 class TestGetSessionMatches:
     def test_only_returns_matches_for_given_session(self, db):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         s2 = db.create_session(source="tello")
         db.add_match(session_id=s1, match_type="reid", reid_score=0.5)
         db.add_match(session_id=s1, match_type="face", face_score=0.6)
@@ -151,13 +151,13 @@ class TestGetSessionMatches:
         assert s2_matches[0]["session_id"] == s2
 
     def test_empty_for_session_with_no_matches(self, db):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         assert db.get_session_matches(s1) == []
 
 
 class TestFeedback:
     def test_add_feedback_and_get_feedback_stats(self, db):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         m1 = db.add_match(session_id=s1, match_type="reid", combined_score=0.9)
         m2 = db.add_match(session_id=s1, match_type="reid", combined_score=0.3)
         db.add_feedback(m1, s1, "confirmed", notes="correct match")
@@ -177,7 +177,7 @@ class TestFeedback:
         assert stats["confirmation_rate"] == 0.0
 
     def test_get_confirmed_matches(self, db):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         m1 = db.add_match(session_id=s1, match_type="reid", combined_score=0.9)
         db.add_feedback(m1, s1, "confirmed")
         confirmed = db.get_confirmed_matches()
@@ -187,7 +187,7 @@ class TestFeedback:
 
 class TestExportEvalDataset:
     def test_produces_expected_format(self, db, tmp_path):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         m1 = db.add_match(
             session_id=s1,
             match_type="reid",
@@ -221,7 +221,7 @@ class TestExportEvalDataset:
         assert by_id[m2]["feedback_notes"] == "no"
 
     def test_empty_dataset_when_no_feedback(self, db, tmp_path):
-        db.create_session(source="webcam")
+        db.create_session(source="tello")
         output_path = tmp_path / "eval_empty.json"
         count = db.export_eval_dataset(str(output_path))
         assert count == 0
@@ -231,7 +231,7 @@ class TestExportEvalDataset:
 
 class TestMatchStats:
     def test_aggregates_by_match_type(self, db):
-        s1 = db.create_session(source="webcam")
+        s1 = db.create_session(source="tello")
         db.add_match(session_id=s1, match_type="reid", reid_score=0.8, combined_score=0.8)
         db.add_match(session_id=s1, match_type="reid", reid_score=0.6, combined_score=0.6)
         db.add_match(session_id=s1, match_type="face", face_score=0.9, combined_score=0.9)
@@ -245,7 +245,7 @@ class TestMatchStats:
 
 class TestConcurrency:
     def test_concurrent_writes_from_two_threads_do_not_crash(self, db):
-        session_id = db.create_session(source="webcam")
+        session_id = db.create_session(source="tello")
         errors = []
 
         def _writer(n_writes):
@@ -271,7 +271,7 @@ class TestConcurrency:
 class TestClose:
     def test_close_prevents_further_queries(self, tmp_path):
         instance = SessionDB(db_path=tmp_path / "close_test.db")
-        instance.create_session(source="webcam")
+        instance.create_session(source="tello")
         instance.close()
         with pytest.raises(Exception):
-            instance.create_session(source="webcam")
+            instance.create_session(source="tello")

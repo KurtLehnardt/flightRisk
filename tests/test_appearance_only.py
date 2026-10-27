@@ -83,7 +83,7 @@ def stubbed_pipeline(clean_app_state, fresh_config):
 # ---------------------------------------------------------------------------
 
 def test_init_pipeline_skips_face_when_appearance_only(stubbed_pipeline, fake_face_module, fresh_config):
-    _init_pipeline(SourceConfig(source="webcam", appearance_only=True, enable_llm=False))
+    _init_pipeline(SourceConfig(source="file", appearance_only=True, enable_llm=False))
 
     assert app_state.face is None
     fake_face_module.assert_not_called()
@@ -97,7 +97,7 @@ def test_init_pipeline_skips_face_when_appearance_only(stubbed_pipeline, fake_fa
 def test_init_pipeline_appearance_only_drops_an_existing_face_recognizer(stubbed_pipeline, fake_face_module):
     app_state.face = MagicMock(name="previous FaceRecognizer")
 
-    _init_pipeline(SourceConfig(source="webcam", appearance_only=True, enable_llm=False))
+    _init_pipeline(SourceConfig(source="file", appearance_only=True, enable_llm=False))
 
     assert app_state.face is None
     fake_face_module.assert_not_called()
@@ -105,7 +105,7 @@ def test_init_pipeline_appearance_only_drops_an_existing_face_recognizer(stubbed
 
 def test_init_pipeline_builds_face_when_appearance_only_is_off(stubbed_pipeline, fake_face_module, fresh_config):
     # Control for the test above: the patch point is the one _init_pipeline uses.
-    _init_pipeline(SourceConfig(source="webcam", appearance_only=False, enable_llm=False))
+    _init_pipeline(SourceConfig(source="file", appearance_only=False, enable_llm=False))
 
     fake_face_module.assert_called_once()
     assert app_state.face is fake_face_module.return_value
@@ -117,7 +117,7 @@ def test_init_pipeline_builds_face_when_appearance_only_is_off(stubbed_pipeline,
 def test_init_pipeline_appearance_only_falls_back_to_vision_config(stubbed_pipeline, fake_face_module, fresh_config):
     fresh_config.vision.appearance_only = True
 
-    _init_pipeline(SourceConfig(source="webcam", enable_llm=False))  # appearance_only=None
+    _init_pipeline(SourceConfig(source="file", enable_llm=False))  # appearance_only=None
 
     assert app_state.face is None
     fake_face_module.assert_not_called()
@@ -154,7 +154,7 @@ def test_no_llm_skips_reasoning(stubbed_pipeline, fake_face_module, monkeypatch)
     monkeypatch.setitem(sys.modules, "flightrisk.reasoning.agent", agent_module)
     app_state.reasoning = MagicMock(name="reasoning left from an earlier pipeline")
 
-    _init_pipeline(SourceConfig(source="webcam", appearance_only=True, enable_llm=False))
+    _init_pipeline(SourceConfig(source="file", appearance_only=True, enable_llm=False))
 
     assert app_state.reasoning is None
     assert app_state.gemma_thread is None
@@ -168,7 +168,7 @@ def test_llm_enabled_by_default_constructs_reasoning(stubbed_pipeline, fake_face
     monkeypatch.setitem(sys.modules, "flightrisk.reasoning.agent", agent_module)
 
     # running is False, so the worker thread exits as soon as it starts.
-    _init_pipeline(SourceConfig(source="webcam", appearance_only=True))
+    _init_pipeline(SourceConfig(source="file", appearance_only=True))
 
     agent_module.FlightRiskAgent.assert_called_once()
     assert app_state.reasoning is agent_module.FlightRiskAgent.return_value
@@ -254,6 +254,12 @@ def test_launcher_with_face_and_env_overrides():
 def test_launcher_no_llm_flag():
     assert _run_main(["--no-llm"]).enable_llm is False
     assert _run_main([], {"FLIGHTRISK_NO_LLM": "1"}).enable_llm is False
+    # --no-llm also forces the reasoning provider off, even when --reasoning asks for one.
+    assert _run_main(["--no-llm"]).reasoning_provider == "off"
+    assert _run_main(["--no-llm", "--reasoning", "claude"]).reasoning_provider == "off"
+    assert _run_main([], {"FLIGHTRISK_NO_LLM": "1"}).reasoning_provider == "off"
+    # Without --no-llm the provider stays the config default (None).
+    assert _run_main([]).reasoning_provider is None
 
 
 def test_launcher_fleet_flags():
@@ -273,7 +279,7 @@ def test_launcher_fleet_flags():
     assert cfg.fleet_net == "station"
 
     with pytest.raises(SystemExit):
-        _run_main(["--source", "webcam", "--fleet", "drone-1"])
+        _run_main(["--source", "tello", "--fleet", "drone-1"])
     with pytest.raises(SystemExit):
         _run_main(["--source", "edge", "--fleet", "drone-1,drone-1"])
     with pytest.raises(SystemExit):

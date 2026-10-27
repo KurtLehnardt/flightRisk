@@ -25,6 +25,7 @@ from flightrisk.dashboard.state import (
     ALERT_COOLDOWN,
     gemma_queue,
 )
+from flightrisk.dashboard.alert_latch import alert_latch
 
 # Match screenshots directory
 # The directory is created lazily when a snapshot is actually written, never at
@@ -151,6 +152,13 @@ def _gemma_worker(socketio):
         #                 or ("describe", track_key, crop, description)
         item_type = item[0]
         try:
+            # While a match alert awaits the operator (or after a confirmed
+            # match) skip every queued LLM call except the single "analyze"
+            # call queued for the open alert itself.
+            if not alert_latch.matching_allowed() and not (
+                item_type == "analyze" and alert_latch.owns_track(item[1])
+            ):
+                continue
             if item_type == "describe":
                 _, track_key, crop, description = item
                 result = app_state.reasoning.match_description(crop, description)
@@ -160,57 +168,64 @@ def _gemma_worker(socketio):
                     "type": "description",
                 })
                 # Full alert path when description match is confirmed, gated by
-                # the same spatial-track cooldown used by the photo-match path
-                # so we don't fire a new alert + DB row on every confirmation
+                # the single-alert latch shared with the photo-match path so we
+                # don't fire a new alert + DB row on every confirmation
                 # (match_description can be re-confirmed roughly every 5s).
-                now_alert = time.time()
-                if result.get("match") and not _is_within_alert_cooldown(track_key, now_alert):
-                    alerted_tracks[track_key] = now_alert
-                    score_result = app_state.scorer.score(reasoning_result=result) if app_state.scorer else {"combined_score": 0.5, "confidence_level": "medium", "signals_used": 1}
-                    match_score = score_result.get("combined_score", 0.5)
-                    alert_level = app_state.scorer.alert_level(score_result) if app_state.scorer else "possible_match"
-                    # Fall back to possible_match if scorer returns no_match or
-                    # weak_signal (description matches always warrant at least
-                    # possible_match)
-                    if alert_level in ("no_match", "weak_signal"):
-                        alert_level = "possible_match"
+                alert_id = alert_latch.try_open([f"grid:{track_key}"]) if result.get("match") else None
+                if alert_id is not None:
+                    try:
+                        score_result = app_state.scorer.score(reasoning_result=result) if app_state.scorer else {"combined_score": 0.5, "confidence_level": "medium", "signals_used": 1}
+                        match_score = score_result.get("combined_score", 0.5)
+                        alert_level = app_state.scorer.alert_level(score_result) if app_state.scorer else "possible_match"
+                        # Fall back to possible_match if scorer returns no_match or
+                        # weak_signal (description matches always warrant at least
+                        # possible_match)
+                        if alert_level in ("no_match", "weak_signal"):
+                            alert_level = "possible_match"
 
-                    snapshot_b64 = None
-                    if crop is not None and crop.size > 0:
-                        _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                        snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
+                        snapshot_b64 = None
+                        if crop is not None and crop.size > 0:
+                            _, sbuf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            snapshot_b64 = base64.b64encode(sbuf).decode("utf-8")
 
-                    match_entry = {
-                        "time": time.strftime("%H:%M:%S"),
-                        "score": round(match_score, 3),
-                        "gemma_match": True,
-                        "gemma_confidence": result.get("confidence"),
-                        "reasoning": result.get("reasoning", ""),
-                        "snapshot": snapshot_b64,
-                        "type": "description",
-                        "face_score": 0,
-                        "reid_score": 0,
-                        "alert_level": alert_level,
-                        "track_id": track_key,
-                    }
+                        match_entry = {
+                            "time": time.strftime("%H:%M:%S"),
+                            "score": round(match_score, 3),
+                            "gemma_match": True,
+                            "gemma_confidence": result.get("confidence"),
+                            "reasoning": result.get("reasoning", ""),
+                            "snapshot": snapshot_b64,
+                            "type": "description",
+                            "face_score": 0,
+                            "reid_score": 0,
+                            "alert_level": alert_level,
+                            "track_id": track_key,
+                            "alert_id": alert_id,
+                        }
 
-                    if app_state.db and app_state.session_id:
-                        match_id = app_state.db.add_match(
-                            session_id=app_state.session_id,
-                            match_type="description",
-                            reid_score=0,
-                            face_score=0,
-                            combined_score=match_score,
-                            gemma_match=True,
-                            gemma_confidence=result.get("confidence"),
-                            reasoning=result.get("reasoning", ""),
-                        )
-                        match_entry["match_id"] = match_id
+                        if app_state.db and app_state.session_id:
+                            match_id = app_state.db.add_match(
+                                session_id=app_state.session_id,
+                                match_type="description",
+                                reid_score=0,
+                                face_score=0,
+                                combined_score=match_score,
+                                gemma_match=True,
+                                gemma_confidence=result.get("confidence"),
+                                reasoning=result.get("reasoning", ""),
+                            )
+                            match_entry["match_id"] = match_id
 
-                    with match_history_lock:
-                        app_state.match_history.append(match_entry)
-                        app_state.match_history = app_state.match_history[-50:]
-                    socketio.emit("match_alert", match_entry)
+                        with match_history_lock:
+                            app_state.match_history.append(match_entry)
+                            app_state.match_history = app_state.match_history[-50:]
+                        alert_latch.attach(alert_id, match_entry)
+                        socketio.emit("match_alert", match_entry)
+                    except Exception:
+                        # Release the slot so an undelivered alert can't
+                        # leave matching paused forever.
+                        alert_latch.abort(alert_id)
+                        raise
                     # NOTE: the worker only has the crop, not the full frame the
                     # detection came from -- the async queue item doesn't carry
                     # it (to avoid ballooning queue memory with full frames).
