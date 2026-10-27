@@ -556,3 +556,73 @@ def test_epochs_at_the_maximum_are_handled():
         fp.make_handover_offer(fp.MAX_EPOCH + 1, fp.make_node_state("mac", "leader", fp.MAX_EPOCH))
     with pytest.raises(fp.ProtocolError):
         fp.make_ground_hello("mac", "leader", fp.MAX_EPOCH + 1)
+
+
+# ===========================================================================
+# A bad protocol version never refuses a landing
+# ===========================================================================
+
+# Values a caller may pass before or instead of an agreed version. An edge
+# that keeps ``proto=None`` until the ground's ``hello`` arrives must still
+# land on an ``emergency_land_all`` that arrives first after a reconnect.
+BAD_PROTOS = [None, 0, "2", 2.0, True, 99, -1, [2]]
+LANDINGS = [
+    {"type": "land"},
+    {"type": "emergency_land_all"},
+    {"type": "land", "cmd_id": "c-1", "epoch": 3, "leader_id": "mac"},
+    {"type": "land", "epoch": "junk", "cmd_id": 7, "image_b64": "A" * 100},
+    {"type": "emergency_land_all", "extra": [1.5] * 100, "nested": {"face": 1}},
+]
+
+
+@pytest.mark.parametrize("proto", BAD_PROTOS, ids=repr)
+@pytest.mark.parametrize("landing", LANDINGS, ids=lambda m: f"{m['type']}+{len(m) - 1}")
+def test_a_bad_proto_never_refuses_a_landing(proto, landing):
+    mtype = landing["type"]
+    assert fp.validate_message(landing, proto=proto) == mtype
+    for require_fence in (False, True):
+        assert fp.validate_ground_to_edge(landing, proto=proto, require_fence=require_fence) == mtype
+        assert fp.validate_for_direction(landing, G2E, proto=proto, require_fence=require_fence) == mtype
+        assert fp.decode(json.dumps(landing), direction=G2E, proto=proto, require_fence=require_fence) == landing
+        assert fp.decode(json.dumps(landing).encode(), direction=G2E, proto=proto,
+                         require_fence=require_fence) == landing
+        malformed = json.dumps(landing)[:-1] + ',"x":NaN}'
+        assert fp.decode(malformed, direction=G2E, proto=proto, require_fence=require_fence) == {"type": mtype}
+    assert fp.shape_for_peer(landing, proto) == landing
+
+
+@pytest.mark.parametrize("proto", [p for p in BAD_PROTOS if p != 99], ids=repr)
+def test_a_bad_proto_still_refuses_everything_else(proto):
+    heartbeat = fp.make_heartbeat(1, fence=FENCE)
+    with pytest.raises(fp.ProtocolError, match="protocol version"):
+        fp.validate_message(heartbeat, proto=proto)
+    for require_fence in (False, True):
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_ground_to_edge(heartbeat, proto=proto, require_fence=require_fence)
+        with pytest.raises(fp.ProtocolError):
+            fp.decode(json.dumps(heartbeat), direction=G2E, proto=proto, require_fence=require_fence)
+    with pytest.raises(fp.ProtocolError):
+        fp.shape_for_peer(heartbeat, proto)
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_edge_to_ground(_telemetry(), proto=proto)
+    # A landing is still not an edge-to-ground message.
+    with pytest.raises(fp.ProtocolError):
+        fp.decode('{"type":"land"}', direction=E2G, proto=proto)
+
+
+def test_decode_returns_a_strictly_parsed_landing_even_if_validation_fails(monkeypatch):
+    """Second guard in ``decode``: a validator bug cannot refuse a landing."""
+    from flightrisk.fleet_protocol import wire
+
+    def refuse(*args, **kwargs):
+        raise fp.ProtocolError("validator refused")
+
+    monkeypatch.setattr(wire, "validate_for_direction", refuse)
+    for landing in LANDINGS:
+        assert fp.decode(json.dumps(landing), direction=G2E, proto=None) == landing
+    with pytest.raises(fp.ProtocolError, match="validator refused"):
+        fp.decode(json.dumps(fp.make_heartbeat(1, fence=FENCE)), direction=G2E, proto=2)
+    with pytest.raises(fp.ProtocolError, match="validator refused"):
+        fp.decode('{"type":"land"}', direction=E2G, proto=2)
+    with pytest.raises(fp.ProtocolError, match="validator refused"):
+        fp.decode('{"type":"LAND"}', direction=G2E, proto=2)

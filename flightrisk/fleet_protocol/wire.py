@@ -197,6 +197,8 @@ def decode(
     (bounded by ``max(max_bytes, FAILSAFE_MAX_BYTES)``), the result is
     ``{"type": "land"}`` or ``{"type": "emergency_land_all"}`` and nothing
     else, so an edge never refuses a landing that the pre-v2 edge executed.
+    A landing that parses strictly is returned whole whatever *proto* and
+    *require_fence* are, including an invalid *proto* such as ``None``.
     """
     if not (_is_int(max_bytes) and max_bytes > 0):
         raise ProtocolError(f"max_bytes must be a positive integer, got {_short(max_bytes)}")
@@ -208,5 +210,17 @@ def decode(
             if landing is not None:
                 return {"type": landing}
         raise
-    validate_for_direction(msg, direction, proto=proto, require_fence=require_fence)
+    try:
+        validate_for_direction(msg, direction, proto=proto, require_fence=require_fence)
+    except ProtocolError:
+        # The validators accept a landing before looking at *proto*; this is
+        # a second guard, so no validation failure can refuse a landing that
+        # parsed strictly.
+        if direction == DIRECTION_GROUND_TO_EDGE and isinstance(msg, dict) and _is_landing(msg.get("type")):
+            return msg
+        raise
     return msg
+
+
+def _is_landing(mtype: Any) -> bool:
+    return isinstance(mtype, str) and mtype in FAILSAFE_TYPES

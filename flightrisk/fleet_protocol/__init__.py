@@ -82,7 +82,9 @@ applies to anything that can move a drone, never to landing. Concretely:
 
 * ``validate_message``, ``validate_ground_to_edge`` and ``shape_for_peer``
   accept any mapping whose ``type`` is ``land`` or ``emergency_land_all``,
-  whatever else it carries.
+  whatever else it carries and whatever protocol version they are given
+  (even an invalid one, such as ``None`` before a ``hello``): the landing
+  check comes before any check of the version.
 * ``decode`` in the ground-to-edge direction accepts every input that the
   pre-v2 edge (``json.loads`` in ``transport.py``) accepted as a landing, and
   more. When its strict parser rejects an input, it parses the input again

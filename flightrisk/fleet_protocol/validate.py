@@ -301,20 +301,20 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
     must carry ``plan_id``, telemetry must carry the v2 state fields, and
     acks and nacks follow the generic v2 rules. With ``proto == 1``, v2
     fields are optional but checked when present. ``land`` and
-    ``emergency_land_all`` are always accepted, whatever else they carry.
+    ``emergency_land_all`` are always accepted, whatever else they carry and
+    whatever *proto* is (even an invalid one, such as ``None`` before a
+    ``hello`` has been exchanged).
 
     Never raises anything but ``ProtocolError`` for any *msg*.
     """
+    mtype = _message_type(msg)
+    if mtype in FAILSAFE_TYPES:
+        # Fail-safe: a landing is accepted whatever its optional fields say,
+        # and before *proto* is looked at, so a bad link version can never
+        # refuse one.
+        return mtype
     if not (_is_int(proto) and proto >= MIN_PROTOCOL_VERSION):
         raise ProtocolError(f"protocol version must be an integer >= {MIN_PROTOCOL_VERSION}, got {_short(proto)}")
-    if not isinstance(msg, Mapping):
-        raise ProtocolError(f"control message must be an object, got {type(msg).__name__}")
-    mtype = msg.get("type")
-    if not isinstance(mtype, str) or not mtype:
-        raise ProtocolError(f"control message has no string 'type': {_short(mtype)}")
-    if mtype in FAILSAFE_TYPES:
-        # Fail-safe: a landing is accepted whatever its optional fields say.
-        return mtype
     if mtype not in _KNOWN_TYPES:
         return mtype
 
@@ -417,10 +417,19 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
     ``cmd_id``, whatever the link version. An edge in a v2-only or
     multi-ground deployment sets it, so a ground that never sends ``hello``,
     starts with a bare ``heartbeat`` or announces ``proto: 1`` cannot move
-    the drone or feed its watchdog with unfenced v1 messages. Landing is
-    still never fenced.
+    the drone or feed its watchdog with unfenced v1 messages. They are then
+    also checked under the v2 rules, so a fenced ``assign_lanes`` must carry
+    ``plan_id`` and ``plan_seq`` and a fenced ``start_at`` must carry
+    ``plan_id``, whatever the link version.
+
+    Landing is never fenced and never refused: ``land`` and
+    ``emergency_land_all`` are accepted before *proto* or *require_fence*
+    is looked at, so even an invalid *proto* (such as ``None`` before a
+    ``hello``) cannot refuse one.
     """
     mtype = _message_type(msg)
+    if mtype in FAILSAFE_TYPES:
+        return mtype
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES:
         return mtype
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}

@@ -616,7 +616,10 @@ def test_shape_for_peer_keeps_v1_peers_on_the_v1_flow():
     with pytest.raises(fp.ProtocolError):
         fp.shape_for_peer(fp.make_takeoff(), 2)  # unfenced motion cannot go to a v2 peer
     with pytest.raises(fp.ProtocolError):
-        fp.shape_for_peer(fp.make_land(), 0)
+        fp.shape_for_peer(fp.make_takeoff(), 0)
+    # A landing goes out even when the peer's version is invalid.
+    land = fp.make_land()
+    assert fp.shape_for_peer(land, 0) == land
     with pytest.raises(fp.ProtocolError):
         fp.shape_for_peer({"type": "warp_drive", "epoch": 7}, 1)
     target = {"type": "set_target", "reid_embedding": [0.5], "state": "kept"}

@@ -221,7 +221,8 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     For a v2 peer the message is checked under v2 rules and returned as a
     copy. For a v1 peer:
 
-    * ``land`` and ``emergency_land_all`` always go through (copied as is);
+    * ``land`` and ``emergency_land_all`` always go through (copied as is),
+      whatever *peer_proto* is, even an invalid one;
     * a ``hello`` goes through, since that is how the peer learns we speak v2;
     * v2-only commands and peer messages raise ``ProtocolError``, because a
       v1 edge would silently ignore them;
@@ -233,13 +234,17 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     are copied unchanged; a type this protocol does not define raises.
     """
     mtype = _message_type(msg)
+    if mtype in FAILSAFE_TYPES:
+        # Checked before *peer_proto*, so a landing goes out even while the
+        # peer's version is unknown or invalid.
+        return dict(msg)
     if not (_is_int(peer_proto) and peer_proto >= MIN_PROTOCOL_VERSION):
         raise ProtocolError(f"peer protocol version must be an integer >= 1, got {_short(peer_proto)}")
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES or mtype in LEGACY_EDGE_TO_GROUND_TYPES:
         return dict(msg)
-    if mtype not in _KNOWN_TYPES and mtype not in FAILSAFE_TYPES:
+    if mtype not in _KNOWN_TYPES:
         raise ProtocolError(f"{_short(mtype)} is not a fleet protocol message")
-    if mtype in FAILSAFE_TYPES or peer_proto >= 2:
+    if peer_proto >= 2:
         validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype == HELLO:

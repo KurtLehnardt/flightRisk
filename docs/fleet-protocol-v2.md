@@ -151,7 +151,14 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 - **Fail-safe exemption.** `land` and `emergency_land_all` are never fenced.
   The validators accept them whatever else they carry: a stale epoch, a
   malformed `cmd_id`, extra fields, even fields that would be refused on any
-  other message. The rule is that fencing applies to anything that moves a
+  other message. They also accept them whatever protocol version they are
+  given: `validate_message`, `validate_ground_to_edge`,
+  `validate_for_direction`, `shape_for_peer` and `decode` check for a
+  landing before they check `proto` (or `peer_proto`), so an invalid value
+  such as `None`, `0`, `"2"`, `2.0` or `True` refuses every other message
+  but never a landing. As a second guard, `decode` in the ground-to-edge
+  direction returns a strictly parsed landing even if validation fails.
+  The rule is that fencing applies to anything that moves a
   drone, never to landing. `fence_of` and `cmd_id_of` read the optional
   fields of a landing without ever raising.
 - **Fail-safe on the wire.** `decode` in the ground-to-edge direction never
