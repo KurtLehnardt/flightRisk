@@ -43,6 +43,7 @@ __all__ = [
     "DEFAULT_MIN_TAKEOFF_BATTERY",
     "GEOFENCE_CM_ENV",
     "HORIZONTAL_DIRECTIONS",
+    "is_finite_number",
     "LINK_LOSS_LAND_S_ENV",
     "LinkWatchdog",
     "MAX_MOVE_CM",
@@ -85,7 +86,7 @@ _DIRECTION_VECTORS: dict[str, tuple[float, float]] = {
 }
 
 
-def _is_number(value: object) -> bool:
+def is_finite_number(value: object) -> bool:
     """Return True for a finite int or float (booleans are not numbers here)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
@@ -127,7 +128,7 @@ class LinkWatchdog:
     """Tracks the age of the last message received from the ground station."""
 
     def __init__(self, timeout_s: float, clock: Callable[[], float] = time.monotonic):
-        if not _is_number(timeout_s) or timeout_s <= 0:
+        if not is_finite_number(timeout_s) or timeout_s <= 0:
             raise ValueError(f"link-loss timeout must be a positive number, got {timeout_s!r}")
         self.timeout_s = float(timeout_s)
         self._clock = clock
@@ -164,11 +165,11 @@ class SafetyEnvelope:
         *,
         clock: Callable[[], float] = time.monotonic,
     ):
-        if not _is_number(geofence_cm) or geofence_cm <= 0:
+        if not is_finite_number(geofence_cm) or geofence_cm <= 0:
             raise ValueError(f"geofence_cm must be a positive number, got {geofence_cm!r}")
-        if not _is_number(min_takeoff_battery) or not 0 <= min_takeoff_battery <= 100:
+        if not is_finite_number(min_takeoff_battery) or not 0 <= min_takeoff_battery <= 100:
             raise ValueError(f"min_takeoff_battery must be within 0-100, got {min_takeoff_battery!r}")
-        if not _is_number(land_battery) or not 0 <= land_battery <= 100:
+        if not is_finite_number(land_battery) or not 0 <= land_battery <= 100:
             raise ValueError(f"land_battery must be within 0-100, got {land_battery!r}")
         if land_battery > min_takeoff_battery:
             raise ValueError("land_battery must not exceed min_takeoff_battery")
@@ -176,7 +177,7 @@ class SafetyEnvelope:
         self.min_takeoff_battery = float(min_takeoff_battery)
         self.land_battery = float(land_battery)
         self._lock = threading.Lock()
-        self.alt_slot_cm = self._validated_slot(alt_slot_cm)
+        self.alt_slot_cm = self.validate_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
 
@@ -212,8 +213,8 @@ class SafetyEnvelope:
     # --- Altitude slot ---
 
     @staticmethod
-    def _validated_slot(alt_slot_cm: float) -> float:
-        if not _is_number(alt_slot_cm) or not MIN_ALT_SLOT_CM <= alt_slot_cm <= MAX_ALT_SLOT_CM:
+    def validate_alt_slot(alt_slot_cm: float) -> float:
+        if not is_finite_number(alt_slot_cm) or not MIN_ALT_SLOT_CM <= alt_slot_cm <= MAX_ALT_SLOT_CM:
             raise ValueError(
                 f"altitude slot must be within {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm, got {alt_slot_cm!r}"
             )
@@ -221,7 +222,7 @@ class SafetyEnvelope:
 
     def set_alt_slot(self, alt_slot_cm: float) -> None:
         """Change the altitude slot. Raises ``ValueError`` for an out-of-range slot."""
-        self.alt_slot_cm = self._validated_slot(alt_slot_cm)
+        self.alt_slot_cm = self.validate_alt_slot(alt_slot_cm)
 
     def slot_move(self, height_cm: float | None) -> tuple[str, int] | None:
         """Return the ``(direction, distance_cm)`` move that reaches the slot.
@@ -230,7 +231,7 @@ class SafetyEnvelope:
         size of its slot. Raises ``ValueError`` when the height is unknown or
         not positive, because the climb cannot be computed safely.
         """
-        if not _is_number(height_cm) or height_cm <= 0:
+        if not is_finite_number(height_cm) or height_cm <= 0:
             raise ValueError(f"height is unknown, cannot reach the altitude slot (got {height_cm!r})")
         delta = int(round(self.alt_slot_cm - height_cm))
         if abs(delta) < MIN_MOVE_CM:
@@ -249,7 +250,7 @@ class SafetyEnvelope:
         """
         if direction not in HORIZONTAL_DIRECTIONS:
             return False
-        if not _is_number(distance_cm) or not MIN_MOVE_CM <= distance_cm <= MAX_MOVE_CM:
+        if not is_finite_number(distance_cm) or not MIN_MOVE_CM <= distance_cm <= MAX_MOVE_CM:
             return False
         with self._lock:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)
@@ -275,11 +276,11 @@ class SafetyEnvelope:
 
     def can_takeoff(self, battery: float | None) -> bool:
         """True only for a known battery level at or above the takeoff minimum."""
-        return _is_number(battery) and battery >= self.min_takeoff_battery
+        return is_finite_number(battery) and battery >= self.min_takeoff_battery
 
     def should_land(self, battery: float | None) -> bool:
         """True when a known battery level is below the landing threshold."""
-        return _is_number(battery) and battery < self.land_battery
+        return is_finite_number(battery) and battery < self.land_battery
 
     # --- Link watchdog ---
 
