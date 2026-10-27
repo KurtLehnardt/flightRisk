@@ -1,6 +1,6 @@
 # Fleet setup: two Tello EDUs, two laptops
 
-This guide gets two Tello EDU drones flying under one FlightRisk ground station. There are two network paths. Both use the same protocol and the same coordinator code. A single variable, `FLIGHTRISK_FLEET_NET`, selects the path, and `scripts/fleet_env.sh` (Mac) or `scripts/fleet_env.ps1` (Windows) turns it into the host and URL settings the launchers need.
+This guide gets two Tello EDU drones flying under one FlightRisk ground station. There are three network paths: station mode, AP mode with an Ethernet link, and AP mode with a Thunderbolt link (Path 3, which has the same addresses as Path 2). All use the same protocol and the same coordinator code. A single variable, `FLIGHTRISK_FLEET_NET`, selects the path, and `scripts/fleet_env.sh` (Mac) or `scripts/fleet_env.ps1` (Windows) turns it into the host and URL settings the launchers need.
 
 Layout in both paths: the ground station and edge-1 run on the Mac, and edge-2 runs on the Windows laptop. Drone 1 is controlled from the Mac and drone 2 from the Windows laptop.
 
@@ -12,7 +12,7 @@ Layout in both paths: the ground station and edge-1 run on the Mac, and edge-2 r
 | `FLIGHTRISK_FLEET_NET` | `station` | `ap` |
 | Use it when | the hardware check passes | station mode fails (for example the `ap` command is rejected) |
 
-Station mode is the default if the hardware check passes. AP mode is the fully designed fallback.
+Station mode is the default if the hardware check passes. AP mode is the fully designed fallback. Path 3 swaps the Ethernet cable of Path 2 for a Thunderbolt or USB4 cable and is UNVERIFIED on our hardware.
 
 ## Placement and heading
 
@@ -150,7 +150,7 @@ Each laptop joins one Tello's own Wi-Fi, so that Wi-Fi radio is busy and cannot 
 | Subnet | 10.42.0.0/24, static, no gateway, no DNS |
 | Mac (ground station, edge-1) | 10.42.0.1 |
 | Windows (edge-2) | 10.42.0.2 |
-| Ground WebSocket | `ws://10.42.0.1:9000` |
+| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the Mac uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
 | Tello address on both laptops | 192.168.10.1 (each laptop sees only its own drone) |
 
 Leave the gateway blank. The laptops keep their Wi-Fi for the drones, and a gateway on the cable would pull the default route off the drone network.
@@ -249,7 +249,184 @@ $env:FLIGHTRISK_FLEET_NET = "ap"
 . .\scripts\fleet_env.ps1
 ```
 
-In AP mode the script fixes `FLIGHTRISK_TELLO_HOST` to 192.168.10.1 on both hosts, `FLIGHTRISK_EDGE_HOST` to 10.42.0.1 and `FLIGHTRISK_EDGE_WS` to `ws://10.42.0.1:9000`.
+In AP mode the script fixes `FLIGHTRISK_TELLO_HOST` to 192.168.10.1 on both hosts and `FLIGHTRISK_EDGE_HOST` to the bind list `127.0.0.1,10.42.0.1` (loopback first, then the cable address; never a wildcard). The ground station needs `FLIGHTRISK_EDGE_TOKEN` because one of those addresses is not loopback. If the cable address is missing at start, the ground station listens on loopback only and retries.
+
+`FLIGHTRISK_EDGE_WS` depends on where the edge runs, and you say so explicitly with `FLIGHTRISK_GROUND_LOCAL`. On the Mac, which runs the ground station and edge-1, run `export FLIGHTRISK_GROUND_LOCAL=1` before sourcing the script and `FLIGHTRISK_EDGE_WS` becomes `ws://127.0.0.1:9000`. The variable must be exported, not just set: `scripts/demo_edge.sh` runs as a child process and sources `fleet_env.sh` again, so an unexported variable is lost and the edge would dial the cable address even though the earlier output said loopback. Only the exact value `1` counts; any other non-empty value other than `0` prints a warning and uses the cable address. On the Windows edge-only laptop, never set it. On Windows leave it unset and `FLIGHTRISK_EDGE_WS` is `ws://10.42.0.1:9000`. Nothing guesses: without the variable every edge dials `ws://10.42.0.1:9000`, as before. Station mode ignores the variable.
+
+With this setup, pulling the cable is expected to leave edge-1 on loopback, so it should keep flying or holding, and edge-2 should lose its link, hit its watchdog and land. UNVERIFIED on hardware; step 8 measures it. If 10.42.0.1 goes away (step 6 shows whether it does), the ground station logs `ground_bind_address_lost`, and `ground_bind_address_restored` when it returns.
+
+Precondition: port 9000 on the Mac's 127.0.0.1 must be free, because a loopback bind failure stops the ground station (loudly, before flight). Homebrew's php-fpm is one default that uses it. Check with `lsof -nP -iTCP:9000 -sTCP:LISTEN`; no output means it is free.
+
+## Path 3: Thunderbolt link
+
+Path 3 is Path 2 with a Thunderbolt or USB4 cable in place of the two Ethernet adapters and the Cat6 cable. Each laptop's Wi-Fi still joins its own Tello. The cable carries the same subnet and the same addresses as Path 2, so `FLIGHTRISK_FLEET_NET=ap` and every script work unchanged.
+
+Status: this path is UNVERIFIED on our hardware. Mac to Windows IP over Thunderbolt is documented only in one blog report, and nobody has tested the pair of laptops used here. Run the validation checklist below before relying on it. If a step fails, use the fallback ladder.
+
+### What is known and what is not
+
+- VERIFIED (Apple support article): two Macs connected directly by a Thunderbolt cable can network with "Thunderbolt Bridge". A plain USB-C charge cable does not work. Do not use a dock or a hub.
+- VERIFIED (Microsoft documentation): Windows 11 has built-in Ethernet over USB4, and it works with a Thunderbolt 3 peer. It can be disabled by Group Policy. UNVERIFIED: which Windows 11 build is needed.
+- VERIFIED as one blog report only: a Mac (M2, Thunderbolt 4) and a Windows 11 PC (Thunderbolt 4) linked with no adapters and ran at over 13 Gbps. FlightRisk needs well under 1 percent of that.
+- VERIFIED as one forum thread only: Windows 10 with Intel Thunderbolt 3 networking was unreliable. A Mac booted into Windows 10 with Boot Camp got no bridge at all. Treat Windows 10 as unsupported.
+- UNVERIFIED: whether a Windows laptop with an older Intel Thunderbolt 3 controller links to a Mac. The only way to find out is to plug in and look for a new network adapter.
+- UNVERIFIED: that the macOS network service is named exactly "Thunderbolt Bridge" and that its interface is `bridge0`. Check both with the commands below.
+- UNVERIFIED: whether macOS keeps the address 10.42.0.1 while the cable is unplugged. Step 6 and step 8 measure this.
+- UNVERIFIED: whether the Windows laptop has Thunderbolt or USB4 at all. Step 1 checks this.
+
+### Address plan
+
+| Item | Value |
+|---|---|
+| Subnet | 10.42.0.0/24, static, no gateway, no DNS |
+| Mac (ground station, edge-1) | 10.42.0.1 |
+| Windows (edge-2) | 10.42.0.2 |
+| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the Mac uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
+| Tello address on both laptops | 192.168.10.1 over Wi-Fi |
+
+Do not use the self-assigned 169.254.x.x addresses for the demo. They change whenever the Windows adapter is recreated, which happens on every replug. They are still useful to prove the physical link: if a static address does not work, ping the peer's 169.254 address shown by `ipconfig` or `ifconfig`.
+
+Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Either one would bridge one Tello's 192.168.10.0/24 network onto the cable.
+
+### Mac steps
+
+1. List the network services and find the Thunderbolt one:
+
+   ```
+   networksetup -listallhardwareports
+   ```
+
+2. Set the static address with no router argument. Replace the service name if yours differs:
+
+   ```
+   sudo networksetup -setmanual "Thunderbolt Bridge" 10.42.0.1 255.255.255.0
+   ```
+
+3. Check the address and the routes:
+
+   ```
+   ifconfig bridge0
+   route -n get 10.42.0.2
+   route -n get 192.168.10.1
+   netstat -rn -f inet | grep -E "default|10.42|192.168.10"
+   ```
+
+   `route -n get 10.42.0.2` must show the Thunderbolt interface. `route -n get 192.168.10.1` must show Wi-Fi once the Mac has joined its drone. No default route may point at the Thunderbolt interface.
+
+4. If the macOS application firewall is on, allow Python as in Path 2, step 2.
+5. Keep the Mac awake for the whole session, and never close the lid. Record before you change: run `pmset -g custom` and write down the current `sleep` value for AC Power. Then:
+
+   ```
+   caffeinate -dimsu
+   sudo pmset -c sleep 0
+   ```
+
+   The `-c` flag changes only the AC power setting, so battery behavior stays as it was. Run `caffeinate` in its own terminal. These settings are standard but UNVERIFIED on this machine, and step 6 checks them.
+
+### Windows steps
+
+The Windows steps are in `docs/windows-edge-setup.md`, section "Thunderbolt link to the Mac".
+
+### Teardown / undo
+
+Record the previous values before you change anything, because these commands restore what you recorded.
+
+Mac:
+
+```
+sudo networksetup -setdhcp "Thunderbolt Bridge"
+sudo pmset -c sleep <previous>
+```
+
+Use the `sleep` value you recorded from `pmset -g custom`. Stop `caffeinate` with Ctrl-C.
+
+Windows (run in an administrator PowerShell, replacing `<name>` with the adapter name; the same steps are referenced from `docs/windows-edge-setup.md`):
+
+```powershell
+Remove-NetIPAddress -InterfaceAlias "<name>" -IPAddress 10.42.0.2 -Confirm:$false
+Remove-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo (TB)"
+Set-NetConnectionProfile -InterfaceAlias "<name>" -NetworkCategory Public
+powercfg /change standby-timeout-ac <previous>
+```
+
+Then restore the lid close action on AC in Power Options and the two "Allow the computer to turn off this device to save power" checkboxes in Device Manager (Thunderbolt adapter and Wi-Fi adapter) to the values you recorded.
+
+### Validation checklist
+
+Run these steps in order when the cable arrives, using a checkout of this repository on both laptops. Copy `docs/thunderbolt-link-results-template.md` and fill it in as you go. Plan on about 90 minutes in total. If a step fails and its text says to go to the fallback ladder, stop and do that.
+
+**Step 1. Inventory (5 min).**
+
+- Mac: `system_profiler SPThunderboltDataType`
+- Windows: run `winver`, then in PowerShell `Get-PnpDevice | ? FriendlyName -match "USB4|Thunderbolt"`, and check the laptop's specification sheet for USB4 or Thunderbolt 4 versus Thunderbolt 3.
+- Pass: the Mac lists a Thunderbolt bus, and Windows 11 shows a USB4 or Thunderbolt controller.
+- Fail: Windows has no Thunderbolt or USB4 port, or runs Windows 10. Go to rung 2 of the fallback ladder.
+
+**Step 2. Plug in directly (2 min).** Connect a Thunderbolt or USB4 cable straight from one laptop to the other. No dock, no hub.
+
+**Step 3. Is there a link? (5 min).**
+
+- Mac: `networksetup -listallhardwareports` and `ifconfig bridge0`
+- Windows: `Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed`
+- Pass: both sides show an interface that is up. On Windows it is a new adapter with status Up at several Gbps. On the Mac `ifconfig bridge0` shows `status: active`.
+- Fail: reseat the cable, try the other Thunderbolt port, reboot Windows, and ask whether Group Policy disables USB4 networking. If it still fails, go to rung 2.
+
+**Step 4. Addressing (5 min).** Apply the Mac steps and the Windows steps above.
+
+- Pass: `route -n get 10.42.0.2` on the Mac shows the Thunderbolt interface, the Mac has no default route through it, and the Windows MTU on the cable adapter is 1500.
+- Fail: fix the addresses before going on. If the static address does not stick on Windows, prove the link with the 169.254 addresses first.
+
+**Step 5. Link quality (15 min).**
+
+- Mac: `ping -c 600 10.42.0.2` (10 minutes). Windows: `ping -n 600 10.42.0.1`.
+- Then run the repository check. Mac: `venv/bin/python scripts/check_fleet_link.py --role server`. Windows: `venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1 --bind 10.42.0.2 --soak 120`.
+- Optional: `iperf3 -s -B 10.42.0.1` on the Mac, then `iperf3 -c 10.42.0.1 -t 10` and again with `-R` on Windows. Over 100 Mbit/s is plenty. Skip it if iperf3 is not installed.
+- Pass: the pings show 0 percent loss, an average under 1 ms and a maximum under 10 ms. Both sides of `check_fleet_link.py` print PASS. The median WebSocket round trip is under 5 ms. The soak line says PASS, which means no lost frame and no gap between replies above 500 ms. These thresholds are our own targets. The real requirement is the 3 second fleet watchdog.
+- Fail: any loss, or any gap above 500 ms. Go to rung 2.
+
+**Step 6. Robustness (15 min).**
+
+1. Unplug the cable for 10 seconds, then plug it back in. Note when the ping fails, how many seconds until the first good ping after replugging, whether Windows kept 10.42.0.2 (`Get-NetIPAddress -InterfaceAlias "<name>"`), and whether the Mac still lists 10.42.0.1 in `ifconfig` while the cable is out.
+2. Repeat the unplug three times, and once while `check_fleet_link.py` is running.
+3. Let the Windows screen turn off and lock the Mac screen. Confirm the ping continues.
+4. Confirm the power settings from the Mac steps and the Windows steps are applied.
+
+- Pass: the link recovers by itself after every replug within 30 seconds and the Windows address is kept.
+- Fail: the Windows address is lost on replug. Re-apply it with the `New-NetIPAddress` command each time, and note this in the results. If the link does not come back at all, go to rung 2.
+
+**Step 7. Coexistence with the Tellos (20 min).** Drones on the floor, propellers on, no takeoff.
+
+1. Join each laptop's Wi-Fi to its own Tello.
+2. Repeat the route checks from step 4.
+3. On each laptop run `scripts/tello_hw_check.py --drones 192.168.10.1 --video-check --json`. At the same time run a ping soak over the cable. On the Mac use `ping -i 0.2 10.42.0.2` (`sudo` is needed only for intervals under 0.002 s, per `man ping`).
+4. Pass: both checks pass, the cable shows no packet loss during the video, and on Windows the state and video packets arrive. That proves the firewall rules for UDP 8890 and 11111.
+5. Fail: Windows does not receive state or video. Check the firewall rules, then retry.
+
+**Step 8. Full fleet path with fake drones over the cable (20 min).** This is the important test. Use `FLIGHTRISK_FLEET_NET=ap` and the same `FLIGHTRISK_EDGE_TOKEN` on both laptops.
+
+- Mac: start the ground station with `scripts/demo_ground.sh` (it binds `127.0.0.1,10.42.0.1`), then fake edge-1 over loopback: `python -m flightrisk.edge_device --source fake --drone-id drone-1 --ws-url ws://127.0.0.1:9000`
+- Windows: start fake edge-2 with `--drone-id drone-2 --ws-url ws://10.42.0.1:9000`.
+- In the dashboard run Plan, then Start. Pull the cable while the fake drones fly their lanes.
+- Expected: edge-2 logs `edge_link_lost` and lands after about 3 seconds. The ground marks drone-2 lost after about 5 seconds and gives its lanes to drone-1. If 10.42.0.1 goes away (step 6), the ground logs `ground_bind_address_lost`, and `ground_bind_address_restored` after replugging; if macOS keeps the address on an inactive interface, neither line appears.
+- Key observation: edge-1 is on `ws://127.0.0.1:9000`, so it should stay connected while the cable is out and keep flying or holding (UNVERIFIED on hardware; this step measures it). Confirm that it does. If it drops anyway, record that; a cable pull then lands both drones, which is safe but not graceful. Do not work around it by binding the ground station to `0.0.0.0`.
+- After replugging, time how long edge-2 takes to rejoin. The reconnect delay doubles from 1 second up to a 2 second cap for fleet edges, so expect a rejoin within a few seconds.
+
+**Step 9. Decide.** Choose a rung from the fallback ladder and write the decision in the results file.
+
+### Windows firewall and Wi-Fi notes
+
+Both laptops need inbound TCP 9000 from the peer once either one can host the ground station. The Windows Tello Wi-Fi also needs inbound UDP 8890 and 11111 from 192.168.10.1. If video or state packets do not arrive on Windows, allow Python through the firewall for that network profile. This is UNVERIFIED on our machines, and step 7 tests it.
+
+### Fallback ladder
+
+The protocol and addresses are the same on every rung. Only the cabling changes.
+
+| Rung | Link | Use it when |
+|---|---|---|
+| 1 | Thunderbolt or USB4 cable, static 10.42.0.1 and 10.42.0.2 | steps 1 to 8 pass |
+| 2 | Two USB-C gigabit Ethernet adapters and one Cat6 cable, same addresses (Path 2 above) | Windows has no Thunderbolt or USB4, or the link fails any step |
+| 3 | Station mode: drones and laptops on one 2.4 GHz router (Path 1 above) | `tello_hw_check.py --station-mode` and `--video-check` both pass. Tello video may not work in station mode (UNVERIFIED for current EDU firmware) |
+| 4 | One live Tello plus one fake edge (rung 2 in `docs/demo-script.md`) | there is no working link between the laptops at all |
 
 ## Launch
 
@@ -259,8 +436,10 @@ On the Mac, in one terminal for the ground station and another for edge-1:
 
 ```
 scripts/demo_ground.sh
-DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
+
+(`FLIGHTRISK_GROUND_LOCAL=1` as a prefix on the command passes the variable to the launcher and makes edge-1 connect over loopback in AP mode. If you source `scripts/fleet_env.sh` yourself first, `export` the variable. Station mode ignores it.)
 
 On Windows, for edge-2:
 
@@ -278,7 +457,8 @@ Confirming a match on a fleet lands every drone in place with LAND ALL. The Tell
 |---|---|---|
 | `FLIGHTRISK_FLEET_NET` | `station` | `ap` |
 | `FLIGHTRISK_TELLO_HOST` | discovered drone IP, set by you | 192.168.10.1 |
-| `FLIGHTRISK_EDGE_HOST` | Mac LAN IP | 10.42.0.1 |
-| `FLIGHTRISK_EDGE_WS` | `ws://<mac lan ip>:9000` | `ws://10.42.0.1:9000` |
+| `FLIGHTRISK_EDGE_HOST` | Mac LAN IP | `127.0.0.1,10.42.0.1` |
+| `FLIGHTRISK_EDGE_WS` | `ws://<mac lan ip>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (Mac) |
+| `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the Mac (ground station and edge-1), unset on Windows |
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |

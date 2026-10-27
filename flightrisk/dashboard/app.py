@@ -1317,6 +1317,13 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         # _init_pipeline() call (e.g. via restart_dashboard) before binding a
         # new server on the same port -- otherwise start() fails with an
         # address-already-in-use error.
+        if source_config.fleet_net == "ap":
+            # AP mode joins each laptop to a Tello's open access point, so no
+            # wildcard or name may be bound, whoever built the config.
+            from flightrisk.transport import check_literal_hosts, parse_bind_hosts
+
+            check_literal_hosts(parse_bind_hosts(source_config.edge_host))
+
         old_transport = app_state.ground_transport
         if old_transport is not None:
             try:
@@ -1388,6 +1395,8 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         log.info(
             "edge_ground_station_started",
             host=source_config.edge_host,
+            bound_hosts=list(transport.bound_hosts),
+            unbound_hosts=list(transport.unbound_hosts),
             port=transport.port,
             stream_video=app_state.stream_video,
             fleet=list(source_config.fleet_drones),

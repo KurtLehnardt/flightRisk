@@ -5,8 +5,8 @@
 #   export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"
 #   scripts/demo_ground.sh
 #
-# The edge WebSocket binds FLIGHTRISK_EDGE_HOST (derived by scripts/fleet_env.sh) and
-# needs FLIGHTRISK_EDGE_TOKEN. The dashboard itself stays on 127.0.0.1: open
+# The edge WebSocket binds FLIGHTRISK_EDGE_HOST (derived by scripts/fleet_env.sh; in ap mode
+# the list "127.0.0.1,10.42.0.1", loopback plus the wired link) and needs FLIGHTRISK_EDGE_TOKEN. The dashboard itself stays on 127.0.0.1: open
 # http://127.0.0.1:5555 in a browser on this Mac. The demo runs appearance-only, writes
 # no match snapshots and starts no reasoning model.
 #

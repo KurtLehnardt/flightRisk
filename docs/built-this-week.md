@@ -94,7 +94,7 @@ Each path below is tagged "(new)" when it did not exist at `798f21a` and "(chang
 - `flightrisk/drone/tello.py` (changed)
 - `flightrisk/edge.py` (changed)
 - `flightrisk/edge_device.py` (changed)
-- `flightrisk/fleet_protocol.py` (new)
+- `flightrisk/fleet_protocol/__init__.py` (new)
 - `flightrisk/ground.py` (changed)
 - `flightrisk/transport.py` (changed)
 - `scripts/tello_hw_check.py` (new)
