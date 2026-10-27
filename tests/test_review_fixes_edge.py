@@ -740,7 +740,8 @@ def test_land_confirmed_by_state_height_despite_error_reply(tello_on_wire, capsy
 
 def test_stale_ok_does_not_confirm_while_state_airborne(tello_on_wire, monkeypatch, capsys):
     """N2: a late 'ok' read as the land's reply confirms nothing while fresh state shows the drone in the air."""
-    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.3)
+    # Long enough that the scripted late "ok" is read even on a loaded machine.
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 1.0)
     monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 0.5)
     attempts = tello_module._LAND_ATTEMPTS
     ctrl, wire = _flying_on_state(tello_on_wire)
