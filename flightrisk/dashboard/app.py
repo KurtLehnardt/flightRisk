@@ -1962,10 +1962,11 @@ def on_set_stream_video(data):
     emit("stream_video_state", {"enabled": app_state.stream_video})
 
 
-#: Capability each manual dashboard command needs.
+#: Capability each manual dashboard command needs. "land" is deliberately
+#: absent: a land command must always be attempted, whatever the backend
+#: declares, because refusing it could leave a drone in the air.
 _COMMAND_CAPABILITY = {
     "takeoff": Capability.TAKEOFF_LAND,
-    "land": Capability.TAKEOFF_LAND,
     "hover": Capability.HOVER,
     "up": Capability.RELATIVE_MOVE,
     "down": Capability.RELATIVE_MOVE,
