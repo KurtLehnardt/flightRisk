@@ -1,9 +1,12 @@
 """Resource counting and error capture for the network and fleet tests.
 
 ``snapshot()`` counts open file descriptors, unfinished asyncio tasks (on every
-loop, found through the garbage collector) and live threads.
-``ResourceSnapshot.leaked_since`` waits for background teardown to settle and
-reports what is still open compared with an earlier snapshot.
+loop, read from asyncio's own registry of tasks) and keeps the live thread
+objects. Threads are compared as objects, not by name, because the same names
+repeat (``edge-transport-loop`` and ``harness-edge-drone-1`` exist in every
+run), so a leaked thread is found even when an equally named one was alive
+before. ``ResourceSnapshot.leaked_since`` waits for background teardown to
+settle and reports what is still open compared with an earlier snapshot.
 
 ``ErrorWatch`` records what a healthy run must never produce: an uncaught
 exception in any thread, an unraisable exception, and any log record at ERROR
@@ -32,16 +35,24 @@ def open_fds() -> int:
 
 
 def live_tasks() -> list[asyncio.Task]:
-    """Every unfinished asyncio task on any loop in this process."""
+    """Every unfinished asyncio task on any loop in this process.
+
+    Read from asyncio's registry of scheduled tasks. Scanning the garbage
+    collector's objects with ``isinstance`` instead would touch every object
+    in the process, and lazily loaded modules (torch) warn when that happens.
+    """
     gc.collect()
-    return [obj for obj in gc.get_objects() if isinstance(obj, asyncio.Task) and not obj.done()]
+    registry = getattr(asyncio.tasks, "_scheduled_tasks", None)
+    if registry is None:  # a Python without the registry: match the exact type, which reads no attributes
+        return [obj for obj in gc.get_objects() if type(obj) is asyncio.Task and not obj.done()]
+    return [task for task in list(registry) if not task.done()]
 
 
 @dataclass(frozen=True)
 class ResourceSnapshot:
     fds: int
     tasks: int
-    threads: frozenset[str]
+    threads: frozenset[threading.Thread]
     task_names: tuple[str, ...] = ()
 
     def leaked_since(self, before: ResourceSnapshot, settle_s: float = 10.0) -> dict[str, object]:
@@ -54,7 +65,7 @@ class ResourceSnapshot:
                 leaks["fds"] = now.fds - before.fds
             if now.tasks > before.tasks:
                 leaks["tasks"] = list(now.task_names)
-            extra = sorted(now.threads - before.threads)
+            extra = sorted(t.name for t in now.threads - before.threads)
             if extra:
                 leaks["threads"] = extra
             if not leaks or time.monotonic() >= deadline:
@@ -68,7 +79,7 @@ def snapshot() -> ResourceSnapshot:
     return ResourceSnapshot(
         fds=open_fds(),
         tasks=len(tasks),
-        threads=frozenset(t.name for t in threading.enumerate() if t.is_alive()),
+        threads=frozenset(t for t in threading.enumerate() if t.is_alive()),
         task_names=names,
     )
 
