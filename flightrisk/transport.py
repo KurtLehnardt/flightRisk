@@ -40,17 +40,27 @@ rides on the same connection:
 
 ``emergency_land_all`` is never queued behind other traffic on either side
 and is never dropped without an error log.
+
+The ground can listen on several addresses at once, for example
+``"127.0.0.1,10.42.0.1"``: loopback for the edge on the same laptop and the
+laptop-to-laptop link address for the other laptop's edge. Each address gets
+its own listener, so losing the link address (a Thunderbolt bridge can lose
+its address when the cable is pulled) never affects the loopback listener or
+the local edge's connection. See ``GroundTransport`` and
+``check_bind_hosts``.
 """
 from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
+import socket
 import threading
 import time
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -58,6 +68,7 @@ from websockets.exceptions import ConnectionClosed
 from flightrisk import fleet_protocol as fp
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
+from flightrisk.observability import StructuredLogger
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +78,9 @@ __all__ = [
     "EdgeTransportSync",
     "GroundTransportSync",
     "ClockSyncError",
+    "parse_bind_hosts",
+    "is_wildcard_host",
+    "check_bind_hosts",
 ]
 
 _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
@@ -75,6 +89,19 @@ _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 # allowed (open, for local dev); binding anything else without a token is
 # refused at start() -- see GroundTransport.start().
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+# Hosts that listen on every interface of this machine. A Tello's access
+# point is open Wi-Fi, so on a fleet laptop a wildcard bind would expose the
+# edge socket to anyone who joins a drone's network. A list of bind hosts
+# never accepts one (see check_bind_hosts); a single wildcard host keeps its
+# legacy meaning and still needs a token.
+_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
+# How often the ground re-checks its non-loopback bind addresses. It retries
+# a listener that could not bind (for example while the link cable is
+# unplugged and the interface has no address) and logs when an address goes
+# away or comes back.
+_BIND_CHECK_INTERVAL_S = 2.0
 
 # Queued commands that an emergency_land_all supersedes: once the ground has
 # ordered every drone down, a takeoff or start_at that was still waiting in
@@ -116,6 +143,140 @@ def _run_emergency_callback(callback: Callable[[dict[str, Any]], None], msg: dic
         callback(msg)
     except Exception:
         logger.exception("on_emergency_land callback raised")
+
+
+# ---------------------------------------------------------------------------
+# Bind hosts
+# ---------------------------------------------------------------------------
+
+
+def _ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """*host* as an IP address, or ``None`` when it is a name rather than a literal."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _is_list_form(host: str | Iterable[str]) -> bool:
+    """Whether a bind-host setting was given as a list rather than as one legacy host string."""
+    return not (isinstance(host, str) and "," not in host)
+
+
+def parse_bind_hosts(host: str | Iterable[str]) -> tuple[str, ...]:
+    """Return the ground's bind hosts as an ordered tuple without duplicates.
+
+    A string without a comma is one host and keeps its legacy meaning; only
+    surrounding whitespace is removed, so ``""`` still means every interface.
+    A string with commas, such as ``"127.0.0.1,10.42.0.1"`` from
+    ``FLIGHTRISK_EDGE_HOST``, is a list, and so is a list or tuple of
+    strings. An empty entry in a list raises ``ValueError`` instead of being
+    read as the wildcard ``""``.
+    """
+    if isinstance(host, str):
+        if "," not in host:
+            return (host.strip(),)
+        entries: list[Any] = host.split(",")
+    else:
+        entries = list(host)
+    hosts: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, str):
+            raise TypeError(f"bind hosts must be strings, got {type(entry).__name__}")
+        entry = entry.strip()
+        if not entry:
+            raise ValueError(
+                "The list of bind hosts has an empty entry. Name each address, for example "
+                "127.0.0.1,10.42.0.1; an empty entry would listen on every interface."
+            )
+        if entry not in hosts:
+            hosts.append(entry)
+    if not hosts:
+        raise ValueError("No bind host was given. Name at least one address, for example 127.0.0.1.")
+    return tuple(hosts)
+
+
+def is_wildcard_host(host: str) -> bool:
+    """Whether binding *host* listens on every interface (``0.0.0.0``, ``::`` and equivalents)."""
+    host = host.strip()
+    if host in _WILDCARD_HOSTS:
+        return True
+    address = _ip_literal(host)
+    if address is None:
+        return False
+    if address.is_unspecified:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_unspecified
+
+
+def _has_token(token: str | None) -> bool:
+    # An empty token would let any client pass the handshake with an empty
+    # token, so it does not count as authentication for an exposed bind.
+    return token is not None and token != ""
+
+
+def check_bind_hosts(hosts: Iterable[str], token: str | None, *, list_form: bool = False) -> None:
+    """Refuse an unsafe ground bind; raises ``ValueError`` with an operator-facing message.
+
+    The rules, in order:
+
+    * With ``list_form`` (the hosts came as a list, for example
+      ``127.0.0.1,10.42.0.1``), no entry may be a wildcard address, because
+      it would also listen on the drone's open Wi-Fi, and every entry that is
+      not loopback must be a literal IP address, because a name can resolve
+      to more interfaces than intended.
+    * Any host outside ``127.0.0.1``, ``localhost`` and ``::1`` needs a
+      non-empty token (``FLIGHTRISK_EDGE_TOKEN``), as before.
+    """
+    hosts = tuple(hosts)
+    if not hosts:
+        raise ValueError("No bind host was given. Name at least one address, for example 127.0.0.1.")
+    if list_form:
+        for host in hosts:
+            if is_wildcard_host(host):
+                raise ValueError(
+                    f"Refusing to bind GroundTransport to the wildcard address {host!r} in a list of "
+                    f"bind hosts: it listens on every interface, including a drone's open Wi-Fi. "
+                    f"List the loopback address and the link address instead, for example "
+                    f"127.0.0.1,10.42.0.1."
+                )
+        for host in hosts:
+            if host not in _LOOPBACK_HOSTS and _ip_literal(host) is None:
+                raise ValueError(
+                    f"Refusing to bind GroundTransport to {host!r}: in a list of bind hosts every "
+                    f"address other than loopback must be a literal IP address such as 10.42.0.1, "
+                    f"because a name can resolve to more interfaces than intended."
+                )
+    if not _has_token(token):
+        for host in hosts:
+            if host not in _LOOPBACK_HOSTS:
+                raise ValueError(
+                    f"Refusing to bind GroundTransport to non-loopback host "
+                    f"{host!r} without authentication. Set the "
+                    f"FLIGHTRISK_EDGE_TOKEN environment variable (or pass "
+                    f"token=) to enable the WebSocket auth handshake, or bind a "
+                    f"loopback host (e.g. 127.0.0.1) for local development."
+                )
+
+
+def _address_is_local(host: str) -> bool:
+    """Whether *host* is an address of one of this machine's interfaces right now.
+
+    Checked by binding a throwaway TCP socket to it on an ephemeral port; the
+    socket never listens and is closed at once. A name (not a literal) cannot
+    be checked this way and counts as present, so the real bind decides.
+    """
+    address = _ip_literal(host)
+    if address is None:
+        return True
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.bind((host, 0))
+    except OSError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -571,11 +732,25 @@ class GroundTransport:
         duplicate_ping_timeout_s: How long a drone's current connection has
             to answer a WebSocket ping when a second connection claims the
             same ``drone_id`` (see ``_claim_drone``).
+        host: One bind host (the legacy form, unchanged), or several as a
+            comma-separated string or a list, for example
+            ``"127.0.0.1,10.42.0.1"``. Every host gets its own listener on
+            the same port, and ``check_bind_hosts`` decides at ``start()``
+            whether the set is safe. When a list includes a loopback host, a
+            non-loopback host that cannot bind (its address is missing, for
+            example while the link cable is unplugged) does not stop the
+            ground: the loopback listeners run, the failure is logged, and
+            the bind is retried every ``bind_check_interval_s``.
+        bind_check_interval_s: How often non-loopback bind addresses are
+            re-checked (see ``host``).
+        address_probe: Returns whether an address is currently assigned to
+            this machine (injectable for tests).
+        event_log: ``StructuredLogger`` for bind events (injectable for tests).
     """
 
     def __init__(
         self,
-        host: str = "0.0.0.0",
+        host: str | Iterable[str] = "0.0.0.0",
         port: int = 9000,
         on_message: Callable[[DetectionMessage], None] | None = None,
         token: str | None = None,
@@ -583,11 +758,27 @@ class GroundTransport:
         heartbeat_interval_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         duplicate_ping_timeout_s: float = _DUPLICATE_PING_TIMEOUT_S,
+        bind_check_interval_s: float = _BIND_CHECK_INTERVAL_S,
+        address_probe: Callable[[str], bool] = _address_is_local,
+        event_log: Any = None,
     ):
         self._host = host
+        self._hosts = parse_bind_hosts(host)
+        self._hosts_list_form = _is_list_form(host)
         self._port = port
         self._on_message = on_message  # callback: (DetectionMessage) -> None
+        # One listener per bind host. ``_server`` is the first one that bound
+        # (a loopback one when the list has any) and doubles as the
+        # "server is running" flag.
         self._server = None
+        self._servers: dict[str, Any] = {}
+        self._bound_port: int | None = None
+        self._bind_check_interval_s = bind_check_interval_s
+        self._address_probe = address_probe
+        self._event_log = event_log if event_log is not None else StructuredLogger(component="ground-transport")
+        self._bind_watch_task: asyncio.Task | None = None
+        self._address_present: dict[str, bool] = {}
+        self._bind_errors: dict[str, int | None] = {}
         self._clients: set = set()
         self._token = token
         self._authenticated_clients: set = set()
@@ -628,6 +819,23 @@ class GroundTransport:
         if self._server is not None and self._server.sockets:
             return self._server.sockets[0].getsockname()[1]
         return self._port
+
+    @property
+    def hosts(self) -> tuple[str, ...]:
+        """Every configured bind host, in the order given."""
+        return self._hosts
+
+    @property
+    def bound_hosts(self) -> tuple[str, ...]:
+        """The bind hosts that currently have a listener."""
+        return tuple(host for host in self._hosts if host in self._servers)
+
+    @property
+    def unbound_hosts(self) -> tuple[str, ...]:
+        """While running, the bind hosts that have no listener yet (being retried)."""
+        if self._server is None:
+            return ()
+        return tuple(host for host in self._hosts if host not in self._servers)
 
     async def _authenticate(self, websocket) -> bool:
         """Consume the first message as an auth handshake.
@@ -876,25 +1084,181 @@ class GroundTransport:
         Secure-by-default: binding a non-loopback host (i.e. exposing the
         edge socket beyond the local machine) without a configured token is
         refused, so a deployed ground station can't accidentally accept
-        unauthenticated edge clients.
+        unauthenticated edge clients. A list of bind hosts is also refused
+        when it contains a wildcard address or a non-loopback name (see
+        ``check_bind_hosts``).
+
+        Loopback hosts bind first, and a loopback bind failure always
+        raises. A non-loopback host that fails to bind raises too, unless the
+        list also has a loopback host: then the ground runs on the listeners
+        it has, logs ``ground_bind_unavailable`` and retries that host every
+        ``bind_check_interval_s``. Nothing is ever bound more widely than
+        configured.
         """
         if self._server is not None:
             return
-        if self._host not in _LOOPBACK_HOSTS and self._token is None:
-            raise ValueError(
-                f"Refusing to bind GroundTransport to non-loopback host "
-                f"{self._host!r} without authentication. Set the "
-                f"FLIGHTRISK_EDGE_TOKEN environment variable (or pass "
-                f"token=) to enable the WebSocket auth handshake, or bind a "
-                f"loopback host (e.g. 127.0.0.1) for local development."
-            )
-        self._server = await websockets.serve(self._handle_client, self._host, self._port)
+        check_bind_hosts(self._hosts, self._token, list_form=self._hosts_list_form)
+        # The local edge depends on the loopback listeners, and with port=0
+        # the first one fixes the port that every other listener reuses.
+        ordered = sorted(self._hosts, key=lambda host: host not in _LOOPBACK_HOSTS)
+        can_degrade = len(self._hosts) > 1 and any(host in _LOOPBACK_HOSTS for host in self._hosts)
+        port = self._port
+        try:
+            for host in ordered:
+                try:
+                    server = await self._serve_host(host, port)
+                except OSError as exc:
+                    if host in _LOOPBACK_HOSTS or not can_degrade:
+                        raise
+                    self._address_present[host] = False
+                    self._note_bind_failure(host, port, exc)
+                    continue
+                self._add_server(host, server, port)
+                if port == 0 and server.sockets:
+                    port = server.sockets[0].getsockname()[1]
+        except BaseException:
+            await self._close_servers()
+            self._address_present.clear()
+            self._bind_errors.clear()
+            raise
+        self._bound_port = port
         if self._heartbeat_interval_s is not None:
             self._heartbeat_task = asyncio.ensure_future(
                 self._heartbeat_loop(self._heartbeat_interval_s)
             )
+        if self._watched_hosts():
+            self._bind_watch_task = asyncio.ensure_future(self._bind_watch_loop())
+
+    async def _serve_host(self, host: str, port: int):
+        """Start one listener on *host*.
+
+        If the caller is cancelled while the bind is in flight (``stop()``
+        cancelling the bind watcher), the listener the bind produces is
+        closed rather than left listening with nothing tracking it.
+        """
+        bind = asyncio.ensure_future(websockets.serve(self._handle_client, host, port))
+        try:
+            return await asyncio.shield(bind)
+        except asyncio.CancelledError:
+            try:
+                server = await bind
+            except BaseException:
+                pass
+            else:
+                server.close()
+                await server.wait_closed()
+            raise
+
+    def _add_server(self, host: str, server, port: int) -> None:
+        self._servers[host] = server
+        if self._server is None:
+            self._server = server
+        self._address_present[host] = True
+        self._bind_errors.pop(host, None)
+        actual = server.sockets[0].getsockname()[1] if server.sockets else port
+        self._event_log.info(
+            "ground_bind_listening",
+            host=host,
+            port=actual,
+            loopback=host in _LOOPBACK_HOSTS,
+        )
+
+    def _note_bind_failure(self, host: str, port: int, exc: OSError) -> None:
+        """Log a failed bind once per distinct error, so a retry every few seconds stays quiet."""
+        code = exc.errno
+        if host in self._bind_errors and self._bind_errors[host] == code:
+            return
+        self._bind_errors[host] = code
+        self._event_log.error(
+            "ground_bind_unavailable",
+            host=host,
+            port=port,
+            errno=code,
+            retry_s=self._bind_check_interval_s,
+            listening=list(self.bound_hosts),
+        )
+
+    def _watched_hosts(self) -> list[str]:
+        """Non-loopback literal hosts whose address the bind watcher re-checks."""
+        return [
+            host for host in self._hosts
+            if host not in _LOOPBACK_HOSTS and not is_wildcard_host(host) and _ip_literal(host) is not None
+        ]
+
+    async def _bind_watch_loop(self) -> None:
+        """Re-check the non-loopback bind addresses until ``stop()``. Never raises."""
+        while True:
+            await asyncio.sleep(self._bind_check_interval_s)
+            try:
+                await self.recheck_binds()
+            except Exception:
+                logger.exception("Bind address re-check failed")
+
+    async def recheck_binds(self) -> None:
+        """Re-check each non-loopback bind address once.
+
+        A host without a listener is bound again once its address is back
+        (``ground_bind_recovered``). A host with a listener keeps it whatever
+        happens to its address: the loss and the return are logged
+        (``ground_bind_address_lost``, ``ground_bind_address_restored``), and
+        no connection is closed, so an edge whose link comes back within its
+        link-loss timeout carries on. Loopback listeners are never touched.
+        """
+        if self._server is None:
+            return
+        for host in self._watched_hosts():
+            try:
+                present = bool(self._address_probe(host))
+            except Exception:
+                logger.warning("Address probe failed", exc_info=True)
+                continue
+            was_present = self._address_present.get(host)
+            self._address_present[host] = present
+            if host in self._servers:
+                if present and was_present is False:
+                    self._event_log.info("ground_bind_address_restored", host=host, port=self._bound_port)
+                elif not present and was_present is not False:
+                    self._event_log.warning(
+                        "ground_bind_address_lost",
+                        host=host,
+                        port=self._bound_port,
+                        listener="kept",
+                        listening=list(self.bound_hosts),
+                    )
+                continue
+            if not present or self._bound_port is None:
+                continue
+            try:
+                server = await self._serve_host(host, self._bound_port)
+            except OSError as exc:
+                self._note_bind_failure(host, self._bound_port, exc)
+                continue
+            if self._server is None:
+                # stop() ran while the bind was in flight.
+                server.close()
+                await server.wait_closed()
+                return
+            self._add_server(host, server, self._bound_port)
+            self._event_log.info("ground_bind_recovered", host=host, port=self._bound_port)
+
+    async def _close_servers(self) -> None:
+        servers = list(self._servers.values())
+        self._servers.clear()
+        self._server = None
+        for server in servers:
+            server.close()
+        for server in servers:
+            await server.wait_closed()
 
     async def stop(self) -> None:
+        watch = self._bind_watch_task
+        self._bind_watch_task = None
+        if watch is not None and not watch.done():
+            watch.cancel()
+            try:
+                await watch
+            except asyncio.CancelledError:
+                pass
         task = self._heartbeat_task
         self._heartbeat_task = None
         if task is not None and not task.done():
@@ -908,10 +1272,10 @@ class GroundTransport:
             task.cancel()
         if closing:
             await asyncio.gather(*closing, return_exceptions=True)
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        await self._close_servers()
+        self._bound_port = None
+        self._address_present.clear()
+        self._bind_errors.clear()
         for websocket in list(self._pending_pings):
             self._forget_socket(websocket)
         self._clients.clear()
@@ -1272,7 +1636,7 @@ class GroundTransportSync:
 
     def __init__(
         self,
-        host: str = "0.0.0.0",
+        host: str | Iterable[str] = "0.0.0.0",
         port: int = 9000,
         on_message: Callable[[DetectionMessage], None] | None = None,
         token: str | None = None,
