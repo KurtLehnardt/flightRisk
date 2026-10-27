@@ -109,7 +109,8 @@ class FakeTelloWire:
     changed) and the motor time as ``time``: whole seconds, starting at 5,
     that go up in real time while ``motors_on`` is true (call
     ``set_motors(on)`` to switch). A field named in ``omit_state_fields`` is
-    left out of every packet.
+    left out of every packet, and a field named in ``state_overrides`` is
+    sent with that text instead of its usual value.
     """
 
     def __init__(
@@ -131,6 +132,7 @@ class FakeTelloWire:
         self.height_cm = 0
         self.tof_cm = 10
         self.omit_state_fields: set[str] = set()
+        self.state_overrides: dict[str, str] = {}
         self._motors_on = False
         self._motor_time_s = 5.0
         self._motors_since = 0.0
@@ -262,7 +264,11 @@ class FakeTelloWire:
             ("h", str(int(self.height_cm))), ("bat", "90"), ("baro", "0.00"),
             ("time", str(self.motor_time())), ("agx", "0.00"), ("agy", "0.00"), ("agz", "-1000.00"),
         ]
-        packet = "".join(f"{key}:{value};" for key, value in fields if key not in self.omit_state_fields)
+        packet = "".join(
+            f"{key}:{self.state_overrides.get(key, value)};"
+            for key, value in fields
+            if key not in self.omit_state_fields
+        )
         udp = djitello.drones.get(self.host)
         if udp is not None:
             udp["state"] = djitello.Tello.parse_state(packet)

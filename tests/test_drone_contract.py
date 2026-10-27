@@ -6,9 +6,17 @@ registered backend is tested automatically -- and fails
 mocks its hardware. Controllers are always built through the registry, the
 same way the dashboard builds them.
 
-Hardware is mocked: djitellopy's ``Tello`` for the Tello backend, a fake
-MAVSDK ``System`` (async telemetry streams) and ``cv2.VideoCapture`` for
-MAVLink.
+Hardware is faked at the lowest level each backend talks to: the Tello
+backend runs the real djitellopy client over ``FakeTelloWire`` (the fake
+command socket and state stream from ``tests/conftest.py`` that main's Tello
+tests use), so its replies and state packets arrive as on hardware; MAVLink
+gets a fake MAVSDK ``System`` (async telemetry streams) and
+``cv2.VideoCapture``.
+
+Command results are read the way every caller reads them: normalized with
+``command_result()`` (see ``docs/drone-interface.md``). Backends may return a
+``CommandResult`` or the legacy ``True``/``None`` (executed) and ``False``
+(not executed).
 """
 
 from __future__ import annotations
@@ -18,7 +26,9 @@ import asyncio
 import contextlib
 import importlib
 import inspect
+import threading
 import time
+import types
 from dataclasses import dataclass, field
 from typing import Callable
 from unittest.mock import AsyncMock, MagicMock
@@ -39,6 +49,7 @@ from flightrisk.drone.controller import (
     Motion,
     TelemetrySource,
     VideoSource,
+    command_result,
 )
 from flightrisk.drone.snapshot import (
     IS_FLYING_COMMANDED,
@@ -48,6 +59,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
     legacy_telemetry_payload,
 )
+from tests.conftest import FakeTelloWire, _tello_hosts
 
 ALL_READINGS = frozenset(READING_UNITS)
 
@@ -59,47 +71,29 @@ ALL_READINGS = frozenset(READING_UNITS)
 
 @dataclass
 class Harness:
-    #: Install hardware mocks (monkeypatch) -- called before the factory runs.
-    install: Callable[[pytest.MonkeyPatch], None]
+    #: Install hardware fakes (monkeypatch) -- called before the factory
+    #: runs. Returns the host to build the controller with, or None for
+    #: ``host``.
+    install: Callable[[pytest.MonkeyPatch], str | None]
     #: Make the backend deliver one round of telemetry after connect().
     refresh: Callable[[object], None]
     #: Readings this backend cannot provide: must stay None.
     unsupported: frozenset[str]
-    #: Context manager that makes the command channel busy, or None if the
-    #: backend queues (blocks) instead of dropping commands.
-    busy: Callable[[object], contextlib.AbstractContextManager] | None = None
+    #: Context manager that makes the command channel busy, as another
+    #: command in flight would.
+    busy: Callable[[object], contextlib.AbstractContextManager]
+    #: Whether a move sent while ``busy`` is dropped (reported as
+    #: DROPPED_BUSY) rather than queued behind the busy command.
+    drops_when_busy: bool = True
     host: str = "test-host"
+    #: Called on each controller right after the registry built it.
+    prepare: Callable[[object], None] = field(default=lambda ctrl: None)
     teardown: Callable[[object], None] = field(default=lambda ctrl: None)
 
 
-# --- Tello ------------------------------------------------------------------
-
-
-def _install_tello(monkeypatch):
-    tello_mod = importlib.import_module("flightrisk.drone.tello")
-    fake = MagicMock(name="djitellopy.Tello")
-    fake.get_battery.return_value = 87
-    fake.get_height.return_value = 120
-    fake.get_temperature.return_value = 45.5
-    fake.get_flight_time.return_value = 30
-    fake.get_speed_x.return_value = 5
-    fake.get_speed_y.return_value = 0
-    fake.get_speed_z.return_value = -2
-    fake.get_distance_tof.return_value = 130
-    fake.get_barometer.return_value = 15736.0
-    fake.get_pitch.return_value = 1
-    fake.get_roll.return_value = -2
-    fake.get_yaw.return_value = 90
-    fake.get_frame_read.return_value.frame = np.zeros((48, 64, 3), dtype=np.uint8)
-    monkeypatch.setattr(tello_mod, "Tello", lambda host=None: fake)
-    # No keepalive/state threads in tests; telemetry is refreshed by calling
-    # one poll explicitly.
-    monkeypatch.setattr(tello_mod.TelloController, "_start_keepalive", lambda self: None)
-    monkeypatch.setattr(tello_mod.TelloController, "_start_state_polling", lambda self: None)
-
-
 @contextlib.contextmanager
-def _tello_busy(ctrl):
+def _hold_cmd_lock(ctrl):
+    """Hold the controller's command lock, as a flight command in flight does."""
     ctrl._cmd_lock.acquire()
     try:
         yield
@@ -107,12 +101,60 @@ def _tello_busy(ctrl):
         ctrl._cmd_lock.release()
 
 
+# --- Tello ------------------------------------------------------------------
+
+#: The FakeTelloWire behind each Tello host built in the current test.
+_TELLO_WIRES: dict[str, FakeTelloWire] = {}
+
+
+def _install_tello(monkeypatch):
+    """Run the real djitellopy client over a FakeTelloWire, as ``tello_on_wire`` does."""
+    import djitellopy.tello as djitello
+
+    tello_mod = importlib.import_module("flightrisk.drone.tello")
+    host = next(_tello_hosts)
+    wire = FakeTelloWire(host)
+    _TELLO_WIRES[host] = wire
+    # threads_initialized stops djitellopy from binding its real UDP
+    # sockets; client_socket is the socket every command is sent on.
+    monkeypatch.setattr(djitello, "threads_initialized", True)
+    monkeypatch.setattr(djitello, "client_socket", wire, raising=False)
+    # No keepalive/state-poll threads in tests; telemetry is refreshed by
+    # calling one poll explicitly.
+    monkeypatch.setattr(tello_mod.TelloController, "_start_keepalive", lambda self: None)
+    monkeypatch.setattr(tello_mod.TelloController, "_start_state_polling", lambda self: None)
+    return host
+
+
+def _prepare_tello(ctrl):
+    # State packets (about 20 a second) of a Tello resting on the ground with
+    # its motors off: connect() waits for the first one, the poll reads
+    # them, and a land is confirmed by them as on hardware.
+    _TELLO_WIRES[ctrl.host].start_state(height_cm=0)
+    # The video decoder is not under test; serve a still frame.
+    still = types.SimpleNamespace(frame=np.zeros((48, 64, 3), dtype=np.uint8))
+    ctrl.tello.get_frame_read = lambda *args, **kwargs: still
+
+
+def _teardown_tello(ctrl):
+    wire = _TELLO_WIRES.pop(ctrl.host, None)
+    ctrl._running = False
+    if wire is not None:
+        wire.stop_state()
+        wire.cancel_pending()
+    # Keep djitellopy's end() (run when the client is garbage collected)
+    # from sending anything after the fake socket is gone.
+    ctrl.tello.is_flying = False
+    ctrl.tello.stream_on = False
+
+
 TELLO = Harness(
     install=_install_tello,
     refresh=lambda ctrl: ctrl._poll_once(),
     unsupported=frozenset({"latitude_deg", "longitude_deg", "altitude_msl_m", "heading_deg"}),
-    busy=_tello_busy,
-    host="192.168.10.1",
+    busy=_hold_cmd_lock,
+    prepare=_prepare_tello,
+    teardown=_teardown_tello,
 )
 
 
@@ -206,17 +248,18 @@ MAVLINK = Harness(
     install=_install_mavlink,
     refresh=_mavlink_refresh,
     unsupported=ALL_READINGS - {"battery_pct", "latitude_deg", "longitude_deg", "altitude_msl_m", "heading_deg"},
-    busy=None,  # MAVLink queues commands behind the lock; nothing is dropped
+    busy=_hold_cmd_lock,
+    drops_when_busy=False,  # MAVLink queues commands behind the lock; nothing is dropped
     host="udp://:14540",
     teardown=_mavlink_teardown,
 )
 
 
-# --- Fake -------------------------------------------------------------------
+# --- Simulated drone (sim) --------------------------------------------------
 
 
 @contextlib.contextmanager
-def _fake_busy(ctrl):
+def _sim_busy(ctrl):
     ctrl.set_busy(True)
     try:
         yield
@@ -224,16 +267,16 @@ def _fake_busy(ctrl):
         ctrl.set_busy(False)
 
 
-FAKE = Harness(
+SIM = Harness(
     install=lambda monkeypatch: None,
     refresh=lambda ctrl: None,
     unsupported=frozenset({"latitude_deg", "longitude_deg", "altitude_msl_m", "heading_deg", "tof_m", "baro_altitude_m"}),
-    busy=_fake_busy,
-    host="fake://drone",
+    busy=_sim_busy,
+    host="sim://drone",
 )
 
 
-HARNESSES: dict[str, Harness] = {"tello": TELLO, "mavlink": MAVLINK, "fake": FAKE}
+HARNESSES: dict[str, Harness] = {"tello": TELLO, "mavlink": MAVLINK, "sim": SIM}
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +299,13 @@ def harness(backend):
 @pytest.fixture
 def make_drone(backend, harness, monkeypatch):
     """Build controllers through the registry, exactly as the dashboard does."""
-    harness.install(monkeypatch)
+    host = harness.install(monkeypatch) or harness.host
     spec = registry.get(backend)
     built = []
 
     def _make(drone_id="contract-1"):
-        ctrl = spec.create(drone_id, harness.host, spec.options({}))
+        ctrl = spec.create(drone_id, host, spec.options({}))
+        harness.prepare(ctrl)
         built.append(ctrl)
         return ctrl
 
@@ -305,7 +349,10 @@ def test_every_backend_has_a_harness():
 
 
 def test_builtin_backends_are_registered():
-    assert {"tello", "mavlink", "fake"} <= set(registry.names())
+    assert {"tello", "mavlink", "sim"} <= set(registry.names())
+    # "fake" is the edge device's simulated Tello (--source fake), never a
+    # dashboard backend name.
+    assert "fake" not in registry.names()
     assert registry.DEFAULT_BACKEND in registry.names()
 
 
@@ -411,30 +458,59 @@ class TestCommands:
         calls.append(("land", lambda: connected.land()))
         for name, call in calls:
             try:
-                result = call()
+                value = call()
             except NotImplementedError:  # pragma: no cover - the assertion is the point
                 pytest.fail(f"{name} raised NotImplementedError")
-            assert isinstance(result, CommandResult), name
+            assert value is None or isinstance(value, (bool, CommandResult)), (name, value)
+            result = command_result(value, name)
             assert result.command == name
             assert result.ok, (name, result)
 
     def test_land_is_idempotent(self, connected):
         connected.takeoff()
         assert connected.snapshot().is_flying is True
-        assert connected.land().ok
-        assert connected.land().ok
+        assert command_result(connected.land(), "land").ok
+        assert command_result(connected.land(), "land").ok
         assert connected.snapshot().is_flying is False
 
     def test_dropped_move_is_reported_not_silent(self, connected, harness, backend):
-        if harness.busy is None:
+        if not harness.drops_when_busy:
             pytest.skip(f"{backend} queues commands behind its lock instead of dropping them")
         connected.takeoff()
         with harness.busy(connected):
-            result = connected.move("forward", 20)
-        assert isinstance(result, CommandResult)
+            value = connected.move("forward", 20)
+        result = command_result(value, "move")
         assert result.outcome is CommandOutcome.DROPPED_BUSY
         assert not result.ok
-        assert connected.move("forward", 20).ok
+        assert not value  # falsy, like the bare False it replaces
+        assert command_result(connected.move("forward", 20), "move").ok
+
+    @pytest.mark.parametrize("command", ["land", "takeoff"])
+    def test_land_and_takeoff_are_never_dropped_while_the_channel_is_busy(self, connected, harness, command):
+        """FlightControl contract: a busy channel is waited for (or, for a
+        land, interrupted), never a reason to drop a land or a takeoff."""
+        if command == "land":
+            assert command_result(connected.takeoff(), "takeoff").ok
+        outcome: dict = {}
+
+        def run():
+            try:
+                outcome["value"] = getattr(connected, command)()
+            except BaseException as exc:  # noqa: BLE001 -- reported by the assertion below
+                outcome["error"] = exc
+
+        with harness.busy(connected):
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            # The busy command finishes a moment later.
+            worker.join(0.3)
+        worker.join(30.0)
+        assert not worker.is_alive(), f"{command} did not return once the channel was free"
+        assert "error" not in outcome, outcome
+        result = command_result(outcome["value"], command)
+        assert result.outcome is not CommandOutcome.DROPPED_BUSY
+        assert result.ok, result
+        assert connected.snapshot().is_flying is (command == "takeoff")
 
     def test_video_source(self, connected):
         frames = []

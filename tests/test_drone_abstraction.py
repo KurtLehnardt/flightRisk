@@ -1,6 +1,6 @@
 """Tests for the drone abstraction: registry, telemetry snapshot, safety
-policy, the fake backend, the Tello telemetry adapter, and the dashboard
-wiring that depends on them."""
+policy, the simulated (``sim``) backend, the Tello telemetry adapter, and the
+dashboard wiring that depends on them."""
 
 from __future__ import annotations
 
@@ -16,12 +16,14 @@ from flightrisk.drone import registry
 from flightrisk.drone.controller import (
     BASIC_FLIGHT,
     Capability,
+    CommandNotExecutedError,
     CommandOutcome,
     CommandResult,
     DroneCapabilities,
     DroneState,
     capabilities_of,
     command_result,
+    require_executed,
 )
 from flightrisk.drone.fake import FakeDrone, FakeDroneConfig, FakeDroneError
 from flightrisk.drone.snapshot import (
@@ -33,6 +35,17 @@ from flightrisk.drone.snapshot import (
     read_telemetry,
     snapshot_from_state,
 )
+
+
+def _old_frame_payload(state):
+    """The frame.telemetry dict exactly as pipeline.py built it before the refactor."""
+    return {
+        "battery": state.battery,
+        "height": state.height,
+        "temperature": state.temperature,
+        "flight_time": state.flight_time,
+        "is_flying": state.is_flying,
+    }
 
 
 def _snap(battery=None, flying=True, **kw):
@@ -102,13 +115,41 @@ class TestRegistry:
         assert spec.default_host(opts) == "udp://:15000"
         assert opts["rtsp_url"] == "rtsp://cam"
 
+    def test_failed_bootstrap_is_rolled_back_and_retried(self, tmp_path, monkeypatch):
+        """The bootstrap flag is set only after the backends module imported."""
+        import importlib
+
+        module = tmp_path / "half_backends.py"
+        module.write_text(
+            "from flightrisk.drone.registry import register\n"
+            "register('half', lambda *a: None, default_host=lambda o: 'x')\n"
+            "raise ImportError('backend SDK missing')\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.setattr(registry, "_BOOTSTRAP_MODULE", "half_backends")
+        monkeypatch.setattr(registry, "_bootstrapped", False)
+        monkeypatch.setattr(registry, "_specs", {})
+        with pytest.raises(ImportError, match="backend SDK missing"):
+            registry.names()
+        assert registry._specs == {}  # nothing half-registered is left behind
+        assert registry._bootstrapped is False
+
+        module.write_text(
+            "from flightrisk.drone.registry import register\n"
+            "register('half', lambda *a: None, default_host=lambda o: 'x')\n"
+        )
+        importlib.invalidate_caches()
+        assert registry.names() == ("half",)  # retried, not stuck empty
+        assert registry._bootstrapped is True
+        monkeypatch.delitem(__import__("sys").modules, "half_backends", raising=False)
+
     def test_tello_default_host_from_config(self):
         spec = registry.get("tello")
         assert spec.default_host(spec.options({"mavlink_address": "udp://:1"})) == "192.168.10.1"
 
-    def test_fake_options_parse_strings(self):
-        spec = registry.get("fake")
-        ctrl = spec.create("f1", "fake://x", spec.options({"battery_pct": "15", "drop_commands": "move,rotate"}))
+    def test_sim_options_parse_strings(self):
+        spec = registry.get("sim")
+        ctrl = spec.create("f1", "sim://x", spec.options({"battery_pct": "15", "drop_commands": "move,rotate"}))
         ctrl.connect()
         assert ctrl.snapshot().battery_pct.value == 15.0
         assert ctrl.move("forward", 20).outcome is CommandOutcome.DROPPED_BUSY
@@ -138,7 +179,26 @@ class TestCapabilities:
         assert command_result(dropped, "move") is dropped
         assert not dropped.ok
         assert command_result(True, "move").ok
-        assert command_result(False, "move").outcome is CommandOutcome.DROPPED_BUSY
+        # A bare False carries no reason: it is "not executed", not "busy".
+        not_executed = command_result(False, "takeoff")
+        assert not_executed.outcome is CommandOutcome.NOT_EXECUTED
+        assert not not_executed.ok
+        assert not_executed.command == "takeoff"
+
+    def test_command_result_truthiness_follows_ok(self):
+        assert CommandResult("move")
+        for outcome in (CommandOutcome.DROPPED_BUSY, CommandOutcome.REJECTED, CommandOutcome.NOT_EXECUTED):
+            assert not CommandResult("move", outcome)
+
+    def test_require_executed(self):
+        assert require_executed(None, "land").ok
+        assert require_executed(True, "land").ok
+        with pytest.raises(CommandNotExecutedError) as excinfo:
+            require_executed(CommandResult("land", CommandOutcome.DROPPED_BUSY, "busy"), "land")
+        assert excinfo.value.result.outcome is CommandOutcome.DROPPED_BUSY
+        assert "land not executed (dropped_busy)" in str(excinfo.value)
+        with pytest.raises(CommandNotExecutedError):
+            require_executed(False, "land")
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +294,7 @@ class TestSafetyPolicy:
 
 
 # ---------------------------------------------------------------------------
-# Fake backend
+# Simulated backend (sim)
 # ---------------------------------------------------------------------------
 
 
@@ -284,31 +344,39 @@ class TestFakeDrone:
 
 
 @pytest.fixture
-def tello(monkeypatch):
+def tello(tello_on_wire, monkeypatch):
+    """A connected TelloController running the real djitellopy client over FakeTelloWire.
+
+    The keepalive and state-poll threads are not started; tests poll with
+    ``_poll_once()``. State packets carry the values below (Tello SDK units).
+    """
     import flightrisk.drone.tello as tello_mod
 
-    fake = MagicMock(name="djitellopy.Tello")
-    fake.get_battery.return_value = 80
-    fake.get_height.return_value = 50
-    fake.get_temperature.return_value = 41.5
-    fake.get_flight_time.return_value = 12
-    fake.get_speed_x.return_value = 3
-    fake.get_speed_y.return_value = 4
-    fake.get_speed_z.return_value = 0
-    fake.get_distance_tof.return_value = 60
-    fake.get_barometer.return_value = 12000.0
-    fake.get_pitch.return_value = 0
-    fake.get_roll.return_value = 0
-    fake.get_yaw.return_value = -90
-    monkeypatch.setattr(tello_mod, "Tello", lambda host=None: fake)
     monkeypatch.setattr(tello_mod.TelloController, "_start_keepalive", lambda self: None)
     monkeypatch.setattr(tello_mod.TelloController, "_start_state_polling", lambda self: None)
-    ctrl = tello_mod.TelloController("t1", "192.168.10.1")
-    ctrl.connect()
-    return ctrl, fake
+    ctrl, wire = tello_on_wire()
+    wire.height_cm = 50
+    wire.tof_cm = 60
+    wire.state_overrides.update({
+        "bat": "80", "templ": "40", "temph": "43", "time": "12",
+        "vgx": "3", "vgy": "4", "vgz": "0", "baro": "120.00", "pitch": "0", "roll": "0", "yaw": "-90",
+    })
+    wire.start_state()
+    assert ctrl.connect() is True
+    return ctrl, wire
 
 
 class TestTelloTelemetry:
+    def test_connect_failure_reports_the_reason(self, tello_on_wire, capsys):
+        ctrl, _ = tello_on_wire()
+
+        def refuse():
+            raise RuntimeError("Did not receive a state packet from the Tello")
+
+        ctrl.tello.connect = refuse
+        assert ctrl.connect() is False
+        assert "Connection failed: Did not receive a state packet from the Tello" in capsys.readouterr().out
+
     def test_extended_readings_in_si_units(self, tello):
         ctrl, _ = tello
         ctrl._poll_once()
@@ -322,8 +390,9 @@ class TestTelloTelemetry:
         assert snap.is_flying_source == "commanded"
 
     def test_missing_extended_field_is_none_and_not_a_poll_failure(self, tello):
-        ctrl, fake = tello
-        fake.get_distance_tof.side_effect = RuntimeError("no state field")
+        ctrl, wire = tello
+        wire.omit_state_fields.add("tof")
+        wire.send_state()
         ctrl._poll_once()
         snap = ctrl.snapshot()
         assert snap.tof_m is None
@@ -336,7 +405,9 @@ class TestTelloTelemetry:
 
         ctrl, _ = tello
         clock = [1000.0]
-        monkeypatch.setattr(tello_mod, "time", types.SimpleNamespace(time=lambda: clock[0], sleep=time.sleep))
+        monkeypatch.setattr(
+            tello_mod, "time", types.SimpleNamespace(time=lambda: clock[0], sleep=time.sleep, monotonic=time.monotonic)
+        )
         ctrl._poll_once()
         clock[0] = 1010.0  # no poll for 10 s (e.g. skipped while a move holds the lock)
         snap = ctrl.snapshot()
@@ -344,9 +415,12 @@ class TestTelloTelemetry:
         assert snap.height_m.age_s(now=clock[0]) == pytest.approx(10.0)
 
     def test_crash_heuristic_unchanged(self, tello):
-        ctrl, fake = tello
-        ctrl.takeoff()
-        fake.get_height.return_value = 0
+        ctrl, wire = tello
+        assert ctrl.takeoff() is True
+        # Fresh state of a drone on the ground with its motors off.
+        wire.height_cm = 0
+        wire.tof_cm = 10
+        wire.send_state()
         ctrl._poll_once()
         ctrl._poll_once()
         assert ctrl.state.is_flying is True
@@ -354,23 +428,56 @@ class TestTelloTelemetry:
         assert ctrl.state.is_flying is False
 
     def test_three_poll_failures_drop_connection(self, tello):
-        ctrl, fake = tello
-        fake.get_battery.side_effect = RuntimeError("timeout")
+        ctrl, wire = tello
+        wire.omit_state_fields.add("bat")
+        wire.send_state()
         for _ in range(3):
             ctrl._poll_once()
         assert ctrl.state.is_connected is False
         assert ctrl.snapshot().connected is False
 
     def test_dropped_and_rejected_moves_are_reported(self, tello):
-        ctrl, fake = tello
-        with ctrl._cmd_lock:
+        ctrl, wire = tello
+        sent_before = list(wire.sent)
+        with ctrl._cmd_lock:  # another flight command holds the channel
             assert ctrl.move("forward", 50).outcome is CommandOutcome.DROPPED_BUSY
             assert ctrl.rotate(90).outcome is CommandOutcome.DROPPED_BUSY
-        fake.move_forward.assert_not_called()
-        del fake.move_sideways
         assert ctrl.move("sideways", 50).outcome is CommandOutcome.REJECTED
-        assert ctrl.move("forward", 900).ok
-        fake.move_forward.assert_called_once_with(500)  # clamp unchanged
+        assert wire.sent == sent_before  # none of them reached the drone
+        assert ctrl.move("forward", 900) is True
+        assert wire.sent[-1] == "forward 500"  # clamp unchanged
+
+    def test_landing_refusal_is_still_a_bare_false(self, tello):
+        """#87's contract is unchanged: a move refused by a landing returns False."""
+        ctrl, _ = tello
+        ctrl._landing = True
+        assert ctrl.move("forward", 50) is False
+        assert ctrl.rotate(90) is False
+        assert command_result(False, "move").outcome is CommandOutcome.NOT_EXECUTED
+
+    def test_read_battery_and_height_are_stamped_before_the_first_poll(self, tello):
+        """read_battery()/read_height_cm() (the lane executor's readers) stamp what they store."""
+        ctrl, _ = tello
+        assert ctrl.snapshot().height_m is None  # nothing has read the height yet
+        before = time.time()
+        assert ctrl.read_height_cm() == 50
+        assert ctrl.read_battery() == 80
+        snap = ctrl.snapshot()
+        assert snap.height_m.value == pytest.approx(0.5) and snap.height_m.measured_at >= before
+        assert snap.battery_pct.measured_at >= before
+        assert legacy_telemetry_payload(snap) == _old_frame_payload(ctrl.state)
+
+    def test_partial_poll_keeps_what_it_read(self, tello):
+        """A poll that fails part-way reports the fields it read, like the old output did."""
+        ctrl, wire = tello
+        wire.omit_state_fields.add("templ")  # get_temperature() fails after battery and height
+        wire.send_state()
+        ctrl._poll_once()
+        snap = ctrl.snapshot()
+        assert snap.battery_pct.value == 80 and snap.height_m.value == pytest.approx(0.5)
+        assert snap.temperature_c is None
+        assert ctrl._poll_failures == 1
+        assert legacy_telemetry_payload(snap) == _old_frame_payload(ctrl.state)
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +558,7 @@ class TestDashboardWiring:
         names = [r["name"] for r in received]
         assert names == ["command_dropped", "command_ack"]
 
-    def test_fake_source_builds_fleet_via_registry(self, clean_app_state):
+    def test_sim_source_builds_fleet_via_registry(self, clean_app_state):
         from flightrisk.dashboard import app as app_mod
         from flightrisk.dashboard.state import SourceConfig
 
@@ -459,10 +566,10 @@ class TestDashboardWiring:
                     "metrics", "db", "obstacle_guard", "canon"):
             app_mod._state[key] = MagicMock()
         app_mod._state["running"] = False
-        app_mod._init_pipeline(SourceConfig(source="fake", drone_options={"battery_pct": "33"}))
+        app_mod._init_pipeline(SourceConfig(source="sim", drone_options={"battery_pct": "33"}))
         try:
             fleet = app_mod._state["fleet"]
-            ctrl = fleet._factory("drone-1", "fake://drone")
+            ctrl = fleet._factory("drone-1", "sim://drone")
             assert isinstance(ctrl, FakeDrone)
             ctrl.connect()
             assert ctrl.snapshot().battery_pct.value == 33.0
@@ -527,18 +634,18 @@ class TestDashboardWiring:
 
 
 class TestCli:
-    def test_fake_source_and_drone_opts(self, monkeypatch):
+    def test_sim_source_and_drone_opts(self, monkeypatch):
         import sys
         from unittest.mock import patch
 
         import flightrisk.dashboard.__main__ as dashboard_main
 
         with patch.object(dashboard_main, "run_dashboard") as mock_run:
-            monkeypatch.setattr(sys, "argv", ["x", "--source", "fake", "--drone-opt", "battery_pct=15",
+            monkeypatch.setattr(sys, "argv", ["x", "--source", "sim", "--drone-opt", "battery_pct=15",
                                               "--drone-opt", "drop_commands=move"])
             dashboard_main.main()
         cfg = mock_run.call_args[0][0]
-        assert cfg.source == "fake"
+        assert cfg.source == "sim"
         assert cfg.drone_options == {"battery_pct": "15", "drop_commands": "move"}
         assert cfg.drone_settings()["battery_pct"] == "15"
 
