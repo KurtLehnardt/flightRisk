@@ -105,3 +105,16 @@ def test_demo_edge_ps1_restores_env():
     assert "$env:FLIGHTRISK_APPEARANCE_ONLY = $savedAppearanceOnly" in restore
     # The exit code is returned after the restore, not from inside the try block.
     assert body.rindex("exit $exitCode") > finally_at
+
+
+def test_demo_script_hotkey_in_text_fields_and_geofence_launchers():
+    """R-116: the LAND ALL hotkey inside text fields, and where the 450 cm geofence comes from."""
+    text = _doc("demo-script.md")
+    core = text[text.index("- 2:15 Say:"):]
+    core = core[:core.index("\n")]
+    assert "Ctrl/Cmd+Shift+L" in core and "text field" in core
+    limits = text[text.index("Each edge enforces its own limits"):]
+    limits = limits[:limits.index("\n")]
+    assert "Ctrl/Cmd+Shift+L" in limits and "text field" in limits
+    assert "450 cm geofence around its takeoff point by default, as set by the demo launchers" in limits
+    assert "the code default is 500 cm" in limits

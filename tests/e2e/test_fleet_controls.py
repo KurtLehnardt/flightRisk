@@ -57,3 +57,25 @@ def test_land_all_hotkey_ignores_repeat_and_text_fields_without_modifier():
     # The button is unchanged and the handler still runs in the capture phase.
     assert 'onclick="landAll()"' in INDEX
     assert INDEX[end:].startswith("}, true);")
+
+
+def test_hotkey_select_not_editable_and_altgr_ignored():
+    """A focused select is not a text field, and Alt (AltGr is Ctrl+Alt) never lands the fleet (R-116)."""
+    start = INDEX.index("document.addEventListener('keydown', function(e) {\n            if (e.repeat) return;")
+    end = INDEX.index("}, true);", start)
+    handler = INDEX[start:end]
+    # Alt is rejected before the Ctrl/Cmd check could let AltGr through,
+    # and before anything is prevented or sent.
+    assert "if (e.altKey) return;" in handler
+    alt_at = handler.index("if (e.altKey) return;")
+    assert alt_at < handler.index("isEditableTarget(e.target)")
+    assert alt_at < handler.index("e.preventDefault()") < handler.index("landAll();")
+    # A select takes no typed text, so Shift+L alone still works from it;
+    # text inputs, textareas and contenteditable elements still need Ctrl or Cmd.
+    editable = _function_body("isEditableTarget")
+    assert "SELECT" not in editable
+    for token in ("isContentEditable", "TEXTAREA", "INPUT"):
+        assert token in editable
+    # The LAND ALL tooltip names the in-field shortcut.
+    tag = re.search(r'<button id="land-all"[^>]*>', INDEX).group(0)
+    assert re.search(r'title="[^"]*Ctrl/Cmd\+Shift\+L[^"]*text field', tag)
