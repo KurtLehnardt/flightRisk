@@ -12,7 +12,7 @@ layer: message schemas, validation, version negotiation, compatibility rules
 and the meaning of each field. The components that act on the messages (the
 edge authority, the lane executor changes and the leader/peer link) arrive in
 later pull requests, and the obligations they must meet are listed in
-"Receiver obligations" below.
+"What PR-4/5 consumers must do" below.
 
 ## Contents
 
@@ -24,7 +24,7 @@ later pull requests, and the obligations they must meet are listed in
 - Compatibility with v1 peers
 - Caps and strictness
 - Privacy
-- Receiver obligations for later pull requests
+- What PR-4/5 consumers must do
 - Differences from the plan text
 
 ## Versions and negotiation
@@ -260,17 +260,23 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 | v2 | v2 | Both send `hello`; fenced v2 rules apply from then on. |
 
 - **Validation entry points.** `validate_message(msg)` with no `proto`
-  argument behaves exactly as before for v1 messages, including passing
-  unknown types through, so existing callers in `transport.py`, the
-  dashboard and the coordinator are unaffected. `validate_message(msg,
-  proto=2)` applies the v2 rules. `validate_ground_to_edge`,
+  argument applies the v1 rules and still passes unknown types through.
+  Realistic v1 messages (everything the v1 builders, the lane executor and
+  the dashboard produce) validate unchanged, so existing callers in
+  `transport.py`, the dashboard and the coordinator are unaffected. It is
+  not byte-for-byte the old function: it adds the caps under "Caps and
+  strictness" and the privacy screen under "Privacy", so a message with,
+  for example, an extra `frame` key, a list of 20 numbers or nesting deeper
+  than 8 levels is now refused, and it fixes two crashes on malformed input
+  (see below). `validate_message(msg, proto=2)` applies the v2 rules. `validate_ground_to_edge`,
   `validate_edge_to_ground` and `validate_peer_message` additionally reject
   unknown and misdirected types. `decode` and `encode` wrap them with JSON
   parsing, serialisation and size limits.
-- **Builders.** Every existing builder keeps its signature and output. The v2
-  form is produced by passing `fence=Fence(epoch, leader_id)` (and
-  `plan_id=` where needed); a fresh `cmd_id` is generated unless one is
-  passed for a retry.
+- **Builders.** Every existing v1 builder keeps its signature (new
+  parameters are keyword-only and optional) and, without a fence, its exact
+  output. The v2 form is produced by passing `fence=Fence(epoch, leader_id)`
+  (and `plan_id=` and `plan_seq=` where needed); a fresh `cmd_id` is
+  generated unless one is passed for a retry.
 - **Downgrade protection.** An edge must not accept unfenced motion commands
   on any connection once it has adopted a v2 epoch, and must accept them on a
   v1 link only in the single-ground legacy configuration. The protocol
@@ -378,27 +384,70 @@ code checks.
   receiver uses only its `type`. Senders never add such keys, because the
   builders cannot.
 
-## Receiver obligations for later pull requests
+## What PR-4/5 consumers must do
 
-These rules follow from the protocol and must be met by the code that uses it.
+The protocol layer defines and checks messages; it does not act on them.
+The edge authority (PR-4), the executor (PR-5) and the leader and peer link
+must meet these rules, which follow from the protocol and from the review of
+this layer.
 
-- **Validate with the agreed version.** Pass the connection's agreed `proto`
-  to `validate_message` or `decode`. Today `transport.py` validates with the
-  default (v1). Until the transport passes the agreed version, a v2 nack for
-  anything other than `assign_lanes` is dropped at the ground as malformed.
-- **Fence `clock`.** In v2, `GroundTransport.sync_clock` must send a fenced
-  `clock` (`make_clock(offset, fence=...)`).
-- **Check `leader_id` against the connection.** An edge should check that a
+- **Multi-ground mode is v2-only.** In multi-ground mode the edge treats
+  unfenced motion as `not_authority` regardless of the link version
+  (`validate_ground_to_edge(..., require_fence=True)`), and both sides
+  refuse v1 links (`negotiate_proto(..., local_min=2)`, and no `hello`
+  means v1) unless `FLIGHTRISK_FLEET_LEGACY=1` is set.
+- **Validate with the agreed version, on both sides.** Pass the
+  connection's agreed `proto` into `transport.py` on the ground and on the
+  edge. Today `EdgeTransport.send` validates with the v1 default, so a v2
+  nack for `hold` or `resume` raises `ProtocolError` there, and
+  `LaneExecutor._emit` swallows the error, so the nack is silently lost.
+  The ground likewise drops a v2 nack it validates as v1.
+- **Use the fail-safe decoder.** An edge that parses frames itself must
+  keep the landing guarantee: use `decode` in the ground-to-edge direction
+  (or `failsafe_type_of` when its own parse fails), never a strict parse
+  alone.
+- **Record `cmd_id` on arrival.** The edge records a command's `cmd_id` as
+  pending when it arrives, before executing it, so a retry that arrives
+  while the first copy is still running is recognised as a duplicate and
+  not executed twice.
+- **Correlate acks by drone and command.** The ground correlates acks and
+  nacks by `(drone_id, cmd_id)`, not by `cmd_id` alone, because a broadcast
+  `hold` sends the same `cmd_id` to every drone.
+- **Only the authority commands and feeds the watchdog.** Only the
+  authority may send `set_target`, `stream_video` and `ping` (they carry no
+  fence, so the edge checks the connection), and only the authority's
+  messages feed the link watchdog (plan section 2.3). A landing from any
+  authenticated ground is executed but does not feed the watchdog. A v1
+  edge feeds the watchdog on every message, including a `hello` it does not
+  understand; that is the existing v1 behaviour and is safe only while
+  there is a single ground.
+- **Check `leader_id` against the connection.** An edge checks that a
   message's `leader_id` equals the `node_id` that the same connection
   announced in its `hello`.
-- **Supersede pending motion on landing.** The transport's
-  `_SUPERSEDED_BY_EMERGENCY` set (`takeoff`, `start_at`) should grow to
-  include `resume` and `nudge`, so that an `emergency_land_all` also discards
-  those if they are still queued.
-- **Watchdog.** Only the authority's messages may feed the link watchdog
-  (plan section 2.3). A v1 edge feeds it on every message, including a
-  `hello` it does not understand; that is the existing v1 behaviour and is
-  safe while there is a single ground.
+- **Fence `clock`.** In v2, `GroundTransport.sync_clock` must send a fenced
+  `clock` (`make_clock(offset, fence=...)`).
+- **Supersede pending motion on landing.** Add `resume` and `nudge` to
+  `_SUPERSEDED_BY_EMERGENCY` in `transport.py` (it holds `takeoff` and
+  `start_at` today), so that an `emergency_land_all` also discards those if
+  they are still queued.
+- **Retries.** Follow "Automatic retries" and "Newer commands cancel older
+  retries" above: never retry `resume`, and cancel pending `assign_lanes`
+  retries for a drone when a newer `hold`, `assign_lanes` or `land` is sent
+  to it. The edge refuses an older plan with `stale_plan`.
+- **`hold` to a v1 edge.** `shape_for_peer` raises for `hold` (and the
+  other v2-only commands) to a v1 edge, so in legacy mode the leader needs a
+  fallback, such as landing that drone or reporting it as unable to hold.
+- **v1 edge quirks.** A v1 edge drops `on_complete` silently and hovers
+  after its last lane. A v2 edge treats a missing `hover_timeout_s` with
+  `on_complete: "hover"` as 20 s (`DEFAULT_HOVER_TIMEOUT_S`).
+- **Late edge `hello`.** A ground that has already treated an edge as v1
+  after `HELLO_TIMEOUT_S` (2 s) closes the connection when an edge `hello`
+  arrives later, because the version cannot change on a live connection.
+  The edge reconnects and negotiates afresh.
+- **Guard `MAX_EPOCH`.** Use `next_epoch` to compute every new epoch, and
+  surface its error to the operator. An edge should not adopt an epoch
+  close to `MAX_EPOCH` from a ground it has not been told to expect,
+  because no leader could follow it.
 
 ## Differences from the plan text
 

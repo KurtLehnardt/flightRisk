@@ -6,8 +6,9 @@ when several drones fly as one coordinated fleet. It is deliberately pure: it
 imports no networking code, so the fleet coordinator, the edge device and the
 transport can all share it, and it can be unit-tested without sockets.
 
-Protocol v1 (the hackathon flow) is unchanged and still the default. Protocol
-v2 adds leader epochs and fencing, command ids, plan ids, a version handshake
+Protocol v1 (the hackathon flow) is still the default, and realistic v1
+messages validate unchanged; v1 validation adds size caps and privacy checks
+and no longer crashes on malformed input. Protocol v2 adds leader epochs and fencing, command ids, plan ids, a version handshake
 (``hello``), new commands (``hold``, ``resume``, ``nudge``, ``handover``),
 generic acks and nacks, and the ground-to-ground messages used for leadership
 handover. ``docs/fleet-protocol-v2.md`` is the full reference: the message

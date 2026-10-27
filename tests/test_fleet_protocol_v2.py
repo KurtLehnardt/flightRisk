@@ -891,15 +891,15 @@ def test_random_valid_commands_round_trip(seed):
     for _ in range(300):
         fence = fp.Fence(rng.randrange(1, fp.MAX_EPOCH), rng.choice(["mac", "win", "node-7"]))
         builders = [
-            lambda: fp.make_nudge(fence, rng.choice(sorted(fp.NUDGE_DIRECTIONS)),
-                                  rng.randrange(fp.NUDGE_MIN_CM, fp.NUDGE_MAX_CM + 1)),
-            lambda: fp.make_hold(fence, reason=rng.choice([None, *sorted(fp.HOLD_REASONS)])),
-            lambda: fp.make_resume(fence, plan_id=rng.choice(["p-1", "p-2"])),
-            lambda: fp.make_heartbeat(rng.randrange(0, 2**40), fence=fence),
-            lambda: fp.make_start_at(rng.uniform(-1e6, 1e6), fence=fence, plan_id="p-9"),
-            lambda: fp.make_takeoff(fence=fence),
-            lambda: fp.make_land(cmd_id=fp.new_cmd_id(), fence=rng.choice([None, fence])),
-            lambda: fp.make_assign_lanes(
+            lambda fence=fence: fp.make_nudge(fence, rng.choice(sorted(fp.NUDGE_DIRECTIONS)),
+                                              rng.randrange(fp.NUDGE_MIN_CM, fp.NUDGE_MAX_CM + 1)),
+            lambda fence=fence: fp.make_hold(fence, reason=rng.choice([None, *sorted(fp.HOLD_REASONS)])),
+            lambda fence=fence: fp.make_resume(fence, plan_id=rng.choice(["p-1", "p-2"])),
+            lambda fence=fence: fp.make_heartbeat(rng.randrange(0, 2**40), fence=fence),
+            lambda fence=fence: fp.make_start_at(rng.uniform(-1e6, 1e6), fence=fence, plan_id="p-9"),
+            lambda fence=fence: fp.make_takeoff(fence=fence),
+            lambda fence=fence: fp.make_land(cmd_id=fp.new_cmd_id(), fence=rng.choice([None, fence])),
+            lambda fence=fence: fp.make_assign_lanes(
                 f"drone-{rng.randrange(8)}", rng.uniform(50, 300),
                 [{"direction": rng.choice(sorted(fp.LANE_DIRECTIONS)), "distance_cm": rng.randrange(1, 2000)}
                  for _ in range(rng.randrange(0, 40))],
@@ -908,7 +908,7 @@ def test_random_valid_commands_round_trip(seed):
                 on_complete=rng.choice(["hover", "land"])),
         ]
         if fence.epoch < fp.MAX_EPOCH:
-            builders.append(lambda: fp.make_handover(fence, "other"))
+            builders.append(lambda fence=fence: fp.make_handover(fence, "other"))
         msg = rng.choice(builders)()
         assert fp.decode(fp.encode(msg, direction=G2E, proto=2), direction=G2E, proto=2) == msg
         _assert_invariants(msg, msg["type"], 2)
