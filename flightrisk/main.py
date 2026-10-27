@@ -184,8 +184,9 @@ def main():
     parser.add_argument("--port", type=int, default=5555, help="Dashboard port (default: 5555)")
     parser.add_argument(
         "--reasoning", choices=("claude", "gemma", "off"), default=None,
-        help="Reasoning backend (default: FLIGHTRISK_REASONING_PROVIDER, else claude; "
-             "claude needs CLAUDE_API_KEY, gemma needs local Ollama)",
+        help="Reasoning backend (default: FLIGHTRISK_REASONING_PROVIDER, else gemma; "
+             "gemma needs local Ollama; claude is cloud and opt-in, needing "
+             "FLIGHTRISK_ALLOW_CLOUD_LLM=1 and FLIGHTRISK_CLAUDE_API_KEY)",
     )
 
     args = parser.parse_args()

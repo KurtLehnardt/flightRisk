@@ -53,8 +53,9 @@ def main():
         "--reasoning", choices=("claude", "gemma", "off"),
         default=None,
         help="Reasoning backend that confirms matches (default: "
-             "FLIGHTRISK_REASONING_PROVIDER, else claude). claude uses the "
-             "CLAUDE_API_KEY env var; gemma uses local Ollama.",
+             "FLIGHTRISK_REASONING_PROVIDER, else gemma). gemma uses local "
+             "Ollama; claude is cloud and opt-in: it needs "
+             "FLIGHTRISK_ALLOW_CLOUD_LLM=1 and FLIGHTRISK_CLAUDE_API_KEY.",
     )
     parser.add_argument("--target", type=str, help="Path to target reference photo")
     parser.add_argument(

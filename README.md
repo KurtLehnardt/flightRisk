@@ -67,33 +67,47 @@ python -m flightrisk --target photo_of_child.jpg
 python -m flightrisk --dashboard --video test.mp4 --target photo_of_child.jpg
 ```
 
-## Reasoning backend (Claude or Gemma)
+## Reasoning backend (Gemma or Claude)
 
-A second opinion confirms ReID/face matches. It can come from **Claude** (Anthropic API, the
-default) or **Gemma** (local Ollama). Claude reads its key from the `CLAUDE_API_KEY` environment
-variable (`ANTHROPIC_API_KEY` also works). The key is never logged.
+A second opinion confirms ReID/face matches. By default it comes from **Gemma** running locally in
+Ollama, so nothing leaves the machine. **Claude** (Anthropic API) is an optional cloud backend and is
+off unless you explicitly opt in.
+
+Using Claude sends the detected person's crop and the missing child's reference photo to Anthropic.
+FlightRisk therefore refuses to start or switch to Claude unless both of these are set:
+
+- `FLIGHTRISK_ALLOW_CLOUD_LLM=1`, the explicit opt-in to cloud reasoning.
+- `FLIGHTRISK_CLAUDE_API_KEY`, the API key. `ANTHROPIC_API_KEY` is deliberately ignored, so a key
+  exported for other tools never turns on uploads by accident. The key is never logged; the startup
+  log only names the variable it came from.
 
 ```bash
-# Windows (persists for new terminals; restart the app afterwards)
-setx CLAUDE_API_KEY "sk-ant-..."
-
-python -m flightrisk --dashboard                      # default: claude
-python -m flightrisk --dashboard --reasoning gemma    # local Ollama
+python -m flightrisk --dashboard                      # default: gemma (local Ollama)
 python -m flightrisk --dashboard --reasoning off      # ReID/face scores only
+
+# Opt in to Claude (cloud). Windows: use setx for each variable and restart the terminal.
+export FLIGHTRISK_ALLOW_CLOUD_LLM=1
+export FLIGHTRISK_CLAUDE_API_KEY="sk-ant-..."
+python -m flightrisk --dashboard --reasoning claude
 ```
 
-You can also switch while it runs from the **AI Reasoning** selector in the dashboard sidebar. If a
-switch fails (for example, no API key), the previous backend stays active and the reason is shown.
+You can also switch while it runs from the **AI Reasoning** selector in the dashboard sidebar. Claude
+is shown as unavailable, with the reason, until cloud use is allowed and a key is set; the dashboard
+cannot opt itself in. If a switch fails (for example, Ollama is not running), the previous backend
+stays active and the reason is shown.
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `FLIGHTRISK_REASONING_PROVIDER` | `claude` | `claude`, `gemma` or `off` |
+| `FLIGHTRISK_REASONING_PROVIDER` | `gemma` | `gemma`, `claude` or `off` |
+| `FLIGHTRISK_ALLOW_CLOUD_LLM` | unset (off) | `1` to allow the Claude cloud backend |
+| `FLIGHTRISK_CLAUDE_API_KEY` | unset | Anthropic API key used only when cloud use is allowed |
 | `FLIGHTRISK_CLAUDE_MODEL` | `claude-opus-5-5` | any vision-capable Claude model, e.g. `claude-sonnet-5-5` to cut cost |
 | `FLIGHTRISK_CLAUDE_EFFORT` | `medium` | `low` to `max`; lower is faster and cheaper |
 | `FLIGHTRISK_GEMMA_MODEL` | `gemma4:latest` | Ollama model when using `gemma` |
 
 Each confirmation sends the reference photo and the detected person's crop to the chosen backend
-(for Claude, to the Anthropic API). Calls are rate-limited per tracked person.
+(for Gemma, to the local Ollama server; for Claude, to the Anthropic API). Calls are rate-limited per
+tracked person.
 
 ## Observability (Grafana)
 

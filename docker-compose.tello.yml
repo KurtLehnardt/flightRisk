@@ -10,5 +10,8 @@ services:
       - OTEL_EXPORTER=otlp-grpc
       - OTEL_ENDPOINT=http://localhost:4317
       - OLLAMA_HOST=http://localhost:11434
-      - FLIGHTRISK_REASONING_PROVIDER=claude   # or gemma (local Ollama)
-      - CLAUDE_API_KEY                         # inherited from the host environment
+      - FLIGHTRISK_REASONING_PROVIDER=gemma    # local Ollama
+      # Claude (cloud) is opt-in: set FLIGHTRISK_REASONING_PROVIDER=claude and
+      # FLIGHTRISK_ALLOW_CLOUD_LLM=1 on the host to send crops to Anthropic.
+      - FLIGHTRISK_ALLOW_CLOUD_LLM             # inherited from the host; unset = no cloud
+      - FLIGHTRISK_CLAUDE_API_KEY              # inherited from the host environment

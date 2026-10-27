@@ -331,13 +331,31 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
 # ---------------------------------------------------------------------------
 
 def _reasoning_state() -> dict:
-    """Current reasoning backend, as shown in the dashboard."""
+    """Current reasoning backend, as shown in the dashboard.
+
+    ``unavailable`` maps each provider that can't be selected right now (for
+    example Claude without the cloud opt-in) to the reason, so the selector
+    can show it greyed out with an explanation.
+    """
+    from flightrisk.reasoning import (
+        PROVIDERS,
+        cloud_llm_allowed,
+        provider_unavailable_reason,
+    )
+
     agent = app_state.reasoning
+    unavailable = {}
+    for name in PROVIDERS:
+        reason = provider_unavailable_reason(name)
+        if reason:
+            unavailable[name] = reason
     return {
         "provider": agent.provider if agent else "off",
         "label": agent.label if agent else None,
         "model": agent.model if agent else None,
-        "available": ["claude", "gemma", "off"],
+        "available": [name for name in PROVIDERS if name not in unavailable],
+        "unavailable": unavailable,
+        "cloud_allowed": cloud_llm_allowed(),
     }
 
 
@@ -969,14 +987,29 @@ def on_get_reasoning_provider():
 
 @socketio.on("set_reasoning_provider")
 def on_set_reasoning_provider(data):
-    """Switch the reasoning backend at runtime (claude / gemma / off)."""
-    from flightrisk.reasoning import create_reasoning_agent, normalize_provider
+    """Switch the reasoning backend at runtime (claude / gemma / off).
+
+    Like every SocketIO handler, this is only reachable by a client that
+    passed the ``on_connect`` API-key check. A cloud backend is refused
+    unless cloud use was explicitly allowed at startup
+    (``FLIGHTRISK_ALLOW_CLOUD_LLM=1``); the dashboard cannot opt itself in.
+    """
+    from flightrisk.reasoning import (
+        cloud_block_reason,
+        create_reasoning_agent,
+        normalize_provider,
+    )
 
     requested = data.get("provider") if isinstance(data, dict) else None
     try:
         if not requested:
             raise ValueError("provider is required")
         provider = normalize_provider(requested)
+        blocked = cloud_block_reason(provider)
+        if blocked:
+            if app_state.logger:
+                app_state.logger.warning("reasoning_provider_refused", provider=provider, reason="cloud_not_allowed")
+            raise PermissionError(blocked)
         agent = create_reasoning_agent(provider)
     except Exception as e:
         # Keep the current backend and tell the operator why the switch failed.

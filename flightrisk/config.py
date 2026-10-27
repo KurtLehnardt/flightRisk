@@ -91,13 +91,22 @@ class VisionConfig:
     insightface_r18_model_path: str = "models/insightface_r18.onnx"
 
 
+def _env_flag(value: str) -> bool:
+    """Parse an on/off environment variable ("1", "true", "yes", "on" are on)."""
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ReasoningConfig:
     """LLM reasoning worker: provider, models, queueing, and timing parameters."""
 
-    # Which backend confirms matches: "claude" (Anthropic API), "gemma"
-    # (local Ollama), or "off".
-    provider: str = "claude"
+    # Which backend confirms matches: "gemma" (local Ollama, the default),
+    # "claude" (Anthropic API, cloud), or "off".
+    provider: str = "gemma"
+    # Cloud reasoning sends person crops and the missing child's reference
+    # photo off the device, so it is opt-in: "claude" is refused unless this
+    # is True (env FLIGHTRISK_ALLOW_CLOUD_LLM=1).
+    allow_cloud: bool = False
     model: str = "gemma4:latest"  # Ollama model, used when provider == "gemma"
     claude_model: str = "claude-opus-5-5"
     claude_effort: str = "medium"  # low | medium | high | xhigh | max
@@ -160,6 +169,7 @@ class AmberConfig:
             "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
             "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
             "FLIGHTRISK_REASONING_PROVIDER": ("reasoning", "provider", str),
+            "FLIGHTRISK_ALLOW_CLOUD_LLM": ("reasoning", "allow_cloud", _env_flag),
             "FLIGHTRISK_GEMMA_MODEL": ("reasoning", "model", str),
             "FLIGHTRISK_CLAUDE_MODEL": ("reasoning", "claude_model", str),
             "FLIGHTRISK_CLAUDE_EFFORT": ("reasoning", "claude_effort", str),

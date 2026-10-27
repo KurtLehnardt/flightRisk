@@ -1821,11 +1821,12 @@
                     <div class="panel-section">
                         <div class="panel-title">AI Reasoning</div>
                         <select id="reasoning-provider" class="search-select" onchange="setReasoningProvider(this.value)">
-                            <option value="claude">Claude (Anthropic API)</option>
-                            <option value="gemma">Gemma (local Ollama)</option>
-                            <option value="off">Off</option>
+                            <option value="gemma" data-label="Gemma (local Ollama)">Gemma (local Ollama)</option>
+                            <option value="claude" data-label="Claude (Anthropic API, cloud)">Claude (Anthropic API, cloud)</option>
+                            <option value="off" data-label="Off">Off</option>
                         </select>
                         <div id="reasoning-status" class="search-status"></div>
+                        <div id="reasoning-unavailable" class="search-status" style="display:none;"></div>
                     </div>
 
                     <!-- Search Pattern -->
@@ -2379,6 +2380,21 @@
         socket.on('reasoning_provider', (data) => {
             const sel = document.getElementById('reasoning-provider');
             const status = document.getElementById('reasoning-status');
+            // Grey out backends that can't be used right now (e.g. Claude
+            // without the cloud opt-in) and say why.
+            const unavailable = data.unavailable || {};
+            const notes = [];
+            Array.from(sel.options).forEach(opt => {
+                const reason = unavailable[opt.value];
+                const label = opt.dataset.label || opt.value;
+                opt.disabled = Boolean(reason) && opt.value !== data.provider;
+                opt.textContent = reason ? label + ' (unavailable)' : label;
+                opt.title = reason || '';
+                if (reason) notes.push(label + ': ' + reason);
+            });
+            const unavailableEl = document.getElementById('reasoning-unavailable');
+            unavailableEl.textContent = notes.join(' ');
+            unavailableEl.style.display = notes.length ? '' : 'none';
             // Always reflect the backend that is actually active, so a failed
             // switch (e.g. no API key) snaps the selector back.
             sel.value = data.provider;
