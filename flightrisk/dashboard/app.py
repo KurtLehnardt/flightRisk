@@ -648,7 +648,14 @@ def upload_target():
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
     print(f"[upload-target] Target saved via HTTP POST ({len(img_data)//1024}KB)")
-    return jsonify({"success": True, "face_detected": face_ok})
+    return jsonify({"success": True, "face_detected": face_ok,
+                    "face_report": _face_report()})
+
+
+def _face_report() -> dict | None:
+    """Operator-facing result of the last face enrolment (None without a recognizer)."""
+    rep = getattr(app_state.face, "target_report", None) if app_state.face else None
+    return rep.as_dict() if hasattr(rep, "as_dict") else None
 
 
 @app.route("/api/clear-target", methods=["POST"])
@@ -881,7 +888,9 @@ def on_set_target(data):
                 _r = app_state.reid.extract_embedding(img)
                 reid_emb = _r.tolist() if _r is not None else None
             if app_state.face is not None:
-                _f = app_state.face.extract_embedding(img)
+                _f = getattr(app_state.face, "target_embedding", None)
+                if not isinstance(_f, np.ndarray):
+                    _f = app_state.face.extract_embedding(img)
                 face_emb = _f.tolist() if _f is not None else None
             if app_state.ground_station is not None:
                 app_state.ground_station.set_target(reid_emb, face_emb)
@@ -892,6 +901,7 @@ def on_set_target(data):
         emit("target_set", {
             "success": True,
             "face_detected": face_ok,
+            "face_report": _face_report(),
             "quality": {
                 "overall_score": quality_report.overall_score,
                 "grade": quality_report.grade,

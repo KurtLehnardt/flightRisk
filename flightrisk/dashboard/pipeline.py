@@ -147,6 +147,12 @@ def _frame_loop(socketio):
                 last_track_emit = frame_start
                 socketio.emit("track_update", {"active_tracks": len(tracked_detections)})
             track_id_by_bbox = _build_track_id_by_bbox(tracked_detections, detections)
+            # Let the face recognizer aggregate/reuse embeddings per track
+            # instead of re-detecting and re-embedding the same face each frame.
+            for _d in detections:
+                _tid = track_id_by_bbox.get(tuple(_d["bbox"]))
+                if _tid is not None:
+                    _d["track_id"] = _tid
 
             if metrics:
                 metrics.inc_frames()
