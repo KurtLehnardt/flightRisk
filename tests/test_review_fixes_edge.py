@@ -36,7 +36,7 @@ from flightrisk.dashboard.app import FleetSupervisor
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone import tello as tello_module
 from flightrisk.drone.safety import SafetyEnvelope
-from flightrisk.drone.tello import FakeTelloController
+from flightrisk.drone.tello import FakeTelloController, TelloController
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_device import _build_parser, _build_runner, _make_sender, _run_flight_edge
 from flightrisk.observability import StructuredLogger
@@ -261,9 +261,10 @@ def test_stream_recovery_takes_command_lock(tello_on_wire, monkeypatch):
     assert ctrl.tello.stream_on is True
 
     # A land that starts while a stream command is on the wire does not wait
-    # for it: stop and land go out at once. The confirming land is sent only
-    # once the stream command has read a reply and left the channel, and
-    # streamon is sent only once the land has finished.
+    # for it: stop goes out at once, and land follows without waiting for
+    # the channel. The confirming land is sent only once the stream command
+    # has read a reply and left the channel, and streamon is sent only once
+    # the land has finished.
     assert ctrl.takeoff() is True
     start = len(wire.sent)
     wire.hold = {"streamoff"}
@@ -274,9 +275,12 @@ def test_stream_recovery_takes_command_lock(tello_on_wire, monkeypatch):
     ctrl.land()
     assert wait_for(lambda: not ctrl._stream_recovering)
     assert wire.sent[start - 1:] == ["takeoff", "streamoff", "stop", "land", "land", "streamon"]
-    assert seen[start + 1:] == [
-        ("stop", True, True, 1),
-        ("land", True, True, 1),
+    assert seen[start + 1] == ("stop", True, True, 1)
+    # The immediate land is paced _TIME_BETWEEN_COMMANDS_S after the stop
+    # (R-114). The stream command reads the stop's "ok" in the meantime, so
+    # whether it still holds the channel then depends on scheduling.
+    assert seen[start + 2][0] == "land" and seen[start + 2][3] == 1
+    assert seen[start + 3:] == [
         ("land", True, False, 1),
         ("streamon", True, True, 0),
     ]
@@ -393,6 +397,249 @@ def test_executor_takeoff_refused_when_land_lands_first():
 
 
 # ---------------------------------------------------------------------------
+# R-114 (PR #87 re-review R1): a land counts only on a fresh "ok"
+# ---------------------------------------------------------------------------
+
+
+def test_land_unconfirmed_raises_after_attempts(tello_on_wire, monkeypatch):
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.2)
+    attempts = tello_module._LAND_ATTEMPTS
+    # Every land packet is lost on Wi-Fi.
+    ctrl, wire = tello_on_wire(drop={"land"})
+    assert ctrl.takeoff() is True
+
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    assert wire.sent == ["takeoff"] + ["land"] * attempts
+    # Still flying as far as anyone can tell, so callers keep retrying.
+    assert ctrl.state.is_flying is True
+    assert not ctrl._cmd_lock.locked() and ctrl._lands_in_progress == 0
+
+    # Until a land is confirmed nothing else goes out: a keepalive or a
+    # stream command would restart the Tello's own 15 s auto-land timer.
+    assert ctrl._keepalive_once() is False
+    assert ctrl._stream_command_once("streamon") is False
+    assert ctrl.move("forward", 50) is False
+    assert wire.sent == ["takeoff"] + ["land"] * attempts
+
+    # The lane executor's monitor keeps retrying while the drone reports
+    # flying...
+    now = [1000.0]
+
+    def clock() -> float:
+        return now[0]
+
+    executor = LaneExecutor(
+        ctrl,
+        SafetyEnvelope(alt_slot_cm=100, clock=clock),
+        "drone-1",
+        send=lambda msg: None,
+        clock=clock,
+        logger=StructuredLogger(component="test-review-fixes-edge"),
+    )
+    try:
+        executor.note_ground_message()
+        executor.land_now("emergency_land_all")
+        assert ctrl.state.is_flying is True
+        assert wire.sent.count("land") == 2 * attempts
+
+        # ...and once Wi-Fi recovers, its next retry is confirmed by the
+        # land's own reply.
+        wire.drop.clear()
+        now[0] += executor.land_retry_s
+        executor.note_ground_message()
+        executor.tick()
+        assert ctrl.state.is_flying is False
+        assert wire.sent.count("land") == 2 * attempts + 1
+    finally:
+        executor.shutdown(timeout=2.0)
+
+    # Once a land is confirmed the keepalive runs again.
+    assert ctrl._keepalive_once() is True
+    assert wire.sent[-1] == "command"
+
+
+def test_stale_stop_ok_not_taken_as_land_confirmation(tello_on_wire, monkeypatch):
+    monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.2)
+    attempts = tello_module._LAND_ATTEMPTS
+    ctrl, wire = tello_on_wire(hold={"forward 200"}, drop={"land"})
+    assert ctrl.takeoff() is True
+
+    errors: list[Exception] = []
+
+    def fly() -> None:
+        try:
+            ctrl.move("forward", 200)
+        except Exception as exc:
+            errors.append(exc)
+
+    mover = threading.Thread(target=fly, daemon=True)
+    mover.start()
+    assert wire.entered.wait(WAIT_S)
+
+    # LAND interrupts the move. The Tello answers the move "error" and the
+    # stop "ok", and every land packet is lost. The stop's "ok" is still
+    # queued when the land confirms; it says nothing about the land.
+    with pytest.raises(RuntimeError, match="land not confirmed"):
+        ctrl.land()
+    mover.join(WAIT_S)
+    assert not mover.is_alive() and len(errors) == 1
+    assert wire.sent == ["takeoff", "forward 200", "stop", "land"] + ["land"] * attempts
+    assert ctrl.state.is_flying is True
+    assert ctrl._keepalive_once() is False
+
+    # A land that gets through is confirmed by its own reply.
+    wire.drop.clear()
+    ctrl.land()
+    assert ctrl.state.is_flying is False
+    assert wire.sent == ["takeoff", "forward 200", "stop", "land"] + ["land"] * (attempts + 1)
+
+
+def test_stop_and_land_paced(tello_on_wire):
+    ctrl, wire = tello_on_wire(hold={"forward 200"})
+    sent_at: list[tuple[str, float]] = []
+    wire.on_send = lambda command: sent_at.append((command, time.monotonic()))
+    assert ctrl.takeoff() is True
+
+    mover = threading.Thread(target=lambda: _move_ignoring_errors(ctrl, "forward", 200), daemon=True)
+    mover.start()
+    assert wire.entered.wait(WAIT_S)
+    land_called = time.monotonic()
+    ctrl.land()
+    mover.join(WAIT_S)
+    assert not mover.is_alive()
+
+    assert [command for command, _ in sent_at] == ["takeoff", "forward 200", "stop", "land", "land"]
+    t_stop, t_land, t_confirm = (t for _, t in sent_at[2:])
+    gap = tello_module._TIME_BETWEEN_COMMANDS_S
+    # The Tello ignores a command sent too soon after another, so the
+    # immediate land follows the stop by at least the gap, and so does the
+    # confirming land after it.
+    assert t_land - t_stop >= gap
+    assert t_confirm - t_land >= gap
+    # The stop still goes out at once.
+    assert t_stop - land_called < 1.0
+    assert ctrl.state.is_flying is False
+
+
+def _move_ignoring_errors(ctrl: TelloController, direction: str, distance_cm: int) -> None:
+    try:
+        ctrl.move(direction, distance_cm)
+    except RuntimeError:
+        pass
+
+
+def test_second_land_does_not_disturb_a_confirming_land(tello_on_wire):
+    """A second LAND sends no stop or land whose replies the first could read as its own."""
+    ctrl, wire = tello_on_wire(hold={"land"})
+    assert ctrl.takeoff() is True
+    first = threading.Thread(target=ctrl.land, daemon=True)
+    first.start()
+    assert wire.entered.wait(WAIT_S)  # the first land waits for its reply
+
+    second = threading.Thread(target=ctrl.land, daemon=True)
+    second.start()
+    time.sleep(0.3)
+    assert wire.sent == ["takeoff", "land"]
+    wire.release("land")
+    first.join(WAIT_S)
+    second.join(WAIT_S)
+    assert not first.is_alive() and not second.is_alive()
+    # The first land was confirmed after the second was asked for, so the
+    # second has nothing left to send.
+    assert wire.sent == ["takeoff", "land"]
+    assert ctrl.state.is_flying is False
+    assert ctrl._land_unconfirmed is False
+
+
+# ---------------------------------------------------------------------------
+# R-114 (PR #87 re-review R2): stream recovery gets in between lane moves
+# ---------------------------------------------------------------------------
+
+
+def test_stream_recovery_gets_in_between_lane_moves(tello_on_wire, monkeypatch):
+    monkeypatch.setattr(tello_module, "_STREAM_RESTART_PAUSE_S", 0.05)
+    # Each lane move takes 0.25 s to answer; everything else is answered at once.
+    ctrl, wire = tello_on_wire(delays={"forward": 0.25, "back": 0.25})
+    ctrl._running = True
+    # (command, command lock held, stream recovery on the channel) at each send.
+    seen: list[tuple[str, bool, bool]] = []
+    wire.on_send = lambda command: seen.append(
+        (command, ctrl._cmd_lock.locked(), ctrl._stream_on_channel)
+    )
+    assert ctrl.takeoff() is True
+
+    moves = 10
+    moved: list[bool] = []
+
+    def fly_lanes() -> None:
+        # Back to back, as the lane executor flies them.
+        for i in range(moves):
+            moved.append(ctrl.move("forward" if i % 2 == 0 else "back", 100))
+
+    flier = threading.Thread(target=fly_lanes, daemon=True)
+    flier.start()
+    assert wait_for(lambda: "forward 100" in wire.sent)
+    ctrl._recover_stream()
+    flier.join(WAIT_S * 3)
+    assert not flier.is_alive()
+    assert wait_for(lambda: not ctrl._stream_recovering)
+
+    # No lane move was dropped.
+    assert moved == [True] * moves
+    commands = [command for command, _, _ in seen]
+    move_at = [i for i, command in enumerate(commands) if command.split()[0] in ("forward", "back")]
+    off, on = commands.index("streamoff"), commands.index("streamon")
+    # The stream was restarted during the lanes, not after them...
+    assert move_at[0] < off < on < move_at[-1]
+    # ...each stream command holding the channel, so none overlapped a move.
+    assert seen[off] == ("streamoff", True, True)
+    assert seen[on] == ("streamon", True, True)
+    assert all(seen[i][2] is False for i in move_at)
+    assert ctrl.tello.stream_on is True
+
+
+def test_stream_gap_wait_never_delays_a_land(tello_on_wire, monkeypatch):
+    """A land that starts while stream recovery waits out the command gap goes first."""
+    monkeypatch.setattr(tello_module, "_STREAM_RESTART_PAUSE_S", 0.05)
+    ctrl, wire = tello_on_wire()
+    ctrl._running = True
+    # (command, command lock held, stream recovery on the channel, lands in
+    # progress) at each send.
+    seen: list[tuple[str, bool, bool, int]] = []
+    wire.on_send = lambda command: seen.append(
+        (command, ctrl._cmd_lock.locked(), ctrl._stream_on_channel, ctrl._lands_in_progress)
+    )
+    assert ctrl.takeoff() is True
+
+    lander = threading.Thread(target=ctrl.land, daemon=True)
+    real_gap = ctrl._command_gap_left
+
+    def gap_then_land() -> float:
+        # Stream recovery asks how much of the gap is left while it holds
+        # the channel. Start a landing right here.
+        if threading.current_thread().name.endswith("stream-recover") and not ctrl._landing:
+            lander.start()
+            assert wait_for(lambda: "stop" in wire.sent)
+            return tello_module._TIME_BETWEEN_COMMANDS_S
+        return real_gap()
+
+    ctrl._command_gap_left = gap_then_land
+    ctrl._recover_stream()
+    assert wait_for(lambda: ctrl._landing)
+    lander.join(WAIT_S)
+    assert not lander.is_alive()
+    assert wait_for(lambda: not ctrl._stream_recovering)
+
+    # The stop went out while the stream command held the channel, and the
+    # stream command was not sent until the land had been confirmed.
+    assert wire.sent == ["takeoff", "stop", "land", "land", "streamoff", "streamon"]
+    assert seen[1] == ("stop", True, True, 1)
+    assert seen[4:] == [("streamoff", True, True, 0), ("streamon", True, True, 0)]
+    assert ctrl.state.is_flying is False
+
+
+# ---------------------------------------------------------------------------
 # B1: a stalled uplink cannot delay the link-loss landing
 # ---------------------------------------------------------------------------
 
@@ -473,6 +720,44 @@ def test_tick_without_sender_thread_sends_inline():
     )
     executor.tick()
     assert [m["type"] for m in sent] == ["telemetry"]
+
+
+def test_no_inline_telemetry_send_after_stop():
+    """R-114 (PR #87 re-review R6): once the executor is stopping, telemetry is dropped, never sent inline."""
+    caller = threading.current_thread()
+    delivered: list[dict] = []
+    inline: list[dict] = []
+    release = threading.Event()
+
+    def send(msg: dict) -> None:
+        if threading.current_thread() is caller:
+            # The uplink has stalled: an inline send would block the caller.
+            inline.append(msg)
+            release.wait(WAIT_S)
+        else:
+            delivered.append(msg)
+
+    drone = FakeTelloController(name="drone-1", battery=90)
+    drone.connect()
+    executor = LaneExecutor(
+        drone, SafetyEnvelope(alt_slot_cm=100), "drone-1", send=send,
+        logger=StructuredLogger(component="test-review-fixes-edge"),
+    )
+    try:
+        executor.start()
+        executor.note_ground_message()
+        assert wait_for(lambda: delivered)  # the sender thread delivers telemetry
+        executor.shutdown(timeout=2.0)
+
+        # A monitor tick that runs once the executor is stopping, after the
+        # sender thread has gone, drops its telemetry.
+        executor._next_telemetry_s = None
+        started = time.monotonic()
+        executor.tick()
+        assert time.monotonic() - started < 1.0
+        assert inline == []
+    finally:
+        release.set()
 
 
 # ---------------------------------------------------------------------------
