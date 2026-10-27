@@ -14,6 +14,14 @@ handler or the frame loop):
 3. Otherwise land in place.
 4. Any exception at any step falls back to landing in place.
 
+A land counts as done only when it was executed: every ``land()`` return
+value goes through ``require_executed``, so a land that returns a result that
+was not executed (``False`` or a non-OK :class:`CommandResult`, such as
+``DROPPED_BUSY``) is a failure like an exception. After a failed land in
+place the fail-safe land is tried once more, and if that is not executed
+either the outcome is ``failsafe_land_failed`` with an ``error`` status
+telling the operator to take manual control.
+
 No hardware controller on ``main`` implements ``return_to_home()`` yet: the
 Tello has no GPS and the dashboard does not track a dead-reckoned pose, and
 the MAVLink controller does not wire up RTL. Until one does, Confirm stops the
@@ -39,7 +47,12 @@ from typing import Any
 from flightrisk.dashboard.alert_latch import alert_latch
 from flightrisk.dashboard.safety import DEFAULT_RTH_MIN_BATTERY_PCT, SafetyPolicy
 from flightrisk.dashboard.state import app_state, fleet_lock
-from flightrisk.drone.controller import Capability, capabilities_of, command_result
+from flightrisk.drone.controller import (
+    Capability,
+    capabilities_of,
+    command_result,
+    require_executed,
+)
 from flightrisk.drone.snapshot import read_telemetry
 
 _log = logging.getLogger(__name__)
@@ -120,7 +133,7 @@ def run_confirm_recovery(
                 raise RuntimeError(f"return to home not executed ({result.outcome.value})")
             _log.info("confirm_recovery: reached home, landing")
             _status(emit, "landing", "Landing", battery=battery)
-            drone.land()
+            require_executed(drone.land(), "land")
             _status(emit, "landed", "Landed at home.", battery=battery)
             return "returned_and_landed"
 
@@ -138,14 +151,14 @@ def run_confirm_recovery(
             reason = "no_return_to_home"
             message = "Return-to-home not supported by this drone. Landing in place."
         _status(emit, "landing", message, battery=battery, reason=reason)
-        drone.land()
+        require_executed(drone.land(), "land")
         _status(emit, "landed", "Landed in place.", battery=battery, reason=reason)
         return "landed_in_place"
     except Exception as exc:  # noqa: BLE001 -- any failure must fall back to landing
         _log.critical("confirm_recovery: error during flight sequence (%s); fail-safe landing", exc, exc_info=True)
         _status(emit, "landing", "Error during return. Fail-safe landing in place.", error=str(exc))
         try:
-            drone.land()
+            require_executed(drone.land(), "land")
         except Exception as land_exc:  # noqa: BLE001 -- report, never raise from the flight thread
             _log.critical(
                 "confirm_recovery: FAIL-SAFE LAND FAILED (%s); operator must take manual control",

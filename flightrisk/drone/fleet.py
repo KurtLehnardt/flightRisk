@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable
 
-from flightrisk.drone.controller import DroneController
+from flightrisk.drone.controller import DroneController, require_executed
 from flightrisk.drone.snapshot import legacy_telemetry_payload, read_telemetry
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,11 @@ class DroneFleet:
         callers can surface partial failures (e.g. "land succeeded on
         drone-1 but drone-2 failed to respond").
 
+        A call that returns a result that was not executed (``False`` or a
+        non-OK ``CommandResult``, see ``command_result``) counts as a
+        failure, reported as a ``CommandNotExecutedError``, so LAND ALL never
+        counts a dropped land as delivered.
+
         Returns:
             Mapping of drone_id -> None (success) or the Exception raised.
         """
@@ -137,7 +142,7 @@ class DroneFleet:
             drones = list(self._drones.items())
 
         def call(drone: DroneController) -> None:
-            getattr(drone, command)(*args, **kwargs)
+            require_executed(getattr(drone, command)(*args, **kwargs), command)
 
         results = _call_each(drones, call, f"fleet-{command}")
         for drone_id, error in results.items():

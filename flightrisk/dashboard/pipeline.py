@@ -10,6 +10,7 @@ and emits results over SocketIO.
 from __future__ import annotations
 
 import base64
+import logging
 import queue
 import time
 import traceback
@@ -18,7 +19,7 @@ from contextlib import nullcontext
 import cv2
 import numpy as np
 
-from flightrisk.drone.controller import DroneController
+from flightrisk.drone.controller import DroneController, command_result
 from flightrisk.drone.snapshot import TelemetrySnapshot, legacy_telemetry_payload, read_telemetry
 
 from flightrisk.dashboard.state import (
@@ -36,6 +37,12 @@ from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot 
 )
 from flightrisk.dashboard.alert_latch import alert_latch
 from flightrisk.dashboard.safety import SafetyPolicy
+
+_log = logging.getLogger(__name__)
+
+#: Seconds between attempts at a critical-battery land that the drone did not
+#: execute (for example dropped because its command channel was busy).
+CRITICAL_LAND_RETRY_S = 2.0
 
 
 def _emit_due_reminder(socketio, log=None):
@@ -80,7 +87,9 @@ def _apply_battery_policy(socketio, drone, snapshot: TelemetrySnapshot, battery,
     """Warn on low battery and land on critical battery, once each per session.
 
     Thresholds come from ``config.drone`` through :class:`SafetyPolicy`.
-    ``battery`` is the value shown to the operator (legacy payload).
+    ``battery`` is the value shown to the operator (legacy payload). A
+    critical-battery land that the drone did not execute is retried (see
+    :func:`_land_for_critical_battery`).
     """
     policy = SafetyPolicy.from_config()
     if not policy.battery_monitored(snapshot):
@@ -88,16 +97,50 @@ def _apply_battery_policy(socketio, drone, snapshot: TelemetrySnapshot, battery,
     if log:
         log.battery(battery_level=battery, is_flying=snapshot.is_flying)
     if policy.battery_critical(snapshot) and not app_state.battery_critical:
-        app_state.battery_critical = True
-        socketio.emit("battery_critical", {"battery": battery})
-        try:
-            drone.land()
-        except Exception as e:  # noqa: BLE001 -- reported; the frame loop must keep running
-            if log:
-                log.warning("battery_critical_land_failed", drone_id=snapshot.drone_id, error_type=type(e).__name__)
+        _land_for_critical_battery(socketio, drone, snapshot, battery, log)
     elif policy.battery_low(snapshot) and not app_state.battery_warned:
         app_state.battery_warned = True
         socketio.emit("battery_warning", {"battery": battery})
+
+
+def _land_for_critical_battery(socketio, drone, snapshot: TelemetrySnapshot, battery, log=None):
+    """Land at critical battery, once per session unless the land was not executed.
+
+    ``battery_critical`` is set (and ``battery_critical`` emitted) before the
+    land, as before. A land that raises is reported and not retried here,
+    unchanged. A land that returns a result that was not executed (for
+    example ``DROPPED_BUSY``) is a failed land, never a landing: the flag is
+    cleared again, the failure is logged at CRITICAL level and sent to the
+    operator, and the land is retried every ``CRITICAL_LAND_RETRY_S`` while
+    the battery stays critical and the drone reports flying.
+    """
+    now = time.monotonic()
+    if now < app_state.battery_critical_retry_at:
+        return
+    first_attempt = app_state.battery_critical_retry_at == 0.0
+    app_state.battery_critical = True
+    if first_attempt:
+        socketio.emit("battery_critical", {"battery": battery})
+    try:
+        result = command_result(drone.land(), "land")
+    except Exception as e:  # noqa: BLE001 -- reported; the frame loop must keep running
+        if log:
+            log.warning("battery_critical_land_failed", drone_id=snapshot.drone_id, error_type=type(e).__name__)
+        return
+    if result.ok:
+        return
+    app_state.battery_critical = False
+    app_state.battery_critical_retry_at = now + CRITICAL_LAND_RETRY_S
+    _log.critical(
+        "battery_critical_land_not_executed drone_id=%s outcome=%s; retrying in %.0f s",
+        snapshot.drone_id, result.outcome.value, CRITICAL_LAND_RETRY_S,
+    )
+    if log:
+        log.error("battery_critical_land_not_executed", drone_id=snapshot.drone_id, outcome=result.outcome.value)
+    socketio.emit("error", {
+        "message": f"CRITICAL BATTERY: the automatic landing was not executed ({result.outcome.value}). "
+                   "Retrying. Land the drone now.",
+    })
 
 
 def _build_track_id_by_bbox(tracked_detections, detections):

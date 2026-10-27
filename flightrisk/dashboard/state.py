@@ -132,7 +132,11 @@ class AppState:
     running: bool = False
     search_active: bool = False
     battery_warned: bool = False
+    # True once the critical-battery land was executed (or raised). A land
+    # that was not executed leaves it False and sets
+    # battery_critical_retry_at (time.monotonic()) for the next attempt.
     battery_critical: bool = False
+    battery_critical_retry_at: float = 0.0
 
     # -- Target --
     target_photo: str | None = None
