@@ -9,7 +9,7 @@ Appearance-only matching compares people by clothing color, height ratio and re-
 - Today: `_init_pipeline` always constructs `FaceRecognizer` (`flightrisk/dashboard/app.py:345-350`). The `insightface_face` signal is enabled by default (`flightrisk/config.py`, `signal_insightface_face`).
 - Planned (t09, R-001, R-002): `VisionConfig.appearance_only` and the env override `FLIGHTRISK_APPEARANCE_ONLY` are added. When it is true, `_init_pipeline` does not construct `FaceRecognizer` and disables the `insightface_face` signal. The demo launcher sets it to true, so the demo runs appearance-only by default. `/api/status` reports `appearance_only` and the UI shows a badge.
 - On the edge, flight sources (`tello`, `fake`) are appearance-only by default: the edge builds no `FaceRecognizer` and sends no face embeddings. Face matching on the edge needs `--with-face` on `edge_device` or `FLIGHTRISK_APPEARANCE_ONLY=0`. The demo launchers set `FLIGHTRISK_APPEARANCE_ONLY=1`.
-- Person crops do leave the edge: each edge sends them to the ground station over the token-authenticated WebSocket link, which needs the shared `FLIGHTRISK_EDGE_TOKEN`. Detections carry the drone id and relative position.
+- Person crops (JPEG, one per detection) and ReID appearance embeddings do leave the edge: each edge sends them to the ground station over the edge WebSocket link, which is token-authenticated with the shared `FLIGHTRISK_EDGE_TOKEN` when that token is set. The demo launchers refuse to start without it, and the ground station refuses a non-loopback bind without it. In appearance-only mode, the default for the `tello` and `fake` sources, no face embeddings are computed or sent. Detections carry the drone id and relative position.
 - Face embeddings and appearance embeddings are computed in process memory only. They are never written to disk. Face embeddings are never sent over the network by the dashboard or the mobile app, and not by the edge unless face matching is switched on as above.
 
 ## Faces at altitude
@@ -28,7 +28,7 @@ Captures are match snapshots: the full frame, the person crop and a metadata JSO
 
 | Data | Where | Today | Planned default |
 |---|---|---|---|
-| Face and appearance embeddings | Process memory | Never persisted, never sent | Same |
+| Face and appearance embeddings | Process memory | Never persisted. Each edge sends ReID appearance embeddings to the ground station, and face embeddings only when face matching is on (see Appearance-only) | Same |
 | Match snapshots (frame, crop, JSON) | `captures/` on the ground station | Written for every match | Not written unless `save_captures` is true |
 | Match rows (scores, timestamps, reasoning text) | SQLite `flightrisk_sessions.db` (`flightrisk/persistence.py`) | Stored; reasoning and description fields are encrypted only if `FLIGHTRISK_ENCRYPTION_KEY` is set | Same |
 | Target photo path and the photo itself | Path in SQLite; photo kept in memory and shown in the dashboard | Stored as given | Same |

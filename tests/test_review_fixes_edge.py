@@ -5,6 +5,8 @@
 * B2: Tello flight moves are sent once and never retried, and no move reaches
   the wire after ``land()`` starts.
 * N2: the Tello keepalive holds the command lock for its whole exchange.
+* R-113: Tello video-stream recovery (``streamoff`` and ``streamon``) holds the
+  command lock for each exchange, and a land always takes the channel first.
 * N7: ``takeoff()`` refuses while a land is in progress.
 * B3: a flying edge tags every detection with its drone id and pose.
 * B4: a flying edge is appearance-only by default: no ``FaceRecognizer`` and
@@ -34,6 +36,7 @@ import pytest
 
 from flightrisk.dashboard.app import FleetSupervisor
 from flightrisk.drone.lane_executor import LaneExecutor
+from flightrisk.drone import tello as tello_module
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.drone.tello import FakeTelloController, TelloController
 from flightrisk.edge import EdgeRunner
@@ -302,6 +305,104 @@ def test_move_waits_behind_keepalive_instead_of_dropping(tello_on_wire):
     keepalive.join(WAIT_S)
     assert moved == [True]
     assert wire.sent == ["takeoff", "command", "forward 50"]
+
+
+# ---------------------------------------------------------------------------
+# R-113: video-stream recovery takes the command lock, and a land wins
+# ---------------------------------------------------------------------------
+
+
+def test_stream_recovery_takes_command_lock(tello_on_wire, monkeypatch):
+    monkeypatch.setattr(tello_module, "_STREAM_RESTART_PAUSE_S", 0.05)
+    ctrl, wire = tello_on_wire()
+    # Recovery waits for a busy channel only while the controller runs.
+    ctrl._running = True
+    # (command, command lock held, stream recovery on the channel, lands in
+    # progress) at each send.
+    seen: list[tuple[str, bool, bool, int]] = []
+    wire.on_send = lambda command: seen.append(
+        (command, ctrl._cmd_lock.locked(), ctrl._stream_on_channel, ctrl._lands_in_progress)
+    )
+    assert ctrl.takeoff() is True
+
+    # A land in progress holds the channel. Recovery sends nothing until the
+    # land has finished, so it never delays the land.
+    wire.hold = {"land"}
+    lander = threading.Thread(target=ctrl.land, daemon=True)
+    lander.start()
+    assert wire.entered.wait(WAIT_S)
+    ctrl._recover_stream()
+    time.sleep(0.3)
+    assert wire.sent == ["takeoff", "land"]
+    wire.release("land")
+    lander.join(WAIT_S)
+    assert not lander.is_alive()
+    assert wait_for(lambda: not ctrl._stream_recovering)
+    assert wire.sent == ["takeoff", "land", "streamoff", "streamon"]
+    # Each stream command is sent holding the command lock, after the land.
+    assert seen[2:] == [("streamoff", True, True, 0), ("streamon", True, True, 0)]
+    assert not ctrl._cmd_lock.locked() and ctrl._stream_on_channel is False
+    assert ctrl.tello.stream_on is True
+
+    # A land that starts while a stream command is on the wire does not wait
+    # for it: stop and land go out at once. The confirming land is sent only
+    # once the stream command has read a reply and left the channel, and
+    # streamon is sent only once the land has finished.
+    assert ctrl.takeoff() is True
+    start = len(wire.sent)
+    wire.hold = {"streamoff"}
+    wire.entered.clear()
+    ctrl._recover_stream()
+    assert wire.entered.wait(WAIT_S)
+    assert ctrl._cmd_lock.locked() and ctrl._stream_on_channel
+    ctrl.land()
+    assert wait_for(lambda: not ctrl._stream_recovering)
+    assert wire.sent[start - 1:] == ["takeoff", "streamoff", "stop", "land", "land", "streamon"]
+    assert seen[start + 1:] == [
+        ("stop", True, True, 1),
+        ("land", True, True, 1),
+        ("land", True, False, 1),
+        ("streamon", True, True, 0),
+    ]
+    assert ctrl.state.is_flying is False
+
+    # The land check is made in the same step as the send: with a land in
+    # progress (here, one waiting for the channel) nothing is sent and the
+    # channel is left free.
+    time.sleep(0.2)  # past djitellopy's minimum gap between commands
+    sent_before = len(wire.sent)
+    with ctrl._wire_lock:
+        ctrl._lands_in_progress += 1
+    try:
+        assert ctrl._stream_command_once("streamon") is False
+    finally:
+        with ctrl._wire_lock:
+            ctrl._lands_in_progress -= 1
+    assert len(wire.sent) == sent_before
+    assert not ctrl._cmd_lock.locked()
+    assert ctrl._stream_command_once("streamon") is True
+    assert wire.sent[sent_before:] == ["streamon"]
+
+
+def test_move_waits_behind_stream_recovery_instead_of_dropping(tello_on_wire, monkeypatch):
+    monkeypatch.setattr(tello_module, "_STREAM_RESTART_PAUSE_S", 0.05)
+    ctrl, wire = tello_on_wire(hold={"streamoff"})
+    ctrl._running = True
+    assert ctrl.takeoff() is True
+    ctrl._recover_stream()
+    assert wire.entered.wait(WAIT_S)
+
+    moved: list[bool] = []
+    mover = threading.Thread(target=lambda: moved.append(ctrl.move("forward", 50)), daemon=True)
+    mover.start()
+    time.sleep(0.2)
+    assert "forward 50" not in wire.sent  # waiting, not interleaved
+    wire.release("streamoff")
+    mover.join(WAIT_S)
+    assert moved == [True]
+    assert wait_for(lambda: not ctrl._stream_recovering)
+    assert wire.sent[:2] == ["takeoff", "streamoff"]
+    assert sorted(wire.sent[2:]) == ["forward 50", "streamon"]
 
 
 # ---------------------------------------------------------------------------

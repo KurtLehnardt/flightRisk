@@ -140,7 +140,7 @@ The demo needs no internet connection. The detector and appearance matcher run o
 - The demo matches on appearance only (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the ground station and on the edge: faces are not resolvable at search altitude, the face model is never loaded, and no face embeddings are computed or sent. For flight sources (`tello`, `fake`) the edge is appearance-only by default; face matching on the edge needs `--with-face` or `FLIGHTRISK_APPEARANCE_ONLY=0`.
 - Match snapshots are not written to disk (`FLIGHTRISK_SAVE_CAPTURES=0`).
 - The dashboard binds `127.0.0.1` only, so Start and LAND ALL are not reachable from the network. Use the browser on the Mac itself. Binding another address with `FLIGHTRISK_DASHBOARD_HOST` needs `FLIGHTRISK_API_KEY`, and the web page does not send that key, so a keyed non-loopback bind locks the web UI out.
-- The edge link is the only thing on the LAN, and it needs the shared `FLIGHTRISK_EDGE_TOKEN`. Person crops (images of people in the camera view) do go from each edge to the ground station over that token-authenticated WebSocket link. They are not written to disk by default.
+- The edge link is the only thing on the LAN, and it needs the shared `FLIGHTRISK_EDGE_TOKEN`. Person crops (JPEG images of people in the camera view, one per detection) and ReID appearance embeddings do go from each edge to the ground station over that token-authenticated WebSocket link. They are not written to disk by default.
 - Socket.IO on the dashboard accepts same-origin pages only.
 
 See [docs/privacy-design.md](docs/privacy-design.md).

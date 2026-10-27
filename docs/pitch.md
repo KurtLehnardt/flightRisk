@@ -55,7 +55,7 @@ Open-source aerial search software for Utah's volunteer search and rescue teams,
 - Funding channel: Utah already funds county search and rescue through the USARA card program (https://secure.utah.gov/rescue/cards.html).
 - A path to a Utah company (ASSUMPTION): free open-source software for county teams first, then hardware integration with in-state drone makers such as Teal Drones in Salt Lake City (https://stateaviationjournal.com/index.php/state-news/utah/red-cat-subsidiary-teal-drones-opens-u-s-manufacturing-facility). There is no relationship with Teal today.
 - Honest limit: dense tree canopy defeats RGB and most thermal imaging, so the fit is open terrain (desert, canyon, meadow, snow), not forest.
-- Privacy: faces are not resolvable at search altitude, so FlightRisk is appearance-only by design, on the edge too, with no face embeddings sent. Person crops go from each edge to the ground station over a token-authenticated link, and no bystander imagery is saved to disk by default (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-design.md).
+- Privacy: faces are not resolvable at search altitude, so FlightRisk is appearance-only by design, on the edge too, with no face embeddings sent. Person crops and ReID appearance embeddings go from each edge to the ground station over a token-authenticated link, and no bystander imagery is saved to disk by default (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-design.md).
 
 ## Slide 5 — The ask
 

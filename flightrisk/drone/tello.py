@@ -53,6 +53,17 @@ _CONNECT_ATTEMPTS = 3
 _KEEPALIVE_INTERVAL_S = 10.0
 _KEEPALIVE_TIMEOUT_S = 5
 _KEEPALIVE_WAIT_S = _KEEPALIVE_TIMEOUT_S + 1.0
+# Video-stream recovery sends ``streamoff``, pauses, then sends ``streamon``.
+# Each one holds the command lock only while it is sent and its reply read,
+# and waits for its reply no longer than the keepalive does, so a move that
+# waits behind it (up to _KEEPALIVE_WAIT_S) is never dropped. Each waits up to
+# _STREAM_CHANNEL_WAIT_S for the channel to be free of flight commands and
+# landings, checking every _STREAM_CHANNEL_POLL_S, before recovery gives up
+# until the stream is next found stale.
+_STREAM_RESTART_PAUSE_S = 1.0
+_STREAM_REPLY_TIMEOUT_S = _KEEPALIVE_TIMEOUT_S
+_STREAM_CHANNEL_WAIT_S = 30.0
+_STREAM_CHANNEL_POLL_S = 0.05
 # Directions accepted by the Tello's move commands.
 _MOVE_DIRECTIONS = ("up", "down", "left", "right", "forward", "back")
 
@@ -115,10 +126,12 @@ class TelloController:
         # command lock).
         self._lands_in_progress = 0
         self._land_seq = 0
-        # True while the keepalive holds _cmd_lock. Guarded by _owner_lock,
-        # which is also held while the keepalive takes or releases _cmd_lock.
+        # True while the keepalive (or, for _stream_on_channel, a
+        # stream-recovery command) holds _cmd_lock. Guarded by _owner_lock,
+        # which is also held while either takes or releases _cmd_lock.
         self._owner_lock = threading.Lock()
         self._keepalive_on_channel = False
+        self._stream_on_channel = False
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -199,22 +212,109 @@ class TelloController:
             return None
 
     def _recover_stream(self):
-        """Restart the video stream after it goes stale."""
+        """Restart the video stream after it goes stale.
+
+        Runs in a background thread. ``streamoff`` and ``streamon`` each go
+        through ``_stream_command_when_free``, so each holds the command lock
+        for its own exchange only (not for the pause between them), is never
+        sent while a land is in progress, and waits for a flight command to
+        finish rather than interleaving with it. A land that starts while one
+        of them is on the wire does not wait for it: ``land()`` sends ``stop``
+        and ``land`` at once. If the channel stays busy, recovery gives up
+        and runs again the next time the stream is found stale.
+        """
         self._stream_recovering = True
+
         def _do_recover():
             print(f"[{self.name}] Video stream stale, restarting...")
             try:
-                self.tello.streamoff()
-            except Exception:
-                pass
-            time.sleep(1)
-            try:
-                self.tello.streamon()
-                print(f"[{self.name}] Video stream restarted.")
-            except Exception as e:
-                print(f"[{self.name}] Stream recovery failed: {e}")
-            self._stream_recovering = False
+                try:
+                    if not self._stream_command_when_free("streamoff"):
+                        print(f"[{self.name}] Stream recovery skipped: the command channel stayed busy.")
+                        return
+                except Exception:
+                    # A failed streamoff does not stop the streamon.
+                    pass
+                time.sleep(_STREAM_RESTART_PAUSE_S)
+                try:
+                    if self._stream_command_when_free("streamon"):
+                        print(f"[{self.name}] Video stream restarted.")
+                    else:
+                        print(f"[{self.name}] Stream recovery failed: the command channel stayed busy.")
+                except Exception as e:
+                    print(f"[{self.name}] Stream recovery failed: {e}")
+            finally:
+                self._stream_recovering = False
+
         threading.Thread(target=_do_recover, daemon=True, name=f"{self.name}-stream-recover").start()
+
+    def _stream_command_when_free(self, command: str) -> bool:
+        """Send a stream command once the command channel is free. False if it never was.
+
+        Polls without holding any lock, and does not try while a land is in
+        progress, so a land always takes the channel first. Gives up after
+        ``_STREAM_CHANNEL_WAIT_S``, or as soon as the controller has stopped
+        running. Raises like ``_stream_command_once`` when the command was
+        sent and not answered ``ok``.
+        """
+        deadline = time.monotonic() + _STREAM_CHANNEL_WAIT_S
+        while True:
+            if not self._lands_in_progress and self._stream_command_once(command):
+                return True
+            if not self._running or time.monotonic() >= deadline:
+                return False
+            time.sleep(_STREAM_CHANNEL_POLL_S)
+
+    def _stream_command_once(self, command: str) -> bool:
+        """Send ``streamoff`` or ``streamon`` once if the channel is free.
+
+        Returns False, sending nothing, when another command holds the
+        command lock, a land is in progress, or djitellopy's minimum gap
+        since the last reply has not passed yet; it never sleeps while
+        holding the lock. Otherwise the command holds ``_cmd_lock`` for its
+        whole exchange, like the keepalive, so its reply can never be read as
+        the reply to a flight command or a land, and a move that finds it on
+        the channel waits for it instead of being dropped. The land check and
+        the send happen under ``_wire_lock``, so a ``land()`` that starts at
+        the same moment either stops the command from being sent or finds it
+        on the wire and interrupts it at once. Returns True on an ``ok``
+        reply; raises ``RuntimeError`` on any other reply or none within
+        ``_STREAM_REPLY_TIMEOUT_S``.
+        """
+        with self._owner_lock:
+            if not self._cmd_lock.acquire(blocking=False):
+                return False
+            self._stream_on_channel = True
+        try:
+            tello = self.tello
+            responses = tello.get_own_udp_object()["responses"]
+            with self._wire_lock:
+                if self._lands_in_progress or self._command_gap_left() > 0:
+                    return False
+                # Replies queued while the channel was free are stale.
+                del responses[:]
+                tello.send_command_without_return(command)
+            reply = self._await_reply(responses, _STREAM_REPLY_TIMEOUT_S)
+            if reply is None:
+                raise RuntimeError(
+                    f"[{self.name}] no reply to '{command}' within {_STREAM_REPLY_TIMEOUT_S:g} s"
+                )
+            if reply.lower() != "ok":
+                raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r}")
+            # The bookkeeping that djitellopy's streamon() and streamoff() do
+            # after an ok reply.
+            if command == "streamon":
+                tello.stream_on = True
+            else:
+                tello.stream_on = False
+                if tello.background_frame_read is not None:
+                    tello.background_frame_read.stop()
+                    tello.background_frame_read = None
+            return True
+        finally:
+            with self._owner_lock:
+                self._stream_on_channel = False
+                self._cmd_lock.release()
 
     def on_frame(self, callback: Callable[[np.ndarray], None]):
         """Register a callback that receives each new frame."""
@@ -262,12 +362,13 @@ class TelloController:
         until the next ``takeoff()``, including a retry of the command that
         was in flight (flight commands are never retried). If the command
         channel is free this is an ordinary ``land``. If a move, rotate,
-        takeoff or keepalive is still waiting for its reply, the land does
-        not queue behind it: ``stop`` (hover, accepted at any time by SDK
-        2.0 and later) and ``land`` are sent straight away without waiting
-        for a reply, then a normal ``land`` confirms once the channel is
-        free. The land is sent up to ``_LAND_ATTEMPTS`` times; a land that
-        is never confirmed raises, so callers can retry.
+        takeoff, keepalive or stream-recovery command is still waiting for
+        its reply, the land does not queue behind it: ``stop`` (hover,
+        accepted at any time by SDK 2.0 and later) and ``land`` are sent
+        straight away without waiting for a reply, then a normal ``land``
+        confirms once the channel is free. The land is sent up to
+        ``_LAND_ATTEMPTS`` times; a land that is never confirmed raises, so
+        callers can retry.
         """
         with self._wire_lock:
             self._landing = True
@@ -353,15 +454,16 @@ class TelloController:
     def _acquire_for_flight(self) -> bool:
         """Take ``_cmd_lock`` for a move or rotate; False if a flight command holds it.
 
-        The keepalive holds the channel for one short exchange, so a move
-        that finds it there waits for it instead of being dropped (a dropped
-        lane move makes the lane executor land).
+        The keepalive and a stream-recovery command each hold the channel
+        for one short exchange, so a move that finds either there waits for
+        it instead of being dropped (a dropped lane move makes the lane
+        executor land).
         """
         with self._owner_lock:
             if self._cmd_lock.acquire(blocking=False):
                 return True
-            behind_keepalive = self._keepalive_on_channel
-        if not behind_keepalive:
+            behind_short_exchange = self._keepalive_on_channel or self._stream_on_channel
+        if not behind_short_exchange:
             return False
         return self._cmd_lock.acquire(timeout=_KEEPALIVE_WAIT_S)
 
@@ -403,32 +505,49 @@ class TelloController:
             # reads its own reply.
             del responses[:]
             tello.send_command_without_return(command)
+        reply = self._await_reply(responses, timeout_s)
+        if reply is None:
+            raise RuntimeError(
+                f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
+            )
+        if reply.lower() != "ok":
+            raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r} (not retried)")
+        return True
+
+    def _await_reply(self, responses: list, timeout_s: float) -> str | None:
+        """Read the reply to the command just sent, or None if none arrives within ``timeout_s``.
+
+        Caller holds ``_cmd_lock``. Records the reply time, as djitellopy
+        does, so the next command keeps the minimum gap.
+        """
         sent_at = time.monotonic()
         while not responses:
             if time.monotonic() - sent_at > timeout_s:
-                raise RuntimeError(
-                    f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
-                )
+                return None
             time.sleep(_REPLY_POLL_S)
-        tello.last_received_command_timestamp = time.time()
+        self.tello.last_received_command_timestamp = time.time()
         raw = responses.pop(0)
         if isinstance(raw, (bytes, bytearray)):
             reply = bytes(raw).decode("utf-8", "replace")
         else:
             reply = str(raw)
-        reply = reply.strip()
-        if reply.lower() != "ok":
-            raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r} (not retried)")
-        return True
+        return reply.strip()
 
-    def _pace_commands(self) -> None:
-        """Wait until djitellopy's minimum gap after the last reply has passed."""
+    def _command_gap_left(self) -> float:
+        """Seconds left of djitellopy's minimum gap after the last reply, or 0 if it has passed."""
         try:
             gap = time.time() - float(self.tello.last_received_command_timestamp)
         except (TypeError, ValueError):
-            return
+            return 0.0
         if 0 <= gap < _TIME_BETWEEN_COMMANDS_S:
-            time.sleep(_TIME_BETWEEN_COMMANDS_S - gap)
+            return _TIME_BETWEEN_COMMANDS_S - gap
+        return 0.0
+
+    def _pace_commands(self) -> None:
+        """Wait until djitellopy's minimum gap after the last reply has passed."""
+        wait = self._command_gap_left()
+        if wait > 0:
+            time.sleep(wait)
 
     def _retry_ground_command(self, fn: Callable[[], object]) -> None:
         """Run a connect-time command (``command``, ``streamon``) with retries.
