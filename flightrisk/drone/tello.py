@@ -30,19 +30,25 @@ __all__ = [
 
 # How long an interrupting land waits for an in-flight command to release the
 # command channel before it gives up on the confirming land. A flight command
-# waits at most _TAKEOFF_REPLY_TIMEOUT_S for its single reply, so 25 s covers
-# a stuck takeoff or move.
+# waits at most _TAKEOFF_REPLY_TIMEOUT_S for its single reply, and another
+# land confirming on the channel holds it for at most _LAND_ATTEMPTS times
+# (_LAND_REPLY_TIMEOUT_S plus the command gap), so 25 s covers either.
 _LAND_CONFIRM_WAIT_S = 25.0
 # How long a flight command waits for the Tello's reply. These match
 # djitellopy's RESPONSE_TIMEOUT and TAKEOFF_TIMEOUT.
 _COMMAND_REPLY_TIMEOUT_S = 7.0
 _TAKEOFF_REPLY_TIMEOUT_S = 20.0
 # djitellopy leaves at least this long between a reply and the next command,
-# because the Tello ignores commands sent too close together.
+# because the Tello ignores commands sent too close together. A land also
+# leaves at least this long after each command it sent without reading the
+# reply (the interrupting ``stop`` and ``land``).
 _TIME_BETWEEN_COMMANDS_S = 0.1
 _REPLY_POLL_S = 0.01
 # A land is sent up to this many times. Repeating a land is always safe.
 _LAND_ATTEMPTS = 3
+# How long each confirming land waits for a fresh reply before it is sent
+# again. Only an ``ok`` that arrives after the land was sent confirms it.
+_LAND_REPLY_TIMEOUT_S = _COMMAND_REPLY_TIMEOUT_S
 # Connect-time commands (``command``, ``streamon``) do not move the drone, so
 # they are tried up to this many times.
 _CONNECT_ATTEMPTS = 3
@@ -54,9 +60,10 @@ _KEEPALIVE_INTERVAL_S = 10.0
 _KEEPALIVE_TIMEOUT_S = 5
 _KEEPALIVE_WAIT_S = _KEEPALIVE_TIMEOUT_S + 1.0
 # Video-stream recovery sends ``streamoff``, pauses, then sends ``streamon``.
-# Each one holds the command lock only while it is sent and its reply read,
-# and waits for its reply no longer than the keepalive does, so a move that
-# waits behind it (up to _KEEPALIVE_WAIT_S) is never dropped. Each waits up to
+# Each one holds the command lock only while it waits out the command gap
+# (at most _TIME_BETWEEN_COMMANDS_S), is sent and has its reply read, and
+# waits for its reply no longer than the keepalive does, so a move that waits
+# behind it (up to _KEEPALIVE_WAIT_S) is never dropped. Each waits up to
 # _STREAM_CHANNEL_WAIT_S for the channel to be free of flight commands and
 # landings, checking every _STREAM_CHANNEL_POLL_S, before recovery gives up
 # until the stream is next found stale.
@@ -81,6 +88,11 @@ class TelloController:
     Once ``land()`` starts, no move, rotate or takeoff reaches the wire until
     a new ``takeoff()``: the landing flag is set, and every flight command
     checks it, under ``_wire_lock``, in the same step that sends it.
+
+    A land counts as done only when a fresh ``ok`` answers it. Until then
+    ``state.is_flying`` stays true, so callers keep retrying, and neither the
+    keepalive nor stream recovery sends anything, so the Tello's own 15 s
+    auto-land still fires if every land is lost.
     """
 
     def __init__(self, name: str = "drone", host: str | None = None):
@@ -126,12 +138,25 @@ class TelloController:
         # command lock).
         self._lands_in_progress = 0
         self._land_seq = 0
+        # Set by land() and cleared, under _wire_lock, only when a land is
+        # confirmed by a fresh "ok" or a takeoff succeeds with no land since.
+        # While it is set the keepalive and stream recovery send nothing:
+        # any command the Tello receives restarts its 15 s auto-land timer,
+        # which is the last resort when every land packet is lost.
+        self._land_unconfirmed = False
+        # time.monotonic() when land() last sent a command whose reply it
+        # did not read first. The next land waits _TIME_BETWEEN_COMMANDS_S
+        # after it, because the Tello ignores commands sent too close
+        # together.
+        self._land_sent_at = 0.0
         # True while the keepalive (or, for _stream_on_channel, a
-        # stream-recovery command) holds _cmd_lock. Guarded by _owner_lock,
-        # which is also held while either takes or releases _cmd_lock.
+        # stream-recovery command; for _land_on_channel, a land) holds
+        # _cmd_lock. Guarded by _owner_lock, which is also held while any of
+        # them takes or releases _cmd_lock.
         self._owner_lock = threading.Lock()
         self._keepalive_on_channel = False
         self._stream_on_channel = False
+        self._land_on_channel = False
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -220,7 +245,8 @@ class TelloController:
         sent while a land is in progress, and waits for a flight command to
         finish rather than interleaving with it. A land that starts while one
         of them is on the wire does not wait for it: ``land()`` sends ``stop``
-        and ``land`` at once. If the channel stays busy, recovery gives up
+        at once and ``land`` right after it. While a land is unconfirmed
+        recovery sends nothing. If the channel stays busy, recovery gives up
         and runs again the next time the stream is found stale.
         """
         self._stream_recovering = True
@@ -252,14 +278,18 @@ class TelloController:
         """Send a stream command once the command channel is free. False if it never was.
 
         Polls without holding any lock, and does not try while a land is in
-        progress, so a land always takes the channel first. Gives up after
-        ``_STREAM_CHANNEL_WAIT_S``, or as soon as the controller has stopped
-        running. Raises like ``_stream_command_once`` when the command was
-        sent and not answered ``ok``.
+        progress or unconfirmed, so a land always takes the channel first.
+        Gives up after ``_STREAM_CHANNEL_WAIT_S``, or as soon as the
+        controller has stopped running. Raises like ``_stream_command_once``
+        when the command was sent and not answered ``ok``.
         """
         deadline = time.monotonic() + _STREAM_CHANNEL_WAIT_S
         while True:
-            if not self._lands_in_progress and self._stream_command_once(command):
+            if (
+                not self._lands_in_progress
+                and not self._land_unconfirmed
+                and self._stream_command_once(command)
+            ):
                 return True
             if not self._running or time.monotonic() >= deadline:
                 return False
@@ -269,16 +299,19 @@ class TelloController:
         """Send ``streamoff`` or ``streamon`` once if the channel is free.
 
         Returns False, sending nothing, when another command holds the
-        command lock, a land is in progress, or djitellopy's minimum gap
-        since the last reply has not passed yet; it never sleeps while
-        holding the lock. Otherwise the command holds ``_cmd_lock`` for its
-        whole exchange, like the keepalive, so its reply can never be read as
-        the reply to a flight command or a land, and a move that finds it on
-        the channel waits for it instead of being dropped. The land check and
-        the send happen under ``_wire_lock``, so a ``land()`` that starts at
-        the same moment either stops the command from being sent or finds it
-        on the wire and interrupts it at once. Returns True on an ``ok``
-        reply; raises ``RuntimeError`` on any other reply or none within
+        command lock or a land is in progress or unconfirmed. Otherwise the
+        command holds ``_cmd_lock`` for its whole exchange, like the
+        keepalive, so its reply can never be read as the reply to a flight
+        command or a land, and a move that finds it on the channel waits for
+        it instead of being dropped. Holding the lock, it first waits out
+        what is left of djitellopy's minimum gap since the last reply (at
+        most ``_TIME_BETWEEN_COMMANDS_S``), so it can go between two lane
+        moves; a land that starts during that wait ends it at once, and the
+        command is not sent. The land check and the send happen under
+        ``_wire_lock``, so a ``land()`` that starts at the same moment
+        either stops the command from being sent or finds it on the wire
+        and interrupts it at once. Returns True on an ``ok`` reply; raises
+        ``RuntimeError`` on any other reply or none within
         ``_STREAM_REPLY_TIMEOUT_S``.
         """
         with self._owner_lock:
@@ -288,8 +321,10 @@ class TelloController:
         try:
             tello = self.tello
             responses = tello.get_own_udp_object()["responses"]
+            if not self._wait_command_gap_unless_landing():
+                return False
             with self._wire_lock:
-                if self._lands_in_progress or self._command_gap_left() > 0:
+                if self._lands_in_progress or self._land_unconfirmed:
                     return False
                 # Replies queued while the channel was free are stale.
                 del responses[:]
@@ -349,6 +384,11 @@ class TelloController:
             ):
                 print(f"[{self.name}] Takeoff refused: a landing is in progress or was requested.")
                 return False
+            with self._wire_lock:
+                # The drone is flying under command again, so an earlier land
+                # that was never confirmed no longer holds off the keepalive.
+                if self._land_seq == land_seq:
+                    self._land_unconfirmed = False
             self.state.is_flying = True
             # djitellopy's end() lands only when its own flag says flying.
             self.tello.is_flying = True
@@ -364,53 +404,124 @@ class TelloController:
         channel is free this is an ordinary ``land``. If a move, rotate,
         takeoff, keepalive or stream-recovery command is still waiting for
         its reply, the land does not queue behind it: ``stop`` (hover,
-        accepted at any time by SDK 2.0 and later) and ``land`` are sent
-        straight away without waiting for a reply, then a normal ``land``
-        confirms once the channel is free. The land is sent up to
-        ``_LAND_ATTEMPTS`` times; a land that is never confirmed raises, so
-        callers can retry.
+        accepted at any time by SDK 2.0 and later) is sent straight away and
+        ``land`` ``_TIME_BETWEEN_COMMANDS_S`` later, without waiting for a
+        reply, then a confirming ``land`` is sent once the channel is free.
+        If another ``land()`` holds the channel, its land is already on the
+        wire, so this one sends nothing extra (whose replies could be taken
+        for that land's) and confirms after it.
+
+        The confirming land is sent up to ``_LAND_ATTEMPTS`` times, and only
+        a fresh ``ok`` confirms it (see ``_confirm_land``). ``is_flying``
+        stays true until then, and a land that is never confirmed raises, so
+        callers keep retrying.
         """
         with self._wire_lock:
             self._landing = True
+            self._land_unconfirmed = True
             self._lands_in_progress += 1
             self._land_seq += 1
         try:
-            if self._cmd_lock.acquire(blocking=False):
+            with self._owner_lock:
+                took_channel = self._cmd_lock.acquire(blocking=False)
+                if took_channel:
+                    self._land_on_channel = True
+                behind_land = not took_channel and self._land_on_channel
+            if took_channel:
                 try:
                     self._confirm_land()
                     print(f"[{self.name}] Landing.")
                 finally:
-                    self._cmd_lock.release()
+                    self._leave_channel_after_land()
                 return
 
-            print(f"[{self.name}] Landing now (interrupting an in-flight command).")
-            for raw in ("stop", "land"):
-                try:
-                    self.tello.send_command_without_return(raw)
-                except Exception as e:
-                    print(f"[{self.name}] Immediate '{raw}' failed: {e}")
+            if behind_land:
+                print(f"[{self.name}] Landing: another land is confirming, waiting for it.")
+            else:
+                print(f"[{self.name}] Landing now (interrupting an in-flight command).")
+                self._send_land_raw("stop")
+                self._pace_land()
+                self._send_land_raw("land")
             if not self._cmd_lock.acquire(timeout=_LAND_CONFIRM_WAIT_S):
                 raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
+            with self._owner_lock:
+                self._land_on_channel = True
             try:
                 self._confirm_land()
                 print(f"[{self.name}] Landing confirmed.")
             finally:
-                self._cmd_lock.release()
+                self._leave_channel_after_land()
         finally:
             with self._wire_lock:
                 self._lands_in_progress -= 1
 
+    def _send_land_raw(self, command: str) -> None:
+        """Send ``stop`` or ``land`` for an interrupting land, without reading a reply."""
+        try:
+            self.tello.send_command_without_return(command)
+        except Exception as e:
+            print(f"[{self.name}] Immediate '{command}' failed: {e}")
+        finally:
+            self._land_sent_at = time.monotonic()
+
+    def _pace_land(self) -> None:
+        """Wait ``_TIME_BETWEEN_COMMANDS_S`` past both the last reply and the last command a land sent."""
+        while True:
+            since_sent = time.monotonic() - self._land_sent_at
+            wait = max(self._command_gap_left(), _TIME_BETWEEN_COMMANDS_S - since_sent)
+            if wait <= 0:
+                return
+            time.sleep(wait)
+
+    def _leave_channel_after_land(self) -> None:
+        """Release ``_cmd_lock`` taken by ``land()``."""
+        with self._owner_lock:
+            self._land_on_channel = False
+            self._cmd_lock.release()
+
     def _confirm_land(self) -> None:
-        """Send ``land`` until the Tello confirms it. Caller holds ``_cmd_lock``."""
+        """Send ``land`` until a fresh ``ok`` confirms it. Caller holds ``_cmd_lock``.
+
+        Each attempt waits out the command gap, then, under ``_wire_lock``,
+        drops every queued reply (for example the ``ok`` that answered an
+        interrupting ``stop``, which says nothing about the land) and sends
+        ``land``. It then waits up to ``_LAND_REPLY_TIMEOUT_S`` for a reply;
+        only ``ok`` confirms the land. On confirmation ``is_flying`` is
+        cleared and the keepalive may run again. Returns at once, sending
+        nothing, if another ``land()`` was confirmed since this one was
+        requested. Raises ``RuntimeError`` after ``_LAND_ATTEMPTS``
+        unconfirmed attempts, leaving ``is_flying`` true.
+        """
+        tello = self.tello
+        responses = tello.get_own_udp_object()["responses"]
+        outcome = "not sent"
         for attempt in range(1, _LAND_ATTEMPTS + 1):
-            try:
-                self.tello.land()
-            except Exception:
-                if attempt == _LAND_ATTEMPTS:
-                    raise
-                continue
-            self.state.is_flying = False
-            return
+            self._pace_land()
+            with self._wire_lock:
+                if not self._land_unconfirmed:
+                    return
+                del responses[:]
+                try:
+                    tello.send_command_without_return("land")
+                    sent = True
+                except Exception as e:
+                    outcome = f"send failed: {e}"
+                    sent = False
+                self._land_sent_at = time.monotonic()
+            if sent:
+                reply = self._await_reply(responses, _LAND_REPLY_TIMEOUT_S)
+                if reply is not None and reply.lower() == "ok":
+                    with self._wire_lock:
+                        self._land_unconfirmed = False
+                        self.state.is_flying = False
+                        # djitellopy's end() lands only when its own flag says flying.
+                        tello.is_flying = False
+                    return
+                outcome = "no reply" if reply is None else f"answered {reply!r}"
+            print(f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} not confirmed: {outcome}.")
+        raise RuntimeError(
+            f"[{self.name}] land not confirmed after {_LAND_ATTEMPTS} attempts (last: {outcome})"
+        )
 
     def move(self, direction: str, distance_cm: int) -> bool:
         """Move in a direction. Drops command if another is in-flight.
@@ -458,7 +569,16 @@ class TelloController:
         for one short exchange, so a move that finds either there waits for
         it instead of being dropped (a dropped lane move makes the lane
         executor land).
+
+        The minimum gap after the last reply is waited out before the lock
+        is taken, not while holding it, so back-to-back lane moves leave the
+        channel free for that long and a stream-recovery command can get in
+        between them. ``_send_flight_command`` waits out the gap again under
+        the lock, which takes no time unless another command got in.
         """
+        gap = self._command_gap_left()
+        if gap > 0:
+            time.sleep(gap)
         with self._owner_lock:
             if self._cmd_lock.acquire(blocking=False):
                 return True
@@ -549,6 +669,22 @@ class TelloController:
         if wait > 0:
             time.sleep(wait)
 
+    def _wait_command_gap_unless_landing(self) -> bool:
+        """Wait out the minimum gap after the last reply. False, at once, if a land starts.
+
+        Caller holds ``_cmd_lock``. Waits at most ``_TIME_BETWEEN_COMMANDS_S``
+        and checks for a land every ``_REPLY_POLL_S``, so a land that starts
+        meanwhile gets the channel without waiting for the rest of the gap.
+        """
+        deadline = time.monotonic() + min(self._command_gap_left(), _TIME_BETWEEN_COMMANDS_S)
+        while True:
+            if self._lands_in_progress or self._land_unconfirmed:
+                return False
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return True
+            time.sleep(min(left, _REPLY_POLL_S))
+
     def _retry_ground_command(self, fn: Callable[[], object]) -> None:
         """Run a connect-time command (``command``, ``streamon``) with retries.
 
@@ -626,13 +762,19 @@ class TelloController:
         The keepalive holds ``_cmd_lock`` for its whole exchange, so its
         ``ok`` can never be read as the reply to a land or a flight command.
         While a flight command holds the channel the keepalive is skipped;
-        that command keeps the link alive.
+        that command keeps the link alive. It is also skipped from the
+        moment a land starts until a land is confirmed: a keepalive would
+        restart the Tello's 15 s auto-land timer, which is the last resort
+        when every land packet is lost.
         """
         with self._owner_lock:
             if not self._cmd_lock.acquire(blocking=False):
                 return False
             self._keepalive_on_channel = True
         try:
+            with self._wire_lock:
+                if self._land_unconfirmed:
+                    return False
             try:
                 # Replies queued while the channel was free are stale.
                 del self.tello.get_own_udp_object()["responses"][:]
