@@ -174,7 +174,7 @@ source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: 
 
 # Path 2, AP mode: each laptop joins one drone's own Wi-Fi, the laptops share a cable (10.42.0.0/24).
 export FLIGHTRISK_FLEET_NET=ap
-source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
 
 On the Windows laptop, set `FLIGHTRISK_EDGE_TOKEN` and `FLIGHTRISK_FLEET_NET` (and in station mode `FLIGHTRISK_GROUND_IP` and `FLIGHTRISK_TELLO_HOST` for drone 2), then run:
