@@ -55,23 +55,36 @@ if ($altCm -lt 10) {
 
 # The live floor is 4 m x 4 m, so the geofence is 450 cm unless the environment overrides it,
 # and the edge matches on appearance only: it builds no face recognizer and sends no face embeddings.
-if (-not $env:FLIGHTRISK_GEOFENCE_CM) { $env:FLIGHTRISK_GEOFENCE_CM = "450" }
-$env:FLIGHTRISK_APPEARANCE_ONLY = "1"
+# These variables are set only for this script's run and restored in the finally block, so a later
+# run in the same PowerShell session does not inherit them.
+$savedGeofence = $env:FLIGHTRISK_GEOFENCE_CM
+$savedAppearanceOnly = $env:FLIGHTRISK_APPEARANCE_ONLY
+$exitCode = 0
+try {
+    if (-not $env:FLIGHTRISK_GEOFENCE_CM) { $env:FLIGHTRISK_GEOFENCE_CM = "450" }
+    $env:FLIGHTRISK_APPEARANCE_ONLY = "1"
 
-$python = if ($env:PYTHON) { $env:PYTHON } else { "venv\Scripts\python.exe" }
+    $python = if ($env:PYTHON) { $env:PYTHON } else { "venv\Scripts\python.exe" }
 
-$edgeArgs = @(
-    "-m", "flightrisk.edge_device",
-    "--source", "tello",
-    "--tello-host", $env:FLIGHTRISK_TELLO_HOST,
-    "--drone-id", $droneId,
-    "--alt-slot", "$altCm",
-    "--ws-url", $env:FLIGHTRISK_EDGE_WS
-)
+    $edgeArgs = @(
+        "-m", "flightrisk.edge_device",
+        "--source", "tello",
+        "--tello-host", $env:FLIGHTRISK_TELLO_HOST,
+        "--drone-id", $droneId,
+        "--alt-slot", "$altCm",
+        "--ws-url", $env:FLIGHTRISK_EDGE_WS
+    )
 
-if ($env:DEMO_DRY_RUN) {
-    Write-Host "$python $($edgeArgs -join ' ')"
-    exit 0
+    if ($env:DEMO_DRY_RUN) {
+        Write-Host "$python $($edgeArgs -join ' ')"
+    }
+    else {
+        & $python @edgeArgs
+        $exitCode = $LASTEXITCODE
+    }
 }
-& $python @edgeArgs
-exit $LASTEXITCODE
+finally {
+    $env:FLIGHTRISK_GEOFENCE_CM = $savedGeofence
+    $env:FLIGHTRISK_APPEARANCE_ONLY = $savedAppearanceOnly
+}
+exit $exitCode

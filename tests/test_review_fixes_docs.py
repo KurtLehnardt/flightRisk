@@ -63,3 +63,45 @@ def test_person_size_assumption_labelled():
     for m in re.finditer(r"1\.7 m", pitch):
         window = pitch[max(0, m.start() - 200): m.end() + 200]
         assert "ASSUMPTION" in window
+
+
+def test_privacy_design_current_state():
+    text = _doc("privacy-design.md")
+    # The pre-hackathon "today / planned" framing and the stale always-constructs claim are gone.
+    assert "`_init_pipeline` always constructs `FaceRecognizer`" not in text
+    assert "798f21a" not in text
+    assert "Today:" not in text and "Planned (" not in text
+    # The face embedding broadcast to edges is stated, with its default-demo exemption.
+    assert "broadcast_target" in text
+    assert "not appearance-only" in text
+    assert "does not happen in the default demo configuration" in text
+    assert "Face embeddings are never sent over the network by the dashboard" not in text
+    # The edge link is unencrypted ws:// protected by a shared token.
+    assert "plain `ws://`" in text
+    assert "FLIGHTRISK_EDGE_TOKEN" in text
+    assert "private network" in text
+
+
+def test_demo_script_rung2_and_geofence_450():
+    text = _doc("demo-script.md")
+    rung = text[text.index("2. **One Tello live and one fake edge.**"):text.index("3. **Recorded video")]
+    assert "refuses a second live edge" in rung
+    assert "swap routing" not in rung
+    assert "450 cm geofence around its takeoff point by default" in text
+    assert "500 cm geofence around its takeoff point by default" not in text
+
+
+def test_demo_edge_ps1_restores_env():
+    ps1 = (ROOT / "scripts" / "demo_edge.ps1").read_text(encoding="utf-8")
+    assert "$savedGeofence = $env:FLIGHTRISK_GEOFENCE_CM" in ps1
+    assert "$savedAppearanceOnly = $env:FLIGHTRISK_APPEARANCE_ONLY" in ps1
+    body = ps1[ps1.index("try {"):]
+    assert "finally {" in body
+    set_at = body.index('$env:FLIGHTRISK_APPEARANCE_ONLY = "1"')
+    finally_at = body.index("finally {")
+    assert set_at < finally_at
+    restore = body[finally_at:]
+    assert "$env:FLIGHTRISK_GEOFENCE_CM = $savedGeofence" in restore
+    assert "$env:FLIGHTRISK_APPEARANCE_ONLY = $savedAppearanceOnly" in restore
+    # The exit code is returned after the restore, not from inside the try block.
+    assert body.rindex("exit $exitCode") > finally_at
