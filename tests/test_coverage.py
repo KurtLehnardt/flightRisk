@@ -112,7 +112,11 @@ def test_cli_shows_infeasible_instead_of_time(capsys):
 
 
 def test_sweep_model_follows_the_forward_trapezoid_formulas():
-    model = SweepModel(height_m=1.5, width_px=960, height_px=720, hfov_deg=80.0, min_person_px=30.0)
+    # The formulas with hfov_deg read as the horizontal field of view; the
+    # default diagonal reading is tested in test_diagonal_fov_is_the_default_reading.
+    model = SweepModel(
+        height_m=1.5, width_px=960, height_px=720, hfov_deg=80.0, min_person_px=30.0, fov_is_diagonal=False
+    )
     half_tan = math.tan(math.radians(40.0))
     vfov_half = math.atan(half_tan * 720 / 960)
     f_px = 480 / half_tan
@@ -178,11 +182,51 @@ def test_sweep_model_refuses_a_camera_that_is_not_forward_facing():
 def test_diagonal_fov_reading_narrows_the_view():
     # UNVERIFIED hardware question: if the Tello's 82.6 degrees is diagonal,
     # the horizontal half-angle tangent shrinks by 4/5 on a 4:3 frame.
-    horizontal = tello_sweep_model(max_range_m=4.0)
+    horizontal = tello_sweep_model(max_range_m=4.0, fov_is_diagonal=False)
     diagonal = tello_sweep_model(max_range_m=4.0, fov_is_diagonal=True)
     assert diagonal.half_tan == pytest.approx(horizontal.half_tan * 0.8)
     assert horizontal.sweep_width_m / diagonal.sweep_width_m == pytest.approx(1.25)
     assert diagonal.near_m == pytest.approx(1.9, abs=0.01)
     assert horizontal.near_m == pytest.approx(1.52, abs=0.01)
     # Uncapped, the far edge's width is resolution-limited and does not change.
-    assert tello_sweep_model(fov_is_diagonal=True).sweep_width_m == pytest.approx(tello_sweep_model().sweep_width_m)
+    assert tello_sweep_model(fov_is_diagonal=True).sweep_width_m == pytest.approx(
+        tello_sweep_model(fov_is_diagonal=False).sweep_width_m
+    )
+
+
+def test_diagonal_fov_is_the_default_reading():
+    # Until hardware rung L1 settles whether 82.6 degrees is horizontal or
+    # diagonal, the pessimistic (diagonal) reading is the default.
+    assert SweepModel.__dataclass_fields__["fov_is_diagonal"].default is True
+    default = tello_sweep_model(max_range_m=4.0)
+    assert default.fov_is_diagonal is True
+    assert default.half_tan == pytest.approx(tello_sweep_model(max_range_m=4.0, fov_is_diagonal=True).half_tan)
+    assert default.half_tan == pytest.approx(math.tan(math.radians(41.3)) * 0.8)
+    assert default.near_m == pytest.approx(1.9, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"width_px": math.inf},
+        {"height_px": math.inf},
+        {"width_px": math.nan},
+        {"height_m": math.inf},
+        {"hfov_deg": math.nan},
+        {"min_person_px": math.inf},
+        {"person_height_m": math.nan},
+        {"efficiency": math.nan},
+        {"width_px": True},
+    ],
+)
+def test_sweep_model_refuses_non_finite_sizes(kwargs):
+    base = {"height_m": 1.0, "width_px": 960, "height_px": 720, "hfov_deg": 82.6, "min_person_px": 32.0}
+    with pytest.raises(ValueError):
+        SweepModel(**{**base, **kwargs})
+
+
+@pytest.mark.parametrize("reading", ["no", 0, 1, None])
+def test_sweep_model_requires_a_real_bool_for_the_fov_reading(reading):
+    # "no" used to be accepted, and was truthy: a diagonal reading.
+    with pytest.raises(TypeError, match="fov_is_diagonal"):
+        tello_sweep_model(fov_is_diagonal=reading)

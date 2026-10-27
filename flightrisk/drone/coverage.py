@@ -131,18 +131,21 @@ class SweepModel:
     HERIDAL ``min_person_px`` was measured on nadir imagery from 40-65 m and
     its transfer to an oblique view from about 1-2 m is UNVERIFIED.
 
-    ``hfov_deg`` is treated as the horizontal field of view and the vertical
-    one is derived from the image aspect ratio. Whether the published Tello
-    82.6 degrees is horizontal or diagonal is an UNVERIFIED hardware question.
-    Set ``fov_is_diagonal=True`` to read ``hfov_deg`` as the diagonal field of
-    view instead: the horizontal half-angle tangent then shrinks by
-    ``width / hypot(width, height)`` (0.8 for 4:3). For the Tello at 1 m that
-    moves the near edge from about 1.5 m to about 1.9 m and, when the range is
-    capped (for example ``max_range_m=4`` for a room), makes the sweep about
-    1.25 times narrower. Uncapped, the far edge's width does not change,
-    because the focal length grows by the same factor as the half-angle
-    shrinks. Plans made with the horizontal reading would over-claim coverage
-    if the figure turns out to be diagonal. Rung L1 settles it.
+    Whether the published Tello 82.6 degrees is a horizontal or a diagonal
+    field of view is an UNVERIFIED hardware question (DJI usually quotes
+    diagonal figures). By default (``fov_is_diagonal=True``) ``hfov_deg`` is
+    read as the diagonal field of view, which is the pessimistic reading: the
+    horizontal half-angle tangent is ``tan(hfov_deg / 2)`` shrunk by
+    ``width / hypot(width, height)`` (0.8 for 4:3), and the vertical one
+    follows from the image aspect ratio. Pass ``fov_is_diagonal=False`` to
+    read ``hfov_deg`` as the horizontal field of view. For the Tello at 1 m
+    the diagonal reading moves the near edge from about 1.5 m to about 1.9 m
+    and, when the range is capped (for example ``max_range_m=4`` for a room),
+    makes the sweep about 1.25 times narrower. Uncapped, the far edge's width
+    does not change, because the focal length grows by the same factor as
+    the half-angle shrinks. Plans made with the horizontal reading would
+    over-claim coverage if the figure turns out to be diagonal. Hardware rung
+    L1 settles it; until then the default stays diagonal.
     """
 
     height_m: float
@@ -154,10 +157,16 @@ class SweepModel:
     efficiency: float = 1.0
     max_range_m: float | None = None
     calibrated_sweep_width_m: float | None = None
-    fov_is_diagonal: bool = False
+    fov_is_diagonal: bool = True
 
     def __post_init__(self) -> None:
-        if not (math.isfinite(self.height_m) and self.height_m > 0):
+        for name in ("height_m", "width_px", "height_px", "hfov_deg", "min_person_px", "person_height_m", "efficiency"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number, got {value!r}")
+        if not isinstance(self.fov_is_diagonal, bool):
+            raise TypeError(f"fov_is_diagonal must be True or False, got {self.fov_is_diagonal!r}")
+        if not self.height_m > 0:
             raise ValueError(f"height_m must be positive, got {self.height_m!r}")
         if self.width_px <= 0 or self.height_px <= 0:
             raise ValueError("width_px and height_px must be positive")

@@ -23,7 +23,8 @@ The search area is rasterised into square cells (10 cm by default). A cell is
 found at the first instant its centre lies inside the camera footprint of an
 airborne drone. ``RectFootprint.square(sweep)`` is the plan's idealised square
 footprint centred on the drone; ``ForwardFootprint`` is the trapezoid ahead of
-a forward-facing camera from ``coverage.SweepModel``. The camera always faces
+a forward-facing camera from ``coverage.SweepModel`` (both are defined in
+``flightrisk.drone.footprints`` and re-exported here). The camera always faces
 ``+y`` because fleet drones never rotate. First-detection times are exact for
 piecewise-linear flight, not sampled.
 
@@ -39,8 +40,13 @@ that the person is inside the searched part. POD is 1 until rung L1
 calibrates it.
 
 ``covered_cells`` answers only "is this cell ever seen" for axis-aligned
-polylines, in time linear in the number of legs times the raster side, so the
-planner can afford to check every plan it builds.
+polylines, in time linear in the number of legs times the raster side.
+``covered_fraction`` is what the planner's coverage gate uses: the fraction of
+the area the footprints ever see, measured exactly along horizontal lines and
+integrated over ``y`` with every polygon edge as a breakpoint, so a strip
+narrower than a raster cell is not missed. ``first_detection_times`` only
+evaluates the cells each segment's footprint can reach, and refuses work above
+``MAX_DETECTION_WORK`` cell evaluations instead of stalling.
 
 Separation
 ----------
@@ -58,16 +64,27 @@ import math
 import random
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
 
+from flightrisk.drone.footprints import (
+    MAX_SCAN_INTERVALS,
+    Footprint,
+    ForwardFootprint,
+    RectFootprint,
+    _per_track,
+    covered_fraction,
+)
 from flightrisk.drone.lane_executor import split_lane_moves
 
 __all__ = [
     "DEFAULT_TIMING",
+    "MAX_DETECTION_WORK",
     "MAX_RASTER_CELLS",
+    "MAX_SCAN_INTERVALS",
     "DroneEstimate",
+    "Footprint",
     "ForwardFootprint",
     "Raster",
     "RectFootprint",
@@ -75,6 +92,7 @@ __all__ = [
     "Segment",
     "TimingModel",
     "covered_cells",
+    "covered_fraction",
     "estimate_plan",
     "first_detection_times",
     "gaussian_prior",
@@ -90,6 +108,10 @@ _VECTORS = {"forward": (0.0, 1.0), "back": (0.0, -1.0), "right": (1.0, 0.0), "le
 MAX_RASTER_CELLS = 4_000_000
 """Largest raster accepted: a 200 m x 200 m area at 10 cm cells. Larger rasters
 are refused with an error rather than left to stall the caller."""
+
+MAX_DETECTION_WORK = 600_000_000
+"""Most (segment, cell) evaluations ``first_detection_times`` performs before
+refusing with an error that asks for a larger ``cell_cm``."""
 
 
 @dataclass(frozen=True)
@@ -210,78 +232,6 @@ def plan_tracks(
 
 
 # ----------------------------------------------------------------------
-# Footprints
-# ----------------------------------------------------------------------
-
-
-class Footprint(Protocol):
-    """Where a cell is visible, in offsets ``dx = cell_x - drone_x``, ``dy = cell_y - drone_y``."""
-
-    def lateral_halfwidth(self, dy: np.ndarray) -> np.ndarray:
-        """Half-width of the visible span of ``dx`` at each ``dy``; negative where nothing is visible."""
-
-    def along_interval(self, adx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """``(lo, hi)`` of the visible ``dy`` at each ``|dx|``; ``lo > hi`` where nothing is visible."""
-
-
-@dataclass(frozen=True)
-class RectFootprint:
-    """A rectangle ``2 * half_x_cm`` wide and ``2 * half_y_cm`` deep, centred ``ahead_cm`` ahead."""
-
-    half_x_cm: float
-    half_y_cm: float
-    ahead_cm: float = 0.0
-
-    @classmethod
-    def square(cls, side_cm: float) -> RectFootprint:
-        """The plan's idealised footprint: a square of the sweep width centred on the drone."""
-        return cls(side_cm / 2, side_cm / 2)
-
-    def lateral_halfwidth(self, dy: np.ndarray) -> np.ndarray:
-        inside = np.abs(dy - self.ahead_cm) <= self.half_y_cm
-        return np.where(inside, self.half_x_cm, -1.0)
-
-    def along_interval(self, adx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        inside = adx <= self.half_x_cm
-        lo = np.where(inside, self.ahead_cm - self.half_y_cm, np.inf)
-        hi = np.where(inside, self.ahead_cm + self.half_y_cm, -np.inf)
-        return lo, hi
-
-
-@dataclass(frozen=True)
-class ForwardFootprint:
-    """Trapezoid ahead of a forward-facing camera: ``near_cm <= dy <= far_cm``, ``|dx| <= dy * half_tan``.
-
-    ``max_half_width_cm`` caps the lateral reach, for a calibrated sweep width.
-    """
-
-    near_cm: float
-    far_cm: float
-    half_tan: float
-    max_half_width_cm: float = math.inf
-
-    @classmethod
-    def from_sweep_model(cls, model: Any) -> ForwardFootprint:
-        """Footprint of a ``coverage.SweepModel``; its sweep width caps the lateral reach."""
-        return cls(
-            near_cm=model.near_m * 100,
-            far_cm=model.far_m * 100,
-            half_tan=model.half_tan * model.efficiency,
-            max_half_width_cm=model.sweep_width_m * 100 / 2,
-        )
-
-    def lateral_halfwidth(self, dy: np.ndarray) -> np.ndarray:
-        inside = (dy >= self.near_cm) & (dy <= self.far_cm)
-        return np.where(inside, np.minimum(dy * self.half_tan, self.max_half_width_cm), -1.0)
-
-    def along_interval(self, adx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        visible = adx <= np.minimum(self.far_cm * self.half_tan, self.max_half_width_cm)
-        lo = np.where(visible, np.maximum(self.near_cm, adx / self.half_tan), np.inf)
-        hi = np.where(visible, self.far_cm, -np.inf)
-        return lo, hi
-
-
-# ----------------------------------------------------------------------
 # Raster and priors
 # ----------------------------------------------------------------------
 
@@ -380,14 +330,6 @@ def _entry_times(seg: Segment, cx: np.ndarray, cy: np.ndarray, footprint: Footpr
     return np.where(ok, seg.t0 + frac * duration, inf)
 
 
-def _per_track(footprint: Footprint | Sequence[Footprint], count: int) -> list[Footprint]:
-    if isinstance(footprint, (list, tuple)):
-        if len(footprint) != count:
-            raise ValueError(f"expected {count} footprints, one per track, got {len(footprint)}")
-        return list(footprint)
-    return [footprint] * count
-
-
 def first_detection_times(
     raster: Raster,
     tracks: Iterable[Sequence[Segment]],
@@ -396,17 +338,42 @@ def first_detection_times(
     """Per cell, the first time any airborne drone's footprint contains its centre (inf if never).
 
     ``footprint`` is one footprint for every track, or a list with one per
-    track (drones at different altitudes see different ground).
+    track (drones at different altitudes see different ground). Each segment
+    is evaluated only on the cells its footprint can reach (its bounding box
+    grown by the footprint's extent); more than ``MAX_DETECTION_WORK`` cell
+    evaluations in all raise ``ValueError``.
     """
     tracks = list(tracks)
     footprints = _per_track(footprint, len(tracks))
-    cx, cy = raster.centres()
-    times = np.full(cx.shape, np.inf)
+    xs, ys = raster.axes()
+    times = np.full((xs.size, ys.size), np.inf)
+    jobs = []
+    work = 0
     for track, fp in zip(tracks, footprints):
+        lo, hi = fp.along_extent()
+        reach = fp.lateral_reach()
+        if lo > hi or reach < 0:
+            continue
         for seg in track:
-            if seg.airborne:
-                np.minimum(times, _entry_times(seg, cx, cy, fp), out=times)
-    return times
+            if not seg.airborne:
+                continue
+            i0 = np.searchsorted(xs, min(seg.x0, seg.x1) - reach, side="left")
+            i1 = np.searchsorted(xs, max(seg.x0, seg.x1) + reach, side="right")
+            j0 = np.searchsorted(ys, min(seg.y0, seg.y1) + lo, side="left")
+            j1 = np.searchsorted(ys, max(seg.y0, seg.y1) + hi, side="right")
+            if i1 > i0 and j1 > j0:
+                jobs.append((seg, fp, int(i0), int(i1), int(j0), int(j1)))
+                work += (int(i1) - int(i0)) * (int(j1) - int(j0))
+    if work > MAX_DETECTION_WORK:
+        raise ValueError(
+            f"first-detection times need {work} cell evaluations, above the {MAX_DETECTION_WORK} limit; "
+            "use a larger cell_cm"
+        )
+    for seg, fp, i0, i1, j0, j1 in jobs:
+        cx, cy = np.meshgrid(xs[i0:i1], ys[j0:j1], indexing="ij")
+        block = times[i0:i1, j0:j1]
+        np.minimum(block, _entry_times(seg, cx, cy, fp), out=block)
+    return times.ravel()
 
 
 def covered_cells(
@@ -673,8 +640,10 @@ def min_separation_under_jitter(
     drone (for up to eight drones) are always included. Returns inf for a
     single drone.
     """
-    if not 0 <= jitter < 1:
-        raise ValueError("jitter must be within [0, 1)")
+    if isinstance(jitter, bool) or not isinstance(jitter, (int, float)) or not 0 <= jitter < 1:
+        raise ValueError(f"jitter must be within [0, 1), got {jitter!r}")
+    if isinstance(trials, bool) or not isinstance(trials, int) or trials < 0:
+        raise ValueError(f"trials must be a whole number, at least 0, got {trials!r}")
     counts = {d.drone_id: len(_moves(d.lanes)) for d in plan.drones}
     ids = list(counts)
     if len(ids) < 2:
