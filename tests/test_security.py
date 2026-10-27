@@ -263,12 +263,33 @@ class TestSessionDBEncryption:
 
 
 class TestCORSOrigins:
-    def test_cors_default_is_wildcard(self, monkeypatch):
-        """Without FLIGHTRISK_CORS_ORIGINS, default should be '*'."""
+    def test_cors_default_is_not_wildcard(self, monkeypatch):
+        """Without FLIGHTRISK_CORS_ORIGINS, the dashboard's Socket.IO is same-origin, not '*'."""
         monkeypatch.delenv("FLIGHTRISK_CORS_ORIGINS", raising=False)
-        origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
-        result = origins if origins == "*" else origins.split(",")
-        assert result == "*"
+        monkeypatch.delenv("FLIGHTRISK_DASHBOARD_HOST", raising=False)
+        import flightrisk.dashboard.app as app_mod
+
+        # The default bind, before run_dashboard records one: 127.0.0.1 on
+        # the configured port.
+        monkeypatch.setattr(app_mod, "_dashboard_bind", None)
+        port = app_mod.get_config().dashboard.port
+
+        # The setting Engine.IO actually checks is not the wildcard.
+        assert app_mod.socketio.server.eio.cors_allowed_origins != "*"
+
+        # A page from another site is refused at the Engine.IO handshake,
+        # which a '*' default would accept.
+        client = app_mod.app.test_client()
+        response = client.get(
+            "/socket.io/?EIO=4&transport=polling",
+            headers={"Origin": "http://evil.example"},
+        )
+        assert response.status_code == 400
+        assert "Access-Control-Allow-Origin" not in response.headers
+        assert app_mod.socketio_origin_allowed("http://evil.example") is False
+
+        # The dashboard's own page is still accepted.
+        assert app_mod.socketio_origin_allowed(f"http://127.0.0.1:{port}") is True
 
     def test_cors_single_origin(self, monkeypatch):
         """Single origin from env var."""
