@@ -13,12 +13,24 @@ the machine.
 import asyncio
 import json
 import logging
+import threading
 import time
+from itertools import pairwise
 
+import numpy as np
 import pytest
+import websockets
 
 from flightrisk import fleet_protocol as fp
-
+from flightrisk.edge import DetectionMessage, EdgeRunner
+from flightrisk.ground import GroundStation
+from flightrisk.transport import (
+    ClockSyncError,
+    EdgeTransport,
+    EdgeTransportSync,
+    GroundTransport,
+    GroundTransportSync,
+)
 
 # ===========================================================================
 # Pure protocol helpers
@@ -179,11 +191,6 @@ def test_start_skews_relative_to_earliest_drone():
 
 
 def test_detections_carry_drone_id_and_pose_round_trip():
-    import numpy as np
-
-    from flightrisk.edge import EdgeRunner
-    from flightrisk.ground import GroundStation
-
     class FakeDetector:
         def detect(self, frame):
             return [{"bbox": [1, 1, 5, 5], "confidence": 0.9}]
@@ -207,10 +214,6 @@ def test_detections_carry_drone_id_and_pose_round_trip():
 
 
 def test_detections_without_fleet_fields_keep_legacy_wire_format():
-    import numpy as np
-
-    from flightrisk.edge import EdgeRunner
-
     def broken_pose():
         raise RuntimeError("no pose yet")
 
@@ -224,19 +227,6 @@ def test_detections_without_fleet_fields_keep_legacy_wire_format():
 # ===========================================================================
 # Transport: in-process websockets server and clients on 127.0.0.1
 # ===========================================================================
-
-import threading  # noqa: E402
-
-import websockets  # noqa: E402
-
-from flightrisk.edge import DetectionMessage  # noqa: E402
-from flightrisk.transport import (  # noqa: E402
-    ClockSyncError,
-    EdgeTransport,
-    EdgeTransportSync,
-    GroundTransport,
-    GroundTransportSync,
-)
 
 TOKEN = "fleet-test-token"
 LANES = [{"direction": "forward", "distance_cm": 200}, {"direction": "right", "distance_cm": 50}]
@@ -591,7 +581,7 @@ def test_pong_timestamps_monotonic():
         for s in samples:
             assert s.t1 <= s.t4  # ground clock
             assert s.t2 <= s.t3  # edge clock
-        for prev, cur in zip(samples, samples[1:]):
+        for prev, cur in pairwise(samples):
             # Rounds are sequential and every clock only moves forward.
             assert cur.t1 >= prev.t4
             assert cur.t2 > prev.t3

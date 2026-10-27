@@ -46,8 +46,9 @@ from __future__ import annotations
 import math
 import statistics
 import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 __all__ = [
     "PING",
