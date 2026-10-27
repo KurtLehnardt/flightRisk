@@ -64,8 +64,11 @@ later pull requests, and the obligations they must meet are listed in
     motion and control (`takeoff`, `assign_lanes`, `start_at`, `hold`,
     `resume`, `nudge`, `handover`, `heartbeat`, `clock`) whatever the link
     version, so a ground that never sends `hello`, or whose first message is
-    a bare `heartbeat`, cannot move the drone or feed its watchdog. Landing
-    is still accepted unfenced.
+    a bare `heartbeat`, cannot move the drone or feed its watchdog. Those
+    types are then checked under the full v2 rules, not only for the fence,
+    so a fenced `assign_lanes` without `plan_id` or `plan_seq`, or a fenced
+    `start_at` without `plan_id`, is refused too. Landing is still accepted
+    unfenced.
 
 ## Message table
 

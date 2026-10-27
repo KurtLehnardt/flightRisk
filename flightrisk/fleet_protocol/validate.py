@@ -439,11 +439,15 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
     if mtype == HELLO and not _is_ground_hello(msg):
         raise ProtocolError("a ground-to-edge 'hello' must have role 'leader' or 'standby'")
     if require_fence and (mtype in FENCED_COMMAND_TYPES or mtype in FENCED_CONTROL_TYPES):
+        # The full v2 rules, not only the fence: a fenced assign_lanes
+        # without plan_id or plan_seq, or a fenced start_at without plan_id,
+        # is refused too.
         try:
-            _validate_fence(msg, mtype, PROTOCOL_VERSION)
+            validate_message(msg, proto=PROTOCOL_VERSION)
         except ProtocolError as exc:
             raise ProtocolError(
-                f"unfenced {mtype!r} refused: this edge requires a fence on every link ({exc})"
+                f"unfenced or incomplete {mtype!r} refused: this edge requires the v2 form "
+                f"on every link ({exc})"
             ) from exc
     return mtype
 

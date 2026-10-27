@@ -725,3 +725,45 @@ def test_landings_over_64_kib_still_land():
         raw = json.dumps({"type": mtype, "pad": "a" * 100_000})
         assert fp.decode(raw, direction=G2E, proto=2) == {"type": mtype}
         assert fp.decode(raw, direction=G2E, proto=None, require_fence=True) == {"type": mtype}
+
+
+# ===========================================================================
+# require_fence applies the v2 rules on a v1 link
+# ===========================================================================
+
+
+def _drop(msg: dict, *keys: str) -> dict:
+    return {k: v for k, v in msg.items() if k not in keys}
+
+
+FENCED_ASSIGN = fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=1, cmd_id=CMD)
+FENCED_START = fp.make_start_at(1.0, fence=FENCE, plan_id="p-1", cmd_id=CMD)
+
+
+@pytest.mark.parametrize("msg", [
+    _drop(FENCED_ASSIGN, "plan_id"),
+    _drop(FENCED_ASSIGN, "plan_seq"),
+    _drop(FENCED_ASSIGN, "plan_id", "plan_seq"),
+    _drop(FENCED_START, "plan_id"),
+], ids=["assign-no-plan_id", "assign-no-plan_seq", "assign-no-plan", "start_at-no-plan_id"])
+def test_require_fence_refuses_fenced_motion_without_its_v2_fields(msg):
+    # Accepted on a plain v1 link, as before ...
+    assert fp.validate_ground_to_edge(msg, proto=1) == msg["type"]
+    # ... refused by an edge that requires the v2 form on every link.
+    for proto in (1, 2):
+        with pytest.raises(fp.ProtocolError, match="plan_"):
+            fp.validate_ground_to_edge(msg, proto=proto, require_fence=True)
+        with pytest.raises(fp.ProtocolError):
+            fp.decode(json.dumps(msg), direction=G2E, proto=proto, require_fence=True)
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_for_direction(msg, G2E, proto=proto, require_fence=True)
+
+
+def test_require_fence_accepts_complete_v2_motion_on_a_v1_link_and_still_never_fences_landing():
+    for msg in (FENCED_ASSIGN, FENCED_START, fp.make_takeoff(fence=FENCE, cmd_id=CMD), fp.make_heartbeat(3, fence=FENCE),
+                fp.make_clock(0.1, fence=FENCE)):
+        assert fp.validate_ground_to_edge(msg, proto=1, require_fence=True) == msg["type"]
+        assert fp.decode(json.dumps(msg), direction=G2E, proto=1, require_fence=True) == msg
+    for landing in LANDINGS:
+        assert fp.validate_ground_to_edge(landing, proto=1, require_fence=True) == landing["type"]
+        assert fp.decode(json.dumps(landing), direction=G2E, proto=1, require_fence=True) == landing
