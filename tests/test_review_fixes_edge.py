@@ -14,15 +14,14 @@
   ``FLIGHTRISK_APPEARANCE_ONLY=0``.
 
 Nothing here touches a real drone or the network. Tello tests run the real
-``djitellopy.Tello`` client over ``FakeTelloWire``, which replaces its UDP
-command socket and answers like a Tello, so djitellopy's own send and retry
-code is exercised. The B3 wiring test runs a real ``GroundTransportSync`` on
+``djitellopy.Tello`` client over ``FakeTelloWire`` (in ``tests/conftest.py``),
+which replaces its UDP command socket and answers like a Tello, so
+djitellopy's own send and retry code is exercised. The B3 wiring test runs a real ``GroundTransportSync`` on
 127.0.0.1. Timing assertions have generous margins because many test
 processes may share the machine.
 """
 from __future__ import annotations
 
-import itertools
 import secrets
 import sys
 import threading
@@ -30,7 +29,6 @@ import time
 import types
 from typing import Callable
 
-import djitellopy.tello as djitello
 import numpy as np
 import pytest
 
@@ -38,18 +36,16 @@ from flightrisk.dashboard.app import FleetSupervisor
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone import tello as tello_module
 from flightrisk.drone.safety import SafetyEnvelope
-from flightrisk.drone.tello import FakeTelloController, TelloController
+from flightrisk.drone.tello import FakeTelloController
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_device import _build_parser, _build_runner, _make_sender, _run_flight_edge
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import GroundTransportSync
+from tests.conftest import TELLO_FLIGHT_WORDS
 
 WAIT_S = 10.0
 
-# Tello SDK words that make the drone fly.
-FLIGHT_WORDS = {"takeoff", "up", "down", "left", "right", "forward", "back", "cw", "ccw", "rc"}
-
-_hosts = (f"192.0.2.{n}" for n in itertools.count(10))
+FLIGHT_WORDS = TELLO_FLIGHT_WORDS
 
 
 def wait_for(predicate: Callable[[], object], timeout: float = WAIT_S) -> bool:
@@ -59,86 +55,6 @@ def wait_for(predicate: Callable[[], object], timeout: float = WAIT_S) -> bool:
             return True
         time.sleep(0.01)
     return bool(predicate())
-
-
-# ---------------------------------------------------------------------------
-# A fake Tello command socket under the real djitellopy client
-# ---------------------------------------------------------------------------
-
-
-class FakeTelloWire:
-    """Replaces djitellopy's UDP command socket and answers like a Tello.
-
-    ``sendto`` records every command in ``sent``. A command listed in
-    ``hold`` gets no reply until the test calls ``release(command)``, or,
-    for a flight command, until a ``stop`` arrives: a Tello answers a move
-    that ``stop`` interrupted with ``error``. Every other command is
-    answered ``ok`` at once, except ``rc`` commands, which a Tello never
-    answers. Replies go into djitellopy's per-drone response list, as its
-    UDP receiver thread does.
-    """
-
-    def __init__(self, host: str, hold: set[str] | None = None):
-        self.host = host
-        self.hold = set(hold or ())
-        self.sent: list[str] = []
-        self.held: list[str] = []
-        self.entered = threading.Event()
-        self.on_send: Callable[[str], None] | None = None
-        self._lock = threading.Lock()
-
-    def _reply(self, text: str) -> None:
-        djitello.drones[self.host]["responses"].append(text.encode("utf-8"))
-
-    def sendto(self, data: bytes, address) -> int:
-        command = data.decode("utf-8")
-        assert address[0] == self.host
-        with self._lock:
-            self.sent.append(command)
-        if self.on_send is not None:
-            self.on_send(command)
-        word = command.split()[0]
-        if command in self.hold and command not in self.held:
-            self.held.append(command)
-            self.entered.set()
-            return len(data)
-        if word == "stop":
-            interrupted = [c for c in self.held if c.split()[0] in FLIGHT_WORDS]
-            for held in interrupted:
-                self.held.remove(held)
-                self._reply("error")
-        if word != "rc":
-            self._reply("ok")
-        return len(data)
-
-    def release(self, command: str, reply: str = "ok") -> None:
-        self.held.remove(command)
-        self._reply(reply)
-
-
-@pytest.fixture
-def tello_on_wire(monkeypatch):
-    """Factory for a ``TelloController`` whose djitellopy client talks to a ``FakeTelloWire``."""
-    made: list[TelloController] = []
-
-    def _make(hold: set[str] | None = None) -> tuple[TelloController, FakeTelloWire]:
-        host = next(_hosts)
-        wire = FakeTelloWire(host, hold)
-        # threads_initialized stops djitellopy from binding its real UDP
-        # sockets; client_socket is the socket every command is sent on.
-        monkeypatch.setattr(djitello, "threads_initialized", True)
-        monkeypatch.setattr(djitello, "client_socket", wire, raising=False)
-        ctrl = TelloController(name="drone-1", host=host)
-        made.append(ctrl)
-        return ctrl, wire
-
-    yield _make
-    for ctrl in made:
-        ctrl._running = False
-        # Keep djitellopy's end() (run when the client is garbage collected)
-        # from sending anything after the fake socket is gone.
-        ctrl.tello.is_flying = False
-        ctrl.tello.stream_on = False
 
 
 def flight_commands(commands: list[str]) -> list[str]:
