@@ -80,7 +80,7 @@ This is Path 3 in `docs/fleet-setup.md`, which has the validation checklist and 
    Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed
    ```
 
-   The adapter exists only while the cable is plugged in. Windows recreates it on every replug, so check after each replug that it still has 10.42.0.2.
+   The adapter exists only while the cable is plugged in. Windows recreates it on every replug (UNVERIFIED: this comes from a single blog report), so check after each replug that it still has 10.42.0.2.
 
 3. In an administrator PowerShell, replace `<name>` with the adapter name from step 2. Set the address with no gateway, set the MTU to 1500 to match the Mac, and mark the link Private:
 
@@ -88,16 +88,26 @@ This is Path 3 in `docs/fleet-setup.md`, which has the validation checklist and 
    New-NetIPAddress -InterfaceAlias "<name>" -IPAddress 10.42.0.2 -PrefixLength 24
    Set-NetIPInterface -InterfaceAlias "<name>" -NlMtuBytes 1500
    Set-NetConnectionProfile -InterfaceAlias "<name>" -NetworkCategory Private
-   New-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
+   if (-not (Get-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo (TB)" -ErrorAction SilentlyContinue)) {
+       New-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo (TB)" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Profile Private -RemoteAddress 10.42.0.0/24 -Action Allow
+   }
    ```
 
-   If you want to keep the profile Public, add rules scoped to the Mac instead, with `-RemoteAddress 10.42.0.1`, for ICMPv4 echo and for TCP 9000 and 9100. Do not turn on Internet Connection Sharing.
+   The check keeps the rule from being created twice if you run this step again. The rule is separate from the "FlightRisk ICMPv4 echo" rule in step 3, so it has its own name. It allows ping only from the 10.42.0.0/24 subnet and only on the Private profile. Whether `-RemoteAddress` scoping behaves as expected on this laptop is UNVERIFIED.
+
+   If you want to keep the link on the Public profile instead, use this command in place of the `Set-NetConnectionProfile` line and the rule above:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo (TB)" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Profile Public -RemoteAddress 10.42.0.1 -Action Allow
+   ```
+
+   TCP 9000 is only needed if the ground station moves to this laptop. A rule for TCP 9100 is not needed yet, because nothing on main listens on 9100. It is for a later pull request. Do not turn on Internet Connection Sharing.
 
 4. Check the route and the link:
 
    ```powershell
    route print
-   Find-NetRoute -RemoteIPAddress 10.42.0.1
+   Find-NetRoute -RemoteIPAddress 10.42.0.1   # UNVERIFIED on this laptop
    ping -n 4 10.42.0.1
    ```
 
@@ -105,7 +115,7 @@ This is Path 3 in `docs/fleet-setup.md`, which has the validation checklist and 
 
 5. The Tello Wi-Fi needs inbound UDP 8890 (state) and 11111 (video) from 192.168.10.1. If `scripts\tello_hw_check.py --drones 192.168.10.1 --video-check` shows no state or video packets, allow Python through Windows Defender Firewall for that network profile.
 
-6. Keep the laptop awake and the adapters powered. In an administrator PowerShell run `powercfg /change standby-timeout-ac 0`, set the lid close action on AC to "Do nothing" in Power Options, and in Device Manager clear "Allow the computer to turn off this device to save power" on both the Thunderbolt adapter and the Wi-Fi adapter. These steps are standard but UNVERIFIED on this laptop.
+6. Keep the laptop awake and the adapters powered. Record before you change: note the current standby timeout (`powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE`), the lid close action on AC, and the state of both Device Manager checkboxes, so that you can restore them. In an administrator PowerShell run `powercfg /change standby-timeout-ac 0`, set the lid close action on AC to "Do nothing" in Power Options, and in Device Manager clear "Allow the computer to turn off this device to save power" on both the Thunderbolt adapter and the Wi-Fi adapter. These steps are standard but UNVERIFIED on this laptop. To undo them, see "Teardown / undo" in Path 3 of `docs/fleet-setup.md`.
 
 7. With the server side running on the Mac, check the link and soak it for two minutes:
 

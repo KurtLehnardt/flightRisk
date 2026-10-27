@@ -308,18 +308,42 @@ Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Eit
    `route -n get 10.42.0.2` must show the Thunderbolt interface. `route -n get 192.168.10.1` must show Wi-Fi once the Mac has joined its drone. No default route may point at the Thunderbolt interface.
 
 4. If the macOS application firewall is on, allow Python as in Path 2, step 2.
-5. Keep the Mac awake for the whole session, and never close the lid:
+5. Keep the Mac awake for the whole session, and never close the lid. Record before you change: run `pmset -g custom` and write down the current `sleep` value for AC Power. Then:
 
    ```
    caffeinate -dimsu
-   sudo pmset -a sleep 0
+   sudo pmset -c sleep 0
    ```
 
-   Run `caffeinate` in its own terminal. These settings are standard but UNVERIFIED on this machine, and step 6 checks them.
+   The `-c` flag changes only the AC power setting, so battery behavior stays as it was. Run `caffeinate` in its own terminal. These settings are standard but UNVERIFIED on this machine, and step 6 checks them.
 
 ### Windows steps
 
 The Windows steps are in `docs/windows-edge-setup.md`, section "Thunderbolt link to the Mac".
+
+### Teardown / undo
+
+Record the previous values before you change anything, because these commands restore what you recorded.
+
+Mac:
+
+```
+sudo networksetup -setdhcp "Thunderbolt Bridge"
+sudo pmset -c sleep <previous>
+```
+
+Use the `sleep` value you recorded from `pmset -g custom`. Stop `caffeinate` with Ctrl-C.
+
+Windows (run in an administrator PowerShell, replacing `<name>` with the adapter name; the same steps are referenced from `docs/windows-edge-setup.md`):
+
+```powershell
+Remove-NetIPAddress -InterfaceAlias "<name>" -IPAddress 10.42.0.2 -Confirm:$false
+Remove-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo (TB)"
+Set-NetConnectionProfile -InterfaceAlias "<name>" -NetworkCategory Public
+powercfg /change standby-timeout-ac <previous>
+```
+
+Then restore the lid close action on AC in Power Options and the two "Allow the computer to turn off this device to save power" checkboxes in Device Manager (Thunderbolt adapter and Wi-Fi adapter) to the values you recorded.
 
 ### Validation checklist
 
@@ -368,7 +392,7 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 1. Join each laptop's Wi-Fi to its own Tello.
 2. Repeat the route checks from step 4.
-3. On each laptop run `scripts/tello_hw_check.py --drones 192.168.10.1 --video-check --json`. At the same time run a ping soak over the cable. On the Mac use `ping -i 0.2 10.42.0.2` (macOS may need `sudo` for intervals under one second, UNVERIFIED).
+3. On each laptop run `scripts/tello_hw_check.py --drones 192.168.10.1 --video-check --json`. At the same time run a ping soak over the cable. On the Mac use `ping -i 0.2 10.42.0.2` (`sudo` is needed only for intervals under 0.002 s, per `man ping`).
 4. Pass: both checks pass, the cable shows no packet loss during the video, and on Windows the state and video packets arrive. That proves the firewall rules for UDP 8890 and 11111.
 5. Fail: Windows does not receive state or video. Check the firewall rules, then retry.
 
