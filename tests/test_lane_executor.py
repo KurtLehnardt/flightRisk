@@ -642,3 +642,16 @@ def test_make_sender_uses_transport_json_method():
 
     # A transport with no way to send drops messages without raising.
     _make_sender(object(), log)({"type": "telemetry"})
+
+
+def test_no_takeoff_after_shutdown(make_executor):
+    executor, drone, _, clock = make_executor()
+    executor.handle_clock({"type": "clock", "offset_s": 0.0})
+    executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1", "lanes": LANES})
+    executor.shutdown(timeout=2.0)
+
+    assert executor.handle_takeoff() is False
+    assert executor.handle_start_at({"type": "start_at", "t_ground_s": clock() + 0.5}) is False
+    clock.advance(1.0)
+    time.sleep(0.1)
+    assert drone.calls == []

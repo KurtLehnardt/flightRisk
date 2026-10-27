@@ -150,6 +150,8 @@ class LaneExecutor:
         # sending commands. Cleared only when a new sequence is launched.
         self._abort = threading.Event()
         self._stop = threading.Event()
+        # Set for good by shutdown(); no flight sequence may start afterwards.
+        self._closed = False
         self._worker: threading.Thread | None = None
         # The thread running the current flight sequence, or None. A thread
         # clears it (under ``_lock``) once it will send no more commands, so
@@ -258,7 +260,12 @@ class LaneExecutor:
             self._monitor.start()
 
     def shutdown(self, timeout: float = 5.0) -> None:
-        """Stop all threads, landing first if the drone is flying."""
+        """Stop all threads, landing first if the drone is flying.
+
+        After shutdown the executor refuses every takeoff, start and re-task.
+        """
+        with self._lock:
+            self._closed = True
         self._stop.set()
         self._abort.set()
         try:
@@ -417,7 +424,7 @@ class LaneExecutor:
                 and not self._worker_alive()
             )
             if retask:
-                self._launch("lanes")
+                retask = self._launch("lanes")
         self._log.info(
             "edge_lanes_assigned",
             drone_id=self.drone_id,
@@ -478,7 +485,8 @@ class LaneExecutor:
                 return self._refuse_start("too_far_ahead", lead_s=lead)
             if lead < -self.max_start_late_s:
                 return self._refuse_start("too_late", lead_s=lead)
-            self._launch("start_at", t_edge=t_edge, offset_s=offset)
+            if not self._launch("start_at", t_edge=t_edge, offset_s=offset):
+                return self._refuse_start("shut_down")
         self._log.info(
             "edge_start_scheduled",
             drone_id=self.drone_id,
@@ -502,7 +510,9 @@ class LaneExecutor:
             if self._worker_alive():
                 self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason="busy")
                 return False
-            self._launch("takeoff")
+            if not self._launch("takeoff"):
+                self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason="shut_down")
+                return False
         return True
 
     def fail_safe(self, reason: str) -> None:
@@ -613,8 +623,13 @@ class LaneExecutor:
     # Flight sequences (worker thread)
     # ------------------------------------------------------------------
 
-    def _launch(self, kind: str, t_edge: float | None = None, offset_s: float = 0.0) -> None:
-        """Start a flight sequence thread. Caller holds ``_lock``."""
+    def _launch(self, kind: str, t_edge: float | None = None, offset_s: float = 0.0) -> bool:
+        """Start a flight sequence thread. Caller holds ``_lock``.
+
+        Returns False (and starts nothing) once the executor is shut down.
+        """
+        if self._closed:
+            return False
         self._abort.clear()
         self._worker = threading.Thread(
             target=self._run_sequence,
@@ -624,6 +639,7 @@ class LaneExecutor:
         )
         self._active_thread = self._worker
         self._worker.start()
+        return True
 
     def _release_active(self) -> None:
         """Mark the calling sequence as finished. Caller holds ``_lock``."""

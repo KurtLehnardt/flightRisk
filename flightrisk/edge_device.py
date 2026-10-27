@@ -437,15 +437,16 @@ def run_edge_device(
         log.info("edge_device_interrupted", frames=frame_count)
     finally:
         if flight is not None:
-            # Land before the ground link goes away. shutdown() lands only if
-            # the drone is flying and never raises past this point.
+            # Stop taking control messages, then land before the ground link
+            # goes away. shutdown() lands only if the drone is flying, and
+            # refuses any takeoff the control thread might still deliver.
+            pump_stop.set()
+            if pump is not None:
+                pump.join(timeout=2.0)
             try:
                 flight.shutdown()
             except Exception as exc:
                 log.error("edge_device_flight_shutdown_error", error=repr(exc))
-            pump_stop.set()
-            if pump is not None:
-                pump.join(timeout=2.0)
         try:
             transport.disconnect()
         except Exception:
