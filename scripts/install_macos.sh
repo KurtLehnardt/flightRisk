@@ -170,6 +170,6 @@ echo "  ONNX Models:  $(ls "$REPO_ROOT/models/"*.onnx 2>/dev/null | wc -l | tr -
 echo ""
 echo "  To start the dashboard:"
 echo "    source venv/bin/activate"
-echo "    python -m flightrisk --webcam --dashboard"
+echo "    python -m flightrisk --dashboard"
 echo "    # Open http://localhost:5555"
 echo ""

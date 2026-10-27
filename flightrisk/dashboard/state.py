@@ -29,7 +29,7 @@ class SourceConfig:
     Groups the source-selection parameters that used to be passed as five
     separate args to ``run_dashboard()`` / ``_init_pipeline()``.
     """
-    source: str = "webcam"
+    source: str = "tello"
     mavlink_address: str = "udp://:14540"
     rtsp_url: str | None = None
     edge_ws: str = "ws://localhost:9000"
@@ -43,6 +43,29 @@ class SourceConfig:
     stream_video: bool = False
     edge_host: str = "127.0.0.1"
     edge_port: int = 9000
+    # -- Privacy and reasoning --
+    # ``appearance_only`` set to True never constructs face recognition and
+    # disables the face signals. ``None`` falls back to
+    # ``VisionConfig.appearance_only``; the ``python -m flightrisk.dashboard``
+    # launcher passes True unless the operator asks for face matching.
+    # ``enable_llm`` set to False never constructs the Gemma reasoning agent
+    # and never starts its worker thread (``--no-llm``).
+    appearance_only: bool | None = None
+    enable_llm: bool = True
+    # -- Multi-drone fleet (``source == "edge"`` only) --
+    # A non-empty ``fleet_drones`` makes the edge source build a
+    # ``FleetCoordinator`` with one link per drone id. The search area is
+    # ``fleet_area_cm`` (width, depth) and ``fleet_strip_cm`` is the lane
+    # spacing. ``fleet_net`` is the network path in use (``station`` or
+    # ``ap``), reported in the dashboard status.
+    fleet_drones: tuple[str, ...] = ()
+    fleet_area_cm: tuple[int, int] = (400, 400)
+    fleet_strip_cm: int = 75
+    fleet_net: str = "station"
+    # -- Reasoning backend: "claude" | "gemma" | "off"; None = config default
+    # (FLIGHTRISK_REASONING_PROVIDER, else "gemma"; claude needs the cloud
+    # opt-in). ``--no-llm`` passes "off" here as well as ``enable_llm=False``.
+    reasoning_provider: str | None = None
 
 
 @dataclass
@@ -62,6 +85,10 @@ class AppState:
     ground_transport: Any = None  # GroundTransportSync (WebSocket server)
     ground_station: Any = None  # GroundStation (scorer over edge detections)
     stream_video: bool = False  # whether edge devices should stream full frames
+    fleet_supervisor: Any = None  # FleetSupervisor (edge source with a fleet)
+
+    # -- Privacy mode (set by _init_pipeline) --
+    appearance_only: bool = False
 
     # -- Vision pipeline components (lazy-init) --
     detector: Any = None
@@ -79,7 +106,7 @@ class AppState:
     edge_ws: str | None = None
     video_path: str | None = None
 
-    # -- Video capture (webcam / file) --
+    # -- Video capture (file) --
     cap: Any = None
 
     # -- Runtime flags --

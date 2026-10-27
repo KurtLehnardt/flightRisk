@@ -135,6 +135,16 @@ Include in the app description or "About this app" section:
 - [ ] Policy covers all data types processed by the app
 - [ ] Policy is written in clear, understandable language
 
+### Cloud LLM Opt-In (Desktop Dashboard)
+
+The desktop dashboard (`python -m flightrisk --dashboard`) follows the same rule as the mobile apps: cloud LLM reasoning is off by default and requires explicit opt-in.
+
+- The default reasoning backend is Gemma running locally in Ollama. With the default settings no image leaves the machine.
+- The Claude backend sends the detected person's crop and the missing child's reference photo to Anthropic. It is refused unless the operator sets `FLIGHTRISK_ALLOW_CLOUD_LLM=1` and provides `FLIGHTRISK_CLAUDE_API_KEY`.
+- A stray `ANTHROPIC_API_KEY` in the environment is ignored, so a key exported for other tools cannot enable uploads.
+- The dashboard's AI Reasoning selector shows Claude as unavailable, with the reason, until cloud use is allowed. The runtime switch cannot opt itself in.
+- When Claude is active, the startup log states that cloud reasoning is on and names the variable that supplied the key (never the key itself).
+
 ### Pre-Submission Checklist
 
 - [ ] Privacy policy created and hosted
@@ -146,5 +156,6 @@ Include in the app description or "About this app" section:
 - [ ] Age rating set to 17+ on both platforms
 - [ ] App Review Notes prepared (iOS)
 - [ ] Cloud LLM opt-in disclosure implemented in-app
+- [x] Desktop dashboard: cloud LLM (Claude) off by default and gated on `FLIGHTRISK_ALLOW_CLOUD_LLM=1`
 - [ ] User data deletion flow implemented and tested
 - [ ] No third-party analytics/tracking/advertising SDKs included

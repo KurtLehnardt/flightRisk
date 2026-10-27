@@ -74,6 +74,14 @@ class GroundStation:
                 "score_result": score_result,
                 "frame_id": msg.frame_id,
                 "timestamp": msg.timestamp,
+                # Fleet fields: which drone saw it and where that drone was.
+                # None outside fleet mode.
+                "drone_id": getattr(msg, "drone_id", None),
+                "rel_x_cm": getattr(msg, "rel_x_cm", None),
+                "rel_y_cm": getattr(msg, "rel_y_cm", None),
+                "heading_deg": getattr(msg, "heading_deg", None),
+                "lat": getattr(msg, "lat", None),
+                "lon": getattr(msg, "lon", None),
             })
 
         return results

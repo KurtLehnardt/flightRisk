@@ -1,0 +1,820 @@
+{
+  "dataset": "HERIDAL",
+  "split": "test",
+  "split_note": "The sweep runs on the test split, so the best row is chosen on test data.",
+  "n_images": 101,
+  "n_gt": 337,
+  "tile_size": 640,
+  "overlap": 0.2,
+  "iou_threshold": 0.3,
+  "recall_floor": 0.5,
+  "runs": [
+    {
+      "model": "yolo11n.pt",
+      "confidence": 0.1,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 9,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 37,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 36,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 0.02702702702702703
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 29,
+          "fp": 67,
+          "fn": 79,
+          "recall": 0.26851851851851855,
+          "precision": 0.3020833333333333
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 37,
+          "fp": 32,
+          "fn": 74,
+          "recall": 0.3333333333333333,
+          "precision": 0.5362318840579711
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 61,
+          "fp": 93,
+          "fn": 50,
+          "recall": 0.5495495495495496,
+          "precision": 0.3961038961038961
+        }
+      ],
+      "min_person_px": 64,
+      "overall": {
+        "n_gt": 337,
+        "tp": 128,
+        "fp": 274,
+        "fn": 209,
+        "recall": 0.3798219584569733,
+        "precision": 0.31840796019900497,
+        "f1": 0.34641407307171856
+      },
+      "inference_seconds": 101.3
+    },
+    {
+      "model": "yolo11n.pt",
+      "confidence": 0.25,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 6,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 0,
+          "fp": 7,
+          "fn": 7,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 17,
+          "fp": 15,
+          "fn": 91,
+          "recall": 0.1574074074074074,
+          "precision": 0.53125
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 21,
+          "fp": 4,
+          "fn": 90,
+          "recall": 0.1891891891891892,
+          "precision": 0.84
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 46,
+          "fp": 31,
+          "fn": 65,
+          "recall": 0.4144144144144144,
+          "precision": 0.5974025974025974
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 84,
+        "fp": 63,
+        "fn": 253,
+        "recall": 0.24925816023738873,
+        "precision": 0.5714285714285714,
+        "f1": 0.347107438016529
+      },
+      "inference_seconds": 101.3
+    },
+    {
+      "model": "yolo11n.pt",
+      "confidence": 0.4,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 0,
+          "fp": 3,
+          "fn": 7,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 5,
+          "fp": 4,
+          "fn": 103,
+          "recall": 0.046296296296296294,
+          "precision": 0.5555555555555556
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 9,
+          "fp": 2,
+          "fn": 102,
+          "recall": 0.08108108108108109,
+          "precision": 0.8181818181818182
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 34,
+          "fp": 11,
+          "fn": 77,
+          "recall": 0.3063063063063063,
+          "precision": 0.7555555555555555
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 48,
+        "fp": 21,
+        "fn": 289,
+        "recall": 0.142433234421365,
+        "precision": 0.6956521739130435,
+        "f1": 0.23645320197044334
+      },
+      "inference_seconds": 101.3
+    },
+    {
+      "model": "yolo11s.pt",
+      "confidence": 0.1,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 6,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 14,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 15,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 0.0625
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 25,
+          "fp": 18,
+          "fn": 83,
+          "recall": 0.23148148148148148,
+          "precision": 0.5813953488372093
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 33,
+          "fp": 12,
+          "fn": 78,
+          "recall": 0.2972972972972973,
+          "precision": 0.7333333333333333
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 59,
+          "fp": 63,
+          "fn": 52,
+          "recall": 0.5315315315315315,
+          "precision": 0.48360655737704916
+        }
+      ],
+      "min_person_px": 64,
+      "overall": {
+        "n_gt": 337,
+        "tp": 118,
+        "fp": 128,
+        "fn": 219,
+        "recall": 0.35014836795252224,
+        "precision": 0.4796747967479675,
+        "f1": 0.404802744425386
+      },
+      "inference_seconds": 146.6
+    },
+    {
+      "model": "yolo11s.pt",
+      "confidence": 0.25,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 2,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 3,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 6,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 0.14285714285714285
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 14,
+          "fp": 7,
+          "fn": 94,
+          "recall": 0.12962962962962962,
+          "precision": 0.6666666666666666
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 17,
+          "fp": 2,
+          "fn": 94,
+          "recall": 0.15315315315315314,
+          "precision": 0.8947368421052632
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 50,
+          "fp": 19,
+          "fn": 61,
+          "recall": 0.45045045045045046,
+          "precision": 0.7246376811594203
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 82,
+        "fp": 39,
+        "fn": 255,
+        "recall": 0.2433234421364985,
+        "precision": 0.6776859504132231,
+        "f1": 0.35807860262008734
+      },
+      "inference_seconds": 146.6
+    },
+    {
+      "model": "yolo11s.pt",
+      "confidence": 0.4,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 0,
+          "fp": 2,
+          "fn": 7,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 9,
+          "fp": 4,
+          "fn": 99,
+          "recall": 0.08333333333333333,
+          "precision": 0.6923076923076923
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 9,
+          "fp": 1,
+          "fn": 102,
+          "recall": 0.08108108108108109,
+          "precision": 0.9
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 43,
+          "fp": 9,
+          "fn": 68,
+          "recall": 0.38738738738738737,
+          "precision": 0.8269230769230769
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 61,
+        "fp": 17,
+        "fn": 276,
+        "recall": 0.18100890207715134,
+        "precision": 0.782051282051282,
+        "f1": 0.29397590361445786
+      },
+      "inference_seconds": 146.6
+    },
+    {
+      "model": "yolo11m.pt",
+      "confidence": 0.1,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 2,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 3,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 13,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 7,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 0.125
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 37,
+          "fp": 14,
+          "fn": 71,
+          "recall": 0.3425925925925926,
+          "precision": 0.7254901960784313
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 43,
+          "fp": 15,
+          "fn": 68,
+          "recall": 0.38738738738738737,
+          "precision": 0.7413793103448276
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 68,
+          "fp": 47,
+          "fn": 43,
+          "recall": 0.6126126126126126,
+          "precision": 0.591304347826087
+        }
+      ],
+      "min_person_px": 64,
+      "overall": {
+        "n_gt": 337,
+        "tp": 149,
+        "fp": 101,
+        "fn": 188,
+        "recall": 0.4421364985163205,
+        "precision": 0.596,
+        "f1": 0.5076660988074958
+      },
+      "inference_seconds": 227.5
+    },
+    {
+      "model": "yolo11m.pt",
+      "confidence": 0.25,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 2,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 1,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 0.5
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 17,
+          "fp": 7,
+          "fn": 91,
+          "recall": 0.1574074074074074,
+          "precision": 0.7083333333333334
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 25,
+          "fp": 5,
+          "fn": 86,
+          "recall": 0.22522522522522523,
+          "precision": 0.8333333333333334
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 55,
+          "fp": 10,
+          "fn": 56,
+          "recall": 0.4954954954954955,
+          "precision": 0.8461538461538461
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 98,
+        "fp": 27,
+        "fn": 239,
+        "recall": 0.29080118694362017,
+        "precision": 0.784,
+        "f1": 0.4242424242424242
+      },
+      "inference_seconds": 227.5
+    },
+    {
+      "model": "yolo11m.pt",
+      "confidence": 0.4,
+      "tiled": true,
+      "n_images": 101,
+      "bins": [
+        {
+          "lo": 0,
+          "hi": 8,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 8,
+          "hi": 16,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 16,
+          "hi": 24,
+          "n_gt": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        {
+          "lo": 24,
+          "hi": 32,
+          "n_gt": 7,
+          "tp": 1,
+          "fp": 0,
+          "fn": 6,
+          "recall": 0.14285714285714285,
+          "precision": 1.0
+        },
+        {
+          "lo": 32,
+          "hi": 48,
+          "n_gt": 108,
+          "tp": 11,
+          "fp": 3,
+          "fn": 97,
+          "recall": 0.10185185185185185,
+          "precision": 0.7857142857142857
+        },
+        {
+          "lo": 48,
+          "hi": 64,
+          "n_gt": 111,
+          "tp": 19,
+          "fp": 2,
+          "fn": 92,
+          "recall": 0.17117117117117117,
+          "precision": 0.9047619047619048
+        },
+        {
+          "lo": 64,
+          "hi": null,
+          "n_gt": 111,
+          "tp": 46,
+          "fp": 2,
+          "fn": 65,
+          "recall": 0.4144144144144144,
+          "precision": 0.9583333333333334
+        }
+      ],
+      "min_person_px": null,
+      "overall": {
+        "n_gt": 337,
+        "tp": 77,
+        "fp": 9,
+        "fn": 260,
+        "recall": 0.228486646884273,
+        "precision": 0.8953488372093024,
+        "f1": 0.36406619385342787
+      },
+      "inference_seconds": 227.5
+    }
+  ],
+  "best": {
+    "model": "yolo11m.pt",
+    "confidence": 0.1,
+    "min_person_px": 64,
+    "criterion": "lowest min_person_px (recall >= 0.5), then highest overall F1"
+  }
+}

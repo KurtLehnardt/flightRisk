@@ -5,13 +5,22 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - FLIGHTRISK_SOURCE=webcam
+      - FLIGHTRISK_SOURCE=tello
+      # The dashboard binds 127.0.0.1 by default, which a published container
+      # port cannot reach. To use this compose file, set FLIGHTRISK_DASHBOARD_HOST=0.0.0.0
+      # and FLIGHTRISK_API_KEY (a non-loopback bind is refused without a key,
+      # and the web page does not send the key). Prefer running on the host.
       - FLIGHTRISK_MAVLINK_ADDRESS=udp://:14540
       - FLIGHTRISK_EDGE_WS=ws://localhost:9000
       - FLIGHTRISK_OTEL_ENABLED=true
       - OTEL_EXPORTER=otlp-grpc
       - OTEL_ENDPOINT=http://jaeger:4317
       - OLLAMA_HOST=http://ollama:11434
+      - FLIGHTRISK_REASONING_PROVIDER=${FLIGHTRISK_REASONING_PROVIDER:-gemma}    # local, uses the ollama service
+      # Claude (cloud) is opt-in: set FLIGHTRISK_REASONING_PROVIDER=claude and
+      # FLIGHTRISK_ALLOW_CLOUD_LLM=1 on the host to send crops to Anthropic.
+      - FLIGHTRISK_ALLOW_CLOUD_LLM             # inherited from the host; unset = no cloud
+      - FLIGHTRISK_CLAUDE_API_KEY              # inherited from the host environment
     depends_on:
       - jaeger
       - ollama

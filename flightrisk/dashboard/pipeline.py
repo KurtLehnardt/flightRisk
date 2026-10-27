@@ -13,6 +13,7 @@ import base64
 import queue
 import time
 import traceback
+from contextlib import nullcontext
 
 import cv2
 import numpy as np
@@ -27,9 +28,10 @@ from flightrisk.dashboard.state import (
     gemma_last_call,
     GEMMA_RATE_LIMIT,
 )
-from flightrisk.dashboard.alerts import (
+from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot is re-exported for backward compat
     _compute_track_key,
     _save_match_snapshot,
+    maybe_save_match_snapshot,
 )
 from flightrisk.dashboard.alert_latch import alert_latch
 
@@ -116,6 +118,11 @@ def _frame_loop(socketio):
     metrics = app_state.metrics
 
     otel_m = app_state.otel_metrics
+    tracer = app_state.tracer
+
+    def _span(name: str):
+        # No-op context manager when OTel is disabled.
+        return tracer.start_as_current_span(name) if tracer else nullcontext()
 
     while app_state.running:
         try:
@@ -138,7 +145,8 @@ def _frame_loop(socketio):
                 time.sleep(0.01)
                 continue
 
-            detections = app_state.detector.detect(frame)
+            with _span("detect"):
+                detections = app_state.detector.detect(frame)
             app_state.persons_detected = len(detections)
 
             tracker = app_state.tracker
@@ -175,14 +183,16 @@ def _frame_loop(socketio):
             matching_on = alert_latch.matching_allowed()
 
             if app_state.reid and has_target and detections and matching_on:
-                match_idx, reid_score = app_state.reid.find_match(detections)
+                with _span("reid_match"):
+                    match_idx, reid_score = app_state.reid.find_match(detections)
                 if reid_score > 0 and log and time.time() - last_detection_log >= 5:
                     log.info("reid_score", score=round(reid_score, 3), matched=(match_idx is not None))
 
             # Face recognition matching
             face_match_idx = None
             if app_state.face and app_state.face.has_target and detections and matching_on:
-                face_match_idx, face_score = app_state.face.find_match(detections)
+                with _span("face_match"):
+                    face_match_idx, face_score = app_state.face.find_match(detections)
                 if metrics:
                     metrics.record_face_check(face_match_idx is not None)
                 if log:
@@ -290,7 +300,7 @@ def _frame_loop(socketio):
                                 "score": round(match_score, 3),
                                 "gemma_match": None,
                                 "gemma_confidence": "pending" if app_state.reasoning else None,
-                                "reasoning": "Awaiting Gemma reasoning..." if app_state.reasoning else None,
+                                "reasoning": f"Awaiting {app_state.reasoning.label} reasoning..." if app_state.reasoning else None,
                                 "snapshot": snapshot_b64,
                                 "type": "photo",
                                 "face_score": round(face_score, 3),
@@ -323,7 +333,9 @@ def _frame_loop(socketio):
                             # operator never saw; the next frame retries.
                             alert_latch.abort(alert_id)
                             raise
-                        _save_match_snapshot(frame, candidate_crop, match_score, None)
+                        # Snapshots hold bystander imagery, so they are written
+                        # only when captures are enabled (off by default).
+                        maybe_save_match_snapshot(frame, candidate_crop, match_score, None)
                         if otel_m:
                             otel_m.record_match(match_score, match_type=match_type)
 
@@ -457,5 +469,7 @@ def _frame_loop(socketio):
         except Exception as e:
             if log:
                 log.error("frame_loop_error", error=str(e), traceback=traceback.format_exc())
+            if otel_m:
+                otel_m.record_error("frame_loop", type(e).__name__)
 
         time.sleep(0.05)

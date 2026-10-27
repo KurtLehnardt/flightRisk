@@ -21,6 +21,10 @@ lands in place. The hook is duck-typed so a backend can opt in without any
 change here. Contract for implementers: ``return_to_home()`` must block until
 the drone is back over its takeoff point (raising on failure or timeout) and
 must not land by itself; this module issues the land command afterwards.
+
+With no primary drone (an edge fleet), Confirm does not hover or return home.
+It lands every drone in place through LAND ALL. The Tello has no return-to-home,
+so each drone lands wherever it currently is.
 """
 
 from __future__ import annotations
@@ -149,6 +153,30 @@ def run_confirm_recovery(
         return "failsafe_landed"
 
 
+def run_fleet_confirm_landing(emit: EmitFn | None = None) -> str:
+    """Land every drone of a multi-drone fleet after the operator confirms a match.
+
+    A fleet (edge source with a coordinator) has no single primary drone to
+    return home, so the confirmed match lands the whole fleet through the
+    same path as the LAND ALL button (``_land_all``): ground transport
+    broadcast, fleet coordinator and local drones, all at once.
+    """
+    from flightrisk.dashboard.app import _land_all  # lazy: app imports this module
+
+    _status(emit, "landing", "Match confirmed. Landing the fleet.")
+    try:
+        report = _land_all()
+    except Exception as exc:  # noqa: BLE001 -- report, never raise from the flight thread
+        _log.critical("confirm_recovery: fleet landing failed (%s)", exc, exc_info=True)
+        _status(emit, "error", "Fleet landing failed. Land every drone manually now.", error=str(exc))
+        return "failsafe_land_failed"
+    if report.get("reached_any"):
+        _status(emit, "landed", "Landing order sent to the fleet.")
+        return "fleet_landed"
+    _status(emit, "error", "Landing order reached no drone. Land every drone manually now.")
+    return "failsafe_land_failed"
+
+
 class ConfirmRecovery:
     """Runs :func:`run_confirm_recovery` at most once per confirmed match."""
 
@@ -157,7 +185,7 @@ class ConfirmRecovery:
         self._started = False
         self.thread: threading.Thread | None = None
 
-    def start(self, drone: Any, emit: EmitFn | None = None) -> bool:
+    def start(self, drone: Any, emit: EmitFn | None = None, fleet: bool = False) -> bool:
         """Start the flight sequence on a daemon thread.
 
         Returns False (and does nothing) if it was already started, so a
@@ -168,8 +196,8 @@ class ConfirmRecovery:
                 return False
             self._started = True
             t = threading.Thread(
-                target=run_confirm_recovery,
-                args=(drone, emit),
+                target=run_fleet_confirm_landing if fleet else run_confirm_recovery,
+                args=(emit,) if fleet else (drone, emit),
                 daemon=True,
                 name="confirm-recovery",
             )
@@ -252,5 +280,8 @@ def handle_alert_response(
         drone = fleet.primary if fleet else None
     body = {"ok": True, "alert_id": alert_id, "action": "confirm", "state": alert_latch.snapshot()}
     _safe_emit(socketio.emit, "match_alert_resolved", dict(body))
-    body["recovery_started"] = confirm_recovery.start(drone, socketio.emit)
+    # No single primary drone but a fleet supervisor (edge source): land the
+    # whole fleet through the LAND ALL path instead of doing nothing.
+    fleet_mode = drone is None and app_state.fleet_supervisor is not None
+    body["recovery_started"] = confirm_recovery.start(drone, socketio.emit, fleet=fleet_mode)
     return body, 200

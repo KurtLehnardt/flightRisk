@@ -64,6 +64,12 @@ class VisionConfig:
     tracker_max_missing: int = 15
     tracker_score_window: int = 8
 
+    # -- Appearance-only mode and tiled inference --
+    appearance_only: bool = False
+    detector_tiled: bool = False
+    detector_tile_size: int = 640
+    detector_tile_overlap: float = 0.2
+
     # -- Configurable signal toggles and weights --
     # Built-in signals default to enabled; new signals default to enabled
     # but will be skipped at runtime if their model is unavailable.
@@ -94,11 +100,25 @@ class VisionConfig:
     insightface_r18_model_path: str = "models/insightface_r18.onnx"
 
 
+def _env_flag(value: str) -> bool:
+    """Parse an on/off environment variable ("1", "true", "yes", "on" are on)."""
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ReasoningConfig:
-    """Gemma reasoning worker: model, queueing, and timing parameters."""
+    """LLM reasoning worker: provider, models, queueing, and timing parameters."""
 
-    model: str = "gemma4:latest"
+    # Which backend confirms matches: "gemma" (local Ollama, the default),
+    # "claude" (Anthropic API, cloud), or "off".
+    provider: str = "gemma"
+    # Cloud reasoning sends person crops and the missing child's reference
+    # photo off the device, so it is opt-in: "claude" is refused unless this
+    # is True (env FLIGHTRISK_ALLOW_CLOUD_LLM=1).
+    allow_cloud: bool = False
+    model: str = "gemma4:latest"  # Ollama model, used when provider == "gemma"
+    claude_model: str = "claude-opus-5-5"
+    claude_effort: str = "medium"  # low | medium | high | xhigh | max
     queue_maxsize: int = 10
     alert_cooldown: float = 10.0
     gemma_rate_limit: float = 5.0
@@ -129,6 +149,17 @@ class DashboardConfig:
     frame_emit_interval: float = 0.05
     jpeg_quality: int = 70
     captures_dir: str = "captures"
+    save_captures: bool = False
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a boolean environment value, rejecting unrecognized strings."""
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off", ""):
+        return False
+    raise ValueError(f"not a boolean: {value!r}")
 
 
 @dataclass
@@ -156,9 +187,18 @@ class AmberConfig:
             "FLIGHTRISK_DETECTOR_MODEL": ("vision", "detector_model", str),
             "FLIGHTRISK_DETECTOR_CONFIDENCE": ("vision", "detector_confidence", float),
             "FLIGHTRISK_FACE_MODEL": ("vision", "face_model", str),
-            "FLIGHTRISK_REID_THRESHOLD":("vision", "reid_threshold", float),
+            "FLIGHTRISK_APPEARANCE_ONLY": ("vision", "appearance_only", _parse_bool),
+            "FLIGHTRISK_DETECTOR_TILED": ("vision", "detector_tiled", _parse_bool),
+            "FLIGHTRISK_DETECTOR_TILE_SIZE": ("vision", "detector_tile_size", int),
+            "FLIGHTRISK_DETECTOR_TILE_OVERLAP": ("vision", "detector_tile_overlap", float),
+            "FLIGHTRISK_SAVE_CAPTURES": ("dashboard", "save_captures", _parse_bool),
+            "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
             "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
+            "FLIGHTRISK_REASONING_PROVIDER": ("reasoning", "provider", str),
+            "FLIGHTRISK_ALLOW_CLOUD_LLM": ("reasoning", "allow_cloud", _env_flag),
             "FLIGHTRISK_GEMMA_MODEL": ("reasoning", "model", str),
+            "FLIGHTRISK_CLAUDE_MODEL": ("reasoning", "claude_model", str),
+            "FLIGHTRISK_CLAUDE_EFFORT": ("reasoning", "claude_effort", str),
             "FLIGHTRISK_ALERT_COOLDOWN": ("reasoning", "alert_cooldown", float),
             "FLIGHTRISK_QUEUE_SIZE": ("reasoning", "queue_maxsize", int),
             "FLIGHTRISK_PORT": ("dashboard", "port", int),

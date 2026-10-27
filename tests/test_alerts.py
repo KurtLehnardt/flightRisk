@@ -148,6 +148,35 @@ class TestGemmaWorkerAnalyze:
             app_state.running = original_running
             app_state.match_history = original_history
 
+    def test_analyze_with_reasoning_switched_off_backfills_off(self):
+        """A None provider skips the call and back-fills confidence 'off'."""
+        mock_socketio = MagicMock()
+        original = (app_state.reasoning, app_state.running, app_state.match_history, app_state.db)
+        app_state.reasoning = None
+        app_state.running = True
+        history = [{"track_id": "3_6", "gemma_match": None, "match_id": 42}]
+        app_state.match_history = history
+        app_state.db = MagicMock()
+        try:
+            crop = np.zeros((50, 50, 3), dtype=np.uint8)
+            gemma_queue.put_nowait(("analyze", "3_6", crop, crop))
+
+            def stop_after_one():
+                time.sleep(0.2)
+                app_state.running = False
+
+            import threading
+            stopper = threading.Thread(target=stop_after_one, daemon=True)
+            stopper.start()
+            _gemma_worker(mock_socketio)
+            stopper.join(timeout=2)
+
+            assert history[0]["gemma_confidence"] == "off"
+            assert app_state.db.update_match.call_args.kwargs["gemma_confidence"] == "off"
+            assert not any(c.args[0] == "reasoning_result" for c in mock_socketio.emit.call_args_list)
+        finally:
+            app_state.reasoning, app_state.running, app_state.match_history, app_state.db = original
+
     def test_analyze_high_confidence_emits_alert_upgrade(self):
         """Worker should emit alert_upgrade when confidence is high."""
         mock_socketio = MagicMock()
