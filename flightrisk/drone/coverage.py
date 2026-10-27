@@ -1,9 +1,16 @@
 """Coverage planner: turns a camera model into altitude, lane spacing and search time.
 
-The model is nadir (straight-down) and idealised. Swath width is the ground
-footprint of the image width, lanes overlap by a fixed fraction, and each lane
-end costs a fixed turn time. Battery swaps are charged per sortie. Adding
-drones divides the wall-clock time evenly, which ignores coordination losses.
+``plan_coverage`` is nadir (straight-down) and idealised. Swath width is the
+ground footprint of the image width, lanes overlap by a fixed fraction, and
+each lane end costs a fixed turn time. Battery swaps are charged per sortie.
+Adding drones divides the wall-clock time evenly, which ignores coordination
+losses. It suits platforms with a downward gimbal, such as the open quad.
+
+``SweepModel`` is the model for a forward-facing camera, such as the Tello's
+fixed main camera. Its ground footprint is a trapezoid ahead of the drone, and
+its effective sweep width is a calibratable parameter. ``plan_coverage`` is
+unchanged; callers choose the forward model explicitly by building a
+``SweepModel``.
 """
 
 from __future__ import annotations
@@ -92,6 +99,174 @@ GROUND_TEAM = CameraModel(
 )
 
 PRESETS = (GROUND_TEAM, TELLO, OPEN_QUAD_4K)
+
+# The live detector sees video frames, not 2592-px photos. The Tello stream
+# size of 960x720 is UNVERIFIED (the published spec says only "HD720P30").
+TELLO_VIDEO_WIDTH_PX = 960
+TELLO_VIDEO_HEIGHT_PX = 720
+
+
+@dataclass(frozen=True)
+class SweepModel:
+    """Ground footprint and sweep width of a forward-facing camera.
+
+    The optical axis is horizontal (camera pitch 0, as on the Tello), so the
+    footprint is a trapezoid on the ground ahead of the drone, symmetric about
+    its heading:
+
+    * the near edge is where the bottom of the image meets the ground,
+      ``near_m = height_m / tan(VFOV / 2)``;
+    * the far edge is the distance at which a person is still
+      ``min_person_px`` tall, ``far_m = f_px * person_height_m / min_person_px``
+      with ``f_px = (width_px / 2) / tan(HFOV / 2)``, capped at
+      ``max_range_m`` when one is given (for example the walls of a room);
+    * the half-width at distance ``d`` is ``d * tan(HFOV / 2)``.
+
+    The effective sweep width is ``2 * far_m * tan(HFOV / 2) * efficiency``.
+    ``efficiency`` is the calibration factor (eta) and
+    ``calibrated_sweep_width_m``, when set, replaces the geometric estimate
+    with a measured one. Both are meant to come from the hardware rung L1
+    calibration, where a person stand-in is walked across the view at measured
+    distances. Until then the geometric value is an upper bound, because the
+    HERIDAL ``min_person_px`` was measured on nadir imagery from 40-65 m and
+    its transfer to an oblique view from about 1-2 m is UNVERIFIED.
+
+    ``hfov_deg`` is treated as the horizontal field of view and the vertical
+    one is derived from the image aspect ratio. Whether the published Tello
+    82.6 degrees is horizontal or diagonal is UNVERIFIED.
+    """
+
+    height_m: float
+    width_px: int
+    height_px: int
+    hfov_deg: float
+    min_person_px: float
+    person_height_m: float = 1.7
+    efficiency: float = 1.0
+    max_range_m: float | None = None
+    calibrated_sweep_width_m: float | None = None
+
+    def __post_init__(self) -> None:
+        if not (math.isfinite(self.height_m) and self.height_m > 0):
+            raise ValueError(f"height_m must be positive, got {self.height_m!r}")
+        if self.width_px <= 0 or self.height_px <= 0:
+            raise ValueError("width_px and height_px must be positive")
+        if not 0 < self.hfov_deg < 180:
+            raise ValueError(f"hfov_deg must be within (0, 180), got {self.hfov_deg!r}")
+        if not (math.isfinite(self.min_person_px) and self.min_person_px > 0):
+            raise ValueError(f"min_person_px must be positive, got {self.min_person_px!r}")
+        if not (math.isfinite(self.person_height_m) and self.person_height_m > 0):
+            raise ValueError(f"person_height_m must be positive, got {self.person_height_m!r}")
+        if not (math.isfinite(self.efficiency) and 0 < self.efficiency <= 1):
+            raise ValueError(f"efficiency must be within (0, 1], got {self.efficiency!r}")
+        if self.max_range_m is not None and not (math.isfinite(self.max_range_m) and self.max_range_m > 0):
+            raise ValueError(f"max_range_m must be positive or None, got {self.max_range_m!r}")
+        if self.calibrated_sweep_width_m is not None and not (
+            math.isfinite(self.calibrated_sweep_width_m) and self.calibrated_sweep_width_m > 0
+        ):
+            raise ValueError(
+                f"calibrated_sweep_width_m must be positive or None, got {self.calibrated_sweep_width_m!r}"
+            )
+
+    @classmethod
+    def for_camera(
+        cls,
+        camera: CameraModel,
+        height_m: float,
+        min_person_px: float,
+        *,
+        width_px: int | None = None,
+        height_px: int | None = None,
+        **kwargs,
+    ) -> SweepModel:
+        """Build a sweep model from a camera preset, optionally with the video frame size."""
+        if camera.is_ground:
+            raise ValueError(f"{camera.name} is a ground team and has no camera footprint")
+        return cls(
+            height_m=height_m,
+            width_px=width_px if width_px is not None else camera.width_px,
+            height_px=height_px if height_px is not None else camera.height_px,
+            hfov_deg=camera.hfov_deg,
+            min_person_px=min_person_px,
+            **kwargs,
+        )
+
+    @property
+    def half_tan(self) -> float:
+        """tan(HFOV / 2): lateral half-width per metre of distance ahead."""
+        return math.tan(math.radians(self.hfov_deg) / 2)
+
+    @property
+    def vfov_deg(self) -> float:
+        return math.degrees(2 * math.atan(self.half_tan * self.height_px / self.width_px))
+
+    @property
+    def focal_px(self) -> float:
+        return (self.width_px / 2) / self.half_tan
+
+    @property
+    def near_m(self) -> float:
+        """Distance ahead at which the bottom edge of the image meets the ground."""
+        return self.height_m / math.tan(math.radians(self.vfov_deg) / 2)
+
+    @property
+    def detection_range_m(self) -> float:
+        """Distance at which a standing person is exactly ``min_person_px`` tall."""
+        return self.focal_px * self.person_height_m / self.min_person_px
+
+    @property
+    def far_m(self) -> float:
+        far = self.detection_range_m
+        if self.max_range_m is not None:
+            far = min(far, self.max_range_m)
+        return far
+
+    @property
+    def usable(self) -> bool:
+        """False when nothing on the ground is both in view and detectable."""
+        return self.far_m > self.near_m
+
+    @property
+    def geometric_sweep_width_m(self) -> float:
+        """Width of the footprint's far edge, scaled by ``efficiency``. Zero when unusable."""
+        if not self.usable:
+            return 0.0
+        return 2 * self.far_m * self.half_tan * self.efficiency
+
+    @property
+    def sweep_width_m(self) -> float:
+        """Effective sweep width: the calibrated value when set, else the geometric one."""
+        if self.calibrated_sweep_width_m is not None:
+            return self.calibrated_sweep_width_m
+        return self.geometric_sweep_width_m
+
+    def lane_spacing_cm(self, overlap: float = 0.0) -> int:
+        """Lane spacing in whole centimetres for a given fractional overlap between lanes."""
+        if not 0 <= overlap < 1:
+            raise ValueError("overlap must be in [0, 1)")
+        # The small epsilon keeps 2.4 m * 0.75 from flooring to 179 cm.
+        spacing = math.floor(self.sweep_width_m * (1 - overlap) * 100 + 1e-9)
+        if spacing <= 0:
+            raise ValueError("the sweep model has no usable footprint at this height and threshold")
+        return spacing
+
+
+def tello_sweep_model(height_m: float = 1.0, min_person_px: float = 32.0, **kwargs) -> SweepModel:
+    """Forward sweep model for the Tello main camera on its video stream.
+
+    The default ``min_person_px`` is the conservative HERIDAL threshold from
+    ``docs/altitude-benchmark.md``; whether it holds for a forward view from
+    about 1 m is UNVERIFIED, so pass a calibrated ``efficiency`` or
+    ``calibrated_sweep_width_m`` once rung L1 has measured one.
+    """
+    return SweepModel.for_camera(
+        TELLO,
+        height_m,
+        min_person_px,
+        width_px=TELLO_VIDEO_WIDTH_PX,
+        height_px=TELLO_VIDEO_HEIGHT_PX,
+        **kwargs,
+    )
 
 
 @dataclass(frozen=True)
