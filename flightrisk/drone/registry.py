@@ -112,14 +112,27 @@ def unregister(name: str) -> None:
 
 
 def _ensure_bootstrapped() -> None:
+    """Import the built-in backends once.
+
+    The flag is set only after the import succeeds. If it fails, the
+    backends it registered before failing are removed again and the error
+    propagates, so the next call retries the import instead of finding a
+    half-filled registry.
+    """
     global _bootstrapped
     if _bootstrapped:
         return
     with _lock:
         if _bootstrapped:
             return
+        before = set(_specs)
+        try:
+            importlib.import_module(_BOOTSTRAP_MODULE)
+        except BaseException:
+            for name in set(_specs) - before:
+                del _specs[name]
+            raise
         _bootstrapped = True
-        importlib.import_module(_BOOTSTRAP_MODULE)
 
 
 def get(name: str) -> BackendSpec:
