@@ -1191,6 +1191,9 @@ class GroundTransportSync:
         Raises ``RuntimeError`` when the transport is not running, so the
         order can never vanish silently.
         """
+        if not self._bridge.is_running:
+            logger.error("emergency_land_all: ground transport is not running; nothing was sent")
+            raise RuntimeError("ground transport is not running; emergency_land_all was not sent")
         return self._bridge.run(self._transport.emergency_land_all(), timeout=timeout)
 
     def send_heartbeat(self, timeout: float = _CMD_TIMEOUT) -> int:

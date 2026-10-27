@@ -485,6 +485,7 @@ class ClockEstimate:
     rtt_s: float
     rounds: int
     measured_at_s: float | None = None
+    samples: tuple[ClockSample, ...] = ()
 
 
 def sample_from_pong(pong: Mapping[str, Any], t4: float) -> ClockSample:
@@ -522,6 +523,7 @@ def estimate_clock(
         rtt_s=statistics.median(s.rtt_s for s in samples),
         rounds=len(samples),
         measured_at_s=measured_at_s,
+        samples=tuple(samples),
     )
 
 
