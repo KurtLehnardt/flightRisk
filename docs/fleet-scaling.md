@@ -19,7 +19,7 @@ What the launcher does:
 
 - Prints every command line before it runs anything, so each process can be started by hand. The token is shown as `<token>`; the value is never printed.
 - Generates a random `FLIGHTRISK_EDGE_TOKEN` per run and passes it to the ground station and every edge. With `--attach` it uses the token already in your environment, if any.
-- Binds the edge WebSocket to 127.0.0.1 and points every edge at `ws://127.0.0.1:<port>`. The dashboard web port is the dashboard's own default bind (all interfaces), which the launcher does not change.
+- Binds the edge WebSocket to 127.0.0.1 and points every edge at `ws://127.0.0.1:<port>`. The dashboard web port also binds 127.0.0.1 by default.
 - Gives drones the coordinator's altitude slots in turn (100 cm, 160 cm, 100 cm, ...), and sizes the area so each zone is three 75 cm lanes wide (`325 * N - 100` cm wide, 400 cm deep). Override with `--area-cm`.
 - Starts each child in its own process group. On exit, Ctrl-C or SIGTERM it sends SIGTERM to every group, waits, then SIGKILLs what remains, and prints `All child processes stopped.` Tests cover a grandchild process and a child that ignores SIGTERM.
 - Widens the edges' geofence (`FLIGHTRISK_GEOFENCE_CM`) to the area width plus 100 cm unless you set it. See "Finding: geofence refuses far re-tasks" below.
@@ -66,26 +66,45 @@ The first N = 4 runs used the edges' default geofence of 500 cm around takeoff. 
 
 ## Time to cover vs N
 
-From `python -m flightrisk.drone.coverage --min-px 64`, which prints hours to search one square mile for each platform preset. Rows for 1, 2, 4 and 8 drones:
+From `python -m flightrisk.drone.coverage --min-px 24` and `--min-px 32`, which print hours to search one square mile for each platform preset, for 1, 2, 3 and 5 drones.
+
+`--min-px 24` is the best fine-tuned result, but only 7 persons fall in that bin (optimistic):
 
 | preset | n | alt_m | lane_m | hours |
 |---|---|---|---|---|
 | Ground team | 1 | 0.0 | 30.0 | 57.555 |
 | Ground team | 2 | 0.0 | 30.0 | 28.778 |
-| Ground team | 4 | 0.0 | 30.0 | 14.389 |
-| Ground team | 8 | 0.0 | 30.0 | 7.194 |
-| Tello | 1 | 39.2 | 55.1 | 2.103 |
-| Tello | 2 | 39.2 | 55.1 | 1.052 |
-| Tello | 4 | 39.2 | 55.1 | 0.526 |
-| Tello | 8 | 39.2 | 55.1 | 0.263 |
-| Open quad 4K | 1 | 48.4 | 81.6 | 0.791 |
-| Open quad 4K | 2 | 48.4 | 81.6 | 0.395 |
-| Open quad 4K | 4 | 48.4 | 81.6 | 0.198 |
-| Open quad 4K | 8 | 48.4 | 81.6 | 0.099 |
+| Ground team | 3 | 0.0 | 30.0 | 19.185 |
+| Ground team | 5 | 0.0 | 30.0 | 11.511 |
+| Tello | 1 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 2 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 3 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 5 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Open quad 4K | 1 | 120.0 | 202.3 | 0.318 |
+| Open quad 4K | 2 | 120.0 | 202.3 | 0.159 |
+| Open quad 4K | 3 | 120.0 | 202.3 | 0.106 |
+| Open quad 4K | 5 | 120.0 | 202.3 | 0.064 |
 
-Where `--min-px 64` comes from: `docs/altitude-benchmark.md` (t11) measured no usable `min_person_px`. The stock `yolo11n.pt` never reached 0.5 recall in any bin on the HERIDAL test split, so both result files store `null`. No measured value has been merged since (t22 had not landed when this page was written). The 64 px figure is the lower edge of the best bin (recall 0.306, not 0.5) and is the benchmark doc's own labeled optimistic bound. Treat these altitudes as the highest the drone could fly with this detector and the hours as best case; the real altitude is lower and the real time longer. Re-run the command with the measured value when one exists.
+`--min-px 32` is the solid value, with 108 persons in its bin (conservative):
 
-Reading the table: the planner divides the single-drone time by N, so time to cover falls as 1/N (eight drones take one eighth as long as one). That is an idealisation. It ignores take-off and transit time, battery swaps, the zone gap the coordinator leaves between neighbours, and the loss of a drone mid-flight, which pushes its lanes onto the survivors. Drone speed and endurance for the open quad are assumptions, as the planner output notes, and the Tello figure assumes a Tello could fly the full mile, which its battery does not allow.
+| preset | n | alt_m | lane_m | hours |
+|---|---|---|---|---|
+| Ground team | 1 | 0.0 | 30.0 | 57.555 |
+| Ground team | 2 | 0.0 | 30.0 | 28.778 |
+| Ground team | 3 | 0.0 | 30.0 | 19.185 |
+| Ground team | 5 | 0.0 | 30.0 | 11.511 |
+| Tello | 1 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 2 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 3 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Tello | 5 | 30.0 | 42.2 | INFEASIBLE (area needs 1138 m of range, platform limit is 100 m) |
+| Open quad 4K | 1 | 96.8 | 163.2 | 0.398 |
+| Open quad 4K | 2 | 96.8 | 163.2 | 0.199 |
+| Open quad 4K | 3 | 96.8 | 163.2 | 0.133 |
+| Open quad 4K | 5 | 96.8 | 163.2 | 0.08 |
+
+Hours are for one square mile. Tello rows are marked INFEASIBLE instead of given a time: the Tello's published maximum flight height is 30 m and its published maximum flight distance is 100 m (https://www.ryzerobotics.com/tello/specs, checked 2026-10-27), and covering a square mile from a central launch point needs about 1,138 m of range. The Tello's altitude is capped at 30 m, not the altitude the detector threshold alone would allow. Where the values come from: `docs/altitude-benchmark.md` (t22) measured a fine-tuned yolo11s at 0.5 recall from 24 px on 7 persons, and from 32 px on 108 persons with a 95% interval clear of 0.5. It still misses about 4 in 10 persons at every height, so these hours are the time to sweep the area once, not the time to find everyone.
+
+Reading the table: the planner divides the single-drone time by N, so time to cover falls as 1/N. That is an idealisation. It ignores take-off and transit time, battery swaps across drones, the zone gap the coordinator leaves between neighbours, and the loss of a drone mid-flight, which pushes its lanes onto the survivors. Drone speed and endurance for the open quad are assumptions, as the planner output notes. A Tello cannot search a square mile at all; the INFEASIBLE rows say so rather than showing a time.
 
 ## Tests
 
