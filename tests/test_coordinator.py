@@ -6,7 +6,8 @@ so a sign error in the clock offset shows up as a gap of hours, not
 milliseconds. No network, drone or real time is involved.
 """
 
-import math
+import threading
+import time
 
 import pytest
 
@@ -242,6 +243,49 @@ def test_sync_ignores_pong_for_an_old_round():
     before = coord.clock_sync("drone-1")
     edge.reply({"type": "pong", "t1": 1.0, "t2": 2.0, "t3": 3.0})
     assert coord.clock_sync("drone-1") == before
+
+
+class ThreadedEdge:
+    """EdgeLink that answers pings from another thread, as a socket would."""
+
+    def __init__(self, true_offset_s, answer=True):
+        self.true_offset_s = true_offset_s
+        self.answer = answer
+        self.on_message = None
+        self.sent = []
+
+    def send(self, msg):
+        self.sent.append(msg)
+        if msg["type"] == "ping" and self.answer:
+            def reply():
+                t2 = time.monotonic() + self.true_offset_s
+                self.on_message({"type": "pong", "t1": msg["t1"], "t2": t2, "t3": t2})
+            threading.Timer(0.001, reply).start()
+
+
+def test_sync_with_replies_from_another_thread():
+    edge = ThreadedEdge(true_offset_s=-4000.0)
+    coord = FleetCoordinator({"drone-1": edge}, area_cm=400, strip_cm=50)
+    result = coord.sync(timeout_s=5.0)["drone-1"]
+    assert result.samples == 8
+    # Real scheduling jitter applies, so the margin is generous.
+    assert result.offset_s == pytest.approx(-4000.0, abs=0.5)
+    assert edge.sent[-1] == {"type": "clock", "offset_s": result.offset_s}
+
+
+def test_land_all_does_not_wait_for_a_blocked_sync():
+    silent = ThreadedEdge(0.0, answer=False)
+    other = ThreadedEdge(0.0, answer=False)
+    coord = FleetCoordinator({"drone-1": silent, "drone-2": other}, area_cm=400, strip_cm=50)
+    syncing = threading.Thread(target=coord.sync, kwargs={"timeout_s": 0.25}, daemon=True)
+    syncing.start()
+    coord.land_all()
+    # sync() needs at least 4 s (2 links x 8 rounds x 0.25 s); land_all has
+    # already returned, so it did not wait behind it.
+    assert syncing.is_alive()
+    assert {"type": "emergency_land_all"} in silent.sent
+    assert {"type": "emergency_land_all"} in other.sent
+    syncing.join(timeout=30)
 
 
 # ---------------------------------------------------------------------------
