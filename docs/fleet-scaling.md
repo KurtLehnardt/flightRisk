@@ -62,7 +62,7 @@ What this shows and what it does not:
 
 ### Finding: geofence refuses far re-tasks
 
-The first N = 4 runs used the edges' default geofence of 500 cm around takeoff. After drone-4 was killed, drone-3 (the neighbour) accepted its extra lanes, but drone-1 and drone-2 refused them: `edge_assign_lanes_refused ... reason: geofence, geofence_cm: 500.0, x_cm: 638.0` (drone-1) and `x_cm: 725.0, y_cm: 400.0` (drone-2). The `retask` event had already reported 4 lanes sent to each of the three survivors, and the edge logs show only one of them took its lanes, so on a wide area part of the lost zone would have been left unsearched. The refusal itself is the safety envelope working; whether the ground station reacts to a refused re-task by handing that share to another drone was not checked in this run. The launcher widens the fence for the demo only. This is flagged for the final review.
+The first N = 4 runs used the edges' default geofence of 500 cm around takeoff. After drone-4 was killed, drone-3 (the neighbour) accepted its extra lanes, but drone-1 and drone-2 refused them: `edge_assign_lanes_refused ... reason: geofence, geofence_cm: 500.0, x_cm: 638.0` (drone-1) and `x_cm: 725.0, y_cm: 400.0` (drone-2). The `retask` event had already reported 4 lanes sent to each of the three survivors, and the edge logs show only one of them took its lanes, so on a wide area part of the lost zone would have been left unsearched. The refusal itself is the safety envelope working. This was fixed in R-106: an edge now nacks lanes it refuses, and the ground station reports lanes that no survivor accepted as uncovered instead of counting them as sent. The launcher still widens the fence for the demo so a wide area is actually flown.
 
 ## Time to cover vs N
 

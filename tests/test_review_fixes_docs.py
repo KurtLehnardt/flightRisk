@@ -1,0 +1,65 @@
+"""Docs and launcher fixes from the PR #87 final review (R-112)."""
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCS = ROOT / "docs"
+
+
+def _doc(name: str) -> str:
+    return (DOCS / name).read_text(encoding="utf-8")
+
+
+def test_placement_step_present():
+    for name in ("demo-script.md", "fleet-setup.md"):
+        text = _doc(name)
+        assert "near-left corner" in text, name
+        assert "250 cm to its right" in text, name
+        assert "4 m depth" in text, name
+        assert "behind the takeoff line" in text, name
+
+
+def test_presenter_outside_flight_path():
+    text = _doc("demo-script.md")
+    assert "step into a drone's camera view" not in text
+    assert "at least 1.5 m beyond the far edge" in text
+    assert "never in a flight path" in text
+    assert "drop edge-2's Wi-Fi" in text
+
+
+def test_launchers_export_geofence_and_appearance_only():
+    sh = (ROOT / "scripts" / "demo_edge.sh").read_text(encoding="utf-8")
+    ps1 = (ROOT / "scripts" / "demo_edge.ps1").read_text(encoding="utf-8")
+    assert 'FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-450}"' in sh
+    assert "FLIGHTRISK_APPEARANCE_ONLY=1" in sh
+    assert re.search(r'-not \$env:FLIGHTRISK_GEOFENCE_CM\).*"450"', ps1)
+    assert '$env:FLIGHTRISK_APPEARANCE_ONLY = "1"' in ps1
+
+
+def test_privacy_docs_match_edge_behaviour():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for name, text in (
+        ("README.md", readme),
+        ("demo-script.md", _doc("demo-script.md")),
+        ("privacy-design.md", _doc("privacy-design.md")),
+        ("pitch.md", _doc("pitch.md")),
+    ):
+        assert re.search(r"person crops", text, re.IGNORECASE), name
+        assert "token-authenticated" in text, name
+    assert "--with-face" in readme and "--with-face" in _doc("privacy-design.md")
+    assert "never sent over the network by either the dashboard or the mobile app" not in _doc("privacy-design.md")
+
+
+def test_rung2_stops_edge_2_first():
+    text = _doc("demo-script.md")
+    rung = text[text.index("2. **One Tello live and one fake edge.**"):text.index("3. **Recorded video")]
+    assert rung.index("stop the real edge") < rung.index("--source fake")
+
+
+def test_person_size_assumption_labelled():
+    pitch = _doc("pitch.md")
+    assert pitch.count("1.7 m") >= 2
+    for m in re.finditer(r"1\.7 m", pitch):
+        window = pitch[max(0, m.start() - 200): m.end() + 200]
+        assert "ASSUMPTION" in window
