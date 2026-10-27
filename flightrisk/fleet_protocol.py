@@ -47,12 +47,12 @@ Protocol v2 additions (every v1 field is kept)::
     ground -> edge
     {"type": "hello", "role": "leader|standby", "node_id": "mac", "epoch": 7, "proto": 2}
     {"type": "heartbeat", "seq": 12, "epoch": 7, "leader_id": "mac"}
-    {"type": "assign_lanes", ..v1 fields.., "plan_id": "p-1", "on_complete": "hover|land",
-     "hover_timeout_s": 20, "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
+    {"type": "assign_lanes", ..v1 fields.., "plan_id": "p-1", "plan_seq": 3,
+     "on_complete": "hover|land", "hover_timeout_s": 20, "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "start_at", "t_ground_s": .., "plan_id": "p-1", "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "takeoff", "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "hold", "epoch": 7, "leader_id": "mac", "cmd_id": "..", "reason": "alert|operator|handover"}
-    {"type": "resume", "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
+    {"type": "resume", "plan_id": "p-1", "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "nudge", "direction": "left", "distance_cm": 50, "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "handover", "to_node": "win", "epoch_next": 8, "epoch": 7, "leader_id": "mac", "cmd_id": ".."}
     {"type": "land", "cmd_id": ".."}            (epoch optional, never required)
@@ -307,6 +307,7 @@ NACK_REASONS_V2 = NACK_REASONS | frozenset({
     "landing",
     "not_flying",
     "plan_mismatch",
+    "stale_plan",
 })
 
 GROUND_TO_EDGE_TYPES = frozenset(
@@ -348,8 +349,12 @@ FENCED_CONTROL_TYPES = frozenset({HEARTBEAT, CLOCK})
 COMMAND_TYPES = FENCED_COMMAND_TYPES | FAILSAFE_TYPES
 # Commands the ground may resend automatically, with the same ``cmd_id``,
 # when no ack arrives in time. ``takeoff``, ``start_at`` and ``nudge`` are
-# never resent automatically.
-RETRYABLE_COMMAND_TYPES = FAILSAFE_TYPES | frozenset({HOLD, RESUME, ASSIGN_LANES, HANDOVER})
+# never resent automatically, and neither is ``resume``: a resume retried
+# after a newer ``hold`` would set the drone moving again. A newer ``hold``,
+# ``assign_lanes`` or ``land`` for a drone cancels the ground's pending
+# retries of ``assign_lanes`` for that drone, and an ``assign_lanes`` that
+# still arrives late is refused by its ``plan_seq`` (``stale_plan``).
+RETRYABLE_COMMAND_TYPES = FAILSAFE_TYPES | frozenset({HOLD, ASSIGN_LANES, HANDOVER})
 
 # Fields protocol v2 adds to v1 message types. ``shape_for_peer`` strips them
 # when a message goes to a v1 peer.
@@ -358,6 +363,7 @@ V2_FIELDS = frozenset({
     "leader_id",
     "cmd_id",
     "plan_id",
+    "plan_seq",
     "on_complete",
     "hover_timeout_s",
     "epoch_seen",
@@ -868,6 +874,10 @@ def _validate_assign_lanes(msg: Mapping[str, Any], proto: int) -> None:
     _validate_lanes(msg)
     _validate_zone(msg)
     _validate_plan_id(msg, proto)
+    if proto >= 2 or "plan_seq" in msg:
+        # Orders the plans one leader issues within its epoch, so an edge can
+        # refuse an older plan that arrives late (nack ``stale_plan``).
+        _require_int_range(msg, "plan_seq", 1, _MAX_SAFE_INT)
     on_complete = msg.get("on_complete")
     if "on_complete" in msg:
         _require_choice(msg, "on_complete", ON_COMPLETE_ACTIONS)
@@ -1125,8 +1135,10 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
         if "reason" in msg:
             _require_choice(msg, "reason", HOLD_REASONS)
     elif mtype == RESUME:
-        if "plan_id" in msg:
-            _require_id(msg, "plan_id")
+        # A v2-only command, so required on every link version: the edge
+        # resumes only the plan the ground means, and answers a mismatch with
+        # nack ``plan_mismatch``.
+        _require_id(msg, "plan_id")
     elif mtype == NUDGE:
         _require_choice(msg, "direction", NUDGE_DIRECTIONS)
         _require_int_range(msg, "distance_cm", NUDGE_MIN_CM, NUDGE_MAX_CM)
@@ -1674,14 +1686,19 @@ def make_assign_lanes(
     fence: Fence | None = None,
     cmd_id: str | None = None,
     plan_id: str | None = None,
+    plan_seq: int | None = None,
     on_complete: str | None = None,
     hover_timeout_s: float | None = None,
 ) -> dict[str, Any]:
     """Ground -> edge lane assignment for one drone.
 
-    The v2 form (with *fence*) needs *plan_id*. *on_complete* says what the
-    drone does after its last lane: ``"hover"`` for *hover_timeout_s*
-    (default ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``.
+    The v2 form (with *fence*) needs *plan_id* and *plan_seq*. *plan_seq*
+    is an integer from 1 that the leader increases with every new plan it
+    issues within its epoch; a retry of the same plan reuses it. The edge
+    orders plans by ``(epoch, plan_seq)`` and refuses an older one with
+    ``stale_plan``. *on_complete* says what the drone does after its last
+    lane: ``"hover"`` for *hover_timeout_s* (default
+    ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``.
     """
     msg: dict[str, Any] = {
         "type": ASSIGN_LANES,
@@ -1692,6 +1709,8 @@ def make_assign_lanes(
     }
     if plan_id is not None:
         msg["plan_id"] = plan_id
+    if plan_seq is not None:
+        msg["plan_seq"] = plan_seq
     if on_complete is not None:
         msg["on_complete"] = on_complete
         if on_complete == "hover":
@@ -1877,11 +1896,13 @@ def make_hold(fence: Fence, *, cmd_id: str | None = None, reason: str | None = N
     return _checked(msg, _fenced(msg, _need_fence(fence), cmd_id))
 
 
-def make_resume(fence: Fence, *, cmd_id: str | None = None, plan_id: str | None = None) -> dict[str, Any]:
-    """Ground -> edge (v2): continue the held plan; with *plan_id*, only if it is still that plan."""
-    msg: dict[str, Any] = {"type": RESUME}
-    if plan_id is not None:
-        msg["plan_id"] = plan_id
+def make_resume(fence: Fence, *, plan_id: str, cmd_id: str | None = None) -> dict[str, Any]:
+    """Ground -> edge (v2): continue the held plan *plan_id*.
+
+    The edge answers a *plan_id* that is not its current plan with nack
+    ``plan_mismatch``. A resume is never resent automatically.
+    """
+    msg: dict[str, Any] = {"type": RESUME, "plan_id": plan_id}
     return _checked(msg, _fenced(msg, _need_fence(fence), cmd_id))
 
 

@@ -68,11 +68,11 @@ kept; v2 fields are in addition to them.
 | `ping` | v1 | `t1` | no | no | not a command |
 | `clock` | v1 | `offset_s`, **`epoch`**, **`leader_id`** | yes | no | not a command |
 | `heartbeat` | v1 | `seq`, **`epoch`**, **`leader_id`** | yes | no | not a command |
-| `assign_lanes` | v1 | `drone_id`, `alt_cm`, `lanes`, `zone`, **`plan_id`** (required in v2), **`on_complete`** (`hover` or `land`, optional), **`hover_timeout_s`** (only with `hover`, above 0 and at most 120, default 20), **`epoch`**, **`leader_id`**, **`cmd_id`** | yes | yes | yes, same `cmd_id` and `plan_id` |
+| `assign_lanes` | v1 | `drone_id`, `alt_cm`, `lanes`, `zone`, **`plan_id`** (required in v2), **`plan_seq`** (integer from 1, required in v2; see "Plan ordering"), **`on_complete`** (`hover` or `land`, optional), **`hover_timeout_s`** (only with `hover`, above 0 and at most 120; when absent the edge uses 20), **`epoch`**, **`leader_id`**, **`cmd_id`** | yes | yes | yes, same `cmd_id`, `plan_id` and `plan_seq` |
 | `start_at` | v1 | `t_ground_s`, **`plan_id`** (required in v2), **`epoch`**, **`leader_id`**, **`cmd_id`** | yes | yes | no |
 | `takeoff` | v1 | **`epoch`**, **`leader_id`**, **`cmd_id`** | yes | yes | no |
 | `hold` | v2 | `epoch`, `leader_id`, `cmd_id`; optional `reason` (`alert`, `operator` or `handover`) | yes | yes | yes |
-| `resume` | v2 | `epoch`, `leader_id`, `cmd_id`; optional `plan_id` (resume only if the edge still holds that plan) | yes | yes | yes |
+| `resume` | v2 | `plan_id` (required; the edge answers a plan it does not hold with `nack{reason: plan_mismatch}`), `epoch`, `leader_id`, `cmd_id` | yes | yes | **no** |
 | `nudge` | v2 | `direction` (`forward`, `back`, `left` or `right`), `distance_cm` (integer from 20 to 500), `epoch`, `leader_id`, `cmd_id` | yes | yes | no |
 | `handover` | v2 | `to_node` (not the sender), `epoch_next` (above `epoch`; the handover flow uses `epoch + 1`), `epoch`, `leader_id`, `cmd_id` | yes | yes | yes |
 | `land` | v1 | optional `cmd_id`, `epoch`, `leader_id` (informational only) | **never** | optional | yes |
@@ -180,10 +180,36 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   every time it arrives, cached id or not, because landing twice is harmless
   and skipping a landing is not.
 - **Automatic retries.** The ground may resend, with the same id, only
-  `land`, `emergency_land_all`, `hold`, `resume`, `assign_lanes` and
-  `handover` (`RETRYABLE_COMMAND_TYPES`). It never resends `takeoff`,
-  `start_at` or `nudge` automatically, because a duplicate that arrives after
-  the cache entry has been evicted would act twice.
+  `land`, `emergency_land_all`, `hold`, `assign_lanes` and `handover`
+  (`RETRYABLE_COMMAND_TYPES`). It never resends `takeoff`, `start_at` or
+  `nudge` automatically, because a duplicate that arrives after the cache
+  entry has been evicted would act twice. It never resends `resume`
+  either: a resume retried after a newer `hold` would set the drone moving
+  again.
+- **Newer commands cancel older retries.** A newer `hold`, `assign_lanes`
+  or `land` for a drone cancels the ground's pending retries of
+  `assign_lanes` (and any queued, not yet sent `resume`) for that drone, and
+  an `emergency_land_all` cancels every pending retry of a motion command
+  for every drone. A `hold` may still be retried after a later `resume`
+  was sent; that is safe, because holding is the stopped state and the
+  operator sees the drone as holding.
+
+### Plan ordering
+
+- **`plan_seq`.** Every v2 `assign_lanes` carries `plan_seq`, an integer
+  from 1 to 2^53 - 1 that the leader increases with each new plan it issues
+  within its epoch. A retry of the same plan reuses its `cmd_id`,
+  `plan_id` and `plan_seq`.
+- **Edge rule.** The edge orders plans by `(epoch, plan_seq)`. It refuses
+  an `assign_lanes` that is older than its current plan with
+  `nack{reason: stale_plan}`, and one with the same `(epoch, plan_seq)` but
+  a different `plan_id` with `nack{reason: plan_mismatch}`. A new leader
+  needs no knowledge of the old leader's `plan_seq`, because its epoch is
+  higher.
+- **Why.** Without an order, an older `assign_lanes` that is retried or
+  delayed (for example across a reconnect) could replace a newer plan.
+  `plan_seq` is a v2 field: `shape_for_peer` removes it for a v1 edge, and
+  a v1 link checks it only when present.
 - **Lifetime.** The cache lives in the edge process and survives reconnects.
   It does not survive an edge restart, but a restarted edge has already
   landed its drone.
@@ -195,7 +221,8 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   or a `nack` with a `reason`, and the ground correlates by `cmd_id`.
 - **Nack reasons.** v1 keeps `geofence`, `altitude`, `battery`,
   `other_drone` and `invalid`. v2 adds `stale_epoch`, `not_authority`,
-  `no_valid_plan`, `busy`, `landing`, `not_flying` and `plan_mismatch`.
+  `no_valid_plan`, `busy`, `landing`, `not_flying`, `plan_mismatch` and
+  `stale_plan`.
 - **Stale leaders.** A `stale_epoch` or `not_authority` nack should carry
   `epoch_seen`, so that a stale leader learns the epoch it lost to and steps
   down.
@@ -362,10 +389,13 @@ These rules follow from the protocol and must be met by the code that uses it.
   when a `start_at` fires.
 - **`taking_off` state.** Telemetry `state` adds `taking_off`, so the few
   seconds of a takeoff have a state of their own.
-- **Optional extra fields.** These are additions the plan does not list:
-  `resume` may carry `plan_id`; acks and nacks may carry `epoch_seen`,
+- **Extra fields.** These are additions the plan does not list: `resume`
+  must carry `plan_id`; `assign_lanes` must carry `plan_seq` in v2, with
+  the nack reason `stale_plan`; acks and nacks may carry `epoch_seen`,
   `plan_id` and `detail`; `peer_heartbeat` may carry `node_id`; `land` may
   carry an informational fence.
+- **`resume` is not retried.** The plan's routing table marks `hold` and
+  `resume` as retried by `cmd_id`. Only `hold` is.
 - **No nack for landing.** A nack for `land` or `emergency_land_all` is
   invalid, which the plan implies but does not state.
 - **Ground speaks first.** The edge sends its `hello` in reply to the

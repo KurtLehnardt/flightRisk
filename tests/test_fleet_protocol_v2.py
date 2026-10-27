@@ -62,14 +62,16 @@ def v2_ground_to_edge():
         fp.make_ping(1.5),
         fp.make_clock(0.25, fence=FENCE),
         fp.make_heartbeat(12, fence=FENCE),
-        fp.make_assign_lanes("drone-2", 160, LANES, ZONE, fence=FENCE, plan_id="p-1", on_complete="hover"),
-        fp.make_assign_lanes("drone-2", 160, LANES, ZONE, fence=FENCE, plan_id="p-1", on_complete="land"),
+        fp.make_assign_lanes("drone-2", 160, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=1,
+                             on_complete="hover"),
+        fp.make_assign_lanes("drone-2", 160, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=1,
+                             on_complete="land"),
         fp.make_start_at(123.4, fence=FENCE, plan_id="p-1"),
         fp.make_takeoff(fence=FENCE),
         fp.make_hold(FENCE, reason="alert"),
         fp.make_hold(FENCE),
-        fp.make_resume(FENCE),
         fp.make_resume(FENCE, plan_id="p-1"),
+        fp.make_resume(FENCE, plan_id="p-2", cmd_id=CMD),
         fp.make_nudge(FENCE, "left", 50),
         fp.make_handover(FENCE, "win"),
         fp.make_land(cmd_id=CMD),
@@ -143,7 +145,9 @@ def test_v2_builders_produce_plan_schemas():
     assert fp.make_hold(FENCE, cmd_id=CMD, reason="alert") == {
         "type": "hold", "reason": "alert", "epoch": 7, "leader_id": "mac", "cmd_id": CMD,
     }
-    assert fp.make_resume(FENCE, cmd_id=CMD) == {"type": "resume", "epoch": 7, "leader_id": "mac", "cmd_id": CMD}
+    assert fp.make_resume(FENCE, cmd_id=CMD, plan_id="p-1") == {
+        "type": "resume", "plan_id": "p-1", "epoch": 7, "leader_id": "mac", "cmd_id": CMD,
+    }
     assert fp.make_nudge(FENCE, "left", 50, cmd_id=CMD) == {
         "type": "nudge", "direction": "left", "distance_cm": 50, "epoch": 7, "leader_id": "mac", "cmd_id": CMD,
     }
@@ -154,10 +158,10 @@ def test_v2_builders_produce_plan_schemas():
         "type": "start_at", "t_ground_s": 123.4, "plan_id": "p-1", "epoch": 7, "leader_id": "mac", "cmd_id": CMD,
     }
     assert fp.make_assign_lanes(
-        "drone-2", 160, LANES, ZONE, fence=FENCE, cmd_id=CMD, plan_id="p-1", on_complete="hover",
+        "drone-2", 160, LANES, ZONE, fence=FENCE, cmd_id=CMD, plan_id="p-1", plan_seq=3, on_complete="hover",
     ) == {
         "type": "assign_lanes", "drone_id": "drone-2", "alt_cm": 160, "lanes": LANES, "zone": ZONE,
-        "plan_id": "p-1", "on_complete": "hover", "hover_timeout_s": fp.DEFAULT_HOVER_TIMEOUT_S,
+        "plan_id": "p-1", "plan_seq": 3, "on_complete": "hover", "hover_timeout_s": fp.DEFAULT_HOVER_TIMEOUT_S,
         "epoch": 7, "leader_id": "mac", "cmd_id": CMD,
     }
     assert fp.make_land(cmd_id=CMD) == {"type": "land", "cmd_id": CMD}
@@ -300,7 +304,7 @@ def test_bad_epochs_are_rejected(epoch):
 @pytest.mark.parametrize("ident", ["", " mac", "mac\n", "-mac", "a" * 65, "mäc", 7, None, ["mac"]])
 def test_bad_identifiers_are_rejected(ident):
     for key in ("leader_id", "cmd_id"):
-        msg = dict(fp.make_resume(FENCE), **{key: ident})
+        msg = dict(fp.make_resume(FENCE, plan_id="p-1"), **{key: ident})
         with pytest.raises(fp.ProtocolError):
             fp.validate_message(msg, proto=2)
 
@@ -401,17 +405,17 @@ def test_handover_rules():
 
 def test_assign_lanes_v2_rules():
     with pytest.raises(fp.ProtocolError):
-        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE)  # no plan_id
+        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_seq=1)  # no plan_id
     with pytest.raises(fp.ProtocolError):
-        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", on_complete="return")
+        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", plan_seq=1, on_complete="return")
     with pytest.raises(fp.ProtocolError):
-        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", on_complete="land",
+        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", plan_seq=1, on_complete="land",
                              hover_timeout_s=5)
     for timeout in (0, -1, fp.MAX_HOVER_TIMEOUT_S + 1, float("nan")):
         with pytest.raises(fp.ProtocolError):
-            fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", on_complete="hover",
+            fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", plan_seq=1, on_complete="hover",
                                  hover_timeout_s=timeout)
-    msg = fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", on_complete="hover",
+    msg = fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p", plan_seq=1, on_complete="hover",
                                hover_timeout_s=fp.MAX_HOVER_TIMEOUT_S)
     assert msg["hover_timeout_s"] == fp.MAX_HOVER_TIMEOUT_S
     with pytest.raises(fp.ProtocolError):
@@ -888,7 +892,7 @@ def test_random_valid_commands_round_trip(seed):
             lambda: fp.make_nudge(fence, rng.choice(sorted(fp.NUDGE_DIRECTIONS)),
                                   rng.randrange(fp.NUDGE_MIN_CM, fp.NUDGE_MAX_CM + 1)),
             lambda: fp.make_hold(fence, reason=rng.choice([None, *sorted(fp.HOLD_REASONS)])),
-            lambda: fp.make_resume(fence, plan_id=rng.choice([None, "p-1", "p-2"])),
+            lambda: fp.make_resume(fence, plan_id=rng.choice(["p-1", "p-2"])),
             lambda: fp.make_heartbeat(rng.randrange(0, 2**40), fence=fence),
             lambda: fp.make_start_at(rng.uniform(-1e6, 1e6), fence=fence, plan_id="p-9"),
             lambda: fp.make_takeoff(fence=fence),
@@ -898,7 +902,8 @@ def test_random_valid_commands_round_trip(seed):
                 [{"direction": rng.choice(sorted(fp.LANE_DIRECTIONS)), "distance_cm": rng.randrange(1, 2000)}
                  for _ in range(rng.randrange(0, 40))],
                 {"x_cm": rng.uniform(-500, 500), "y_cm": 0, "w_cm": 400, "h_cm": 400},
-                fence=fence, plan_id=f"p-{rng.randrange(100)}", on_complete=rng.choice(["hover", "land"])),
+                fence=fence, plan_id=f"p-{rng.randrange(100)}", plan_seq=rng.randrange(1, 2**40),
+                on_complete=rng.choice(["hover", "land"])),
         ]
         if fence.epoch < fp.MAX_EPOCH:
             builders.append(lambda: fp.make_handover(fence, "other"))

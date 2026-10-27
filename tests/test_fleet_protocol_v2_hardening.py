@@ -365,7 +365,9 @@ def test_every_schema_field_passes_the_privacy_screen():
     lanes = [{"direction": "forward", "distance_cm": 200}]
     zone = {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400}
     messages = [
-        (fp.make_assign_lanes("drone-1", 100, lanes, zone, fence=FENCE, plan_id="p-1", on_complete="hover"), 2),
+        (fp.make_assign_lanes("drone-1", 100, lanes, zone, fence=FENCE, plan_id="p-1", plan_seq=1,
+                                 on_complete="hover"), 2),
+        (fp.make_resume(FENCE, plan_id="p-1"), 2),
         (fp.make_start_at(1.0, fence=FENCE, plan_id="p-1"), 2),
         (fp.make_handover(FENCE, "win"), 2),
         (fp.make_edge_hello("drone-1", "win", 7, plan_id="p-1", lane_index=0, is_flying=True, battery=50), 2),
@@ -377,3 +379,69 @@ def test_every_schema_field_passes_the_privacy_screen():
     ]
     for msg, proto in messages:
         assert fp.validate_message(msg, proto=proto) == msg["type"]
+
+
+# ===========================================================================
+# resume carries plan_id; plans are ordered by plan_seq; retries
+# ===========================================================================
+
+LANES = [{"direction": "forward", "distance_cm": 200}]
+ZONE = {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400}
+CMD = "c0ffee00c0ffee00c0ffee00c0ffee00"
+
+
+def test_resume_must_carry_a_plan_id_on_every_link():
+    resume = fp.make_resume(FENCE, plan_id="p-1", cmd_id=CMD)
+    assert resume["plan_id"] == "p-1"
+    bare = {k: v for k, v in resume.items() if k != "plan_id"}
+    for proto in (1, 2):
+        with pytest.raises(fp.ProtocolError, match="plan_id"):
+            fp.validate_message(bare, proto=proto)
+    with pytest.raises(fp.ProtocolError):
+        fp.validate_ground_to_edge(bare, proto=2)
+    for bad in (None, "", "has space", 7):
+        with pytest.raises(fp.ProtocolError):
+            fp.make_resume(FENCE, plan_id=bad)
+    with pytest.raises(TypeError):
+        fp.make_resume(FENCE)  # plan_id is a required keyword
+
+
+def test_plan_mismatch_and_stale_plan_are_v2_nack_reasons():
+    assert "plan_mismatch" in fp.NACK_REASONS_V2
+    assert "stale_plan" in fp.NACK_REASONS_V2
+    for reason in ("plan_mismatch", "stale_plan"):
+        assert fp.validate_message(fp.make_nack("resume", "drone-1", reason, CMD), proto=2) == "nack"
+        nack = fp.make_nack("assign_lanes", "drone-1", reason, CMD, lanes_total=1)
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_message(nack, proto=1)
+
+
+def test_v2_assign_lanes_needs_a_plan_seq():
+    msg = fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=4, cmd_id=CMD)
+    assert msg["plan_seq"] == 4
+    assert fp.validate_message(msg, proto=2) == "assign_lanes"
+    with pytest.raises(fp.ProtocolError, match="plan_seq"):
+        fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p-1")
+    with pytest.raises(fp.ProtocolError, match="plan_seq"):
+        fp.validate_message({k: v for k, v in msg.items() if k != "plan_seq"}, proto=2)
+    for bad in (0, -1, True, 1.0, "1", None, 2**53, 10**400):
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_message(dict(msg, plan_seq=bad), proto=2)
+        # A v1 link does not need it, but checks it when present.
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_message(dict(msg, plan_seq=bad), proto=1)
+    assert fp.validate_message(fp.make_assign_lanes("drone-1", 100, LANES, ZONE), proto=1) == "assign_lanes"
+    assert fp.validate_message(dict(msg, plan_seq=2**53 - 1), proto=2) == "assign_lanes"
+
+
+def test_plan_seq_is_stripped_for_a_v1_edge():
+    msg = fp.make_assign_lanes("drone-1", 100, LANES, ZONE, fence=FENCE, plan_id="p-1", plan_seq=2)
+    assert "plan_seq" in fp.V2_FIELDS
+    assert fp.shape_for_peer(msg, 1) == {"type": "assign_lanes", "drone_id": "drone-1", "alt_cm": 100,
+                                          "lanes": LANES, "zone": ZONE}
+
+
+def test_resume_is_never_retried_automatically():
+    assert "resume" not in fp.RETRYABLE_COMMAND_TYPES
+    assert fp.RETRYABLE_COMMAND_TYPES == {"land", "emergency_land_all", "hold", "assign_lanes", "handover"}
+    assert not {"takeoff", "start_at", "nudge", "resume"} & fp.RETRYABLE_COMMAND_TYPES
