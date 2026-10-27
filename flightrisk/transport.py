@@ -160,6 +160,7 @@ class EdgeTransport:
         self.clock = fp.EdgeClock(clock)
         self._on_emergency_land = on_emergency_land
         self._reader_task: asyncio.Task | None = None
+        self._pong_tasks: set[asyncio.Task] = set()
         self._inbox: deque[dict[str, Any]] = deque()
         self._inbox_event = asyncio.Event()
         self._last_ground_msg_s: float | None = None
@@ -210,6 +211,10 @@ class EdgeTransport:
         self._connected = True
         self._should_reconnect = True
         self._retry_count = 0
+        # Nothing can be waiting in recv() while disconnected, so a fresh
+        # event is safe here, and it binds to the loop this connection runs
+        # on (the sync wrapper starts a new loop after a full disconnect).
+        self._inbox_event = asyncio.Event()
         # The reader owns the receive side from here on, so a ping or an
         # emergency_land_all is handled even while the frame loop is busy.
         self._reader_task = asyncio.ensure_future(self._read_loop(self._ws))
@@ -232,7 +237,7 @@ class EdgeTransport:
                 if not isinstance(data, dict):
                     logger.warning("recv: non-object message, ignoring: %r", data)
                     continue
-                await self._dispatch_incoming(ws, data, received_at)
+                self._dispatch_incoming(ws, data, received_at)
         except ConnectionClosed:
             pass
         except asyncio.CancelledError:
@@ -244,15 +249,22 @@ class EdgeTransport:
             # Only the reader of the current socket may mark the transport
             # disconnected; a stale reader from before a reconnect must not.
             if not cancelled and self._ws is ws and self._connected:
-                logger.warning("[%s] Connection to ground closed", self._ws_url)
                 self._connected = False
-                self._schedule_reconnect()
+                if self._should_reconnect:
+                    logger.warning("[%s] Connection to ground closed", self._ws_url)
+                    self._schedule_reconnect()
             self._inbox_event.set()
 
-    async def _dispatch_incoming(self, ws, data: dict[str, Any], received_at: float) -> None:
+    def _dispatch_incoming(self, ws, data: dict[str, Any], received_at: float) -> None:
+        """Handle one ground message without ever waiting, so the next is read at once."""
         mtype = data.get("type")
         if mtype == fp.PING:
-            await self._answer_ping(ws, data, received_at)
+            # The pong goes out from its own task: if the socket's send buffer
+            # is full, waiting for it here would hold up an emergency_land_all
+            # arriving right behind the ping.
+            task = asyncio.ensure_future(self._answer_ping(ws, data, received_at))
+            self._pong_tasks.add(task)
+            task.add_done_callback(self._pong_tasks.discard)
             return
         if mtype == fp.EMERGENCY_LAND_ALL:
             self._handle_emergency(data)
@@ -268,6 +280,7 @@ class EdgeTransport:
         self._inbox_event.set()
 
     async def _answer_ping(self, ws, data: dict[str, Any], received_at: float) -> None:
+        # t3 is stamped here, immediately before the write.
         try:
             pong = fp.answer_ping(data, t2=received_at, clock=self._clock)
         except fp.ProtocolError as exc:
@@ -278,6 +291,8 @@ class EdgeTransport:
         except ConnectionClosed:
             # The read loop observes the closure on its next iteration.
             pass
+        except Exception:
+            logger.exception("[%s] Failed to send pong", self._ws_url)
 
     def _handle_emergency(self, data: dict[str, Any]) -> None:
         logger.warning("[%s] emergency_land_all received from ground", self._ws_url)
