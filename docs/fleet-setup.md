@@ -270,6 +270,8 @@ $env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 
+Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
+
 ## Quick reference
 
 | Setting | Station | AP |
