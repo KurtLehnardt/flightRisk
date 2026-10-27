@@ -53,3 +53,12 @@ def clean_app_state():
         setattr(app_state, name, value)
     app_module._alerted_tracks.clear()
     app_module._alerted_tracks.update(original_alerted)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_captures_dir(tmp_path, monkeypatch):
+    """Point the alerts captures directory at a per-test temp dir.
+
+    No test may write into the real ``captures/`` directory.
+    """
+    monkeypatch.setattr("flightrisk.dashboard.alerts.CAPTURES_DIR", tmp_path / "captures")
