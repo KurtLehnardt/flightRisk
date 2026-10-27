@@ -10,6 +10,13 @@ re-tasks its lanes to the others. No real drone is involved.
     python scripts/demo_fake_fleet.py --n 4
     python scripts/demo_fake_fleet.py --n 4 --drive --kill-drone drone-3
     python scripts/demo_fake_fleet.py --n 4 --attach        # ground station already running
+    python scripts/demo_fake_fleet.py --n 2 --nodes 2       # two ground nodes, edges on node 1
+
+With ``--nodes 2`` a second ground station starts beside the first (edge port
+and dashboard port one higher, 9001 and 5556 by default). An edge connects to
+one ground today, so all edges attach to node 1, or to the node named by
+``--edge-node``; the other node idles as a standby. The ports reserved for the
+future peer link (9100 and 9101) are printed but nothing listens on them yet.
 
 Every command line is printed before it runs, so each process can be started
 by hand. Every child is started in its own process group and is terminated
@@ -43,6 +50,8 @@ ALT_SLOTS_CM = (100, 160)
 MAX_DRONES = 16
 DEFAULT_DASHBOARD_PORT = 5555
 DEFAULT_EDGE_PORT = 9000
+DEFAULT_PEER_PORT = 9100
+MAX_NODES = 2
 TERM_GRACE_S = 8.0
 
 
@@ -100,20 +109,35 @@ def build_edge_command(k: int, edge_port: int, python: str = sys.executable) -> 
     ]
 
 
+def node_label(node: int, nodes: int) -> str:
+    """Label of ground node ``node`` (1-based): plain ``ground`` when there is only one."""
+    return "ground" if nodes == 1 else f"ground-{node}"
+
+
 def build_commands(
     n: int, edge_port: int, dashboard_port: int, area_cm: str | None = None, strip_cm: int = 75,
-    attach: bool = False, python: str = sys.executable,
+    attach: bool = False, python: str = sys.executable, nodes: int = 1, edge_node: int = 1,
 ) -> list[tuple[str, list[str]]]:
-    """Return ``(label, argv)`` for the ground station (unless attaching) and each edge."""
+    """Return ``(label, argv)`` for each ground station (unless attaching) and each edge.
+
+    Ground node ``k`` (1-based) listens for edges on ``edge_port + k - 1`` and serves its
+    dashboard on ``dashboard_port + k - 1``. Every edge connects to node ``edge_node``.
+    """
     if not 1 <= n <= MAX_DRONES:
         raise ValueError(f"--n must be between 1 and {MAX_DRONES}, got {n}")
+    if not 1 <= nodes <= MAX_NODES:
+        raise ValueError(f"--nodes must be between 1 and {MAX_NODES}, got {nodes}")
+    if not 1 <= edge_node <= nodes:
+        raise ValueError(f"--edge-node must be between 1 and {nodes}, got {edge_node}")
     if area_cm is None:
         area_cm = default_area_cm(n)
     commands: list[tuple[str, list[str]]] = []
     if not attach:
-        commands.append(("ground", build_dashboard_command(n, edge_port, dashboard_port, area_cm, strip_cm, python)))
+        for node in range(1, nodes + 1):
+            commands.append((node_label(node, nodes), build_dashboard_command(
+                n, edge_port + node - 1, dashboard_port + node - 1, area_cm, strip_cm, python)))
     for k in range(1, n + 1):
-        commands.append((f"drone-{k}", build_edge_command(k, edge_port, python)))
+        commands.append((f"drone-{k}", build_edge_command(k, edge_port + edge_node - 1, python)))
     return commands
 
 
@@ -298,6 +322,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="Fleet search area in cm: 400 or WxD. Default: as wide as 3 lanes per zone need "
                         "for N drones (WxD with W = 325*N - 100, D = 400).")
     p.add_argument("--strip-cm", type=int, default=75, help="Lane spacing in cm (default 75).")
+    p.add_argument("--nodes", type=int, default=1,
+                   help=f"Number of ground stations to start (1 to {MAX_NODES}, default 1). Node k uses "
+                        "--edge-port and --dashboard-port plus k-1.")
+    p.add_argument("--edge-node", type=int, default=1,
+                   help="Ground node the edges connect to with --nodes 2 (default 1).")
     p.add_argument("--dry-run", action="store_true", help="Print the command lines and exit.")
     p.add_argument("--drive", action="store_true",
                    help="Drive the dashboard: plan, start, kill one edge, print the re-task events, then exit.")
@@ -314,10 +343,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.area_cm is None:
         args.area_cm = default_area_cm(args.n)
     try:
-        commands = build_commands(args.n, args.edge_port, args.dashboard_port, args.area_cm, args.strip_cm, args.attach)
+        commands = build_commands(args.n, args.edge_port, args.dashboard_port, args.area_cm, args.strip_cm,
+                                  args.attach, nodes=args.nodes, edge_node=args.edge_node)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    grounds = [c for c in commands if c[0].startswith("ground")]
+    edge_port = args.edge_port + args.edge_node - 1
+    dashboard_port = args.dashboard_port + args.edge_node - 1
 
     if args.attach:
         token = os.environ.get(TOKEN_ENV_VAR) or None
@@ -326,6 +359,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Loopback only ({LOOPBACK}); token {'set from the environment' if args.attach and token else 'random per run' if token else 'not set'}.")
     for label, argv_ in commands:
         print(f"[{label}] {format_command(argv_, token_env=token is not None)}")
+    if args.nodes > 1:
+        print("Ground nodes: " + ", ".join(
+            f"node {k}: edges :{args.edge_port + k - 1}, dashboard :{args.dashboard_port + k - 1}, "
+            f"peer :{DEFAULT_PEER_PORT + k - 1} (reserved, unused)" for k in range(1, args.nodes + 1)))
+        print(f"All edges connect to node {args.edge_node}; the other node is a standby with no edges.")
     if args.dry_run:
         return 0
 
@@ -351,32 +389,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = 0
     try:
         if args.attach:
-            if not port_is_open(args.edge_port):
-                print(f"error: nothing is listening on {LOOPBACK}:{args.edge_port}", file=sys.stderr)
+            if not port_is_open(edge_port):
+                print(f"error: nothing is listening on {LOOPBACK}:{edge_port}", file=sys.stderr)
                 return 1
         else:
-            if port_is_open(args.edge_port):
-                print(f"error: {LOOPBACK}:{args.edge_port} is already in use; use --attach or --edge-port", file=sys.stderr)
-                return 1
-            label, argv_ = commands[0]
-            group.spawn(label, argv_, env, args.log_dir / f"{label}.log" if args.log_dir else None)
+            for node, (label, _) in enumerate(grounds, start=1):
+                if port_is_open(args.edge_port + node - 1):
+                    print(f"error: {LOOPBACK}:{args.edge_port + node - 1} is already in use; "
+                          "use --attach or --edge-port", file=sys.stderr)
+                    return 1
+            for label, argv_ in grounds:
+                group.spawn(label, argv_, env, args.log_dir / f"{label}.log" if args.log_dir else None)
             deadline = time.monotonic() + args.ready_timeout_s
-            while not port_is_open(args.edge_port):
-                if group.procs[label].poll() is not None:
-                    print("error: the ground station exited during startup", file=sys.stderr)
-                    return 1
-                if time.monotonic() > deadline:
-                    print("error: the ground station did not open its edge port in time", file=sys.stderr)
-                    return 1
-                time.sleep(0.5)
-            print(f"Ground station is listening on {LOOPBACK}:{args.edge_port}; dashboard at http://{LOOPBACK}:{args.dashboard_port}")
-        for label, argv_ in commands[0 if args.attach else 1:]:
+            for node, (label, _) in enumerate(grounds, start=1):
+                while not port_is_open(args.edge_port + node - 1):
+                    if group.procs[label].poll() is not None:
+                        print("error: the ground station exited during startup", file=sys.stderr)
+                        return 1
+                    if time.monotonic() > deadline:
+                        print("error: the ground station did not open its edge port in time", file=sys.stderr)
+                        return 1
+                    time.sleep(0.5)
+                print(f"Ground station is listening on {LOOPBACK}:{args.edge_port + node - 1}; "
+                      f"dashboard at http://{LOOPBACK}:{args.dashboard_port + node - 1}")
+        for label, argv_ in commands[len(grounds):]:
             group.spawn(label, argv_, env, args.log_dir / f"{label}.log" if args.log_dir else None)
         print(f"Started {args.n} fake edges. Ctrl-C stops everything.")
 
         if args.drive:
             kill_drone = args.kill_drone or f"drone-{args.n}"
-            result = 0 if drive_fleet(args.dashboard_port, group, kill_drone, args.kill_after_s, args.watch_s, args.n) else 1
+            result = 0 if drive_fleet(dashboard_port, group, kill_drone, args.kill_after_s, args.watch_s, args.n) else 1
         else:
             while True:
                 dead = [label for label, proc in group.procs.items() if proc.poll() is not None]
