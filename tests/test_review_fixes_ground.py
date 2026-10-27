@@ -118,7 +118,22 @@ def test_socketio_cors_not_wildcard_by_default(loopback_dashboard):
     _close_session(client, _session_id(response))
 
 
-def test_dashboard_page_still_connects(loopback_dashboard):
+@pytest.fixture
+def real_socketio_packets():
+    """Send Socket.IO packets over Engine.IO again for the duration of a test.
+
+    ``SocketIOTestClient`` (used by other tests in this process) replaces the
+    server's packet senders with recorders for its own clients, so packets
+    for a real polling session would otherwise be dropped.
+    """
+    server = socketio.server
+    saved = {name: server.__dict__.pop(name) for name in ("_send_packet", "_send_eio_packet")
+             if name in server.__dict__}
+    yield
+    server.__dict__.update(saved)
+
+
+def test_dashboard_page_still_connects(loopback_dashboard, real_socketio_packets):
     """A Socket.IO connect from the page's own origin completes and gets the status event."""
     client = loopback_dashboard
     origin = "http://127.0.0.1:5555"
