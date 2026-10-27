@@ -2,6 +2,11 @@
 
 Handles connection, video streaming, flight commands, and keepalive.
 Standard Tello (TLW004) — SDK 1.3, WiFi AP mode only.
+
+``FakeTelloController`` is an in-process stand-in with the same interface. It
+never touches the network, so the edge device can fly a simulated drone
+(``python -m flightrisk.edge_device --source fake``) and tests can exercise
+flight logic without hardware.
 """
 
 import threading
@@ -15,7 +20,18 @@ from flightrisk.config import get_config
 from flightrisk.drone.controller import DroneCapabilities, DroneController, DroneState
 
 # Backward-compatible re-export so `from flightrisk.drone.tello import DroneState` still works
-__all__ = ["TelloController", "DroneState", "DroneCapabilities", "DroneController"]
+__all__ = [
+    "TelloController",
+    "FakeTelloController",
+    "DroneState",
+    "DroneCapabilities",
+    "DroneController",
+]
+
+# How long an interrupting land waits for an in-flight command to release the
+# command channel before it gives up on the confirming land. djitellopy waits
+# up to 7 s per attempt and retries three times, so 25 s covers a stuck move.
+_LAND_CONFIRM_WAIT_S = 25.0
 
 
 class TelloController:
@@ -47,6 +63,10 @@ class TelloController:
         self._stream_recovering = False
         self._frozen_count: int = 0
         self._last_frame_hash: int = 0
+        # Set by land() and cleared by takeoff(). While it is set, move() and
+        # rotate() refuse to send anything, so a lane executor cannot push a
+        # move in behind a landing.
+        self._landing = False
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -144,39 +164,111 @@ class TelloController:
 
     def takeoff(self):
         with self._cmd_lock:
+            self._landing = False
             self.tello.takeoff()
             self.state.is_flying = True
             print(f"[{self.name}] Takeoff.")
 
     def land(self):
-        with self._cmd_lock:
+        """Land now, interrupting any flight command that is still in progress.
+
+        If the command channel is free this is an ordinary ``land``. If a
+        move, rotate or takeoff is still waiting for its reply, the land does
+        not queue behind it: ``stop`` (hover, accepted at any time by SDK 2.0
+        and later) and ``land`` are sent straight away without waiting for a
+        reply, then a normal ``land`` confirms once the channel is free. The
+        confirming land raises like any other command failure, so callers can
+        retry.
+        """
+        self._landing = True
+        if self._cmd_lock.acquire(blocking=False):
+            try:
+                self.tello.land()
+                self.state.is_flying = False
+                print(f"[{self.name}] Landing.")
+            finally:
+                self._cmd_lock.release()
+            return
+
+        print(f"[{self.name}] Landing now (interrupting an in-flight command).")
+        for raw in ("stop", "land"):
+            try:
+                self.tello.send_command_without_return(raw)
+            except Exception as e:
+                print(f"[{self.name}] Immediate '{raw}' failed: {e}")
+        if not self._cmd_lock.acquire(timeout=_LAND_CONFIRM_WAIT_S):
+            raise RuntimeError(f"[{self.name}] land not confirmed: command channel still busy")
+        try:
             self.tello.land()
             self.state.is_flying = False
-            print(f"[{self.name}] Landing.")
+            print(f"[{self.name}] Landing confirmed.")
+        finally:
+            self._cmd_lock.release()
 
-    def move(self, direction: str, distance_cm: int):
-        """Move in a direction. Drops command if another is in-flight."""
+    def move(self, direction: str, distance_cm: int) -> bool:
+        """Move in a direction. Drops command if another is in-flight.
+
+        Returns True when the command was sent and acknowledged, and False
+        when it was dropped (another command is in flight, a landing is in
+        progress, or the direction is unknown). Command failures raise.
+        """
+        if self._landing:
+            return False
         if not self._cmd_lock.acquire(blocking=False):
-            return
+            return False
         try:
+            if self._landing:
+                return False
             distance_cm = max(20, min(500, distance_cm))
             cmd = getattr(self.tello, f"move_{direction}", None)
             if cmd:
                 cmd(distance_cm)
+                return True
+            return False
         finally:
             self._cmd_lock.release()
 
-    def rotate(self, degrees: int):
-        """Rotate clockwise/counter-clockwise. Drops if another command is in-flight."""
+    def rotate(self, degrees: int) -> bool:
+        """Rotate clockwise/counter-clockwise. Drops if another command is in-flight.
+
+        Returns True when the command was sent, False when it was dropped.
+        """
+        if self._landing:
+            return False
         if not self._cmd_lock.acquire(blocking=False):
-            return
+            return False
         try:
+            if self._landing:
+                return False
             if degrees > 0:
                 self.tello.rotate_clockwise(min(360, degrees))
             else:
                 self.tello.rotate_counter_clockwise(min(360, abs(degrees)))
+            return True
         finally:
             self._cmd_lock.release()
+
+    def read_battery(self) -> int | None:
+        """Battery percentage from the latest state packet, or None if unknown.
+
+        Reads the state stream (no UDP command), so it is safe to call while
+        a flight command is in progress.
+        """
+        try:
+            battery = int(self.tello.get_battery())
+        except Exception:
+            return None
+        self.state.battery = battery
+        return battery
+
+    def read_height_cm(self) -> int | None:
+        """Height above takeoff in cm from the latest state packet, or None if unknown."""
+        try:
+            height = int(self.tello.get_height())
+        except Exception:
+            return None
+        self.state.height = height
+        return height
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int):
         """Send RC joystick control. Each value -100 to 100."""
@@ -245,3 +337,120 @@ class TelloController:
             target=_poll, daemon=True, name=f"{self.name}-state"
         )
         self._state_thread.start()
+
+
+class FakeTelloController:
+    """In-process simulated Tello with the ``TelloController`` interface.
+
+    Nothing here touches the network. Flight commands update a simulated
+    state and are appended to ``calls`` as tuples (``("takeoff",)``,
+    ``("land",)``, ``("move", direction, distance_cm)``,
+    ``("rotate", degrees)``), so tests can assert on exactly what a real
+    drone would have been told. Like the real drone, it refuses to move while
+    on the ground.
+
+    ``speed_cm_s`` makes moves take simulated time (distance divided by
+    speed), which lets a fake edge show lane progress in the dashboard. A
+    landing interrupts a move that is in progress.
+    """
+
+    TAKEOFF_HEIGHT_CM = 80
+
+    def __init__(
+        self,
+        name: str = "fake-tello",
+        battery: int = 100,
+        takeoff_height_cm: int = TAKEOFF_HEIGHT_CM,
+        speed_cm_s: float | None = None,
+        frame_shape: tuple[int, int, int] = (720, 960, 3),
+    ):
+        self.name = name
+        self.host = "fake"
+        self.state = DroneState(battery=battery)
+        self.capabilities = DroneCapabilities(
+            has_gps=False,
+            has_rtsp=False,
+            min_move_cm=20,
+            max_move_cm=500,
+            max_altitude_m=10,
+            supports_missions=False,
+        )
+        self.calls: list[tuple] = []
+        self.takeoff_height_cm = takeoff_height_cm
+        self.speed_cm_s = speed_cm_s
+        self._frame_shape = frame_shape
+        self._frame_callbacks: list[Callable[[np.ndarray], None]] = []
+        self._lock = threading.Lock()
+        self._interrupt = threading.Event()
+
+    def _record(self, *call) -> None:
+        with self._lock:
+            self.calls.append(call)
+
+    def connect(self) -> bool:
+        self.state.is_connected = True
+        print(f"[{self.name}] Fake drone connected. Battery: {self.state.battery}%")
+        return True
+
+    def disconnect(self) -> None:
+        if self.state.is_flying:
+            self.land()
+        self.state.is_connected = False
+
+    def get_frame(self) -> np.ndarray | None:
+        if not self.state.is_connected:
+            return None
+        frame = np.zeros(self._frame_shape, dtype=np.uint8)
+        for cb in self._frame_callbacks:
+            cb(frame)
+        return frame
+
+    def on_frame(self, callback: Callable[[np.ndarray], None]) -> None:
+        self._frame_callbacks.append(callback)
+
+    def takeoff(self) -> None:
+        self._record("takeoff")
+        self._interrupt.clear()
+        self.state.is_flying = True
+        self.state.height = self.takeoff_height_cm
+
+    def land(self) -> None:
+        self._interrupt.set()
+        self._record("land")
+        self.state.is_flying = False
+        self.state.height = 0
+
+    def _fly_for(self, distance_cm: float) -> None:
+        if self.speed_cm_s:
+            self._interrupt.wait(distance_cm / self.speed_cm_s)
+
+    def move(self, direction: str, distance_cm: int) -> bool:
+        if not self.state.is_flying:
+            raise RuntimeError(f"[{self.name}] cannot move while landed")
+        if direction not in ("forward", "back", "left", "right", "up", "down"):
+            return False
+        self._record("move", direction, distance_cm)
+        self._fly_for(distance_cm)
+        if direction == "up":
+            self.state.height += distance_cm
+        elif direction == "down":
+            self.state.height = max(0, self.state.height - distance_cm)
+        return True
+
+    def rotate(self, degrees: int) -> bool:
+        if not self.state.is_flying:
+            raise RuntimeError(f"[{self.name}] cannot rotate while landed")
+        self._record("rotate", degrees)
+        return True
+
+    def hover(self) -> None:
+        self._record("hover")
+
+    def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> None:
+        self._record("rc", lr, fb, ud, yaw)
+
+    def read_battery(self) -> int | None:
+        return self.state.battery
+
+    def read_height_cm(self) -> int | None:
+        return self.state.height
