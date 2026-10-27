@@ -455,11 +455,11 @@ this layer.
   refuse a large `detections` frame. They are still parsed strictly, so a
   legacy sender must not put `NaN` or repeated keys in them.
 - **Decode off the event loop.** `decode` is CPU-bound and can take tens
-  of milliseconds on a hostile frame near the 1 MiB WebSocket limit: about
-  20 ms for the strict parse (frames over 64 KiB are parsed to see whether
-  they are legacy messages), and up to about 65 ms on the test machine
-  (80 ms in review) when the strict parse fails and the lenient fail-safe
-  parse runs as well. Run it in a worker thread (`asyncio.to_thread` or an
+  of milliseconds on a hostile frame near the 1 MiB WebSocket limit. On
+  the test machine the strict parse alone took up to about 50 ms (frames
+  over 64 KiB are parsed to see whether they are legacy messages), and the
+  strict parse followed by the lenient fail-safe parse up to about 65 ms
+  (80 ms in review); a busy machine is slower. Run it in a worker thread (`asyncio.to_thread` or an
   executor), not directly on the event loop that also runs the heartbeats
   and the link watchdog, or put a cheap rate or size limit in front of it.
   `failsafe_type_of` already skips the lenient parse when a frame cannot
