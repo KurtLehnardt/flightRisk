@@ -358,6 +358,5 @@ def _reset_match_alert_latch():
 from tests.support.fixtures import (  # noqa: F401
     error_watch,
     netsim,
-    resource_baseline,
     two_node_fleet,
 )

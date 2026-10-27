@@ -17,11 +17,19 @@ uses the real transports and the real ``LaneExecutor`` and drives a
 
 Today an edge talks to one ground at a time. Once an edge can hold several
 ground connections, a test attaches it to both links the same way.
+
+Settings mirror the product unless a test overrides them: heartbeats every
+``fp.HEARTBEAT_INTERVAL_S`` (1 s), a 3 s link-loss watchdog, reconnect backoff
+from 1 s up to the 2 s cap the fleet edge uses, telemetry at the executor's
+default rate, and the product's own emergency wiring
+(``edge_device._wire_emergency_callback``). Scenarios that must be quick pass
+``FAST`` (or their own values) explicitly.
 """
 
 from __future__ import annotations
 
 import contextlib
+import inspect
 import threading
 import time
 from collections import deque
@@ -31,15 +39,34 @@ from typing import Any
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.fake import FakeDrone, FakeDroneConfig
 from flightrisk.drone.lane_executor import LaneExecutor
-from flightrisk.drone.safety import SafetyEnvelope
+from flightrisk.drone.safety import DEFAULT_LINK_LOSS_LAND_S, SafetyEnvelope
 from flightrisk.edge import EdgeRunner
-from flightrisk.edge_device import DroneFrameSource, run_edge_device
+from flightrisk.edge_device import (
+    _FLEET_RECONNECT_MAX_DELAY_S,
+    DroneFrameSource,
+    _wire_emergency_callback,
+    run_edge_device,
+)
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import EdgeTransportSync, GroundTransportSync, _call_on_loop
 from tests.support.netsim import LOOPBACK, NetLink, NetSim
 
 WAIT_S = 20.0
 ALT_SLOTS_CM = (100, 160)
+
+#: The product's settings (see ``flightrisk/fleet_protocol/constants.py`` and ``edge_device``).
+PRODUCT_LINK_LOSS_LAND_S = DEFAULT_LINK_LOSS_LAND_S
+PRODUCT_RECONNECT_BASE_DELAY_S = inspect.signature(EdgeTransportSync).parameters["base_delay"].default
+PRODUCT_RECONNECT_MAX_DELAY_S = _FLEET_RECONNECT_MAX_DELAY_S
+PRODUCT_FRAME_INTERVAL_S = 0.2  # DroneFrameSource rate of the fake edge
+
+#: Quick settings for scenarios that cannot wait for the product's timings.
+FAST = {
+    "link_loss_land_s": 1.0,
+    "heartbeat_interval_s": 0.5,
+    "reconnect_base_delay_s": 0.2,
+    "reconnect_max_delay_s": 1.0,
+}
 
 
 def wait_for(predicate: Callable[[], Any], timeout: float = WAIT_S, interval: float = 0.02) -> Any:
@@ -55,7 +82,7 @@ def wait_for(predicate: Callable[[], Any], timeout: float = WAIT_S, interval: fl
 class GroundNode:
     """A ground station's transport: accepts edges, heartbeats them, records what they send."""
 
-    def __init__(self, name: str, token: str, heartbeat_interval_s: float = 0.5):
+    def __init__(self, name: str, token: str, heartbeat_interval_s: float = fp.HEARTBEAT_INTERVAL_S):
         self.name = name
         self.controls: deque[tuple[float, dict[str, Any]]] = deque(maxlen=5000)
         self.transport = GroundTransportSync(
@@ -106,6 +133,9 @@ class _SwitchableTransport:
 
     ``run_edge_device`` and the executor's sender keep one reference for the
     whole flight, so switching ground nodes swaps the transport behind them.
+    A transport whose event loop has stopped (one that is being replaced or
+    closed) counts as disconnected: sends report False or do nothing and
+    ``recv`` returns None, as they do on a dropped connection, and never raise.
     """
 
     def __init__(self, owner: FleetEdge):
@@ -126,50 +156,82 @@ class _SwitchableTransport:
     @on_emergency_land.setter
     def on_emergency_land(self, callback) -> None:
         self._emergency_cb = callback
-        self._t.on_emergency_land = self._counting(callback)
+        self._t.on_emergency_land = self.wrap_emergency(callback)
 
-    def _counting(self, callback):
+    def wrap_emergency(self, callback):
+        """The callback to install on a transport: it notes the message, then runs *callback*."""
         if callback is None:
             return None
 
         def run(msg: dict[str, Any]) -> None:
-            self._owner.emergencies.append(time.monotonic())
+            self._owner.note_emergency()
             callback(msg)
         return run
 
+    def _running(self) -> EdgeTransportSync | None:
+        transport = self._owner.transport
+        return transport if transport is not None and transport._bridge.is_running else None
+
     def send_detections(self, msg, timeout: float = 30.0) -> None:
-        self._t.send_detections(msg, timeout=timeout)
+        transport = self._running()
+        if transport is None:
+            return
+        try:
+            transport.send_detections(msg, timeout=timeout)
+        except RuntimeError:  # the loop stopped between the check and the call
+            return
 
     def recv(self, recv_timeout: float | None = None, timeout: float = 30.0):
-        return self._t.recv(recv_timeout=recv_timeout, timeout=timeout)
+        transport = self._running()
+        if transport is None:
+            time.sleep(min(recv_timeout or 0.01, 0.05))  # do not spin while there is no connection
+            return None
+        try:
+            return transport.recv(recv_timeout=recv_timeout, timeout=timeout)
+        except RuntimeError:
+            return None
 
     def send(self, message: dict[str, Any], timeout: float = 30.0) -> bool:
-        return self._t.send(message, timeout=timeout)
+        transport = self._running()
+        if transport is None:
+            return False
+        try:
+            return transport.send(message, timeout=timeout)
+        except RuntimeError:
+            return False
 
     def disconnect(self, timeout: float = 30.0) -> None:
-        self._t.disconnect(timeout=timeout)
+        self._owner.transport.disconnect(timeout=timeout)
 
 
 class FleetEdge:
     """One fake edge: ``FakeDrone``, ``LaneExecutor`` with a real watchdog, real transport."""
 
-    def __init__(self, drone_id: str, alt_slot_cm: float, token: str, *, link_loss_land_s: float = 3.0,
-                 drone_config: FakeDroneConfig | None = None, frame_interval_s: float = 0.1):
+    def __init__(self, drone_id: str, alt_slot_cm: float, token: str, *,
+                 link_loss_land_s: float = PRODUCT_LINK_LOSS_LAND_S,
+                 reconnect_base_delay_s: float = PRODUCT_RECONNECT_BASE_DELAY_S,
+                 reconnect_max_delay_s: float = PRODUCT_RECONNECT_MAX_DELAY_S,
+                 drone_config: FakeDroneConfig | None = None,
+                 frame_interval_s: float = PRODUCT_FRAME_INTERVAL_S,
+                 telemetry_interval_s: float = fp.TELEMETRY_INTERVAL_S):
         self.drone_id = drone_id
         self.token = token
         self.log = StructuredLogger(component=f"harness-edge-{drone_id}")
         self.runner = EdgeRunner(detector=None)
         self.drone = FakeDrone(name=drone_id, config=drone_config)
         self.envelope = SafetyEnvelope(alt_slot_cm=alt_slot_cm, link_loss_land_s=link_loss_land_s)
+        #: When each ``emergency_land_all`` reached this edge, and how many drone calls existed by then.
         self.emergencies: list[float] = []
+        self.emergency_call_marks: list[int] = []
         self.transport: EdgeTransportSync | None = None
         self.current_url: str | None = None
         self.proxy = _SwitchableTransport(self)
         self.flight = LaneExecutor(self.drone, self.envelope, drone_id, send=self.proxy.send, logger=self.log,
-                                  telemetry_interval_s=0.2)
+                                  telemetry_interval_s=telemetry_interval_s)
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"harness-edge-{drone_id}")
         self._frame_interval_s = frame_interval_s
+        self._reconnect = (reconnect_base_delay_s, reconnect_max_delay_s)
         self._closed = False
 
     @property
@@ -187,10 +249,27 @@ class FleetEdge:
     def landings(self) -> int:
         return sum(1 for call in list(self.drone.calls) if call[0] == "land")
 
+    def note_emergency(self) -> None:
+        """Record that ``emergency_land_all`` arrived; called just before the product callback lands."""
+        self.emergency_call_marks.append(len(self.drone.calls))
+        self.emergencies.append(time.monotonic())
+
+    def landed_after_emergency(self, index: int) -> bool:
+        """True when the drone was told to land after the *index*-th ``emergency_land_all`` arrived."""
+        mark = self.emergency_call_marks[index]
+        return any(call[0] == "land" for call in list(self.drone.calls)[mark:])
+
+    @property
+    def thread_alive(self) -> bool:
+        return self.thread.is_alive()
+
     def _new_transport(self, url: str) -> EdgeTransportSync:
-        # Same retry policy as a fleet edge: retry forever, 2 s ceiling.
-        return EdgeTransportSync(ws_url=url, runner=self.runner, token=self.token,
-                                 max_retries=None, base_delay=0.2, max_delay=1.0)
+        base, cap = self._reconnect
+        transport = EdgeTransportSync(ws_url=url, runner=self.runner, token=self.token,
+                                      max_retries=None, base_delay=base, max_delay=cap)
+        # A switched-to transport must land on emergency from its first message.
+        transport.on_emergency_land = self.proxy.wrap_emergency(self.proxy.on_emergency_land)
+        return transport
 
     def _run(self) -> None:
         run_edge_device(
@@ -201,29 +280,45 @@ class FleetEdge:
     def start(self, url: str) -> None:
         assert self.drone.connect()
         self.flight.start()
-        self._attach(url)
+        self.transport = self._new_transport(url)  # the frame thread is not running yet
+        self.current_url = url
+        _wire_emergency_callback(self.proxy, self.flight)  # the product's own wiring
+        self._connect(self.transport, url, give_up_s=WAIT_S * 2)
         self.thread.start()
 
-    def _attach(self, url: str, attempts: int = 40) -> None:
-        self.transport = self._new_transport(url)
-        self.current_url = url
+    def _connect(self, transport: EdgeTransportSync, url: str, give_up_s: float) -> None:
+        """Connect, retrying while the proxy is partitioned or severed. Never touches the current transport."""
+        deadline = time.monotonic() + give_up_s
         last: Exception | None = None
-        for _ in range(attempts):
+        while time.monotonic() < deadline:
             try:
-                self.transport.connect(timeout=WAIT_S)
-                break
+                transport.connect(timeout=WAIT_S)
+                return
             except Exception as exc:  # noqa: BLE001 - the proxy may be partitioned or severed right now
                 last = exc
-                self.transport.disconnect(timeout=WAIT_S)
+                with contextlib.suppress(Exception):
+                    transport.disconnect(timeout=WAIT_S)
                 time.sleep(0.25)
-        else:
-            raise RuntimeError(f"{self.drone_id} could not connect to {url}: {last!r}")
-        self.proxy.on_emergency_land = lambda msg: self.flight.land_now("emergency_land_all")
+        raise RuntimeError(f"{self.drone_id} could not connect to {url}: {last!r}")
 
-    def switch_to(self, url: str) -> None:
-        """Drop the current ground connection and connect to *url*, keeping the flight state."""
+    def switch_to(self, url: str, give_up_s: float = 120.0) -> None:
+        """Connect to *url* and then drop the current ground connection, keeping the flight state.
+
+        The new transport is only made current once it is connected, so while
+        the target is unreachable the edge keeps its old connection and its
+        frame thread never sees a half-open transport.
+        """
         old = self.transport
-        self._attach(url)
+        new = self._new_transport(url)
+        try:
+            self._connect(new, url, give_up_s)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                new.disconnect(timeout=WAIT_S)
+            raise
+        self.transport = new
+        self.current_url = url
+        _wire_emergency_callback(self.proxy, self.flight)  # the product's wiring, on the new transport
         if old is not None:
             old.disconnect(timeout=WAIT_S)
 
@@ -248,14 +343,18 @@ class TwoNodeHarness:
 
     GROUNDS = ("a", "b")
 
-    def __init__(self, seed: int = 0, *, edges: int = 2, link_loss_land_s: float = 3.0,
-                 heartbeat_interval_s: float = 0.5, token: str = "harness-token"):
+    def __init__(self, seed: int = 0, *, edges: int = 2, link_loss_land_s: float = PRODUCT_LINK_LOSS_LAND_S,
+                 heartbeat_interval_s: float = fp.HEARTBEAT_INTERVAL_S,
+                 reconnect_base_delay_s: float = PRODUCT_RECONNECT_BASE_DELAY_S,
+                 reconnect_max_delay_s: float = PRODUCT_RECONNECT_MAX_DELAY_S, token: str = "harness-token"):
         self.sim = NetSim(seed=seed)
         self.token = token
         self.grounds = {name: GroundNode(name, token, heartbeat_interval_s) for name in self.GROUNDS}
         self.edges = {
             f"drone-{k}": FleetEdge(f"drone-{k}", ALT_SLOTS_CM[(k - 1) % len(ALT_SLOTS_CM)], token,
-                                    link_loss_land_s=link_loss_land_s)
+                                    link_loss_land_s=link_loss_land_s,
+                                    reconnect_base_delay_s=reconnect_base_delay_s,
+                                    reconnect_max_delay_s=reconnect_max_delay_s)
             for k in range(1, edges + 1)
         }
         self._links: dict[tuple[str, str], NetLink] = {}
@@ -274,13 +373,18 @@ class TwoNodeHarness:
         return list(self._links.values())
 
     def start(self, attach_to: str = "a") -> TwoNodeHarness:
+        """Start everything. If any part fails to start, what already started is stopped before raising."""
         self._started = True
-        self.sim.start()
-        for node in self.grounds.values():
-            node.start()
-        for drone_id, edge in self.edges.items():
-            edge.start(self.link(drone_id, attach_to).url)
-            self.attached[drone_id] = attach_to
+        try:
+            self.sim.start()
+            for node in self.grounds.values():
+                node.start()
+            for drone_id, edge in self.edges.items():
+                edge.start(self.link(drone_id, attach_to).url)
+                self.attached[drone_id] = attach_to
+        except BaseException:
+            self.stop()
+            raise
         return self
 
     def switch_ground(self, drone_id: str, ground: str) -> None:

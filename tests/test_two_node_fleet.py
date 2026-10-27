@@ -8,7 +8,7 @@ main guarantees today; the leader and handover tests build on the same harness.
 
 import pytest
 
-from tests.support.fleet_harness import TwoNodeHarness, wait_for
+from tests.support.fleet_harness import FAST, TwoNodeHarness, wait_for
 from tests.support.leaks import ErrorWatch, snapshot
 from tests.support.netsim import BOTH, DOWN, UP
 
@@ -91,8 +91,9 @@ def test_an_edge_can_move_to_the_other_ground_node(two_node_fleet):
 def test_a_fault_free_run_and_teardown_leave_nothing_behind():
     before = snapshot()
     with ErrorWatch() as watch:
-        harness = TwoNodeHarness(seed=5, link_loss_land_s=1.0).start()
+        harness = TwoNodeHarness(seed=5, **FAST)
         try:
+            harness.start()
             assert harness.wait_connected() and harness.takeoff_all()
             harness.link("drone-1", "a").set_faults(BOTH, latency_s=0.02, jitter_s=0.02)
             harness.link("drone-2", "a").flap(0.2, 0.2, cycles=2)

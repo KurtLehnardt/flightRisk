@@ -323,7 +323,9 @@ class NetLink:
         except OSError:
             end = _Close(abort=True)  # a reset or another socket error
         finally:
-            if not conn.closed:
+            if conn.closed:  # severed or stopped: nothing more to pass on
+                self._conns.pop(conn.cid, None)
+            else:
                 self._submit_close(conn, direction, end)
 
     def _submit_close(self, conn: _Conn, direction: str, end: _Close) -> None:
