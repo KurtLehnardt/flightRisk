@@ -1789,6 +1789,7 @@ class GroundTransport(GroundV2Mixin):
             obs_comm.ground_broadcast(message, 0, 0)
             return 0
         sends = []
+        sent_bytes = 0
         for ws in clients:
             try:
                 payload = self._payload_for(ws, message)
@@ -1797,12 +1798,13 @@ class GroundTransport(GroundV2Mixin):
                 continue
             if payload is not None:
                 sends.append(self._send_json(ws, payload))
+                sent_bytes += len(payload)
         if not sends:
             obs_comm.ground_broadcast(message, 0, len(clients))
             return 0
         results = await asyncio.gather(*sends, return_exceptions=True)
         reached = sum(1 for result in results if result is True)
-        obs_comm.ground_broadcast(message, reached, len(clients), len(payload))
+        obs_comm.ground_broadcast(message, reached, len(clients), sent_bytes)
         return reached
 
     def _validation_proto(self, message: dict[str, Any]) -> int:
