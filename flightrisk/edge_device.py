@@ -13,6 +13,14 @@ control messages off the same connection and applies them:
       updates the target the ground station is looking for. The edge does
       not score against a target today, so this is simply retained (stashed
       on the runner) and logged; it never raises.
+    * ``{"type": "set_detection_profile", "profile": ..., "cmd_id": ...}``
+      switches the detection profile (model and detection settings) through
+      the runner's ``ProfileSwitcher`` (``flightrisk/edge_profiles.py``) and
+      is answered with an ``ack`` or ``nack``. It is refused while the drone
+      flies; it never touches the flight. ``--detection-profile`` (or
+      ``FLIGHTRISK_DETECTION_PROFILE``) picks the startup profile; without
+      one the edge runs the ``default`` profile, its detector from before
+      profiles existed.
 
 With ``--source tello`` (a real Tello) or ``--source fake`` (an in-process
 simulated Tello) the edge also flies. A ``LaneExecutor`` handles the fleet
@@ -234,6 +242,13 @@ def _handle_control(
             enabled = bool(msg.get("enabled"))
             runner.set_stream_video(enabled)
             log.info("edge_control_stream_video", enabled=enabled)
+        elif mtype == fp.SET_DETECTION_PROFILE:
+            switcher = getattr(runner, "profile_switcher", None)
+            if switcher is None:
+                log.warning("edge_control_profile_unsupported", type=mtype)
+            else:
+                # Never raises, and loads the model on its own thread.
+                switcher.handle(msg)
         elif mtype == "set_target":
             # The edge doesn't score against a target today; just retain the
             # embeddings (stashed on the runner) for future use and log it.
@@ -592,6 +607,37 @@ def _envelope_pose_provider(envelope: SafetyEnvelope) -> Callable[[], dict[str, 
     return _pose
 
 
+def _startup_profile_name(args: argparse.Namespace) -> str:
+    """``--detection-profile``, else ``FLIGHTRISK_DETECTION_PROFILE``, else empty (the default profile)."""
+    explicit = getattr(args, "detection_profile", None)
+    if explicit:
+        return str(explicit)
+    from flightrisk.config import get_config
+
+    return str(get_config().vision.detection_profile or "")
+
+
+def _with_profile_status(send: Callable[[dict[str, Any]], Any], runner: EdgeRunner) -> Callable[[dict[str, Any]], Any]:
+    """Wrap the executor's sender so telemetry also reports the active detection profile.
+
+    Only telemetry changes, and only by added fields, which every ground
+    version accepts (unknown fields on an edge link are allowed).
+    """
+
+    def _send(msg: dict[str, Any]) -> Any:
+        switcher = getattr(runner, "profile_switcher", None)
+        if switcher is not None and isinstance(msg, dict) and msg.get("type") == fp.TELEMETRY:
+            try:
+                fields = switcher.status_fields()
+            except Exception:  # noqa: BLE001 - telemetry goes out regardless
+                fields = {}
+            if fields:
+                msg = {**msg, **fields}
+        return send(msg)
+
+    return _send
+
+
 def _build_runner(
     args: argparse.Namespace,
     log: StructuredLogger,
@@ -602,6 +648,9 @@ def _build_runner(
     A flying source tags every detection message with ``args.drone_id`` and
     the pose from ``pose_provider``. Face recognition is constructed only
     when the edge is not appearance-only (see ``_resolve_appearance_only``).
+    The detector comes from the startup detection profile (see
+    ``_startup_profile_name``); the runner's ``profile_switcher`` changes it
+    later on the ground's request.
     """
     # Decide first, so a bad FLIGHTRISK_APPEARANCE_ONLY fails before any
     # model is loaded.
@@ -609,9 +658,10 @@ def _build_runner(
 
     # Lazy imports: these pull in ultralytics / torch / insightface, which are
     # heavy and unnecessary for importing this module or unit-testing the loop.
-    from flightrisk.vision.detector import PersonDetector
+    from flightrisk.edge_profiles import ProfileSwitcher
 
-    detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
+    switcher = ProfileSwitcher(None, drone_id=getattr(args, "drone_id", None) or "drone-1", logger=log)
+    detector, profile_name = switcher.startup_detector(_startup_profile_name(args))
 
     reid = None
     try:
@@ -631,7 +681,7 @@ def _build_runner(
             log.warning("insightface_unavailable", error=str(e))
 
     flying = args.source in _FLIGHT_SOURCES
-    return EdgeRunner(
+    runner = EdgeRunner(
         detector=detector,
         reid=reid,
         face=face,
@@ -640,6 +690,20 @@ def _build_runner(
         pose_provider=pose_provider if flying else None,
         appearance_only=appearance_only,
     )
+    runner.detection_profile = profile_name
+    switcher.bind_runner(runner)
+    runner.profile_switcher = switcher
+    return runner
+
+
+def _bind_profile_switcher(runner: EdgeRunner, transport: Any, log: StructuredLogger, flight: Any = None) -> None:
+    """Give the runner's profile switcher its reply sender and, on a flying edge, the flight state."""
+    switcher = getattr(runner, "profile_switcher", None)
+    if switcher is None:
+        return
+    switcher.bind_sender(_make_sender(transport, log))
+    if flight is not None:
+        switcher.bind_safety(flight.is_active)
 
 
 def _parse_drone_id(raw: str) -> str:
@@ -727,6 +791,14 @@ def _build_parser() -> argparse.ArgumentParser:
              "not resolvable at search altitude)",
     )
     parser.set_defaults(appearance_only=None)
+    from flightrisk.vision.profiles import REGISTRY
+
+    parser.add_argument(
+        "--detection-profile", choices=REGISTRY.names(), default=None,
+        help="Detection profile to start with (default: $FLIGHTRISK_DETECTION_PROFILE, else 'default', "
+             "the detector used before profiles existed). The ground can switch it while the drone is "
+             "on the ground; see docs/detection-profiles.md",
+    )
     return parser
 
 
@@ -784,10 +856,13 @@ def _run_flight_edge(
 
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
-    flight = LaneExecutor(drone, envelope, args.drone_id, send=_make_sender(transport, log), logger=log)
+    flight = LaneExecutor(
+        drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
+    )
     bind_executor = getattr(transport, "bind_executor", None)
     if callable(bind_executor):
         bind_executor(flight)
+    _bind_profile_switcher(runner, transport, log, flight)
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -899,6 +974,7 @@ def main(argv: list[str] | None = None) -> None:
 
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
+    _bind_profile_switcher(runner, transport, log)
 
     log.info("edge_connect", ws_url=args.ws_url, authenticated=token is not None)
     transport.connect()

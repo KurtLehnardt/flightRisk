@@ -6,12 +6,15 @@ detection messages over WebSocket to the ground station.
 """
 import base64
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 import cv2
 import numpy as np
+
+from flightrisk.fleet_protocol import is_profile_name
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,11 @@ class DetectionMessage:
     # peers that predate it. Lets the ground detect embeddings from a
     # different model, whose cosine similarity is meaningless.
     face_model: str | None = None
+    # Name of the detection profile (flightrisk/vision/profiles.py) that ran
+    # on this frame. Optional: omitted from the wire when unknown, and
+    # ignored by grounds that predate profiles. Its presence tells the
+    # ground that this edge can switch profiles.
+    detection_profile: str | None = None
 
 
 # DetectionMessage fleet fields carried on the wire when set.
@@ -92,6 +100,32 @@ class EdgeRunner:
         # crops/embeddings are shipped -- no full-frame thumbnail -- to keep
         # bandwidth and battery use down. Flip on for live video streaming.
         self.stream_video = stream_video
+        # Name of the detection profile the detector was built from, or
+        # None when the caller did not say (an edge built before profiles).
+        # swap_detector() replaces detector and name together.
+        self.detection_profile: str | None = None
+        # The edge's ProfileSwitcher (flightrisk/edge_profiles.py), which
+        # handles set_detection_profile; None when profiles are not wired.
+        self.profile_switcher: Any = None
+        self._detector_lock = threading.Lock()
+
+    @property
+    def detector(self) -> Any:
+        """The detector the next frame will use."""
+        with self._detector_lock:
+            return self._detector
+
+    def swap_detector(self, detector: Any, profile: str | None) -> Any:
+        """Replace the detector and its profile name in one step; returns the old detector.
+
+        A frame being processed keeps the detector it started with; the next
+        frame uses the new one. The caller builds *detector* first, so a
+        model that fails to load never replaces a working one.
+        """
+        with self._detector_lock:
+            old, self._detector = self._detector, detector
+            self.detection_profile = profile
+        return old
 
     def set_stream_video(self, enabled: bool) -> None:
         """Enable or disable full-frame thumbnail streaming at runtime."""
@@ -103,12 +137,17 @@ class EdgeRunner:
         Returns a DetectionMessage with detections, embeddings, and crops.
         """
         self._frame_id += 1
+        # Detector and profile name are read together, so a profile switch
+        # never labels a frame with the wrong profile.
+        with self._detector_lock:
+            detector, profile = self._detector, self.detection_profile
         msg = DetectionMessage(
             timestamp=time.time(),
             frame_id=self._frame_id,
             frame_width=frame.shape[1],
             frame_height=frame.shape[0],
             drone_id=self.drone_id,
+            detection_profile=profile,
         )
         if self._face is not None and not self.appearance_only:
             name = getattr(self._face, "model_name", None)
@@ -124,10 +163,10 @@ class EdgeRunner:
             msg.thumbnail_jpeg = buf.tobytes()
 
         # Run YOLO
-        if self._detector is None:
+        if detector is None:
             return msg
 
-        raw_detections = self._detector.detect(frame)
+        raw_detections = detector.detect(frame)
 
         for det in raw_detections:
             bbox = det["bbox"]  # x1, y1, x2, y2
@@ -217,6 +256,8 @@ class EdgeRunner:
             data["drone_id"] = msg.drone_id
         if msg.face_model is not None and not self.appearance_only:
             data["face_model"] = msg.face_model
+        if msg.detection_profile is not None:
+            data["detection_profile"] = msg.detection_profile
         for key in FLEET_POSE_FIELDS:
             value = getattr(msg, key)
             if value is not None:
@@ -239,6 +280,7 @@ class EdgeRunner:
             lat=data.get("lat"),
             lon=data.get("lon"),
             face_model=data.get("face_model") if isinstance(data.get("face_model"), str) else None,
+            detection_profile=data.get("detection_profile") if is_profile_name(data.get("detection_profile")) else None,
         )
         for d in data.get("detections", []):
             det = Detection(

@@ -69,6 +69,9 @@ class VisionConfig:
     detector_tiled: bool = False
     detector_tile_size: int = 640
     detector_tile_overlap: float = 0.2
+    # Detection profile an edge starts with (flightrisk/vision/profiles.py).
+    # Empty means the "default" profile, which is today's edge detector.
+    detection_profile: str = ""
 
     # -- Configurable signal toggles and weights --
     # Built-in signals default to enabled; new signals default to enabled
@@ -191,6 +194,7 @@ class AmberConfig:
             "FLIGHTRISK_DETECTOR_TILED": ("vision", "detector_tiled", _parse_bool),
             "FLIGHTRISK_DETECTOR_TILE_SIZE": ("vision", "detector_tile_size", int),
             "FLIGHTRISK_DETECTOR_TILE_OVERLAP": ("vision", "detector_tile_overlap", float),
+            "FLIGHTRISK_DETECTION_PROFILE": ("vision", "detection_profile", str),
             "FLIGHTRISK_SAVE_CAPTURES": ("dashboard", "save_captures", _parse_bool),
             "FLIGHTRISK_REID_THRESHOLD": ("vision", "reid_threshold", float),
             "FLIGHTRISK_SCORER_THRESHOLD": ("vision", "scorer_match_threshold", float),
