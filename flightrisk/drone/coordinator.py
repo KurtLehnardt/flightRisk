@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import statistics
 import threading
 import time
@@ -69,6 +70,21 @@ SYNC_ROUNDS = 8
 
 DEFAULT_ZONE_GAP_CM = 100
 """Empty corridor between neighbouring zones."""
+
+PATTERN_PARALLEL = "parallel"
+PATTERN_EXPANDING_SQUARES = "expanding-squares"
+PATTERNS = (PATTERN_PARALLEL, PATTERN_EXPANDING_SQUARES)
+"""Search patterns. ``parallel`` (the default) sweeps strips; ``expanding-squares`` flies, from each
+drone's take-off point, a closed square of ``square_step_cm``, then one of twice that, and so on for
+``square_count`` squares (forward, right, back, left each), and ends back at the take-off point."""
+
+PATTERN_ENV = "FLIGHTRISK_FLEET_PATTERN"
+SQUARE_STEP_ENV = "FLIGHTRISK_FLEET_SQUARE_STEP_CM"
+SQUARE_COUNT_ENV = "FLIGHTRISK_FLEET_SQUARE_COUNT"
+ON_COMPLETE_ENV = "FLIGHTRISK_FLEET_ON_COMPLETE"
+DEFAULT_SQUARE_STEP_CM = 50
+DEFAULT_SQUARE_COUNT = 3
+ON_COMPLETE_ACTIONS = ("hover", "land")
 
 DEFAULT_ALT_SLOTS_CM = (100, 130)
 """Altitude slots given to zones in turn when no per-drone slot is set.
@@ -463,9 +479,38 @@ class FleetCoordinator:
         retask_wait_s: float = RETASK_WAIT_S,
         alt_slot_of: Callable[[str, int], int] | None = None,
         retask_excluded: Callable[[str], bool] | None = None,
+        pattern: str | None = None,
+        square_step_cm: int | None = None,
+        square_count: int | None = None,
+        on_complete: str | None = None,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
+        # Pattern settings: the argument, else the environment, else the defaults (strip sweep, hover).
+        pattern = pattern or os.environ.get(PATTERN_ENV, "").strip() or PATTERN_PARALLEL
+        if pattern not in PATTERNS:
+            raise ValueError(f"pattern must be one of {', '.join(PATTERNS)}, got {pattern!r}")
+        step_raw = square_step_cm if square_step_cm is not None else os.environ.get(SQUARE_STEP_ENV, "").strip() or DEFAULT_SQUARE_STEP_CM
+        count_raw = square_count if square_count is not None else os.environ.get(SQUARE_COUNT_ENV, "").strip() or DEFAULT_SQUARE_COUNT
+        try:
+            square_step_cm, square_count = int(step_raw), int(count_raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"square step and count must be whole numbers, got {step_raw!r} and {count_raw!r}") from None
+        if pattern == PATTERN_EXPANDING_SQUARES:
+            if not TELLO_MIN_MOVE_CM <= square_step_cm <= TELLO_MAX_MOVE_CM:
+                raise ValueError(f"square_step_cm must be {TELLO_MIN_MOVE_CM}-{TELLO_MAX_MOVE_CM} cm, got {square_step_cm}")
+            if square_count < 1 or square_step_cm * square_count > TELLO_MAX_MOVE_CM:
+                raise ValueError(
+                    f"square_count must be at least 1 and the largest square ({square_step_cm * square_count} cm) "
+                    f"at most {TELLO_MAX_MOVE_CM} cm"
+                )
+        on_complete = on_complete or os.environ.get(ON_COMPLETE_ENV, "").strip() or None
+        if on_complete is not None and on_complete not in ON_COMPLETE_ACTIONS:
+            raise ValueError(f"on_complete must be one of {', '.join(ON_COMPLETE_ACTIONS)}, got {on_complete!r}")
+        self._pattern = pattern
+        self._square_step_cm = square_step_cm
+        self._square_count = square_count
+        self._on_complete = on_complete
         if not alt_slots_cm:
             raise ValueError("alt_slots_cm must contain at least one altitude")
         if isinstance(area_cm, (int, float)):
@@ -659,16 +704,36 @@ class FleetCoordinator:
                 f"area width {self._width_cm} cm is too narrow for {n} zones with "
                 f"{self._zone_gap_cm} cm gaps"
             )
-        zone_waypoints = split_parallel_track_zones(
-            n, width_cm=zone_w * n, depth_cm=self._depth_cm, strip_width_cm=self._strip_cm
-        )
-        # Zone 0 carries no sideways offset, so its length is the length of
-        # one zone's pattern; later zones carry an offset prefix to drop.
-        pattern_len = len(zone_waypoints[0])
+        square_lanes: tuple[dict, ...] | None = None
+        if self._pattern == PATTERN_EXPANDING_SQUARES:
+            largest = self._square_step_cm * self._square_count
+            if zone_w < largest or self._depth_cm < largest:
+                raise ValueError(
+                    f"the largest square is {largest} cm, so each zone must be at least {largest} cm wide and deep "
+                    f"(zone width {zone_w} cm, area depth {self._depth_cm} cm)"
+                )
+            # From the take-off point: a closed square of each size, forward, right, back, left.
+            square_lanes = tuple(
+                _lane(direction, k * self._square_step_cm)
+                for k in range(1, self._square_count + 1)
+                for direction in ("forward", "right", "back", "left")
+            )
+            zone_waypoints = None
+            pattern_len = 0
+        else:
+            zone_waypoints = split_parallel_track_zones(
+                n, width_cm=zone_w * n, depth_cm=self._depth_cm, strip_width_cm=self._strip_cm
+            )
+            # Zone 0 carries no sideways offset, so its length is the length of
+            # one zone's pattern; later zones carry an offset prefix to drop.
+            pattern_len = len(zone_waypoints[0])
         zones = []
         for i, drone_id in enumerate(drone_ids):
-            waypoints = zone_waypoints[i][len(zone_waypoints[i]) - pattern_len:]
-            lanes = tuple(_lane(wp.direction, wp.distance_cm) for wp in waypoints)
+            if square_lanes is not None:
+                lanes = tuple(dict(lane) for lane in square_lanes)
+            else:
+                waypoints = zone_waypoints[i][len(zone_waypoints[i]) - pattern_len:]
+                lanes = tuple(_lane(wp.direction, wp.distance_cm) for wp in waypoints)
             zones.append(ZoneAssignment(
                 drone_id=drone_id,
                 x_cm=i * (zone_w + self._zone_gap_cm),
@@ -724,17 +789,20 @@ class FleetCoordinator:
         state.ack_battery = None
         state.ack_lanes_total = None
 
-    @staticmethod
-    def _assign_message(drone_id: str, state: _DroneState) -> dict:
+    def _assign_message(self, drone_id: str, state: _DroneState) -> dict:
         zone = state.zone
         assert zone is not None
-        return {
+        msg = {
             "type": "assign_lanes",
             "drone_id": drone_id,
             "alt_cm": zone.alt_cm,
             "lanes": [dict(lane) for lane in state.lanes],
             "zone": zone.zone_dict(),
         }
+        if self._on_complete is not None:
+            # What the drone does after its last lane: land (or hover, then land). A v1 edge ignores it.
+            msg["on_complete"] = self._on_complete
+        return msg
 
     @staticmethod
     def _origin(state: _DroneState) -> tuple[int, int]:

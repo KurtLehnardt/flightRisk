@@ -92,7 +92,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, Callable, Iterable, TextIO
+from typing import Any, Callable, Iterable, Mapping, TextIO
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import (
@@ -138,6 +138,8 @@ _TRUE_VALUES = ("1", "true", "yes", "on")
 _FALSE_VALUES = ("0", "false", "no", "off")
 # Environment fallbacks for --tello-local-ip and --tello-ifindex.
 _TELLO_LOCAL_IP_ENV_VAR = "FLIGHTRISK_TELLO_LOCAL_IP"
+_FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
+_NO_SLOT_CLIMB_ENV_VAR = "FLIGHTRISK_NO_SLOT_CLIMB"
 _TELLO_IFINDEX_ENV_VAR = "FLIGHTRISK_TELLO_IFINDEX"
 # Sources that fly a drone (and therefore run the lane executor).
 _FLIGHT_SOURCES = ("tello", "fake")
@@ -204,13 +206,27 @@ class DroneFrameSource:
     stopping, because losing video must not end the edge loop while the
     drone is flying. Iteration stops only when ``stop_event`` is set. The
     drone itself is disconnected by ``main()``, so ``release()`` does nothing.
+
+    ``frame_stride`` N > 1 hands on only every Nth frame the drone returns and drops the others
+    before any detection work, so a stride of 2 processes every other frame. It lowers the CPU
+    use only when the detector is faster than the frame rate it then sees.
     """
 
-    def __init__(self, drone: Any, stop_event: threading.Event | None = None, min_interval_s: float = 1 / 30):
+    def __init__(
+        self,
+        drone: Any,
+        stop_event: threading.Event | None = None,
+        min_interval_s: float = 1 / 30,
+        frame_stride: int = 1,
+    ):
+        if frame_stride < 1:
+            raise ValueError("frame_stride must be at least 1")
         self._drone = drone
         self._stop = stop_event if stop_event is not None else threading.Event()
         self._min_interval_s = min_interval_s
         self._next_at = 0.0
+        self._frame_stride = frame_stride
+        self._frames_seen = 0
 
     def __iter__(self) -> "DroneFrameSource":
         return self
@@ -223,7 +239,9 @@ class DroneFrameSource:
             self._next_at = time.monotonic() + self._min_interval_s
             frame = self._drone.get_frame()
             if frame is not None:
-                return frame
+                self._frames_seen += 1
+                if self._frames_seen % self._frame_stride == 0:
+                    return frame
         raise StopIteration
 
     def release(self) -> None:
@@ -805,6 +823,27 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _slot_climb_disabled(args: argparse.Namespace, env: Mapping[str, str] | None = None) -> bool:
+    """True if the operator turned the altitude-slot climb off (``--no-slot-climb`` or ``FLIGHTRISK_NO_SLOT_CLIMB=1``)."""
+    env = os.environ if env is None else env
+    return bool(getattr(args, "no_slot_climb", False)) or (env.get(_NO_SLOT_CLIMB_ENV_VAR) or "").strip() == "1"
+
+
+def _resolve_frame_stride(flag: int | None, env: Mapping[str, str] | None = None) -> int:
+    """The frame stride: the flag, else ``FLIGHTRISK_EDGE_FRAME_STRIDE``, else 1. Raises ``SystemExit`` if below 1."""
+    env = os.environ if env is None else env
+    raw = flag if flag is not None else (env.get(_FRAME_STRIDE_ENV_VAR) or "").strip() or None
+    if raw is None:
+        return 1
+    try:
+        stride = int(raw)
+    except ValueError:
+        raise SystemExit(f"edge_device: {_FRAME_STRIDE_ENV_VAR} must be a whole number, got {raw!r}") from None
+    if stride < 1:
+        raise SystemExit(f"edge_device: the frame stride must be at least 1, got {stride}")
+    return stride
+
+
 def _parse_alt_slot(raw: str) -> float:
     """Parse ``--alt-slot`` as centimetres.
 
@@ -865,6 +904,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tello-ifindex", type=str, default=None,
         help="Windows only, with --tello-local-ip: also pin outgoing Tello commands to this interface "
              "index (InterfaceIndex in Get-NetIPAddress; default: $" + _TELLO_IFINDEX_ENV_VAR + ")",
+    )
+    parser.add_argument(
+        "--no-slot-climb", action="store_true",
+        help="Testing only: do not move to the altitude slot after takeoff; fly the lanes at the height the "
+             "drone hovers at (about 80 cm for a Tello). Use it when the Tello's height sensors disagree and the "
+             "edge lands with height_unsettled. Also set by $" + _NO_SLOT_CLIMB_ENV_VAR + "=1. The geofence and the "
+             "ceiling checks are unchanged",
+    )
+    parser.add_argument(
+        "--frame-stride", type=int, default=None, metavar="N",
+        help="Run detection on only every Nth video frame of a flying source (--source tello or fake); "
+             "2 means every other frame. Lowers CPU when two edges share one computer (default: $"
+             + _FRAME_STRIDE_ENV_VAR + ", else 1 = every frame)",
     )
     parser.add_argument(
         "--drone-id", type=_parse_drone_id, default="drone-1",
@@ -1039,6 +1091,10 @@ def _run_flight_edge(
     flight = LaneExecutor(
         drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
     )
+    if _slot_climb_disabled(args):
+        # An operator choice for testing: fly the lanes at the height the drone hovers at after takeoff.
+        flight.skip_slot_climb = True
+        log.warning("edge_slot_climb_disabled", drone_id=args.drone_id, reason="operator")
     bind_executor = getattr(transport, "bind_executor", None)
     if callable(bind_executor):
         bind_executor(flight)
@@ -1074,7 +1130,11 @@ def _run_flight_edge(
         transport.connect()
         run_edge_device(
             # The fake drone only yields blank frames, so a low rate saves CPU.
-            DroneFrameSource(drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30),
+            DroneFrameSource(
+                drone, stop_event,
+                min_interval_s=0.2 if args.source == "fake" else 1 / 30,
+                frame_stride=_resolve_frame_stride(getattr(args, "frame_stride", None)),
+            ),
             transport,
             runner,
             logger=log,

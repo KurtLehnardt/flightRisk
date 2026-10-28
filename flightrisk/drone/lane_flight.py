@@ -37,6 +37,14 @@ __all__ = ["FlightSequenceMixin", "MoveNotExecutedError"]
 # Below this much remaining time the start wait switches from event waits to
 # short sleeps, so takeoff fires close to the scheduled instant.
 _START_SPIN_S = 0.02
+# Before the slot climb the height must be read steadily and agree with the time-of-flight sensor.
+_HEIGHT_SAMPLE_S = 0.4
+_HEIGHT_SAMPLES = 3
+_HEIGHT_SPREAD_CM = 10
+_HEIGHT_TOF_TOLERANCE_CM = 30
+_HEIGHT_SETTLE_TIMEOUT_S = 5.0
+# Returned by ``_settled_height`` when a landing was requested or started while it waited.
+_ABORTED = object()
 # Phase of each flight sequence when it is launched.
 _FIRST_PHASE = {
     "start_at": "pre_takeoff",
@@ -416,7 +424,12 @@ class FlightSequenceMixin:
         the ceiling limit (``SafetyEnvelope.max_alt_slot_cm``). The edge
         enforces that limit itself, whatever the ground sent.
         """
-        height = self._read_height()
+        if getattr(self, "skip_slot_climb", False):
+            self._log.warning("edge_alt_slot_climb_skipped", drone_id=self.drone_id, reason="operator")
+            return True
+        height = self._settled_height()
+        if height is _ABORTED:
+            return False
         try:
             move = self.envelope.slot_move(height)
         except CeilingError as exc:
@@ -441,6 +454,55 @@ class FlightSequenceMixin:
             distance_cm=distance,
         )
         return self._command_move(direction, distance, record=False, allow_held=allow_held)
+
+    def _settled_height(self) -> Any:
+        """The height to climb from: several steady readings that agree with the time-of-flight sensor.
+
+        On 2026-10-28 two Tellos read their height as 130 cm and 20 cm in the instant after the takeoff
+        reply (both were about 80 cm up), so one flew ``up 110`` towards the ceiling. When the controller
+        offers a time-of-flight reading (``read_tof_cm``), the last ``_HEIGHT_SAMPLES`` readings must be
+        steady (within ``_HEIGHT_SPREAD_CM``) and agree with it (within ``_HEIGHT_TOF_TOLERANCE_CM``)
+        before the slot climb starts. If they do not settle within ``_HEIGHT_SETTLE_TIMEOUT_S`` the drone
+        lands (``height_unsettled``) instead of moving on a reading it cannot trust. A controller without
+        that reading (the fake, MAVLink) keeps the single reading it always used. Returns ``_ABORTED``
+        when a landing was requested while waiting.
+        """
+        tof_reader = getattr(self.drone, "read_tof_cm", None)
+        if not callable(tof_reader):
+            return self._read_height()
+        heights: list[float] = []
+        tofs: list[float] = []
+        # A bounded number of tries, not a deadline on the clock: the executor's clock may be a fake one.
+        for _ in range(int(_HEIGHT_SETTLE_TIMEOUT_S / _HEIGHT_SAMPLE_S) + 1):
+            height, tof = self._read_height(), tof_reader()
+            if isinstance(height, (int, float)) and isinstance(tof, (int, float)) and height > 0 and tof > 0:
+                heights.append(float(height))
+                tofs.append(float(tof))
+                recent_h, recent_t = heights[-_HEIGHT_SAMPLES:], tofs[-_HEIGHT_SAMPLES:]
+                if (
+                    len(recent_h) == _HEIGHT_SAMPLES
+                    and max(recent_h) - min(recent_h) <= _HEIGHT_SPREAD_CM
+                    and max(recent_t) - min(recent_t) <= _HEIGHT_SPREAD_CM
+                    and abs(sum(recent_h) / len(recent_h) - sum(recent_t) / len(recent_t)) <= _HEIGHT_TOF_TOLERANCE_CM
+                ):
+                    return recent_h[-1]
+            else:
+                heights.clear()
+                tofs.clear()
+            if self._abort.is_set():
+                return _ABORTED
+            self._abort.wait(_HEIGHT_SAMPLE_S)
+            if self._abort.is_set():
+                return _ABORTED
+        self._log.error(
+            "edge_altitude_unsettled",
+            drone_id=self.drone_id,
+            heights_cm=[int(h) for h in heights[-6:]],
+            tof_cm=[int(t) for t in tofs[-6:]],
+            waited_s=_HEIGHT_SETTLE_TIMEOUT_S,
+        )
+        self.land_now("height_unsettled")
+        return _ABORTED
 
     def _refuse_climb(self, height: Any, distance: int | None, detail: str) -> None:
         """Do not climb above the ceiling limit: log it and land through the normal landing path."""

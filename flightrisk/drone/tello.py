@@ -2057,6 +2057,18 @@ class TelloController:
         self._set_measured("height", height)
         return height
 
+    def read_tof_cm(self) -> int | None:
+        """Time-of-flight distance to the floor in cm from the latest state packet, or None if unknown.
+
+        Reads the state stream only (no UDP command). The lane executor compares it with
+        ``read_height_cm`` before the altitude-slot climb.
+        """
+        try:
+            tof = int(self.tello.get_distance_tof())
+        except Exception:
+            return None
+        return tof if tof > 0 else None
+
     def _set_measured(self, field: str, value) -> None:
         """Store a value read from the drone in ``state.<field>`` and stamp when it was read.
 

@@ -48,6 +48,9 @@ def wired(tello_on_wire):
         ctrl, wire = tello_on_wire(hold=set(hold_commands or ()))
         ctrl.read_battery = lambda: 90
         ctrl.read_height_cm = lambda: 100 if ctrl.state.is_flying else 0
+        # The slot climb cross-checks the height with the time-of-flight reading; this fake has no state
+        # stream, so give it one that agrees with the stubbed height.
+        ctrl.read_tof_cm = lambda: 100 if ctrl.state.is_flying else 10
         # Never connected and no state stream (see the module docstring), so
         # the real link_status() would refuse every takeoff as unreachable;
         # these tests are about hold, resume and nudge, so report it healthy.
