@@ -8,6 +8,8 @@ New signals (thermal, gait, etc.) can be added without touching this
 module's internals via `register_signal()` — see MatchScorer.score().
 """
 
+from collections.abc import Mapping
+
 from flightrisk.config import get_config
 
 # Names populated internally via score()'s named params (reid_score,
@@ -114,6 +116,7 @@ class MatchScorer:
         reid_score: float = 0.0,
         face_score: float = 0.0,
         reasoning_result: dict | None = None,
+        weight_scale: Mapping[str, float] | None = None,
         **signals: float,
     ) -> dict:
         """Compute a combined match score.
@@ -122,6 +125,10 @@ class MatchScorer:
             reid_score: Cosine similarity from ReID (0-1).
             face_score: Cosine similarity from face recognition (0-1).
             reasoning_result: Dict from FlightRiskAgent with 'match', 'confidence' keys.
+            weight_scale: Optional multiplier per signal name applied to the
+                configured weights before they are normalised (for example
+                ``{"face": 1.5}`` from a detection profile). None, or a
+                signal it does not name, keeps the configured weight.
             **signals: Additional signals registered via register_signal(),
                 passed as `name=score` keyword arguments (0-1 each).
 
@@ -168,6 +175,8 @@ class MatchScorer:
         for name, value in raw_scores.items():
             if value > 0:
                 w = self._signals[name]["weight"]
+                if weight_scale is not None:
+                    w *= float(weight_scale.get(name, 1.0))
                 weights[name] = w
                 total_weight += w
 

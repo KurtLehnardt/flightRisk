@@ -43,6 +43,11 @@ variables become `[REDACTED]`. Strings are capped at 500 characters.
 | `flight_safety` (`flight_safety`) | WARNING; ERROR for critical battery, land failures, a failed confirm sequence | pipeline battery policy, search executor, fleet supervisor, recovery, drone instrumentation | `kind` (the edge events above add `land`, `link_loss`, `watchdog_land`, `manual_land` and the other kinds of `SAFETY_EVENTS` in `flightrisk/obs_events.py`; the dashboard adds `battery_low`, `battery_critical`, `land_failed`, `drone_lost`, `fleet_start_refused`, `obstacle`, `obstacle_check_skipped`, `obstacle_guard_unavailable`, `waypoint_skipped`, `confirm_recovery`), `reason`, `drone_id` and kind-specific numbers (`battery_pct`, `threshold`, `center_depth`, `margin`, `confidence`, `waypoint`, `retry`, `duration_s`) |
 | Lane-executor and edge events | as logged | `flightrisk/drone/lane_executor.py`, `flightrisk/edge_device.py` (unchanged) | `edge_land`, `edge_link_lost`, `edge_land_not_executed`, `edge_land_error`, `edge_geofence_refused`, `edge_takeoff_refused`, `edge_assign_lanes_refused`, `edge_start_refused`, `edge_fail_safe_idle`, `edge_altitude_unknown`, `edge_local_land_key`, `edge_sigint_land`, `edge_pose_reset` (a takeoff made the drone's spot its new takeoff point; carries where the previous flight ended as `previous_x_cm`/`previous_y_cm`) and similar get `category=flight_safety` and are counted in `flightrisk_flight_safety_events`; an `edge_land` with reason `link_loss` counts as `kind=watchdog_land`. `edge_telemetry_dropped` and `edge_send_error` count as dropped messages |
 | `detection_pipeline` (`detection_pipeline`) | INFO, once per 5 s | frame loop and the edge-detection consumer | `source`, `frames`, `window_s`, `fps`, `persons`, `stages_ms` (mean and max per stage), `scores` (mean, max, n per signal), `alert_levels` |
+| `profile_selected` (`detection_pipeline`) | INFO | the edge's profile switcher (`flightrisk/edge_profiles.py`), at startup and after each switch (`docs/detection-profiles.md`) | `drone_id`, `profile` (now active), `requested`, `previous`, `changed`, `phase` (`startup` or `switch`), `weights`, `tiled`, `confidence`, `fallback` |
+| `profile_fallback` (`detection_pipeline`) | WARNING | the edge's profile switcher, when the requested profile's weights file is missing and its fallback was loaded instead | `drone_id`, `requested`, `profile` (the fallback now active), `reason` (`weights_missing`), `missing_weights`, `phase` |
+| `profile_switch_refused` (`detection_pipeline`) | WARNING | the edge's profile switcher, when a switch is refused (the edge also nacks it) or a startup profile could not be used | `drone_id`, `requested`, `profile` (still active), `reason` (`in_flight`, `unknown_profile`, `weights_missing`, `load_failed`, `busy`, `invalid`, `unavailable`), `nack_reason`, `detail`; at startup `phase=startup` |
+| `profile_switch_stuck`, `profile_switch_discarded` | WARNING | the edge's profile switcher: a switch still running after 60 s stops blocking the next one; if it finishes later its detector is discarded | `drone_id`, `cmd_id`, `age_s`, `timeout_s`, `profile`, `reason` |
+| `edge_frame_error`, `edge_frame_errors_fatal`, `edge_frame_recovered` | ERROR (the first and then every 100th failure; fatal once), INFO on recovery | `flightrisk/edge_device.py`: processing a frame raised (for example a detector failure) and the frame was skipped; after 10 s of failures in a row the loop ends with the last error and the exit path lands a flying drone; recovery is logged when a frame succeeds again | `error`, `count`, `failing_s`, `failed_frames` |
 | `model_load` (`detection_pipeline`) | INFO when loaded, WARNING when it failed or is unavailable | dashboard initialisation, signal registry | `model`, `outcome`, `error_type`, `error` |
 | `reasoning` (`reasoning`) | INFO; WARNING when the outcome is `error` or `unavailable` | the reasoning worker (`flightrisk/dashboard/alerts.py`) | `provider`, `model`, `kind` (`analyze`/`describe`), `duration_ms`, `outcome` (`match`, `no_match`, `error`, `unavailable`, `off`), `tokens_in`, `tokens_out`, `error_type`. Never the prompt or the reasoning text |
 | `queue_dropped` (`error`) | WARNING, at most once per 10 s per queue | frame loop | `queue`, `kind` |
@@ -79,8 +84,9 @@ series also carries `service_name` and `service_instance_id` (the node).
 | `flightrisk_socket_duration_ms` | histogram | `event` |
 | `flightrisk_socket_emits` | counter | `event` |
 | `flightrisk_stage_duration_ms` | histogram | `stage` (`detect`, `track`, `reid`, `face`, `score`, `annotate`, `encode`, `emit`, `edge_score`) |
-| `flightrisk_frames` | counter | `source` |
-| `flightrisk_detections_per_frame` | histogram | none |
+| `flightrisk_frames` | counter | `source`; `profile` for edge detections from an edge that reports its detection profile |
+| `flightrisk_detections_per_frame` | histogram | none; `profile` for edge detections from an edge that reports its detection profile |
+| `flightrisk_detection_profile_events` | counter | `event` (`profile_selected`, `profile_fallback`, `profile_switch_refused`), `profile`, `reason` |
 | `flightrisk_signal_score` | histogram (0 to 1) | `signal` |
 | `flightrisk_alert_levels` | counter | `level` |
 | `flightrisk_alert_transitions`, `flightrisk_alert_phase`, `flightrisk_alert_response_s` | counter, gauge, histogram | `transition`, `phase`, `action` |
@@ -114,7 +120,8 @@ The PR #88 metrics (`flightrisk_fps`, `flightrisk_drone_battery`, `flightrisk_fr
 `flightrisk_detections_count`, `flightrisk_errors_count`) are unchanged.
 
 Labels never carry alert ids, track ids, file names or free text. A `type` label is a known
-protocol message type (anything else is `other`), and at most 64 distinct drone ids from the
+protocol message type (anything else is `other`), a `profile` label is a registered detection
+profile name (anything else is `other`, no profile is `none`), and at most 64 distinct drone ids from the
 network become a `drone_id` label (later ones are `other`), so a client that invents ids
 cannot create series without end. Every series from a process also carries `process_pid`.
 

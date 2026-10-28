@@ -165,6 +165,7 @@ detections_per_frame = _hist("flightrisk.detections.per_frame", description="Per
 signal_score = _hist("flightrisk.signal.score", description="Per-signal match score of the best candidate (0..1)")
 alert_levels = _counter("flightrisk.alert.levels", description="Scored candidates by alert level")
 model_loads = _counter("flightrisk.model.loads", description="Model and signal provider loads by model and outcome")
+profile_events = _counter("flightrisk.detection_profile.events", description="Detection profile selections, fallbacks and refused switches by event, profile and reason")
 
 # --- Reasoning (metadata only, never text) ----------------------------------
 reasoning_calls = _counter("flightrisk.reasoning.calls", description="Reasoning calls by provider, kind and outcome")

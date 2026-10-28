@@ -99,6 +99,14 @@ kept; v2 fields are in addition to them.
 | `land` | v1 | optional `cmd_id`, `epoch`, `leader_id` (informational only) | **never** | optional | yes |
 | `emergency_land_all` | v1 | unchanged; optional fields are ignored | **never** | optional | yes |
 
+`set_detection_profile` (`profile`, `cmd_id`, optional `drone_id`) is a
+configuration command (`CONFIG_COMMAND_TYPES`): valid on every link version,
+never fenced (it cannot move a drone), obeyed by a multi-ground edge only
+from its authority, and answered with an `ack` or `nack` whose `for` is
+`set_detection_profile` on every link version. It is not in
+`GROUND_TO_EDGE_TYPES` or `COMMAND_TYPES`, so the v1 and v2 rules for
+flight commands are unchanged. See `docs/detection-profiles.md`.
+
 The legacy `set_target` and `stream_video` messages also travel from ground
 to edge. They are not fleet control messages: the strict validators let them
 through by type, and their existing handlers check them. `decode` and
@@ -268,6 +276,14 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 - **Stale leaders.** A `stale_epoch` or `not_authority` nack should carry
   `epoch_seen`, so that a stale leader learns the epoch it lost to and steps
   down.
+- **Configuration commands.** An ack or nack for `set_detection_profile` has
+  its own rules on every link version: `drone_id` and `cmd_id` always; an
+  ack carries `profile` (now active) and `fallback` (with `fallback_reason`
+  `weights_missing` when true); a nack carries a reason from
+  `PROFILE_NACK_REASONS` (`in_flight`, `unknown_profile`, `unavailable`,
+  `load_failed`, `busy`, `invalid`); both may carry `requested`,
+  `epoch_seen` and `detail`. `shape_for_peer` copies them unchanged, so the
+  `cmd_id` survives a v1 link.
 - **Landing is never nacked.** A nack whose `for` is `land` or
   `emergency_land_all` is invalid. An edge may ack a landing.
 - **v1 rules kept.** On a v1 link a nack must be for `assign_lanes`, with a
