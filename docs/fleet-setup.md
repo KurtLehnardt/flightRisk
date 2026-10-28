@@ -24,7 +24,7 @@ Do this before every flight, in both paths. The coordinator assumes this layout,
 4. Point both noses into the area along the 4 m depth.
 5. Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence and never in a flight path.
 
-The launchers set the edge geofence to 300 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
+The launchers set the edge geofence to 450 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 
 ### Every takeoff is a new start point
 

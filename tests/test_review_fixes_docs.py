@@ -31,9 +31,9 @@ def test_presenter_outside_flight_path():
 def test_launchers_export_geofence_and_appearance_only():
     sh = (ROOT / "scripts" / "demo_edge.sh").read_text(encoding="utf-8")
     ps1 = (ROOT / "scripts" / "demo_edge.ps1").read_text(encoding="utf-8")
-    assert 'FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-300}"' in sh
+    assert 'FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-450}"' in sh
     assert "FLIGHTRISK_APPEARANCE_ONLY=1" in sh
-    assert re.search(r'-not \$env:FLIGHTRISK_GEOFENCE_CM\).*"300"', ps1)
+    assert re.search(r'-not \$env:FLIGHTRISK_GEOFENCE_CM\).*"450"', ps1)
     assert '$env:FLIGHTRISK_APPEARANCE_ONLY = "1"' in ps1
 
 
@@ -82,13 +82,13 @@ def test_privacy_design_current_state():
     assert "private network" in text
 
 
-def test_demo_script_rung2_and_geofence_300():
+def test_demo_script_rung2_and_geofence_450():
     text = _doc("demo-script.md")
     rung = text[text.index("2. **One Tello live and one fake edge.**"):text.index("3. **Recorded video")]
     assert "refuses a second live edge" in rung
     assert "swap routing" not in rung
-    assert "300 cm geofence around its takeoff point by default" in text
-    assert "450 cm geofence around its takeoff point by default" not in text
+    assert "450 cm geofence around its takeoff point by default" in text
+    assert "300 cm geofence around its takeoff point by default" not in text
     assert "500 cm geofence around its takeoff point by default" not in text
 
 
@@ -109,7 +109,7 @@ def test_demo_edge_ps1_restores_env():
 
 
 def test_demo_script_hotkey_in_text_fields_and_geofence_launchers():
-    """R-116: the LAND ALL hotkey inside text fields, and where the 300 cm geofence comes from."""
+    """R-116: the LAND ALL hotkey inside text fields, and where the 450 cm geofence comes from."""
     text = _doc("demo-script.md")
     core = text[text.index("- 2:15 Say:"):]
     core = core[:core.index("\n")]
@@ -117,5 +117,5 @@ def test_demo_script_hotkey_in_text_fields_and_geofence_launchers():
     limits = text[text.index("Each edge enforces its own limits"):]
     limits = limits[:limits.index("\n")]
     assert "Ctrl/Cmd+Shift+L" in limits and "text field" in limits
-    assert "300 cm geofence around its takeoff point by default, as set by the demo launchers" in limits
+    assert "450 cm geofence around its takeoff point by default, as set by the demo launchers" in limits
     assert "the code default is 500 cm" in limits
