@@ -120,6 +120,20 @@ _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
 #: Until then the configured defaults are used.
 _dashboard_bind: tuple[str, int] | None = None
 
+# --- UI v2 (docs/ui-v2-design.md) ---
+#: Environment variable naming the port of the optional UI v2 listener
+#: (``--ui-v2-port``). Unset or empty means no second listener starts.
+UI_V2_PORT_ENV = "FLIGHTRISK_UI_V2_PORT"
+
+#: WSGI environ key that the UI v2 listener sets on every request it serves.
+#: It cannot come from a client: request headers only ever become
+#: ``HTTP_*`` keys.
+UI_V2_ENVIRON_KEY = "flightrisk.ui_v2"
+
+#: The port of the UI v2 listener, recorded by ``run_dashboard``; ``None``
+#: when no UI v2 listener runs.
+_ui_v2_port: int | None = None
+
 
 def cors_origins_override() -> list[str] | None:
     """The origins named in ``FLIGHTRISK_CORS_ORIGINS``, or ``None`` when it is unset or empty."""
@@ -161,6 +175,11 @@ def socketio_origin_allowed(origin: str | None, environ: dict | None = None) -> 
     listed origins are accepted, and ``*`` accepts any origin. Engine.IO
     checks the origin only for requests that carry an ``Origin`` header,
     which browsers send on every cross-origin request and WebSocket upgrade.
+
+    A request that arrives on the UI v2 listener (``--ui-v2-port``) is
+    checked against the origins of that port instead of the main port, so
+    each listener accepts only the page it serves itself. Requests on the
+    main port are checked exactly as before.
     """
     if not origin:
         return False
@@ -168,6 +187,8 @@ def socketio_origin_allowed(origin: str | None, environ: dict | None = None) -> 
     if override is not None:
         return "*" in override or origin in override
     host, port = _dashboard_bind or (resolve_dashboard_host(), get_config().dashboard.port)
+    if environ and environ.get(UI_V2_ENVIRON_KEY) and _ui_v2_port is not None:
+        port = _ui_v2_port
     if origin in dashboard_origins(host, port):
         return True
     if host in _LOOPBACK_HOSTS or not environ:
@@ -1667,6 +1688,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
 @app.route("/")
 def index():
+    # The UI v2 listener marks its requests; the main port always serves the current UI.
+    if request.environ.get(UI_V2_ENVIRON_KEY):
+        return render_template("index_v2.html")
     return render_template("index.html")
 
 
@@ -2805,7 +2829,34 @@ def on_restart_dashboard():
     emit("dashboard_restarted", {})
 
 
-def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host=None):
+def ui_v2_wsgi_app(environ, start_response):
+    """WSGI entry point of the UI v2 listener.
+
+    It is the same Flask app, with the same Socket.IO server, API-key gate
+    and routes as the main port. The only difference is the
+    ``UI_V2_ENVIRON_KEY`` mark, which makes ``/`` serve ``index_v2.html``
+    and makes the Socket.IO origin check accept the UI v2 port's origins.
+    """
+    environ[UI_V2_ENVIRON_KEY] = True
+    return app(environ, start_response)
+
+
+def make_ui_v2_server(host: str, port: int):
+    """Bind the UI v2 listener on ``host``:``port`` and return the Werkzeug server.
+
+    The server is threaded, exactly like the main port's server under
+    ``async_mode="threading"``, and it is not serving yet: call
+    ``serve_forever()`` (``run_dashboard`` does so on a daemon thread).
+    Because it runs in the same process as the main port and serves the
+    same app object, both UIs share the app state, the edge connections and
+    every Socket.IO event. Raises ``OSError`` when the port cannot be bound.
+    """
+    from werkzeug.serving import make_server
+
+    return make_server(host, port, ui_v2_wsgi_app, threaded=True)
+
+
+def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host=None, ui_v2_port=None):
     """Start the dashboard server.
 
     Args:
@@ -2816,12 +2867,19 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host
         port: Dashboard HTTP/WebSocket port. Defaults to `config.dashboard.port`.
         host: Bind address. Defaults to ``FLIGHTRISK_DASHBOARD_HOST``, then
             127.0.0.1. A non-loopback address requires ``FLIGHTRISK_API_KEY``.
+        ui_v2_port: Optional second port that serves UI v2
+            (docs/ui-v2-design.md) on the same host, from this process. When
+            it is ``None`` no second listener starts and nothing else
+            changes.
 
     Raises:
         ValueError: The bind address is not loopback and no API key is
-            configured. Nothing is started in that case.
+            configured, or ``ui_v2_port`` equals the main port. Nothing is
+            started in that case.
+        OSError: The UI v2 port cannot be bound. Nothing is started in that
+            case either.
     """
-    global _dashboard_bind
+    global _dashboard_bind, _ui_v2_port
     host = resolve_dashboard_host(host)
     # Checked before anything starts, so a refused bind connects to no drone.
     check_dashboard_bind(host)
@@ -2832,6 +2890,13 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host
         )
     if port is None:
         port = get_config().dashboard.port
+    ui_v2_server = None
+    if ui_v2_port is not None:
+        if int(ui_v2_port) == int(port):
+            raise ValueError(f"The UI v2 port must differ from the dashboard port {port}.")
+        # Bound before any drone or edge is touched, so a busy port starts nothing.
+        ui_v2_server = make_ui_v2_server(host, int(ui_v2_port))
+        _ui_v2_port = int(ui_v2_port)
     # Socket.IO accepts browser pages from the origins of this host and port.
     _dashboard_bind = (host, int(port))
     cors_override = cors_origins_override()
@@ -2856,4 +2921,10 @@ def run_dashboard(source_config: SourceConfig, target_path=None, port=None, host
     if app_state.logger:
         url_host = f"[{host}]" if ":" in host else host
         app_state.logger.info("dashboard_started", url=f"http://{url_host}:{port}", host=host)
+    if ui_v2_server is not None:
+        url_host = f"[{host}]" if ":" in host else host
+        threading.Thread(target=ui_v2_server.serve_forever, name="ui-v2-listener", daemon=True).start()
+        log.info("UI v2 serving on http://%s:%s (the current UI stays on port %s)", url_host, _ui_v2_port, port)
+        if app_state.logger:
+            app_state.logger.info("ui_v2_started", url=f"http://{url_host}:{_ui_v2_port}", host=host)
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
