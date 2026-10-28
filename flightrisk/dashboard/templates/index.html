@@ -525,6 +525,26 @@
             justify-content: space-between;
         }
 
+        /* ========== COLLAPSIBLE CARDS ========== */
+        /* Shared by every panel-section card. The body is hidden with CSS only, so live-updating content keeps updating. */
+        .card-toggle {
+            all: unset;
+            box-sizing: border-box;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            text-transform: inherit;
+            letter-spacing: inherit;
+        }
+        .card-toggle:focus-visible, .collapsible-header:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 4px; }
+        .card-chevron { font-size: 10px; transition: transform 150ms ease; }
+        .card-collapsed .card-chevron { transform: rotate(-90deg); }
+        .card-collapsed > .card-body { display: none; }
+        .card-collapsed > .panel-title { margin-bottom: 0; }
+
         /* ========== TARGET TAB ========== */
         /* Telemetry compact grid (always visible at top of target tab) */
         .telem-grid {
@@ -1793,8 +1813,11 @@
                     </div>
 
                     <!-- Target Photo + Description -->
-                    <div class="panel-section">
-                        <div class="panel-title">Target Child</div>
+                    <div class="panel-section" data-card="target">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-target-body"><span>Target Child</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-target-body">
                         <div class="target-area">
                             <div id="target-upload-zone" class="target-upload-zone" onclick="document.getElementById('target-upload').click()">
                                 <img id="target-preview">
@@ -1819,6 +1842,7 @@
                                 <button class="preset-pill" data-preset="fewer_alerts" onclick="setSensitivityPreset('fewer_alerts', this)">Fewer Alerts</button>
                             </div>
                         </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1828,8 +1852,13 @@
                     {% include "ceiling_settings.html" %}
 
                     <!-- Fleet Selector -->
-                    <div class="panel-section">
-                        <div class="panel-title">Drone Fleet</div>
+                    <div class="panel-section" data-card="drone-fleet">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-drone-fleet-body"><span>Drone Fleet</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <!-- Only the drone management buttons collapse. The per-drone status list and the fleet search
+                             controls (including LAND ALL) stay outside the collapsible body so they are always visible. -->
+                        <div class="card-body" id="card-drone-fleet-body">
                         <div class="fleet-bar">
                             <select id="drone-selector" class="fleet-select">
                                 <option value="">Primary Drone</option>
@@ -1840,6 +1869,7 @@
                             <button class="btn-ghost btn-danger" onclick="removeAllDrones()" title="Disconnect all drones">Remove All</button>
                             <button class="btn-ghost" onclick="setPrimaryDrone()" title="Set selected drone as primary">Set Primary</button>
                             <button class="btn-ghost btn-danger" onclick="restartDashboard()" title="Restart dashboard and reconnect">Restart</button>
+                        </div>
                         </div>
                         <div id="fleet-drone-list" class="fleet-drone-list"></div>
                         <div class="fleet-controls" role="group" aria-label="Fleet search controls">
@@ -1854,8 +1884,11 @@
                     </div>
 
                     <!-- Detection profiles (edge source): which model each drone runs -->
-                    <div class="panel-section" id="detection-profiles-section">
-                        <div class="panel-title">Detection Profile</div>
+                    <div class="panel-section" data-card="detection-profile" id="detection-profiles-section">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-detection-profile-body"><span>Detection Profile</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-detection-profile-body">
                         <div class="profile-row">
                             <label for="profile-fleet-default" class="profile-label">Fleet default</label>
                             <select id="profile-fleet-default" class="fleet-select" onchange="setFleetDetectionProfile(this.value)">
@@ -1865,11 +1898,15 @@
                         <div id="profile-controls-note" class="profile-status warn" style="display:none;"></div>
                         <div id="profile-drone-list" class="profile-drone-list" aria-live="polite"></div>
                         <div class="fleet-controls-hint">Top-down suits a camera looking straight down (HERIDAL model, tiled). Level suits level flight with faces in view. A drone switches only while it is on the ground; in the air the edge refuses and the reason is shown here.</div>
+                        </div>
                     </div>
 
                     <!-- D-pad Flight Controls -->
-                    <div class="panel-section">
-                        <div class="panel-title">Flight Controls</div>
+                    <div class="panel-section" data-card="flight-controls">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-flight-controls-body"><span>Flight Controls</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-flight-controls-body">
                         <div class="keyboard-toggle">
                             <label class="toggle-switch">
                                 <input type="checkbox" id="keyboard-toggle" onchange="toggleKeyboardControls(this.checked)">
@@ -1932,11 +1969,15 @@
                             <button class="btn-takeoff" data-key="t" onclick="sendCmd('takeoff')">TAKEOFF</button>
                             <button class="btn-land" data-key="l" onclick="sendCmd('land')" aria-label="Land this drone" title="Land this drone only (L)">Land this drone</button>
                         </div>
+                        </div>
                     </div>
 
                     <!-- AI Reasoning backend -->
-                    <div class="panel-section">
-                        <div class="panel-title">AI Reasoning</div>
+                    <div class="panel-section" data-card="ai-reasoning">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-ai-reasoning-body"><span>AI Reasoning</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-ai-reasoning-body">
                         <select id="reasoning-provider" class="search-select" onchange="setReasoningProvider(this.value)">
                             <option value="gemma" data-label="Gemma (local Ollama)">Gemma (local Ollama)</option>
                             <option value="claude" data-label="Claude (Anthropic API, cloud)">Claude (Anthropic API, cloud)</option>
@@ -1944,11 +1985,15 @@
                         </select>
                         <div id="reasoning-status" class="search-status"></div>
                         <div id="reasoning-unavailable" class="search-status" style="display:none;"></div>
+                        </div>
                     </div>
 
                     <!-- Search Pattern -->
-                    <div class="panel-section">
-                        <div class="panel-title">Autonomous Search</div>
+                    <div class="panel-section" data-card="autonomous-search">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-autonomous-search-body"><span>Autonomous Search</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-autonomous-search-body">
                         <select id="search-pattern" class="search-select">
                             <option value="expanding_square">Expanding Square (SS) -- from LKP</option>
                             <option value="sector">Sector / Radial (VS) -- pie slices</option>
@@ -1961,11 +2006,15 @@
                             <button class="btn-search-stop" onclick="stopSearch()">STOP</button>
                         </div>
                         <div id="search-status" class="search-status"></div>
+                        </div>
                     </div>
 
                     <!-- Recording -->
-                    <div class="panel-section">
-                        <div class="panel-title">Session Recording</div>
+                    <div class="panel-section" data-card="session-recording">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-session-recording-body"><span>Session Recording</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-session-recording-body">
                         <div class="rec-toggle-wrapper">
                             <button id="rec-btn" class="rec-toggle-btn" onclick="toggleRecording()">
                                 <span id="rec-btn-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);"></span>
@@ -1973,11 +2022,15 @@
                             </button>
                         </div>
                         <div id="rec-status" class="rec-status-text"></div>
+                        </div>
                     </div>
 
                     <!-- Edge Video Stream -->
-                    <div class="panel-section">
-                        <div class="panel-title">Edge Video</div>
+                    <div class="panel-section" data-card="edge-video">
+                        <div class="panel-title">
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-edge-video-body"><span>Edge Video</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                        </div>
+                        <div class="card-body" id="card-edge-video-body">
                         <div class="keyboard-toggle">
                             <label class="toggle-switch">
                                 <input type="checkbox" id="video-toggle" checked onchange="toggleStreamVideo(this.checked)">
@@ -1987,21 +2040,24 @@
                             <span class="keyboard-status active" id="video-status">ON</span>
                         </div>
                         <div class="video-toggle-hint">Off = detections-only: the edge device sends bounding boxes without video frames to save link bandwidth.</div>
+                        </div>
                     </div>
                 </div>
 
                 <!-- ALERTS TAB -->
                 <div id="tab-alerts" class="tab-pane">
-                    <div class="panel-section" style="border:none; background:none; backdrop-filter:none; padding:0;">
+                    <div class="panel-section" data-card="match-log" style="border:none; background:none; backdrop-filter:none; padding:0;">
                         <div class="panel-title">
-                            <span>Match Log <span id="match-count" style="color:var(--amber);"></span></span>
+                            <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-match-log-body"><span>Match Log <span id="match-count" style="color:var(--amber);"></span></span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
                             <span id="feedback-stats" class="feedback-stats"></span>
                         </div>
+                        <div class="card-body" id="card-match-log-body">
                         <div id="match-log" class="match-log">
                             <div class="no-matches-placeholder">
                                 <div class="nm-icon">&#9673;</div>
                                 <div class="nm-text">No matches detected yet</div>
                             </div>
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -2016,8 +2072,11 @@
             <div id="advanced-content" class="advanced-content">
 
                 <!-- Observability -->
-                <div class="panel-section">
-                    <div class="panel-title">Observability</div>
+                <div class="panel-section" data-card="observability">
+                    <div class="panel-title">
+                        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-observability-body"><span>Observability</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                    </div>
+                    <div class="card-body" id="card-observability-body">
                     <div class="obs-grid">
                         <div class="obs-cell">
                             <div id="obs-frames" class="obs-val">0</div>
@@ -2060,21 +2119,29 @@
                         <span class="obs-row-label">Avg reasoning latency</span>
                         <span id="obs-reasoning-lat" class="obs-row-val dim">--</span>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Manual Threshold Override -->
-                <div class="panel-section">
-                    <div class="panel-title">Manual Threshold</div>
+                <div class="panel-section" data-card="manual-threshold">
+                    <div class="panel-title">
+                        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-manual-threshold-body"><span>Manual Threshold</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                    </div>
+                    <div class="card-body" id="card-manual-threshold-body">
                     <div class="threshold-section">
                         <label>Threshold</label>
                         <input type="range" id="threshold-slider" min="30" max="90" value="55" oninput="updateThreshold(this.value)">
                         <span id="threshold-val" class="threshold-val">0.55</span>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Threshold Tuner -->
-                <div class="panel-section">
-                    <div class="panel-title">Threshold Tuner</div>
+                <div class="panel-section" data-card="threshold-tuner">
+                    <div class="panel-title">
+                        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-threshold-tuner-body"><span>Threshold Tuner</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                    </div>
+                    <div class="card-body" id="card-threshold-tuner-body">
                     <button class="tuner-btn" onclick="checkThreshold()">Analyze Threshold</button>
                     <div id="tuner-result" class="tuner-result">
                         <div class="tuner-row">
@@ -2095,11 +2162,12 @@
                         </div>
                         <button id="tuner-apply" class="tuner-apply" onclick="applyThreshold()">Apply Suggested</button>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Target History -->
                 <div class="panel-section">
-                    <div class="collapsible-header" onclick="toggleTargetHistory()">
+                    <div class="collapsible-header" role="button" tabindex="0" aria-expanded="false" aria-controls="target-history-container" onclick="toggleTargetHistory()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTargetHistory();}">
                         <div class="panel-title" style="margin-bottom:0;">Target History</div>
                         <span id="target-history-arrow" class="collapse-arrow">&#9654;</span>
                     </div>
@@ -2110,7 +2178,7 @@
 
                 <!-- Past Sessions -->
                 <div class="panel-section">
-                    <div class="collapsible-header" onclick="toggleSessions()">
+                    <div class="collapsible-header" role="button" tabindex="0" aria-expanded="false" aria-controls="sessions-container" onclick="toggleSessions()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSessions();}">
                         <div class="panel-title" style="margin-bottom:0;">Past Sessions</div>
                         <span id="sessions-arrow" class="collapse-arrow">&#9654;</span>
                     </div>
@@ -2168,6 +2236,34 @@
     <div id="toast" class="toast"></div>
 
     <!-- ====== SCRIPTS ====== -->
+    <script>
+        // Shared collapsible-card helper. Each card is .panel-section[data-card] with a .card-toggle button
+        // in its title and a .card-body. State is saved per card id in localStorage; storage failures are ignored.
+        (function () {
+            var PREFIX = 'flightrisk.card.';
+            function load(id) { try { return window.localStorage.getItem(PREFIX + id) === 'collapsed'; } catch (e) { return false; } }
+            function save(id, collapsed) { try { window.localStorage.setItem(PREFIX + id, collapsed ? 'collapsed' : 'expanded'); } catch (e) {} }
+            function apply(card, collapsed) {
+                card.classList.toggle('card-collapsed', collapsed);
+                var btn = card.querySelector('.card-toggle');
+                if (btn) btn.setAttribute('aria-expanded', String(!collapsed));
+            }
+            function init() {
+                document.querySelectorAll('.panel-section[data-card]').forEach(function (card) {
+                    var id = card.getAttribute('data-card');
+                    var btn = card.querySelector('.card-toggle');
+                    if (!btn) return;
+                    apply(card, load(id));
+                    btn.addEventListener('click', function () {
+                        var collapsed = !card.classList.contains('card-collapsed');
+                        apply(card, collapsed);
+                        save(id, collapsed);
+                    });
+                });
+            }
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+        })();
+    </script>
     <script>
         // Web Audio API alert sounds
         let audioCtx = null;
@@ -3421,6 +3517,7 @@
         function toggleTargetHistory() {
             targetHistoryOpen = !targetHistoryOpen;
             const container = document.getElementById('target-history-container');
+            container.previousElementSibling.setAttribute('aria-expanded', String(targetHistoryOpen));
             const arrow = document.getElementById('target-history-arrow');
             if (targetHistoryOpen) {
                 container.classList.add('open');
@@ -3477,6 +3574,7 @@
         function toggleSessions() {
             sessionsOpen = !sessionsOpen;
             const container = document.getElementById('sessions-container');
+            container.previousElementSibling.setAttribute('aria-expanded', String(sessionsOpen));
             const arrow = document.getElementById('sessions-arrow');
             if (sessionsOpen) {
                 container.classList.add('open');
