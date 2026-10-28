@@ -1542,8 +1542,14 @@ def test_land_right_after_a_takeoff_answered_error_waits_out_the_lift_guard(tell
     "error" and ignored. Before the fix only a takeoff still waiting for its
     reply started the lift guard, so state at ground height with the motor
     time still confirmed the land at once, with is_flying false.
+
+    A bare "error" is now checked against the state stream for
+    ``_TAKEOFF_CONFIRM_S`` before it fails the takeoff. That window is set
+    here to end before the drone lifts, so the takeoff still fails with no
+    proof either way, which is the case this test is about.
     """
     monkeypatch.setattr(tello_module, "_TAKEOFF_LIFT_GUARD_S", 2.0)
+    monkeypatch.setattr(tello_module, "_TAKEOFF_CONFIRM_S", 0.5)
     monkeypatch.setattr(tello_module, "_LAND_REPLY_TIMEOUT_S", 0.5)
     monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 1.0)
     ctrl, wire = tello_on_wire()
