@@ -451,7 +451,7 @@ Lay out the drones as in "Placement and heading" above first. The dashboard shou
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
-### Observability (optional)
+## Observability (optional)
 
 To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
 

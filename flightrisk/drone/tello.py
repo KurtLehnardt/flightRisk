@@ -22,7 +22,6 @@ import numpy as np
 from djitellopy import Tello
 
 from flightrisk.config import get_config
-from flightrisk.obs_log import Throttle, log_event, notice
 from flightrisk.drone.controller import (
     BASIC_FLIGHT,
     CommandOutcome,
@@ -43,6 +42,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
 )
 from flightrisk.drone.snapshot import reading as _reading
+from flightrisk.obs_log import Throttle, log_event, notice
 
 _log = logging.getLogger(__name__)
 

@@ -52,7 +52,7 @@ def test_raw_upload_bytes_are_hashed_as_uploaded(store, monkeypatch):
     monkeypatch.setenv("FLIGHTRISK_PREVIEW_PORT", "0")
     import hashlib
 
-    ok, buf = cv2.imencode(".png", _img())
+    _, buf = cv2.imencode(".png", _img())
     raw = buf.tobytes()
     assert store.store_target(_img(), raw=raw)["sha256"] == hashlib.sha256(raw).hexdigest()
 

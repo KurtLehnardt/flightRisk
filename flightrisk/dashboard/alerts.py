@@ -18,15 +18,15 @@ from pathlib import Path
 
 import cv2
 
-from flightrisk.dashboard.state import (
-    app_state,
-    match_history_lock,
-    alerted_tracks,
-    ALERT_COOLDOWN,
-    gemma_queue,
-)
-from flightrisk.dashboard.alert_latch import alert_latch
 from flightrisk import obs_events
+from flightrisk.dashboard.alert_latch import alert_latch
+from flightrisk.dashboard.state import (
+    ALERT_COOLDOWN,
+    alerted_tracks,
+    app_state,
+    gemma_queue,
+    match_history_lock,
+)
 
 # Match screenshots directory
 # The directory is created lazily when a snapshot is actually written, never at
@@ -198,7 +198,7 @@ def _gemma_worker(socketio):
                 agent = app_state.reasoning
                 if agent is None:
                     continue
-                result = _timed_reasoning(agent, "describe", lambda: agent.match_description(crop, description))
+                result = _timed_reasoning(agent, "describe", lambda a=agent, c=crop, d=description: a.match_description(c, d))
                 socketio.emit("reasoning_result", {
                     "track_id": track_key,
                     "result": result,
@@ -278,7 +278,7 @@ def _gemma_worker(socketio):
                     # call but still back-fill the history entry and DB row.
                     result = {"match": False, "confidence": "off", "reasoning": ""}
                 else:
-                    result = _timed_reasoning(agent, "analyze", lambda: agent.analyze_match(reference, crop))
+                    result = _timed_reasoning(agent, "analyze", lambda a=agent, r=reference, c=crop: a.analyze_match(r, c))
                     socketio.emit("reasoning_result", {
                         "track_id": track_key,
                         "result": result,

@@ -211,7 +211,9 @@ def test_timed_reasoning_records_metadata(rec, caplog):
 
     class Agent:
         provider, model = "gemma", "gemma4"
-        last_usage = {"input_tokens": 300, "output_tokens": 12}
+
+        def __init__(self):
+            self.last_usage = {"input_tokens": 300, "output_tokens": 12}
 
     with caplog.at_level(logging.INFO, logger="flightrisk"):
         out = _timed_reasoning(Agent(), "describe", lambda: {"match": False, "confidence": "low", "reasoning": "hidden"})
@@ -299,7 +301,7 @@ def test_queue_drop_is_counted(rec):
 
 def test_frame_age_gauge_is_computed_at_collection():
     M.note_frame()
-    obs = list(M._observe_frame_age(None))
-    assert obs and obs[0].value < 1.0
+    first = next(iter(M._observe_frame_age(None)))
+    assert first.value < 1.0
     time.sleep(0.05)
-    assert list(M._observe_frame_age(None))[0].value >= 0.05
+    assert next(iter(M._observe_frame_age(None))).value >= 0.05

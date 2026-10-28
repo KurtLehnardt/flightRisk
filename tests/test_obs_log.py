@@ -123,7 +123,7 @@ def test_fingerprint_groups_by_type_and_frames():
     for kind in (ValueError, ValueError, KeyError):
         try:
             _raise(kind)
-        except Exception as exc:
+        except (ValueError, KeyError) as exc:
             infos.append((type(exc), exc, exc.__traceback__))
     a, b, c = (error_fingerprint(i)[0] for i in infos)
     assert a == b

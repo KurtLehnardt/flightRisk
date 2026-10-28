@@ -64,12 +64,12 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from flightrisk import fleet_protocol as fp
+from flightrisk import obs_comm
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
 from flightrisk.fleet_authority import ACCEPT, CLOSE, HANDLED, LAND, EdgeAuthority
 from flightrisk.fleet_ground_link import CLOSE_PROTOCOL
 from flightrisk.link_outbox import BULK, TELEMETRY, URGENT, LinkOutbox
-from flightrisk import obs_comm
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import (
     EdgeTransport,

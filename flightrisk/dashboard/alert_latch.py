@@ -102,7 +102,7 @@ class MatchAlertLatch:
         for listener in list(self._listeners):
             try:
                 listener(event)
-            except Exception:  # noqa: BLE001 -- telemetry must never affect the latch
+            except Exception:  # noqa: BLE001, S110 -- telemetry must never affect the latch
                 pass
 
     # ------------------------------------------------------------------

@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                         "OTEL_RESOURCE_ATTRIBUTES": f"service.instance.id=bench-{mode}"})
         t0 = time.monotonic()
         proc = subprocess.run([sys.executable, __file__, "--worker", "--frames", str(args.frames), "--ticks",
-                               str(args.ticks), "--logs", str(args.logs)], env=env, capture_output=True, text=True)
+                               str(args.ticks), "--logs", str(args.logs)], env=env, capture_output=True, text=True, check=False)
         elapsed = time.monotonic() - t0
         line = [ln for ln in proc.stdout.splitlines() if ln.startswith("{")]
         results[mode] = json.loads(line[-1]) if line else {"error": proc.stderr[-2000:]}

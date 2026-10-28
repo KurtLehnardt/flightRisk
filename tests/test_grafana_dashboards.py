@@ -33,7 +33,7 @@ def _queries(panel):
 
 def test_generator_output_is_committed():
     proc = subprocess.run([sys.executable, str(OBS / "grafana" / "build_dashboards.py"), "--check"],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
 
 
@@ -174,7 +174,7 @@ class TestAlertRules:
         cfg = get_config().drone
 
         def threshold(uid):
-            return [d for d in by_uid[uid]["data"] if d["refId"] == "C"][0]["model"]["conditions"][0]["evaluator"]["params"][0]
+            return next(d for d in by_uid[uid]["data"] if d["refId"] == "C")["model"]["conditions"][0]["evaluator"]["params"][0]
 
         assert threshold("fr-battery-low") == cfg.battery_warn_threshold
         assert threshold("fr-battery-critical") == cfg.battery_critical_threshold

@@ -361,7 +361,7 @@ class _NotEchoed(logging.Filter):
 class _NotFlightRisk(logging.Filter):
     """Passes only records from loggers outside ``flightrisk`` (those have their own handler)."""
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+    def filter(self, record: logging.LogRecord) -> bool:
         return not (record.name == ROOT_LOGGER or record.name.startswith(ROOT_LOGGER + "."))
 
 
