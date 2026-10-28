@@ -58,6 +58,7 @@ DIRECTIONS = (UP, DOWN)
 LOOPBACK = "127.0.0.1"
 _MAX_FRAME_BYTES = 64 * 1024 * 1024
 _FIFO_EPSILON_S = 1e-6
+_RESET_GRACE_S = 0.02
 _RECORDS_KEPT = 20000
 
 
@@ -341,7 +342,10 @@ class NetLink:
 
     def _close_later(self, conn: _Conn, direction: str, end: _Close) -> None:
         loop = asyncio.get_running_loop()
-        loop.call_at(max(conn.last_t[direction], loop.time()), self._finish, conn, direction, end)
+        # Strictly after the last queued message (equal timers have no defined order), and a reset a moment
+        # later still so the peer can read what was written before it.
+        at = max(conn.last_t[direction] + _FIFO_EPSILON_S, loop.time()) + (_RESET_GRACE_S if end.abort else 0.0)
+        loop.call_at(at, self._finish, conn, direction, end)
 
     def _submit(self, conn: _Conn, direction: str, frame: _Frame, handshake: bool = False) -> None:
         d = self._dirs[direction]
