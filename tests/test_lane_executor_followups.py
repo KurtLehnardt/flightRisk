@@ -161,13 +161,13 @@ class _OwnershipAuthority:
         return 7
 
 
-def test_fleet_status_reads_the_epoch_under_the_executor_lock(executors):
+def test_fleet_status_reads_the_epoch_before_taking_the_executor_lock(executors):
     box: list = []
     authority = _OwnershipAuthority(box)
     executor, _, _, _, _ = executors(authority=authority)
     box.append(executor)
     status = executor.fleet_status()
-    assert status["epoch"] == 7 and authority.held == [True]
+    assert status["epoch"] == 7 and authority.held == [False]
     assert set(status) == {"plan_id", "state", "plan_valid", "epoch"}
 
 
