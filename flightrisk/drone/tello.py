@@ -9,6 +9,7 @@ never touches the network, so the edge device can fly a simulated drone
 flight logic without hardware.
 """
 
+import logging
 import math
 import threading
 import time
@@ -21,6 +22,7 @@ import numpy as np
 from djitellopy import Tello
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import Throttle, log_event, notice
 from flightrisk.drone.controller import (
     BASIC_FLIGHT,
     CommandOutcome,
@@ -41,6 +43,24 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
 )
 from flightrisk.drone.snapshot import reading as _reading
+
+_log = logging.getLogger(__name__)
+
+#: Repeated Tello failures (frame read, keepalive, state poll) are logged at
+#: most once per this many seconds per drone and kind.
+_FAILURE_LOG_INTERVAL_S = 10.0
+_failure_throttle = Throttle(_FAILURE_LOG_INTERVAL_S)
+
+
+def _log_failure(drone_id: str, event: str, exc: BaseException, level: int = logging.WARNING, **fields) -> None:
+    """Log a Tello failure that used to be silent: type and message, throttled."""
+    allowed, suppressed = _failure_throttle.allow((drone_id, event))
+    if not allowed:
+        return
+    if suppressed:
+        fields["suppressed"] = suppressed
+    log_event(_log, level, event, f"[{drone_id}] {event}: {type(exc).__name__}", category="error", component="tello",
+              drone_id=drone_id, error_type=type(exc).__name__, error=str(exc), **fields)
 
 # Backward-compatible re-export so `from flightrisk.drone.tello import DroneState` still works
 __all__ = [
@@ -245,6 +265,16 @@ def _dropped_busy(command: str) -> CommandResult:
     return CommandResult(command, CommandOutcome.DROPPED_BUSY, "another flight command holds the command channel")
 
 
+def _note_dropped(drone_id: str, result: CommandResult) -> CommandResult:
+    """Log (throttled) a move or rotate dropped because the channel was busy; return ``result``."""
+    allowed, suppressed = _failure_throttle.allow((drone_id, "tello_command_dropped", result.command))
+    if allowed:
+        log_event(_log, logging.WARNING, "tello_command_dropped", f"[{drone_id}] {result.command} dropped: channel busy",
+                  category="drone_comm", component="tello", drone_id=drone_id, command=result.command,
+                  outcome=result.outcome.value, suppressed=suppressed or None)
+    return result
+
+
 def _state_int(state: dict, key: str) -> int | None:
     """The state field ``key`` as an int, or None if it is missing or not a number."""
     try:
@@ -369,9 +399,11 @@ class _StateStampedUdpObject(dict):
                     # times a second.
                     if not self._failure_logged:
                         self._failure_logged = True
-                        print(
+                        notice(
+                            _log, "tello_state_record_failed",
                             f"[{self._name}] Recording a state packet failed ({e!r}); "
-                            "further failures are not logged."
+                            "further failures are not logged.",
+                            level=logging.WARNING, drone_id=self._name, error_type=type(e).__name__,
                         )
 
 
@@ -514,9 +546,11 @@ class TelloController:
                 _djitello.drones[host] = _StateStampedUdpObject(udp, self._note_state_packet, self.name)
         except Exception as e:
             # No arrival times: landing falls back to reply-based confirmation.
-            print(
+            notice(
+                _log, "tello_state_arrivals_unavailable",
                 f"[{self.name}] Could not record state packet arrivals ({e!r}); "
-                "lands are confirmed by replies once the state stream counts as lost."
+                "lands are confirmed by replies once the state stream counts as lost.",
+                level=logging.WARNING, drone_id=self.name, error_type=type(e).__name__,
             )
 
     def _note_state_packet(self, state: object) -> None:
@@ -656,7 +690,8 @@ class TelloController:
             self._retry_ground_command(self.tello.connect)
             self._set_measured("battery", self.tello.get_battery())
             self.state.is_connected = True
-            print(f"[{self.name}] Connected. Battery: {self.state.battery}%")
+            notice(_log, "tello_connected", f"[{self.name}] Connected. Battery: {self.state.battery}%",
+                   drone_id=self.name, battery_pct=self.state.battery)
 
             self._retry_ground_command(self.tello.streamon)
             self._running = True
@@ -664,7 +699,8 @@ class TelloController:
             self._start_state_polling()
             return True
         except Exception as e:
-            print(f"[{self.name}] Connection failed: {e}")
+            notice(_log, "tello_connect_failed", f"[{self.name}] Connection failed: {e}", level=logging.ERROR,
+                   drone_id=self.name, error_type=type(e).__name__)
             return False
 
     def disconnect(self):
@@ -679,7 +715,8 @@ class TelloController:
             try:
                 self.land()
             except Exception as e:
-                print(f"[{self.name}] Land before disconnect failed: {e}")
+                notice(_log, "tello_land_before_disconnect_failed", f"[{self.name}] Land before disconnect failed: {e}",
+                       level=logging.ERROR, drone_id=self.name, error_type=type(e).__name__)
         with self._cmd_lock:
             try:
                 self.tello.end()
@@ -687,7 +724,7 @@ class TelloController:
                 pass
         self.state.is_connected = False
         self.state.is_flying = False
-        print(f"[{self.name}] Disconnected.")
+        notice(_log, "tello_disconnected", f"[{self.name}] Disconnected.", drone_id=self.name)
 
     def get_frame(self) -> np.ndarray | None:
         """Get the latest video frame as a BGR numpy array."""
@@ -710,7 +747,9 @@ class TelloController:
 
                 if self._frozen_count > 100:
                     if not self._stream_recovering:
-                        print(f"[{self.name}] Frozen frame detected ({self._frozen_count} identical), recovering...")
+                        notice(_log, "tello_frozen_frame",
+                               f"[{self.name}] Frozen frame detected ({self._frozen_count} identical), recovering...",
+                               level=logging.WARNING, drone_id=self.name, identical_frames=self._frozen_count)
                         self._recover_stream()
                     return None
 
@@ -725,7 +764,8 @@ class TelloController:
                     and not self._stream_recovering):
                 self._recover_stream()
             return None
-        except Exception:
+        except Exception as e:
+            _log_failure(self.name, "tello_get_frame_failed", e)
             return None
 
     def _recover_stream(self):
@@ -744,11 +784,14 @@ class TelloController:
         self._stream_recovering = True
 
         def _do_recover():
-            print(f"[{self.name}] Video stream stale, restarting...")
+            notice(_log, "tello_stream_stale", f"[{self.name}] Video stream stale, restarting...",
+                   level=logging.WARNING, drone_id=self.name)
             try:
                 try:
                     if not self._stream_command_when_free("streamoff"):
-                        print(f"[{self.name}] Stream recovery skipped: the command channel stayed busy.")
+                        notice(_log, "tello_stream_recovery_skipped",
+                               f"[{self.name}] Stream recovery skipped: the command channel stayed busy.",
+                               level=logging.WARNING, drone_id=self.name, reason="channel_busy")
                         return
                 except Exception:
                     # A failed streamoff does not stop the streamon.
@@ -756,11 +799,14 @@ class TelloController:
                 time.sleep(_STREAM_RESTART_PAUSE_S)
                 try:
                     if self._stream_command_when_free("streamon"):
-                        print(f"[{self.name}] Video stream restarted.")
+                        notice(_log, "tello_stream_restarted", f"[{self.name}] Video stream restarted.", drone_id=self.name)
                     else:
-                        print(f"[{self.name}] Stream recovery failed: the command channel stayed busy.")
+                        notice(_log, "tello_stream_recovery_failed",
+                               f"[{self.name}] Stream recovery failed: the command channel stayed busy.",
+                               level=logging.WARNING, drone_id=self.name, reason="channel_busy")
                 except Exception as e:
-                    print(f"[{self.name}] Stream recovery failed: {e}")
+                    notice(_log, "tello_stream_recovery_failed", f"[{self.name}] Stream recovery failed: {e}",
+                           level=logging.WARNING, drone_id=self.name, error_type=type(e).__name__)
             finally:
                 self._stream_recovering = False
 
@@ -868,13 +914,16 @@ class TelloController:
             land_seq = self._land_seq
             landing_now = self._lands_in_progress > 0
         if landing_now:
-            print(f"[{self.name}] Takeoff refused: a landing is in progress.")
+            notice(_log, "tello_takeoff_refused", f"[{self.name}] Takeoff refused: a landing is in progress.",
+                   level=logging.WARNING, drone_id=self.name, reason="landing")
             return False
         with self._cmd_lock:
             if not self._send_flight_command(
                 "takeoff", _TAKEOFF_REPLY_TIMEOUT_S, abort=abort, rearm_after_land=land_seq
             ):
-                print(f"[{self.name}] Takeoff refused: a landing is in progress or was requested.")
+                notice(_log, "tello_takeoff_refused",
+                       f"[{self.name}] Takeoff refused: a landing is in progress or was requested.",
+                       level=logging.WARNING, drone_id=self.name, reason="landing_or_abort")
                 return False
             with self._wire_lock:
                 # The drone is flying under command again, so an earlier land
@@ -884,7 +933,7 @@ class TelloController:
             self.state.is_flying = True
             # djitellopy's end() lands only when its own flag says flying.
             self.tello.is_flying = True
-            print(f"[{self.name}] Takeoff.")
+            notice(_log, "tello_takeoff", f"[{self.name}] Takeoff.", drone_id=self.name)
             return True
 
     def land(self):
@@ -952,9 +1001,11 @@ class TelloController:
                 self.state.is_flying = True
                 self.tello.is_flying = True
         if guarded:
-            print(
+            notice(
+                _log, "tello_land_guarded",
                 f"[{self.name}] Landing follows a takeoff that may still lift: nothing confirms it "
-                f"for {self._lift_guard_left():.1f} s, and no reply alone for {self._reply_guard_left():.1f} s."
+                f"for {self._lift_guard_left():.1f} s, and no reply alone for {self._reply_guard_left():.1f} s.",
+                level=logging.WARNING, drone_id=self.name,
             )
         try:
             with self._owner_lock:
@@ -964,14 +1015,17 @@ class TelloController:
                 behind_land = not took_channel and self._land_on_channel
             if not took_channel:
                 if behind_land:
-                    print(f"[{self.name}] Landing: another land is confirming, waiting for it.")
+                    notice(_log, "tello_land_waiting", f"[{self.name}] Landing: another land is confirming, waiting for it.",
+                           drone_id=self.name)
                 else:
-                    print(f"[{self.name}] Landing now (interrupting an in-flight command).")
+                    notice(_log, "tello_land_interrupting", f"[{self.name}] Landing now (interrupting an in-flight command).",
+                           level=logging.WARNING, drone_id=self.name)
                     self._send_land_raw("stop")
                     self._pace_land()
                     self._send_land_raw("land")
             self._confirm_land(holding_channel=took_channel, deadline=deadline, start_height=start_height)
-            print(f"[{self.name}] Landing." if took_channel else f"[{self.name}] Landing confirmed.")
+            notice(_log, "tello_land_done", f"[{self.name}] Landing." if took_channel else f"[{self.name}] Landing confirmed.",
+                   drone_id=self.name, took_channel=took_channel)
         finally:
             with self._wire_lock:
                 self._lands_in_progress -= 1
@@ -981,7 +1035,8 @@ class TelloController:
         try:
             self.tello.send_command_without_return(command)
         except Exception as e:
-            print(f"[{self.name}] Immediate '{command}' failed: {e}")
+            notice(_log, "tello_immediate_command_failed", f"[{self.name}] Immediate '{command}' failed: {e}",
+                   level=logging.ERROR, drone_id=self.name, command=command, error_type=type(e).__name__)
         finally:
             self._land_sent_at = time.monotonic()
 
@@ -1034,7 +1089,7 @@ class TelloController:
             # djitellopy's end() lands only when its own flag says flying.
             self.tello.is_flying = False
         if how:
-            print(f"[{self.name}] Land confirmed: {how}.")
+            notice(_log, "tello_land_confirmed", f"[{self.name}] Land confirmed: {how}.", drone_id=self.name, how=how)
         return True
 
     def _confirm_land(self, holding_channel: bool, deadline: float, start_height: int | None = None) -> None:
@@ -1132,9 +1187,11 @@ class TelloController:
                             return
                         if not not_taking:
                             break
-                        print(
+                        notice(
+                            _log, "tello_land_not_taking",
                             f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} ({outcome}) did not take: "
-                            f"{not_taking}; sending land again."
+                            f"{not_taking}; sending land again.",
+                            level=logging.WARNING, drone_id=self.name, attempt=attempt, attempts=_LAND_ATTEMPTS,
                         )
                         if not self._take_channel_for_land(watch_until):
                             if not self._land_unconfirmed:
@@ -1186,7 +1243,9 @@ class TelloController:
                             f"{outcome}, but the state stream is lost and last showed "
                             f"{self._state_height_text()}"
                         )
-                print(f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} not confirmed: {outcome}.")
+                notice(_log, "tello_land_unconfirmed",
+                       f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} not confirmed: {outcome}.",
+                       level=logging.ERROR, drone_id=self.name, attempt=attempt, attempts=_LAND_ATTEMPTS)
                 if time.monotonic() >= deadline:
                     break
             raise RuntimeError(
@@ -1365,7 +1424,7 @@ class TelloController:
         if self._landing:
             return False
         if not self._acquire_for_flight():
-            return _dropped_busy("move")
+            return _note_dropped(self.name, _dropped_busy("move"))
         try:
             distance_cm = max(20, min(500, int(distance_cm)))
             return self._send_flight_command(f"{direction} {distance_cm}", _COMMAND_REPLY_TIMEOUT_S)
@@ -1383,7 +1442,7 @@ class TelloController:
         if self._landing:
             return False
         if not self._acquire_for_flight():
-            return _dropped_busy("rotate")
+            return _note_dropped(self.name, _dropped_busy("rotate"))
         try:
             if degrees > 0:
                 command = f"cw {min(360, int(degrees))}"
@@ -1701,7 +1760,8 @@ class TelloController:
                 pass
             self.tello.send_control_command("command", timeout=_KEEPALIVE_TIMEOUT_S)
             return True
-        except Exception:
+        except Exception as e:
+            _log_failure(self.name, "tello_keepalive_failed", e)
             return False
         finally:
             with self._owner_lock:
@@ -1738,12 +1798,15 @@ class TelloController:
             self._poll_failures = 0
             self._extended = self._read_extended_state(time.time())
             self._check_zero_height()
-        except Exception:
+        except Exception as e:
             self._poll_failures += 1
+            _log_failure(self.name, "tello_poll_failed", e, consecutive=self._poll_failures)
             if self._poll_failures >= 3 and self.state.is_connected:
                 self.state.is_connected = False
                 self._running = False
-                print(f"[{self.name}] Connection lost — {self._poll_failures} consecutive poll failures.")
+                notice(_log, "tello_link_lost",
+                       f"[{self.name}] Connection lost — {self._poll_failures} consecutive poll failures.",
+                       level=logging.ERROR, drone_id=self.name, poll_failures=self._poll_failures)
 
     def _check_zero_height(self) -> None:
         """The state poller's zero-height path, run after each successful poll.
@@ -1782,7 +1845,8 @@ class TelloController:
             return
         if self.state.is_flying:
             self.state.is_flying = False
-            print(f"[{self.name}] Crash detected — height 0 for {polls} polls.")
+            notice(_log, "tello_crash_suspected", f"[{self.name}] Crash detected — height 0 for {polls} polls.",
+                   level=logging.ERROR, drone_id=self.name, polls=polls)
 
 
 class FakeTelloController:
@@ -1841,7 +1905,8 @@ class FakeTelloController:
 
     def connect(self) -> bool:
         self.state.is_connected = True
-        print(f"[{self.name}] Fake drone connected. Battery: {self.state.battery}%")
+        notice(_log, "tello_connected", f"[{self.name}] Fake drone connected. Battery: {self.state.battery}%",
+               drone_id=self.name, battery_pct=self.state.battery, fake=True)
         return True
 
     def disconnect(self) -> None:

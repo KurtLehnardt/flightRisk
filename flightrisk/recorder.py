@@ -4,12 +4,17 @@ Records annotated frames to an MP4 file for backup demos and review.
 Also supports playing back recorded sessions as a video source.
 """
 
+import logging
 import time
 import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from flightrisk.obs_log import notice
+
+_log = logging.getLogger(__name__)
 
 RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
 RECORDINGS_DIR.mkdir(exist_ok=True)
@@ -48,7 +53,7 @@ class SessionRecorder:
             )
             self._recording = True
             self._frame_count = 0
-            print(f"[recorder] Recording started: {self._filepath}")
+            notice(_log, "recording_started", f"[recorder] Recording started: {self._filepath}", file=self._filepath.name)
             return str(self._filepath)
 
     def write_frame(self, frame: np.ndarray):
@@ -77,8 +82,9 @@ class SessionRecorder:
                 self._writer = None
 
         duration = self._frame_count / self.fps if self.fps > 0 else 0
-        print(f"[recorder] Recording saved: {self._filepath} "
-              f"({self._frame_count} frames, {duration:.1f}s)")
+        notice(_log, "recording_saved", f"[recorder] Recording saved: {self._filepath} "
+               f"({self._frame_count} frames, {duration:.1f}s)",
+               file=self._filepath.name if self._filepath else None, frames=self._frame_count, duration_s=round(duration, 1))
         return str(self._filepath)
 
     @property
