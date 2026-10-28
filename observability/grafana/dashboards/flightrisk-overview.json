@@ -1,0 +1,299 @@
+{
+  "uid": "fr-overview",
+  "title": "FlightRisk / Overview",
+  "description": "Golden signals (traffic, errors, latency, saturation), SLOs and recent problems for every FlightRisk process.",
+  "tags": [
+    "flightrisk",
+    "overview"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "links": [
+    {
+      "title": "FlightRisk dashboards",
+      "type": "dashboards",
+      "tags": ["flightrisk"],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0}
+    ]
+  },
+  "annotations": {
+    "list": [
+      {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"},
+      {"name": "Flight safety", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "red", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "instant": false, "titleFormat": "{{kind}}", "textFormat": "{{kind}} {{reason}} {{drone_id}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Alerts", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "orange", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "instant": false, "titleFormat": "{{transition}}", "textFormat": "alert {{transition}} ({{awaiting_s}} s)", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Target changes", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "blue", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "instant": false, "titleFormat": "{{event}}", "textFormat": "target from {{source}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "refId": "Anno", "queryType": "range"}}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Golden signals",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Uptime",
+      "description": "Seconds since the newest FlightRisk process on the selected nodes started.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(flightrisk_process_uptime_s{service_instance_id=~\"$node\"})", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 2,
+      "gridPos": {"x": 0, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Request rate",
+      "description": "Dashboard REST requests plus Socket.IO events from the browser, per second.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(flightrisk_http_requests{service_instance_id=~\"$node\"}[$__rate_interval])) + (sum(rate(flightrisk_socket_events{service_instance_id=~\"$node\"}[5m])) or vector(0))", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 3,
+      "gridPos": {"x": 4, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Handler error ratio (5m)",
+      "description": "Share of REST requests and Socket.IO events whose handler failed (5xx or exception).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "((sum(rate(flightrisk_http_requests{service_instance_id=~\"$node\", outcome=\"error\"}[5m])) or vector(0)) + (sum(rate(flightrisk_socket_events{service_instance_id=~\"$node\", outcome=\"error\"}[5m])) or vector(0))) / clamp_min((sum(rate(flightrisk_http_requests{service_instance_id=~\"$node\"}[5m])) or vector(0)) + (sum(rate(flightrisk_socket_events{service_instance_id=~\"$node\"}[5m])) or vector(0)), 1e-9)", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.01}, {"color": "red", "value": 0.05}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 4,
+      "gridPos": {"x": 8, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Frame loop FPS",
+      "description": "Frames per second processed by the dashboard frame loop.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(flightrisk_fps{service_instance_id=~\"$node\"})", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "", "custom": {}, "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 2}, {"color": "green", "value": 5}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 5,
+      "gridPos": {"x": 12, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Alert awaiting operator",
+      "description": "1 while a match alert waits for Confirm or Dismiss.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(flightrisk_alert_phase{service_instance_id=~\"$node\", phase=\"awaiting_response\"})", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 6,
+      "gridPos": {"x": 16, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Errors logged (range)",
+      "description": "ERROR and CRITICAL log records in the selected time range.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(flightrisk_error_logs{service_instance_id=~\"$node\"}[$__range])) or vector(0)", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "", "custom": {}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 20}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 7,
+      "gridPos": {"x": 20, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Traffic, errors and latency",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 5, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic",
+      "description": "RED rate: REST requests by route template and Socket.IO events by name.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (route) (rate(flightrisk_http_requests{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "REST {{route}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (event) (rate(flightrisk_socket_events{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "socket {{event}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 9,
+      "gridPos": {"x": 0, "y": 6, "w": 8, "h": 9}
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors",
+      "description": "RED errors: handlers that were rejected, unauthorized or failed, and ERROR log records by component.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (outcome) (rate(flightrisk_socket_events{service_instance_id=~\"$node\", outcome!=\"ok\"}[$__rate_interval]))", "legendFormat": "socket {{outcome}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (outcome) (rate(flightrisk_http_requests{service_instance_id=~\"$node\", outcome!=\"ok\"}[$__rate_interval]))", "legendFormat": "REST {{outcome}}", "refId": "B"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (component) (rate(flightrisk_error_logs{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "logged errors {{component}}", "refId": "C"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 10,
+      "gridPos": {"x": 8, "y": 6, "w": 8, "h": 9}
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99",
+      "description": "RED duration. Exemplar dots link to the trace of a sampled request.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.5, sum by (le) (rate(flightrisk_socket_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "socket p50", "refId": "A", "exemplar": true}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(flightrisk_socket_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "socket p95", "refId": "B", "exemplar": true}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.99, sum by (le) (rate(flightrisk_socket_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "socket p99", "refId": "C"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(flightrisk_http_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "REST p95", "refId": "D", "exemplar": true}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(flightrisk_frame_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "frame p95", "refId": "E", "exemplar": true}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 11,
+      "gridPos": {"x": 16, "y": 6, "w": 8, "h": 9}
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Saturation (USE)",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 15, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU",
+      "description": "Process CPU (100 = one core).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "flightrisk_process_usage{service_instance_id=~\"$node\", resource=\"cpu_percent\"}", "legendFormat": "{{service_instance_id}} {{service_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 13,
+      "gridPos": {"x": 0, "y": 16, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory (RSS)",
+      "description": "Resident set size of each process.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "flightrisk_process_usage{service_instance_id=~\"$node\", resource=\"memory_rss_bytes\"}", "legendFormat": "{{service_instance_id}} {{service_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 14,
+      "gridPos": {"x": 6, "y": 16, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Threads and open files",
+      "description": "Thread count and open file descriptors.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "flightrisk_process_usage{service_instance_id=~\"$node\", resource=\"threads\"}", "legendFormat": "threads {{service_instance_id}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "flightrisk_process_usage{service_instance_id=~\"$node\", resource=\"open_fds\"}", "legendFormat": "fds {{service_instance_id}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 15,
+      "gridPos": {"x": 12, "y": 16, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Queues",
+      "description": "Depth of the bounded queues (reasoning, log console) and items dropped because one was full.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (queue) (flightrisk_queue_depth{service_instance_id=~\"$node\"})", "legendFormat": "depth {{queue}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (queue) (increase(flightrisk_queue_dropped{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "dropped {{queue}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 16,
+      "gridPos": {"x": 18, "y": 16, "w": 6, "h": 8}
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Service level objectives (1 h)",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 24, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Frame loop availability",
+      "description": "SLI: share of 30 s samples in the last hour where the frame loop processed a frame in the previous 5 s. SLO 99 %.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "avg_over_time((max(flightrisk_frame_loop_last_frame_age_s{service_instance_id=~\"$node\"}) < bool 5)[1h:30s])", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {}, "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 0.95}, {"color": "green", "value": 0.99}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 18,
+      "gridPos": {"x": 0, "y": 25, "w": 6, "h": 5}
+    },
+    {
+      "type": "stat",
+      "title": "Drone command success",
+      "description": "SLI: commands executed (outcome ok) over all commands in the last hour. SLO 99 %.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(flightrisk_drone_commands{service_instance_id=~\"$node\", outcome=\"ok\"}[1h])) / clamp_min(sum(increase(flightrisk_drone_commands{service_instance_id=~\"$node\"}[1h])), 1e-9)", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {}, "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 0.95}, {"color": "green", "value": 0.99}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 19,
+      "gridPos": {"x": 6, "y": 25, "w": 6, "h": 5}
+    },
+    {
+      "type": "stat",
+      "title": "Edge link availability",
+      "description": "SLI: share of 30 s samples in the last hour where every known edge link was connected. SLO 99 %.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "avg_over_time((min(flightrisk_link_connected{service_instance_id=~\"$node\"}) >= bool 1)[1h:30s])", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {}, "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 0.95}, {"color": "green", "value": 0.99}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 20,
+      "gridPos": {"x": 12, "y": 25, "w": 6, "h": 5}
+    },
+    {
+      "type": "timeseries",
+      "title": "Error-budget burn rate (SLO 99 %)",
+      "description": "1 means the error budget is spent exactly at the SLO pace; above 14 for 5 minutes is a fast burn.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - sum(rate(flightrisk_drone_commands{service_instance_id=~\"$node\", outcome=\"ok\"}[5m])) / clamp_min(sum(rate(flightrisk_drone_commands{service_instance_id=~\"$node\"}[5m])), 1e-9)) / 0.01", "legendFormat": "commands 5m", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(1 - avg_over_time((max(flightrisk_frame_loop_last_frame_age_s{service_instance_id=~\"$node\"}) < bool 5)[5m:30s])) / 0.01", "legendFormat": "frame loop 5m", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "line"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 14}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 21,
+      "gridPos": {"x": 18, "y": 25, "w": 6, "h": 5}
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Recent problems",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 30, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "Warnings and errors",
+      "description": "Click a line, then the trace_id link, to open its trace in Tempo.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | level=~\"warning|error|critical\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 23,
+      "gridPos": {"x": 0, "y": 31, "w": 16, "h": 10}
+    },
+    {
+      "type": "table",
+      "title": "Recent traces",
+      "description": "Most recent traces in Tempo.",
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [{"datasource": {"type": "tempo", "uid": "tempo"}, "queryType": "traceql", "query": "{resource.service.name=~\"flightrisk.*\"}", "limit": 20, "tableType": "traces", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
+      "options": {"showHeader": true},
+      "id": 24,
+      "gridPos": {"x": 16, "y": 31, "w": 8, "h": 10}
+    }
+  ]
+}

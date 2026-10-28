@@ -299,7 +299,10 @@ def test_same_leader_reconnecting_keeps_the_authority(grounds, edges, token):
     a2 = grounds(leader(), port=port)
     assert wait_for(lambda: edge.uplink.authority.authority_key not in (None, first_key))
     assert edge.uplink.authority.epoch_seen == 1
-    a2.transport.send_to_drone(DRONE, fp.make_takeoff(fence=leader().fence))
+    # The edge adopts the new connection on the ground's hello; the ground
+    # can address the drone only once the edge's hello has reached it.
+    assert wait_for(lambda: a2.transport.drone_ids() == [DRONE])
+    assert a2.transport.send_to_drone(DRONE, fp.make_takeoff(fence=leader().fence))
     assert wait_for(lambda: edge.flying)
 
 

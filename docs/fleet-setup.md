@@ -451,6 +451,17 @@ Lay out the drones as in "Placement and heading" above first. The dashboard shou
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
+## Observability (optional)
+
+To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
+
+```
+export FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://127.0.0.1:4317
+export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=mac-ground FLIGHTRISK_TELEMETRY_CONTENT=1
+```
+
+On Windows set the same variables with `OTEL_ENDPOINT=http://10.42.0.1:4317` and `service.instance.id=edge-2`. `FLIGHTRISK_TELEMETRY_CONTENT=1` records what the operator typed (redacted, capped) and keeps a private copy of the target photo for the Grafana preview; it is off unless set. Secrets, embeddings, bystander crops, video frames and reasoning text are never recorded.
+
 ## Quick reference
 
 | Setting | Station | AP |

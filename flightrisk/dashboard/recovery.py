@@ -198,6 +198,33 @@ def run_fleet_confirm_landing(emit: EmitFn | None = None) -> str:
     return "failsafe_land_failed"
 
 
+def _observed_recovery(target: Callable[..., str], args: tuple, fleet: bool) -> str | None:
+    """Run the confirm flight sequence and record its outcome and duration.
+
+    The outcome (``returned_and_landed``, ``landed_in_place``,
+    ``failsafe_landed``, ``failsafe_land_failed``, ``fleet_landed``, ...) is
+    a ``flight_safety`` event (``confirm_recovery``) and a metric label.
+    """
+    import time
+
+    from flightrisk import obs_events
+
+    t0 = time.monotonic()
+    outcome = None
+    try:
+        outcome = target(*args)
+        return outcome
+    finally:
+        failed = outcome in (None, "failsafe_land_failed")
+        obs_events.flight_safety(
+            "confirm_recovery",
+            reason=outcome or "error",
+            level=logging.ERROR if failed else logging.WARNING,
+            duration_s=round(time.monotonic() - t0, 3),
+            fleet=fleet,
+        )
+
+
 class ConfirmRecovery:
     """Runs :func:`run_confirm_recovery` at most once per confirmed match."""
 
@@ -217,8 +244,9 @@ class ConfirmRecovery:
                 return False
             self._started = True
             t = threading.Thread(
-                target=run_fleet_confirm_landing if fleet else run_confirm_recovery,
-                args=(emit,) if fleet else (drone, emit),
+                target=_observed_recovery,
+                args=(run_fleet_confirm_landing if fleet else run_confirm_recovery,
+                      (emit,) if fleet else (drone, emit), fleet),
                 daemon=True,
                 name="confirm-recovery",
             )

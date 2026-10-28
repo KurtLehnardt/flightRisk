@@ -56,7 +56,12 @@ class SignalRegistry:
                 self._providers[name] = provider
                 logger.info("signal enabled: %s (weight=%.2f)", name, sig_cfg.weight)
             else:
-                logger.info("signal disabled: %s (unavailable)", name)
+                # Configured on but could not load (a missing model file, for
+                # example): matching runs without it, so this is a warning.
+                logger.warning("signal disabled: %s (unavailable)", name)
+                from flightrisk import obs_events
+
+                obs_events.model_load(name, "unavailable", component="vision")
 
     def _create_provider(self, name: str) -> object | None:
         """Instantiate the provider for `name` if it's available.

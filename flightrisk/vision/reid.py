@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import notice
 
 try:
     import torch
@@ -51,7 +52,7 @@ class PersonReID:
         self.preprocess = preprocess
 
         self._target_embedding: np.ndarray | None = None
-        print(f"[reid] CLIP ViT-B/16 loaded on {self.device}")
+        notice(logger, "model_loaded", f"[reid] CLIP ViT-B/16 loaded on {self.device}", model="clip-vit-b-16", device=str(self.device))
 
     def _select_device(self) -> str:
         if torch.backends.mps.is_available():
@@ -112,7 +113,8 @@ class PersonReID:
             image: BGR numpy array — a photo of the target child.
         """
         self._target_embedding = self._extract_embedding(image)
-        print(f"[reid] Target embedding set ({self._target_embedding.shape[0]}-d)")
+        notice(logger, "reid_target_set", f"[reid] Target embedding set ({self._target_embedding.shape[0]}-d)",
+               dims=int(self._target_embedding.shape[0]))
 
     def set_target_from_file(self, path: str):
         """Load a reference photo from disk."""
