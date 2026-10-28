@@ -180,14 +180,33 @@
             justify-content: center;
             overflow: hidden;
         }
-        #video-feed {
+        /* One tile per drone, side by side; wraps to a single column when narrow. */
+        #video-tiles {
+            position: absolute;
+            inset: 0;
+            display: none; /* shown by the frame handler once a frame arrives */
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+            grid-auto-rows: minmax(160px, 1fr);
+            gap: 2px;
+            overflow-y: auto;
+        }
+        .video-tile {
+            position: relative;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            min-width: 0;
+        }
+        .tile-feed {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
             display: none;
         }
-        /* Detection box overlay canvas -- sits exactly over the video feed */
-        #detection-overlay {
+        /* Detection box overlay canvas -- sits exactly over the tile's video feed */
+        .tile-overlay {
             position: absolute;
             top: 0;
             left: 0;
@@ -196,6 +215,35 @@
             pointer-events: none;
             z-index: 4;
         }
+        .tile-label {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 6;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(10, 15, 26, 0.85);
+            border: 1px solid var(--cyan-dim);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+        .tile-label:empty { display: none; }
+        .tile-nodata {
+            position: absolute;
+            inset: 0;
+            z-index: 3;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: #0A0F1A;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        .tile-nodata.active { display: flex; }
         /* "detections only -- video off" indicator (edge not streaming video) */
         .detections-only-indicator {
             position: absolute;
@@ -1653,14 +1701,23 @@
 
         <!-- VIDEO PANEL -->
         <div class="video-panel">
-            <img id="video-feed" alt="Drone Feed">
+            <!-- One tile per drone. This first tile is reused for the first drone
+                 (or for a source that sends no drone id); more are created on demand. -->
+            <div id="video-tiles">
+                <div class="video-tile" id="video-tile-default">
+                    <img id="video-feed" class="tile-feed" alt="Drone Feed">
 
-            <!-- Detection box overlay (edge devices send normalized boxes) -->
-            <canvas id="detection-overlay"></canvas>
+                    <!-- Detection box overlay (edge devices send normalized boxes) -->
+                    <canvas id="detection-overlay" class="tile-overlay"></canvas>
 
-            <!-- Detections-only indicator (shown when edge sends boxes but no video) -->
-            <div id="detections-only-indicator" class="detections-only-indicator">
-                DETECTIONS ONLY &mdash; VIDEO OFF
+                    <div class="tile-label"></div>
+                    <div class="tile-nodata">NO VIDEO</div>
+
+                    <!-- Detections-only indicator (shown when edge sends boxes but no video) -->
+                    <div id="detections-only-indicator" class="detections-only-indicator">
+                        DETECTIONS ONLY &mdash; VIDEO OFF
+                    </div>
+                </div>
             </div>
 
             <div id="video-placeholder" class="video-placeholder">
@@ -2172,30 +2229,86 @@
         }
 
         // ========== DOM REFS ==========
-        const videoFeed = document.getElementById('video-feed');
         const videoPlaceholder = document.getElementById('video-placeholder');
         const videoPanel = document.querySelector('.video-panel');
-        const overlayCanvas = document.getElementById('detection-overlay');
-        const detectionsOnlyIndicator = document.getElementById('detections-only-indicator');
+        const videoTilesEl = document.getElementById('video-tiles');
 
-        // ========== DETECTION OVERLAY (edge boxes) ==========
-        // Latest edge-detection state, kept so the overlay can be redrawn on
-        // image load / window resize without waiting for the next frame.
-        let latestBoxes = [];
-        let latestHasImage = true;
+        // ========== VIDEO TILES (one per drone) ==========
+        // A drone with no frame for this long shows "NO VIDEO" instead of its
+        // last frame, so a stale picture is never mistaken for live video.
+        const TILE_STALE_MS = 3000;
+        const videoTiles = new Map(); // drone id -> tile state
+        const defaultTile = makeTile(document.getElementById('video-tile-default'));
+        let defaultTileOwner = null;  // drone id that adopted the static first tile
+        let defaultTileAnon = false;  // true once a frame without a drone id used it
 
-        function resizeOverlayCanvas() {
-            const w = videoPanel.clientWidth;
-            const h = videoPanel.clientHeight;
-            if (overlayCanvas.width !== w) overlayCanvas.width = w;
-            if (overlayCanvas.height !== h) overlayCanvas.height = h;
+        function makeTile(el) {
+            const t = {
+                el: el,
+                feed: el.querySelector('.tile-feed'),
+                canvas: el.querySelector('.tile-overlay'),
+                label: el.querySelector('.tile-label'),
+                nodata: el.querySelector('.tile-nodata'),
+                detOnly: el.querySelector('.detections-only-indicator'),
+                boxes: [],
+                hasImage: true,
+                lastFrameAt: 0,
+                lastShownAt: 0,
+            };
+            t.feed.addEventListener('load', () => renderDetectionOverlay(t));
+            return t;
         }
 
-        // Rectangle (in canvas px) that the video image actually occupies inside
-        // the panel, mirroring CSS object-fit: contain letterboxing.
-        function getVideoRect() {
-            const Wp = overlayCanvas.width, Hp = overlayCanvas.height;
-            const nw = videoFeed.naturalWidth, nh = videoFeed.naturalHeight;
+        function createTile(droneId) {
+            const el = document.createElement('div');
+            el.className = 'video-tile';
+            el.dataset.droneId = droneId;
+            el.innerHTML = '<img class="tile-feed" alt="Drone Feed">' +
+                '<canvas class="tile-overlay"></canvas>' +
+                '<div class="tile-label"></div>' +
+                '<div class="tile-nodata">NO VIDEO</div>' +
+                '<div class="detections-only-indicator">DETECTIONS ONLY &mdash; VIDEO OFF</div>';
+            videoTilesEl.appendChild(el);
+            return makeTile(el);
+        }
+
+        // Tile for a drone id, created on demand. Frames without a drone id
+        // (single-drone and non-fleet sources) use the static first tile.
+        function getTile(droneId) {
+            if (droneId === null || droneId === undefined || droneId === '') {
+                defaultTileAnon = true;
+                return defaultTile;
+            }
+            const key = String(droneId);
+            let t = videoTiles.get(key);
+            if (!t) {
+                if (!defaultTileAnon && defaultTileOwner === null) {
+                    t = defaultTile;
+                    defaultTileOwner = key;
+                } else {
+                    t = createTile(key);
+                }
+                t.el.dataset.droneId = key;
+                t.label.textContent = key;
+                videoTiles.set(key, t);
+            }
+            return t;
+        }
+
+        function resizeOverlayCanvas(t) {
+            const w = t.el.clientWidth;
+            const h = t.el.clientHeight;
+            if (t.canvas.width !== w) t.canvas.width = w;
+            if (t.canvas.height !== h) t.canvas.height = h;
+        }
+
+        // Rectangle (in canvas px) that the tile's video image actually occupies,
+        // mirroring CSS object-fit: contain letterboxing. The natural size is that
+        // of this drone's own frames, so each drone maps boxes with its own
+        // frame_width/frame_height aspect.
+        function getVideoRect(t) {
+            const Wp = t.canvas.width, Hp = t.canvas.height;
+            const nw = t.feed.naturalWidth, nh = t.feed.naturalHeight;
             if (!nw || !nh) return { x: 0, y: 0, w: Wp, h: Hp };
             const scale = Math.min(Wp / nw, Hp / nh);
             const w = nw * scale, h = nh * scale;
@@ -2235,29 +2348,43 @@
             }
         }
 
-        // Redraw the overlay from the latest frame state.
-        function renderDetectionOverlay() {
-            resizeOverlayCanvas();
-            const ctx = overlayCanvas.getContext('2d');
-            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        // Redraw one tile's overlay from its latest frame state.
+        function renderDetectionOverlay(t) {
+            if (!t) { videoTiles.forEach(renderDetectionOverlay); if (!videoTiles.size) renderDetectionOverlay(defaultTile); return; }
+            resizeOverlayCanvas(t);
+            const ctx = t.canvas.getContext('2d');
+            ctx.clearRect(0, 0, t.canvas.width, t.canvas.height);
             // Detections-only mode: paint a clean dark background behind the boxes.
-            if (!latestHasImage) {
+            if (!t.hasImage) {
                 ctx.fillStyle = '#0A0F1A';
-                ctx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                ctx.fillRect(0, 0, t.canvas.width, t.canvas.height);
             }
-            if (!latestBoxes || latestBoxes.length === 0) return;
+            if (!t.boxes || t.boxes.length === 0) return;
             // Video present -> map boxes into the letterboxed image rect;
             // detections-only -> map across the full canvas.
-            const rect = latestHasImage
-                ? getVideoRect()
-                : { x: 0, y: 0, w: overlayCanvas.width, h: overlayCanvas.height };
-            drawDetectionBoxes(ctx, latestBoxes, rect);
+            const rect = t.hasImage
+                ? getVideoRect(t)
+                : { x: 0, y: 0, w: t.canvas.width, h: t.canvas.height };
+            drawDetectionBoxes(ctx, t.boxes, rect);
         }
 
-        // Redraw when the feed image finishes loading (natural size now known)
-        // and on resize so boxes stay aligned.
-        videoFeed.addEventListener('load', renderDetectionOverlay);
-        window.addEventListener('resize', renderDetectionOverlay);
+        // Redraw on resize so boxes stay aligned.
+        window.addEventListener('resize', () => renderDetectionOverlay());
+
+        // Mark tiles that stopped receiving frames as "NO VIDEO".
+        function checkStaleTiles() {
+            const now = Date.now();
+            const all = videoTiles.size ? Array.from(videoTiles.values()) : [defaultTile];
+            all.forEach((t) => {
+                if (!t.lastFrameAt || now - t.lastFrameAt <= TILE_STALE_MS) return;
+                t.feed.style.display = 'none';
+                t.detOnly.classList.remove('active');
+                t.boxes = [];
+                t.nodata.classList.add('active');
+                renderDetectionOverlay(t);
+            });
+        }
+        setInterval(checkStaleTiles, 1000);
 
         // ========== EDGE VIDEO TOGGLE ==========
         function syncVideoToggle(enabled) {
@@ -2328,11 +2455,12 @@
         });
 
         // ========== FRAME HANDLER ==========
-        let lastFrameTime = 0;
         socket.on('frame', (data) => {
             const now = Date.now();
-            if (now - lastFrameTime < 100) return; // max 10fps display
-            lastFrameTime = now;
+            const tile = getTile(data.drone_id);
+            if (now - tile.lastShownAt < 100) return; // max 10fps display per drone
+            tile.lastShownAt = now;
+            tile.lastFrameAt = now;
 
             // Edge devices may send explicit detection boxes (normalized 0..1)
             // and may omit the video image entirely (detections-only mode).
@@ -2340,24 +2468,25 @@
             // no `boxes` array -> guard all overlay drawing on a non-empty array
             // so normal mode looks exactly as before.
             const hasImage = typeof data.image === 'string' && data.image.length > 0;
-            latestHasImage = hasImage;
-            latestBoxes = Array.isArray(data.boxes) ? data.boxes : [];
+            tile.hasImage = hasImage;
+            tile.boxes = Array.isArray(data.boxes) ? data.boxes : [];
 
+            videoTilesEl.style.display = 'grid';
+            videoPlaceholder.style.display = 'none';
+            tile.nodata.classList.remove('active');
             if (hasImage) {
-                videoFeed.src = 'data:image/jpeg;base64,' + data.image;
-                videoFeed.style.display = 'block';
-                videoPlaceholder.style.display = 'none';
-                detectionsOnlyIndicator.classList.remove('active');
+                tile.feed.src = 'data:image/jpeg;base64,' + data.image;
+                tile.feed.style.display = 'block';
+                tile.detOnly.classList.remove('active');
             } else {
                 // Detections-only: no video frame. Hide the (stale) image and
                 // show a clean dark canvas with the "video off" indicator.
-                videoFeed.style.display = 'none';
-                videoPlaceholder.style.display = 'none';
-                detectionsOnlyIndicator.classList.add('active');
+                tile.feed.style.display = 'none';
+                tile.detOnly.classList.add('active');
             }
             // Draw (or clear) the box overlay from the latest state. When there
             // is an image, the `load` listener redraws once natural size is known.
-            renderDetectionOverlay();
+            renderDetectionOverlay(tile);
 
             // Keep the edge video toggle in sync with the server's actual state.
             if (typeof data.stream_video === 'boolean') syncVideoToggle(data.stream_video);

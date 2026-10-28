@@ -446,14 +446,18 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
             _maybe_emit_edge_match(socketio, det, result, score_result, now)
 
     # Best-effort FPS from consecutive message timestamps.
+    # Track the previous timestamp per drone so two interleaved drones do not
+    # produce a bogus frame rate from each other's timestamps.
+    drone_id = getattr(msg, "drone_id", None)
+    fps_key = "last" if drone_id is None else "last:" + str(drone_id)
     fps = 0.0
     if fps_state is not None:
-        last = fps_state.get("last")
+        last = fps_state.get(fps_key)
         if last is not None:
             dt = msg.timestamp - last
             if dt > 0:
                 fps = round(1.0 / dt, 1)
-        fps_state["last"] = msg.timestamp
+        fps_state[fps_key] = msg.timestamp
 
     image_b64 = (
         base64.b64encode(msg.thumbnail_jpeg).decode("utf-8")
@@ -476,6 +480,10 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
         "stream_video": app_state.stream_video,
         "telemetry": {},
         "recording": False,
+        # Lets the browser keep one video tile per drone.
+        "drone_id": drone_id,
+        "frame_width": w,
+        "frame_height": h,
     })
 
 
