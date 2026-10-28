@@ -187,3 +187,12 @@ def test_chevron_keeps_rotation_and_respects_reduced_motion():
         INDEX,
     )
     assert "focus-visible" in INDEX and "outline: 2px solid var(--cyan)" in INDEX
+
+
+def test_ceiling_card_sits_directly_below_flight_controls():
+    flight = PAGE.index('data-card="flight-controls"')
+    ceiling = PAGE.index('data-card="ceiling"')
+    ai_reasoning = PAGE.index('data-card="ai-reasoning"')
+    assert flight < ceiling < ai_reasoning
+    # The fleet card (LAND ALL, fleet status) keeps its place ahead of flight controls.
+    assert PAGE.index('data-card="drone-fleet"') < flight
