@@ -87,6 +87,7 @@ from flightrisk.edge_uplink import (
     ENV_FLEET_LEGACY,
     ENV_GROUND_URLS,
     ENV_INFLIGHT_HANDOVER,
+    ENV_NODE_ID,
     EdgeUplink,
     default_node_id,
     env_flag,
@@ -845,11 +846,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.source == "file" and not args.video:
         parser.error("--video is required when --source=file")
     try:
-        parse_ground_urls(args.ground_urls)
+        ground_urls = parse_ground_urls(args.ground_urls)
     except ValueError as exc:
         parser.error(str(exc))
     if args.node_id is not None and not fp.is_identifier(args.node_id):
         parser.error(f"--node-id must be an identifier such as mac or win-1, got {args.node_id!r}")
+    env_node_id = os.environ.get(ENV_NODE_ID, "").strip()
+    uses_uplink = bool(ground_urls) and args.source in _FLIGHT_SOURCES
+    if uses_uplink and args.node_id is None and env_node_id and not fp.is_identifier(env_node_id):
+        parser.error(f"{ENV_NODE_ID} must be an identifier such as mac or win-1, got {env_node_id!r}")
     try:
         _resolve_appearance_only(args)
     except ValueError as exc:

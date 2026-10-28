@@ -57,6 +57,7 @@ def test_non_flying_sources_ignore_the_ground_list(monkeypatch):
     (["--source", "fake"], {"FLIGHTRISK_GROUND_URLS": "ws://a:1,,ws://b:2"}),
     (["--source", "fake", "--ground-urls", "http://a:1"], {}),
     (["--source", "fake", "--node-id", "bad id"], {}),
+    (["--source", "fake", "--ground-urls", "ws://127.0.0.1:9000"], {"FLIGHTRISK_NODE_ID": "bad id"}),
 ])
 def test_bad_ground_settings_fail_at_startup(argv, env, monkeypatch):
     for name in ("FLIGHTRISK_GROUND_URLS", "FLIGHTRISK_NODE_ID"):
