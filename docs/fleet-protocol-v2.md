@@ -272,6 +272,34 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   `emergency_land_all` is invalid. An edge may ack a landing.
 - **v1 rules kept.** On a v1 link a nack must be for `assign_lanes`, with a
   v1 reason and `lanes_total`, exactly as before.
+- **Geofence details.** A `geofence` nack for `assign_lanes`, v1 or v2, may
+  carry five optional numbers (`NACK_GEOFENCE_FIELDS`), all in cm and
+  relative to the drone's takeoff point: `geofence_cm` (the edge's fence
+  half-width), `x_cm` and `y_cm` (the first point of the refused path
+  outside the fence) and `rel_x_cm` and `rel_y_cm` (where that path starts:
+  the drone's dead-reckoned position in the air, or 0, 0 on the ground,
+  see "Takeoff point" below). When present each must be a finite number.
+  The edge executor always sends them with a geofence refusal of a lane
+  plan; the coordinator shows them in the refusal reason, for example
+  `refused by drone-1 (geofence: the path would reach (475, 0) cm from
+  drone-1's takeoff point, outside its 450 cm geofence; drone-1 is at
+  (300, 0) cm from its takeoff point)`. Older grounds ignore them, as they
+  ignore any extra field on an edge link.
+- **Takeoff point.** The dead-reckoned position, and so the geofence, is
+  relative to the spot the drone took off from on its current flight. Every
+  takeoff from the ground makes the drone's spot the origin again, just
+  before the takeoff is sent (logged as `edge_pose_reset` with where the
+  previous flight ended), because a Tello lands where it is and the edge
+  cannot see whether the operator carried it back to its start spot. A lane
+  plan received while the drone is on the ground is therefore checked from
+  0, 0 (the next takeoff point), and one received in the air (a re-task)
+  from the dead-reckoned position. After a landing, telemetry keeps
+  reporting where the drone landed until the next takeoff. The plan's zones
+  are only right if the operator puts every drone back on its start spot
+  before each start (`docs/fleet-setup.md`, "Every takeoff is a new start
+  point"). Before this change the position was never reset, so each run's
+  net displacement accumulated across flights and a later plan or re-task
+  could be refused for a position the drone never had.
 
 ## Compatibility with v1 peers
 

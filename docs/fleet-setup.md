@@ -26,6 +26,21 @@ Do this before every flight, in both paths. The coordinator assumes this layout,
 
 The launchers set the edge geofence to 450 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 
+### Every takeoff is a new start point
+
+The Tello has no GPS. Each edge tracks its drone by dead reckoning from the spot the drone took off from, and the geofence is a square of half-width `FLIGHTRISK_GEOFENCE_CM` around that spot. Every takeoff from the ground makes the drone's current spot the new start point (the edge logs `edge_pose_reset` with where the previous flight ended). The edge cannot know whether you carried the drone back to its mark after it landed, so it never carries a position over from an earlier flight: a position kept from an earlier flight would shift the geofence by however far the drone was moved by hand.
+
+What this means for you:
+
+- The plan's zones assume each drone takes off from its mark (drone-1 on the near-left corner, drone-2 250 cm to its right). A Tello lands where it is, so after every run, and after every LAND ALL, put each drone back on its mark, nose into the area, before the next Start. The Start confirmation reminds you of this.
+- If you do not, the drone flies its lanes, and keeps its geofence, around the spot where it landed. It still never flies further than the geofence from the spot it took off from, but its search pattern is shifted by however far it was from its mark.
+- After a landing, the dashboard shows the drone where it landed. It shows it at its zone's start again once it takes off.
+- A lane plan sent while a drone is on the ground is checked against the geofence from the spot it will take off from. A plan sent while it flies (a re-task) is checked from its dead-reckoned position.
+
+Repeated test runs (real or fake drones): press Plan, then Start, wait for the lanes to finish (or press LAND ALL), put the drones back on their marks, and press Plan again before the next Start. A landed drone always needs a new Plan, because every landing ends its plan.
+
+When a drone refuses lanes for its geofence, the refusal names where the path would leave the fence and where the drone is, both relative to its takeoff point, for example `refused by drone-1 (geofence: the path would reach (475, 0) cm from drone-1's takeoff point, outside its 450 cm geofence; drone-1 is at (300, 0) cm from its takeoff point)`. Start is refused the same way when a drone refuses its plan.
+
 ## Video port verdict
 
 Each Tello streams video to UDP port 11111 on whichever host sent `streamon`, and djitellopy binds one video capture per port, so two drones streaming to one host would collide. The SDK command `port <state> <video>` could move the video port, but whether Tello EDU firmware accepts it is unverified, because the SDK 2.0 and 3.0 documents could not be text-extracted when this was designed. The design therefore does not depend on `port`: run one edge process per host. Drone 1 gets `streamon` from the Mac and drone 2 gets it from the Windows laptop, so each drone's video goes to a different IP. This holds in both paths. The hardware check probes `port 8890 11112` on drone 2 and reports `ok` or `unknown command`. If it reports `ok`, a one-host two-edge layout becomes an option, still with one edge process per drone, but nothing here requires it.
