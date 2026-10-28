@@ -79,6 +79,10 @@ class AsyncBridge:
         # run_coroutine_threadsafe if we re-read the attribute.
         loop = self.loop
         if loop is None or not loop.is_running():
+            # Close the unstarted coroutine so it is not reported as never awaited.
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
             raise RuntimeError("Event loop is not running")
         effective_timeout = self._cmd_timeout if timeout is None else timeout
         future = asyncio.run_coroutine_threadsafe(coro, loop)
