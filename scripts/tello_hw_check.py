@@ -100,6 +100,11 @@ def _command_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
+# A real Tello can send duplicate or late "ok" replies, and a reply that is not text. Those are skipped
+# (so they are not read as the answer to the next command) and listed per host in one INFO row.
+_STRAYS: dict[str, list[str]] = {}
+
+
 def close_command_sockets() -> None:
     """Close the shared command sockets (call once the report is done)."""
     for sock in _CMD_SOCKETS.values():
@@ -108,14 +113,29 @@ def close_command_sockets() -> None:
         except OSError:
             pass
     _CMD_SOCKETS.clear()
+    _STRAYS.clear()
 
 
-def _drain(sock: socket.socket) -> None:
-    """Drop late replies to earlier timed-out commands so they are not read as the next reply."""
+def _is_text(data: bytes) -> bool:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return all(ch.isprintable() or ch in "\r\n\t\x00" for ch in text)
+
+
+def _note_stray(host: str, data: bytes) -> None:
+    shown = _clean(data) if _is_text(data) else "binary " + data[:8].hex()
+    _STRAYS.setdefault(host, []).append(shown)
+
+
+def _drain(sock: socket.socket, host: str) -> None:
+    """Drop late replies to earlier commands so they are not read as the next reply."""
     sock.settimeout(0.0)
     try:
         while True:
-            sock.recvfrom(2048)
+            data, _ = sock.recvfrom(2048)
+            _note_stray(host, data)
     except (BlockingIOError, socket.timeout, OSError):
         pass
 
@@ -129,15 +149,27 @@ def send_command(
 ) -> Optional[str]:
     """Send one SDK command and return the stripped reply, or None on timeout.
 
-    Every command to the same host and port goes out from the same local UDP port.
+    Every command to the same host and port goes out from the same local UDP port. Replies that are not
+    text are skipped, and so is a bare "ok" when the command is a query (ends with "?"), because that is a
+    duplicate or late acknowledgement and not the value asked for. Skipped replies are noted per host.
     """
     sock = _command_socket(host, port)
+    wants_value = command.strip().endswith("?")
     try:
-        _drain(sock)
-        sock.settimeout(timeout)
+        _drain(sock, host)
         sock.sendto(command.encode("utf-8"), (host, port))
-        data, _ = sock.recvfrom(2048)
-        return _clean(data)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            sock.settimeout(remaining)
+            data, _ = sock.recvfrom(2048)
+            text = _clean(data)
+            if not _is_text(data) or (wants_value and text.lower() == "ok"):
+                _note_stray(host, data)
+                continue
+            return text
     except socket.timeout:
         return None
     except OSError:
@@ -162,6 +194,7 @@ def _is_error(reply: str) -> bool:
 def check_drone(host: str, *, port: int = CMD_PORT, timeout: float = DEFAULT_TIMEOUT) -> list[CheckResult]:
     """Run the five status commands against one drone."""
     results: list[CheckResult] = []
+    _STRAYS.pop(host, None)
     for cmd in STATUS_COMMANDS:
         reply = send_command(host, cmd, port=port, timeout=timeout)
         name = f"cmd:{cmd}"
@@ -178,6 +211,10 @@ def check_drone(host: str, *, port: int = CMD_PORT, timeout: float = DEFAULT_TIM
             results.append(CheckResult(name, host, FAIL, f"battery not 0-100: {reply}", reply))
         else:
             results.append(CheckResult(name, host, PASS, "", reply))
+    strays = _STRAYS.get(host)
+    if strays:
+        shown = ", ".join(repr(s) for s in strays[:6])
+        results.append(CheckResult("stray-replies", host, INFO, f"ignored {len(strays)} duplicate or non-text reply(ies): {shown}", strays[:6]))
     return results
 
 
