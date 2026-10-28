@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from flightrisk.fleet_protocol.ceiling import SET_CEILING, is_ceiling_reply
-from flightrisk.fleet_protocol.manual import MANUAL_COMMAND_TYPES, is_manual_reply
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_id,
@@ -33,6 +32,7 @@ from flightrisk.fleet_protocol.constants import (
     V2_FIELDS,
     V2_ONLY_COMMAND_TYPES,
 )
+from flightrisk.fleet_protocol.manual import MANUAL_COMMAND_TYPES, is_manual_reply
 from flightrisk.fleet_protocol.validate import (
     _checked,
     _is_ground_hello,

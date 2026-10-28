@@ -89,7 +89,11 @@ import time
 from typing import Any, Callable, Iterable, TextIO
 
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.lane_executor import CONTROL_TYPES, MANUAL_CONTROL_TYPES, LaneExecutor
+from flightrisk.drone.lane_executor import (
+    CONTROL_TYPES,
+    MANUAL_CONTROL_TYPES,
+    LaneExecutor,
+)
 from flightrisk.drone.safety import (
     CEILING_CM_ENV,
     CEILING_MARGIN_CM_ENV,

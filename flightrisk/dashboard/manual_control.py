@@ -175,7 +175,7 @@ class ManualControl:
     def _emit(self, name: str, payload: dict[str, Any]) -> None:
         try:
             self._emit_fn(name, payload)
-        except Exception:  # noqa: BLE001 - the browser view must never stop control
+        except Exception:  # the browser view must never stop control
             log.warning("manual emit %s failed", name, exc_info=True)
 
     def _emit_status(self) -> None:
@@ -350,8 +350,13 @@ class ManualControl:
             if drone_id not in self._edge_mode:
                 refusal = ("no_telemetry", f"no telemetry from {drone_id} yet; wait for its edge to connect")
             elif self._edge_mode.get(drone_id) is None:
-                refusal = ("unsupported", f"{drone_id}'s edge does not support manual control (it reports no "
-                                          "control_mode); update the edge software")
+                refusal = (
+                    "unsupported",
+                    (
+                        f"{drone_id}'s edge does not support manual control (it reports no control_mode); "
+                        "update the edge software"
+                    ),
+                )
             else:
                 refusal = None
             if refusal is None:

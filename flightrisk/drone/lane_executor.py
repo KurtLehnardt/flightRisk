@@ -75,7 +75,11 @@ from flightrisk.drone.lane_commands import (
     PermissiveAuthority,
 )
 from flightrisk.drone.lane_flight import FlightSequenceMixin, MoveNotExecutedError
-from flightrisk.drone.lane_manual import MANUAL_CONTROL_TYPES, ManualControlMixin, ManualState
+from flightrisk.drone.lane_manual import (
+    MANUAL_CONTROL_TYPES,
+    ManualControlMixin,
+    ManualState,
+)
 from flightrisk.drone.lane_monitor import MonitorMixin
 from flightrisk.drone.lane_plan import (
     LanePlanMixin,
@@ -84,7 +88,12 @@ from flightrisk.drone.lane_plan import (
     split_lane_moves,
 )
 from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
-from flightrisk.fleet_protocol import MANUAL_DEADMAN_S, MAX_TEXT_LEN, is_identifier, is_manual_land
+from flightrisk.fleet_protocol import (
+    MANUAL_DEADMAN_S,
+    MAX_TEXT_LEN,
+    is_identifier,
+    is_manual_land,
+)
 from flightrisk.observability import StructuredLogger
 
 __all__ = [

@@ -129,7 +129,7 @@ def _axis_moves(component_cm: float, positive: str, negative: str, *, exact: boo
     A component shorter than the 20 cm minimum is flown as an overshoot and a
     20 cm return when *exact*, and skipped otherwise (at most 20 cm short).
     """
-    distance = int(round(abs(component_cm)))
+    distance = round(abs(component_cm))
     if distance == 0:
         return []
     direction, opposite = (positive, negative) if component_cm > 0 else (negative, positive)
@@ -167,7 +167,7 @@ class ManualControlMixin:
             if manual is None:
                 return None
             pose = manual.hold_pose
-            copy = ManualState(**{**manual.__dict__})
+            copy = ManualState(**manual.__dict__)
             copy.hold_pose = None if pose is None else RelativePose(pose.x_cm, pose.y_cm, pose.heading_deg)
             return copy
 
@@ -573,7 +573,7 @@ class ManualControlMixin:
         """
         pose = self.envelope.pose_snapshot()
         steps: list[tuple[str, int]] = []
-        turn = int(round(((target.heading_deg - pose.heading_deg + 180.0) % 360.0) - 180.0))
+        turn = round(((target.heading_deg - pose.heading_deg + 180.0) % 360.0) - 180.0)
         if turn:
             steps.append(("rotate", turn))
         heading = (pose.heading_deg + turn) % 360.0

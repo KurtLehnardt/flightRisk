@@ -10,13 +10,6 @@ from flightrisk.fleet_protocol.ceiling import (
     validate_ceiling_reply,
     validate_set_ceiling,
 )
-from flightrisk.fleet_protocol.manual import (
-    CONTROL_MODES,
-    MANUAL_COMMAND_TYPES,
-    is_manual_reply,
-    validate_manual_command,
-    validate_manual_reply,
-)
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _check_structure,
@@ -102,6 +95,13 @@ from flightrisk.fleet_protocol.constants import (
     TAKEOFF,
     TELEMETRY,
     V2_ONLY_COMMAND_TYPES,
+)
+from flightrisk.fleet_protocol.manual import (
+    CONTROL_MODES,
+    MANUAL_COMMAND_TYPES,
+    is_manual_reply,
+    validate_manual_command,
+    validate_manual_reply,
 )
 from flightrisk.fleet_protocol.peer import (
     _validate_node_state,

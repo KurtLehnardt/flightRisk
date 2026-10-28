@@ -100,6 +100,14 @@ kept; v2 fields are in addition to them.
 | `land` | v1 | optional `cmd_id`, `epoch`, `leader_id` (informational only) | **never** | optional | yes |
 | `emergency_land_all` | v1 | unchanged; optional fields are ignored | **never** | optional | yes |
 
+The manual takeover commands (`manual_hold`, `manual_move`,
+`manual_takeoff`, `resume_search`, and the manual land as an ordinary
+`land` with `reason: "manual"`) are described in `docs/manual-takeover.md`.
+They always carry a `cmd_id`, are fenced like `takeoff` (required in v2 and
+in multi-ground mode, optional on a v1 link), are valid on every link
+version, and are kept out of `GROUND_TO_EDGE_TYPES`, `FENCED_COMMAND_TYPES`
+and `COMMAND_TYPES`, so the rules for those sets are unchanged.
+
 `set_detection_profile` (`profile`, `cmd_id`, optional `drone_id`) is a
 configuration command (`CONFIG_COMMAND_TYPES`): valid on every link version,
 never fenced (it cannot move a drone), obeyed by a multi-ground edge only
