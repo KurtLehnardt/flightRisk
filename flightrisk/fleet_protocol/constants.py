@@ -59,6 +59,12 @@ NACK_REASONS_V2 = NACK_REASONS | frozenset({
     "not_flying",
     "plan_mismatch",
     "stale_plan",
+    # The edge cannot talk to its drone (no state, failed keepalive or send),
+    # so it refuses a takeoff or a start that would take off. ``detail``
+    # carries the operator text, for example ``Tello unreachable (no state
+    # for 12 s)``. A ground without this reason logs the nack as malformed
+    # and ignores it.
+    "drone_unreachable",
 })
 # Optional numeric fields of a ``geofence`` nack for ``assign_lanes`` (v1 and
 # v2), all in cm and relative to the drone's takeoff point of its current
@@ -337,6 +343,14 @@ TELEMETRY_FIELDS = (
     "takeoff_at_local_s",
 )
 TELEMETRY_FIELDS_V2 = TELEMETRY_FIELDS + ("epoch", "plan_id", "state", "plan_valid")
+# Optional telemetry fields, v1 and v2, sent by an edge whose drone controller
+# reports its link (a Tello): ``drone_link_ok`` (boolean), ``drone_link_age_s``
+# (seconds since the drone last sent state, or null when unknown) and
+# ``drone_link_detail`` (operator text while the link is down, else null).
+# While ``drone_link_ok`` is false, ``battery`` and ``height_cm`` are the last
+# values the drone reported, not fresh ones. Checked when present; older
+# grounds ignore them.
+TELEMETRY_DRONE_LINK_FIELDS = ("drone_link_ok", "drone_link_age_s", "drone_link_detail")
 
 _ZONE_FIELDS = ("x_cm", "y_cm", "w_cm", "h_cm")
 

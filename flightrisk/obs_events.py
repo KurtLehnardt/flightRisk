@@ -588,6 +588,8 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_shutdown_land_error": ("land_failed", "shutdown"),
     "edge_geofence_refused": ("geofence_refused", "geofence"),
     "edge_takeoff_refused": ("takeoff_refused", None),
+    "edge_drone_link_unhealthy": ("drone_link_unhealthy", None),
+    "edge_drone_link_restored": ("drone_link_restored", None),
     "edge_assign_lanes_refused": ("plan_refused", None),
     "edge_start_refused": ("start_refused", None),
     "edge_fail_safe_idle": ("fail_safe", None),

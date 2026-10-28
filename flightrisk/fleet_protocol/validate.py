@@ -193,6 +193,17 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
         _require_choice(msg, "state", EDGE_STATES)
     if proto >= 2 or "plan_valid" in msg:
         _require_bool(msg, "plan_valid")
+    # Optional on every version (TELEMETRY_DRONE_LINK_FIELDS): checked only
+    # when present, so telemetry from an edge without them is unchanged.
+    if "drone_link_ok" in msg:
+        _require_bool(msg, "drone_link_ok")
+    if "drone_link_age_s" in msg:
+        _require_optional_number(msg, "drone_link_age_s")
+        age = msg["drone_link_age_s"]
+        if age is not None and age < 0:
+            raise ProtocolError(f"'telemetry' field 'drone_link_age_s' must not be negative, got {_short(age)}")
+    if msg.get("drone_link_detail") is not None:
+        _require_text(msg, "drone_link_detail")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:

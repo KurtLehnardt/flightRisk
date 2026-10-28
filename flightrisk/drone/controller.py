@@ -206,6 +206,35 @@ def command_result(value: Any, command: str) -> CommandResult:
     return CommandResult(command=command)
 
 
+#: Why a drone link is unhealthy (``DroneLinkStatus.reason``). A bounded set
+#: of codes, safe as a metric label; the human text is in ``detail``.
+DRONE_LINK_REASONS = frozenset({"not_connected", "no_state", "state_stale", "command_failed", "unreadable"})
+
+
+@dataclass(frozen=True)
+class DroneLinkStatus:
+    """Whether the controller can talk to its drone right now (read-only, sends nothing).
+
+    A backend that can tell (the Tello controller) exposes it as
+    ``link_status()``; a backend without one is not gated by it. The lane
+    executor refuses a takeoff while ``ok`` is false and never gates a
+    landing on it.
+
+    * ``ok``: the drone link is healthy.
+    * ``age_s``: seconds since the drone last reported state, or ``None``
+      when that is unknown (no state ever arrived, or the backend cannot
+      timestamp it).
+    * ``reason``: ``None`` when healthy, else one of ``DRONE_LINK_REASONS``.
+    * ``detail``: ``None`` when healthy, else a short operator-facing text
+      such as ``Tello unreachable (no state for 12 s)``.
+    """
+
+    ok: bool
+    age_s: float | None = None
+    reason: str | None = None
+    detail: str | None = None
+
+
 def require_executed(value: Any, command: str) -> CommandResult:
     """Normalize ``value`` like :func:`command_result`, raising if it was not executed.
 
@@ -336,12 +365,14 @@ class GpsDroneController(DroneController, Protocol):
 
 __all__ = [
     "BASIC_FLIGHT",
+    "DRONE_LINK_REASONS",
     "Capability",
     "CommandNotExecutedError",
     "CommandOutcome",
     "CommandResult",
     "DroneCapabilities",
     "DroneController",
+    "DroneLinkStatus",
     "DroneState",
     "FlightControl",
     "GpsDroneController",

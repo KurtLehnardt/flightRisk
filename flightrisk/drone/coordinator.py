@@ -332,6 +332,18 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _drone_link_refusal(msg: dict, key: str = "drone_link_detail") -> str:
+    """The operator text for an edge that cannot reach its drone, from telemetry or a nack.
+
+    The edge's own text (for example ``Tello unreachable (no state for 12 s)``)
+    when it sent a usable one, else ``drone unreachable``.
+    """
+    detail = msg.get(key)
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()[:200]
+    return "drone unreachable"
+
+
 def _lane(direction: str, distance_cm: int) -> dict:
     return {"direction": direction, "distance_cm": int(distance_cm)}
 
@@ -577,6 +589,8 @@ class FleetCoordinator:
                     "synced": state.offset_s is not None,
                     "acked": state.acked,
                     "lost": state.lost,
+                    "drone_link_ok": telemetry.get("drone_link_ok"),
+                    "drone_link_detail": telemetry.get("drone_link_detail"),
                 }
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
@@ -786,7 +800,11 @@ class FleetCoordinator:
         marked lost is clock-synced, has acked its current ``assign_lanes``
         and has a battery of at least ``min_battery`` percent. The battery is
         taken from telemetry no older than ``TELEMETRY_FRESH_S`` when there is
-        some, and otherwise from the ``assign_lanes`` ack.
+        some, and otherwise from the ``assign_lanes`` ack. A drone whose
+        telemetry from that window says ``drone_link_ok: false`` (its edge
+        cannot reach the drone) is refused with the edge's text, for example
+        ``Tello unreachable (no state for 12 s)``; telemetry without the
+        field changes nothing.
 
         If a ``start_at`` cannot be sent, no further ``start_at`` is sent,
         ``land_all()`` is issued to abort and the result is not ok.
@@ -845,7 +863,13 @@ class FleetCoordinator:
                 continue
             battery = state.ack_battery
             if state.telemetry_at is not None and now - state.telemetry_at <= TELEMETRY_FRESH_S:
-                fresh = _number((state.telemetry or {}).get("battery"))
+                telemetry = state.telemetry or {}
+                if telemetry.get("drone_link_ok") is False:
+                    # The edge cannot reach its drone, so its battery is a
+                    # cached value and a start_at would be refused anyway.
+                    refusals[drone_id] = _drone_link_refusal(telemetry)
+                    continue
+                fresh = _number(telemetry.get("battery"))
                 if fresh is not None:
                     battery = fresh
             if battery is None:
@@ -962,6 +986,15 @@ class FleetCoordinator:
         reported uncovered. A refused plan from ``plan()`` blocks ``start()``
         with the edge's reason.
         """
+        if msg.get("for") in ("start_at", "takeoff") and msg.get("reason") == "drone_unreachable":
+            # The edge refused to take off because it cannot reach its drone
+            # (a v2 edge only; see docs/fleet-protocol-v2.md). The drone
+            # stays on the ground; loss detection re-tasks its lanes as for
+            # any drone that does not take off.
+            detail = f"{drone_id}: {_drone_link_refusal(msg, key='detail')}"
+            logger.warning("%s refused %s: %s", drone_id, msg.get("for"), detail)
+            self._emit("fleet_event", {"event": "start_refused", "detail": detail})
+            return
         if msg.get("for") != "assign_lanes":
             logger.debug("Ignoring nack for %r from %s", msg.get("for"), drone_id)
             return

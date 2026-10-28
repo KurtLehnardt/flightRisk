@@ -26,6 +26,7 @@ requests.
 - Fencing and the fail-safe exemption
 - Command ids and idempotency
 - Acks and nacks
+- Drone link preflight (takeoff only)
 - Compatibility with v1 peers
 - Caps and strictness
 - Privacy
@@ -119,7 +120,7 @@ limit), not the 64 KiB fleet limit (see "Caps and strictness").
 |---|---|---|
 | `hello` | v2 | `role` `edge` (optional, the only allowed value), `drone_id`, `node_id`, `proto`, `epoch_seen` (0 when no leader has been obeyed yet), `plan_id` (or null), `lane_index` (or null), `is_flying`, `battery` (0 to 100, or null) |
 | `pong` | v1 | `t1`, `t2`, `t3` |
-| `telemetry` | v1 | all v1 fields, plus **`epoch`** (the edge's `epoch_seen`), **`plan_id`** (or null), **`state`** (`idle`, `taking_off`, `hovering`, `flying_lanes`, `holding` or `landing`) and **`plan_valid`**, all four required in v2 |
+| `telemetry` | v1 | all v1 fields, plus **`epoch`** (the edge's `epoch_seen`), **`plan_id`** (or null), **`state`** (`idle`, `taking_off`, `hovering`, `flying_lanes`, `holding` or `landing`) and **`plan_valid`**, all four required in v2. Optional on every version (`TELEMETRY_DRONE_LINK_FIELDS`, see "Drone link preflight"): `drone_link_ok` (boolean), `drone_link_age_s` (seconds since the drone last sent state, non-negative, or null) and `drone_link_detail` (printable text up to 200 characters, or null) |
 | `ack` | v1 | `for`, `drone_id`, **`cmd_id`** (required in v2 except for a landing that carried none), **`result`** (`ok`, required in v2), optional **`epoch_seen`**, **`plan_id`**, **`detail`**. An ack for `start_at` still needs `executed_at_ground_s`; an ack for `assign_lanes` still needs `battery` and `lanes_total` |
 | `nack` | v1 | `for`, `drone_id`, `reason`, **`cmd_id`** (required in v2), optional **`epoch_seen`**, **`plan_id`**, **`detail`** (printable text up to 200 characters). A nack for `assign_lanes` still needs `lanes_total` |
 
@@ -271,8 +272,9 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   or a `nack` with a `reason`, and the ground correlates by `cmd_id`.
 - **Nack reasons.** v1 keeps `geofence`, `altitude`, `battery`,
   `other_drone` and `invalid`. v2 adds `stale_epoch`, `not_authority`,
-  `no_valid_plan`, `busy`, `landing`, `not_flying`, `plan_mismatch` and
-  `stale_plan`.
+  `no_valid_plan`, `busy`, `landing`, `not_flying`, `plan_mismatch`,
+  `stale_plan` and `drone_unreachable` (the edge cannot talk to its drone,
+  so it refuses to take off; see "Drone link preflight").
 - **Stale leaders.** A `stale_epoch` or `not_authority` nack should carry
   `epoch_seen`, so that a stale leader learns the epoch it lost to and steps
   down.
@@ -316,6 +318,88 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
   point"). Before this change the position was never reset, so each run's
   net displacement accumulated across flights and a later plan or re-task
   could be refused for a position the drone never had.
+
+## Drone link preflight (takeoff only)
+
+Incident of 2026-10-28 (Mac edge-1): the Mac was not on the Tello's Wi-Fi.
+For minutes the state stream was silent and every keepalive and stream
+recovery failed with `OSError` 51 (network unreachable), but the
+edge-to-ground link was fine and telemetry kept the last cached battery, so
+the ground thought drone-1 was healthy and sent `start_at`. The edge
+accepted it, sent `takeoff` into the dead link (the send raised `OSError`
+51), logged `edge_executor_error` and then retried `land` three times, all
+unreachable. An earlier run the same morning did the same after a keepalive
+went unanswered. The edge now refuses to take off when it cannot talk to
+its drone, and says so.
+
+- **Link health.** `TelloController.link_status()` returns a
+  `DroneLinkStatus` (`flightrisk/drone/controller.py`): `ok`, `age_s` (age
+  of the newest state packet), a bounded `reason` code and an operator
+  `detail`. It sends nothing and takes no command lock. It is unhealthy
+  when the controller is not connected (`not_connected`), when no state
+  packet ever arrived (`no_state`), when none arrived for more than
+  `_STATE_LOST_S` = 3 s (`state_stale`, the threshold landing already uses
+  for a lost state stream: about 30 missed packets at the Tello's 10 per
+  second), or when the last command-channel exchange (keepalive, stream
+  command or flight command) raised or got no reply and nothing was
+  answered since (`command_failed`). The keepalive runs every 10 s, so a
+  recovered link clears within that. No new probe is sent: the existing
+  keepalive and the state stream are the evidence. State packets keep
+  arriving while a command holds the channel (the state poller skips then,
+  the state stream does not), so a drone in the middle of a command is not
+  counted as unreachable, and a Tello that has just connected has fresh
+  state because `connect()` waits for the first state packet.
+- **Who is checked.** Only a controller with `link_status()` (the Tello).
+  The fake Tello (`--source fake`) and MAVLink report none and are never
+  refused for it. A `link_status()` that raises counts as unhealthy
+  (`unreadable`), so the takeoff is refused rather than flown blind.
+- **When `start_at` arrives.** A start that would take off (the drone is on
+  the ground) is refused at once while the link is unhealthy:
+  `nack{reason: drone_unreachable, detail: "Tello unreachable (no state for
+  12 s)"}` on a v2 link, and the log event `edge_start_refused` with
+  `reason=drone_unreachable` on every link (a v1 link has no `start_at`
+  nack). The other `start_at` checks come first.
+- **Right before the takeoff.** The link is checked again as the first step
+  of the takeoff, after the scheduled wait. If it is unhealthy then, the
+  sequence ends with nothing sent to the drone: no takeoff and, because the
+  drone never left the ground, no landing to retry. The pose, the plan and
+  the land state are left as they were, so a new `start_at` flies once the
+  link is back. The edge logs `edge_takeoff_refused` with
+  `reason=drone_unreachable`, `link_reason` and `detail`, and answers a v2
+  command with the same nack. A standalone `takeoff` command is refused the
+  same way.
+- **Landing is never gated.** `land`, `emergency_land_all`, the local land
+  key, Ctrl+C, the link-loss, battery and geofence landings and the land
+  retries never look at the drone link, and nothing about landing, the
+  geofence or the safety envelope changed. A flight that did take off keeps
+  the existing behaviour: a controller error lands it.
+- **Telemetry.** When the controller reports its link, telemetry on every
+  version carries `drone_link_ok`, `drone_link_age_s` and
+  `drone_link_detail` (null while healthy). While `drone_link_ok` is false,
+  `battery` and `height_cm` are the controller's last cached values, not
+  fresh ones; the flag says so instead of hiding them. Each field is
+  checked when present and absent fields change nothing.
+- **Ground.** `FleetCoordinator.start()` refuses a drone whose telemetry
+  from the last `TELEMETRY_FRESH_S` (2 s) says `drone_link_ok: false`, with
+  the edge's text, so the dashboard shows `Start refused: drone-1: Tello
+  unreachable (no state for 12 s)` through the existing `start_refused`
+  fleet event, and no `start_at` is sent to any drone (the existing
+  all-or-nothing start rule). A `drone_unreachable` nack for `start_at` or
+  `takeoff` that arrives after the start is shown the same way
+  (`start_refused`, `drone-1: <detail>`); the drone stays on the ground and
+  loss detection re-tasks its lanes as for any drone that does not take
+  off. `coordinator.status()` (and so `fleet_status`) carries
+  `drone_link_ok` and `drone_link_detail`; the dashboard does not display
+  them yet.
+- **Compatibility.** An older ground ignores the telemetry fields. On a v2
+  link it logs a `drone_unreachable` nack as malformed and ignores it; it
+  never acted on a `start_at` nack anyway, and the link stays up. An older
+  ground therefore does not show the refusal, but the edge still never
+  takes off into a dead link. A v1 link gets no nack for `start_at`, only
+  the log line; the telemetry flag is how the ground learns of it there.
+- **Not verified on hardware.** The thresholds and the incident replay are
+  covered by tests on the wire-level Tello fake
+  (`tests/test_edge_takeoff_preflight.py`), not on a real Tello.
 
 ## Compatibility with v1 peers
 
