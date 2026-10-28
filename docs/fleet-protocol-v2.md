@@ -576,7 +576,9 @@ bookkeeping is `flightrisk/fleet_ground_link.py`, used by `GroundTransport`
 when it is given a `GroundIdentity`. Tests: `tests/test_fleet_authority.py`
 (rule tests and a model-based random walk), `tests/test_edge_uplink.py` (two
 real ground stations and one edge over loopback),
-`tests/test_fleet_ground_link.py` and `tests/test_edge_device_uplink.py`.
+`tests/test_fleet_ground_link.py`, `tests/test_edge_device_uplink.py` and
+`tests/test_link_stalls.py` (a dead link must not stall the others, through a
+black-hole TCP proxy).
 
 ### Turning it on
 
@@ -584,7 +586,11 @@ real ground stations and one edge over loopback),
   `FLIGHTRISK_GROUND_URLS` (or `--ground-urls`) set to a comma-separated
   list, for example `ws://127.0.0.1:9000,ws://10.42.0.2:9000`, connects to
   every listed ground and speaks v2. `FLIGHTRISK_NODE_ID` (or `--node-id`)
-  names the laptop in its `hello` (default: the host name).
+  names the laptop in its `hello` (default: the host name); an invalid
+  value stops the edge at startup with a usage error. `connect` waits at
+  most 2 s for the first attempts, so a ground that does not answer (an
+  unplugged link waits for the 10 s open timeout) never delays the start;
+  it keeps connecting in the background.
   `FLIGHTRISK_FLEET_LEGACY=1` keeps v1 grounds connected as monitor-only
   links instead of closing them. `FLIGHTRISK_INFLIGHT_HANDOVER=1` enables the
   in-flight adoption rule below (off by default; plan rung L6 first).
@@ -596,6 +602,21 @@ real ground stations and one edge over loopback),
   speaks v2; `local_min_proto=2` closes v1 edges; `set_identity` announces a
   new role or epoch. Without an identity the ground is unchanged (v1). The
   dashboard does not pass an identity yet; the leader logic (PR-6) will.
+- **Today's dashboard is a v1 ground.** Until PR-6 gives the dashboard an
+  identity, an edge with `FLIGHTRISK_GROUND_URLS` pointing at it sees a v1
+  ground. In strict mode (the default) the edge closes that link at the
+  ground's first heartbeat and reconnects after 1 s, then 2, 4 and 8 s, at
+  most every 10 s, so the link churns and the drone is never obeyed or fed
+  from it; only a landing reaches it while a connection is up. With
+  `FLIGHTRISK_FLEET_LEGACY=1` the link stays up as monitor-only (telemetry
+  out, landings in). For a single dashboard today, use `--ws-url` instead.
+- **The token goes to every listed ground.** The edge sends
+  `FLIGHTRISK_EDGE_TOKEN` in the auth handshake to every URL in the list,
+  and over `ws://` that is plain text on the link. It cannot tell which
+  ground it reached: anything that answers on a listed address receives the
+  token and can then send landings (always obeyed) or, by claiming to be a
+  leader, try to become the authority. List only addresses on the fleet's
+  own link and loopback, and prefer `wss://` where the network is shared.
 
 ### Edge rules
 
@@ -604,7 +625,11 @@ real ground stations and one edge over loopback),
   are never nacked. On a v2 link the edge acks them, without a `cmd_id` when
   the landing carried none (including a landing read by the fail-safe
   decoder). A landing feeds the link watchdog only when it comes from the
-  authority. Landing bypasses the command-id cache.
+  authority. Landing bypasses the command-id cache. A landing also ends the
+  plan: `start_at` and `resume` naming it are refused (`no_valid_plan`)
+  until a new `assign_lanes` is acked. At most one `edge_landing_command`
+  is logged per connection and landing type per second, with the number not
+  logged since.
 - **Hello first.** A connection's first fleet message must be a ground
   `hello`. Until then the connection cannot move the drone, feed the
   watchdog, ping, set the target or toggle video, and receives nothing. A
@@ -619,12 +644,18 @@ real ground stations and one edge over loopback),
   direction with the connection's agreed version (1 before its `hello`).
   Frames up to 4 KiB are decoded on the event loop; larger ones in a worker
   thread, so a hostile frame near 1 MiB cannot stall the other ground's
-  link.
+  link. A frame is always decoded before the connection's state is looked
+  at: a landing read from a connection that another task already saw close,
+  or that the edge is closing, still lands (and its emergency callback
+  runs); anything else from such a connection is dropped, and a closed
+  connection's state is never re-created.
 - **Adopting an epoch.** The edge holds `epoch_seen` and the leader that
   holds it. A ground `hello` with role `leader` (or a heartbeat matching
   that `hello`) at a higher epoch is adopted only while the drone is
   inactive: on the ground, no flight sequence pending, and no motion command
-  being handed to the executor. With in-flight handover enabled it is also
+  being handed to the executor, including one handed out and finished
+  while the executor's state was being read (a dispatch counter is compared
+  before and after). With in-flight handover enabled it is also
   adopted in flight when the current authority announced exactly that node
   and epoch in a `handover`. `epoch_seen` never decreases. An epoch within
   1024 of `MAX_EPOCH` is adopted only when a handover announced it. Adoption
@@ -660,8 +691,10 @@ real ground stations and one edge over loopback),
 - **At most once.** A command's `cmd_id` is recorded as pending when it is
   accepted, before it is executed. A duplicate never runs again: it is
   ignored while pending and answered with the cached reply afterwards. A
-  `cmd_id` reused for another type is refused with `invalid`. Refusals are
-  cached too.
+  `cmd_id` reused for another type is refused with `invalid`. The
+  authority's refusals are cached too; a refusal on any other connection is
+  not, so a ground that is not obeyed cannot evict the authority's entries,
+  and a resend from it is simply refused again.
 - **Outbound.** Telemetry, acks and nacks go to every ground that agreed a
   version, shaped for it; detections (crops, embeddings, thumbnails) go to
   the authority only and are dropped while there is none. The authority
@@ -669,6 +702,43 @@ real ground stations and one edge over loopback),
   telemetry gains `epoch`, `plan_id`, `state` and `plan_valid` (`false`
   unless the executor reports otherwise), and acks and nacks gain the
   `cmd_id` of the command they answer, `epoch_seen` and `result`.
+- **Closing a refused connection.** A connection closed with 4010 is
+  marked as closing at once: frames already behind the refusal are dropped
+  (a landing still lands). The next reconnect to that ground waits 1 s,
+  doubling while it keeps being refused up to 10 s, and is reset by an
+  accepted `hello`. `edge_connection_refused` is logged for the first
+  refusal of each (ground, reason) and then every 20th.
+
+### Link stalls
+
+A pulled cable closes nothing: packets stop. The WebSocket keepalive
+notices 20 to 40 s later, and the connection then spends its close timeout
+(10 s by default) closing, during which a `send` on it waits. Neither side
+may let that stall anything else.
+
+- **Edge.** Every ground connection has its own outbound queue and writer
+  (`flightrisk/link_outbox.py`). `send` (telemetry, acks, nacks),
+  `send_detections` and the reader's replies (hello, pong, landing acks)
+  only queue and return at once; the executor's control thread and the
+  reader never wait for the network. Each writer sends one message at a
+  time with a 1 s timeout and stops at a connection that is closing.
+  Replies go first; telemetry keeps the latest four and detections the
+  latest two per connection. Connections use a 1 s `close_timeout`.
+  Measured with a black-holed standby link and a 10 s close timeout:
+  the longest telemetry gap at the authority is 0.57 s (cadence 0.5 s) and
+  a `land` from it reaches the drone in 2 ms (before: a 9.8 s telemetry
+  gap, and the land waited 9.7 s behind an `assign_lanes` ack on the
+  control thread).
+- **Ground.** `GroundTransport` sends to each edge independently with a
+  0.5 s timeout (`send_timeout_s`) and skips a connection that is closing;
+  its connections use a 1 s `close_timeout`, and heartbeats are paced by
+  deadline. Measured with a black-holed follower edge and a 10 s close
+  timeout: the healthy edge's longest heartbeat gap is 1.0 s (interval
+  1 s) and `emergency_land_all` reaches it in under 1 ms and returns in
+  1 ms (before: an 11 s heartbeat gap, so the leader's own drone landed on
+  link loss, against plan section 2.7, and `emergency_land_all` took 7.5 s
+  to return to its caller). A send that timed out may still arrive; it is
+  reported as not confirmed.
 
 ### Executor interface
 
@@ -679,8 +749,19 @@ else the drone's `is_flying` or `is_busy`; an error counts as active),
 `supports(type)` (`type in LaneExecutor.CONTROL_TYPES`), `snapshot()` (from
 `telemetry()`), `fleet_status()` (`LaneExecutor.fleet_status` if present,
 returning `plan_id`, `state`, `plan_valid`) and `invalidate_plan(reason)`
-(`LaneExecutor.invalidate_plan` if present). Hooks are never called while
-the authority holds its lock.
+(`LaneExecutor.invalidate_plan` if present). Hooks, `supports` included,
+are never called while the authority holds its lock, so a hook may take the
+executor's lock.
+
+**Known issue (not fixed here).** A `start_at` ack is sent by the
+executor's worker thread without a `cmd_id`; the authority stamps it with
+the latest `start_at` it accepted. When a second `start_at` is accepted by
+the authority and then refused by the executor as `busy` (the v1 executor
+refuses it silently, without a nack) before the first one's ack goes out,
+that ack carries the second `cmd_id`. The ground then sees the second
+command acked and the first one time out. PR-5's executor echoes `cmd_id`
+in its own acks, which removes the guess; until then a leader should not
+send a second `start_at` while one is pending.
 
 ### Ground rules
 
@@ -706,6 +787,28 @@ the authority holds its lock.
   and `broadcast_control` skips such links with a warning. Choosing the
   fallback (land that drone, or report it as unable to hold) is the
   leader's policy and is left to PR-6/PR-8.
+
+## Integration with the lane executor (PR-5)
+
+PR-5 (`feat/lane-executor-hold-resume`) and this change were reviewed in
+parallel; wiring them together is a follow-up after both merge. This side
+already provides PR-5's `authority=` contract: `EdgeAuthority.check(msg)`
+returns `None`, `stale_epoch` or `not_authority` (`None` for every message
+the uplink accepted and handed out, and always for a landing), and
+`EdgeAuthority.epoch_seen` is an `int` that can also be called, so
+`authority.epoch_seen()` works as PR-5 expects while existing code keeps
+reading the property. The remaining mismatches:
+
+| Topic | This change (PR-4) | PR-5 | What the integration must do |
+|---|---|---|---|
+| Routing `hold`, `resume`, `nudge` | The authority accepts them and the uplink delivers them, but `edge_device` routes only `CONTROL_TYPES` to the executor, and `LaneExecutorHooks.supports` reads `CONTROL_TYPES`, so they are refused with `invalid` | `LaneExecutor.ALL_CONTROL_TYPES` (`CONTROL_TYPES` plus the three) and `handle_message` handles them | Route `ALL_CONTROL_TYPES` in `edge_device._handle_control` and make `supports` read `ALL_CONTROL_TYPES` |
+| `supports(type)` | Sampled before the authority's lock (never under it) | No such method; the executor itself refuses what it cannot do | Keep the adapter on `ALL_CONTROL_TYPES`; it must stay non-blocking or at least never call back into the authority |
+| `fleet_status()` / `is_active()` | `LaneExecutorHooks` calls them by name when they exist, else falls back to `is_flying`/`is_busy` and fills `plan_valid: false` | No `fleet_status()` and no public `is_active()` (`_is_active` is private and means something else); it exposes `state`, `plan_id`, `plan_valid`, `epoch_seen` and fills the v2 telemetry fields itself (`fleet_v2=True`) | Build `fleet_status()` from `state`, `plan_id` and `plan_valid`, and `is_active()` from `state != "idle"` or `is_busy`; telemetry the executor completed is left as it is (`setdefault`) |
+| Landing ack | `_landing` acks every `land`/`emergency_land_all` on a v2 link, from the reader | `_ack_landing` acks every landing with a `cmd_id` again, from the control thread | Keep one: drop the reader's ack once the executor acks (the reader's is faster and also covers a landing the executor never sees), or suppress the executor's in uplink mode; the ground already tolerates a duplicate ack |
+| Command-id cache | The authority caches accepted and refused `cmd_id`s | The executor has its own `cmd_id` cache and reply cache | Either is enough; with both, a duplicate is answered by the authority and never reaches the executor |
+| Plan named in the edge `hello` | The authority's own record of the plan acked in this epoch, cleared on adoption and on every landing | `plan_id` is kept after invalidation; `plan_valid` says whether it can still be started | Take `plan_id` and `plan_valid` from the executor, and report `plan_valid` in the `hello` so a new leader does not trust a dead plan |
+| `start_at` ack `cmd_id` | Guessed from the latest accepted `start_at` (see the known issue above) | Echoed by the executor | Prefer the executor's `cmd_id`; the authority only fills it when absent |
+| `invalidate_plan` | Called after adopting an epoch | Provided; also called by the executor on every landing | Nothing more |
 
 ## Differences from the plan text
 
