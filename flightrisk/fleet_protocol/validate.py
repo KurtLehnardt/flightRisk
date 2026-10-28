@@ -65,6 +65,7 @@ from flightrisk.fleet_protocol.constants import (
     MAX_TEXT_LEN,
     MIN_PROTOCOL_VERSION,
     NACK,
+    NACK_GEOFENCE_FIELDS,
     NACK_REASONS,
     NACK_REASONS_V2,
     NODE_STATE,
@@ -249,6 +250,9 @@ def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
             raise ProtocolError(
                 f"'nack' field 'lanes_total' must be a non-negative integer, got {_short(lanes_total)}"
             )
+        for key in NACK_GEOFENCE_FIELDS:
+            if key in msg:
+                _require_number(msg, key)
 
 
 def _is_ground_hello(msg: Mapping[str, Any]) -> bool:

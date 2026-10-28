@@ -1,9 +1,15 @@
 """Edge-side flight safety envelope for relative-move Tello flights.
 
 The Tello has no GPS, so the edge tracks the drone's position by dead
-reckoning: every commanded relative move updates a pose that starts at the
-spot where the edge process began (the takeoff point). The envelope uses that
-pose and a few configured limits to decide what the edge may do:
+reckoning: every commanded relative move updates a pose relative to the
+point the drone took off from on its current flight (the takeoff point).
+Every takeoff from the ground re-establishes that origin (``reset_pose``,
+called by the lane executor), because a Tello lands where it is and the
+edge cannot observe whether the drone was carried back to its start spot
+before the next flight. The geofence is therefore always a square around the
+spot the drone actually took off from, never around the spot an earlier
+flight started from. The envelope uses that pose and a few configured limits
+to decide what the edge may do:
 
 * Soft geofence: ``check_move`` refuses a horizontal move whose dead-reckoned
   endpoint would leave a square of half-width ``geofence_cm`` around the
@@ -266,6 +272,18 @@ class SafetyEnvelope:
         """Update the dead-reckoned pose after a horizontal move completed."""
         with self._lock:
             self.pose.apply_move(direction, distance_cm)
+
+    def reset_pose(self) -> RelativePose:
+        """Make the drone's current spot the takeoff point; return the pose it replaces.
+
+        Call this only while the drone is on the ground, immediately before
+        it takes off: the pose and the geofence are relative to the takeoff
+        point of the current flight. The returned pose is where the previous
+        flight ended relative to its own takeoff point.
+        """
+        with self._lock:
+            previous, self.pose = self.pose, RelativePose()
+        return previous
 
     def pose_snapshot(self) -> RelativePose:
         """Return a consistent copy of the current pose."""

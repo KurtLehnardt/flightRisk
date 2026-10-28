@@ -60,6 +60,14 @@ NACK_REASONS_V2 = NACK_REASONS | frozenset({
     "plan_mismatch",
     "stale_plan",
 })
+# Optional numeric fields of a ``geofence`` nack for ``assign_lanes`` (v1 and
+# v2), all in cm and relative to the drone's takeoff point of its current
+# flight (or its next takeoff point while it is on the ground):
+# ``geofence_cm`` is the edge's fence half-width, ``x_cm``/``y_cm`` the first
+# point of the refused path outside the fence, and ``rel_x_cm``/``rel_y_cm``
+# where that path starts (the drone's dead-reckoned position). Older grounds
+# ignore them.
+NACK_GEOFENCE_FIELDS = ("geofence_cm", "x_cm", "y_cm", "rel_x_cm", "rel_y_cm")
 
 GROUND_TO_EDGE_TYPES = frozenset(
     {PING, CLOCK, ASSIGN_LANES, START_AT, TAKEOFF, LAND, EMERGENCY_LAND_ALL, HEARTBEAT}

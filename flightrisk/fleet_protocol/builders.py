@@ -26,6 +26,7 @@ from flightrisk.fleet_protocol.constants import (
     HOLD,
     LAND,
     NACK,
+    NACK_GEOFENCE_FIELDS,
     NODE_STATE,
     NUDGE,
     PEER_HEARTBEAT,
@@ -272,11 +273,24 @@ def make_ack_assign_lanes(
     })
 
 
-def make_nack_assign_lanes(drone_id: str, reason: str, lanes_total: int) -> dict[str, Any]:
+def _geofence_fields(geofence: Mapping[str, float] | None) -> dict[str, float]:
+    """The optional geofence fields of an ``assign_lanes`` nack (``NACK_GEOFENCE_FIELDS``)."""
+    if not geofence:
+        return {}
+    unknown = set(geofence) - set(NACK_GEOFENCE_FIELDS)
+    if unknown:
+        raise ProtocolError(f"unknown geofence nack fields: {sorted(unknown)}")
+    return dict(geofence)
+
+
+def make_nack_assign_lanes(
+    drone_id: str, reason: str, lanes_total: int, *, geofence: Mapping[str, float] | None = None
+) -> dict[str, Any]:
     """Edge -> ground: the edge refused its lane assignment for ``reason``.
 
     ``lanes_total`` is the number of lanes in the refused assignment, so the
-    ground can tell which of its assignments was refused.
+    ground can tell which of its assignments was refused. *geofence* adds
+    the optional fields of ``NACK_GEOFENCE_FIELDS`` to a ``geofence`` nack.
     """
     return _checked({
         "type": NACK,
@@ -284,6 +298,7 @@ def make_nack_assign_lanes(drone_id: str, reason: str, lanes_total: int) -> dict
         "drone_id": drone_id,
         "reason": reason,
         "lanes_total": lanes_total,
+        **_geofence_fields(geofence),
     })
 
 
@@ -399,12 +414,15 @@ def make_nack(
     epoch_seen: int | None = None,
     lanes_total: int | None = None,
     detail: str | None = None,
+    geofence: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Edge -> ground (v2): the edge refused the fenced command *for_type* for *reason*.
 
     Pass *epoch_seen* with ``stale_epoch``/``not_authority`` so a stale
     leader learns the epoch it lost to. ``lanes_total`` is required for an
-    ``assign_lanes`` nack. Landing is never refused, so it is never nacked.
+    ``assign_lanes`` nack. *geofence* adds the optional fields of
+    ``NACK_GEOFENCE_FIELDS`` to an ``assign_lanes`` nack. Landing is never
+    refused, so it is never nacked.
     """
     msg: dict[str, Any] = {"type": NACK, "for": for_type, "drone_id": drone_id, "cmd_id": cmd_id, "reason": reason}
     if epoch_seen is not None:
@@ -413,6 +431,7 @@ def make_nack(
         msg["lanes_total"] = lanes_total
     if detail is not None:
         msg["detail"] = detail
+    msg.update(_geofence_fields(geofence))
     return _checked(msg, 2)
 
 

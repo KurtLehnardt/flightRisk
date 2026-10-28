@@ -165,8 +165,11 @@ def test_edge_sends_nack_on_geofence_refusal():
         assert edge.executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1", "lanes": far}) is False
 
         nack = edge.replies[-1]
+        # A geofence nack also says where the path leaves the fence and where
+        # it starts, relative to the takeoff point (NACK_GEOFENCE_FIELDS).
         assert nack == {"type": "nack", "for": "assign_lanes", "drone_id": "drone-1",
-                        "reason": "geofence", "lanes_total": 3}
+                        "reason": "geofence", "lanes_total": 3, "geofence_cm": 500.0,
+                        "x_cm": 600.0, "y_cm": 400.0, "rel_x_cm": 0.0, "rel_y_cm": 0.0}
         assert fp.validate_message(nack) == fp.NACK
         assert edge.replies_of_type("ack") == []
         # The refused plan was not stored.

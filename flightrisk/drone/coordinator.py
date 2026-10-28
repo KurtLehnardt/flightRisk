@@ -39,6 +39,14 @@ the lanes it receives are relative moves from that point and the
 ``rel_x_cm``/``rel_y_cm`` it reports are relative to that point. The
 coordinator adds the zone origin to place telemetry and detections on the
 shared grid. All drones face the same forward direction at takeoff.
+
+That frame is per flight: an edge makes the spot each takeoff starts from its
+origin again, and its geofence is a square around that spot, because a Tello
+lands where it is and nothing tells the edge whether the operator carried it
+back to its start spot. A plan is therefore only right if every drone is back
+on its zone origin before each ``start()`` (see ``docs/fleet-setup.md``,
+"Placement and heading"). After a flight the reported position is where the
+drone landed, relative to where it took off.
 """
 
 from __future__ import annotations
@@ -959,6 +967,7 @@ class FleetCoordinator:
             return
         reason = msg.get("reason")
         reason = reason if isinstance(reason, str) and reason else "refused"
+        described = self._describe_refusal(drone_id, reason, msg)
         lanes_total = msg.get("lanes_total")
         messages: list[tuple[str, dict]] = []
         events: list[tuple[str, dict]] = []
@@ -971,16 +980,45 @@ class FleetCoordinator:
                     drone_id, lanes_total, len(state.lanes),
                 )
                 return
-            logger.warning("%s refused its assign_lanes (%s)", drone_id, reason)
+            logger.warning("%s refused its assign_lanes (%s)", drone_id, described)
             if state.offer is not None:
-                self._withdraw_offer_locked(drone_id, reason, transient=reason in TRANSIENT_NACKS)
+                # Whether the refusal is transient depends on the bare reason;
+                # what is recorded and shown is the described one.
+                self._withdraw_offer_locked(drone_id, described, transient=reason in TRANSIENT_NACKS)
                 messages = self._dispatch_locked()
                 events = self._settle_and_collect_locked()
             else:
                 self._clear_ack(state)
-                state.nack_reason = reason
+                state.nack_reason = described
         self._emit_all(events)
         self._send_offers(messages)
+
+    @staticmethod
+    def _describe_refusal(drone_id: str, reason: str, msg: dict) -> str:
+        """The nack *reason*, followed by what a ``geofence`` nack says about the fence.
+
+        A ``geofence`` nack may carry the optional ``NACK_GEOFENCE_FIELDS``
+        (all relative to the drone's takeoff point): where the refused path
+        starts, the first point of it outside the fence and the fence size.
+        They are shown so the operator sees why, for example a drone that is
+        far from its takeoff point. Without them the bare reason is returned.
+        """
+        if reason != "geofence":
+            return reason
+        x, y = _number(msg.get("x_cm")), _number(msg.get("y_cm"))
+        fence = _number(msg.get("geofence_cm"))
+        here_x, here_y = _number(msg.get("rel_x_cm")), _number(msg.get("rel_y_cm"))
+        parts = []
+        if x is not None and y is not None:
+            outside = f"the path would reach ({x:g}, {y:g}) cm from {drone_id}'s takeoff point"
+            if fence is not None:
+                outside += f", outside its {fence:g} cm geofence"
+            parts.append(outside)
+        elif fence is not None:
+            parts.append(f"{drone_id}'s geofence is {fence:g} cm")
+        if here_x is not None and here_y is not None:
+            parts.append(f"{drone_id} is at ({here_x:g}, {here_y:g}) cm from its takeoff point")
+        return reason + (": " + "; ".join(parts) if parts else "")
 
     # ------------------------------------------------------------------
     # Detection dedup

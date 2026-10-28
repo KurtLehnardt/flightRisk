@@ -3679,7 +3679,11 @@
             if (!fleetPlanReceived || fleetStartInFlight) return;
             const n = fleetPlanDroneCount;
             const who = n > 0 ? n + ' drone' + (n === 1 ? '' : 's') : 'The drones';
-            if (!window.confirm(who + ' will take off. Start the search?')) return;
+            // Each drone's geofence and lanes are measured from the spot it takes
+            // off from, so every drone must be back on its marked start spot.
+            if (!window.confirm(who + ' will take off. Each drone flies its lanes and keeps its geofence '
+                + 'around the spot it takes off from, so every drone must be on its marked start spot, '
+                + 'nose into the area. Start the search?')) return;
             showFleetError('');
             fleetStartInFlight = true;
             updateFleetStartButton();

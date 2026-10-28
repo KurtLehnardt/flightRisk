@@ -279,6 +279,7 @@ class FlightSequenceMixin:
                 link_age_s=round(self.envelope.link_age_s(), 3),
             )
             return "link_loss"
+        previous_pose = None
         with self._lock:
             # The takeoff is claimed here: a hold that arrives from now on
             # lets it complete and stops the sequence before its next move.
@@ -291,9 +292,25 @@ class FlightSequenceMixin:
                 # flight, nor take a takeoff that fails for a landing.
                 self._land_reason = None
                 self._was_flying = False
+                # A new flight starts here, so this spot becomes the takeoff
+                # point: the pose and the geofence are relative to it. The
+                # pose of the last flight ended wherever that flight landed,
+                # and the edge cannot see whether the drone was carried back
+                # to its start spot since; keeping it would shift the fence
+                # by that distance. Reset before the takeoff is sent, so a
+                # takeoff that executes but reports a failure still starts
+                # from the right origin.
+                previous_pose = self.envelope.reset_pose()
             self._flying_lanes = False
             self._phase = "taking_off"
             self._moving = True
+        if previous_pose is not None and (previous_pose.x_cm or previous_pose.y_cm):
+            self._log.info(
+                "edge_pose_reset",
+                drone_id=self.drone_id,
+                previous_x_cm=round(previous_pose.x_cm, 1),
+                previous_y_cm=round(previous_pose.y_cm, 1),
+            )
         try:
             result = command_result(self._drone_takeoff(), "takeoff")
         finally:
