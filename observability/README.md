@@ -1,6 +1,8 @@
 # Grafana observability stack
 
-Traces, metrics and logs from the FlightRisk app, with a ready-made **FlightRisk** dashboard.
+Traces, metrics and logs from the FlightRisk app, with five provisioned dashboards, alert
+rules, and links between the three signals. The event names, fields and metrics are listed
+in [`docs/observability-events.md`](../docs/observability-events.md).
 
 ```
 app --OTLP--> otel-collector --> Tempo       (traces)
@@ -33,8 +35,12 @@ FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://localh
   python -m flightrisk --dashboard --target photo_of_child.jpg
 ```
 
+To also see what the operator typed and the target image in Grafana, add
+`FLIGHTRISK_TELEMETRY_CONTENT=1` (see "Operator content and the target image" below; it is
+off unless you set it).
+
 Open <http://localhost:3000> (user `admin`, password `$GRAFANA_ADMIN_PASSWORD`, default `admin`).
-The **FlightRisk** dashboard is the home page and lives in the *FlightRisk* folder.
+**FlightRisk / Overview** is the home page; all dashboards live in the *FlightRisk* folder.
 
 If the app itself runs in Docker, set `OTEL_ENDPOINT=http://host.docker.internal:4317`
 (or put it on the same network and use `http://otel-collector:4317`).
@@ -86,21 +92,24 @@ Mac (ground station; use `http://127.0.0.1:4317` if the collector is on loopback
 
 ```bash
 FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://10.42.0.1:4317 \
-OTEL_RESOURCE_ATTRIBUTES=service.instance.id=mac-ground \
+OTEL_RESOURCE_ATTRIBUTES=service.instance.id=mac-ground FLIGHTRISK_TELEMETRY_CONTENT=1 \
   python -m flightrisk.dashboard --source edge ...
 ```
+
+`FLIGHTRISK_TELEMETRY_CONTENT=1` turns on operator text and the target image preview for the
+field setup (the code default is off); leave it out to log numbers and ids only.
 
 ZBook (edge-2), PowerShell from the repo root:
 
 ```powershell
-$env:FLIGHTRISK_OTEL_ENABLED = "true"; $env:OTEL_EXPORTER = "otlp-grpc"; $env:OTEL_ENDPOINT = "http://10.42.0.1:4317"; $env:OTEL_RESOURCE_ATTRIBUTES = "service.instance.id=edge-2"
+$env:FLIGHTRISK_OTEL_ENABLED = "true"; $env:OTEL_EXPORTER = "otlp-grpc"; $env:OTEL_ENDPOINT = "http://10.42.0.1:4317"; $env:OTEL_RESOURCE_ATTRIBUTES = "service.instance.id=edge-2"; $env:FLIGHTRISK_TELEMETRY_CONTENT = "1"
 .\scripts\demo_edge.ps1
 ```
 
 The edge process (`python -m flightrisk.edge_device`) exports its logs the same way the
-dashboard does; it records no metrics or spans today, so edge-2 shows up in the log panels
-only. In Grafana, pick nodes with the **Node** drop-down at the top of the FlightRisk
-dashboard (multi-select, *All* by default). A process that does not set
+dashboard does, plus its side of the drone communication (message counts, sends, reconnects)
+and the lane executor's flight-safety events. In Grafana, pick nodes with the **Node**
+drop-down at the top of each dashboard (multi-select, *All* by default). A process that does not set
 `service.instance.id` appears as `unknown`.
 
 The cable path does not use Wi-Fi, so exporting keeps working while the ZBook's Wi-Fi is
@@ -119,55 +128,140 @@ docker compose -f docker-compose.grafana.yml down       # keeps the data
 docker compose -f docker-compose.grafana.yml down -v    # also wipes metrics, logs and traces
 ```
 
-## What the dashboard shows
+## Dashboards
 
-| Section | Panels |
+Five dashboards are generated from `grafana/build_dashboards.py` (dashboards as code) and
+provisioned from `grafana/dashboards/`. They share the **Node**, **Drone**, **Level** and
+**Component** variables, link to each other (top right), and annotate flight-safety events,
+alert transitions and target changes.
+
+| Dashboard (uid) | What it answers |
 | --- | --- |
-| Overview | FPS, drone battery, p95 frame latency, face detection rate, matches, errors |
-| Pipeline performance | FPS, frame latency p50/p95/p99, persons detected per frame |
-| Matching | matches by type, match-score distribution, face detection rate |
-| Drone & health | battery (warning line at 20%), errors by component/type |
-| Logs | log volume by level, warnings and errors, all logs |
-| Traces | recent traces from Tempo (`detect`, `reid_match`, `face_match` spans) |
+| FlightRisk / Overview (`fr-overview`) | Golden signals: request rate, handler error ratio, latency p50/p95/p99 (with exemplar links to traces), saturation (CPU, memory, threads, open files, queues), uptime, active alert; SLOs for frame-loop availability, drone command success and edge link availability with an error-budget burn rate; recent warnings and errors; recent traces |
+| FlightRisk / Flight Safety & Comms (`fr-flight-comm`) | Per-drone battery, height with its source, telemetry age, speed, attitude, flying; command outcomes and latency, land durations, flight-safety events, obstacle checks; link age, clock offset and RTT, connections and reconnects; message rates by type, acks and nacks with reasons, undelivered messages; live drone communication, flight-safety and telemetry-snapshot logs |
+| FlightRisk / Detection & Matching (`fr-detection`) | FPS, frame and per-stage latency, persons per frame, per-signal scores, alert levels, alert latch and operator response time, model loads, reasoning calls, latency and tokens, pipeline summaries |
+| FlightRisk / Operator Input & Target (`fr-operator`) | Every operator action with its outcome, rejected and unauthorized requests, the operator input log, the target image (numbers, hash and thumbnail), alert responses |
+| FlightRisk / Errors & Logs (`fr-errors`) | Error rate by component, top error fingerprints, log volume by level and component, dropped console records, an error log and a log explorer filtered by level and component, traces with errors |
 
-## Metrics
+The original **FlightRisk** dashboard (`flightrisk-overview`, from PR #88) is still provisioned.
 
-Names are the OTel names from `flightrisk/telemetry.py` with dots turned into underscores
-(the collector runs with `add_metric_suffixes: false`, so there is no `_total` or unit suffix).
+To change a dashboard, edit `grafana/build_dashboards.py` and run it; a test fails when the
+committed JSON differs from the generator's output. `allowUiUpdates` is on for quick
+experiments, but provisioned changes made in the UI are lost on restart.
 
-| Prometheus name | Type |
-| --- | --- |
-| `flightrisk_fps` | gauge |
-| `flightrisk_drone_battery` | gauge (%) |
-| `flightrisk_face_detection_rate` | gauge (%) |
-| `flightrisk_frame_duration_ms_{bucket,sum,count}` | histogram (ms) |
-| `flightrisk_detections_count` | running total of persons seen (gauge) |
-| `flightrisk_match_count{match_type}` | counter |
-| `flightrisk_match_score_{bucket,sum,count}{match_type}` | histogram, buckets 0.1 to 1.0 |
-| `flightrisk_errors_count{component,error_type}` | counter |
+## Alerts
 
-`flightrisk_reasoning_duration_ms` is defined but nothing records it today, so the dashboard has no panel for it.
+Grafana alert rules are provisioned from `grafana/alerting/` (mounted into
+`/etc/grafana/provisioning/alerting`): drone battery below 20 % (warning) and 10 %
+(critical), telemetry older than 5 s while flying, a link-loss or watchdog landing (or a lost
+drone), a land that was not executed or not confirmed, dropped fleet messages, an error-rate
+spike (more than 10 per minute) and a stalled frame loop (no frame for 10 s). They notify a
+placeholder webhook on Grafana's own loopback, so nothing leaves the machine; replace its URL
+in `grafana/alerting/contact-points.yml` with a local receiver to get notifications.
+
+## Links between logs, metrics and traces
+
+- Every log line written inside a span carries `trace_id` and `span_id`; the OTLP record
+  carries the same ids, which Loki stores as structured metadata. In Explore, a Loki line
+  has a **View trace** link (derived field `trace_id`).
+- From a Tempo span, **Logs for this span** runs
+  `{service_name=~"flightrisk.*"} | trace_id="<id>"` in Loki.
+- Latency histograms carry exemplars. The collector exposes them in OpenMetrics format and
+  Prometheus stores them (`--enable-feature=exemplar-storage`); the exemplar dots on the
+  latency panels open the trace.
 
 ## Logs
 
-`StructuredLogger` output still goes to stdout. In the `otlp-*` modes it is also sent to Loki as
-OTLP logs. Each line is the same JSON the app prints, so use `| json` in LogQL:
+Every module writes the same JSON line (`flightrisk/obs_log.py`) to stderr and, in the
+`otlp-*` modes, to Loki. Query with `| json`:
 
 ```logql
-{service_name="flightrisk"} | json | event="detection_tick"
-{service_name="flightrisk"} | json | level="error"
-{service_name="flightrisk", service_instance_id="edge-2"}
+{service_name=~"flightrisk.*"} | json | event="user_input"
+{service_name=~"flightrisk.*"} | json | category="flight_safety"
+{service_name=~"flightrisk.*", service_instance_id="edge-2"} | json | level=~"error|critical"
 ```
 
-## Editing the dashboard
+`FLIGHTRISK_LOG_LEVEL` (default `INFO`) sets the level; `DEBUG` also adds stack traces to
+error lines. Console output goes through a bounded queue and a writer thread, so a slow
+terminal never blocks the frame loop: when the queue is full, records are dropped and counted
+(`flightrisk_log_dropped`). Operator console lines from the Tello, detector, ReID, recorder
+and reasoning modules are still printed to stdout as before and also logged as events;
+`FLIGHTRISK_CONSOLE_ECHO=0` stops the stdout copy.
 
-`grafana/dashboards/flightrisk.json` is provisioned read-only from disk but `allowUiUpdates`
-is on: edit in Grafana, then use *Share > Export > Save to file* and replace the JSON to keep changes.
+## Operator content and the target image
+
+`FLIGHTRISK_TELEMETRY_CONTENT` decides whether operator content is captured. It is **off by
+default in code**. The two-laptop instructions above and the field launch in
+`docs/fleet-setup.md` turn it on.
+
+| | Off (default) | On (`FLIGHTRISK_TELEMETRY_CONTENT=1`) |
+| --- | --- | --- |
+| Operator actions (`user_input`) | event name, outcome, actor, remote address, numbers, short tokens (preset, command, drone id); free text as its length only | the same, plus free text (description, notes) after redaction, capped at 500 characters |
+| Target image (`target_image`) | size, dimensions, MIME type, quality scores, face-report numbers | the same, plus the sha256, a local artifact and a signed preview URL |
+| Image bytes in logs, metrics or labels | never | never |
+
+Never captured, whatever the switch: face or appearance embeddings, crops of bystanders,
+video frames, the reasoning model's text (only provider, model, latency, tokens and outcome
+are recorded), and secrets (API keys, `FLIGHTRISK_EDGE_TOKEN`, `Authorization` headers and
+anything matching a known key pattern are redacted before a line is written).
+
+### The target image preview
+
+With content capture on, the target photo is stored once per distinct image in
+`~/.flightrisk/artifacts/targets/` (`FLIGHTRISK_ARTIFACT_DIR`): the photo as uploaded
+(`<sha256>.jpg`) and a thumbnail of at most 160 px (`<sha256>.thumb.jpg`). The directory is
+mode 0700 and the files 0600. Files older than `FLIGHTRISK_ARTIFACT_RETENTION_DAYS` (default 7)
+are deleted, and at most `FLIGHTRISK_ARTIFACT_MAX_FILES` (default 50) targets are kept.
+
+The **Target image** panel shows the thumbnail. A Grafana panel cannot send the dashboard's
+`Authorization` header, and the dashboard's deny-by-default API-key gate is not changed to
+allow one. Instead, FlightRisk runs a separate preview server that:
+
+- listens on `127.0.0.1` only (`FLIGHTRISK_PREVIEW_PORT`, default 5560; `0` turns it off),
+- serves only thumbnails, never the full photo,
+- requires a capability URL signed with HMAC-SHA256 over the image hash and an expiry
+  (`FLIGHTRISK_PREVIEW_TTL_S`, default 24 h), with the key from `FLIGHTRISK_PREVIEW_SECRET` or
+  a random key kept in `<artifact dir>/preview.key` (mode 0600),
+- answers 404 to anything else (wrong signature, expired, unknown hash, other paths).
+
+Each `target_image` event carries its `preview_url`. The trade-off: anyone who can read the
+Loki logs and reach this machine's loopback can open that thumbnail until the URL expires.
+The URL is a bearer capability, so treat the logs as sensitive while it is valid (they
+describe an active search anyway). Set `FLIGHTRISK_PREVIEW_PORT=0` to keep the artifact but
+serve no preview.
+
+## What is stored, and where
+
+| Data | Where | Kept for |
+| --- | --- | --- |
+| Logs (all events above) | Loki volume `loki_data` in the Docker stack on the ground station | 7 days (`LOKI_RETENTION_PERIOD`, default `168h`; deleted by the compactor) |
+| Metrics | Prometheus volume `prometheus_data` | 7 days (`--storage.tsdb.retention.time`) |
+| Traces | Tempo volume `tempo_data` | 7 days (`block_retention`) |
+| Target photo and thumbnail (content capture on) | `~/.flightrisk/artifacts/targets/` on the machine that received the upload | 7 days, at most 50 targets |
+| Preview signing key | `~/.flightrisk/artifacts/preview.key` | until deleted |
+| Console output | the terminal (stderr), and wherever you redirect it | not managed |
+
+Nothing is sent outside the machines you run: the collector listens on loopback (or, with
+`OTLP_BIND=10.42.0.1`, on the laptop-to-laptop cable only), Grafana, Prometheus, Tempo and
+Loki stay on `127.0.0.1`, and the alert contact point is a local placeholder.
+
+## Checking the dashboards against a live stack
+
+```bash
+python scripts/audit_grafana_dashboards.py --grafana http://127.0.0.1:3000 --minutes 10
+python scripts/bench_telemetry_overhead.py --endpoint http://127.0.0.1:4317
+```
+
+The audit runs every panel query through Grafana and lists panels that returned no data.
+The benchmark measures what the instrumentation adds to the frame loop and to the lane
+executor's monitor tick, with the collector reachable, on a closed port and on an address
+that never answers.
 
 ## Notes
 
 - All published ports bind to `127.0.0.1`. Do not expose them; logs and traces describe an active search.
   The one exception is opt-in: `OTLP_BIND=10.42.0.1` puts the OTLP ports on the Thunderbolt cable address.
   Change the Grafana admin password (`GRAFANA_ADMIN_PASSWORD`) before using this anywhere shared.
-- Image versions are pinned in `docker-compose.grafana.yml`. Retention is 7 days for metrics, logs and traces.
+- Image versions are pinned in `docker-compose.grafana.yml`. Retention is 7 days for metrics, logs and traces
+  (`LOKI_RETENTION_PERIOD` changes the log retention).
 - Data lives in named Docker volumes. `docker compose -f docker-compose.grafana.yml down -v` wipes it.

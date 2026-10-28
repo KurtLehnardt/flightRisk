@@ -35,6 +35,8 @@ Captures are match snapshots: the full frame, the person crop and a metadata JSO
 | Video recordings | `recordings/` (`flightrisk/recorder.py`), only when the operator starts a recording | Not encrypted |
 | Crops and reference photo sent to a reasoning model | Local Ollama by default (`flightrisk/reasoning/agent.py`; `OLLAMA_HOST` may point to another machine) | Sent to that host; not started when `--no-llm` is used |
 | Reference photo and person crops sent to a cloud LLM | Mobile app only: Anthropic, OpenAI or Google, via `CloudClaudeLlmBackend` and its siblings | Sent only after the user selects a cloud backend and stores an API key |
+| Telemetry logs, metrics and traces | The local Grafana stack (Loki, Prometheus, Tempo volumes), only when `FLIGHTRISK_OTEL_ENABLED=true` | Operator actions, drone communication, flight-safety and pipeline events as numbers, ids and short tokens; secrets redacted; never embeddings, crops, frames or reasoning text. See `observability/README.md` |
+| Operator text and the target photo in telemetry | Operator text in the Loki logs; the photo and a thumbnail in `~/.flightrisk/artifacts/targets/` (mode 0700, files 0600), served to Grafana by a 127.0.0.1-only preview server with expiring signed URLs | Only when `FLIGHTRISK_TELEMETRY_CONTENT=1` (off by default in code); text redacted and capped at 500 characters |
 
 The mobile app stores match thumbnails, scores, GPS fixes and timestamps in a local SQLite database on the phone. Nothing in the dashboard or the mobile app sends data to an analytics or advertising service.
 
@@ -51,4 +53,5 @@ Tests use only synthetic imagery: rectangles and noise arrays generated in code,
 - Session database rows and recordings: kept until the operator deletes `flightrisk_sessions.db` or the files in `recordings/`. There is no automatic expiry.
 - Mobile app: thumbnails, scores and locations stay until the user deletes them in settings or uninstalls the app.
 - Cloud LLM: retention after transmission is governed by the provider's policy and is outside FlightRisk's control.
+- Telemetry: logs, metrics and traces are deleted after 7 days by the Grafana stack (`LOKI_RETENTION_PERIOD` for logs); target-photo artifacts after `FLIGHTRISK_ARTIFACT_RETENTION_DAYS` (default 7), at most 50 kept.
 - Deployments that handle real imagery must use filesystem-level encryption, because image files are not encrypted by the application.
