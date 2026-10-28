@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>FlightRisk</title>
+    <!-- UI v2 (docs/ui-v2-design.md). Served only on the --ui-v2-port listener; index.html stays the default UI. -->
+    <link rel="stylesheet" href="/static/leaflet/leaflet.css">
+    <link rel="stylesheet" href="/static/v2/ui.css">
+</head>
+<body>
+
+    <!-- Top bar: connection, privacy badges, recording, and LAND ALL. Always visible, never inside a section. -->
+    <header class="topbar">
+        <div class="brand">FlightRisk</div>
+        <div class="topbar-status" aria-live="polite">
+            <span id="conn-state" class="pill" data-state="offline"><span class="dot" aria-hidden="true"></span><span id="status-label">Offline</span></span>
+            <span id="rec-indicator" class="pill pill-rec" hidden><span class="dot" aria-hidden="true"></span>REC</span>
+            <span id="appearance-only-badge" class="pill" hidden>Appearance only</span>
+            <span id="face-off-badge" class="pill pill-warn" hidden></span>
+        </div>
+        <button type="button" id="land-all" class="land-all" aria-label="Land all drones" aria-keyshortcuts="Shift+L"
+                title="Shift+L (Ctrl/Cmd+Shift+L inside text fields)">LAND ALL <kbd>Shift+L</kbd></button>
+    </header>
+
+    <div class="layout">
+
+        <!-- MAIN: glanceable status, video tiles, manual takeover, search map. No commands except the contextual
+             manual takeover panel, which appears only for the drone under manual control. -->
+        <main class="main">
+
+            <!-- One card per drone: connection state, battery, altitude, mode, lane, auto-land countdown. -->
+            <section class="drone-strip" aria-label="Drone status">
+                <div id="drone-status" class="drone-cards"></div>
+                <div id="drone-status-empty" class="empty">No drone reported yet.</div>
+            </section>
+
+            <div class="readout" aria-live="off">
+                <span>FPS <b id="hud-fps">--</b></span>
+                <span>Detected <b id="hud-persons">0</b></span>
+                <span>Matches <b id="match-count">0</b></span>
+                <span id="hud-match" class="readout-match" hidden>Match <b id="hud-match-score">--</b></span>
+                <span id="hud-confidence" class="readout-confidence" hidden></span>
+            </div>
+            <div id="search-bar" class="search-bar" hidden><div id="search-bar-fill" class="search-bar-fill"></div></div>
+
+            <section class="video" aria-label="Video">
+                <!-- One tile per drone. The first tile is reused for the first drone (or a source that sends no
+                     drone id); more are created on demand. Click a tile to take manual control (fleet mode). -->
+                <div id="video-tiles" hidden>
+                    <div class="video-tile" id="video-tile-default">
+                        <img id="video-feed" class="tile-feed" alt="Drone video">
+                        <canvas id="detection-overlay" class="tile-overlay"></canvas>
+                        <div class="tile-label"></div>
+                        <div class="tile-nodata">No video</div>
+                        <div id="detections-only-indicator" class="detections-only-indicator">Detections only, video off</div>
+                    </div>
+                </div>
+                <div id="video-placeholder" class="placeholder">Waiting for video</div>
+            </section>
+
+            <!-- Manual takeover (docs/manual-takeover.md): shown under the tiles only while a drone is under manual
+                 control. These buttons exist nowhere else. LAND ALL (top bar, Shift+L) always works. -->
+            <div id="manual-overlay" role="region" aria-label="Manual flight controls" hidden>
+                <div class="manual-head">
+                    <span class="manual-badge">MANUAL</span>
+                    <span id="manual-drone-id" class="manual-drone"></span>
+                    <span id="manual-mode" class="manual-mode"></span>
+                </div>
+                <div id="manual-reason" class="manual-reason" aria-live="polite"></div>
+                <div class="manual-grid">
+                    <button type="button" id="manual-ccw" data-manual="ccw" title="Rotate left (Q)">Rotate left</button>
+                    <button type="button" id="manual-forward" data-manual="forward" title="Forward (W)">Forward</button>
+                    <button type="button" id="manual-cw" data-manual="cw" title="Rotate right (E)">Rotate right</button>
+                    <button type="button" id="manual-up" data-manual="up" title="Up (X)">Up</button>
+                    <button type="button" id="manual-left" data-manual="left" title="Left (A)">Left</button>
+                    <button type="button" id="manual-back" data-manual="back" title="Back (S)">Back</button>
+                    <button type="button" id="manual-right" data-manual="right" title="Right (D)">Right</button>
+                    <button type="button" id="manual-down" data-manual="down" title="Down (Z)">Down</button>
+                </div>
+                <div class="manual-actions">
+                    <button type="button" id="manual-takeoff" data-manual="takeoff" title="Takeoff (T)">Takeoff</button>
+                    <button type="button" id="manual-land" data-manual="land" title="Land this drone (L)">Land</button>
+                    <button type="button" id="manual-resume" title="End manual control; the drone resumes its search">Resume search</button>
+                </div>
+                <div class="hint">Keys: W/S/A/D move, X/Z up/down, Q/E rotate, T takeoff, L land. Shift+L lands every drone.</div>
+            </div>
+
+            <section class="map-card" aria-label="Search map">
+                <div id="fleet-banner" class="banner" role="status" hidden></div>
+                <div id="fleet-uncovered" class="uncovered" hidden></div>
+                <div id="search-map"></div>
+            </section>
+
+            <p class="disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</p>
+        </main>
+
+        <!-- SIDEBAR: every command and option, each in exactly one place, in collapsible sections. -->
+        <aside class="sidebar" aria-label="Commands and options">
+
+            <!-- FLEET -->
+            <section class="panel-section" data-card="fleet">
+                <div class="panel-title">
+                    <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-fleet-body"><span>Fleet</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                </div>
+                <div class="card-body" id="card-fleet-body">
+                    <div class="field">
+                        <label for="drone-selector">Selected drone</label>
+                        <div class="row">
+                            <select id="drone-selector"><option value="">Primary drone</option></select>
+                            <button type="button" id="land-selected" class="btn btn-danger-quiet" title="Land only the selected drone (L with keyboard control on)">Land drone</button>
+                        </div>
+                    </div>
+                    <!-- Direct flight control for a single drone (no fleet). In fleet mode the drone under manual
+                         control is flown from the manual takeover panel under the video instead. -->
+                    <div id="direct-control" class="subgroup" hidden>
+                        <div class="switch-row">
+                            <label class="switch"><input type="checkbox" id="keyboard-toggle"><span class="switch-track" aria-hidden="true"></span><span>Keyboard control</span></label>
+                            <span id="keyboard-status" class="state">Off</span>
+                        </div>
+                        <div id="keyboard-legend" class="hint" hidden>W/S forward/back, A/D left/right, Q/E rotate, X/Z up/down, T takeoff, L land.</div>
+                        <div class="pad">
+                            <button type="button" id="direct-ccw" data-direct="ccw" data-key="q" title="Rotate left (Q)">Rotate L</button>
+                            <button type="button" id="direct-forward" data-direct="forward" data-key="w" title="Forward (W)">Forward</button>
+                            <button type="button" id="direct-cw" data-direct="cw" data-key="e" title="Rotate right (E)">Rotate R</button>
+                            <button type="button" id="direct-left" data-direct="left" data-key="a" title="Left (A)">Left</button>
+                            <button type="button" id="direct-hover" data-direct="hover" title="Stop and hover">Hover</button>
+                            <button type="button" id="direct-right" data-direct="right" data-key="d" title="Right (D)">Right</button>
+                            <button type="button" id="direct-up" data-direct="up" data-key="x" title="Up (X)">Up</button>
+                            <button type="button" id="direct-back" data-direct="back" data-key="s" title="Back (S)">Back</button>
+                            <button type="button" id="direct-down" data-direct="down" data-key="z" title="Down (Z)">Down</button>
+                        </div>
+                        <button type="button" id="direct-takeoff" class="btn btn-block" data-direct="takeoff" data-key="t" title="Takeoff (T)">Takeoff</button>
+                    </div>
+                    <div class="field">
+                        <span class="field-label">Connections</span>
+                        <div class="row grid3">
+                            <button type="button" id="drone-add" class="btn btn-quiet">Add</button>
+                            <button type="button" id="drone-retry" class="btn btn-quiet" title="Retry connecting the primary drone">Retry</button>
+                            <button type="button" id="drone-set-primary" class="btn btn-quiet" title="Make the selected drone primary">Set primary</button>
+                            <button type="button" id="drone-remove" class="btn btn-quiet" title="Remove the selected drone">Remove</button>
+                            <button type="button" id="drone-remove-all" class="btn btn-quiet" title="Disconnect all drones">Remove all</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- MISSION -->
+            <section class="panel-section" data-card="mission">
+                <div class="panel-title">
+                    <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-mission-body"><span>Mission</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                </div>
+                <div class="card-body" id="card-mission-body">
+                    <div class="field">
+                        <span class="field-label">Target</span>
+                        <div class="target">
+                            <div id="target-upload-zone" class="target-photo" role="button" tabindex="0" aria-label="Upload target photo">
+                                <img id="target-preview" alt="Target photo" hidden>
+                                <span id="upload-prompt">Add photo</span>
+                            </div>
+                            <input type="file" id="target-upload" accept="image/*" hidden>
+                            <div class="target-text">
+                                <textarea id="target-description" rows="3" placeholder="Or describe: red jacket, blue backpack, about 8 years old"></textarea>
+                                <div class="row">
+                                    <button type="button" id="set-description" class="btn">Set description</button>
+                                    <button type="button" id="clear-target-btn" class="btn btn-quiet" hidden>Clear photo</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="quality-feedback" class="quality" hidden></div>
+                        <button type="button" id="target-history-toggle" class="disclosure" aria-expanded="false" aria-controls="target-history-container">Target history</button>
+                        <div id="target-history-container" hidden><div id="target-history-list" class="list"></div></div>
+                    </div>
+
+                    <div class="field">
+                        <span class="field-label">Fleet search</span>
+                        <div class="row">
+                            <button type="button" id="fleet-plan" class="btn">Plan search</button>
+                            <button type="button" id="fleet-start" class="btn btn-primary" disabled>Start search</button>
+                        </div>
+                        <div id="fleet-error" class="msg msg-error" hidden></div>
+                    </div>
+
+                    <div class="field">
+                        <label for="search-pattern">Single-drone pattern</label>
+                        <select id="search-pattern">
+                            <option value="expanding_square">Expanding square, from last known point</option>
+                            <option value="sector">Sector, pie slices</option>
+                            <option value="parallel_track">Parallel track, lawnmower</option>
+                            <option value="track_line">Track line, follow path</option>
+                            <option value="spiral">Spiral, outward from center</option>
+                        </select>
+                        <div class="row">
+                            <button type="button" id="start-search" class="btn">Start pattern</button>
+                            <button type="button" id="stop-search" class="btn btn-quiet">Stop pattern</button>
+                        </div>
+                        <div id="search-status" class="msg"></div>
+                    </div>
+
+                    <div class="field" id="detection-profiles-section">
+                        <label for="profile-fleet-default">Detection profile</label>
+                        <select id="profile-fleet-default"><option value="">Keep each drone's startup profile</option></select>
+                        <div id="profile-controls-note" class="msg msg-warn" hidden></div>
+                        <div id="profile-drone-list" class="profile-list" aria-live="polite"></div>
+                        <div class="hint">Top-down suits a camera looking straight down (HERIDAL model, tiled). Level suits level flight with faces in view. A drone switches only on the ground.</div>
+                    </div>
+
+                    <div class="field">
+                        <span class="field-label">Map</span>
+                        <div class="segmented" role="group" aria-label="Map view">
+                            <button type="button" id="map-mode-grid" class="active" aria-pressed="true">Grid</button>
+                            <button type="button" id="map-mode-latlon" aria-pressed="false">Lat/Lon</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- FLIGHT SETTINGS: the shared ceiling and altitude card (docs/ceiling-and-altitude.md). -->
+            {% include "ceiling_settings.html" %}
+
+            <!-- VIDEO AND DETECTION -->
+            <section class="panel-section" data-card="video-detection">
+                <div class="panel-title">
+                    <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-video-detection-body"><span>Video and detection</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                </div>
+                <div class="card-body" id="card-video-detection-body">
+                    <div class="field">
+                        <div class="switch-row">
+                            <label class="switch"><input type="checkbox" id="video-toggle" checked><span class="switch-track" aria-hidden="true"></span><span>Stream video</span></label>
+                            <span id="video-status" class="state on">On</span>
+                        </div>
+                        <div class="hint">Off means detections only: the edge sends boxes without video to save link bandwidth.</div>
+                    </div>
+                    <div class="field">
+                        <span class="field-label">Sensitivity</span>
+                        <div class="segmented" role="group" aria-label="Sensitivity">
+                            <button type="button" class="preset-pill" data-preset="more_alerts">More alerts</button>
+                            <button type="button" class="preset-pill active" data-preset="balanced">Balanced</button>
+                            <button type="button" class="preset-pill" data-preset="fewer_alerts">Fewer alerts</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="threshold-slider">Match threshold <span id="threshold-val" class="num">0.55</span></label>
+                        <input type="range" id="threshold-slider" min="30" max="90" value="55">
+                        <div class="row">
+                            <button type="button" id="tuner-analyze" class="btn btn-quiet">Suggest threshold</button>
+                            <button type="button" id="tuner-apply" class="btn" hidden>Apply suggested</button>
+                        </div>
+                        <dl id="tuner-result" class="kv" hidden>
+                            <dt>Current</dt><dd id="tuner-current">--</dd>
+                            <dt>Suggested</dt><dd id="tuner-suggested">--</dd>
+                            <dt>Confidence</dt><dd id="tuner-confidence">--</dd>
+                            <dt>Reason</dt><dd id="tuner-reason"></dd>
+                        </dl>
+                    </div>
+                    <div class="field">
+                        <label for="reasoning-provider">AI reasoning</label>
+                        <select id="reasoning-provider">
+                            <option value="gemma" data-label="Gemma (local Ollama)">Gemma (local Ollama)</option>
+                            <option value="claude" data-label="Claude (Anthropic API, cloud)">Claude (Anthropic API, cloud)</option>
+                            <option value="off" data-label="Off">Off</option>
+                        </select>
+                        <div id="reasoning-status" class="msg"></div>
+                        <div id="reasoning-unavailable" class="msg" hidden></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SESSION AND RECORDING -->
+            <section class="panel-section" data-card="session">
+                <div class="panel-title">
+                    <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-session-body"><span>Session and recording</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                </div>
+                <div class="card-body" id="card-session-body">
+                    <div class="field">
+                        <div class="row">
+                            <button type="button" id="rec-btn" class="btn"><span class="rec-dot" aria-hidden="true"></span><span id="rec-btn-text">Start recording</span></button>
+                        </div>
+                        <div id="rec-status" class="msg"></div>
+                    </div>
+                    <div class="field">
+                        <span class="field-label">Match log <span id="feedback-stats" class="num"></span></span>
+                        <div id="match-log" class="match-log"><div class="empty">No matches yet.</div></div>
+                    </div>
+                    <button type="button" id="sessions-toggle" class="disclosure" aria-expanded="false" aria-controls="sessions-container">Past sessions</button>
+                    <div id="sessions-container" hidden><div id="sessions-list" class="list"></div></div>
+                </div>
+            </section>
+
+            <!-- ADVANCED AND OBSERVABILITY -->
+            <section class="panel-section" data-card="advanced" data-default="collapsed">
+                <div class="panel-title">
+                    <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-advanced-body"><span>Advanced</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+                </div>
+                <div class="card-body" id="card-advanced-body">
+                    <dl class="kv">
+                        <dt>Frames</dt><dd id="obs-frames">0</dd>
+                        <dt>Persons</dt><dd id="obs-persons">0</dd>
+                        <dt>Errors</dt><dd id="obs-errors">0</dd>
+                        <dt>Matches</dt><dd id="obs-matches-total">0</dd>
+                        <dt>by ReID</dt><dd id="obs-matches-reid">0</dd>
+                        <dt>by face</dt><dd id="obs-matches-face">0</dd>
+                        <dt>by description</dt><dd id="obs-matches-desc">0</dd>
+                        <dt>Face detection rate</dt><dd id="obs-face-rate">--</dd>
+                        <dt>Reasoning calls</dt><dd id="obs-reasoning">0</dd>
+                        <dt>Reasoning latency</dt><dd id="obs-reasoning-lat">--</dd>
+                    </dl>
+                    <div class="field">
+                        <span class="field-label">Link timing</span>
+                        <div class="table-wrap">
+                            <table id="fleet-panel">
+                                <thead><tr><th>Drone</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
+                                <tbody id="fleet-panel-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <button type="button" id="restart-dashboard" class="btn btn-quiet" title="Disconnect every drone and restart the pipeline">Restart dashboard</button>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+
+    <!-- Match alert dialog -->
+    <div id="match-overlay" class="match-overlay" hidden>
+        <div id="match-overlay-card" class="match-overlay-card" role="alertdialog" aria-modal="true" aria-labelledby="overlay-title">
+            <div id="overlay-title" class="overlay-title">Possible match</div>
+            <div id="overlay-subtitle" class="overlay-subtitle"></div>
+            <img id="overlay-snapshot" class="overlay-snapshot" alt="Match snapshot" hidden>
+            <div id="overlay-score" class="overlay-score"></div>
+            <div id="overlay-reasoning" class="overlay-reasoning"></div>
+            <div class="overlay-actions">
+                <button type="button" id="overlay-confirm-btn" class="btn btn-primary alert-response-btn">Yes, that's my child</button>
+                <button type="button" id="overlay-reject-btn" class="btn alert-response-btn">Not my child</button>
+                <button type="button" id="overlay-later-btn" class="btn btn-quiet" title="Hide this pop-up; the alert stays pending and will be shown again">Decide later</button>
+            </div>
+            <div id="overlay-status" class="overlay-status"></div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/static/socket.io.min.js"></script>
+    <script src="/static/leaflet/leaflet.js"></script>
+    <script src="/static/v2/ui.js"></script>
+</body>
+</html>
