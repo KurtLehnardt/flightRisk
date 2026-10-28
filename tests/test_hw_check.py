@@ -21,12 +21,13 @@ class FakeTello:
     """UDP responder on 127.0.0.1 that mimics a Tello EDU command socket."""
 
     def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10,
-                 strict_source=False, edu_queries=True, raw_replies=None):
+                 strict_source=False, edu_queries=True, raw_replies=None, lead_replies=None):
         # strict_source: like a real Tello, answer only the source port that sent "command".
         # edu_queries=False: like a standard Tello, "sdk?" and "sn?" are unknown commands.
         self.strict_source = strict_source
         self.edu_queries = edu_queries
         self.raw_replies = raw_replies or {}  # command -> exact reply bytes (for undecodable replies)
+        self.lead_replies = lead_replies or {}  # command -> extra datagrams sent before the real reply
         self.locked_addr = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
@@ -85,6 +86,8 @@ class FakeTello:
                     self.locked_addr = addr
                 if addr != self.locked_addr:
                     continue
+            for lead in self.lead_replies.get(cmd, []):
+                self.sock.sendto(lead, addr)
             raw = self.raw_replies.get(cmd)
             self.sock.sendto(raw if raw is not None else self._reply(cmd).encode(), addr)
             if cmd == "streamon" and self.video_port:
@@ -148,19 +151,48 @@ def test_real_command_port_sends_from_local_8889_like_djitellopy():
 
 
 def test_undecodable_reply_does_not_crash_the_report_on_a_cp1252_stdout(monkeypatch):
-    # Seen on a real Tello: a reply with bytes that are not text became U+FFFD and crashed the table print.
+    # Seen on a real Tello: U+FFFD in the report crashed the table print on a redirected cp1252 stdout. Non-text
+    # replies are now skipped, but any printable character cp1252 cannot encode must still not crash the report.
     import io
 
     raw = io.BytesIO()
     stdout = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
     monkeypatch.setattr(sys, "stdout", stdout)
-    with FakeTello(raw_replies={"wifi?": b"\xff\xfe9"}) as drone:
+    with FakeTello(raw_replies={"wifi?": "\u26039".encode("utf-8")}) as drone:
         rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])
     stdout.flush()
     text = raw.getvalue().decode("cp1252")
     assert rc == 0
     assert "cmd:wifi?" in text
     assert "OVERALL: PASS" in text
+
+
+def test_non_text_reply_before_ok_is_skipped_and_reported(capsys):
+    with FakeTello(lead_replies={"command": [b"\xff\xfeVl\x00"]}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:command"]["status"] == "PASS"
+    assert by_name["stray-replies"]["status"] == "INFO"
+    assert "binary" in by_name["stray-replies"]["detail"]
+
+
+def test_stale_ok_before_a_query_value_is_skipped(capsys):
+    with FakeTello(lead_replies={"battery?": [b"ok"]}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:battery?"]["status"] == "PASS" and by_name["cmd:battery?"]["value"] == "87"
+    assert by_name["stray-replies"]["status"] == "INFO"
+
+
+def test_a_clean_run_reports_no_stray_row(capsys):
+    with FakeTello() as drone:
+        hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    names = [c["name"] for c in json.loads(capsys.readouterr().out)["checks"]]
+    assert "stray-replies" not in names
 
 
 def test_command_sockets_are_closed_after_main():
