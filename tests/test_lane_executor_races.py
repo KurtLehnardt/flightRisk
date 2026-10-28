@@ -20,7 +20,6 @@ every message they send is validated.
 """
 from __future__ import annotations
 
-import sys
 import threading
 
 import pytest
@@ -191,20 +190,17 @@ def test_a_landing_opened_inside_launch_after_its_check_still_aborts_the_sequenc
     # the order "check, then clear", the clear would wipe the landing's flag.
     executor, drone, _, _, _ = held_mid_lane(executors)
     mark = len(drone.calls)
-    original = executor._landing_wanted_locked
     gaps: list[LandingGap] = []
 
-    def wanted_then_open_gap():
-        wanted = original()
-        if not wanted and not gaps and sys._getframe(1).f_code.co_name == "_launch":
+    def open_gap_after_check():
+        if not gaps:
             gaps.append(LandingGap(executor))
-        return wanted
 
-    executor._landing_wanted_locked = wanted_then_open_gap
+    executor._after_launch_check = open_gap_after_check
     try:
         send(executor, resume("p-1", cmd_id="c1") if command == "resume" else nudge("left", 50, cmd_id="c1"))
     finally:
-        del executor._landing_wanted_locked
+        executor._after_launch_check = None
     assert gaps
     assert not wait_for(lambda: len(drone.calls) > mark, timeout=0.3)
     gaps[0].close()

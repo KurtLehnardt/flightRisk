@@ -448,3 +448,71 @@ def test_stale_nack_is_ignored_and_plan_nack_blocks_start():
     assert not result.ok
     assert result.refusals == {"drone-2": "assign_lanes refused (geofence)"}
     assert all(edge.of_type("start_at") == [] for edge in edges.values())
+
+
+# ---------------------------------------------------------------------------
+# Transient refusals (landing, busy) are retried, not permanent
+# ---------------------------------------------------------------------------
+
+
+class TransientEdge(FakeEdge):
+    """Nacks every ``assign_lanes`` with *reason* until ``refuse`` is cleared."""
+
+    def send(self, msg):
+        if msg["type"] == "assign_lanes" and self.refuse:
+            self.sent.append(msg)
+            self.reply({"type": "nack", "for": "assign_lanes", "drone_id": self.drone_id,
+                        "reason": self.refuse, "lanes_total": len(msg["lanes"])})
+            return
+        super().send(msg)
+
+
+def _telemetry(drone_id, state, is_flying):
+    return {"type": "telemetry", "drone_id": drone_id, "state": state, "is_flying": is_flying}
+
+
+@pytest.mark.parametrize("reason, still, over", [
+    ("landing", ("landing", True), ("idle", False)),
+    ("busy", ("taking_off", True), ("hovering", True)),
+])
+def test_a_transient_nack_is_retried_once_the_drone_is_ready(reason, still, over):
+    edges = {f"drone-{i}": TransientEdge(f"drone-{i}") for i in (1, 2, 3)}
+    coord, events = make_fleet(edges, area=(900, 400))
+    coord.plan()
+    for drone_id in ("drone-1", "drone-2"):
+        edges[drone_id].refuse = reason
+    own_one = coord.lanes("drone-1")
+
+    appended = coord.on_drone_lost("drone-3")
+
+    # Nobody could take the lanes yet, but they are not reported as uncovered.
+    assert appended == {}
+    assert fleet_events(events, "retask_failed") == []
+    offers = {d: len(e.of_type("assign_lanes")) for d, e in edges.items()}
+
+    # Telemetry that still shows the refusal reason re-offers nothing.
+    coord.handle_message("drone-1", _telemetry("drone-1", *still))
+    assert {d: len(e.of_type("assign_lanes")) for d, e in edges.items()} == offers
+
+    # Once the drone is ready the lanes are offered again and accepted.
+    for drone_id in ("drone-1", "drone-2"):
+        edges[drone_id].refuse = None
+    coord.handle_message("drone-1", _telemetry("drone-1", *over))
+    assert len(edges["drone-1"].of_type("assign_lanes")) == offers["drone-1"] + 1
+    assert len(coord.lanes("drone-1")) > len(own_one)
+    assert fleet_events(events, "retask_failed") == []
+    assert any(set(p["to"]) == {"drone-1"} and "awaiting" not in p for p in fleet_events(events, "retask"))
+
+
+def test_a_permanent_nack_is_still_never_reoffered_to_the_same_drone():
+    edges = {f"drone-{i}": TransientEdge(f"drone-{i}") for i in (1, 2, 3)}
+    coord, events = make_fleet(edges, area=(900, 400))
+    coord.plan()
+    edges["drone-1"].refuse = "battery"
+    edges["drone-2"].refuse = "battery"
+    coord.on_drone_lost("drone-3")
+    assert fleet_events(events, "retask_failed")
+    count = len(edges["drone-1"].of_type("assign_lanes"))
+    edges["drone-1"].refuse = None
+    coord.handle_message("drone-1", _telemetry("drone-1", "idle", False))
+    assert len(edges["drone-1"].of_type("assign_lanes")) == count

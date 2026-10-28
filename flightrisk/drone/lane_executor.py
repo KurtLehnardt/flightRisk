@@ -240,7 +240,8 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         # under ``_lock``. land_now counts itself here before it waits for
         # the lock, so no flight sequence can be launched in between (see
         # ``_landing_wanted_locked``). Guarded by ``_land_gate``, a lock that
-        # is never held while taking another. It is re-entrant: the SIGINT
+        # is never held while taking ``_lock`` (land_now releases ``_lock``
+        # before it decrements). It is re-entrant: the SIGINT
         # handler calls ``land_now`` on the main thread, which may be inside
         # ``land_now`` itself (holding the gate) when a second Ctrl+C lands.
         self._land_gate = threading.RLock()
@@ -250,6 +251,9 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         # request meanwhile (for example emergency_land_all arriving through
         # both the transport callback and recv()) does not send another one.
         self._land_inflight = False
+        # Test-only: called inside ``_launch`` (under ``_lock``) right after
+        # the landing check returned False. Always None in production.
+        self._after_launch_check: Callable[[], None] | None = None
         # Flight state the monitor saw last, to notice an unrequested landing.
         self._was_flying = False
         self._next_telemetry_s: float | None = None
@@ -332,12 +336,15 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
             flying: bool | None = self._is_flying()
         except Exception:  # noqa: BLE001 - an unreadable state is reported, not raised
             flying = None
+        # Read before taking the executor lock, so the safety lock is never
+        # coupled to the authority's own lock.
+        epoch = self.epoch_seen
         with self._lock:
             return {
                 "plan_id": None if self._plan_identity is None else self._plan_identity.plan_id,
                 "state": "unknown" if flying is None else self._state_locked(flying),
                 "plan_valid": self._plan_valid,
-                "epoch": self.epoch_seen,
+                "epoch": epoch,
             }
 
     def _worker_alive(self) -> bool:
@@ -606,53 +613,65 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         command never passes *only_if*: a hold never stops it.
         """
         announced = only_if is None
-        if announced:
-            with self._land_gate:
-                self._land_requests += 1
-            self._abort.set()
-        with self._lock:
-            if announced:
-                with self._land_gate:
-                    self._land_requests -= 1
-            elif not only_if():
-                self._log.info("edge_land_skipped", drone_id=self.drone_id, reason=reason)
-                return False
-            self._land_reason = reason
-            # Set again under the lock, together with _land_reason, so the
-            # abort flag is set from here on whatever ran before.
-            self._abort.set()
-            self._last_land_attempt_s = self._clock()
-            self._flying_lanes = False
-            duplicate = self._land_inflight
-            self._land_inflight = True
-            was_held, self._held, self._parked = self._held, False, None
-            was_valid, self._plan_valid = self._plan_valid, False
-            self._hover_since = None
-        if was_held:
-            self._log.warning("edge_hold_cleared", drone_id=self.drone_id, reason=reason)
-        if was_valid:
-            self._log.warning("edge_plan_invalidated", drone_id=self.drone_id, reason=reason, plan_id=self.plan_id)
-        if duplicate:
-            self._log.info("edge_land_already_in_progress", drone_id=self.drone_id, reason=reason)
-            return True
-        self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
+        counted = False
+        owner = False
         try:
-            result = command_result(self.drone.land(), "land")
-            if not result.ok:
-                # A land that was not executed is a failed land: the monitor
-                # retries it while the drone still reports flying.
-                self._log.error(
-                    "edge_land_not_executed",
-                    drone_id=self.drone_id,
-                    reason=reason,
-                    outcome=result.outcome.value,
-                )
-        except Exception as exc:
-            self._log.error("edge_land_error", drone_id=self.drone_id, reason=reason, error=repr(exc))
+            try:
+                if announced:
+                    with self._land_gate:
+                        self._land_requests += 1
+                        counted = True
+                    self._abort.set()
+                with self._lock:
+                    if not announced and not only_if():
+                        self._log.info("edge_land_skipped", drone_id=self.drone_id, reason=reason)
+                        return False
+                    self._land_reason = reason
+                    # Set again under the lock, together with _land_reason, so the
+                    # abort flag is set from here on whatever ran before.
+                    self._abort.set()
+                    self._last_land_attempt_s = self._clock()
+                    self._flying_lanes = False
+                    was_held, self._held, self._parked = self._held, False, None
+                    was_valid, self._plan_valid = self._plan_valid, False
+                    self._hover_since = None
+                    # Last statement under the lock: from here the outer
+                    # finally owns the flag and resets it.
+                    owner = not self._land_inflight
+                    self._land_inflight = True
+            finally:
+                # Taken after the executor lock is released, so the gate is
+                # never held while taking _lock (a gate-holding re-entrant
+                # call takes gate -> _lock; the reverse order could deadlock).
+                if counted:
+                    with self._land_gate:
+                        self._land_requests -= 1
+            if was_held:
+                self._log.warning("edge_hold_cleared", drone_id=self.drone_id, reason=reason)
+            if was_valid:
+                self._log.warning("edge_plan_invalidated", drone_id=self.drone_id, reason=reason, plan_id=self.plan_id)
+            if not owner:
+                self._log.info("edge_land_already_in_progress", drone_id=self.drone_id, reason=reason)
+                return True
+            self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
+            try:
+                result = command_result(self.drone.land(), "land")
+                if not result.ok:
+                    # A land that was not executed is a failed land: the monitor
+                    # retries it while the drone still reports flying.
+                    self._log.error(
+                        "edge_land_not_executed",
+                        drone_id=self.drone_id,
+                        reason=reason,
+                        outcome=result.outcome.value,
+                    )
+            except Exception as exc:
+                self._log.error("edge_land_error", drone_id=self.drone_id, reason=reason, error=repr(exc))
+            return True
         finally:
-            with self._lock:
-                self._land_inflight = False
-        return True
+            if owner:
+                with self._lock:
+                    self._land_inflight = False
 
     def _emit(self, msg: dict[str, Any]) -> None:
         """Send a message to the ground. Transport errors are logged, never raised."""

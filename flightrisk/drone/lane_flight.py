@@ -70,6 +70,9 @@ class FlightSequenceMixin:
             self._abort.set()
             self._log.warning("edge_launch_refused", drone_id=self.drone_id, kind=kind, reason="landing")
             return False
+        hook = self._after_launch_check
+        if hook is not None:
+            hook()
         self._cancel = None
         self._worker = threading.Thread(
             target=self._run_sequence,

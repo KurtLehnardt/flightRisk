@@ -71,6 +71,7 @@ imported lazily, keeping ``import flightrisk.edge_device`` cheap.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -396,7 +397,10 @@ def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger) -> Any:
     (not on the main thread).
     """
     def _on_sigint(signum, frame):
-        log.warning("edge_sigint_land")
+        # A signal that arrives mid-write to stderr can make the log call
+        # raise (reentrant call); the land must run regardless.
+        with contextlib.suppress(Exception):  # logging must never skip the land
+            log.warning("edge_sigint_land")
         try:
             flight.land_now("sigint")
         except Exception as exc:
