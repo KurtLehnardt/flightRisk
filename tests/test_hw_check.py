@@ -21,11 +21,12 @@ class FakeTello:
     """UDP responder on 127.0.0.1 that mimics a Tello EDU command socket."""
 
     def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10,
-                 strict_source=False, edu_queries=True):
+                 strict_source=False, edu_queries=True, raw_replies=None):
         # strict_source: like a real Tello, answer only the source port that sent "command".
         # edu_queries=False: like a standard Tello, "sdk?" and "sn?" are unknown commands.
         self.strict_source = strict_source
         self.edu_queries = edu_queries
+        self.raw_replies = raw_replies or {}  # command -> exact reply bytes (for undecodable replies)
         self.locked_addr = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
@@ -84,7 +85,8 @@ class FakeTello:
                     self.locked_addr = addr
                 if addr != self.locked_addr:
                     continue
-            self.sock.sendto(self._reply(cmd).encode(), addr)
+            raw = self.raw_replies.get(cmd)
+            self.sock.sendto(raw if raw is not None else self._reply(cmd).encode(), addr)
             if cmd == "streamon" and self.video_port:
                 for _ in range(self.video_packets):
                     self.sock.sendto(b"\x00" * 1460, ("127.0.0.1", self.video_port))
@@ -143,6 +145,22 @@ def test_real_command_port_sends_from_local_8889_like_djitellopy():
     if local != hw.CMD_PORT:
         pytest.skip("local UDP 8889 is in use on this machine")
     assert local == 8889
+
+
+def test_undecodable_reply_does_not_crash_the_report_on_a_cp1252_stdout(monkeypatch):
+    # Seen on a real Tello: a reply with bytes that are not text became U+FFFD and crashed the table print.
+    import io
+
+    raw = io.BytesIO()
+    stdout = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    with FakeTello(raw_replies={"wifi?": b"\xff\xfe9"}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])
+    stdout.flush()
+    text = raw.getvalue().decode("cp1252")
+    assert rc == 0
+    assert "cmd:wifi?" in text
+    assert "OVERALL: PASS" in text
 
 
 def test_command_sockets_are_closed_after_main():
