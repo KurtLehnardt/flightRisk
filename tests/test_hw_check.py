@@ -20,7 +20,13 @@ _spec.loader.exec_module(hw)
 class FakeTello:
     """UDP responder on 127.0.0.1 that mimics a Tello EDU command socket."""
 
-    def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10):
+    def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10,
+                 strict_source=False, edu_queries=True):
+        # strict_source: like a real Tello, answer only the source port that sent "command".
+        # edu_queries=False: like a standard Tello, "sdk?" and "sn?" are unknown commands.
+        self.strict_source = strict_source
+        self.edu_queries = edu_queries
+        self.locked_addr = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.sock.settimeout(0.1)
@@ -46,9 +52,9 @@ class FakeTello:
         if cmd == "command":
             return "ok"
         if cmd == "sdk?":
-            return "30"
+            return "30" if self.edu_queries else "unknown command: sdk?"
         if cmd == "sn?":
-            return "0TQDG12345"
+            return "0TQDG12345" if self.edu_queries else "unknown command: sn?"
         if cmd == "battery?":
             return "87"
         if cmd == "wifi?":
@@ -73,6 +79,11 @@ class FakeTello:
                 return
             cmd = data.decode().strip()
             self.received.append(cmd)
+            if self.strict_source:
+                if cmd == "command" and self.locked_addr is None:
+                    self.locked_addr = addr
+                if addr != self.locked_addr:
+                    continue
             self.sock.sendto(self._reply(cmd).encode(), addr)
             if cmd == "streamon" and self.video_port:
                 for _ in range(self.video_packets):
@@ -99,6 +110,34 @@ def test_commands_against_fake_udp_drone(capsys):
     assert {c["name"]: c["value"] for c in doc["checks"]}["cmd:battery?"] == "87"
     assert drone.received == ["command", "sdk?", "sn?", "battery?", "wifi?"]
     assert set(doc["checks"][0]) == {"name", "target", "status", "detail", "value"}
+
+
+def test_commands_use_one_source_port_so_a_strict_tello_answers_all(capsys):
+    # A real Tello answers only the port that sent "command"; a new socket per command used to time out.
+    with FakeTello(strict_source=True) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert [c["status"] for c in doc["checks"]] == ["PASS"] * 5
+    assert drone.received == ["command", "sdk?", "sn?", "battery?", "wifi?"]
+
+
+def test_standard_tello_without_sdk_and_sn_queries_is_info_not_fail(capsys):
+    with FakeTello(strict_source=True, edu_queries=False) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:sdk?"]["status"] == "INFO"
+    assert by_name["cmd:sn?"]["status"] == "INFO"
+    assert by_name["cmd:battery?"]["status"] == "PASS"
+    assert doc["overall"] == "PASS"
+
+
+def test_command_sockets_are_closed_after_main():
+    with FakeTello() as drone:
+        hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])
+    assert hw._CMD_SOCKETS == {}
 
 
 def test_unreachable_drone_fails(capsys):
