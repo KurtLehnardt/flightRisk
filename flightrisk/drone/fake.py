@@ -150,6 +150,10 @@ class FakeDrone:
         #: Every command received, in order: (command, *args).
         self.calls: list[tuple] = []
         self._busy = False
+        # Serialises takeoff and land like the real controller's command lock,
+        # so a land that arrives while a takeoff checks its abort flag is
+        # ordered before the check or after the takeoff, never in between.
+        self._lock = threading.RLock()
         self._height_m = 0.0
         self._yaw_deg = 0.0
         self._measured_at: float | None = None
@@ -249,13 +253,15 @@ class FakeDrone:
 
     def takeoff(self, abort: threading.Event | None = None) -> CommandResult:
         """Take off unless ``abort`` is set (checked before anything happens, like the Tello)."""
-        if abort is not None and abort.is_set():
-            self.calls.append(("takeoff",))
-            return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "abort requested")
-        return self._command("takeoff", (), self._do_takeoff, waits_for_channel=True)
+        with self._lock:
+            if abort is not None and abort.is_set():
+                self.calls.append(("takeoff",))
+                return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "abort requested")
+            return self._command("takeoff", (), self._do_takeoff, waits_for_channel=True)
 
     def land(self) -> CommandResult:
-        return self._command("land", (), self._do_land, waits_for_channel=True)
+        with self._lock:
+            return self._command("land", (), self._do_land, waits_for_channel=True)
 
     def hover(self) -> CommandResult:
         return self._command("hover", (), None)
