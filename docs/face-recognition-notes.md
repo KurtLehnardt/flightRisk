@@ -3,8 +3,9 @@
 Scope: `flightrisk/vision/face.py` (`FaceRecognizer`), its callers in
 `flightrisk/dashboard/{app,pipeline}.py`, `edge.py`, and the optional
 `insightface_face` signal in `flightrisk/vision/signals.py`.
-Machine: Windows 11, 8 logical CPUs, CPU only, Python 3.13, insightface 2.1,
-onnxruntime 1.31.
+Benchmark machine: Windows 11, 8 logical CPUs, CPU only, Python 3.13,
+insightface 2.1, onnxruntime 1.31. (The execution-provider findings below were
+reproduced separately on Apple Silicon with onnxruntime 1.27, insightface 1.0.1.)
 
 ## Findings (before the change)
 
@@ -57,18 +58,51 @@ onnxruntime 1.31.
   * `compare()` of a crop just scored by `find_match` is served from a memo
     (removes the duplicate inference at `pipeline.py:203`);
   * enrolment: best-face choice, hard rejection with a clear message
-    (`no_face`, `face_too_small` < 32 px, `low_confidence`), warnings (several
+    (`no_face`, `face_too_small` < 32 px), warnings (several
     faces, face < 80 px, turned > 0.45 inter-eye distances, blurry), template =
     aligned face + mirror at three resolutions (112, 56, 32 px re-upsampled),
-    best-matching row wins. The previous target is kept when enrolment fails.
+    best-matching row wins. When enrolment fails the face target is cleared (the
+    other recognisers have already switched to the new photo, so keeping the
+    previous child's face would match the wrong person); the dashboard shows
+    "FACE MATCHING OFF" until a usable photo is enrolled.
     `app.py` returns the report as `face_report` from `/api/upload-target`-style
-    responses and the `target_set` event, and pushes the enrolled template to
-    edge devices.
+    responses, the `target_set` event and on socket connect. Only the
+    full-resolution row of the template (`target_embedding`) is pushed to the
+    ground scorer and the edge devices; the low-resolution rows stay in the
+    dashboard's `FaceRecognizer`, so the ground/edge path does not get the
+    low-resolution recall gain (sending the whole template would need a protocol
+    change; not done).
 * `config.py`: `vision.face_model` (default `buffalo_l`), env
   `FLIGHTRISK_FACE_MODEL`. `buffalo_s` (SCRFD-500M + MobileFaceNet) is a
-  supported drop-in.
-* `scripts/bench_face.py` (benchmark), `tests/test_face_logic.py` (12 model-free
-  tests), 6 new integration tests in `tests/integration/test_face.py`.
+  supported drop-in **only if every node uses it**: the ground station and
+  each edge device choose their model independently from their own
+  `FLIGHTRISK_FACE_MODEL`, and both packs produce 512-d embeddings, so a
+  mismatch cannot be seen from the embedding itself. Set the same
+  `FLIGHTRISK_FACE_MODEL` on the ground station and on every edge. To catch
+  mistakes, detection messages now carry an optional `face_model` field (older
+  peers ignore it); the ground logs a startup warning with its own model and,
+  when an edge reports a different one, logs `face_model_mismatch` once per
+  drone and ignores that edge's face scores. An edge that does not send the
+  field (older software) cannot be checked.
+* Model files: only the SCRFD (`det_*`) and ArcFace (`w600k_*`) files of the pack
+  are loaded; the landmark and gender/age sessions are never built (a pack with
+  another file layout falls back to `FaceAnalysis`, which builds them all and
+  discards the unused ones, so start-up is slower). Nothing is downloaded
+  automatically: if the pack is not in `~/.insightface/models/<name>` the
+  recogniser refuses to start (face matching off, with a clear log line) unless
+  `FLIGHTRISK_ALLOW_MODEL_DOWNLOAD=1` is set.
+* Execution providers: the SCRFD detector always runs on the CPU provider. It
+  is fed a per-call input size (multiples of 32, e.g. 128x192), and CoreML
+  only accepts the fixed 640x640 shape it was prepared with; on any other size
+  it raises a static-output-shape error on every call. The recognition model
+  has a fixed 112x112 input and may use CoreML/CUDA. `scripts/bench_face.py`
+  forces CPU for both models in its baseline, so its timings are not directly
+  comparable with a CoreML recogniser.
+* Stored per-track observations expire after `TRACK_OBS_MAX_AGE` (60)
+  `find_match` calls, so a track does not keep, or pass to another person, a
+  score for a face that is no longer visible.
+* `scripts/bench_face.py` (benchmark), `tests/test_face_logic.py` (model-free),
+  `tests/test_face_review_fixes.py` and `tests/integration/test_face.py`.
 
 ## Benchmark methodology
 
@@ -165,7 +199,8 @@ enrols with a multiple-faces warning; noise gives `no_face`.
   small sizes in this benchmark, but retune on a real validation set before
   changing anything.
 * Edge devices (`edge.py`) still send single-frame embeddings; the ground
-  station could aggregate per track the same way.
+  station could aggregate per track the same way. The ground also only has the
+  full-resolution template row (see above).
 * Build a small consented low-resolution child/adult validation set from field
   tests (`docs/field-test-protocol.md`) to calibrate thresholds, the quality
   warnings (blur 60, yaw 0.45, 80 px are heuristics) and to evaluate AdaFace.
