@@ -1941,6 +1941,30 @@ def test_with_face_flag_enables_face(fake_vision, monkeypatch):
         _build_runner(parser.parse_args(["--source", "fake"]), log)
 
 
+def test_edge_detector_weights_come_from_flightrisk_detector_model(fake_vision, monkeypatch):
+    seen: list[object] = []
+
+    class RecordingDetector(FakeDetector):
+        def __init__(self, *args, **kwargs):
+            seen.append(kwargs.get("model_name"))
+
+    module = types.ModuleType("flightrisk.vision.detector")
+    module.PersonDetector = RecordingDetector
+    monkeypatch.setitem(sys.modules, "flightrisk.vision.detector", module)
+    parser = _build_parser()
+    log = StructuredLogger(component="test-review-fixes-edge")
+    argv = ["--source", "fake", "--drone-id", "drone-2"]
+
+    monkeypatch.delenv("FLIGHTRISK_DETECTOR_MODEL", raising=False)
+    _build_runner(parser.parse_args(argv), log)
+    monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", r"C:\models\heridal_yolo11s.pt")
+    _build_runner(parser.parse_args(argv), log)
+    monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", "   ")
+    _build_runner(parser.parse_args(argv), log)
+
+    assert seen == ["yolo11n.pt", r"C:\models\heridal_yolo11s.pt", "yolo11n.pt"]
+
+
 # ---------------------------------------------------------------------------
 # B3: a flying edge tags detections with drone id and pose
 # ---------------------------------------------------------------------------
