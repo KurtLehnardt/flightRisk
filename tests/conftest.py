@@ -71,6 +71,17 @@ def _isolate_captures_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("flightrisk.dashboard.alerts.CAPTURES_DIR", tmp_path / "captures")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ceiling_settings(tmp_path, monkeypatch):
+    """Keep the dashboard's ceiling settings in a per-test file and the edge ceiling at its defaults.
+
+    No test may read or write the operator's ``~/.flightrisk/ceiling.json``.
+    """
+    monkeypatch.setenv("FLIGHTRISK_CEILING_FILE", str(tmp_path / "ceiling.json"))
+    monkeypatch.delenv("FLIGHTRISK_CEILING_CM", raising=False)
+    monkeypatch.delenv("FLIGHTRISK_CEILING_MARGIN_CM", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # A fake Tello command socket under the real djitellopy client
 # ---------------------------------------------------------------------------

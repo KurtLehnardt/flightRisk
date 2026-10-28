@@ -190,7 +190,7 @@ class TestEdgeTelemetry:
     def test_main_initialises_telemetry_before_running(self, monkeypatch):
         calls = []
         monkeypatch.setattr(edge_device, "_init_edge_telemetry", lambda log: calls.append("otel"))
-        monkeypatch.setattr(edge_device, "_run_flight_edge", lambda args, log: calls.append("run"))
+        monkeypatch.setattr(edge_device, "_run_flight_edge", lambda args, log, **kwargs: calls.append("run"))
 
         edge_device.main(["--source", "fake"])
 

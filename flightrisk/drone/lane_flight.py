@@ -27,6 +27,7 @@ import threading
 from typing import Any
 
 from flightrisk.drone.controller import command_result
+from flightrisk.drone.safety import CeilingError
 
 __all__ = ["FlightSequenceMixin", "MoveNotExecutedError"]
 
@@ -376,10 +377,19 @@ class FlightSequenceMixin:
         return takeoff()
 
     def _climb_to_slot(self) -> bool:
-        """Move vertically to the altitude slot. Lands if the height is unknown."""
+        """Move vertically to the altitude slot, measured from the Tello's own height reading.
+
+        Lands if the height is unknown, and lands instead of climbing when
+        the slot, or the climb from the measured height, would end above
+        the ceiling limit (``SafetyEnvelope.max_alt_slot_cm``). The edge
+        enforces that limit itself, whatever the ground sent.
+        """
         height = self._read_height()
         try:
             move = self.envelope.slot_move(height)
+        except CeilingError as exc:
+            self._refuse_climb(height, None, str(exc))
+            return False
         except ValueError as exc:
             self._log.error("edge_altitude_unknown", drone_id=self.drone_id, error=str(exc))
             self.land_now("height_unknown")
@@ -387,6 +397,9 @@ class FlightSequenceMixin:
         if move is None:
             return True
         direction, distance = move
+        if direction == "up" and not self.envelope.climb_allowed(height, distance):
+            self._refuse_climb(height, distance, "climb would end above the ceiling limit")
+            return False
         self._log.info(
             "edge_alt_slot_climb",
             drone_id=self.drone_id,
@@ -396,6 +409,23 @@ class FlightSequenceMixin:
             distance_cm=distance,
         )
         return self._command_move(direction, distance, record=False)
+
+    def _refuse_climb(self, height: Any, distance: int | None, detail: str) -> None:
+        """Do not climb above the ceiling limit: log it and land through the normal landing path."""
+        status = self.envelope.ceiling_status()
+        self._log.error(
+            "slot_refused_above_ceiling",
+            drone_id=self.drone_id,
+            source="climb",
+            height_cm=height,
+            distance_cm=distance,
+            alt_slot_cm=status["alt_slot_cm"],
+            ceiling_cm=status["ceiling_cm"],
+            ceiling_margin_cm=status["ceiling_margin_cm"],
+            max_alt_slot_cm=self.envelope.max_alt_slot_cm,
+            detail=detail,
+        )
+        self.land_now("ceiling")
 
     def _command_move(self, direction: str, distance: int, record: bool) -> bool:
         """Claim and fly one move; False if the sequence must stop (landing or hold)."""

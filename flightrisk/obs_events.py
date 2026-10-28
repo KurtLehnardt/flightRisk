@@ -613,6 +613,12 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_takeoff": ("takeoff", None),
     "edge_pose_reset": ("pose_reset", None),
     "edge_lanes_complete": ("lanes_complete", None),
+    # Ceiling and altitude slots (docs/ceiling-and-altitude.md), logged by
+    # the dashboard and the edge.
+    "ceiling_changed": ("ceiling_changed", None),
+    "slot_changed": ("slot_changed", None),
+    "slot_refused_above_ceiling": ("slot_refused_above_ceiling", "above_ceiling"),
+    "edge_ceiling_exceeded": ("ceiling_exceeded", "ceiling_exceeded"),
 }
 
 #: StructuredLogger events about the ground/edge link.

@@ -4,6 +4,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from flightrisk.fleet_protocol.ceiling import (
+    SET_CEILING,
+    is_ceiling_reply,
+    validate_ceiling_reply,
+    validate_set_ceiling,
+)
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _check_structure,
@@ -285,6 +291,11 @@ def _validate_profile_reply(msg: Mapping[str, Any], *, ack: bool) -> None:
 
 
 def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_ceiling_reply(msg):
+        # A configuration command's reply has its own rules on every link
+        # version (flightrisk/fleet_protocol/ceiling.py).
+        validate_ceiling_reply(msg)
+        return
     target = _require(msg, "for")
     if _is_member(target, CONFIG_COMMAND_TYPES):
         _validate_profile_reply(msg, ack=True)
@@ -311,6 +322,9 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
 
 
 def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_ceiling_reply(msg):
+        validate_ceiling_reply(msg)
+        return
     target = _require(msg, "for")
     if _is_member(target, CONFIG_COMMAND_TYPES):
         # Configuration commands are refused the same way on every link
@@ -408,6 +422,10 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
         return mtype
     if not (_is_int(proto) and proto >= MIN_PROTOCOL_VERSION):
         raise ProtocolError(f"protocol version must be an integer >= {MIN_PROTOCOL_VERSION}, got {_short(proto)}")
+    if mtype == SET_CEILING:
+        # A configuration command, the same on every link version.
+        validate_set_ceiling(msg)
+        return mtype
     if mtype not in _KNOWN_TYPES:
         return mtype
 
@@ -530,9 +548,9 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
         return mtype
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES:
         return mtype
-    if mtype in CONFIG_COMMAND_TYPES:
-        # Allowed on every link version: it never moves the drone, and a v1
-        # single-ground edge takes it too.
+    if mtype == SET_CEILING or mtype in CONFIG_COMMAND_TYPES:
+        # Configuration commands: allowed on every link version, checked
+        # against their own schema; they never move the drone.
         return validate_message(msg, proto=proto)
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
     if mtype not in allowed:

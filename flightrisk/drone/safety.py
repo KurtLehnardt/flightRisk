@@ -18,6 +18,15 @@ to decide what the edge may do:
   fleet at separate heights.
 * Altitude slot: after takeoff the drone climbs (or descends) from its
   measured takeoff height to ``alt_slot_cm`` (``slot_move``).
+* Ceiling: ``ceiling_cm`` is the room's ceiling height above the takeoff
+  surface and ``ceiling_margin_cm`` the clearance kept below it. No altitude
+  slot may be above ``ceiling_cm - ceiling_margin_cm`` (``max_alt_slot_cm``):
+  the envelope refuses such a slot (``CeilingError``) wherever it comes
+  from, ``climb_allowed`` refuses a climb that would end above that limit,
+  and ``above_ceiling`` reports a measured height above ``ceiling_cm``, on
+  which the executor lands. ``configure_ceiling`` changes the ceiling, the
+  margin and the slot together; the executor calls it only on the ground.
+  See ``docs/ceiling-and-altitude.md``.
 * Battery gates: ``can_takeoff`` is false below ``min_takeoff_battery`` and
   ``should_land`` is true below ``land_battery``. An unknown battery level
   never permits a takeoff.
@@ -26,7 +35,8 @@ to decide what the edge may do:
 
 Design reference: hackathon design section 10. The limits can be overridden
 with the environment variables ``FLIGHTRISK_GEOFENCE_CM``,
-``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` and ``FLIGHTRISK_LINK_LOSS_LAND_S`` through
+``FLIGHTRISK_MIN_TAKEOFF_BATTERY``, ``FLIGHTRISK_LINK_LOSS_LAND_S``,
+``FLIGHTRISK_CEILING_CM`` and ``FLIGHTRISK_CEILING_MARGIN_CM`` through
 ``SafetyEnvelope.from_env``.
 
 Frame convention: ``x_cm`` is to the right of the takeoff heading, ``y_cm`` is
@@ -42,26 +52,41 @@ from dataclasses import dataclass
 from typing import Callable, Mapping
 
 __all__ = [
+    "CEILING_CM_ENV",
+    "CEILING_MARGIN_CM_ENV",
+    "CeilingError",
     "DEFAULT_ALT_SLOT_CM",
+    "DEFAULT_CEILING_CM",
+    "DEFAULT_CEILING_MARGIN_CM",
     "DEFAULT_GEOFENCE_CM",
     "DEFAULT_LAND_BATTERY",
     "DEFAULT_LINK_LOSS_LAND_S",
     "DEFAULT_MIN_TAKEOFF_BATTERY",
+    "format_cm",
     "GEOFENCE_CM_ENV",
     "HORIZONTAL_DIRECTIONS",
     "is_finite_number",
     "LINK_LOSS_LAND_S_ENV",
     "LinkWatchdog",
+    "MAX_ALT_SLOT_CM",
+    "MAX_CEILING_CM",
     "MAX_MOVE_CM",
+    "MIN_ALT_SLOT_CM",
+    "MIN_CEILING_CM",
+    "MIN_CEILING_MARGIN_CM",
     "MIN_MOVE_CM",
     "MIN_TAKEOFF_BATTERY_ENV",
     "RelativePose",
     "SafetyEnvelope",
+    "slot_above_ceiling",
+    "validate_ceiling",
 ]
 
 LINK_LOSS_LAND_S_ENV = "FLIGHTRISK_LINK_LOSS_LAND_S"
 MIN_TAKEOFF_BATTERY_ENV = "FLIGHTRISK_MIN_TAKEOFF_BATTERY"
 GEOFENCE_CM_ENV = "FLIGHTRISK_GEOFENCE_CM"
+CEILING_CM_ENV = "FLIGHTRISK_CEILING_CM"
+CEILING_MARGIN_CM_ENV = "FLIGHTRISK_CEILING_MARGIN_CM"
 
 DEFAULT_LINK_LOSS_LAND_S = 3.0
 DEFAULT_MIN_TAKEOFF_BATTERY = 30
@@ -80,6 +105,22 @@ MAX_MOVE_CM = 500
 MIN_ALT_SLOT_CM = MIN_MOVE_CM
 MAX_ALT_SLOT_CM = MAX_MOVE_CM
 
+# Ceiling (docs/ceiling-and-altitude.md). Heights are the Tello's own reading
+# above the surface it took off from, so the ceiling is measured from that
+# surface too. The default effective maximum slot is 200 - 60 = 140 cm. On
+# 2026-10-28 a Tello sent to a 160 cm slot hit the ceiling, so the default is
+# deliberately below that, and a lower room must be configured explicitly.
+DEFAULT_CEILING_CM = 200
+DEFAULT_CEILING_MARGIN_CM = 60
+# The Tello's takeoff alone hovers at about 80 cm and can overshoot, so a
+# room lower than this is not safe to fly in at all.
+MIN_CEILING_CM = 150
+# Far above any room; with it the 500 cm slot limit is the binding one.
+MAX_CEILING_CM = 1000
+# The clearance below the ceiling never drops below this: it covers the
+# Tello's height error and its overshoot at the end of a climb.
+MIN_CEILING_MARGIN_CM = 30
+
 HORIZONTAL_DIRECTIONS = ("forward", "back", "left", "right")
 
 # Unit vectors (right, ahead) for each horizontal direction relative to the
@@ -97,6 +138,49 @@ def is_finite_number(value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     return math.isfinite(value)
+
+
+class CeilingError(ValueError):
+    """An altitude slot, or a climb, would end above the ceiling limit (ceiling minus margin)."""
+
+
+def format_cm(value: float) -> str:
+    """A height for messages: ``140`` rather than ``140.0``, one decimal otherwise."""
+    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def validate_ceiling(ceiling_cm: object, margin_cm: object) -> tuple[float, float]:
+    """Check a ceiling and its safety margin; return them as floats.
+
+    The ceiling must be within ``MIN_CEILING_CM``-``MAX_CEILING_CM``, the
+    margin at least ``MIN_CEILING_MARGIN_CM``, and the effective maximum slot
+    (ceiling minus margin) at least the lowest altitude slot. Raises
+    ``ValueError`` with an operator-facing message otherwise.
+    """
+    if not is_finite_number(ceiling_cm) or not MIN_CEILING_CM <= ceiling_cm <= MAX_CEILING_CM:
+        raise ValueError(f"ceiling height must be within {MIN_CEILING_CM}-{MAX_CEILING_CM} cm, got {ceiling_cm!r}")
+    if not is_finite_number(margin_cm) or margin_cm < MIN_CEILING_MARGIN_CM:
+        raise ValueError(f"ceiling margin must be at least {MIN_CEILING_MARGIN_CM} cm, got {margin_cm!r}")
+    if ceiling_cm - margin_cm < MIN_ALT_SLOT_CM:
+        raise ValueError(
+            f"ceiling {format_cm(ceiling_cm)} cm minus margin {format_cm(margin_cm)} cm leaves "
+            f"{format_cm(ceiling_cm - margin_cm)} cm, below the lowest altitude slot {MIN_ALT_SLOT_CM} cm"
+        )
+    return float(ceiling_cm), float(margin_cm)
+
+
+def slot_above_ceiling(alt_slot_cm: float, ceiling_cm: float, margin_cm: float) -> str | None:
+    """Why *alt_slot_cm* is above the ceiling limit, or None when it is not.
+
+    The limit is ``ceiling_cm - margin_cm``; a slot exactly at it is allowed.
+    """
+    limit = ceiling_cm - margin_cm
+    if alt_slot_cm <= limit:
+        return None
+    return (
+        f"slot {format_cm(alt_slot_cm)} cm is above the ceiling limit {format_cm(limit)} cm "
+        f"(ceiling {format_cm(ceiling_cm)} cm minus margin {format_cm(margin_cm)} cm)"
+    )
 
 
 @dataclass
@@ -159,7 +243,7 @@ class LinkWatchdog:
 
 
 class SafetyEnvelope:
-    """Geofence, altitude slot, battery gates and link watchdog for one drone."""
+    """Geofence, altitude slot and ceiling, battery gates and link watchdog for one drone."""
 
     def __init__(
         self,
@@ -170,6 +254,8 @@ class SafetyEnvelope:
         link_loss_land_s: float = DEFAULT_LINK_LOSS_LAND_S,
         *,
         clock: Callable[[], float] = time.monotonic,
+        ceiling_cm: float = DEFAULT_CEILING_CM,
+        ceiling_margin_cm: float = DEFAULT_CEILING_MARGIN_CM,
     ):
         if not is_finite_number(geofence_cm) or geofence_cm <= 0:
             raise ValueError(f"geofence_cm must be a positive number, got {geofence_cm!r}")
@@ -183,7 +269,8 @@ class SafetyEnvelope:
         self.min_takeoff_battery = float(min_takeoff_battery)
         self.land_battery = float(land_battery)
         self._lock = threading.Lock()
-        self.alt_slot_cm = self.validate_alt_slot(alt_slot_cm)
+        self.ceiling_cm, self.ceiling_margin_cm = validate_ceiling(ceiling_cm, ceiling_margin_cm)
+        self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
 
@@ -214,6 +301,8 @@ class SafetyEnvelope:
             land_battery=DEFAULT_LAND_BATTERY,
             link_loss_land_s=_read(LINK_LOSS_LAND_S_ENV, DEFAULT_LINK_LOSS_LAND_S),
             clock=clock,
+            ceiling_cm=_read(CEILING_CM_ENV, DEFAULT_CEILING_CM),
+            ceiling_margin_cm=_read(CEILING_MARGIN_CM_ENV, DEFAULT_CEILING_MARGIN_CM),
         )
 
     # --- Altitude slot ---
@@ -226,19 +315,85 @@ class SafetyEnvelope:
             )
         return float(alt_slot_cm)
 
+    @property
+    def max_alt_slot_cm(self) -> float:
+        """The highest altitude slot allowed: the ceiling minus its margin."""
+        return self.ceiling_cm - self.ceiling_margin_cm
+
+    def check_alt_slot(self, alt_slot_cm: float) -> float:
+        """Validate a slot against the slot range and this envelope's ceiling; return it as a float.
+
+        Raises ``ValueError`` for a slot outside the slot range and
+        ``CeilingError`` (a ``ValueError``) for one above the ceiling limit.
+        """
+        slot = self.validate_alt_slot(alt_slot_cm)
+        reason = slot_above_ceiling(slot, self.ceiling_cm, self.ceiling_margin_cm)
+        if reason is not None:
+            raise CeilingError(f"altitude {reason}")
+        return slot
+
     def set_alt_slot(self, alt_slot_cm: float) -> None:
-        """Change the altitude slot. Raises ``ValueError`` for an out-of-range slot."""
-        self.alt_slot_cm = self.validate_alt_slot(alt_slot_cm)
+        """Change the altitude slot.
+
+        Raises ``ValueError`` for an out-of-range slot and ``CeilingError``
+        for one above the ceiling limit; the slot is then unchanged.
+        """
+        with self._lock:
+            self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
+
+    def configure_ceiling(self, ceiling_cm: float, margin_cm: float, alt_slot_cm: float) -> None:
+        """Replace the ceiling, the margin and the altitude slot together.
+
+        All three are checked first (``validate_ceiling``, the slot range,
+        and the slot against the new limit); on any error nothing changes.
+        Call this only while the drone is on the ground: the executor does.
+        """
+        ceiling, margin = validate_ceiling(ceiling_cm, margin_cm)
+        slot = self.validate_alt_slot(alt_slot_cm)
+        reason = slot_above_ceiling(slot, ceiling, margin)
+        if reason is not None:
+            raise CeilingError(f"altitude {reason}")
+        with self._lock:
+            self.ceiling_cm, self.ceiling_margin_cm, self.alt_slot_cm = ceiling, margin, slot
+
+    def ceiling_status(self) -> dict[str, float]:
+        """The active ``ceiling_cm``, ``ceiling_margin_cm`` and ``alt_slot_cm``, read together."""
+        with self._lock:
+            return {
+                "ceiling_cm": self.ceiling_cm,
+                "ceiling_margin_cm": self.ceiling_margin_cm,
+                "alt_slot_cm": self.alt_slot_cm,
+            }
+
+    def climb_allowed(self, height_cm: float | None, distance_cm: float) -> bool:
+        """True if climbing *distance_cm* from the measured *height_cm* stays at or below the limit.
+
+        The limit is ``max_alt_slot_cm``. An unknown height never allows a
+        climb.
+        """
+        if not is_finite_number(height_cm) or not is_finite_number(distance_cm):
+            return False
+        return height_cm + distance_cm <= self.max_alt_slot_cm
+
+    def above_ceiling(self, height_cm: float | None) -> bool:
+        """True when a measured height is above the ceiling itself (not just the slot limit)."""
+        return is_finite_number(height_cm) and height_cm > self.ceiling_cm
 
     def slot_move(self, height_cm: float | None) -> tuple[str, int] | None:
         """Return the ``(direction, distance_cm)`` move that reaches the slot.
 
         Returns ``None`` when the drone is already within the minimum move
         size of its slot. Raises ``ValueError`` when the height is unknown or
-        not positive, because the climb cannot be computed safely.
+        not positive, because the climb cannot be computed safely. Raises
+        ``CeilingError`` when the slot is above the ceiling limit; the
+        caller must also check a climb with ``climb_allowed`` before it is
+        flown.
         """
         if not is_finite_number(height_cm) or height_cm <= 0:
             raise ValueError(f"height is unknown, cannot reach the altitude slot (got {height_cm!r})")
+        reason = slot_above_ceiling(self.alt_slot_cm, self.ceiling_cm, self.ceiling_margin_cm)
+        if reason is not None:
+            raise CeilingError(f"altitude {reason}")
         delta = int(round(self.alt_slot_cm - height_cm))
         if abs(delta) < MIN_MOVE_CM:
             return None

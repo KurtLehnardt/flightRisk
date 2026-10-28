@@ -117,7 +117,7 @@ def test_edge_ids_match_ground_fleet_list():
     ground = _run("demo_ground.sh", AP).stdout.strip().splitlines()[-1]
     fleet = ground.split("--fleet ")[1].split()[0].split(",")
     seen = []
-    for drone_number, alt in (("1", "100"), ("2", "160")):
+    for drone_number, alt in (("1", "100"), ("2", "130")):
         result = _run("demo_edge.sh", {**AP, "DRONE_ID": drone_number})
         assert result.returncode == 0, result.stderr
         command = result.stdout.strip().splitlines()[-1]

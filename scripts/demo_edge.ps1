@@ -2,12 +2,14 @@
 #
 #   $env:FLIGHTRISK_FLEET_NET = "ap"            # or "station"; see docs/fleet-setup.md
 #   $env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"
-#   $env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
+#   $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 #
 # DRONE_ID is 1 or 2 (or a full id such as drone-2) and becomes the fleet id drone-1 or
 # drone-2, which the ground station's --fleet list must contain. Default: 2.
 # ALT_CM is this drone's altitude slot in cm (at least 10). Default: 100 for odd ids and
-# 160 for even ids, the same alternation the coordinator uses.
+# 130 for even ids, the same alternation the coordinator uses. The edge refuses to start
+# when ALT_CM is above the ceiling limit, FLIGHTRISK_CEILING_CM minus
+# FLIGHTRISK_CEILING_MARGIN_CM (200 - 60 = 140 cm by default); see docs/ceiling-and-altitude.md.
 # The Tello address and ground URL come from scripts\fleet_env.ps1. In ap mode, set
 # $env:FLIGHTRISK_GROUND_LOCAL = "1" only on a machine that runs the ground station itself, so
 # its edge connects to ws://127.0.0.1:9000; otherwise the edge dials ws://10.42.0.1:9000.
@@ -52,7 +54,7 @@ if ($env:ALT_CM) {
     $altCm = [int]$env:ALT_CM
 }
 else {
-    $altCm = if ($number % 2 -eq 1) { 100 } else { 160 }
+    $altCm = if ($number % 2 -eq 1) { 100 } else { 130 }
 }
 if ($altCm -lt 10) {
     Write-Error "demo_edge.ps1: ALT_CM must be at least 10; smaller values are read as metres"

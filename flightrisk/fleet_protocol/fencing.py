@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from flightrisk.fleet_protocol.ceiling import SET_CEILING, is_ceiling_reply
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_id,
@@ -238,6 +239,7 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     Configuration commands (``CONFIG_COMMAND_TYPES``) and their acks and
     nacks are checked under *peer_proto* and copied unchanged for every
     version, so their ``cmd_id`` survives on a v1 link.
+    ``set_ceiling`` and its acks and nacks are handled the same way.
     """
     mtype = _message_type(msg)
     if mtype in FAILSAFE_TYPES:
@@ -248,7 +250,11 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         raise ProtocolError(f"peer protocol version must be an integer >= 1, got {_short(peer_proto)}")
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES or mtype in LEGACY_EDGE_TO_GROUND_TYPES:
         return dict(msg)
-    if mtype in CONFIG_COMMAND_TYPES or (mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)):
+    if mtype == SET_CEILING or is_ceiling_reply(msg) or mtype in CONFIG_COMMAND_TYPES or (
+        mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)
+    ):
+        # Configuration commands and their replies are the same on every
+        # version, so the cmd_id survives a v1 link.
         validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype not in _KNOWN_TYPES:

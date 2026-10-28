@@ -157,7 +157,7 @@ def test_plan_two_zones_two_altitudes():
 
     one, two = plan.zones
     assert (one.drone_id, one.x_cm, one.y_cm, one.w_cm, one.h_cm, one.alt_cm) == ("drone-1", 0, 0, 150, 400, 100)
-    assert (two.drone_id, two.x_cm, two.y_cm, two.w_cm, two.h_cm, two.alt_cm) == ("drone-2", 250, 0, 150, 400, 160)
+    assert (two.drone_id, two.x_cm, two.y_cm, two.w_cm, two.h_cm, two.alt_cm) == ("drone-2", 250, 0, 150, 400, 130)
     assert two.x_cm - (one.x_cm + one.w_cm) == 100  # the gap between zones
 
     # Lanes are split_parallel_track_zones output without the shared-launch
@@ -183,7 +183,7 @@ def test_plan_two_zones_two_altitudes():
 
     payload = plan.to_dict()
     assert payload["grid"] == {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400}
-    assert [z["alt_cm"] for z in payload["zones"]] == [100, 160]
+    assert [z["alt_cm"] for z in payload["zones"]] == [100, 130]
 
 
 def test_plan_refused_while_a_drone_is_flying():
@@ -563,7 +563,7 @@ def test_generic_for_n_equals_4():
     plan = coord.plan()
     assert [z.x_cm for z in plan.zones] == [0, 275, 550, 825]
     assert all(z.w_cm == 175 for z in plan.zones)
-    assert [z.alt_cm for z in plan.zones] == [100, 160, 100, 160]
+    assert [z.alt_cm for z in plan.zones] == [100, 130, 100, 130]
     for left, right in zip(plan.zones, plan.zones[1:]):
         assert right.x_cm - (left.x_cm + left.w_cm) == 100
         assert left.alt_cm != right.alt_cm

@@ -70,6 +70,14 @@ SYNC_ROUNDS = 8
 DEFAULT_ZONE_GAP_CM = 100
 """Empty corridor between neighbouring zones."""
 
+DEFAULT_ALT_SLOTS_CM = (100, 130)
+"""Altitude slots given to zones in turn when no per-drone slot is set.
+
+Both are at or below the default ceiling limit of 140 cm (200 cm ceiling
+minus 60 cm margin, ``flightrisk.drone.safety``). The second slot was 160 cm
+until a Tello at that slot hit a ceiling (docs/ceiling-and-altitude.md).
+"""
+
 MIN_START_BATTERY = 30
 """Lowest battery percentage that lets a drone take part in ``start()``."""
 
@@ -411,6 +419,10 @@ class FleetCoordinator:
         strip_cm: Lane spacing inside a zone.
         alt_slots_cm: Altitude slots assigned to zones in turn, so
             neighbouring zones never share a slot when two or more are given.
+        alt_slot_of: Optional ``(drone_id, zone_index) -> slot_cm`` that
+            picks each drone's altitude slot at ``plan()`` instead (the
+            dashboard's per-drone slot settings). The coordinator does not
+            check slots against a ceiling; its caller and every edge do.
         dedup_radius_cm: Detections closer than this on the shared grid are
             merged, whichever drones reported them.
         zone_gap_cm: Empty corridor between neighbouring zones.
@@ -435,7 +447,7 @@ class FleetCoordinator:
         links: Mapping[str, EdgeLink],
         area_cm: int | tuple[int, int],
         strip_cm: int,
-        alt_slots_cm: tuple[int, ...] = (100, 160),
+        alt_slots_cm: tuple[int, ...] = DEFAULT_ALT_SLOTS_CM,
         dedup_radius_cm: float = 80,
         *,
         zone_gap_cm: int = DEFAULT_ZONE_GAP_CM,
@@ -444,6 +456,7 @@ class FleetCoordinator:
         on_event: Callable[[str, dict], None] | None = None,
         geofence_cm: float | None = None,
         retask_wait_s: float = RETASK_WAIT_S,
+        alt_slot_of: Callable[[str, int], int] | None = None,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -471,6 +484,7 @@ class FleetCoordinator:
         self._depth_cm = depth_cm
         self._strip_cm = int(strip_cm)
         self._alt_slots_cm = tuple(int(a) for a in alt_slots_cm)
+        self._alt_slot_of = alt_slot_of
         self._dedup_radius_cm = float(dedup_radius_cm)
         self._zone_gap_cm = int(zone_gap_cm)
         self._min_battery = float(min_battery)
@@ -654,7 +668,7 @@ class FleetCoordinator:
                 y_cm=0,
                 w_cm=zone_w,
                 h_cm=self._depth_cm,
-                alt_cm=self._alt_slots_cm[i % len(self._alt_slots_cm)],
+                alt_cm=self._zone_alt_cm(drone_id, i),
                 lanes=lanes,
             ))
         plan = FleetPlan(
@@ -690,6 +704,12 @@ class FleetCoordinator:
         for drone_id, msg in messages.items():
             self._send_logged(drone_id, msg)
         return plan
+
+    def _zone_alt_cm(self, drone_id: str, index: int) -> int:
+        """The altitude slot of zone *index*, flown by *drone_id*."""
+        if self._alt_slot_of is not None:
+            return int(self._alt_slot_of(drone_id, index))
+        return self._alt_slots_cm[index % len(self._alt_slots_cm)]
 
     @staticmethod
     def _clear_ack(state: _DroneState) -> None:

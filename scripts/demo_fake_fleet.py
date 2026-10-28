@@ -46,7 +46,7 @@ TOKEN_ENV_VAR = "FLIGHTRISK_EDGE_TOKEN"
 
 #: The coordinator hands its zones these altitude slots in turn (cm), so the
 #: edges are started with the same alternation to avoid a climb on assignment.
-ALT_SLOTS_CM = (100, 160)
+ALT_SLOTS_CM = (100, 130)
 
 MAX_DRONES = 16
 DEFAULT_DASHBOARD_PORT = 5555

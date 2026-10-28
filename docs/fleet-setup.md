@@ -26,6 +26,8 @@ Do this before every flight, in both paths. The coordinator assumes this layout,
 
 The launchers set the edge geofence to 450 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 
+Set the ceiling before the first flight in a new room: measure from the surface the drones take off from and enter it under "Ceiling and altitude" in the dashboard's Controls tab. No altitude slot may be above the ceiling minus the safety margin (200 - 60 = 140 cm by default); Plan and Start are refused otherwise, and every edge enforces the same limit on its own. See [Ceiling height and altitude slots](ceiling-and-altitude.md).
+
 ### Every takeoff is a new start point
 
 The Tello has no GPS. Each edge tracks its drone by dead reckoning from the spot the drone took off from, and the geofence is a square of half-width `FLIGHTRISK_GEOFENCE_CM` around that spot. Every takeoff from the ground makes the drone's current spot the new start point (the edge logs `edge_pose_reset` with where the previous flight ended). The edge cannot know whether you carried the drone back to its mark after it landed, so it never carries a position over from an earlier flight: a position kept from an earlier flight would shift the geofence by however far the drone was moved by hand.
@@ -459,8 +461,10 @@ FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 On Windows, for edge-2:
 
 ```
-$env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
+$env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 ```
+
+An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM`, 140 cm by default); see [Ceiling height and altitude slots](ceiling-and-altitude.md). On a dashboard flight the slot comes from the dashboard's settings, not from `ALT_CM`.
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 

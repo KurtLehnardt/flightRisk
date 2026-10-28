@@ -20,7 +20,7 @@ What the launcher does:
 - Prints every command line before it runs anything, so each process can be started by hand. The token is shown as `<token>`; the value is never printed.
 - Generates a random `FLIGHTRISK_EDGE_TOKEN` per run and passes it to the ground station and every edge. With `--attach` it uses the token already in your environment, if any.
 - Binds the edge WebSocket to 127.0.0.1 and points every edge at `ws://127.0.0.1:<port>`. The dashboard web port also binds 127.0.0.1 by default.
-- Gives drones the coordinator's altitude slots in turn (100 cm, 160 cm, 100 cm, ...), and sizes the area so each zone is three 75 cm lanes wide (`325 * N - 100` cm wide, 400 cm deep). Override with `--area-cm`.
+- Gives drones the coordinator's altitude slots in turn (100 cm, 130 cm, 100 cm, ...), and sizes the area so each zone is three 75 cm lanes wide (`325 * N - 100` cm wide, 400 cm deep). Override with `--area-cm`.
 - Starts each child in its own process group. On exit, Ctrl-C or SIGTERM it sends SIGTERM to every group, waits, then SIGKILLs what remains, and prints `All child processes stopped.` Tests cover a grandchild process and a child that ignores SIGTERM.
 - Widens the edges' geofence (`FLIGHTRISK_GEOFENCE_CM`) to the area width plus 100 cm unless you set it. See "Finding: geofence refuses far re-tasks" below.
 
@@ -42,7 +42,7 @@ Ground station is listening on 127.0.0.1:9000; dashboard at http://127.0.0.1:555
 Started 4 fake edges. Ctrl-C stops everything.
 [drive] waiting for 4 edges to report telemetry
 [drive] emit plan_fleet
-[drive] fleet_plan: 4 zones: drone-1@x=0cm/5 lanes/alt 100cm, drone-2@x=325cm/5 lanes/alt 160cm, drone-3@x=650cm/5 lanes/alt 100cm, drone-4@x=975cm/5 lanes/alt 160cm
+[drive] fleet_plan: 4 zones: drone-1@x=0cm/5 lanes/alt 100cm, drone-2@x=325cm/5 lanes/alt 130cm, drone-3@x=650cm/5 lanes/alt 100cm, drone-4@x=975cm/5 lanes/alt 130cm
 [drive] emit start_fleet
 [drive] fleet_event {'event': 'start', 'detail': 'start_at in 2 s'}
 [drive] killing drone-4 (SIGKILL on its process group)

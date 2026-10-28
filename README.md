@@ -180,7 +180,7 @@ source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: 
 On the Windows laptop, set `FLIGHTRISK_EDGE_TOKEN` and `FLIGHTRISK_FLEET_NET` (and in station mode `FLIGHTRISK_GROUND_IP` and `FLIGHTRISK_TELLO_HOST` for drone 2), then run:
 
 ```powershell
-$env:DRONE_ID = "2"; $env:ALT_CM = "160"; .\scripts\demo_edge.ps1
+$env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 ```
 
 `DRONE_ID` 1 and 2 become the fleet ids `drone-1` and `drone-2`, which are the ids the ground station expects (`FLIGHTRISK_FLEET_DRONES`, default `drone-1,drone-2`). Each launcher refuses to start without `FLIGHTRISK_EDGE_TOKEN`. Open the dashboard at `http://127.0.0.1:5555` on the Mac. [docs/demo-script.md](docs/demo-script.md) is the minute-by-minute run sheet, including the fallbacks. Without hardware, `python scripts/demo_fake_fleet.py --n 4 --drive` runs the same ground station against fake edges.

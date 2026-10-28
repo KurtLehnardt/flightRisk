@@ -1116,3 +1116,16 @@ What the edge authority (PR-4) has to wire to the executor:
 - **Ground speaks first.** The edge sends its `hello` in reply to the
   ground's, not unprompted on connect. A v1 ground therefore never sees a
   message type it does not know.
+
+## Configuration command: `set_ceiling`
+
+`set_ceiling` (`ceiling_cm`, `ceiling_margin_cm`, `alt_slot_cm`, `cmd_id`, optional
+`drone_id`, optional fence) sets an edge's ceiling, safety margin and altitude slot. It is a
+configuration command, not a flight command: valid on every link version, not in
+`GROUND_TO_EDGE_TYPES`, `COMMAND_TYPES` or `FENCED_COMMAND_TYPES`, never retried automatically,
+and applied only while the drone is on the ground. A multi-ground edge obeys it only from its
+authority at the current epoch. Its `ack` (the values now in force) and `nack` (reason from
+`CEILING_NACK_REASONS`: `in_flight`, `above_ceiling`, `invalid`, `stale_epoch`,
+`not_authority`) have their own rules on every link version, and `shape_for_peer` copies the
+command and its replies unchanged, so the `cmd_id` survives a v1 link. Landing is unaffected.
+See `docs/ceiling-and-altitude.md`.

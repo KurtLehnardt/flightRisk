@@ -8,7 +8,9 @@
 # DRONE_ID is 1 or 2 (or a full id such as drone-2) and becomes the fleet id drone-1 or
 # drone-2, which the ground station's --fleet list must contain. Default: 1.
 # ALT_CM is this drone's altitude slot in cm (at least 10). Default: 100 for odd ids and
-# 160 for even ids, the same alternation the coordinator uses.
+# 130 for even ids, the same alternation the coordinator uses. The edge refuses to start
+# when ALT_CM is above the ceiling limit, FLIGHTRISK_CEILING_CM minus
+# FLIGHTRISK_CEILING_MARGIN_CM (200 - 60 = 140 cm by default); see docs/ceiling-and-altitude.md.
 # The Tello address and ground URL come from scripts/fleet_env.sh. In ap mode, set
 # export FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
 # ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
@@ -51,7 +53,7 @@ if [ "${FLIGHTRISK_GROUND_LOCAL:-}" = "1" ] && [ "$number" -ne 1 ]; then
 fi
 
 if [ -z "${ALT_CM:-}" ]; then
-    if [ $((number % 2)) -eq 1 ]; then ALT_CM=100; else ALT_CM=160; fi
+    if [ $((number % 2)) -eq 1 ]; then ALT_CM=100; else ALT_CM=130; fi
 fi
 case "$ALT_CM" in
     ''|*[!0-9]*)
