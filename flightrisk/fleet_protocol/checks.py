@@ -14,6 +14,7 @@ from flightrisk.fleet_protocol.constants import (
     _MAX_ABS_NUMBER,
     _MAX_PROTO_FIELD,
     _MAX_SAFE_INT,
+    _PROFILE_NAME_RE,
     MAX_DEPTH,
     MAX_FIELDS,
     MAX_ID_LEN,
@@ -86,6 +87,17 @@ def is_identifier(value: Any) -> bool:
     ``--drone-id`` with this at startup.
     """
     return _is_id(value)
+
+
+def is_profile_name(value: Any) -> bool:
+    """True when *value* can name a detection profile.
+
+    A profile name is 1 to ``MAX_PROFILE_NAME_LEN`` (32) characters of
+    lowercase letters, digits and underscores, starting with a letter, so it
+    is safe in logs, metric labels and the dashboard. Whether a profile of
+    that name exists is up to the edge's registry, not the protocol.
+    """
+    return isinstance(value, str) and _PROFILE_NAME_RE.fullmatch(value) is not None
 
 
 def _require(msg: Mapping[str, Any], key: str) -> Any:

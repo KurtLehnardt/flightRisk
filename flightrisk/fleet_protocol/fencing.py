@@ -10,11 +10,14 @@ from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_id,
     _is_int,
+    _is_member,
     _short,
 )
 from flightrisk.fleet_protocol.constants import (
     _KNOWN_TYPES,
     _MAX_PROTO_FIELD,
+    ACK,
+    CONFIG_COMMAND_TYPES,
     EDGE_ROLE,
     FAILSAFE_TYPES,
     HELLO,
@@ -22,6 +25,7 @@ from flightrisk.fleet_protocol.constants import (
     LEGACY_GROUND_TO_EDGE_TYPES,
     MAX_EPOCH,
     MIN_PROTOCOL_VERSION,
+    NACK,
     PEER_TYPES,
     PROTOCOL_VERSION,
     V2_FIELDS,
@@ -231,6 +235,9 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     A v1 edge ignores ``on_complete`` and hovers at the end of its lanes.
     The legacy ``set_target``, ``stream_video`` and ``detections`` messages
     are copied unchanged; a type this protocol does not define raises.
+    Configuration commands (``CONFIG_COMMAND_TYPES``) and their acks and
+    nacks are checked under *peer_proto* and copied unchanged for every
+    version, so their ``cmd_id`` survives on a v1 link.
     """
     mtype = _message_type(msg)
     if mtype in FAILSAFE_TYPES:
@@ -240,6 +247,9 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     if not (_is_int(peer_proto) and peer_proto >= MIN_PROTOCOL_VERSION):
         raise ProtocolError(f"peer protocol version must be an integer >= 1, got {_short(peer_proto)}")
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES or mtype in LEGACY_EDGE_TO_GROUND_TYPES:
+        return dict(msg)
+    if mtype in CONFIG_COMMAND_TYPES or (mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)):
+        validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype not in _KNOWN_TYPES:
         raise ProtocolError(f"{_short(mtype)} is not a fleet protocol message")
