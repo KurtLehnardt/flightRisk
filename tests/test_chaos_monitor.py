@@ -22,6 +22,12 @@ pytestmark = [
 # Longer than the 3 s watchdog plus the 1 s slack.
 LONG_DOWN = Episode(3.0, "partition", "drone-1", DOWN, 7.0, (("hold", True),))
 EMERGENCY = Episode(2.0, "emergency", "all", BOTH, 1.6)
+# The partition comes first and the emergency well after it: a takeoff ordered right after an emergency
+# landing is re-landed 2 s later, which would put a landing inside a partition that starts soon after.
+PARTITION_THEN_EMERGENCY = [
+    Episode(2.0, "partition", "drone-1", DOWN, 7.0, (("hold", True),)),
+    Episode(11.0, "emergency", "all", BOTH, 1.6),
+]
 
 
 def _play(plan, duration_s, *, mutate=None):
@@ -40,7 +46,7 @@ def _play(plan, duration_s, *, mutate=None):
 
 
 def test_a_fleet_with_working_safety_is_clean_under_the_same_plans():
-    report = _play([EMERGENCY, Episode(5.0, "partition", "drone-1", DOWN, 7.0, (("hold", True),))], 15.0)
+    report = _play(PARTITION_THEN_EMERGENCY, 15.0)
     assert report.violations == []
     assert report.watchdog_landings >= 1 and report.reflights >= 1
     assert report.emergencies_checked >= 1 and report.emergency_landings == report.emergencies_checked

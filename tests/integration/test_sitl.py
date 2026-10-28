@@ -2,7 +2,7 @@
 
 These tests require a running SITL instance on udp://:14540.
 Run with: pytest tests/integration/test_sitl.py -m sitl
-Skip with: pytest -m "not sitl" (default in pytest.ini)
+Skip with: pytest -m "not sitl and not slow" (default in pytest.ini)
 
 Start SITL: ./scripts/start_sitl.sh
 """
