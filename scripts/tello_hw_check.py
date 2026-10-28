@@ -15,6 +15,11 @@ Modes (they may be combined, except ``--station-mode``, which runs alone):
 * ``--ap-mode-check``: verify plain AP mode round-trips.
 * ``--fleet-net ap --link-role server|client --peer IP``: ping the peer and do
   a WebSocket round-trip on port 9000, reporting the median RTT.
+* ``--local-ip IP [--ifindex N]``: bind every drone socket (commands, video,
+  discovery) to this local IP, the Wi-Fi adapter that joined the drone, and
+  never to all addresses. This checks one drone of a two-adapter laptop
+  (docs/two-tellos-one-pc.md). ``--ifindex`` (Windows only) also pins outgoing
+  packets to that interface with IP_UNICAST_IF.
 * ``--station-mode SSID PASS --i-understand-this-reconfigures-the-drone``:
   sends ``ap`` to the single drone currently joined. This reconfigures the
   drone and is never done without the explicit acknowledgement flag.
@@ -85,10 +90,31 @@ def _clean(reply: bytes) -> str:
 # and the edge) always sends from, so a later FlightRisk process is not locked out by this check.
 _CMD_SOCKETS: dict[tuple[str, int], socket.socket] = {}
 
+# Set by --local-ip and --ifindex (see run()). With a local IP, every drone socket binds that IP, never the
+# wildcard address, so another program on another adapter keeps its own ports.
+_LOCAL_IP: str | None = None
+_IFINDEX: int | None = None
+# Windows IP_UNICAST_IF (not named in Python's socket module): the interface index, 4 bytes, network byte order.
+IP_UNICAST_IF = 31
+
+
+def _drone_socket() -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if _IFINDEX is not None:
+        sock.setsockopt(socket.IPPROTO_IP, IP_UNICAST_IF, _IFINDEX.to_bytes(4, "big"))
+    return sock
+
 
 def _command_socket(host: str, port: int) -> socket.socket:
     key = (host, port)
     sock = _CMD_SOCKETS.get(key)
+    if sock is None and _LOCAL_IP is not None:
+        sock = _drone_socket()
+        try:
+            sock.bind((_LOCAL_IP, CMD_PORT if port == CMD_PORT else 0))
+        except OSError:
+            sock.bind((_LOCAL_IP, 0))  # 8889 busy on this IP: any free port, still on this adapter
+        _CMD_SOCKETS[key] = sock
     if sock is None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if port == CMD_PORT:
@@ -106,7 +132,9 @@ _STRAYS: dict[str, list[str]] = {}
 
 
 def close_command_sockets() -> None:
-    """Close the shared command sockets (call once the report is done)."""
+    """Close the shared command sockets (call once the report is done) and forget --local-ip."""
+    global _LOCAL_IP, _IFINDEX
+    _LOCAL_IP, _IFINDEX = None, None
     for sock in _CMD_SOCKETS.values():
         try:
             sock.close()
@@ -242,9 +270,11 @@ def discover(
     if len(hosts) > MAX_DISCOVER_HOSTS:
         return [CheckResult("discover", subnet, FAIL, f"subnet has {len(hosts)} hosts, limit is {MAX_DISCOVER_HOSTS}")]
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = _drone_socket()
     found: dict[str, str] = {}
     try:
+        if _LOCAL_IP is not None:
+            sock.bind((_LOCAL_IP, 0))
         sock.settimeout(0.2)
         for host in hosts:
             try:
@@ -296,9 +326,11 @@ def video_check(
     results: list[CheckResult] = []
     vsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        vsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if _LOCAL_IP is None:
+            vsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            vsock.bind(("0.0.0.0", video_port))
+            # With --local-ip there is no SO_REUSEADDR: the port on this IP must really be free.
+            vsock.bind((_LOCAL_IP or "0.0.0.0", video_port))
         except OSError as exc:
             return [CheckResult("video", host, FAIL, f"cannot bind UDP {video_port}: {exc}")]
         vsock.settimeout(0.2)
@@ -561,6 +593,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bind", metavar="IP", default="10.42.0.1", help="server-role listen address (default 10.42.0.1)")
     p.add_argument("--link-port", type=int, default=LINK_PORT, help="WebSocket port for the link check (default 9000)")
     p.add_argument("--serve-seconds", type=float, default=60.0, help="server role: how long to keep the listener up")
+    p.add_argument("--local-ip", metavar="IP", help="bind every drone socket to this adapter IP (two-adapter laptop)")
+    p.add_argument("--ifindex", type=int, metavar="N", help="Windows only, with --local-ip: pin outgoing packets to this interface index")
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-command timeout in seconds")
     p.add_argument("--video-seconds", type=float, default=VIDEO_SECONDS, help=argparse.SUPPRESS)
     p.add_argument("--cmd-port", type=int, default=CMD_PORT, help=argparse.SUPPRESS)
@@ -573,6 +607,37 @@ def _hosts(arg: Optional[str]) -> list[str]:
     if not arg:
         return [DEFAULT_DRONE_HOST]
     return [h.strip() for h in arg.split(",") if h.strip()]
+
+
+def _set_local_binding(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Check --local-ip and --ifindex and store them for the socket helpers."""
+    global _LOCAL_IP, _IFINDEX
+    local_ip = getattr(args, "local_ip", None)
+    ifindex = getattr(args, "ifindex", None)
+    _LOCAL_IP, _IFINDEX = None, None
+    if ifindex is not None:
+        if local_ip is None:
+            parser.error("--ifindex needs --local-ip (the IP of the same adapter)")
+        if sys.platform != "win32":
+            parser.error("--ifindex is only supported on Windows (it sets IP_UNICAST_IF)")
+        if ifindex <= 0:
+            parser.error(f"--ifindex must be a positive interface index, got {ifindex}")
+    if local_ip is None:
+        return
+    try:
+        address = ipaddress.IPv4Address(local_ip)
+    except ValueError:
+        parser.error(f"--local-ip must be an IPv4 address, got {local_ip!r}")
+    if address.is_unspecified or address.is_multicast:
+        parser.error(f"--local-ip must be the IP of one adapter, got {local_ip}")
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.bind((local_ip, 0))
+    except OSError as exc:
+        parser.error(f"--local-ip {local_ip} is not assigned to any adapter on this computer ({exc})")
+    finally:
+        probe.close()
+    _LOCAL_IP, _IFINDEX = str(address), ifindex
 
 
 def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[CheckResult]:
@@ -599,6 +664,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[Check
             ipaddress.ip_address(args.peer)
         except ValueError:
             parser.error(f"--peer must be an IP address, got {args.peer!r}")
+    _set_local_binding(args, parser)
 
     if args.station_mode:
         ssid, password = args.station_mode

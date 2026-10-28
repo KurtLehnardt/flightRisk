@@ -370,3 +370,47 @@ def test_dataset_and_demo_readmes():
     assert "zenodo" in datasets.lower()
     assert "never committed" in datasets
     assert "two minutes" in demo or "2:00" in demo
+
+
+def test_local_ip_binds_every_drone_socket_to_that_ip(capsys, monkeypatch):
+    """--local-ip (two adapters on one laptop): commands and video use sockets bound to that IP only."""
+    import types
+
+    binds = []
+
+    class Recording(socket.socket):
+        def bind(self, address):
+            binds.append(address)
+            return super().bind(address)
+
+    video_port = _free_udp_port()
+    with FakeTello(video_port=video_port, strict_source=True) as drone:
+        monkeypatch.setattr(hw, "socket", types.SimpleNamespace(**{**vars(socket), "socket": Recording}))
+        rc = hw.main([
+            "--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--video-port", str(video_port),
+            "--video-check", "--video-seconds", "0.5", "--timeout", "1", "--local-ip", "127.0.0.1", "--json",
+        ])
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0, doc
+    assert {c["name"]: c["status"] for c in doc["checks"]}["video"] == "PASS"
+    assert binds and all(ip == "127.0.0.1" for ip, _ in binds), binds
+    assert ("127.0.0.1", video_port) in binds
+    assert "streamon" in drone.received
+    assert hw._LOCAL_IP is None  # forgotten once the report is done
+
+
+def test_local_ip_not_on_this_computer_is_refused(capsys):
+    with pytest.raises(SystemExit):
+        hw.main(["--drones", "127.0.0.1", "--local-ip", "192.0.2.77"])
+    assert "not assigned to any adapter" in capsys.readouterr().err
+
+
+def test_ifindex_needs_local_ip_and_windows(capsys):
+    with pytest.raises(SystemExit):
+        hw.main(["--drones", "127.0.0.1", "--ifindex", "12"])
+    assert "--ifindex needs --local-ip" in capsys.readouterr().err
+    if sys.platform != "win32":
+        with pytest.raises(SystemExit):
+            hw.main(["--drones", "127.0.0.1", "--local-ip", "127.0.0.1", "--ifindex", "12"])
+        assert "only supported on Windows" in capsys.readouterr().err
+

@@ -69,6 +69,12 @@ Run it with::
     python -m flightrisk.edge_device --source tello --tello-host 192.168.10.1 \
         --drone-id drone-1 --alt-slot 100
     python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 130
+    python -m flightrisk.edge_device --source tello --tello-local-ip 192.168.10.50 \
+        --drone-id drone-2 --alt-slot 80
+
+``--tello-local-ip`` (or ``FLIGHTRISK_TELLO_LOCAL_IP``) binds every Tello
+socket to one Wi-Fi adapter's IP, so one computer can run two edges, one per
+adapter and drone (docs/two-tellos-one-pc.md). Without it nothing changes.
 
 The core loop (``run_edge_device``) is dependency-injected -- the frame
 source, transport, and runner are all passed in -- so it can be unit-tested
@@ -130,6 +136,9 @@ _TOKEN_ENV_VAR = "FLIGHTRISK_EDGE_TOKEN"
 _APPEARANCE_ONLY_ENV_VAR = "FLIGHTRISK_APPEARANCE_ONLY"
 _TRUE_VALUES = ("1", "true", "yes", "on")
 _FALSE_VALUES = ("0", "false", "no", "off")
+# Environment fallbacks for --tello-local-ip and --tello-ifindex.
+_TELLO_LOCAL_IP_ENV_VAR = "FLIGHTRISK_TELLO_LOCAL_IP"
+_TELLO_IFINDEX_ENV_VAR = "FLIGHTRISK_TELLO_IFINDEX"
 # Sources that fly a drone (and therefore run the lane executor).
 _FLIGHT_SOURCES = ("tello", "fake")
 # Simulated speed of the fake drone, so lane progress is visible on the map.
@@ -846,6 +855,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Tello IP address (when --source=tello; default from config, 192.168.10.1)",
     )
     parser.add_argument(
+        "--tello-local-ip", type=str, default=None,
+        help="Bind every Tello socket to this local IP, the Wi-Fi adapter that joined this drone "
+             "(--source tello only; default: $" + _TELLO_LOCAL_IP_ENV_VAR + "). Lets one computer fly two "
+             "Tellos, one per adapter; every edge on the computer must then use it. See "
+             "docs/two-tellos-one-pc.md",
+    )
+    parser.add_argument(
+        "--tello-ifindex", type=str, default=None,
+        help="Windows only, with --tello-local-ip: also pin outgoing Tello commands to this interface "
+             "index (InterfaceIndex in Get-NetIPAddress; default: $" + _TELLO_IFINDEX_ENV_VAR + ")",
+    )
+    parser.add_argument(
         "--drone-id", type=_parse_drone_id, default="drone-1",
         help="Drone id used in fleet messages (default: drone-1)",
     )
@@ -913,8 +934,71 @@ def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
 
     from flightrisk.drone.tello import TelloController
 
-    log.info("edge_source_tello", drone_id=args.drone_id, tello_host=args.tello_host)
-    return TelloController(name=args.drone_id, host=args.tello_host)
+    local_ip = getattr(args, "tello_local_ip", None)
+    if local_ip is None:
+        log.info("edge_source_tello", drone_id=args.drone_id, tello_host=args.tello_host)
+        return TelloController(name=args.drone_id, host=args.tello_host)
+
+    from flightrisk.drone.tello_bound import TelloBindingError
+
+    ifindex = getattr(args, "tello_ifindex", None)
+    log.info("edge_source_tello", drone_id=args.drone_id, tello_host=args.tello_host,
+             tello_local_ip=local_ip, tello_ifindex=ifindex)
+    try:
+        return TelloController(name=args.drone_id, host=args.tello_host, local_ip=local_ip, ifindex=ifindex)
+    except TelloBindingError as exc:
+        log.error("edge_tello_binding_refused", drone_id=args.drone_id, tello_local_ip=local_ip, error=str(exc))
+        raise SystemExit(f"edge_device: {exc} Refusing to start.") from exc
+
+
+def _resolve_tello_binding(args: argparse.Namespace, environ: Any = None) -> tuple[str | None, int | None]:
+    """The checked ``--tello-local-ip`` and ``--tello-ifindex``, each falling back to its environment variable.
+
+    Both are None unless ``--source tello``; the environment variables are
+    then ignored, and giving either flag is an error. The interface index
+    needs a local IP. Raises ``ValueError`` with an operator-facing message.
+    """
+    env = os.environ if environ is None else environ
+    flag_ip = getattr(args, "tello_local_ip", None)
+    flag_ifindex = getattr(args, "tello_ifindex", None)
+    if args.source != "tello":
+        if flag_ip is not None or flag_ifindex is not None:
+            raise ValueError("--tello-local-ip and --tello-ifindex only apply to --source tello")
+        return None, None
+    raw_ip = flag_ip if flag_ip is not None else (env.get(_TELLO_LOCAL_IP_ENV_VAR) or "").strip() or None
+    raw_ifindex = flag_ifindex if flag_ifindex is not None else (env.get(_TELLO_IFINDEX_ENV_VAR) or "").strip() or None
+    if raw_ip is None and raw_ifindex is None:
+        return None, None
+
+    from flightrisk.drone.tello_bound import parse_ifindex, parse_local_ip
+
+    if raw_ip is None:
+        raise ValueError("--tello-ifindex needs --tello-local-ip (the IP of the same adapter)")
+    local_ip = parse_local_ip(raw_ip)
+    ifindex = parse_ifindex(raw_ifindex) if raw_ifindex is not None else None
+    return local_ip, ifindex
+
+
+def _check_tello_binding(args: argparse.Namespace) -> None:
+    """Refuse a ``--tello-local-ip`` that cannot work before the models load. Raises ``SystemExit``.
+
+    The ports themselves are bound, and a port in use is reported, when the
+    controller is built.
+    """
+    if getattr(args, "tello_local_ip", None) is None:
+        return
+    from flightrisk.config import get_config
+    from flightrisk.drone.tello_bound import (
+        TelloBinding,
+        TelloBindingError,
+        check_binding,
+    )
+
+    host = args.tello_host or get_config().drone.tello_default_host
+    try:
+        check_binding(TelloBinding(local_ip=args.tello_local_ip, ifindex=args.tello_ifindex), host)
+    except TelloBindingError as exc:
+        raise SystemExit(f"edge_device: {exc} Refusing to start.") from exc
 
 
 def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
@@ -1059,6 +1143,11 @@ def main(argv: list[str] | None = None) -> None:
         _resolve_appearance_only(args)
     except ValueError as exc:
         parser.error(str(exc))
+    try:
+        args.tello_local_ip, args.tello_ifindex = _resolve_tello_binding(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    _check_tello_binding(args)
 
     log = StructuredLogger(component="edge-device")
     _init_edge_telemetry(log)
