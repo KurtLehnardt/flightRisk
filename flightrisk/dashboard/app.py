@@ -89,6 +89,8 @@ from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for ba
     _frame_loop,
 )
 from flightrisk.dashboard.alert_latch import AlertPhase, alert_latch
+from flightrisk.dashboard.detection_profiles import EVENT as DETECTION_PROFILES_EVENT
+from flightrisk.dashboard.detection_profiles import ProfileBoard
 from flightrisk.dashboard.recovery import handle_alert_response, reset_alert_flow
 
 # ---------------------------------------------------------------------------
@@ -456,7 +458,11 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
         if msg.thumbnail_jpeg
         else None
     )
-    _edge_stats.frame_done(len(results), source="edge")
+    profile = getattr(msg, "detection_profile", None)
+    if profile is None:
+        _edge_stats.frame_done(len(results), source="edge")
+    else:
+        _edge_stats.frame_done(len(results), source="edge", profile=profile)
 
     socketio.emit("frame", {
         "image": image_b64,
@@ -1394,9 +1400,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.ground_station = station
 
         _fps_state = {"last": None}
-        # The fleet supervisor needs the transport and the transport's
-        # callbacks need the supervisor, so the callbacks look it up here.
-        _fleet: dict = {"supervisor": None}
+        # The fleet supervisor and the profile board need the transport and
+        # the transport's callbacks need them, so the callbacks look them up here.
+        _fleet: dict = {"supervisor": None, "profiles": None}
 
         def _on_edge_message(msg):
             # Runs in a GroundTransport executor thread -- plain socketio.emit
@@ -1408,6 +1414,15 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     app_state.logger.error(
                         "edge_message_error", traceback=traceback.format_exc()
                     )
+            profiles = _fleet["profiles"]
+            if profiles is not None:
+                try:
+                    profiles.observe_detections(msg)
+                except Exception:  # noqa: BLE001 - profile display must never stop scoring or fleet control
+                    if app_state.logger:
+                        app_state.logger.warning(
+                            "detection_profile_observe_failed", traceback=traceback.format_exc()
+                        )
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 try:
@@ -1420,6 +1435,18 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
         def _on_edge_control(msg):
             # Edge ack, nack and telemetry messages, on a transport executor thread.
+            profiles = _fleet["profiles"]
+            if profiles is not None:
+                try:
+                    # A reply to a profile command is the board's alone; the
+                    # fleet coordinator never sent that command.
+                    if profiles.observe_control(msg):
+                        return
+                except Exception:  # noqa: BLE001 - profile display must never stop scoring or fleet control
+                    if app_state.logger:
+                        app_state.logger.warning(
+                            "detection_profile_observe_failed", traceback=traceback.format_exc()
+                        )
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 supervisor.handle_control(msg)
@@ -1434,6 +1461,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             on_control=_on_edge_control,
             heartbeat_interval_s=fp.HEARTBEAT_INTERVAL_S,
         )
+        profile_board = ProfileBoard(transport, socketio.emit, fleet_drones=source_config.fleet_drones)
+        _fleet["profiles"] = profile_board
+        app_state.profile_board = profile_board
         supervisor = None
         if source_config.fleet_drones:
             supervisor = FleetSupervisor(
@@ -2047,6 +2077,50 @@ def on_set_stream_video(data):
     if app_state.logger:
         app_state.logger.info("stream_video_updated", enabled=enabled)
     emit("stream_video_state", {"enabled": app_state.stream_video})
+
+
+def _no_profile_board_payload() -> dict:
+    """The ``detection_profiles`` event outside the edge source: choices only, no drones."""
+    return {"profiles": [], "fleet_default": None, "drones": {}, "available": False}
+
+
+@socketio.on("get_detection_profiles")
+def on_get_detection_profiles(data=None):
+    """Send the detection profile choices and each drone's active profile."""
+    board = app_state.profile_board
+    emit(DETECTION_PROFILES_EVENT, board.payload() if board is not None else _no_profile_board_payload())
+
+
+@socketio.on("set_detection_profile")
+def on_set_detection_profile(data):
+    """Choose a detection profile for one drone (``profile`` empty: follow the fleet default).
+
+    The edge refuses the switch while its drone flies; its reason reaches
+    the browser in the next ``detection_profiles`` event.
+    """
+    board = app_state.profile_board
+    if board is None:
+        emit("error", {"message": "Detection profiles need the edge source (--source edge)."})
+        return
+    data = data if isinstance(data, dict) else {}
+    error = board.select(data.get("drone_id"), data.get("profile"))
+    if error:
+        emit("error", {"message": error})
+    emit(DETECTION_PROFILES_EVENT, board.payload())
+
+
+@socketio.on("set_fleet_detection_profile")
+def on_set_fleet_detection_profile(data):
+    """Set the fleet default detection profile (``profile`` empty: no default, keep each edge's own)."""
+    board = app_state.profile_board
+    if board is None:
+        emit("error", {"message": "Detection profiles need the edge source (--source edge)."})
+        return
+    data = data if isinstance(data, dict) else {}
+    error, _ = board.set_fleet_default(data.get("profile"))
+    if error:
+        emit("error", {"message": error})
+    emit(DETECTION_PROFILES_EVENT, board.payload())
 
 
 #: Capability each manual dashboard command needs. "land" is deliberately

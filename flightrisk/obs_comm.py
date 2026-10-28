@@ -41,13 +41,15 @@ SAMPLED_TYPES = frozenset({"telemetry", "heartbeat", "ping", "pong", "detections
 
 #: Scalar fields copied from a message into its event.
 _SCALAR_FIELDS = ("cmd_id", "epoch", "plan_id", "seq", "for", "reason", "leader_id", "node_id", "proto",
-                  "lanes_total", "t_ground_s", "enabled", "epoch_next", "role")
+                  "lanes_total", "t_ground_s", "enabled", "epoch_next", "role", "profile", "requested",
+                  "fallback")
 
 #: Message types that become a ``type`` label as themselves; anything else is "other",
 #: so a client that invents types cannot create series without end.
 KNOWN_TYPES = frozenset(
     set(fp.GROUND_TO_EDGE_TYPES_V2) | set(fp.EDGE_TO_GROUND_TYPES_V2) | set(fp.PEER_TYPES)
     | set(fp.LEGACY_GROUND_TO_EDGE_TYPES) | set(fp.LEGACY_EDGE_TO_GROUND_TYPES) | SAMPLED_TYPES
+    | set(fp.CONFIG_COMMAND_TYPES)
     | {"command", "clock_sync", "link_up", "link_down", "reconnect", "unknown", "broadcast"}
 )
 
@@ -57,7 +59,8 @@ _local_drone: list[str | None] = [None]
 def _reason_label(value: Any) -> str:
     if value is None:
         return "none"
-    return value if isinstance(value, str) and value in fp.NACK_REASONS else "other"
+    known = isinstance(value, str) and (value in fp.NACK_REASONS or value in fp.PROFILE_NACK_REASONS)
+    return value if known else "other"
 
 
 def type_label(value: Any) -> str:
