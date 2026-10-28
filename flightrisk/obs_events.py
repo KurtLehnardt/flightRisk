@@ -313,7 +313,8 @@ def telemetry_snapshot(snapshot: Any, *, component: str = "dashboard") -> None:
 @_safe
 def edge_telemetry(drone_id: str, msg: Mapping[str, Any], *, side: str = "ground") -> None:
     """Export a fleet ``telemetry`` message received from an edge (numbers only)."""
-    base = {"drone_id": drone_id, "backend": "edge"}
+    label = M.drone_label(drone_id)
+    base = {"drone_id": label, "backend": "edge"}
     battery = msg.get("battery")
     if isinstance(battery, (int, float)) and not isinstance(battery, bool):
         M.drone_battery.set(battery, base)
@@ -323,8 +324,8 @@ def edge_telemetry(drone_id: str, msg: Mapping[str, Any], *, side: str = "ground
     flying = msg.get("is_flying")
     if isinstance(flying, bool):
         M.drone_flying.set(1 if flying else 0, base)
-    M.note_telemetry(drone_id, "edge", time.time())
-    allowed, suppressed = _snapshot_throttle.allow(("edge", drone_id))
+    M.note_telemetry(label, "edge", time.time())
+    allowed, suppressed = _snapshot_throttle.allow(("edge", label))
     if not allowed:
         return
     keep = ("battery", "height_cm", "is_flying", "rel_x_cm", "rel_y_cm", "heading_deg", "lane_index",
