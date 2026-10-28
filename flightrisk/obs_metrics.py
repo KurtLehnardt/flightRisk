@@ -26,6 +26,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from flightrisk.obs_log import obs_enter as _obs_enter
+from flightrisk.obs_log import obs_exit as _obs_exit
+from flightrisk.obs_redact import safe_token
+
 try:
     from opentelemetry import metrics as _otel_metrics
     from opentelemetry.metrics import CallbackOptions, Observation
@@ -90,16 +94,56 @@ def _meter():
 _m = _meter()
 
 
+class GuardedInstrument:
+    """An instrument whose updates are skipped when they arrive re-entrantly.
+
+    The SDK updates an instrument under non-reentrant locks. A signal handler
+    that interrupts this thread inside one of those updates and then records a
+    metric itself (the edge's Ctrl+C handler logs a flight-safety event before
+    it lands) would wait for a lock its own thread holds. Such a nested update
+    is dropped instead (see :func:`flightrisk.obs_log.obs_enter`).
+    """
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def add(self, *args, **kwargs):
+        if not _obs_enter():
+            return
+        try:
+            self._inner.add(*args, **kwargs)
+        finally:
+            _obs_exit()
+
+    def record(self, *args, **kwargs):
+        if not _obs_enter():
+            return
+        try:
+            self._inner.record(*args, **kwargs)
+        finally:
+            _obs_exit()
+
+    def set(self, *args, **kwargs):
+        if not _obs_enter():
+            return
+        try:
+            self._inner.set(*args, **kwargs)
+        finally:
+            _obs_exit()
+
+
 def _counter(name: str, unit: str = "1", description: str = ""):
-    return _m.create_counter(name, unit=unit, description=description) if _m else _Noop()
+    return GuardedInstrument(_m.create_counter(name, unit=unit, description=description)) if _m else _Noop()
 
 
 def _hist(name: str, unit: str = "1", description: str = ""):
-    return _m.create_histogram(name, unit=unit, description=description) if _m else _Noop()
+    return GuardedInstrument(_m.create_histogram(name, unit=unit, description=description)) if _m else _Noop()
 
 
 def _gauge(name: str, unit: str = "1", description: str = ""):
-    return _m.create_gauge(name, unit=unit, description=description) if _m else _Noop()
+    return GuardedInstrument(_m.create_gauge(name, unit=unit, description=description)) if _m else _Noop()
 
 
 def _observable(name: str, callback: Callable, unit: str = "1", description: str = "") -> None:
@@ -166,7 +210,28 @@ start_skew = _gauge("flightrisk.fleet.start_skew_ms", "ms", "Spread of start_at 
 # Observable state (read when the exporter collects)
 # ---------------------------------------------------------------------------
 
-_state_lock = threading.Lock()
+# Re-entrant: a signal handler may record a metric while this thread is inside a note_*().
+_state_lock = threading.RLock()
+
+#: At most this many distinct drone ids become metric labels from network input;
+#: later ones are labelled "other". A fleet is a handful of drones; without a
+#: limit a client that sends random drone ids would create series without end.
+MAX_DRONE_LABELS = 64
+_drone_labels: set[str] = set()
+
+
+def drone_label(value: Any, default: str = "unknown") -> str:
+    """A bounded metric label for a drone id that came off the network."""
+    token = safe_token(value, default)
+    if token == default:
+        return token
+    with _state_lock:
+        if token in _drone_labels:
+            return token
+        if len(_drone_labels) >= MAX_DRONE_LABELS:
+            return "other"
+        _drone_labels.add(token)
+    return token
 _telemetry_seen: dict[tuple[str, str], float] = {}  # (drone_id, backend) -> measured_at (epoch s)
 _link_seen: dict[tuple[str, str], float] = {}       # (drone_id, side) -> last message (monotonic s)
 _link_connected: dict[str, bool] = {}
@@ -345,7 +410,7 @@ _observable("flightrisk.log.dropped", _observe_log_dropped, description="Console
 
 
 def _error_hook(component: str, error_type: str, fingerprint: str, level: str) -> None:
-    error_logs.add(1, {"component": component, "error_type": error_type, "fingerprint": fingerprint, "level": level})
+    error_logs.add(1, {"component": safe_token(component), "error_type": safe_token(error_type), "fingerprint": fingerprint, "level": level})
 
 
 def _install_error_hook() -> None:
@@ -359,6 +424,8 @@ _install_error_hook()
 
 __all__ = [
     "HISTOGRAM_BUCKETS",
+    "MAX_DRONE_LABELS",
+    "drone_label",
     "note_frame",
     "note_link",
     "note_link_state",

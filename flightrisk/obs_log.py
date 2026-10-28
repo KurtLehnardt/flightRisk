@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import datetime as _dt
+import functools
 import hashlib
 import json
 import logging
@@ -66,6 +67,10 @@ _RESERVED = frozenset({
     "node", "session_id", "category", "error_type", "error_message", "fingerprint", "stack",
 })
 
+#: Longest wait, at exit, for the console writer thread to drain its queue. A
+#: terminal or pipe that stopped reading must not keep the process alive.
+LISTENER_STOP_TIMEOUT_S = 2.0
+
 _lock = threading.RLock()
 _configured = False
 _queue_handler: DropQueueHandler | None = None
@@ -79,6 +84,56 @@ try:  # tracing is optional
     from opentelemetry import trace as _otel_trace
 except ImportError:  # pragma: no cover - opentelemetry is in requirements
     _otel_trace = None
+
+
+# ---------------------------------------------------------------------------
+# Re-entrancy guard (signal handlers)
+# ---------------------------------------------------------------------------
+#
+# A signal handler runs on the main thread between two bytecodes, possibly
+# while that same thread is inside the telemetry code (a metric update, a
+# handler, a processor queue) holding one of its non-reentrant locks. If the
+# handler logs (the edge's Ctrl+C handler logs before it lands the drone) it
+# would wait for a lock its own thread holds, forever. Every telemetry entry
+# point that can take such a lock marks the thread as busy; a call made while
+# the thread is already busy is skipped and counted instead of waiting.
+
+_tls = threading.local()
+_reentrant_skipped = 0
+
+
+def obs_enter() -> bool:
+    """Mark this thread as inside telemetry code; False if it already was (a nested call)."""
+    global _reentrant_skipped
+    if getattr(_tls, "busy", False):
+        _reentrant_skipped += 1
+        return False
+    _tls.busy = True
+    return True
+
+
+def obs_exit() -> None:
+    _tls.busy = False
+
+
+def reentrant_skipped() -> int:
+    """How many telemetry calls were skipped because they arrived while the thread was already inside telemetry."""
+    return _reentrant_skipped
+
+
+def reentrant_safe(fn):
+    """Decorator: skip (return None) a call that arrives while this thread is already inside telemetry."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not obs_enter():
+            return None
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            obs_exit()
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +222,8 @@ class Throttle:
         self.interval_s = interval_s
         self._clock = clock
         self._max_keys = max_keys
-        self._lock = threading.Lock()
+        # Re-entrant: a signal handler may log while this thread is inside allow().
+        self._lock = threading.RLock()
         self._last: dict[Any, float] = {}
         self._suppressed: dict[Any, int] = {}
 
@@ -227,12 +283,25 @@ class ContextFilter(logging.Filter):
                     _error_hook(_component_of(record), etype, fp, record.levelname.lower())
                 except Exception:  # noqa: BLE001, S110 -- metrics must never break logging
                     pass
-            allowed, suppressed = _error_throttle.allow(fp)
+            allowed, suppressed = _error_throttle.allow((fp, _discriminators(record, fields)))
             keep = allowed
             if suppressed:
                 record.fr_suppressed = suppressed
         record.fr_keep = keep
         return keep
+
+
+#: Event fields that tell two failures of the same event apart. Without them,
+#: a land failure on drone B right after one on drone A would be folded into A's.
+_DISCRIMINATOR_FIELDS = ("drone_id", "kind", "command", "action", "type", "reason", "peer", "model", "queue")
+
+
+def _discriminators(record: logging.LogRecord, fields: Mapping[str, Any]) -> tuple:
+    values = [getattr(record, "fr_drone_id", None)]
+    for name in _DISCRIMINATOR_FIELDS:
+        value = fields.get(name)
+        values.append(value if isinstance(value, (str, int, bool)) else None)
+    return tuple(values)
 
 
 def _component_of(record: logging.LogRecord) -> str:
@@ -366,12 +435,19 @@ class _NotFlightRisk(logging.Filter):
 
 
 class DropQueueHandler(logging.handlers.QueueHandler):
-    """A QueueHandler that never blocks: a full queue drops the record and counts it."""
+    """A QueueHandler that never blocks: a full queue drops the record and counts it.
 
-    def __init__(self, q: queue.Queue):
+    With a ``queue.SimpleQueue`` (what :func:`setup_logging` uses) the limit
+    is ``max_depth``; ``SimpleQueue.put`` takes no lock a signal handler
+    could be holding, so logging from a signal handler cannot deadlock on it.
+    A bounded ``queue.Queue`` is also accepted.
+    """
+
+    def __init__(self, q: queue.Queue | queue.SimpleQueue, max_depth: int = QUEUE_SIZE):
         super().__init__(q)
         self.dropped = 0
         self.listener = None
+        self.max_depth = max_depth
 
     def close(self) -> None:
         # logging.shutdown() (registered by the logging module at exit)
@@ -379,15 +455,18 @@ class DropQueueHandler(logging.handlers.QueueHandler):
         # is still queued, so no exit hook of our own is needed.
         listener, self.listener = self.listener, None
         if listener is not None:
-            try:
-                listener.stop()
-            except Exception:  # noqa: BLE001, S110 -- never raise from logging shutdown
-                pass
+            _stop_listener(listener)
         super().close()
 
     def enqueue(self, record: logging.LogRecord) -> None:
         try:
-            self.queue.put_nowait(record)
+            if isinstance(self.queue, queue.SimpleQueue):
+                if self.queue.qsize() >= self.max_depth:
+                    self.dropped += 1
+                    return
+                self.queue.put(record)
+            else:
+                self.queue.put_nowait(record)
         except queue.Full:
             self.dropped += 1
 
@@ -411,6 +490,29 @@ class DropQueueHandler(logging.handlers.QueueHandler):
         return clone
 
 
+def _stop_listener(listener: logging.handlers.QueueListener) -> None:
+    """Drain and stop a QueueListener, waiting at most ``LISTENER_STOP_TIMEOUT_S``.
+
+    ``QueueListener.stop`` joins its thread without a limit: a console that
+    stopped reading (a full pipe, a paused terminal) would keep the process
+    from exiting. The thread is a daemon, so giving up costs only the
+    records still queued.
+    """
+    try:
+        thread = getattr(listener, "_thread", None)
+        if thread is None:
+            return
+        try:
+            listener.enqueue_sentinel()
+        except Exception:  # noqa: BLE001, S110 -- a full bounded queue: the daemon thread dies with the process
+            pass
+        thread.join(LISTENER_STOP_TIMEOUT_S)
+        if not thread.is_alive():
+            listener._thread = None
+    except Exception:  # noqa: BLE001, S110 -- never raise from logging shutdown
+        pass
+
+
 def _level_from_env() -> int:
     raw = os.environ.get(LOG_LEVEL_ENV, "INFO").strip().upper()
     level = logging.getLevelName(raw)
@@ -432,8 +534,8 @@ def setup_logging(level: int | str | None = None, *, console: bool = True) -> lo
         if _configured:
             return root
         if console:
-            q: queue.Queue = queue.Queue(QUEUE_SIZE)
-            handler = DropQueueHandler(q)
+            q: queue.SimpleQueue = queue.SimpleQueue()
+            handler = DropQueueHandler(q, QUEUE_SIZE)
             handler.addFilter(ContextFilter())
             handler.addFilter(_NotEchoed())
             stderr = _StderrHandler()
@@ -447,7 +549,7 @@ def setup_logging(level: int | str | None = None, *, console: bool = True) -> lo
             # same JSON format through the same queue. A handler on the Python
             # root logger also turns a library's implicit logging.basicConfig()
             # into a no-op, so FlightRisk records are never printed twice.
-            others = DropQueueHandler(q)
+            others = DropQueueHandler(q, QUEUE_SIZE)
             others.addFilter(_NotFlightRisk())
             others.addFilter(ContextFilter())
             logging.getLogger().addHandler(others)
@@ -477,8 +579,31 @@ def install_otel_handler(handler: logging.Handler) -> None:
         handler.addFilter(ContextFilter())
         if handler.formatter is None:
             handler.setFormatter(JsonFormatter())
+        _guard_handler(handler)
         root.addHandler(handler)
         _otel_handler = handler
+
+
+def _guard_handler(handler: logging.Handler) -> None:
+    """Make ``handler.emit`` skip a call made while this thread is already inside telemetry.
+
+    The OTel handler formats and queues the record on the calling thread,
+    under locks of the SDK's batch processor.
+    """
+    if getattr(handler, "_fr_guarded", False):
+        return
+    original = handler.emit
+
+    def emit(record: logging.LogRecord) -> None:
+        if not obs_enter():
+            return
+        try:
+            original(record)
+        finally:
+            obs_exit()
+
+    handler.emit = emit  # type: ignore[method-assign]
+    handler._fr_guarded = True  # type: ignore[attr-defined]
 
 
 def otel_handler() -> logging.Handler | None:
@@ -570,7 +695,11 @@ __all__ = [
     "log_event",
     "node_id",
     "notice",
+    "obs_enter",
+    "obs_exit",
     "otel_handler",
+    "reentrant_safe",
+    "reentrant_skipped",
     "set_error_hook",
     "set_session_id",
     "setup_logging",
