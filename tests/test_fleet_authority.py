@@ -516,6 +516,7 @@ class Model:
         c = self.conns[key]
         t = msg["type"]
         if t in fp.FAILSAFE_TYPES:
+            self.plan = None  # a landing ends the plan
             return LAND
         if t == fp.HELLO:
             if c["v1"] or (c["node"] not in (None, msg["node_id"])):

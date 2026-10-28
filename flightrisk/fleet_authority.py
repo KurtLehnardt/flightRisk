@@ -26,21 +26,53 @@ are refused with ``invalid``), ``snapshot()`` (``is_flying``,
 (optional ``plan_id``, ``state``, ``plan_valid`` for v2 telemetry) and
 ``invalidate_plan(reason)`` (called after a new epoch is adopted).
 
-Thread safety: every public method may be called from any thread. Hooks are
-never called while the authority's lock is held, so the executor may call
-``outbound`` while holding its own lock. Privacy: log events carry ids,
-epochs, types, reasons and sizes only, never message bodies, embeddings,
-frames or the token.
+PR-5's lane executor takes an ``authority=`` object with ``check(msg)`` and
+``epoch_seen()``; ``EdgeAuthority`` provides both (``epoch_seen`` is an
+``int`` that can also be called), so it can be passed there directly.
+
+Thread safety: every public method may be called from any thread. Hooks
+(``supports`` included) are never called while the authority's lock is
+held, so the executor may call ``outbound`` while holding its own lock, and
+a hook may take the executor's lock. Privacy: log events carry ids, epochs,
+types, reasons and sizes only, never message bodies, embeddings, frames or
+the token.
 """
 from __future__ import annotations
 
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from dataclasses import replace
+from typing import Any
 
 from flightrisk import fleet_protocol as fp
+from flightrisk.fleet_authority_types import (
+    _FLEET_TYPES,
+    _MAX_UNANNOUNCED_EPOCH,
+    _MOTION_TYPES,
+    _PLAN_BOUND_TYPES,
+    _REFUSAL_EVENTS,
+    _UNFENCED_AUTHORITY_TYPES,
+    ACCEPT,
+    CLOSE,
+    CLOSE_LOG_EVERY,
+    EPOCH_ADOPT_HEADROOM,
+    HANDLED,
+    IGNORE,
+    LAND,
+    LANDING_LOG_INTERVAL_S,
+    REFUSE,
+    Decision,
+    EpochSeen,
+    ExecutorHooks,
+    _clean_battery,
+    _clean_lane_index,
+    _CmdEntry,
+    _Conn,
+    _GroundedHooks,
+    _Handover,
+)
 from flightrisk.observability import StructuredLogger
 
 __all__ = [
@@ -53,116 +85,9 @@ __all__ = [
     "REFUSE",
     "Decision",
     "EdgeAuthority",
+    "EpochSeen",
     "ExecutorHooks",
 ]
-
-# Decision actions.
-LAND = "land"        # execute a landing (always)
-ACCEPT = "accept"    # deliver to the executor (or answer the ping)
-HANDLED = "handled"  # handled here (a hello or a handover); only the replies go out
-REFUSE = "refuse"    # a command was refused; the nack (when one can be sent) is in replies
-IGNORE = "ignore"    # dropped without a reply
-CLOSE = "close"      # close this connection (protocol error)
-
-# An epoch this close to MAX_EPOCH is adopted only when a handover from the
-# current authority announced it: no leader could take over after it.
-EPOCH_ADOPT_HEADROOM = 1024
-_MAX_UNANNOUNCED_EPOCH = fp.MAX_EPOCH - EPOCH_ADOPT_HEADROOM
-
-_MOTION_TYPES = fp.FENCED_COMMAND_TYPES - {fp.HANDOVER}
-_PLAN_BOUND_TYPES = frozenset({fp.START_AT, fp.RESUME})
-_UNFENCED_AUTHORITY_TYPES = frozenset({fp.PING}) | fp.LEGACY_GROUND_TO_EDGE_TYPES
-_FLEET_TYPES = fp.FENCED_COMMAND_TYPES | fp.FENCED_CONTROL_TYPES
-_REFUSAL_EVENTS = {"epoch_conflict_in_flight": "epoch_conflict_in_flight", "stale_epoch": "fleet_stale_epoch_rejected"}
-
-
-@dataclass(frozen=True)
-class Decision:
-    """What to do with one received message.
-
-    ``replies`` go back on the same connection, in order, already complete
-    for the connection's agreed protocol version. ``admitted`` is the
-    authority (epoch, leader) under which an accepted message was taken; the
-    uplink stores it with the message and passes it to ``begin_dispatch``.
-    """
-
-    action: str
-    feed_watchdog: bool = False
-    replies: tuple[dict[str, Any], ...] = ()
-    reason: str = ""
-    admitted: tuple[int, str | None] | None = None
-
-
-class ExecutorHooks(Protocol):
-    """The minimal executor interface the authority needs (see the module docstring)."""
-
-    def is_active(self) -> bool: ...
-
-    def supports(self, mtype: str) -> bool: ...
-
-    def snapshot(self) -> Mapping[str, Any]: ...
-
-    def fleet_status(self) -> Mapping[str, Any] | None: ...
-
-    def invalidate_plan(self, reason: str) -> None: ...
-
-
-class _GroundedHooks:
-    """Hooks for an edge without a drone: never active, executes nothing."""
-
-    def is_active(self) -> bool:
-        return False
-
-    def supports(self, mtype: str) -> bool:
-        return False
-
-    def snapshot(self) -> Mapping[str, Any]:
-        return {}
-
-    def fleet_status(self) -> Mapping[str, Any] | None:
-        return None
-
-    def invalidate_plan(self, reason: str) -> None:
-        return None
-
-
-@dataclass
-class _Conn:
-    label: str
-    node_id: str | None = None
-    role: str | None = None
-    epoch: int | None = None
-    proto: int | None = None  # agreed by the first hello
-    v1: bool = False          # first fleet message was not a hello
-
-
-@dataclass
-class _CmdEntry:
-    mtype: str
-    node_id: str | None
-    epoch: int | None
-    plan_id: str | None
-    reply: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class _Handover:
-    to_node: str
-    epoch_next: int
-    from_epoch: int
-
-
-def _clean_battery(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return value if 0 <= value <= 100 else None
-
-
-def _clean_lane_index(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return None
-    return value
-
 
 class EdgeAuthority:
     """Decides which ground station this edge obeys; see the module docstring."""
@@ -177,6 +102,7 @@ class EdgeAuthority:
         inflight_handover: bool = False,
         logger: StructuredLogger | None = None,
         cmd_cache_size: int = fp.CMD_ID_CACHE_SIZE,
+        clock: Callable[[], float] = time.monotonic,
     ):
         if not fp.is_identifier(drone_id):
             raise ValueError(f"drone_id must be a protocol identifier, got {drone_id!r}")
@@ -189,6 +115,7 @@ class EdgeAuthority:
         self._hooks: ExecutorHooks = hooks if hooks is not None else _GroundedHooks()
         self._log = logger if logger is not None else StructuredLogger(component="edge-authority")
         self._cache_size = max(int(cmd_cache_size), fp.CMD_ID_CACHE_SIZE)
+        self._clock = clock
 
         self._lock = threading.RLock()
         self._tls = threading.local()
@@ -206,14 +133,25 @@ class EdgeAuthority:
         # True while a motion command from the authority is being dispatched
         # to the executor (between recv() handing it out and the next recv()).
         self._dispatching = False
+        # Bumped whenever a motion dispatch ends (_dispatching goes back to
+        # False). on_message reads it before sampling the hooks; a change by
+        # the time it holds the lock means a motion command finished being
+        # dispatched in between (it may have launched a takeoff after the
+        # sample), so the drone counts as active. A dispatch that started in
+        # between and is still running is caught by _dispatching itself.
+        self._dispatch_gen = 0
         self._refusal_counts: dict[tuple[str, str], int] = {}
+        self._close_counts: dict[tuple[str, str], int] = {}
+        # (label, type) -> (last logged at, landings not logged since).
+        self._landing_log: dict[tuple[str, str], tuple[float, int]] = {}
 
     # -- Introspection -----------------------------------------------------
 
     @property
-    def epoch_seen(self) -> int:
+    def epoch_seen(self) -> EpochSeen:
+        """The leader epoch this edge obeys (0 before any); also callable, see ``EpochSeen``."""
         with self._lock:
-            return self._epoch_seen
+            return EpochSeen(self._epoch_seen)
 
     @property
     def authority_leader(self) -> str | None:
@@ -283,22 +221,37 @@ class EdgeAuthority:
     def on_message(self, key: Hashable, msg: Mapping[str, Any]) -> Decision:
         """Decide what to do with one decoded ground-to-edge message from *key*."""
         mtype = msg.get("type")
-        # Sampled before taking the lock (hooks never run under it), and only
-        # when the message could adopt an epoch; unsampled counts as active.
-        # The dispatch flag, checked under the lock, covers a motion command
-        # handed to the executor after this sample.
+        # Hooks are sampled before taking the lock (they never run under it):
+        # is_active only when the message could adopt an epoch (unsampled
+        # counts as active), the snapshot for a hello, supports for a
+        # command. The dispatch generation is read first; if it changed by
+        # the time the lock is held, a motion command was dispatched in
+        # between and the is_active sample may predate its takeoff.
+        with self._lock:
+            generation = self._dispatch_gen
         active = True
         snapshot: Mapping[str, Any] = {}
+        supported = False
         if mtype == fp.HELLO or (mtype == fp.HEARTBEAT and self._may_adopt(msg)):
             active = self._hooks_active()
         if mtype == fp.HELLO:
             snapshot = self._hooks_snapshot()
+        if mtype in _MOTION_TYPES:
+            supported = self._supports(mtype)
         post: list[Callable[[], None]] = []
         with self._lock:
+            if self._dispatch_gen != generation:
+                active = True
             conn = self._conns.get(key)
             if conn is None:
-                conn = self._conns[key] = _Conn(label="")
-            if mtype in fp.FAILSAFE_TYPES:
+                # Never opened, or already closed: a landing still lands
+                # (without a reply, the connection is gone); nothing else
+                # counts, and no state is kept for the dead connection.
+                if mtype in fp.FAILSAFE_TYPES:
+                    decision = self._landing(key, _Conn(label=""), msg, mtype)
+                else:
+                    decision = Decision(IGNORE, reason="connection_closed")
+            elif mtype in fp.FAILSAFE_TYPES:
                 decision = self._landing(key, conn, msg, mtype)
             elif mtype == fp.HELLO:
                 decision = self._hello(key, conn, msg, active, snapshot, post)
@@ -313,7 +266,7 @@ class EdgeAuthority:
             elif mtype in fp.FENCED_CONTROL_TYPES:
                 decision = self._control(key, conn, msg, mtype, active, post)
             elif mtype in fp.FENCED_COMMAND_TYPES:
-                decision = self._command(key, conn, msg, mtype)
+                decision = self._command(key, conn, msg, mtype, supported)
             else:
                 decision = Decision(IGNORE, reason="unexpected_type")
             if decision.action in (ACCEPT, LAND):
@@ -340,16 +293,31 @@ class EdgeAuthority:
             return {}
 
     def _landing(self, key: Hashable, conn: _Conn, msg: Mapping[str, Any], mtype: str) -> Decision:
-        fence = fp.fence_of(msg)
-        self._log.warning(
-            "edge_landing_command", drone_id=self.drone_id, type=mtype, from_node=conn.node_id,
-            from_authority=key == self._authority_key, epoch=fence.epoch if fence else None,
-            epoch_seen=self._epoch_seen,
-        )
+        self._log_landing(key, conn, msg, mtype)
+        # The drone is landing: the plan it was flying is over, so a start_at
+        # or resume naming it is refused (no_valid_plan) until a new plan is
+        # acked.
+        self._plan = None
         replies: tuple[dict[str, Any], ...] = ()
         if conn.proto is not None and conn.proto >= 2:
             replies = (fp.make_ack(mtype, self.drone_id, fp.cmd_id_of(msg), epoch_seen=self._epoch_seen),)
         return Decision(LAND, feed_watchdog=key == self._authority_key, replies=replies, reason=mtype)
+
+    def _log_landing(self, key: Hashable, conn: _Conn, msg: Mapping[str, Any], mtype: str) -> None:
+        """Log a landing, at most once per LANDING_LOG_INTERVAL_S per connection and type."""
+        slot = (conn.label, mtype)
+        now = self._clock()
+        last, skipped = self._landing_log.get(slot, (None, 0))
+        if last is not None and now - last < LANDING_LOG_INTERVAL_S:
+            self._landing_log[slot] = (last, skipped + 1)
+            return
+        self._landing_log[slot] = (now, 0)
+        fence = fp.fence_of(msg)
+        self._log.warning(
+            "edge_landing_command", drone_id=self.drone_id, type=mtype, from_node=conn.node_id,
+            from_authority=key == self._authority_key, epoch=fence.epoch if fence else None,
+            epoch_seen=self._epoch_seen, not_logged_since=skipped,
+        )
 
     def _hello(
         self,
@@ -410,7 +378,12 @@ class EdgeAuthority:
         return Decision(IGNORE if mtype not in fp.FENCED_COMMAND_TYPES else REFUSE, reason="no_hello")
 
     def _close(self, conn: _Conn, reason: str, **fields: Any) -> Decision:
-        self._log.warning("edge_connection_refused", drone_id=self.drone_id, url=conn.label, reason=reason, **fields)
+        slot = (conn.label, reason)
+        count = self._close_counts.get(slot, 0) + 1
+        self._close_counts[slot] = count
+        if count == 1 or count % CLOSE_LOG_EVERY == 0:
+            self._log.warning("edge_connection_refused", drone_id=self.drone_id, url=conn.label, reason=reason,
+                              count=count, **fields)
         return Decision(CLOSE, reason=reason)
 
     def _control(
@@ -507,7 +480,7 @@ class EdgeAuthority:
         except Exception as exc:  # noqa: BLE001 - logged, adoption stands
             self._log.error("edge_plan_invalidate_error", drone_id=self.drone_id, error=repr(exc))
 
-    def _command(self, key: Hashable, conn: _Conn, msg: Mapping[str, Any], mtype: str) -> Decision:
+    def _command(self, key: Hashable, conn: _Conn, msg: Mapping[str, Any], mtype: str, supported: bool) -> Decision:
         cmd_id = fp.cmd_id_of(msg)
         fence = fp.fence_of(msg)
         current = self._current(key, fence) and fence is not None and fence.leader_id == conn.node_id
@@ -515,28 +488,29 @@ class EdgeAuthority:
             entry = self._cache.get(cmd_id)
             if entry is not None:
                 if entry.mtype != mtype:
-                    nack = self._nack(conn, msg, mtype, cmd_id, "invalid", detail="cmd_id was used for another command")
+                    nack = self._nack(conn, msg, mtype, cmd_id, "invalid",
+                                      detail="cmd_id was used for another command")
                     return Decision(REFUSE, feed_watchdog=current, replies=nack, reason="cmd_id_reused")
                 if entry.reply is not None and conn.proto is not None and conn.proto >= 2:
                     return Decision(REFUSE, feed_watchdog=current, replies=(dict(entry.reply),), reason="duplicate")
                 return Decision(IGNORE, feed_watchdog=current, reason="duplicate")
         if fence is None or fence.leader_id != conn.node_id:
-            return self._refuse(conn, msg, mtype, cmd_id, "not_authority", feed=False)
+            return self._refuse(key, conn, msg, mtype, cmd_id, "not_authority", feed=False)
         if fence.epoch < self._epoch_seen:
-            return self._refuse(conn, msg, mtype, cmd_id, "stale_epoch", feed=False)
+            return self._refuse(key, conn, msg, mtype, cmd_id, "stale_epoch", feed=False)
         if not current:
-            return self._refuse(conn, msg, mtype, cmd_id, "not_authority", feed=False)
+            return self._refuse(key, conn, msg, mtype, cmd_id, "not_authority", feed=False)
         if mtype == fp.HANDOVER:
             return self._handover_command(conn, msg, cmd_id, fence)
         if mtype in _PLAN_BOUND_TYPES:
             plan_id = msg.get("plan_id")
             if self._plan is None or self._plan[0] != self._epoch_seen:
-                return self._refuse(conn, msg, mtype, cmd_id, "no_valid_plan", feed=True)
+                return self._refuse(key, conn, msg, mtype, cmd_id, "no_valid_plan", feed=True)
             if plan_id != self._plan[1]:
-                return self._refuse(conn, msg, mtype, cmd_id, "plan_mismatch", feed=True)
-        if not self._supports(mtype):
+                return self._refuse(key, conn, msg, mtype, cmd_id, "plan_mismatch", feed=True)
+        if not supported:
             return self._refuse(
-                conn, msg, mtype, cmd_id, "invalid", feed=True, detail=f"this edge does not implement {mtype}"
+                key, conn, msg, mtype, cmd_id, "invalid", feed=True, detail=f"this edge does not implement {mtype}"
             )
         if cmd_id is not None:
             plan_id = msg.get("plan_id") if isinstance(msg.get("plan_id"), str) else None
@@ -582,6 +556,7 @@ class EdgeAuthority:
 
     def _refuse(
         self,
+        key: Hashable,
         conn: _Conn,
         msg: Mapping[str, Any],
         mtype: str,
@@ -594,7 +569,12 @@ class EdgeAuthority:
         replies = self._nack(conn, msg, mtype, cmd_id, reason, detail)
         fence = fp.fence_of(msg)
         self._note_refusal(conn, mtype, reason, epoch=fence.epoch if fence else None)
-        if cmd_id is not None:
+        # Only the authority's refusals are final for their cmd_id. Caching a
+        # refusal from any other connection would let a ground that is not
+        # obeyed fill the cache and evict the authority's entries, which
+        # guard its commands against running twice; such a refusal is simply
+        # decided again (with the same answer) if the command is resent.
+        if cmd_id is not None and key == self._authority_key:
             self._remember(cmd_id, _CmdEntry(mtype, conn.node_id, fence.epoch if fence else None, None,
                                              reply=replies[0] if replies else None))
         return Decision(REFUSE, feed_watchdog=feed, replies=replies, reason=reason)
@@ -633,7 +613,9 @@ class EdgeAuthority:
         """
         self._tls.current = None
         with self._lock:
-            self._dispatching = False
+            if self._dispatching:
+                self._dispatching = False
+                self._dispatch_gen += 1
             self._tls.stale_reply = None
             if msg is None:
                 return None
@@ -679,6 +661,30 @@ class EdgeAuthority:
     def stale_reply(self) -> dict[str, Any] | None:
         """The nack produced by the last ``begin_dispatch`` on this thread, if it dropped a command."""
         return getattr(self._tls, "stale_reply", None)
+
+    def check(self, msg: Mapping[str, Any]) -> str | None:
+        """PR-5's ``CommandAuthority.check``: None to execute *msg*, else ``stale_epoch`` or ``not_authority``.
+
+        The uplink already fenced every command before the executor sees it
+        (``on_message``) and re-checked it when it was handed out
+        (``begin_dispatch``), so this returns None for those messages. It
+        repeats the same test without side effects: a landing is always
+        accepted; any other message must carry the fence of the current
+        authority at ``epoch_seen``, and a motion command other than
+        ``hold`` also needs the authority's connection to be up.
+        """
+        mtype = msg.get("type")
+        if mtype in fp.FAILSAFE_TYPES:
+            return None
+        fence = fp.fence_of(msg)
+        with self._lock:
+            if fence is not None and fence.epoch < self._epoch_seen:
+                return "stale_epoch"
+            if fence is None or fence.epoch != self._epoch_seen or fence.leader_id != self._authority_leader:
+                return "not_authority"
+            if mtype in _MOTION_TYPES and mtype != fp.HOLD and self._authority_key is None:
+                return "not_authority"
+            return None
 
     # -- Outbound (executor -> grounds) ------------------------------------
 
