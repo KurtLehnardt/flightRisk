@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from flightrisk import fleet_protocol as fp
+from flightrisk.drone.controller import DroneLinkStatus
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from tests.conftest import TELLO_FLIGHT_WORDS
@@ -47,6 +48,12 @@ def wired(tello_on_wire):
         ctrl, wire = tello_on_wire(hold=set(hold_commands or ()))
         ctrl.read_battery = lambda: 90
         ctrl.read_height_cm = lambda: 100 if ctrl.state.is_flying else 0
+        # Never connected and no state stream (see the module docstring), so
+        # the real link_status() would refuse every takeoff as unreachable;
+        # these tests are about hold, resume and nudge, so report it healthy.
+        # The drone-link preflight has its own wire tests in
+        # tests/test_edge_takeoff_preflight.py.
+        ctrl.link_status = lambda: DroneLinkStatus(ok=True, age_s=0.1)
         clock = FakeClock()
         sent: list[dict] = []
         executor = LaneExecutor(
