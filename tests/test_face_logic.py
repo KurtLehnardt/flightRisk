@@ -5,6 +5,8 @@ without any model download.
 """
 
 import threading
+import time
+import types
 
 import numpy as np
 import pytest
@@ -18,7 +20,10 @@ from flightrisk.vision.face import (
     yaw_ratio,
 )
 
-pytestmark = pytest.mark.skipif(not face_mod.HAS_INSIGHTFACE, reason="insightface not installed")
+
+# Tolerant lookup so these tests fail by behaviour (not AttributeError) on code
+# without the expiry window.
+_OBS_AGE = getattr(face_mod, "TRACK_OBS_MAX_AGE", 60)
 
 
 def _unit(seed, d=512):
@@ -226,29 +231,111 @@ class TestRobustness:
         assert r.set_target(np.zeros((100, 100, 3), np.uint8)) is False
         assert not r.has_target and r.target_report.reason == "error"
 
-    def test_concurrent_clear_and_match_do_not_crash(self):
+    def test_clear_target_waits_for_an_in_flight_match(self):
+        """clear_target() racing a match in progress must block on the lock.
+
+        The stubbed _observe parks inside find_match while another thread calls
+        clear_target(). Without the lock the target vanishes mid-call and the
+        similarity step raises; with it clear_target() only runs afterwards.
+        """
         t = _unit(1)
         r = _make(t)
-        r._observe = lambda c: _obs(t)
+        inside, proceed = threading.Event(), threading.Event()
+        errs, results = [], []
+
+        def observe(c):
+            inside.set()
+            proceed.wait(2.0)
+            return _obs(t)
+
+        r._observe = observe
         crop = np.zeros((80, 40, 3), np.uint8)
-        errs = []
 
         def match():
             try:
-                for i in range(300):
-                    r.find_match([{"crop": crop, "track_id": i % 3}])
-                    r.compare(crop)
-            except Exception as e:  # pragma: no cover
+                results.append(r.find_match([{"crop": crop, "track_id": 1}]))
+            except Exception as e:
                 errs.append(e)
 
-        def churn():
-            for _ in range(300):
-                r.clear_target()
-                with r._lock:
-                    r._target_embedding = t
-                    r._target_templates = t[None, :]
+        def clear():
+            inside.wait(2.0)
+            r.clear_target()
 
-        th = [threading.Thread(target=match), threading.Thread(target=churn)]
+        th = [threading.Thread(target=match), threading.Thread(target=clear)]
         [x.start() for x in th]
+        inside.wait(2.0)
+        time.sleep(0.2)          # give clear() time to run if nothing stops it
+        proceed.set()
         [x.join() for x in th]
         assert not errs
+        assert results and results[0][0] == 0  # the in-flight match completed
+        assert not r.has_target                # and the clear applied after it
+
+
+class TestStaleTrackObservations:
+    """Item: a track must not keep (or hand on) a face score after the face is gone."""
+
+    def _settle(self, r, t, tid=1, n=4):
+        r._observe = lambda c: _obs(t)
+        crop = np.zeros((80, 40, 3), np.uint8)
+        for _ in range(n):
+            r.find_match([{"crop": crop, "track_id": tid}])
+        return crop
+
+    def test_score_expires_after_face_is_no_longer_seen(self):
+        t = _unit(1)
+        r = _make(t)
+        crop = self._settle(r, t)
+        assert r.find_match([{"crop": crop, "track_id": 1}])[1] > 0.9
+        r._observe = lambda c: None            # face no longer visible
+        score = 1.0
+        for _ in range(_OBS_AGE + 5):
+            _, score = r.find_match([{"crop": crop, "track_id": 1}])
+        assert score == 0.0
+
+    def test_expired_track_does_not_lend_its_score_to_another_person(self):
+        t = _unit(1)
+        r = _make(t)
+        crop = self._settle(r, t)
+        r._observe = lambda c: None
+        for _ in range(_OBS_AGE + 5):
+            r.find_match([{"crop": crop, "track_id": 1}])
+        sib = 0.3 * t + np.sqrt(1 - 0.09) * _unit(2)
+        sib = (sib / np.linalg.norm(sib)).astype(np.float32)
+        r._observe = lambda c: _obs(sib, q=0.5)
+        _, score = r.find_match([{"crop": crop, "track_id": 1}])
+        assert score < 0.5     # their own similarity, not the old person's 0.95
+
+    def test_fresh_observations_are_kept(self):
+        t = _unit(1)
+        r = _make(t)
+        crop = self._settle(r, t, n=3)
+        r._observe = lambda c: _obs(t)
+        for _ in range(_OBS_AGE + 20):   # continuously visible
+            _, score = r.find_match([{"crop": crop, "track_id": 1}])
+        assert score > 0.9
+
+
+class TestMultiFaceWarning:
+    def _enrol_two_faces(self, monkeypatch, w_second):
+        t = _unit(1)
+        r = _make(None)
+        det = np.array([[0, 0, 200, 200, 0.99], [300, 0, 300 + w_second, w_second, 0.9]], np.float32)
+        kps = np.stack([_kps(), _kps()]) * 1.0
+        r._detect_reference = lambda img: (det, kps)
+        r.template_lowres = False
+        r._rec = types.SimpleNamespace(get_feat=lambda views: np.tile(t, (len(views), 1)))
+        monkeypatch.setattr(face_mod, "face_align", types.SimpleNamespace(
+            norm_crop=lambda img, k, s: np.random.default_rng(0).integers(0, 255, (112, 112, 3), dtype=np.uint8)),
+            raising=False)
+        assert r.set_target(np.zeros((300, 600, 3), np.uint8)) is True
+        return r.target_report
+
+    def test_warns_when_second_face_is_much_smaller(self, monkeypatch):
+        rep = self._enrol_two_faces(monkeypatch, w_second=60)   # 0.3x: adult holding the child
+        assert rep.ok and rep.n_faces == 2
+        assert any("2 faces found" in w for w in rep.warnings)
+
+    def test_warns_when_second_face_is_similar_in_size(self, monkeypatch):
+        rep = self._enrol_two_faces(monkeypatch, w_second=180)
+        assert any("2 faces found" in w for w in rep.warnings)

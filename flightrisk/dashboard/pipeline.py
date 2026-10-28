@@ -143,6 +143,33 @@ def _land_for_critical_battery(socketio, drone, snapshot: TelemetrySnapshot, bat
     })
 
 
+_face_error_logged = False
+
+
+def _safe_face_call(fn, default, log=None):
+    """Call a face-recognizer method; a model failure must never kill the frame loop.
+
+    An exception here would otherwise reach the outer ``frame_loop_error``
+    handler, skipping the frame emit and the battery policy (the only caller
+    of the critical-battery auto-land). On failure the safe ``default`` is
+    returned and one ERROR is logged per failure episode (re-armed by the
+    next success), so a persistent fault does not flood the log.
+    """
+    global _face_error_logged
+    try:
+        result = fn()
+    except Exception as e:  # noqa: BLE001 -- isolation boundary, see docstring
+        if not _face_error_logged:
+            _face_error_logged = True
+            if log:
+                log.error("face_match_failed", error=str(e), traceback=traceback.format_exc())
+            else:
+                logging.getLogger(__name__).error("face_match_failed: %s", e, exc_info=True)
+        return default
+    _face_error_logged = False
+    return result
+
+
 def _build_track_id_by_bbox(tracked_detections, detections):
     """Join tracked detections back to this frame's raw detections by bbox.
 
@@ -261,7 +288,8 @@ def _frame_loop(socketio):
             face_match_idx = None
             if app_state.face and app_state.face.has_target and detections and matching_on:
                 with _span("face_match"):
-                    face_match_idx, face_score = app_state.face.find_match(detections)
+                    face_match_idx, face_score = _safe_face_call(
+                        lambda: app_state.face.find_match(detections), (None, 0.0), log)
                 if metrics:
                     metrics.record_face_check(face_match_idx is not None)
                 if log:
@@ -285,7 +313,10 @@ def _frame_loop(socketio):
             current_alert_level = "no_match"
             if match_idx is not None and app_state.scorer:
                 det_reid = app_state.reid.compare(detections[match_idx]["crop"]) if has_target else 0.0
-                det_face = app_state.face.compare(detections[match_idx]["crop"]) if (app_state.face and app_state.face.has_target) else 0.0
+                det_face = (
+                    _safe_face_call(lambda: app_state.face.compare(detections[match_idx]["crop"]), 0.0, log)
+                    if (app_state.face and app_state.face.has_target) else 0.0
+                )
                 # Gather scores from configurable signals (clothing_color, etc.)
                 extra_signals = {}
                 if app_state.signal_registry:
