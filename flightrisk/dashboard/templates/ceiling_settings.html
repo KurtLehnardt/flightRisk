@@ -14,8 +14,11 @@
     .ceiling-edge { grid-column: 1 / -1; font-size: 10px; color: var(--text-muted); margin-top: -3px; }
     .ceiling-edge.warn { color: var(--amber); }
 </style>
-<div class="panel-section" id="ceiling-section">
-    <div class="panel-title">Ceiling and altitude</div>
+<div class="panel-section" data-card="ceiling" id="ceiling-section">
+    <div class="panel-title">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="card-ceiling-body"><span>Ceiling and altitude</span><span class="card-chevron" aria-hidden="true">&#9662;</span></button>
+    </div>
+    <div class="card-body" id="card-ceiling-body">
     <div id="ceiling-unavailable" class="ceiling-msg" style="display:none;">Ceiling settings need the edge source (--source edge).</div>
     <div id="ceiling-body">
         <div class="ceiling-grid">
@@ -31,6 +34,7 @@
             <button id="ceiling-save" class="btn-ghost" onclick="ceilingSave()">Save ceiling settings</button>
         </div>
         <div id="ceiling-msg" class="ceiling-msg"></div>
+    </div>
     </div>
 </div>
 <script>
