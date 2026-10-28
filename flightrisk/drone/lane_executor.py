@@ -236,6 +236,13 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         # and the drone still reports flying, the monitor retries the land
         # and new takeoffs are refused.
         self._land_reason: str | None = None
+        # Landings announced by land_now that have not yet been recorded
+        # under ``_lock``. land_now counts itself here before it waits for
+        # the lock, so no flight sequence can be launched in between (see
+        # ``_landing_wanted_locked``). Guarded by ``_land_gate``, a lock that
+        # is never held while taking another.
+        self._land_gate = threading.Lock()
+        self._land_requests = 0
         self._last_land_attempt_s = 0.0
         # True while some thread is inside drone.land(). A second land
         # request meanwhile (for example emergency_land_all arriving through
@@ -295,6 +302,17 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
         return self._active_thread is not None
+
+    def _landing_wanted_locked(self) -> bool:
+        """True from the moment ``land_now`` is called until that landing is over. Caller holds ``_lock``.
+
+        While it is true no flight sequence is launched (``_launch``) and
+        ``start_at``, ``resume``, ``nudge`` and ``hold`` are refused with
+        ``landing``.
+        """
+        if self._land_requests > 0:
+            return True
+        return self._land_reason is not None and (self._land_inflight or self._is_flying())
 
     def _is_flying(self) -> bool:
         return bool(getattr(self.drone.state, "is_flying", False))
@@ -450,7 +468,7 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
                 refusal = "busy"
             elif self._held:
                 refusal = "holding"
-            elif self._land_reason is not None and self._is_flying():
+            elif self._landing_wanted_locked():
                 refusal = "landing"
             else:
                 t_edge = float(t_ground) + offset
@@ -460,7 +478,7 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
                 elif lead < -self.max_start_late_s:
                     refusal = "too_late"
                 elif not self._launch("start_at", t_edge=t_edge, offset_s=offset, cmd=msg):
-                    refusal = "shut_down"
+                    refusal = "shut_down" if self._closed else "landing"
         if refusal is not None:
             # The nack is sent outside the lock, like every other message.
             fields = {"lead_s": lead} if refusal in ("too_far_ahead", "too_late") else {}
@@ -490,14 +508,17 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
             elif self._worker_alive():
                 refusal = "busy"
             elif not self._launch("takeoff", cmd=msg):
-                refusal = "shut_down"
+                refusal = "shut_down" if self._closed else "landing"
             else:
                 return True
         if refusal == "already_flying":
             self._log.info("edge_takeoff_ignored", drone_id=self.drone_id, reason=refusal)
         else:
             self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason=refusal)
-        self._nack(msg, "busy", **({"detail": refusal} if refusal != "busy" else {}))
+        if refusal == "landing":
+            self._nack(msg, "landing")
+        else:
+            self._nack(msg, "busy", **({"detail": refusal} if refusal != "busy" else {}))
         return False
 
     def fail_safe(self, reason: str) -> None:
@@ -518,20 +539,45 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
             self._abort.set()
             self._log.warning("edge_fail_safe_idle", drone_id=self.drone_id, reason=reason)
 
-    def land_now(self, reason: str) -> None:
-        """Land immediately from the calling thread.
+    def land_now(self, reason: str, *, only_if: Callable[[], bool] | None = None) -> bool:
+        """Land immediately from the calling thread. Returns False if *only_if* stopped it.
 
-        Sets the abort flag first so a running sequence sends nothing more,
-        then calls ``drone.land()`` directly; nothing is queued. If another
-        thread is already inside ``drone.land()``, this call returns without
-        sending a second land. A failed land (one that raised, or returned a
-        result that was not executed) is logged and retried by the monitor
-        while the drone still reports flying. Every landing clears a hold and
-        invalidates the plan.
+        Announces the landing and sets the abort flag before it waits for
+        the executor lock, so a running sequence sends nothing more and no
+        new sequence can be launched from that moment on (see
+        ``_landing_wanted_locked``); under the lock it records the landing
+        and sets the abort flag again. Then it calls ``drone.land()``
+        directly; nothing is queued. If another thread is already inside
+        ``drone.land()``, this call returns without sending a second land. A
+        failed land (one that raised, or returned a result that was not
+        executed) is logged and retried by the monitor while the drone still
+        reports flying. Every landing clears a hold and invalidates the plan.
+
+        *only_if* is for the landings a hold must be able to stop (the
+        end-of-lanes hover timeout and the plan's ``on_complete`` landing).
+        It is called under the executor lock, in the same step that records
+        the landing, and the landing is skipped when it returns False (for
+        example because a hold or a re-task arrived after the landing was
+        decided). Such a landing is not announced early. A landing for
+        battery, link loss, the geofence, an error or a ground or operator
+        command never passes *only_if*: a hold never stops it.
         """
-        self._abort.set()
+        announced = only_if is None
+        if announced:
+            with self._land_gate:
+                self._land_requests += 1
+            self._abort.set()
         with self._lock:
+            if announced:
+                with self._land_gate:
+                    self._land_requests -= 1
+            elif not only_if():
+                self._log.info("edge_land_skipped", drone_id=self.drone_id, reason=reason)
+                return False
             self._land_reason = reason
+            # Set again under the lock, together with _land_reason, so the
+            # abort flag is set from here on whatever ran before.
+            self._abort.set()
             self._last_land_attempt_s = self._clock()
             self._flying_lanes = False
             duplicate = self._land_inflight
@@ -545,7 +591,7 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
             self._log.warning("edge_plan_invalidated", drone_id=self.drone_id, reason=reason, plan_id=self.plan_id)
         if duplicate:
             self._log.info("edge_land_already_in_progress", drone_id=self.drone_id, reason=reason)
-            return
+            return True
         self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
         try:
             result = command_result(self.drone.land(), "land")
@@ -563,6 +609,7 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         finally:
             with self._lock:
                 self._land_inflight = False
+        return True
 
     def _emit(self, msg: dict[str, Any]) -> None:
         """Send a message to the ground. Transport errors are logged, never raised."""

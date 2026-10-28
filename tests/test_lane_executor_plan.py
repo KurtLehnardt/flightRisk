@@ -456,6 +456,42 @@ def test_authority_refusal_is_a_cached_nack_and_landing_bypasses_it(executors):
     assert executor.telemetry()["epoch"] == 7
 
 
+def test_authority_refusal_of_assign_lanes_is_answered_and_cached(executors):
+    # A stale leader must get its stale_epoch nack (with lanes_total, which
+    # every assign_lanes nack carries) so it can step down.
+    authority = FakeAuthority("stale_epoch")
+    executor, drone, sent, _, _ = executors(authority=authority)
+    msg = assign(cmd_id="a1")
+    send(executor, msg)
+    nack = reply_for(sent, "a1")
+    assert nack is not None
+    assert (nack["type"], nack["for"], nack["reason"], nack["epoch_seen"], nack["lanes_total"]) == (
+        "nack", "assign_lanes", "stale_epoch", 7, 3,
+    )
+    assert executor.plan_id is None and not executor.plan_valid
+    # The retry of the same cmd_id gets the same nack, even once accepted.
+    authority.verdict = None
+    send(executor, dict(msg))
+    assert replies_for(sent, "a1") == [nack, nack]
+    assert executor.plan_id is None
+    # A lane list that is not a list still gets a valid nack.
+    authority.verdict = "not_authority"
+    send(executor, dict(assign(cmd_id="a2"), lanes="not lanes"))
+    assert (reply_for(sent, "a2")["reason"], reply_for(sent, "a2")["lanes_total"]) == ("not_authority", 0)
+    assert drone.calls == []
+
+
+def test_cmd_id_reused_for_assign_lanes_is_answered(executors):
+    executor, _, sent, _, _ = executors()
+    send(executor, hold(cmd_id="x1"))  # on the ground: not_flying
+    send(executor, assign(cmd_id="x1"))
+    nack = replies_for(sent, "x1")[-1]
+    assert (nack["for"], nack["reason"], nack["detail"], nack["lanes_total"]) == (
+        "assign_lanes", "invalid", "cmd_id_reused", 3,
+    )
+    assert executor.plan_id is None
+
+
 @pytest.mark.parametrize("verdict", [RuntimeError("boom"), "nope", 3])
 def test_authority_failures_fail_closed(executors, verdict):
     executor, drone, sent, _, _ = executors(authority=FakeAuthority(verdict))

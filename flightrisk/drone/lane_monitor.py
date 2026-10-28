@@ -8,8 +8,10 @@
 * lands the drone when the ground link has been silent past the threshold,
   when the battery is low, or when the plan's end-of-lanes hover
   (``on_complete: hover``) has lasted ``hover_timeout_s`` with the drone
-  idle (a hold suspends that countdown; it starts again once the drone is
-  idle after its lanes);
+  idle (a hold restarts that countdown: it starts again from zero once the
+  drone is idle after its lanes; the hover timeout is checked again under
+  the executor lock as the landing is recorded, so a hold acknowledged
+  first always stops it);
 * notices a landing the executor did not ask for (the Tello's own auto-land
   or a crash), and then invalidates the plan and clears any hold, as for
   every other landing;
@@ -70,7 +72,12 @@ class MonitorMixin:
                     self._log.warning(
                         "edge_hover_timeout", drone_id=self.drone_id, hover_timeout_s=self._hover_timeout_s
                     )
-                    self.land_now("hover_timeout")
+                    # Checked again under the lock as the landing is recorded:
+                    # a hold (or a nudge, a re-task) since the check above
+                    # stops it.
+                    self.land_now(
+                        "hover_timeout", only_if=lambda: self._hover_timeout_due_locked(self._is_flying(), now)
+                    )
         except Exception as exc:
             self._log.error("edge_monitor_error", drone_id=self.drone_id, error=repr(exc))
             try:

@@ -17,7 +17,8 @@ Every move, and a takeoff, is *claimed* under the executor lock immediately
 before it is sent (``_claim_move``). A landing (the abort flag) or a hold
 makes the claim fail, so the sequence stops before its next move and never
 interrupts the move already with the drone; a hold then releases the
-sequence's slot so ``resume`` can start it again from the same step.
+sequence's slot so ``resume`` can start it again from the same step. No
+sequence is launched once a landing has been requested (``_launch``).
 """
 from __future__ import annotations
 
@@ -53,11 +54,22 @@ class FlightSequenceMixin:
     ) -> bool:
         """Start a flight sequence thread. Caller holds ``_lock``.
 
-        Returns False (and starts nothing) once the executor is shut down.
+        Returns False (and starts nothing) once the executor is shut down,
+        and while a landing is wanted (``_landing_wanted_locked``): from the
+        moment ``land_now`` is called until that landing is over. Every
+        caller answers a False with a refusal (``landing``, or ``busy`` once
+        shut down), never with an ack.
         """
         if self._closed:
             return False
+        # Clear the abort flag before looking for a landing. land_now counts
+        # itself in ``_land_requests`` before it sets the flag, so either the
+        # check below sees that landing or the flag is set after this clear.
         self._abort.clear()
+        if self._landing_wanted_locked():
+            self._abort.set()
+            self._log.warning("edge_launch_refused", drone_id=self.drone_id, kind=kind, reason="landing")
+            return False
         self._cancel = None
         self._worker = threading.Thread(
             target=self._run_sequence,
@@ -164,7 +176,24 @@ class FlightSequenceMixin:
         if self._path_outside(self._moves, self._step) is not None:
             self._log.warning("edge_retask_not_flown", drone_id=self.drone_id, reason="geofence")
             return
-        self._launch("lanes")
+        if not self._launch("lanes"):
+            reason = "shut_down" if self._closed else "landing"
+            self._log.warning("edge_retask_not_flown", drone_id=self.drone_id, reason=reason)
+
+    def _on_complete_due_locked(self) -> bool:
+        """True if the ``on_complete`` landing the calling sequence decided on is still due. Caller holds ``_lock``.
+
+        Checked by ``land_now`` under the lock, so a hold, or a re-task with
+        lanes still to fly or another end-of-lanes action, that arrived
+        after the last lane was flown stops the landing.
+        """
+        return (
+            self._is_active()
+            and not self._held
+            and not self._abort.is_set()
+            and self._step >= len(self._moves)
+            and self._on_complete == "land"
+        )
 
     def _run_start(self, t_edge: float, offset_s: float, cmd: dict[str, Any] | None) -> None:
         """The start_at sequence: wait, take off (unless flying), acknowledge, fly the lanes."""
@@ -366,6 +395,11 @@ class FlightSequenceMixin:
         while not self._abort.is_set():
             land_after = False
             with self._lock:
+                if not self._is_active():
+                    # A sequence that no longer holds the slot sends nothing
+                    # more. Checked here so a skipped on_complete landing
+                    # always ends the loop.
+                    return
                 if self._held:
                     # Hold: stop here, after the move just flown.
                     self._log.info("edge_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
@@ -388,8 +422,11 @@ class FlightSequenceMixin:
                 continue
             if step is None:
                 self._log.info("edge_lanes_complete", drone_id=self.drone_id, lanes_total=self.lanes_total)
-                if land_after:
-                    self.land_now("on_complete")
+                if land_after and not self.land_now("on_complete", only_if=self._on_complete_due_locked):
+                    # A hold or a re-task arrived after the landing was
+                    # decided: the top of the loop stops for the hold, or
+                    # flies the new plan.
+                    continue
                 return
             lane_index, _, direction, distance = step
             if not self.envelope.check_move(direction, distance):

@@ -32,9 +32,12 @@ This module is the protocol v2 half of the edge lane executor
   sent; once a hold is recorded no further move is claimed. The ack says
   ``detail: finishing_move`` when a move was already claimed. A hold also
   cancels a scheduled ``start_at`` that has not fired (its ``start_at`` is
-  answered ``nack busy``), suspends the end-of-lanes hover timeout, and is
-  cleared by every landing. A hold on a drone that is on the ground and
-  has no start pending is refused with ``not_flying``.
+  answered ``nack busy``), restarts the end-of-lanes hover timeout (and
+  stops a hover-timeout or ``on_complete`` landing that was decided but not
+  yet recorded), and is cleared by every landing; a battery, link-loss,
+  geofence or operator landing is never stopped by a hold. A hold on a
+  drone that is on the ground and has no start pending is refused with
+  ``not_flying``.
 * **resume.** Restarts only the plan named by ``plan_id``, and only while
   it is valid, from the lane and move where the drone stopped (or from the
   start of a plan accepted while holding). Refused with ``landing``,
@@ -49,9 +52,13 @@ This module is the protocol v2 half of the edge lane executor
   (``geofence``). It is recorded in the dead-reckoned pose like any lane
   move. It is acknowledged once the drone has flown it; a nudge the
   controller did not execute is answered ``nack busy`` and is not recorded,
-  and a controller error lands the drone, as for a lane move. A re-task
-  that arrives while a nudge flies is flown after it, once the rest of the
-  plan has been checked against the geofence from the nudged position.
+  and a controller error lands the drone, as for a lane move. A nudge that
+  a landing cut short is answered ``nack landing`` (and recorded, like an
+  interrupted lane move, because the controller reported it executed).
+  Like ``resume``, ``start_at`` and ``hold``, a nudge is refused with
+  ``landing`` from the moment a landing is requested. A re-task that
+  arrives while a nudge flies is flown after it, once the rest of the plan
+  has been checked against the geofence from the nudged position.
 """
 from __future__ import annotations
 
@@ -157,7 +164,7 @@ class FleetCommandMixin:
 
     def _state_locked(self, flying: bool) -> str:
         """Caller holds ``_lock``."""
-        if self._land_reason is not None and (flying or self._land_inflight):
+        if self._land_requests > 0 or (self._land_reason is not None and (flying or self._land_inflight)):
             return "landing"
         phase = self._phase if self._worker_alive() else None
         if not flying:
@@ -272,6 +279,11 @@ class FleetCommandMixin:
             self._emit(reply)
 
     def _build_nack(self, msg: Mapping[str, Any], reason: str, **fields: Any) -> dict[str, Any] | None:
+        if msg.get("type") == "assign_lanes" and "lanes_total" not in fields:
+            # Every assign_lanes nack carries the number of lanes received
+            # (the authority and cmd_id refusals included).
+            lanes = msg.get("lanes")
+            fields["lanes_total"] = len(lanes) if isinstance(lanes, list) else 0
         try:
             return make_nack(msg["type"], self.drone_id, reason, msg["cmd_id"], **fields)
         except ProtocolError as exc:
@@ -302,7 +314,7 @@ class FleetCommandMixin:
         detail = None
         with self._lock:
             flying = self._is_flying()
-            if self._land_reason is not None and (flying or self._land_inflight):
+            if self._landing_wanted_locked():
                 refusal = "landing"
             else:
                 cancelled = self._worker_alive() and self._phase == "pre_takeoff"
@@ -358,7 +370,7 @@ class FleetCommandMixin:
             current_id = None if self._plan_identity is None else self._plan_identity.plan_id
             if not is_identifier(plan_id):
                 refusal = "invalid"
-            elif self._land_reason is not None and (flying or self._land_inflight):
+            elif self._landing_wanted_locked():
                 refusal = "landing"
             elif not self._plan_valid:
                 refusal = "no_valid_plan"
@@ -383,7 +395,7 @@ class FleetCommandMixin:
                 if outside is not None:
                     refusal = "geofence"
                 elif kind in ("lanes", "climb") and not self._launch(kind):
-                    refusal = "busy"
+                    refusal = "busy" if self._closed else "landing"
                 else:
                     self._held = False
                     self._parked = None
@@ -411,7 +423,7 @@ class FleetCommandMixin:
             flying = self._is_flying()
             if direction not in HORIZONTAL_DIRECTIONS or not _is_nudge_distance(distance):
                 refusal = "invalid"
-            elif self._land_reason is not None and (flying or self._land_inflight):
+            elif self._landing_wanted_locked():
                 refusal = "landing"
             elif not flying:
                 refusal = "not_flying"
@@ -420,7 +432,7 @@ class FleetCommandMixin:
             elif not self.envelope.check_move(direction, distance):
                 refusal = "geofence"
             elif not self._launch("nudge", cmd=msg, nudge=(direction, distance, self._held)):
-                refusal = "busy"
+                refusal = "busy" if self._closed else "landing"
         if refusal is not None:
             self._log.warning("edge_nudge_refused", drone_id=self.drone_id, reason=refusal, cmd_id=msg.get("cmd_id"))
             self._nack(msg, refusal)
@@ -453,7 +465,19 @@ class FleetCommandMixin:
             else:
                 self._nack(cmd, "busy", detail=result.outcome.value)
             return
+        # The controller reported the move executed, so it is recorded in the
+        # dead-reckoned pose like a lane move, even when a landing cut it
+        # short (the distance actually flown is then unknown either way).
         self.envelope.record_move(direction, distance)
+        if self._abort.is_set():
+            # A landing started while the nudge flew: the operator's nudge
+            # was not completed as asked, so it is refused, never acked.
+            reason, detail = self._cancel_reason()
+            self._log.warning(
+                "edge_nudge_interrupted", drone_id=self.drone_id, reason=reason, cmd_id=cmd.get("cmd_id")
+            )
+            self._nack(cmd, reason, **({"detail": detail} if detail else {}))
+            return
         pose = self.envelope.pose_snapshot()
         self._log.info(
             "edge_nudge", drone_id=self.drone_id, direction=direction, distance_cm=distance,

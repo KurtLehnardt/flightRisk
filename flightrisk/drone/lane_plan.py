@@ -265,7 +265,9 @@ class LanePlanMixin:
         continues into the appended lanes instead of starting again from
         lane 0. Any other plan starts from its first lane at the current
         position. A drone that is holding stores the plan and flies it only
-        after ``resume``.
+        after ``resume``. A plan that would re-task the drone after a landing
+        was requested (``land_now`` called, the landing not yet recorded) is
+        refused with ``landing`` and the current plan is kept.
         """
         raw_lanes = msg.get("lanes")
         lanes_received = len(raw_lanes) if isinstance(raw_lanes, list) else 0
@@ -314,8 +316,16 @@ class LanePlanMixin:
                 # accepting anything. A move in progress is not in the pose yet,
                 # and it is still part of moves[start_step:].
                 outside = self._path_outside(moves, start_step)
-                if outside is None:
-                    accepted = self._store_plan(msg, lanes, moves, alt_cm, carried_step, start_step)
+                # A re-task is launched before the plan is stored, so a
+                # landing that refuses the launch leaves the current plan
+                # untouched. The sequence waits for this lock before it
+                # reads the plan, so it flies the plan stored below.
+                wanted = outside is None and self._retask_wanted_locked()
+                retask = wanted and self._launch("lanes")
+                if wanted and not retask and not self._closed:
+                    verdict = "landing"
+                elif outside is None:
+                    accepted = self._store_plan(msg, lanes, moves, alt_cm, carried_step, start_step, retask)
                     self._plan_identity = identity
                     if identity.order is not None:
                         self._plan_newest = max(identity.order, self._plan_newest or identity.order)
@@ -373,11 +383,12 @@ class LanePlanMixin:
         alt_cm: float | None,
         carried_step: int | None,
         start_step: int,
+        retask: bool,
     ) -> tuple[int, bool]:
         """Make an accepted plan current. Caller holds ``_lock``.
 
-        Returns the lane index to report and whether a re-task sequence was
-        launched. A holding drone launches nothing; ``resume`` does.
+        Returns the lane index to report and *retask*, whether the caller
+        launched a re-task sequence for this plan (``_retask_wanted_locked``).
         """
         if alt_cm is not None and alt_cm != self.envelope.alt_slot_cm:
             self._log.warning(
@@ -400,17 +411,21 @@ class LanePlanMixin:
         self._plan_gen += 1
         self._zone = msg.get("zone")
         self._hover_since = None
-        lane_index = self.lane_index
-        retask = (
+        return self.lane_index, retask
+
+    def _retask_wanted_locked(self) -> bool:
+        """True if a new plan must be flown at once (a re-task). Caller holds ``_lock``.
+
+        That is when the drone flies its lanes and nothing else runs. A
+        holding drone launches nothing; ``resume`` does.
+        """
+        return (
             self._flying_lanes
             and self._is_flying()
             and self._land_reason is None
             and not self._held
             and not self._worker_alive()
         )
-        if retask:
-            retask = self._launch("lanes")
-        return lane_index, retask
 
     def _ack_lanes(self, msg: dict[str, Any], battery: Any, lanes_total: int) -> None:
         """Acknowledge an ``assign_lanes``: the v1 form, or the v2 form for a command with a ``cmd_id``."""
