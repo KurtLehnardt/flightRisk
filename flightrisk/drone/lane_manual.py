@@ -21,8 +21,10 @@
   (a square of half-width ``geofence_cm`` around the takeoff point, from the
   dead-reckoned pose), the ceiling limit for climbs (the ceiling minus its
   margin, ``SafetyEnvelope.max_alt_slot_cm``, from the measured height; an
-  unknown height refuses the climb), ``MANUAL_FLOOR_CM`` for descents, and
-  the drone link (a drone the controller cannot reach is not moved). A
+  unknown height refuses the climb), ``MANUAL_FLOOR_CM`` for descents, a
+  band of ``MANUAL_SLOT_BAND_CM`` (30 cm) around the drone's own altitude
+  slot for both (so a drone flown by hand stays in its own altitude band,
+  clear of the other drones' slots), and the drone link (a drone the controller cannot reach is not moved). A
   refused move is answered with a nack naming the limit; a move that is
   flown is recorded in the dead-reckoned pose like a lane move, and is
   acknowledged once the drone has flown it. As for lanes, a controller error
@@ -85,6 +87,7 @@ from flightrisk.fleet_protocol import (
     MANUAL_HOLD,
     MANUAL_MOVE,
     MANUAL_ROTATIONS,
+    MANUAL_SLOT_BAND_CM,
     MANUAL_TAKEOFF,
     MAX_TEXT_LEN,
     RESUME_SEARCH,
@@ -386,12 +389,24 @@ class ManualControlMixin:
                     f"outside the {format_cm(fence)} cm geofence"
                 ),
             }
+        slot = envelope.alt_slot_cm
+        band = {"alt_slot_cm": slot, "band_low_cm": slot - MANUAL_SLOT_BAND_CM, "band_high_cm": slot + MANUAL_SLOT_BAND_CM}
         if direction == "up":
             limit = envelope.max_alt_slot_cm
             if not is_finite_number(height):
                 return "ceiling", {"max_alt_slot_cm": limit, "detail": "height unknown, so climbing is refused"}
             if envelope.climb_allowed(height, amount):
-                return None
+                if height + amount <= band["band_high_cm"]:
+                    return None
+                return "slot_band", {
+                    "height_cm": height,
+                    **band,
+                    "detail": (
+                        f"up {amount} cm from {format_cm(height)} cm would leave this drone's altitude band "
+                        f"({format_cm(band['band_low_cm'])} to {format_cm(band['band_high_cm'])} cm around its "
+                        f"{format_cm(slot)} cm slot)"
+                    ),
+                }
             return "ceiling", {
                 "height_cm": height,
                 "max_alt_slot_cm": limit,
@@ -405,7 +420,17 @@ class ManualControlMixin:
             if not is_finite_number(height):
                 return "floor", {"floor_cm": MANUAL_FLOOR_CM, "detail": "height unknown, so descending is refused"}
             if height - amount >= MANUAL_FLOOR_CM:
-                return None
+                if height - amount >= band["band_low_cm"]:
+                    return None
+                return "slot_band", {
+                    "height_cm": height,
+                    **band,
+                    "detail": (
+                        f"down {amount} cm from {format_cm(height)} cm would leave this drone's altitude band "
+                        f"({format_cm(band['band_low_cm'])} to {format_cm(band['band_high_cm'])} cm around its "
+                        f"{format_cm(slot)} cm slot)"
+                    ),
+                }
             return "floor", {
                 "height_cm": height,
                 "floor_cm": MANUAL_FLOOR_CM,

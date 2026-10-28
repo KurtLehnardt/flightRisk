@@ -91,6 +91,7 @@ from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
     MAX_TEXT_LEN,
+    ORPHAN_LAND_REASON,
     is_identifier,
     is_manual_land,
 )
@@ -524,7 +525,14 @@ class LaneExecutor(
         elif mtype == "land":
             # The manual Land button sends an ordinary land; only the
             # reason in the log differs.
-            self.land_now("manual_land" if is_manual_land(msg) else "ground_land")
+            if is_manual_land(msg):
+                reason = "manual_land"
+            elif msg.get("reason") == ORPHAN_LAND_REASON:
+                # The ground landed a held drone whose controller went away.
+                reason = ORPHAN_LAND_REASON
+            else:
+                reason = "ground_land"
+            self.land_now(reason)
             self._ack_landing(msg)
         elif mtype == "ping":
             self.handle_ping(msg, recv_t=recv_t)

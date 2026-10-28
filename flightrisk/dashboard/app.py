@@ -719,6 +719,9 @@ class FleetSupervisor:
             geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
             retask_wait_s=retask_wait_s,
             alt_slot_of=self._plan_slot if ceiling is not None else None,
+            # A drone held for manual control is never offered a lost
+            # drone's lanes; they would wait for the operator.
+            retask_excluded=self._held_for_manual,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -743,6 +746,9 @@ class FleetSupervisor:
         """The fence a v2 leader ground stamps on manual commands; None for today's v1 dashboard."""
         identity = getattr(self._transport, "identity", None)
         return getattr(identity, "fence", None)
+
+    def _held_for_manual(self, drone_id: str) -> bool:
+        return self.manual is not None and self.manual.paused(drone_id)
 
     def _paused_drones(self) -> list[str]:
         """Drones whose search is paused for manual control."""
@@ -1017,6 +1023,8 @@ class FleetSupervisor:
             log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
             obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
             self.coordinator.on_drone_lost(drone_id)
+            if self.manual is not None:
+                self.manual.cancel_orphan(drone_id, "lost")
             lost.append(drone_id)
         return lost
 
@@ -1059,11 +1067,15 @@ class FleetSupervisor:
                 self.check_losses()
             except Exception:
                 log.error("Fleet loss check failed", exc_info=True)
-            try:
-                if self.manual is not None:
+            if self.manual is not None:
+                try:
+                    self.manual.check_orphans()
+                except Exception:
+                    log.exception("Manual orphan-landing check failed")
+                try:
                     self.manual.check_timeouts()
-            except Exception:
-                log.exception("Manual command timeout check failed")
+                except Exception:
+                    log.exception("Manual command timeout check failed")
             self.emit_status()
 
 

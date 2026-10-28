@@ -440,6 +440,11 @@ class FleetCoordinator:
             the edges still enforce their own and answer with a ``nack``.
         retask_wait_s: How long ``on_drone_lost`` waits for the receiving
             drones to answer before reporting the re-task.
+        retask_excluded: Optional ``drone_id -> bool``; a drone for which it
+            returns True is never offered a lost drone's lanes. The dashboard
+            passes the drones held for manual control
+            (``docs/manual-takeover.md``), whose lanes would otherwise wait
+            for the operator.
     """
 
     def __init__(
@@ -457,6 +462,7 @@ class FleetCoordinator:
         geofence_cm: float | None = None,
         retask_wait_s: float = RETASK_WAIT_S,
         alt_slot_of: Callable[[str, int], int] | None = None,
+        retask_excluded: Callable[[str], bool] | None = None,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -492,6 +498,7 @@ class FleetCoordinator:
         self._on_event = on_event
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
         self._retask_wait_s = float(retask_wait_s)
+        self._retask_excluded = retask_excluded
 
         self._lock = threading.RLock()
         self._drones: dict[str, _DroneState] = {drone_id: _DroneState() for drone_id in self._links}
@@ -1213,8 +1220,22 @@ class FleetCoordinator:
     # ------------------------------------------------------------------
 
     def _receivers(self) -> list[str]:
-        """Drones that can still be given lanes: not lost and part of the plan."""
-        return [rid for rid, other in self._drones.items() if not other.lost and other.zone is not None]
+        """Drones that can still be given lanes: not lost, part of the plan, and not held for manual control."""
+        return [
+            rid for rid, other in self._drones.items()
+            if not other.lost and other.zone is not None and not self._excluded(rid)
+        ]
+
+    def _excluded(self, drone_id: str) -> bool:
+        """True when ``retask_excluded`` keeps *drone_id* from receiving re-tasked lanes. Fails closed."""
+        check = self._retask_excluded
+        if check is None:
+            return False
+        try:
+            return bool(check(drone_id))
+        except Exception:  # an unreadable state never gets lanes
+            logger.warning("retask_excluded check failed for %s", drone_id, exc_info=True)
+            return True
 
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
         if self._geofence_cm is None:
@@ -1354,6 +1375,10 @@ class FleetCoordinator:
     def _failure_reason(self, chunk: _Chunk) -> str:
         receivers = self._receivers()
         if not receivers:
+            held = [rid for rid, other in self._drones.items()
+                    if not other.lost and other.zone is not None and self._excluded(rid)]
+            if held:
+                return f"no drone left to take them ({', '.join(held)} held for manual control)"
             return "no drone left to take them"
         parts = []
         refused = [rid for rid in receivers if rid in chunk.refusals]

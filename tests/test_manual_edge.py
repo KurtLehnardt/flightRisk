@@ -179,17 +179,41 @@ def test_geofence_refuses_a_manual_step(executors):
 
 def test_ceiling_and_floor_refuse_vertical_steps(executors):
     executor, drone, sent, _, _ = held_mid_lane(executors)
-    assert drone.state.height == 100
-    step(executor, sent, move("up", "up", 50))  # 150 > 140 = ceiling 200 - margin 60
-    nack = answered(sent, "up")
+    # A 120 cm slot (set directly for the test): its band (90 to 150 cm) reaches past the 140 cm
+    # ceiling limit, so the ceiling binds.
+    executor.envelope.set_alt_slot(120)
+    step(executor, sent, move("up", "up", 30))  # 100 -> 130, inside both
+    assert answered(sent, "up")["type"] == "ack" and drone.state.height == 130
+    step(executor, sent, move("up2", "up", 20))  # 150 > 140 = ceiling 200 - margin 60
+    nack = answered(sent, "up2")
     assert nack["reason"] == "ceiling" and nack["max_alt_slot_cm"] == 140 and "ceiling limit 140" in nack["detail"]
-    step(executor, sent, move("up2", "up", 40))  # exactly at the limit is allowed
-    assert answered(sent, "up2")["type"] == "ack" and drone.state.height == 140
-    step(executor, sent, move("down", "down", 100))  # 40 is the floor: 140 - 100 = 40 is allowed
-    assert answered(sent, "down")["type"] == "ack"
+    step(executor, sent, move("up3", "up", 10 + 10))  # 150 again: still refused
+    assert answered(sent, "up3")["reason"] == "ceiling"
+
+
+def test_the_floor_refuses_a_descent_inside_the_slot_band(executors):
+    executor, drone, sent, _, _ = held_mid_lane(executors)
+    # A 60 cm slot (set directly for the test): its band (30 to 90 cm) reaches below the 40 cm floor.
+    executor.envelope.set_alt_slot(60)
+    step(executor, sent, move("down", "down", 60))  # 100 -> 40: the floor itself is allowed
+    assert answered(sent, "down")["type"] == "ack" and drone.state.height == 40
     step(executor, sent, move("down2", "down", 20))
     nack = answered(sent, "down2")
     assert nack["reason"] == "floor" and nack["floor_cm"] == fp.MANUAL_FLOOR_CM
+
+
+def test_the_slot_band_refuses_climbs_and_descents_away_from_the_slot(executors):
+    executor, drone, sent, _, _ = held_mid_lane(executors)  # 100 cm slot: band 70 to 130 cm
+    before = len(drone.calls)
+    step(executor, sent, move("up", "up", 40))  # 140 is under the ceiling limit but outside the band
+    nack = answered(sent, "up")
+    assert nack["reason"] == "slot_band" and (nack["band_low_cm"], nack["band_high_cm"]) == (70, 130)
+    assert "altitude band" in nack["detail"]
+    step(executor, sent, move("down", "down", 40))  # 60 is above the floor but outside the band
+    assert answered(sent, "down")["reason"] == "slot_band"
+    assert len(drone.calls) == before  # nothing was sent to the drone
+    step(executor, sent, move("up2", "up", 30))  # 130: the edge of the band is allowed
+    assert answered(sent, "up2")["type"] == "ack" and drone.state.height == 130
 
 
 def test_unknown_height_refuses_vertical_steps(executors):
@@ -405,3 +429,11 @@ def test_edge_device_and_uplink_route_manual_commands_to_the_executor(executors)
     assert answered(sent, "m1")["type"] == "ack" and executor.control_mode == "manual"
     hooks = LaneExecutorHooks(executor)
     assert all(hooks.supports(mtype) for mtype in fp.MANUAL_COMMAND_TYPES)
+
+
+def test_the_ground_orphan_land_is_an_ordinary_landing_on_the_edge(executors):
+    executor, drone, sent, _, log = held_mid_lane(executors)
+    send(executor, fp.make_manual_land(cmd_id="o1", reason=fp.ORPHAN_LAND_REASON))
+    assert answered(sent, "o1")["type"] == "ack"
+    assert not drone.state.is_flying
+    assert any(f.get("reason") == "controller_timeout" for _, e, f in log.events if e == "edge_land")

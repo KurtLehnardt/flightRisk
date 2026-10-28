@@ -4264,7 +4264,11 @@
                 const held = !selected && !!d && d.control_mode === 'held';
                 tile.classList.toggle('manual-selected', selected);
                 tile.classList.toggle('manual-held', held);
-                if (id) manualTileBadge(tile).textContent = selected ? 'MANUAL' : (held ? 'HELD' : '');
+                // A held drone with no controller lands when the ground's countdown runs out (orphan_land_in_s).
+                const landIn = d && typeof d.orphan_land_in_s === 'number' ? d.orphan_land_in_s : null;
+                let badge = selected ? 'MANUAL' : (held ? 'HELD' : '');
+                if (landIn !== null) badge = 'HELD: auto-landing in ' + landIn + ' s, no controller';
+                if (id) manualTileBadge(tile).textContent = badge;
             });
             if (!manualDroneId) { manualOverlay.hidden = true; return; }
             manualOverlay.hidden = false;
@@ -4362,7 +4366,7 @@
                     if (MANUAL_STEPS.indexOf(r.action) !== -1 || r.action === 'takeoff') manualRefused = {};
                 } else {
                     manualReason = r.action + ' refused: ' + (r.detail || r.reason || 'refused');
-                    if (['geofence', 'ceiling', 'floor'].indexOf(r.reason) !== -1) manualRefused[r.action] = true;
+                    if (['geofence', 'ceiling', 'floor', 'slot_band'].indexOf(r.reason) !== -1) manualRefused[r.action] = true;
                 }
             }
             if (!r.ok) showToast(r.drone_id + ': ' + r.action + ' refused (' + (r.detail || r.reason) + ')');

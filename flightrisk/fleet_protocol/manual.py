@@ -91,10 +91,12 @@ __all__ = [
     "MANUAL_ROTATE_MAX_DEG",
     "MANUAL_ROTATE_MIN_DEG",
     "MANUAL_ROTATIONS",
+    "MANUAL_SLOT_BAND_CM",
     "MANUAL_STEP_MAX_CM",
     "MANUAL_STEP_MIN_CM",
     "MANUAL_TAKEOFF",
     "MANUAL_TRANSLATIONS",
+    "ORPHAN_LAND_REASON",
     "RESUME_SEARCH",
     "is_manual_land",
     "is_manual_reply",
@@ -132,6 +134,14 @@ MANUAL_ROTATE_MAX_DEG = 45
 # A manual descent may not end below this height (cm above the takeoff
 # surface, as the Tello measures it).
 MANUAL_FLOOR_CM = 40
+# A manual climb or descent must keep the drone within this many cm of its
+# own altitude slot, so a drone flown by hand stays in its own altitude band
+# and clear of the other drones' slots. The floor and the ceiling limit
+# still apply inside the band.
+MANUAL_SLOT_BAND_CM = 30
+# The ``reason`` of the ground's automatic landing of a drone that was held
+# for manual control and lost its controller (docs/manual-takeover.md).
+ORPHAN_LAND_REASON = "controller_timeout"
 # With no manual command for this long, an edge under manual control
 # reports itself held (hovering, waiting for the operator).
 MANUAL_DEADMAN_S = 1.5
@@ -145,9 +155,10 @@ CONTROL_MODES = frozenset({"autonomous", "manual", "held"})
 # Why an edge refused a manual command: the v2 reasons plus ``not_manual``
 # (the drone is not under manual control), ``ceiling`` (a climb would end
 # above the ceiling limit, the ceiling minus its margin), ``floor`` (a
-# descent would end below ``MANUAL_FLOOR_CM``) and ``unsupported`` (the
-# edge, or this ground, cannot do it).
-MANUAL_NACK_REASONS = NACK_REASONS_V2 | frozenset({"not_manual", "ceiling", "floor", "unsupported"})
+# descent would end below ``MANUAL_FLOOR_CM``), ``slot_band`` (a climb or
+# descent would leave the band of ``MANUAL_SLOT_BAND_CM`` around the drone's
+# altitude slot) and ``unsupported`` (the edge, or this ground, cannot do it).
+MANUAL_NACK_REASONS = NACK_REASONS_V2 | frozenset({"not_manual", "ceiling", "floor", "slot_band", "unsupported"})
 # Optional numbers in a reply, all in cm or degrees, relative to the drone's
 # takeoff point: where the drone is, the resume target, and the limit that
 # refused a move.
@@ -161,6 +172,9 @@ MANUAL_REPLY_NUMBERS = (
     "geofence_cm",
     "max_alt_slot_cm",
     "floor_cm",
+    "alt_slot_cm",
+    "band_low_cm",
+    "band_high_cm",
 )
 
 
@@ -286,9 +300,13 @@ def make_resume_search(*, drone_id: str | None = None, cmd_id: str | None = None
     return msg
 
 
-def make_manual_land(*, cmd_id: str | None = None) -> dict[str, Any]:
-    """Ground -> edge: the manual land. An ordinary, never-fenced ``land`` with ``reason: manual``."""
-    return {"type": LAND, "cmd_id": cmd_id if cmd_id is not None else uuid.uuid4().hex, "reason": MANUAL_LAND_REASON}
+def make_manual_land(*, cmd_id: str | None = None, reason: str = MANUAL_LAND_REASON) -> dict[str, Any]:
+    """Ground -> edge: the manual land. An ordinary, never-fenced ``land`` with ``reason: manual``.
+
+    *reason* is ``ORPHAN_LAND_REASON`` for the ground's automatic landing of
+    a held drone whose controller went away; only the edge's log differs.
+    """
+    return {"type": LAND, "cmd_id": cmd_id if cmd_id is not None else uuid.uuid4().hex, "reason": reason}
 
 
 def make_manual_ack(for_type: str, drone_id: str, cmd_id: str, **fields: Any) -> dict[str, Any]:

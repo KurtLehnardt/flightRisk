@@ -272,3 +272,185 @@ def test_land_all_still_works_with_a_drone_under_manual_control(fleet_client):
     finally:
         app_state.ground_transport = None
     assert report["transport"] == 2 and report["coordinator"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Orphan landing: a held drone whose controller went away lands after 120 s
+# ---------------------------------------------------------------------------
+
+
+def _orphaned(drone_id="drone-1", **kwargs):
+    """A supervisor whose controller of *drone_id* (flying) has just disconnected."""
+    supervisor, transport, sio, clock = _supervisor(**kwargs)
+    _manual_ready(supervisor, is_flying=True)
+    supervisor.manual.take_control(drone_id, sid="browser-1")
+    assert supervisor.manual.controller_disconnected("browser-1") == drone_id
+    # The edge keeps reporting the drone held (hovering) under manual control.
+    supervisor.handle_control(dict(_telemetry(drone_id, is_flying=True), control_mode="held"))
+    return supervisor, transport, sio, clock
+
+
+def _orphan_lands(transport, drone_id):
+    return [m for d, m in transport.sent
+            if d == drone_id and m["type"] == "land" and m.get("reason") == fp.ORPHAN_LAND_REASON]
+
+
+def test_disconnect_starts_the_countdown_and_the_drone_lands_after_120_s():
+    supervisor, transport, _sio, clock = _orphaned()
+    assert supervisor.manual.orphan_land_s == 120
+    assert supervisor.status_payload()["drones"]["drone-1"]["orphan_land_in_s"] == 120
+    clock.now += 119.0
+    assert supervisor.manual.check_orphans() == []
+    assert supervisor.status_payload()["drones"]["drone-1"]["orphan_land_in_s"] == 1
+    clock.now += 1.0
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+    lands = _orphan_lands(transport, "drone-1")
+    assert len(lands) == 1 and "epoch" not in lands[0]  # the ordinary, never-fenced land
+    fp.validate_ground_to_edge(lands[0], proto=2, require_fence=True)
+    assert supervisor.status_payload()["drones"]["drone-1"]["orphan_land_in_s"] is None
+    assert supervisor.manual.check_orphans() == []  # landed once only
+
+
+def test_reconnecting_alone_does_not_cancel_the_countdown():
+    supervisor, _, _, clock = _orphaned()
+    # A reloaded browser asks for the status, and sees the countdown.
+    status = supervisor.manual.status()
+    assert status["drones"]["drone-1"]["orphan_land_in_s"] == 120
+    clock.now += 120
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+
+
+def test_resume_search_success_cancels_the_countdown():
+    supervisor, transport, _, clock = _orphaned()
+    supervisor.manual.resume_search("drone-1")
+    resume = _sent(transport, "drone-1")[-1]
+    clock.now += 60
+    assert supervisor.manual.check_orphans() == []  # still counting until the edge confirms
+    _answer(supervisor, "drone-1", resume, ok=True)
+    clock.now += 120
+    assert supervisor.manual.check_orphans() == [] and _orphan_lands(transport, "drone-1") == []
+
+
+def test_a_refused_resume_search_keeps_the_countdown():
+    supervisor, transport, _, clock = _orphaned()
+    supervisor.manual.resume_search("drone-1")
+    _answer(supervisor, "drone-1", _sent(transport, "drone-1")[-1], ok=False, reason="geofence")
+    clock.now += 120
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+
+
+def test_take_control_cancels_and_a_new_disconnect_restarts_the_countdown():
+    supervisor, _, _, clock = _orphaned()
+    clock.now += 100
+    supervisor.manual.take_control("drone-1", sid="browser-2")
+    clock.now += 100
+    assert supervisor.manual.check_orphans() == []
+    supervisor.manual.controller_disconnected("browser-2")
+    clock.now += 119
+    assert supervisor.manual.check_orphans() == []  # a fresh 120 s
+    clock.now += 1
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+
+
+def test_land_all_and_landing_and_loss_cancel_the_countdown():
+    supervisor, transport, _, clock = _orphaned()
+    supervisor.land_all()
+    clock.now += 200
+    assert supervisor.manual.check_orphans() == []
+    assert _orphan_lands(transport, "drone-1") == []
+
+    supervisor, _, _, clock = _orphaned()
+    supervisor.handle_control(dict(_telemetry("drone-1", is_flying=False), control_mode="held"))
+    clock.now += 200
+    assert supervisor.manual.check_orphans() == []
+
+    supervisor, _, _, clock = _orphaned()
+    assert supervisor.manual.cancel_orphan("drone-1", "lost") is True
+    clock.now += 200
+    assert supervisor.manual.check_orphans() == []
+
+
+def test_a_lost_held_drone_cancels_its_countdown():
+    supervisor, transport, _, _clock = _started_supervisor()
+    _manual_ready(supervisor, is_flying=True)
+    supervisor.manual.take_control("drone-2", sid="browser-1")
+    supervisor.manual.controller_disconnected("browser-1")
+    transport.connected["drone-2"] = False
+    assert supervisor.check_losses() == ["drone-2"]
+    assert supervisor.status_payload()["drones"]["drone-2"]["orphan_land_in_s"] is None
+
+
+def test_each_held_drone_has_its_own_countdown():
+    supervisor, _transport, _, clock = _orphaned("drone-1")
+    clock.now += 60
+    supervisor.manual.take_control("drone-2", sid="browser-3")
+    supervisor.manual.controller_disconnected("browser-3")
+    clock.now += 60
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+    assert supervisor.status_payload()["drones"]["drone-2"]["orphan_land_in_s"] == 60
+    clock.now += 60
+    assert supervisor.manual.check_orphans() == ["drone-2"]
+
+
+def test_a_held_drone_on_the_ground_gets_no_countdown():
+    supervisor, _transport, _, _ = _supervisor()
+    _manual_ready(supervisor, is_flying=False)
+    supervisor.manual.take_control("drone-1", sid="b")
+    supervisor.manual.controller_disconnected("b")
+    assert supervisor.status_payload()["drones"]["drone-1"]["orphan_land_in_s"] is None
+
+
+def test_an_orphan_land_that_cannot_be_sent_is_retried():
+    supervisor, transport, sio, clock = _orphaned()
+    transport.connected["drone-1"] = False
+    clock.now += 120
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+    assert sio.named("manual_result")[-1]["reason"] == "not_delivered"
+    transport.connected["drone-1"] = True
+    clock.now += 2
+    assert supervisor.manual.check_orphans() == ["drone-1"]
+    assert len(_orphan_lands(transport, "drone-1")) == 2  # the first one was written but not delivered
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("", 120.0), ("90", 90.0), ("5", 30.0), ("0", 30.0), ("600", 600.0)])
+def test_orphan_land_time_comes_from_the_environment_with_a_30_s_minimum(raw, expected):
+    from flightrisk.dashboard.manual_control import (
+        ORPHAN_LAND_ENV,
+        manual_orphan_land_s,
+    )
+
+    assert manual_orphan_land_s({ORPHAN_LAND_ENV: raw}) == expected
+
+
+@pytest.mark.parametrize("raw", ["soon", "nan", "inf"])
+def test_orphan_land_time_refuses_a_value_that_is_not_a_number(raw):
+    from flightrisk.dashboard.manual_control import (
+        ORPHAN_LAND_ENV,
+        manual_orphan_land_s,
+    )
+
+    with pytest.raises(ValueError, match=ORPHAN_LAND_ENV):
+        manual_orphan_land_s({ORPHAN_LAND_ENV: raw})
+
+
+def test_the_supervisor_reads_the_orphan_land_time_from_the_environment(monkeypatch):
+    monkeypatch.setenv("FLIGHTRISK_MANUAL_ORPHAN_LAND_S", "45")
+    supervisor, _, _, _ = _supervisor()
+    assert supervisor.manual.orphan_land_s == 45
+
+
+# ---------------------------------------------------------------------------
+# A held drone is never offered a lost drone's lanes
+# ---------------------------------------------------------------------------
+
+
+def test_lanes_of_a_lost_drone_are_not_offered_to_a_held_drone():
+    supervisor, transport, _sio, _ = _started_supervisor()
+    _manual_ready(supervisor, is_flying=True)
+    supervisor.manual.take_control("drone-1")
+    before = len(_sent(transport, "drone-1", "assign_lanes"))
+    transport.connected["drone-2"] = False
+    assert supervisor.check_losses() == ["drone-2"]
+    assert len(_sent(transport, "drone-1", "assign_lanes")) == before
+    plan = supervisor.coordinator.current_plan()
+    assert plan["uncovered"] and all("held for manual control" in lane["reason"] for lane in plan["uncovered"])

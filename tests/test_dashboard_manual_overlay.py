@@ -130,3 +130,15 @@ def test_land_all_and_fleet_status_stay_global():
     # The overlay sits below the floating fleet status panel (z-index 900), never over it.
     assert re.search(r"#manual-overlay \{[^}]*z-index: 850", INDEX)
     assert "manual-overlay" not in t.ancestors["fleet-section"]
+
+
+def test_tiles_show_the_orphan_landing_countdown_after_a_reload():
+    # The countdown comes from the per-drone status (fleet_status and manual_status), so a
+    # reloaded dashboard shows it again on that drone's tile.
+    assert "d.orphan_land_in_s" in SCRIPT
+    assert "'HELD: auto-landing in ' + landIn + ' s, no controller'" in SCRIPT
+    assert "socket.on('connect', () => socket.emit('get_manual_status'))" in SCRIPT
+
+
+def test_slot_band_refusals_disable_that_step():
+    assert "'slot_band'" in SCRIPT
