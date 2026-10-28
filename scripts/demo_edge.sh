@@ -66,9 +66,9 @@ fi
 
 PYTHON="${PYTHON:-venv/bin/python}"
 
-# The live floor is 4 m x 4 m, so the geofence is 450 cm unless the environment overrides it,
+# The live floor is 4 m x 4 m, so the geofence is 300 cm unless the environment overrides it,
 # and the edge matches on appearance only: it builds no face recognizer and sends no face embeddings.
-export FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-450}"
+export FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-300}"
 export FLIGHTRISK_APPEARANCE_ONLY=1
 
 cmd=("$PYTHON" -m flightrisk.edge_device
