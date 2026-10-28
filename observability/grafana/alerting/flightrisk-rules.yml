@@ -1,0 +1,398 @@
+# Grafana-managed alert rules for FlightRisk (provisioned at startup).
+#
+# Each rule queries Prometheus (refId A), reduces it to the last value per
+# series (B) and compares it with a threshold (C). No data means OK: a rule
+# about drones stays quiet while no drone reports. Notifications go to the
+# local placeholder contact point in contact-points.yml; nothing leaves the
+# machine. Thresholds mirror the code: battery warning 20 %, critical land
+# 10 % (config.drone), edge link-loss land after 3 s (FLIGHTRISK_LINK_LOSS_LAND_S).
+apiVersion: 1
+groups:
+- orgId: 1
+  name: flightrisk-flight-safety
+  folder: FlightRisk
+  interval: 10s
+  rules:
+  - uid: fr-battery-low
+    title: Drone battery low (< 20 %)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: min by (drone_id) (flightrisk_drone_battery_pct)
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: lt
+            params:
+            - 20
+    noDataState: OK
+    execErrState: Error
+    for: 30s
+    isPaused: false
+    labels:
+      severity: warning
+      team: flightrisk
+    annotations:
+      summary: Battery of {{ $labels.drone_id }} is below 20 %
+      description: Bring the drone back; the dashboard lands it automatically at 10 %.
+      __dashboardUid__: fr-flight-comm
+  - uid: fr-battery-critical
+    title: Drone battery critical (< 10 %)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: min by (drone_id) (flightrisk_drone_battery_pct)
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: lt
+            params:
+            - 10
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    isPaused: false
+    labels:
+      severity: critical
+      team: flightrisk
+    annotations:
+      summary: Battery of {{ $labels.drone_id }} is below 10 %
+      description: The critical-battery land should be in progress. Check the drone and land it manually if it is still flying.
+      __dashboardUid__: fr-flight-comm
+  - uid: fr-telemetry-stale
+    title: Drone telemetry stale (> 5 s)
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: max by (drone_id, backend) (flightrisk_drone_telemetry_age_s) and on (drone_id) (max by (drone_id) (flightrisk_drone_flying) ==
+          1)
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 5
+    noDataState: OK
+    execErrState: Error
+    for: 10s
+    isPaused: false
+    labels:
+      severity: warning
+      team: flightrisk
+    annotations:
+      summary: No fresh telemetry from {{ $labels.drone_id }} for over 5 s while flying
+      description: Height, battery and speed shown for this drone are stale.
+      __dashboardUid__: fr-flight-comm
+  - uid: fr-link-loss-landing
+    title: Link loss or watchdog landing
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: sum by (drone_id) (increase(flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"}[5m]))
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    isPaused: false
+    labels:
+      severity: critical
+      team: flightrisk
+    annotations:
+      summary: '{{ $labels.drone_id }} lost its link or was landed by the watchdog'
+      description: An edge landed its drone after ground silence, or the ground declared a drone lost and re-tasked its lanes.
+      __dashboardUid__: fr-flight-comm
+  - uid: fr-land-failure
+    title: Land not executed or not confirmed
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: sum by (drone_id) (increase(flightrisk_flight_safety_events{kind="land_failed"}[5m])) or sum by (drone_id) (increase(flightrisk_drone_commands{command="land",
+          outcome!="ok"}[5m]))
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 0s
+    isPaused: false
+    labels:
+      severity: critical
+      team: flightrisk
+    annotations:
+      summary: A land on {{ $labels.drone_id }} failed
+      description: A land returned not executed, raised, or was not confirmed. Take manual control of the drone.
+      __dashboardUid__: fr-flight-comm
+  - uid: fr-outbox-drops
+    title: Fleet messages dropped
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: sum by (side, type, reason) (increase(flightrisk_comm_dropped[5m]))
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0
+    noDataState: OK
+    execErrState: Error
+    for: 30s
+    isPaused: false
+    labels:
+      severity: warning
+      team: flightrisk
+    annotations:
+      summary: '{{ $labels.side }} dropped {{ $labels.type }} messages ({{ $labels.reason }})'
+      description: Telemetry queue overflow on an edge, or control messages that reached no connection.
+      __dashboardUid__: fr-flight-comm
+- orgId: 1
+  name: flightrisk-service
+  folder: FlightRisk
+  interval: 30s
+  rules:
+  - uid: fr-error-rate-spike
+    title: Error rate spike
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: sum(rate(flightrisk_error_logs[5m])) * 60
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 10
+    noDataState: OK
+    execErrState: Error
+    for: 2m
+    isPaused: false
+    labels:
+      severity: warning
+      team: flightrisk
+    annotations:
+      summary: More than 10 errors per minute
+      description: Open FlightRisk / Errors & Logs and look at the top fingerprints.
+      __dashboardUid__: fr-errors
+  - uid: fr-frame-loop-stalled
+    title: Frame loop stalled
+    condition: C
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 300
+        to: 0
+      datasourceUid: prometheus
+      model:
+        refId: A
+        expr: max by (service_instance_id) (flightrisk_frame_loop_last_frame_age_s{source_active="true"})
+        instant: true
+        range: false
+        intervalMs: 1000
+        maxDataPoints: 43200
+    - refId: B
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        expression: A
+        reducer: last
+        settings:
+          mode: dropNN
+    - refId: C
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 10
+    noDataState: OK
+    execErrState: Error
+    for: 30s
+    isPaused: false
+    labels:
+      severity: critical
+      team: flightrisk
+    annotations:
+      summary: No frame processed for over 10 s on {{ $labels.service_instance_id }}
+      description: 'Detection is not running: the video source stopped or the frame loop is stuck.'
+      __dashboardUid__: fr-detection

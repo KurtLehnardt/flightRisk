@@ -40,6 +40,8 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
+      # Keep exemplars (trace ids on histogram samples) for metric -> trace links.
+      - --enable-feature=exemplar-storage
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -59,7 +61,10 @@ services:
 
   loki:
     image: grafana/loki:3.3.2
-    command: ["-config.file=/etc/loki/config.yaml"]
+    # expand-env lets LOKI_RETENTION_PERIOD (default 168h, 7 days) set the log retention.
+    command: ["-config.file=/etc/loki/config.yaml", "-config.expand-env=true"]
+    environment:
+      - LOKI_RETENTION_PERIOD=${LOKI_RETENTION_PERIOD:-168h}
     volumes:
       - ./observability/loki.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
@@ -71,12 +76,14 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/flightrisk.json
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/flightrisk-overview.json
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Alert rules, contact point and notification policy as code.
+      - ./observability/grafana/alerting:/etc/grafana/provisioning/alerting:ro
       - grafana_data:/var/lib/grafana
     ports:
       # GRAFANA_PORT moves Grafana off 3000 when something else uses it.

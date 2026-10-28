@@ -38,6 +38,9 @@ exporters:
     # Keep names as defined in flightrisk/telemetry.py (dots -> underscores)
     # with no _total / unit suffixes, so dashboard queries stay predictable.
     add_metric_suffixes: false
+    # OpenMetrics exposition carries exemplars (the trace id of a sampled
+    # observation), so Grafana can jump from a latency spike to its trace.
+    enable_open_metrics: true
     # Copy resource attributes (service.instance.id among them) onto every
     # series, so each node's metrics carry service_instance_id.
     resource_to_telemetry_conversion:

@@ -1,0 +1,26 @@
+# Placeholder contact point and notification policy for the FlightRisk alerts.
+#
+# The webhook points at the discard port on Grafana's own loopback, so a firing
+# alert is visible in Grafana (Alerting > Alert rules) and in Grafana's log, and
+# nothing is sent anywhere else. Replace the URL with a local receiver (for
+# example a pager bridge on this laptop) to get notifications.
+apiVersion: 1
+contactPoints:
+- orgId: 1
+  name: flightrisk-local
+  receivers:
+  - uid: fr-local-webhook
+    type: webhook
+    disableResolveMessage: false
+    settings:
+      url: http://127.0.0.1:9/flightrisk-alerts
+      httpMethod: POST
+policies:
+- orgId: 1
+  receiver: flightrisk-local
+  group_by:
+  - alertname
+  - drone_id
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 30m

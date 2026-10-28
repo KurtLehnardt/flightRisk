@@ -1,0 +1,336 @@
+{
+  "uid": "fr-flight-comm",
+  "title": "FlightRisk / Flight Safety & Comms",
+  "description": "Per-drone battery, height (with its source and age), speed, link health, command outcomes, landings, obstacle checks, and every message between the ground station and the edges.",
+  "tags": [
+    "flightrisk",
+    "safety",
+    "comms"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "links": [
+    {
+      "title": "FlightRisk dashboards",
+      "type": "dashboards",
+      "tags": ["flightrisk"],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0},
+      {"name": "drone_id", "label": "Drone", "description": "Drone id (drone-1, sim-1, ...)", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": {"query": "label_values({__name__=~\"flightrisk_drone_flying|flightrisk_comm_messages|flightrisk_drone_commands\"}, drone_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values({__name__=~\"flightrisk_drone_flying|flightrisk_comm_messages|flightrisk_drone_commands\"}, drone_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0}
+    ]
+  },
+  "annotations": {
+    "list": [
+      {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"},
+      {"name": "Flight safety", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "red", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "instant": false, "titleFormat": "{{kind}}", "textFormat": "{{kind}} {{reason}} {{drone_id}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Alerts", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "orange", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "instant": false, "titleFormat": "{{transition}}", "textFormat": "alert {{transition}} ({{awaiting_s}} s)", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Target changes", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "blue", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "instant": false, "titleFormat": "{{event}}", "textFormat": "target from {{source}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "refId": "Anno", "queryType": "range"}}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Drone state",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "Battery",
+      "description": "Latest battery per drone. Warning at 20 %, critical land at 10 %.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "min by (drone_id) (flightrisk_drone_battery_pct{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}}", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "percent", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 10}, {"color": "yellow", "value": 20}, {"color": "green", "value": 30}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true},
+      "id": 2,
+      "gridPos": {"x": 0, "y": 1, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Battery over time",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "min by (drone_id) (flightrisk_drone_battery_pct{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "line+area"}}, "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 10}, {"color": "yellow", "value": 20}, {"color": "transparent", "value": 30}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 3,
+      "gridPos": {"x": 6, "y": 1, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Height by source",
+      "description": "Height above takeoff and where it came from: tello.h (state field h, polled), tello.tof, sim.height, edge.height_cm (edge telemetry), state.height (legacy cache).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id, source) (flightrisk_drone_height_m{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}} {{source}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "m", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 4,
+      "gridPos": {"x": 12, "y": 1, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Telemetry age",
+      "description": "Seconds since the newest measured reading. Grows when a drone stops reporting.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id, backend) (flightrisk_drone_telemetry_age_s{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}} {{backend}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "line"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 2}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 5,
+      "gridPos": {"x": 18, "y": 1, "w": 6, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Speed",
+      "description": "Measured speed per axis and its source (tello.vgx..., sim.vx..., mavlink.velocity).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id, axis, source) (flightrisk_drone_speed_mps{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}} {{axis}} ({{source}})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "velocityms", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 6,
+      "gridPos": {"x": 0, "y": 9, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Attitude",
+      "description": "Pitch, roll and yaw.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id, axis) (flightrisk_drone_attitude_deg{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}} {{axis}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "degree", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 7,
+      "gridPos": {"x": 8, "y": 9, "w": 8, "h": 8}
+    },
+    {
+      "type": "stat",
+      "title": "Flying",
+      "description": "1 while the drone reports flying.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id) (flightrisk_drone_flying{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "", "custom": {}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 8,
+      "gridPos": {"x": 16, "y": 9, "w": 8, "h": 8}
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Commands, landings and safety events",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 17, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Command outcomes",
+      "description": "Every flight command by outcome: ok, dropped_busy, not_executed, rejected, error.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (command, outcome) (increase(flightrisk_drone_commands{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__rate_interval]))", "legendFormat": "{{command}} {{outcome}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 10,
+      "gridPos": {"x": 0, "y": 18, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Command latency p95",
+      "description": "Time from command to result (a land includes its confirmation).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le, command) (rate(flightrisk_drone_command_duration_ms_bucket{service_instance_id=~\"$node\"}[$__rate_interval])))", "legendFormat": "{{command}}", "refId": "A", "exemplar": true}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 11,
+      "gridPos": {"x": 8, "y": 18, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Land duration",
+      "description": "Land command until confirmed (or failed), over 10 minute windows.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.5, sum by (le, outcome) (rate(flightrisk_drone_land_duration_ms_bucket{service_instance_id=~\"$node\"}[10m])))", "legendFormat": "p50 {{outcome}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(flightrisk_drone_land_duration_ms_bucket{service_instance_id=~\"$node\"}[10m])))", "legendFormat": "p95 {{outcome}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 12,
+      "gridPos": {"x": 16, "y": 18, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Flight-safety events",
+      "description": "Battery warnings, critical lands, watchdog (link-loss) landings, geofence refusals, obstacle triggers, land failures, lost drones.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (kind, reason) (increase(flightrisk_flight_safety_events{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__rate_interval]))", "legendFormat": "{{kind}} {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 13,
+      "gridPos": {"x": 0, "y": 26, "w": 12, "h": 8}
+    },
+    {
+      "type": "table",
+      "title": "Flight-safety events by kind (range)",
+      "description": "Counts in the selected time range.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (kind, reason, drone_id) (increase(flightrisk_flight_safety_events{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__range]))", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"Value": "events"}}}],
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "fields": ""}, "sortBy": [{"displayName": "events", "desc": true}]},
+      "id": 14,
+      "gridPos": {"x": 12, "y": 26, "w": 12, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Obstacle guard",
+      "description": "Obstacle checks by decision (clear, go_left, go_right, reverse).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (action) (increase(flightrisk_obstacle_checks{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "{{action}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 15,
+      "gridPos": {"x": 0, "y": 34, "w": 12, "h": 7}
+    },
+    {
+      "type": "timeseries",
+      "title": "Obstacle margin",
+      "description": "min_safe_depth minus centre depth (relative MiDaS units): below 0 the path is blocked.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.1, sum by (le) (rate(flightrisk_obstacle_margin_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p10", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.5, sum by (le) (rate(flightrisk_obstacle_margin_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p50", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 16,
+      "gridPos": {"x": 12, "y": 34, "w": 12, "h": 7}
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Link health",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 41, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Link age",
+      "description": "Seconds since the last message on each drone's link. The edge lands its drone after 3 s of ground silence.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id, side) (flightrisk_link_age_s{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "{{drone_id}} {{side}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "line"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 2}, {"color": "red", "value": 3}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 18,
+      "gridPos": {"x": 0, "y": 42, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Clock offset and RTT",
+      "description": "Clock-sync median offset (edge minus ground) and round-trip time.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id) (flightrisk_link_clock_offset_ms{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "offset {{drone_id}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le, drone_id) (rate(flightrisk_comm_rtt_ms_bucket{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[10m])))", "legendFormat": "rtt p95 {{drone_id}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 19,
+      "gridPos": {"x": 8, "y": 42, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections and reconnects",
+      "description": "1 while an edge is connected; edge reconnect attempts by outcome.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max by (drone_id) (flightrisk_link_connected{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"})", "legendFormat": "connected {{drone_id}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (outcome) (increase(flightrisk_link_reconnects{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "reconnect {{outcome}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 20,
+      "gridPos": {"x": 16, "y": 42, "w": 8, "h": 8}
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Ground and edge messages",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 50, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Message rate by type",
+      "description": "Every fleet message counted on both sides (ground in/out, edge in/out).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (side, direction, type) (rate(flightrisk_comm_messages{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__rate_interval]))", "legendFormat": "{{side}} {{direction}} {{type}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 22,
+      "gridPos": {"x": 0, "y": 51, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Acks and nacks",
+      "description": "Edge answers to ground commands; a nack carries the refusal reason.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (kind, for, reason) (increase(flightrisk_comm_acks{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__rate_interval]))", "legendFormat": "{{kind}} {{for}} {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 23,
+      "gridPos": {"x": 8, "y": 51, "w": 8, "h": 8}
+    },
+    {
+      "type": "timeseries",
+      "title": "Not delivered",
+      "description": "Messages not delivered (not connected, closed, telemetry queue full) and traffic volume.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (side, type, reason) (increase(flightrisk_comm_dropped{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "{{side}} {{type}} {{reason}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (side, direction) (rate(flightrisk_comm_bytes{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "bytes/s {{side}} {{direction}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 24,
+      "gridPos": {"x": 16, "y": 51, "w": 8, "h": 8}
+    },
+    {
+      "type": "logs",
+      "title": "Drone communication (live)",
+      "description": "Commands, acks, nacks, hello, clock, land and emergency messages one per line; telemetry, heartbeats and pings as one aggregated line per 5 s.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"drone_comm\" | drone_id=~\"$drone_id\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 25,
+      "gridPos": {"x": 0, "y": 59, "w": 12, "h": 10}
+    },
+    {
+      "type": "logs",
+      "title": "Flight-safety events",
+      "description": "",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 26,
+      "gridPos": {"x": 12, "y": 59, "w": 12, "h": 10}
+    },
+    {
+      "type": "logs",
+      "title": "Telemetry snapshots (how height and speed were determined)",
+      "description": "One line per drone every 5 s: each reading's value, unit, source and age.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"drone_telemetry_snapshot\" | drone_id=~\"$drone_id\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 27,
+      "gridPos": {"x": 0, "y": 69, "w": 24, "h": 9}
+    }
+  ]
+}
