@@ -105,8 +105,7 @@ from flightrisk.drone.safety import (
 )
 from flightrisk.fleet_protocol import MAX_LANES as _PROTOCOL_MAX_LANES
 from flightrisk.fleet_protocol import MAX_MESSAGE_BYTES as _PROTOCOL_MAX_MESSAGE_BYTES
-from flightrisk.fleet_protocol import MAX_ROSTER, is_identifier
-from flightrisk.fleet_protocol import make_assign_lanes
+from flightrisk.fleet_protocol import MAX_ROSTER, is_identifier, make_assign_lanes
 
 __all__ = [
     "ALTITUDE_DEADBAND_CM",

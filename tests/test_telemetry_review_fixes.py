@@ -15,9 +15,8 @@ import pytest
 
 pytest.importorskip("opentelemetry.sdk")
 
-from flightrisk import edge_device, observability
+from flightrisk import observability
 from flightrisk import telemetry as t
-from flightrisk.observability import StructuredLogger
 
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN_ENV = ("FLIGHTRISK_OTEL_ENABLED", "OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES",
@@ -50,7 +49,9 @@ def _exporters():
 
     from opentelemetry.sdk._logs import export as logs_export
     from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
     log_cls = getattr(logs_export, "InMemoryLogRecordExporter", None) or logs_export.InMemoryLogExporter
     return InMemorySpanExporter(), ConsoleMetricExporter(out=io.StringIO()), log_cls()
@@ -102,7 +103,7 @@ def _run_blocked(code: str, **env):
     full_env.update(env)
     prelude = "import sys\nfor m in ('opentelemetry',):\n    sys.modules[m] = None\n"
     return subprocess.run([sys.executable, "-c", prelude + textwrap.dedent(code)], cwd=ROOT, env=full_env,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=60, check=False)
 
 
 def test_enabled_without_the_packages_warns():
@@ -225,9 +226,9 @@ def test_partial_init_failure_shuts_down_the_providers_already_built(fresh, monk
 
     monkeypatch.setattr(t, "TracerProvider", _Tracer)
     with patch.object(t, "_build_span_exporter", return_value=_exporters()[0]), \
-            patch.object(t, "_build_metric_exporter", side_effect=RuntimeError("no metrics")):
-        with pytest.raises(RuntimeError):
-            t.init_telemetry()
+            patch.object(t, "_build_metric_exporter", side_effect=RuntimeError("no metrics")), \
+            pytest.raises(RuntimeError):
+        t.init_telemetry()
     assert stopped == ["tracer"]
     assert t._providers == [] and t._initialized is False
 
@@ -358,7 +359,7 @@ def test_check_otlp_bind_script(value, ok):
     env = {k: v for k, v in os.environ.items() if k != "OTLP_BIND"}
     env["OTLP_BIND"] = value
     result = subprocess.run(["bash", str(ROOT / "scripts" / "check_otlp_bind.sh")], env=env,
-                            capture_output=True, text=True, timeout=20)
+                            capture_output=True, text=True, timeout=20, check=False)
     assert (result.returncode == 0) is ok, result.stderr
     if not ok:
         assert "no authentication" in result.stderr

@@ -11,11 +11,17 @@ import warnings
 import pytest
 import websockets
 
-from flightrisk import edge_uplink, transport as transport_mod
+from flightrisk import edge_uplink
 from flightrisk import link_log_limits as limits
+from flightrisk import transport as transport_mod
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge_uplink import EdgeUplink
-from flightrisk.link_log_limits import RateLimitedLog, auth_rejected_line, closed_line, safe_url
+from flightrisk.link_log_limits import (
+    RateLimitedLog,
+    auth_rejected_line,
+    closed_line,
+    safe_url,
+)
 from flightrisk.transport import EdgeTransport, EdgeTransportSync, GroundTransport
 
 
