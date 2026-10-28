@@ -711,7 +711,18 @@ class FleetSupervisor:
 
     def status_payload(self) -> dict:
         """The ``fleet_status`` event: per-drone telemetry, clock offset, RTT and skew."""
-        return {"drones": self.coordinator.status(), "net": self.net, "synced": self.synced}
+        drones = {drone_id: dict(info) for drone_id, info in self.coordinator.status().items()}
+        try:
+            links = self._transport.fleet_status()
+        except Exception:
+            # Without the transport's view no drone can be called connected.
+            log.warning("fleet link status unavailable", exc_info=True)
+            links = {}
+        for drone_id, info in drones.items():
+            link = links.get(drone_id) or {}
+            info["connected"] = bool(link.get("connected", False))
+            info["link_age_s"] = link.get("link_age_s")
+        return {"drones": drones, "net": self.net, "synced": self.synced}
 
     def emit_status(self) -> None:
         self._emit("fleet_status", self.status_payload())
@@ -2146,7 +2157,16 @@ def on_drone_command(data):
     drone_id = data.get("drone_id")
     fleet = app_state.fleet
     if not fleet or not fleet.primary:
-        emit("error", {"message": "No drones connected"})
+        if app_state.fleet_supervisor is not None:
+            emit(
+                "error",
+                {
+                    "message": "No drones connected locally: manual flight commands are not available "
+                    "in fleet mode. Use Plan and Start to fly the fleet (LAND ALL still works)."
+                },
+            )
+        else:
+            emit("error", {"message": "No drones connected"})
         return
     drone: DroneController | None = fleet.get(drone_id) if drone_id else fleet.primary
     if not drone:
