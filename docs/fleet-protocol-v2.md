@@ -586,7 +586,15 @@ fake).
   one is a v1 command and gets exactly the v1 replies as before; a v2-only
   nack reason (for example `stale_plan`) is reported to a v1 ground as
   `invalid`, the nearest v1 reason. A landing that carried a `cmd_id` is
-  acknowledged after the land command has been issued.
+  acknowledged only after `drone.land()` returns. On a real Tello that is
+  once the land is confirmed (the driver waits for state showing the drone
+  on the ground, up to 25 s), which takes seconds, longer than the ground's
+  2 s ack timeout. PR-4/6 must account for this: a land ack that arrives
+  late does not mean the land failed, and a resent `land` is executed
+  again (harmless). Every `assign_lanes` nack carries `lanes_total`
+  (the number of lanes received, 0 when `lanes` is not a list), including
+  an authority refusal (`stale_epoch`, `not_authority`) and a reused
+  `cmd_id`, so a stale leader always gets the nack it needs to step down.
 - **Command ids.** Every fenced command with a `cmd_id` is recorded as
   pending when it arrives, so a duplicate is never executed again. A
   duplicate of a finished command gets its first reply resent unchanged
@@ -607,9 +615,18 @@ fake).
   A hold also cancels a scheduled `start_at` that has not fired (that
   `start_at` is answered `nack{reason: busy, detail: cancelled_by_hold}`),
   stops before the altitude-slot climb if it arrives during a takeoff, holds
-  a plan with `on_complete: land` before its landing, and suspends the
-  end-of-lanes hover timeout. Every landing clears it. A hold on a drone
-  that is on the ground with no start pending is refused with `not_flying`.
+  a plan with `on_complete: land` before its landing, and restarts (does
+  not pause) the end-of-lanes hover timeout: after the resume the drone
+  hovers the full `hover_timeout_s` again. The hover-timeout and
+  `on_complete` landings are checked again under the executor lock as
+  they are recorded, so a hold that was acknowledged first always stops
+  them. A hold has no time limit while the ground's heartbeats keep
+  arriving; the battery landing (below 15 %), the link-loss landing and
+  every operator or ground landing still end it, and every landing clears
+  it. A hold during a takeoff leaves the drone at its takeoff height
+  (about 80 cm on a Tello), not at its altitude slot, until the resume. A
+  hold on a drone that is on the ground with no start pending is refused
+  with `not_flying`.
 - **`resume`.** Restarts only the plan named by `plan_id`, and only while
   it is valid, from the lane and move where the drone stopped (a plan
   accepted while holding starts where that plan says). It is refused with
@@ -625,7 +642,11 @@ fake).
   the dead-reckoned position like a lane move and acknowledged once flown.
   A nudge the controller did not execute is answered
   `nack{reason: busy, detail: <outcome>}` and not recorded; a controller
-  error lands the drone, as for a lane move. A later v2 `start_at` or a `resume`
+  error lands the drone, as for a lane move. A nudge that a landing cut
+  short is answered `nack{reason: landing}`, never acknowledged; the
+  controller reported the move executed, so it is recorded in the
+  dead-reckoned position like an interrupted lane move (the distance
+  actually flown is unknown either way). A later v2 `start_at` or a `resume`
   re-checks the rest of the plan against the geofence from the nudged
   position and refuses with `geofence` instead of flying out of it, and a
   re-task that arrives while a nudge flies is flown after it only if it
@@ -641,11 +662,21 @@ fake).
   `stale_plan`, until a new plan is accepted. This applies to v1 commands
   too: before this change, a v1 `start_at` after an unplanned landing
   restarted the old lanes.
+- **Landing requested.** From the moment the executor is asked to land
+  (`land_now`: a ground or local landing, battery, link loss, the
+  geofence, an error) until that landing is over, no flight sequence is
+  launched: `start_at`, `resume`, `nudge`, `hold` and `takeoff` are refused
+  with `landing`, and an `assign_lanes` that would re-task the flying drone
+  is refused with `landing` and the current plan is kept. The executor
+  counts the request before it waits for its lock, so a command that is
+  being checked at that moment is refused too.
 - **End of lanes.** With `on_complete: land` the drone lands after its
   last lane. With `on_complete: hover` it lands once it has hovered idle
   for `hover_timeout_s` (20 s when absent) after its last lane; a hold
-  suspends that countdown and it starts again after the resume. A plan
-  without `on_complete` hovers until the ground lands it, as in v1.
+  restarts that countdown, which starts again from zero after the resume.
+  A hold or a re-task that arrives after either landing was decided, but
+  before it was recorded, stops it (a re-task then flies its lanes). A
+  plan without `on_complete` hovers until the ground lands it, as in v1.
 - **Telemetry.** In v2 mode (constructed with `fleet_v2=True`, or after
   the first command with a `cmd_id`) telemetry adds `epoch`, `plan_id`,
   `state` and `plan_valid`. `plan_id` is kept after the plan is
@@ -664,6 +695,11 @@ What the edge authority (PR-4) has to wire to the executor:
   (`not_authority`) if `check` raises or returns anything else. The default
   accepts everything and reports the highest epoch it has seen.
 - Call `invalidate_plan(reason)` when the edge adopts a new epoch.
+- Use `is_active()` for the authority's "inactive" test (true while the
+  drone flies, a sequence runs or a `start_at` is pending, or a landing is
+  requested or in progress; an unreadable flight state counts as active)
+  and `fleet_status()` for the v2 telemetry and `hello` fields (`plan_id`,
+  `state`, `plan_valid` and `epoch`).
 - Construct the executor with `fleet_v2=True` in a v2 deployment, so
   telemetry carries the v2 fields from the start.
 - Build the edge `hello` from `plan_id`, `lane_index`, `is_flying`
