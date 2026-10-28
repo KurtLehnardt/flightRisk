@@ -105,7 +105,7 @@ from flightrisk.drone.safety import (
 )
 from flightrisk.fleet_protocol import MAX_LANES as _PROTOCOL_MAX_LANES
 from flightrisk.fleet_protocol import MAX_MESSAGE_BYTES as _PROTOCOL_MAX_MESSAGE_BYTES
-from flightrisk.fleet_protocol import make_assign_lanes
+from flightrisk.fleet_protocol import MAX_ROSTER, is_identifier, make_assign_lanes
 
 __all__ = [
     "ALTITUDE_DEADBAND_CM",
@@ -167,7 +167,8 @@ imported from ``flightrisk.fleet_protocol``, measured as compact JSON
 
 MESSAGE_RESERVE_BYTES = 1_024
 """Bytes of ``MAX_MESSAGE_BYTES`` kept free for the fields protocol v2 adds to a
-message (``epoch``, ``cmd_id``, ``plan_id``), so a plan that fits here still fits there."""
+message (``epoch``, ``leader_id``, ``cmd_id``, ``plan_id``, ``plan_seq``,
+``on_complete`` and ``hover_timeout_s``), so a plan that fits here still fits there."""
 
 ALTITUDE_DEADBAND_CM = MIN_MOVE_CM
 """How far above its slot a drone may hold: ``safety.SafetyEnvelope.slot_move`` makes
@@ -255,6 +256,11 @@ def _ids(drone_ids: Sequence[str]) -> list[str]:
         raise ValueError("at least one drone id is required")
     if len(set(ids)) != len(ids):
         raise ValueError(f"drone ids must be unique, got {ids!r}")
+    if len(ids) > MAX_ROSTER:
+        raise ValueError(f"a plan can have at most {MAX_ROSTER} drones (the fleet protocol roster cap), got {len(ids)}")
+    for drone_id in ids:
+        if not is_identifier(drone_id):
+            raise ValueError(f"{drone_id!r} is not a drone id (an identifier: letters, digits, . _ : -)")
     return ids
 
 
@@ -625,12 +631,16 @@ def _check(
         )
     flight_area = (0, -standoff, width, depth)
     broken = False
+    if len(plan.drones) > MAX_ROSTER:
+        problems.append(f"the plan has {len(plan.drones)} drones, above the {MAX_ROSTER} drone roster cap of the fleet protocol")
     for drone in plan.drones:
+        if not is_identifier(drone.drone_id):
+            problems.append(f"{drone.drone_id!r} is not a drone id (an identifier: letters, digits, . _ : -)")
         lane_problems = _lane_problems(drone)
         problems.extend(lane_problems)
         if not _MIN_ALT_SLOT_CM <= drone.alt_cm <= _MAX_ALT_SLOT_CM:
             problems.append(f"{drone.drone_id}: altitude slot {drone.alt_cm} cm is out of range")
-        if any("no lanes" not in p for p in lane_problems):
+        if drone.lanes and lane_problems:  # a drone with no lanes at all is not "broken lanes"
             broken = True
             continue
         problems.extend(_message_problems(drone))

@@ -122,8 +122,8 @@ def test_ordinary_close_keeps_fast_reconnect_and_rate_limits_the_warning(caplog)
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
-def test_auth_backoff_doubles_from_one_to_thirty_seconds():
-    assert [auth_backoff_s(n) for n in (0, 1, 2, 3, 4, 5, 6, 7, 40)] == [0, 1, 2, 4, 8, 16, 30, 30, 30]
+def test_auth_backoff_doubles_from_one_to_ten_seconds():
+    assert [auth_backoff_s(n) for n in (0, 1, 2, 3, 4, 5, 6, 7, 40)] == [0, 1, 2, 4, 8, 10, 10, 10, 10]
 
 
 def test_stable_connection_resets_auth_state():

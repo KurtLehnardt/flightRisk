@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 # Close code the ground sends when the auth handshake fails. 4010 is the
 # multi-ground uplink's protocol refusal (fleet_ground_link.CLOSE_PROTOCOL) and
 # 4009 is a drone-id conflict, so auth keeps its own code.
 CLOSE_UNAUTHORIZED = 4001
 CLOSE_UNAUTHORIZED_REASON = "unauthorized: edge token mismatch"
+CLOSE_UNAUTHORIZED_REASON_NO_MESSAGE = "unauthorized: no auth message"
 
 AUTH_BACKOFF_BASE_S = 1.0
-AUTH_BACKOFF_MAX_S = 30.0
+# Matches REFUSED_RECONNECT_MAX_S in edge_uplink: a ground that rejects this
+# edge is retried at least every 10 s, so fixing the token on the ground is
+# noticed within about 10 s.
+AUTH_BACKOFF_MAX_S = 10.0
+# Longest log text taken from a peer-controlled close reason.
+MAX_REASON_CHARS = 120
 # A connection must stay up this long before the backoff and log state reset.
 STABLE_UPTIME_S = 10.0
 
@@ -72,11 +79,33 @@ class RateLimitedLog:
     def reset(self, key: object = None) -> None:
         self._state.pop(key, None)
 
+    def reset_all(self) -> None:
+        self._state.clear()
+
+
+def safe_url(url: str) -> str:
+    """*url* without any user name or password, for logs."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<invalid url>"
+    if parts.username is None and parts.password is None:
+        return url
+    host = parts.hostname or ""
+    if parts.port is not None:
+        host = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+
+
+def _safe_reason(reason: object) -> str:
+    """A peer-controlled close reason as a quoted, escaped, truncated literal."""
+    return repr(str(reason)[:MAX_REASON_CHARS])
+
 
 def auth_rejected_line(ground: str, code: object, reason: str, attempts: int) -> str:
-    """The single error line for an auth rejection; never includes the token."""
+    """The single error line for an auth rejection; never includes the token or URL credentials."""
     return (
-        f'edge_auth_rejected ground={ground} code={code} reason="{reason}" '
+        f"edge_auth_rejected ground={safe_url(ground)} code={code} reason={_safe_reason(reason)} "
         f'attempts={attempts} hint="{AUTH_REJECTED_HINT}"'
     )
 
@@ -84,4 +113,4 @@ def auth_rejected_line(ground: str, code: object, reason: str, attempts: int) ->
 def closed_line(ground: str, code: object, reason: str, count: int) -> str:
     """The rate-limited 'closed' warning, with the close code and reason."""
     more = "" if count <= 1 else f" ({count} closes since last report)"
-    return f"[{ground}] Connection to ground closed (code={code} reason={reason!r}){more}"
+    return f"[{safe_url(ground)}] Connection to ground closed (code={code} reason={_safe_reason(reason)}){more}"

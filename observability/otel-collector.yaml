@@ -19,9 +19,11 @@ processors:
     check_interval: 1s
     limit_mib: 256
   batch: {}
-  # A node that does not set service.instance.id still gets a label value,
-  # so the dashboard's "node" filter never hides it. "insert" leaves a value
-  # the node did set untouched.
+  # Fallback for senders that send no service.instance.id at all (other OTLP
+  # clients). FlightRisk itself always sends one: init_telemetry sets
+  # "unknown" when OTEL_RESOURCE_ATTRIBUTES names no node, because the SDK
+  # would otherwise invent a random id. "insert" leaves a value the node did
+  # set untouched.
   resource/node:
     attributes:
       - key: service.instance.id

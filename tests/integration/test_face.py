@@ -133,3 +133,29 @@ class TestTrackedMatching:
             _, s_same = face.find_match([{"crop": same, "track_id": 1}])
             _, s_other = face.find_match([{"crop": other, "track_id": 2}])
         assert s_same > 0.45 > s_other
+
+
+class TestDetectorProviders:
+    """The detector gets per-call, non-640x640 input sizes. The CoreML EP only
+    accepts the fixed size it was prepared with, so the detector must run on
+    CPU even though the recogniser may use CoreML/CUDA."""
+
+    def test_detector_session_is_cpu_only(self, face):
+        assert face._det.session.get_providers() == ["CPUExecutionProvider"]
+
+    @pytest.mark.parametrize("shape", [(192, 128), (448, 640), (640, 640), (300, 500)])
+    def test_detect_accepts_any_input_shape(self, face, shape):
+        img = np.random.randint(0, 255, (*shape, 3), dtype=np.uint8)
+        det, kps = face._detect(img, 640, thresh=0.5)  # must not raise
+        assert det.shape[1] == 5 and len(det) == len(kps)
+
+    def test_non_square_noise_reference_reports_no_face_not_error(self, face):
+        noise = np.random.randint(0, 255, (300, 500, 3), dtype=np.uint8)
+        assert face.set_target(noise) is False
+        assert face.target_report.reason == "no_face"
+
+    def test_find_match_on_person_crop_does_not_raise(self, face, sample_photo):
+        assert face.set_target(sample_photo)
+        crop = np.random.randint(0, 255, (256, 96, 3), dtype=np.uint8)
+        face.find_match([{"crop": crop, "track_id": 1}])
+        face.compare(crop)
