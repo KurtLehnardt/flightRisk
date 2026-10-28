@@ -45,7 +45,7 @@ def _import_real_mavlink_controller():
     The cache-clear + reimport is done inside a try/finally that puts
     the previous (fake) modules back afterward. That matters when SITL
     and non-SITL tests run in the *same* pytest process without the
-    default `-m "not sitl"` filter (e.g. `pytest tests/ -m ""`):
+    default `-m "not sitl and not slow"` filter (e.g. `pytest tests/ -m ""`):
     tests/test_mavlink.py uses string-target `mock.patch`
     ("flightrisk.drone.mavlink.System", ...), which re-resolves the module
     via sys.modules / package attributes at patch time, not just at
