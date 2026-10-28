@@ -455,3 +455,174 @@ def test_ground_url_parsing():
         with pytest.raises(ValueError):
             parse_ground_urls(bad)
     assert safe_url("ws://user:secret@10.42.0.2:9000/x") == "ws://10.42.0.2:9000/x"
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: the reader never waits, and a landing is never dropped
+# ---------------------------------------------------------------------------
+
+
+class FakeSocket:
+    """Stands in for a WebSocket when the uplink's frame handler is driven directly."""
+
+    def __init__(self, block_sends=False):
+        self.sent: list[str] = []
+        self.block_sends = block_sends
+
+    async def send(self, payload):
+        if self.block_sends:
+            await asyncio.Event().wait()
+        self.sent.append(payload)
+
+    async def close(self, code=1000, reason=""):
+        return None
+
+
+def _open_fake_link(uplink, ws):
+    """What ``EdgeTransport`` does when a connection opens, without a socket (on the running loop)."""
+    uplink._inbox_event = asyncio.Event()
+    transport = uplink._transports[0]
+    transport._ws, transport._connected = ws, True
+    transport._on_connected(ws)
+    return transport
+
+
+@pytest.mark.parametrize("frame", [
+    json.dumps(fp.make_land(cmd_id="L1")),
+    json.dumps({**fp.make_land(cmd_id="L1"), "pad": "y" * 5000}),  # decoded in a worker thread
+    json.dumps(fp.make_emergency_land_all()),
+], ids=["land", "large-land", "emergency"])
+def test_landing_on_a_connection_already_marked_down_still_lands(frame):
+    emergencies = []
+
+    async def scenario():
+        uplink = EdgeUplink(["ws://127.0.0.1:1"], drone_id=DRONE, node_id="win", on_emergency_land=emergencies.append)
+        ws = FakeSocket()
+        transport = _open_fake_link(uplink, ws)
+        await uplink._on_frame(transport, ws, json.dumps(fp.make_ground_hello("win", "standby", 0)), 0.0)
+        # Another task's send saw the connection close and marked it down
+        # while frames already received on it were still being read.
+        transport._connected = False
+        await uplink._on_frame(transport, ws, frame, 0.0)
+        # The reader then ends; a frame it had buffered is still handled.
+        transport._on_closed(ws)
+        await uplink._on_frame(transport, ws, frame, 0.0)
+        await uplink._on_frame(transport, ws, json.dumps(fp.make_heartbeat(1, fence=fp.Fence(1, "win"))), 0.0)
+        return [m["type"] for m, _ in uplink._inbox], ws in uplink.authority._conns
+
+    inbox, conn_kept = asyncio.run(scenario())
+    expected = json.loads(frame)["type"]
+    assert inbox == [expected, expected]
+    assert not conn_kept, "a closed connection was re-created"
+    if expected == "emergency_land_all":
+        assert wait_for(lambda: len(emergencies) == 2, timeout=5)
+
+
+def test_landing_read_after_the_link_was_marked_down_lands_and_is_acked_over_real_sockets():
+    frames = [json.dumps(fp.make_ground_hello("win", "standby", 0)), json.dumps(fp.make_land(cmd_id="L-late"))]
+    ground = ScriptedGround(frames)
+    uplink = EdgeUplink([f"ws://127.0.0.1:{ground.port}"], drone_id=DRONE, node_id="win",
+                        max_delay=30.0, base_delay=30.0)
+    handle = uplink._on_frame
+
+    async def mark_down_before_the_landing(transport, ws, raw, received_at):
+        if '"land"' in raw:
+            transport._connected = False  # as when a concurrent send hits ConnectionClosed
+        await handle(transport, ws, raw, received_at)
+
+    uplink._on_frame = mark_down_before_the_landing
+    uplink.connect(timeout=WAIT_S)
+    try:
+        got = wait_for(lambda: uplink.recv(0.1) or None)
+        assert got is not None and got["type"] == "land" and got["cmd_id"] == "L-late"
+        acks = wait_for(lambda: [m for m in ground.received if m["type"] == "ack"])
+        assert acks and acks[0]["for"] == "land" and acks[0]["cmd_id"] == "L-late"
+    finally:
+        uplink.disconnect()
+        ground.stop()
+
+
+def test_reader_never_waits_for_a_reply_to_be_written():
+    async def scenario():
+        uplink = EdgeUplink(["ws://127.0.0.1:1"], drone_id=DRONE, node_id="win")
+        ws = FakeSocket(block_sends=True)  # a peer that stopped reading
+        transport = _open_fake_link(uplink, ws)
+        for frame in (fp.make_ground_hello("mac", "leader", 1), {"type": "ping", "t1": 1.0}, fp.make_land(cmd_id="L")):
+            await asyncio.wait_for(uplink._on_frame(transport, ws, json.dumps(frame), 0.0), timeout=0.5)
+        inbox = [m["type"] for m, _ in uplink._inbox]
+        transport._on_closed(ws)
+        return inbox
+
+    assert asyncio.run(scenario()) == ["land"]
+
+
+def test_frames_after_a_refusal_are_not_processed_but_a_landing_still_lands():
+    seen: list[str] = []
+    drops: list[tuple[int, str]] = []
+
+    async def scenario():
+        uplink = EdgeUplink(["ws://127.0.0.1:1"], drone_id=DRONE, node_id="win")
+        ws = FakeSocket()
+        transport = _open_fake_link(uplink, ws)
+
+        async def drop(target, code, reason):
+            drops.append((code, reason))
+
+        transport.drop_connection = drop
+        on_message = uplink.authority.on_message
+        uplink.authority.on_message = lambda key, msg: (seen.append(msg["type"]), on_message(key, msg))[1]
+        # A v1 heartbeat (no hello first) is refused in strict mode; the
+        # frames already behind it on the connection must not count.
+        for frame in (fp.make_heartbeat(1), fp.make_ground_hello("mac", "leader", 1), fp.make_land()):
+            await uplink._on_frame(transport, ws, json.dumps(frame), 0.0)
+        await asyncio.sleep(0.05)
+        inbox = [m["type"] for m, _ in uplink._inbox]
+        transport._on_closed(ws)
+        return inbox, uplink.authority.epoch_seen
+
+    inbox, epoch = asyncio.run(scenario())
+    assert seen == ["heartbeat", "land"]
+    assert drops == [(4010, "v1_link_refused")]
+    assert inbox == ["land"] and epoch == 0
+
+
+def test_refused_v1_ground_is_not_reconnected_in_a_tight_loop(token):
+    from tests.test_fleet_authority_hardening import RecordingLog
+
+    v1 = GroundTransportSync(host="127.0.0.1", port=0, token=token, heartbeat_interval_s=0.1)
+    v1.start()
+    log = RecordingLog()
+    uplink = EdgeUplink([f"ws://127.0.0.1:{v1.port}"], drone_id=DRONE, node_id="win", token=token,
+                        base_delay=0.05, max_delay=0.1, logger=log)
+    link = uplink._transports[0]
+    opened: list[float] = []
+    on_connected = link._on_connected
+    link._on_connected = lambda ws: (opened.append(time.monotonic()), on_connected(ws))[1]
+    try:
+        uplink.connect(timeout=WAIT_S)
+        time.sleep(3.0)
+        count = len(opened)
+    finally:
+        uplink.disconnect()
+        v1.stop()
+    # Refused at its first heartbeat each time; reconnects wait 1 s, then 2 s.
+    assert 1 <= count <= 3, f"{count} connections in 3 s"
+    assert log.count("edge_connection_refused") == 1
+
+
+def test_connect_does_not_wait_for_a_ground_that_never_answers(grounds, token):
+    import socket
+
+    a = grounds(leader())
+    silent = socket.create_server(("127.0.0.1", 0))  # completes TCP, never answers the WebSocket handshake
+    uplink = EdgeUplink([f"ws://127.0.0.1:{silent.getsockname()[1]}", a.url], drone_id=DRONE, node_id="win",
+                        token=token)
+    try:
+        started = time.monotonic()
+        uplink.connect(timeout=WAIT_S)
+        took = time.monotonic() - started
+        assert took < 4.0, f"connect() blocked for {took:.1f} s"
+        assert wait_for(lambda: uplink._transports[1].connected)
+    finally:
+        uplink.disconnect()
+        silent.close()

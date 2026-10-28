@@ -29,15 +29,30 @@ How it works:
   version (completed for v2 by ``EdgeAuthority.outbound`` and shaped per
   link); detections (crops, embeddings, thumbnails) go to the authority
   only, and are dropped while there is none.
+* Nothing waits for the network except each connection's own writer. Every
+  connection has a ``LinkOutbox`` (``flightrisk.link_outbox``): ``send``,
+  ``send_detections`` and the reader's replies only queue there and return
+  at once, and each writer sends with a timeout and skips a connection that
+  is closing. A ground whose link stalls (a pulled cable: its keepalive
+  fails 20 to 40 s later and the connection then spends ``close_timeout``
+  closing) therefore never delays telemetry to, or a landing from, the
+  other ground, and never holds up the executor's control thread.
+  Connections use a 1 s ``close_timeout``.
 * A message accepted from the authority is re-checked when the executor
   takes it (``begin_dispatch``): if a new leader was adopted in between, it
   is dropped and answered with ``nack{stale_epoch}``.
+* A connection the authority refuses (``CLOSE``, code 4010) is marked as
+  closing at once, so nothing after the refusal but a landing is processed,
+  and the next reconnect to that ground waits 1 s, doubling to 10 s while
+  it keeps being refused, so a v1 ground in strict mode is not reconnected
+  to in a tight loop.
 
 Privacy: logs carry URLs without credentials, ids, types and sizes only.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import socket
@@ -51,8 +66,9 @@ from urllib.parse import urlsplit, urlunsplit
 from flightrisk import fleet_protocol as fp
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
-from flightrisk.fleet_authority import ACCEPT, CLOSE, LAND, EdgeAuthority
+from flightrisk.fleet_authority import ACCEPT, CLOSE, HANDLED, LAND, EdgeAuthority
 from flightrisk.fleet_ground_link import CLOSE_PROTOCOL
+from flightrisk.link_outbox import BULK, TELEMETRY, URGENT, LinkOutbox
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import (
     EdgeTransport,
@@ -80,6 +96,18 @@ ENV_INFLIGHT_HANDOVER = "FLIGHTRISK_INFLIGHT_HANDOVER"
 # Frames up to this size are decoded on the event loop; larger ones in a
 # worker thread. Every fleet control message is far smaller.
 INLINE_DECODE_BYTES = 4096
+# A connection that is closing gives up on the close handshake after this
+# long (the websockets default is 10 s, during which its sends would wait).
+UPLINK_CLOSE_TIMEOUT_S = 1.0
+# One write on one connection may take this long before it is abandoned.
+UPLINK_SEND_TIMEOUT_S = 1.0
+# connect() waits this long for the first attempt to every ground; slower
+# ones finish (or keep retrying) in the background.
+STARTUP_WAIT_S = 2.0
+# Reconnect delay after the authority refused a ground's connection: this,
+# doubling per refusal in a row, up to the maximum.
+REFUSED_RECONNECT_S = 1.0
+REFUSED_RECONNECT_MAX_S = 10.0
 _CMD_TIMEOUT = 30.0
 _TRUE_VALUES = ("1", "true", "yes", "on")
 _NOT_ID_CHARS = re.compile(r"[^A-Za-z0-9._:-]+")
@@ -194,6 +222,9 @@ class EdgeUplink:
         logger: StructuredLogger | None = None,
         inline_decode_bytes: int = INLINE_DECODE_BYTES,
         on_emergency_land: Callable[[dict[str, Any]], None] | None = None,
+        close_timeout_s: float = UPLINK_CLOSE_TIMEOUT_S,
+        send_timeout_s: float = UPLINK_SEND_TIMEOUT_S,
+        startup_wait_s: float = STARTUP_WAIT_S,
     ):
         self._urls = parse_ground_urls(list(urls))
         if not self._urls:
@@ -206,26 +237,34 @@ class EdgeUplink:
         self._watchdog_feed: Callable[[], None] | None = None
         self._last_authority_msg_s: float | None = None
         self.authority = EdgeAuthority(
-            drone_id, node_id, legacy=legacy, inflight_handover=inflight_handover, logger=self._log
+            drone_id, node_id, legacy=legacy, inflight_handover=inflight_handover, logger=self._log, clock=clock
         )
+        self._runner = runner if runner is not None else EdgeRunner()
+        self._send_timeout_s = float(send_timeout_s)
+        self._startup_wait_s = float(startup_wait_s)
         self._bridge = AsyncBridge(name="edge-uplink", cmd_timeout=_CMD_TIMEOUT)
         self._inbox: deque[tuple[dict[str, Any], Any]] = deque()
         self._inbox_event: asyncio.Event | None = None
         self._tasks: set[asyncio.Task] = set()
         self._dropped_detections = 0
+        # Event-loop state: one outbox per open connection, connections being
+        # closed after a refusal, and refusals in a row per ground.
+        self._outboxes: dict[Any, LinkOutbox] = {}
+        self._closing: set[Any] = set()
+        self._refusals: dict[int, int] = {}
         self._transports: list[EdgeTransport] = []
         for index, url in enumerate(self._urls):
-            label = safe_url(url)
             self._transports.append(EdgeTransport(
                 ws_url=url,
-                runner=runner,
+                runner=self._runner,
                 token=token,
                 base_delay=base_delay,
                 max_delay=max_delay,
                 clock=clock,
                 on_frame=self._frame_handler(index),
-                on_connected=lambda ws, label=label: self.authority.opened(ws, label),
-                on_closed=self.authority.closed,
+                on_connected=lambda ws, index=index: self._link_opened(index, ws),
+                on_closed=self._link_closed,
+                connect_kwargs={"close_timeout": float(close_timeout_s)},
             ))
 
     # -- Properties the edge device uses ------------------------------------
@@ -260,7 +299,13 @@ class EdgeUplink:
     # -- Sync API -----------------------------------------------------------
 
     def connect(self, timeout: float = _CMD_TIMEOUT) -> None:
-        """Start connecting to every ground; a ground that is down is retried in the background."""
+        """Start connecting to every ground; a ground that is down is retried in the background.
+
+        Waits up to ``startup_wait_s`` for the first attempts; a ground that
+        is slower to answer (an unplugged link waits for the open timeout)
+        keeps connecting in the background, so it never delays the edge's
+        start.
+        """
         self._bridge.start_loop()
         self._bridge.run(self._connect_all(), timeout=timeout)
         self._log.info(
@@ -273,8 +318,12 @@ class EdgeUplink:
         )
 
     def send_detections(self, msg: DetectionMessage, timeout: float = _CMD_TIMEOUT) -> None:
-        if self._bridge.is_running:
-            self._bridge.run(self._send_detections(msg), timeout=timeout)
+        """Queue *msg* for the authority (never waits for the network; *timeout* is unused)."""
+        if not self._bridge.is_running:
+            return
+        # Serialized here, on the frame thread, and only when there is an authority to send it to.
+        payload = json.dumps(self._runner.to_dict(msg)) if self.authority.authority_key is not None else None
+        self._call_soon(self._post_detections, payload)
 
     def recv(self, recv_timeout: float | None = None, timeout: float = _CMD_TIMEOUT) -> dict[str, Any] | None:
         """The next message for the executor, or ``None``; see ``EdgeAuthority.begin_dispatch``."""
@@ -291,14 +340,18 @@ class EdgeUplink:
                 return out
             stale = self.authority.stale_reply()
             if stale is not None:
-                self._bridge.run(self._broadcast(stale), timeout=timeout)
+                self._call_soon(self._post_broadcast, stale)
 
     def send(self, message: dict[str, Any], timeout: float = _CMD_TIMEOUT) -> bool:
-        """Send an executor message (telemetry, ack, nack) to every ground; True if any got it."""
+        """Queue an executor message (telemetry, ack, nack) for every ground; True if any can take it.
+
+        Never waits for the network (*timeout* is unused): each ground's
+        writer sends it, so a stalled ground delays nobody else.
+        """
         completed = self.authority.outbound(message)
-        if not self._bridge.is_running:
+        if not self.authority.broadcast_keys():
             return False
-        return self._bridge.run(self._broadcast(completed), timeout=timeout)
+        return self._call_soon(self._post_broadcast, completed)
 
     def disconnect(self, timeout: float = _CMD_TIMEOUT) -> None:
         if self._bridge.is_running:
@@ -310,17 +363,50 @@ class EdgeUplink:
 
     # -- Event loop side -----------------------------------------------------
 
+    def _call_soon(self, fn: Callable[..., None], *args: Any) -> bool:
+        """Run *fn* on the uplink's event loop without waiting; False when the loop is not running."""
+        loop = self._bridge.loop
+        if loop is None or not loop.is_running():
+            return False
+        try:
+            loop.call_soon_threadsafe(fn, *args)
+        except RuntimeError:  # the loop closed in between
+            return False
+        return True
+
     async def _connect_all(self) -> None:
         if self._inbox_event is None:
             self._inbox_event = asyncio.Event()
-        await asyncio.gather(*(t.connect(retry_in_background=True) for t in self._transports))
+        attempts = [self._spawn(t.connect(retry_in_background=True)) for t in self._transports]
+        await asyncio.wait(attempts, timeout=self._startup_wait_s)
 
     async def _disconnect_all(self) -> None:
-        await asyncio.gather(*(t.disconnect() for t in self._transports), return_exceptions=True)
-        for task in list(self._tasks):
+        # Pending connects and closes first, so none opens a connection after
+        # its transport was told to stop.
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*(t.disconnect() for t in self._transports), return_exceptions=True)
+        for outbox in list(self._outboxes.values()):
+            outbox.close()
+        self._outboxes.clear()
         if self._inbox_event is not None:
             self._inbox_event.set()
+
+    def _link_opened(self, index: int, ws: Any) -> None:
+        label = safe_url(self._transports[index].ws_url)
+        self.authority.opened(ws, label)
+        outbox = LinkOutbox(ws, label=label, send_timeout_s=self._send_timeout_s, logger=self._log)
+        self._outboxes[ws] = outbox
+        outbox.start()
+
+    def _link_closed(self, ws: Any) -> None:
+        self.authority.closed(ws)
+        self._closing.discard(ws)
+        outbox = self._outboxes.pop(ws, None)
+        if outbox is not None:
+            outbox.close()
 
     def _frame_handler(self, index: int):
         async def on_frame(ws: Any, raw: Any, received_at: float) -> None:
@@ -333,8 +419,9 @@ class EdgeUplink:
         return on_frame
 
     async def _on_frame(self, transport: EdgeTransport, ws: Any, raw: Any, received_at: float) -> None:
-        if transport.websocket is not ws:
-            return
+        # Decode first, whatever the connection's state: a landing read from
+        # a connection that is already marked down (another task saw it
+        # close) or being closed still lands.
         proto = self.authority.proto_for(ws)
         size = len(raw) if isinstance(raw, (str, bytes, bytearray)) else 0
         try:
@@ -345,9 +432,9 @@ class EdgeUplink:
         except fp.ProtocolError:
             self.authority.on_decode_error(ws, size)
             return
-        if transport.websocket is not ws and msg.get("type") not in fp.FAILSAFE_TYPES:
-            # The connection went away during a threaded decode. A landing
-            # still lands; anything else belongs to a connection that is gone.
+        if msg.get("type") not in fp.FAILSAFE_TYPES and (transport.websocket is not ws or ws in self._closing):
+            # Anything but a landing from a connection that is gone or being
+            # closed is dropped.
             return
         decision = self.authority.on_message(ws, msg)
         if decision.feed_watchdog:
@@ -356,11 +443,25 @@ class EdgeUplink:
             self._land(msg, decision.admitted)
         elif decision.action == ACCEPT:
             self._accept(transport, ws, msg, decision.admitted, received_at)
+        elif decision.action == HANDLED and decision.reason == "hello":
+            self._refusals.pop(self._transports.index(transport), None)
         transport.proto = self.authority.proto_for(ws)
         for reply in decision.replies:
-            await self._reply(transport, ws, reply)
+            self._queue_reply(ws, reply)
         if decision.action == CLOSE:
-            await transport.drop_connection(ws, CLOSE_PROTOCOL, decision.reason)
+            self._refuse_link(transport, ws, decision.reason)
+
+    def _refuse_link(self, transport: EdgeTransport, ws: Any, reason: str) -> None:
+        """Close a connection the authority refused, without waiting, and back off before reconnecting."""
+        self._closing.add(ws)
+        outbox = self._outboxes.get(ws)
+        if outbox is not None:
+            outbox.close()
+        index = self._transports.index(transport)
+        refusals = self._refusals.get(index, 0) + 1
+        self._refusals[index] = refusals
+        transport.hold_reconnect(min(REFUSED_RECONNECT_MAX_S, REFUSED_RECONNECT_S * 2 ** min(refusals - 1, 8)))
+        self._spawn(transport.drop_connection(ws, CLOSE_PROTOCOL, reason))
 
     def _feed(self, received_at: float) -> None:
         self._last_authority_msg_s = received_at
@@ -371,7 +472,7 @@ class EdgeUplink:
     def _accept(self, transport: EdgeTransport, ws: Any, msg: dict[str, Any], admitted: Any, received_at: float) -> None:
         mtype = msg.get("type")
         if mtype == fp.PING:
-            self._spawn(self._answer_ping(transport, ws, msg, received_at))
+            self._answer_ping(ws, msg, received_at)
             return
         if mtype == fp.CLOCK:
             try:
@@ -409,24 +510,43 @@ class EdgeUplink:
         if self._inbox_event is not None:
             self._inbox_event.set()
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
-    async def _answer_ping(self, transport: EdgeTransport, ws: Any, msg: dict[str, Any], received_at: float) -> None:
-        try:
-            pong = fp.answer_ping(msg, t2=received_at, clock=self._clock)
-        except fp.ProtocolError:
+    def _answer_ping(self, ws: Any, msg: dict[str, Any], received_at: float) -> None:
+        outbox = self._outboxes.get(ws)
+        if outbox is None:
             return
-        await self._reply(transport, ws, pong)
 
-    async def _reply(self, transport: EdgeTransport, ws: Hashable, reply: dict[str, Any]) -> bool:
+        def pong() -> str | None:
+            # Built by the writer right before the write, so t3 is as late as possible.
+            try:
+                reply = fp.answer_ping(msg, t2=received_at, clock=self._clock)
+            except fp.ProtocolError:
+                return None
+            return self._encode_reply(ws, reply)
+
+        outbox.put(URGENT, pong)
+
+    def _encode_reply(self, ws: Hashable, reply: dict[str, Any]) -> str | None:
         try:
-            return await transport.send(reply, proto=self.authority.proto_for(ws), ws=ws)
+            fp.validate_message(reply, proto=self.authority.proto_for(ws))
         except fp.ProtocolError as exc:
             self._log.warning("edge_reply_invalid", type=reply.get("type"), error=str(exc)[:200])
-            return False
+            return None
+        return json.dumps(reply)
+
+    def _queue_reply(self, ws: Hashable, reply: dict[str, Any]) -> None:
+        """Queue a reply on the connection the message came from (never on its replacement)."""
+        outbox = self._outboxes.get(ws)
+        if outbox is None:
+            return
+        payload = self._encode_reply(ws, reply)
+        if payload is not None:
+            outbox.put(URGENT, payload)
 
     async def _recv(self, timeout: float | None) -> tuple[dict[str, Any], Any] | None:
         loop = asyncio.get_running_loop()
@@ -446,37 +566,30 @@ class EdgeUplink:
             except (asyncio.TimeoutError, TimeoutError):
                 return None
 
-    async def _broadcast(self, msg: dict[str, Any]) -> bool:
+    def _post_broadcast(self, msg: dict[str, Any]) -> None:
+        """Queue *msg*, shaped per link, on every connection that receives broadcasts (event loop)."""
         keys = set(self.authority.broadcast_keys())
-        sends = []
-        for transport in self._transports:
-            ws = transport.websocket
-            if ws is None or ws not in keys:
+        kind = TELEMETRY if msg.get("type") == fp.TELEMETRY else URGENT
+        for ws, outbox in list(self._outboxes.items()):
+            if ws not in keys or ws in self._closing:
                 continue
             shaped = self.authority.shape_for(ws, msg)
             if shaped is None:
                 continue
-            sends.append(self._send_shaped(transport, ws, *shaped))
-        if not sends:
-            return False
-        results = await asyncio.gather(*sends, return_exceptions=True)
-        return any(result is True for result in results)
+            out, proto = shaped
+            try:
+                fp.validate_message(out, proto=proto)
+            except fp.ProtocolError as exc:
+                self._log.warning("edge_send_invalid", type=out.get("type"), url=outbox.label, error=str(exc)[:200])
+                continue
+            outbox.put(kind, json.dumps(out))
 
-    async def _send_shaped(self, transport: EdgeTransport, ws: Any, msg: dict[str, Any], proto: int) -> bool:
-        try:
-            return await transport.send(msg, proto=proto, ws=ws)
-        except fp.ProtocolError as exc:
-            self._log.warning(
-                "edge_send_invalid", type=msg.get("type"), url=safe_url(transport.ws_url), error=str(exc)[:200]
-            )
-            return False
-
-    async def _send_detections(self, msg: DetectionMessage) -> None:
+    def _post_detections(self, payload: str | None) -> None:
+        """Queue a serialized detection message for the authority only (event loop); None counts a drop."""
         key = self.authority.authority_key
-        for transport in self._transports:
-            if key is not None and transport.websocket is key:
-                await transport.send_detections(msg, ws=key)
-                return
+        outbox = self._outboxes.get(key) if key is not None else None
+        if payload is not None and outbox is not None and key not in self._closing and outbox.put(BULK, payload):
+            return
         self._dropped_detections += 1
         if self._dropped_detections == 1 or self._dropped_detections % 100 == 0:
             self._log.warning(

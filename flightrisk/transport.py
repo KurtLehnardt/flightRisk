@@ -76,6 +76,7 @@ from flightrisk.fleet_ground_link import (
     GroundV2Mixin,
     PeerVersionError,
 )
+from flightrisk.link_outbox import is_open
 from flightrisk.observability import StructuredLogger
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,16 @@ _PING_ROUND_TIMEOUT_S = 1.0
 # time is live, so the second one is refused; one that does not is treated as
 # dropped, so the second one is a reconnect and takes over.
 _DUPLICATE_PING_TIMEOUT_S = 1.0
+
+# Ground sends to one edge never wait longer than this, and the ground's
+# connections give up on a close handshake after _LINK_CLOSE_TIMEOUT_S (the
+# websockets default is 10 s). A pulled cable makes a connection's
+# keepalive fail 20 to 40 s later, and the connection then spends its close
+# timeout closing; a send waiting on it must not hold up the heartbeats and
+# landings of every other edge (plan section 2.7: the leader's own drone
+# keeps flying when a follower's link dies).
+_SEND_TIMEOUT_S = 0.5
+_LINK_CLOSE_TIMEOUT_S = 1.0
 
 # Close code for a connection that loses a drone_id conflict: a second
 # connection refused while the first is live, or a dropped connection that a
@@ -353,6 +364,8 @@ class EdgeTransport:
         on_connected: Called with each new WebSocket right after it opens,
             before its reader starts (raw mode bookkeeping).
         on_closed: Called with a WebSocket when its reader ends.
+        connect_kwargs: Extra keyword arguments for ``websockets.connect``
+            (the multi-ground uplink passes a short ``close_timeout``).
 
     ``proto`` is the protocol version agreed on the current connection (1
     until a ``hello`` is exchanged; reset to 1 on every new connection). It
@@ -373,8 +386,12 @@ class EdgeTransport:
         on_frame: Callable[[Any, Any, float], Awaitable[None]] | None = None,
         on_connected: Callable[[Any], None] | None = None,
         on_closed: Callable[[Any], None] | None = None,
+        connect_kwargs: dict[str, Any] | None = None,
     ):
         self._ws_url = ws_url
+        self._connect_kwargs = dict(connect_kwargs or {})
+        # One-shot minimum delay for the next reconnect (see hold_reconnect).
+        self._reconnect_floor_s = 0.0
         self._ws = None
         self._connected = False
         self._runner = runner if runner is not None else EdgeRunner()
@@ -473,7 +490,7 @@ class EdgeTransport:
         """Connection logic, assumes ``_connect_lock`` is already held."""
         if self._connected:
             return
-        self._ws = await websockets.connect(self._ws_url)
+        self._ws = await websockets.connect(self._ws_url, **self._connect_kwargs)
         self._connected = True
         self._should_reconnect = True
         self._retry_count = 0
@@ -633,6 +650,7 @@ class EdgeTransport:
             # reaches 2**1024 after about 34 minutes at a 2 s cap) cannot
             # raise OverflowError and kill the reconnect task.
             delay = min(self._base_delay * 2 ** min(self._retry_count, 16), self._max_delay)
+            delay, self._reconnect_floor_s = max(delay, self._reconnect_floor_s), 0.0
             logger.info(
                 "[%s] Reconnecting in %.1fs (attempt %d)",
                 self._ws_url, delay, self._retry_count + 1,
@@ -656,6 +674,15 @@ class EdgeTransport:
                 self._ws_url, self._retry_count,
             )
         return False
+
+    def hold_reconnect(self, seconds: float) -> None:
+        """Wait at least *seconds* before the next reconnect attempt (applies once).
+
+        The multi-ground uplink calls this before closing a connection it
+        refused, so a ground it will refuse again is not reconnected to in a
+        tight loop.
+        """
+        self._reconnect_floor_s = max(self._reconnect_floor_s, float(seconds))
 
     def _schedule_reconnect(self) -> None:
         """Kick off a background reconnect attempt, if one isn't already running.
@@ -880,6 +907,12 @@ class GroundTransport(GroundV2Mixin):
         on_stale_epoch: Called with an edge's ``epoch_seen`` when an edge
             reports a leader epoch above this ground's (in a stale-leader
             nack or its ``hello``), so the leader logic can step down.
+        send_timeout_s: The longest one control send to one edge may take
+            (heartbeats, ``emergency_land_all``, commands). Every broadcast
+            sends to each edge independently and skips a connection that is
+            closing, so one dead link never delays another edge's
+            heartbeat or landing. Keep it below the heartbeat interval.
+        close_timeout_s: ``close_timeout`` of the ground's connections.
     """
 
     def __init__(
@@ -900,8 +933,13 @@ class GroundTransport(GroundV2Mixin):
         identity: GroundIdentity | None = None,
         local_min_proto: int = 1,
         on_stale_epoch: Callable[[int], None] | None = None,
+        send_timeout_s: float = _SEND_TIMEOUT_S,
+        close_timeout_s: float = _LINK_CLOSE_TIMEOUT_S,
     ):
         self._hosts = parse_bind_hosts(host)
+        self._send_timeout_s = float(send_timeout_s)
+        self._close_timeout_s = float(close_timeout_s)
+        self._send_timeouts = 0
         self._links = GroundLinks(identity, local_min_proto=local_min_proto) if identity is not None else None
         self._commands = CommandTracker()
         self._on_stale_epoch = on_stale_epoch
@@ -1317,7 +1355,9 @@ class GroundTransport(GroundV2Mixin):
         cancelling the bind watcher), the listener the bind produces is
         closed rather than left listening with nothing tracking it.
         """
-        bind = asyncio.ensure_future(websockets.serve(self._handle_client, host, port))
+        bind = asyncio.ensure_future(
+            websockets.serve(self._handle_client, host, port, close_timeout=self._close_timeout_s)
+        )
         try:
             return await asyncio.shield(bind)
         except asyncio.CancelledError:
@@ -1633,11 +1673,28 @@ class GroundTransport(GroundV2Mixin):
         return repr(drone_id) if drone_id is not None else "an unidentified edge"
 
     async def _send_json(self, websocket, payload: str) -> bool:
+        """Send *payload* to one edge; False when it is closing, closed or the send times out.
+
+        Never waits longer than ``send_timeout_s``: a send to a connection
+        that is closing would otherwise wait for its close timeout. A send
+        that timed out may still be delivered (it was written to the
+        socket's buffer); it is reported as not confirmed.
+        """
+        if not is_open(websocket):
+            return False
         try:
-            await websocket.send(payload)
+            await asyncio.wait_for(websocket.send(payload), timeout=self._send_timeout_s)
         except ConnectionClosed:
             self._clients.discard(websocket)
             self._authenticated_clients.discard(websocket)
+            return False
+        except (asyncio.TimeoutError, TimeoutError):
+            self._send_timeouts += 1
+            if self._send_timeouts == 1 or self._send_timeouts % 20 == 0:
+                logger.warning(
+                    "Send to %s timed out after %.2f s (%d so far)",
+                    self._describe(websocket), self._send_timeout_s, self._send_timeouts,
+                )
             return False
         return True
 
@@ -1739,12 +1796,22 @@ class GroundTransport(GroundV2Mixin):
         return await self.broadcast_control(fp.make_heartbeat(seq, fence=fence))
 
     async def _heartbeat_loop(self, interval_s: float) -> None:
+        # Paced by deadline, not by sleeping after each broadcast, so a
+        # broadcast that took up to send_timeout_s does not stretch the gap
+        # every edge sees.
+        loop = asyncio.get_running_loop()
+        due = loop.time()
         while True:
             try:
                 await self.send_heartbeat()
             except Exception:
                 logger.exception("Heartbeat broadcast failed")
-            await asyncio.sleep(interval_s)
+            due += interval_s
+            delay = due - loop.time()
+            if delay < 0:
+                # Fell behind (a suspended laptop): carry on from now, no burst.
+                due, delay = loop.time(), 0.0
+            await asyncio.sleep(delay)
 
     def _resolve_target(self, target: Any) -> tuple[Any, str | None]:
         if isinstance(target, str):
