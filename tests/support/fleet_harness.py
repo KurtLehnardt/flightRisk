@@ -79,6 +79,20 @@ def wait_for(predicate: Callable[[], Any], timeout: float = WAIT_S, interval: fl
         time.sleep(interval)
 
 
+class TimedCalls(list):
+    """A ``FakeDrone.calls`` list that also remembers when each call was made (``times``, same index)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.times: list[float] = []
+        self._lock = threading.Lock()
+
+    def append(self, item: Any) -> None:
+        with self._lock:
+            super().append(item)
+            self.times.append(time.monotonic())
+
+
 class GroundNode:
     """A ground station's transport: accepts edges, heartbeats them, records what they send."""
 
@@ -123,6 +137,10 @@ class GroundNode:
 
     def emergency_land_all(self) -> int:
         return self.transport.emergency_land_all()
+
+    def sync_clock(self, drone_id: str):
+        """Measure the edge's clock offset and send it; the edge refuses ``start_at`` until it has one."""
+        return self.transport.sync_clock(drone_id)
 
     def received(self, mtype: str) -> list[dict[str, Any]]:
         return [m for _, m in list(self.controls) if m.get("type") == mtype]
@@ -219,6 +237,7 @@ class FleetEdge:
         self.log = StructuredLogger(component=f"harness-edge-{drone_id}")
         self.runner = EdgeRunner(detector=None)
         self.drone = FakeDrone(name=drone_id, config=drone_config)
+        self.drone.calls = TimedCalls()
         self.envelope = SafetyEnvelope(alt_slot_cm=alt_slot_cm, link_loss_land_s=link_loss_land_s)
         #: When each ``emergency_land_all`` reached this edge, and how many drone calls existed by then.
         self.emergencies: list[float] = []
@@ -346,7 +365,8 @@ class TwoNodeHarness:
     def __init__(self, seed: int = 0, *, edges: int = 2, link_loss_land_s: float = PRODUCT_LINK_LOSS_LAND_S,
                  heartbeat_interval_s: float = fp.HEARTBEAT_INTERVAL_S,
                  reconnect_base_delay_s: float = PRODUCT_RECONNECT_BASE_DELAY_S,
-                 reconnect_max_delay_s: float = PRODUCT_RECONNECT_MAX_DELAY_S, token: str = "harness-token"):
+                 reconnect_max_delay_s: float = PRODUCT_RECONNECT_MAX_DELAY_S, token: str = "harness-token",
+                 drone_configs: dict[str, FakeDroneConfig] | None = None):
         self.sim = NetSim(seed=seed)
         self.token = token
         self.grounds = {name: GroundNode(name, token, heartbeat_interval_s) for name in self.GROUNDS}
@@ -354,7 +374,8 @@ class TwoNodeHarness:
             f"drone-{k}": FleetEdge(f"drone-{k}", ALT_SLOTS_CM[(k - 1) % len(ALT_SLOTS_CM)], token,
                                     link_loss_land_s=link_loss_land_s,
                                     reconnect_base_delay_s=reconnect_base_delay_s,
-                                    reconnect_max_delay_s=reconnect_max_delay_s)
+                                    reconnect_max_delay_s=reconnect_max_delay_s,
+                                    drone_config=(drone_configs or {}).get(f"drone-{k}"))
             for k in range(1, edges + 1)
         }
         self._links: dict[tuple[str, str], NetLink] = {}

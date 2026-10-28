@@ -255,6 +255,8 @@ class NetLink:
         self.flap_history: list[tuple[float, str]] = []
         self.port = 0
         self.accepted = 0
+        #: Monotonic time of every accepted client connection.
+        self.accept_times: list[float] = []
 
     # --- addressing ---
 
@@ -291,6 +293,7 @@ class NetLink:
 
     async def _on_connect(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         self.accepted += 1
+        self.accept_times.append(time.monotonic())
         try:
             server_reader, server_writer = await asyncio.open_connection(self.target_host, self.target_port)
         except OSError:
