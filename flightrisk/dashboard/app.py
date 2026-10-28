@@ -49,7 +49,11 @@ from flightrisk.drone.controller import (
 from flightrisk.drone.coordinator import FleetCoordinator
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
+from flightrisk import obs_events
+from flightrisk import obs_metrics
+from flightrisk.obs_log import set_session_id
 from flightrisk.canon import TargetCanon
+from flightrisk.dashboard.obs_hooks import install_http_observability, install_socketio_observability
 
 try:
     from flightrisk.telemetry import init_telemetry, get_tracer, get_meter, FlightRiskMetrics
@@ -271,6 +275,12 @@ try:
 except ImportError:
     pass
 
+# RED metrics, spans and user_input events for every REST request and
+# Socket.IO event (flightrisk/dashboard/obs_hooks.py). The API-key gate above
+# is unchanged and still decides first whether a request is served.
+install_http_observability(app)
+install_socketio_observability(socketio)
+
 
 # ---------------------------------------------------------------------------
 # Edge (ground-station) detection consumer
@@ -372,6 +382,10 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
     socketio.emit("match_alert", match_entry)
 
 
+#: Stage timings and the periodic detection_pipeline event for edge detections.
+_edge_stats = obs_events.PipelineStats()
+
+
 def _edge_process_and_emit(socketio, msg, fps_state=None):
     """Score one edge ``DetectionMessage`` and emit ``frame`` (+ ``match_alert``).
 
@@ -382,7 +396,9 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
     station = app_state.ground_station
     if station is None:
         return
+    _t0 = time.perf_counter()
     results = station.process_message(msg)
+    _edge_stats.stage("edge_score", (time.perf_counter() - _t0) * 1000.0)
 
     w = msg.frame_width or 0
     h = msg.frame_height or 0
@@ -440,6 +456,7 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
         if msg.thumbnail_jpeg
         else None
     )
+    _edge_stats.frame_done(len(results), source="edge")
 
     socketio.emit("frame", {
         "image": image_b64,
@@ -515,6 +532,19 @@ def fleet_geofence_cm() -> float:
     return value
 
 
+def _fleet_span(name: str, **attrs):
+    """A span around one fleet operation (no-op while OpenTelemetry is off)."""
+    from contextlib import nullcontext
+
+    try:
+        from opentelemetry import trace as _otel_trace
+    except ImportError:  # pragma: no cover
+        return nullcontext()
+    tracer = _otel_trace.get_tracer("flightrisk.fleet")
+    attributes = {f"flightrisk.{k}": str(v) for k, v in attrs.items() if v is not None}
+    return tracer.start_as_current_span(name, attributes=attributes)
+
+
 class TransportEdgeLink:
     """``EdgeLink`` for one drone over the dashboard's ``GroundTransportSync``.
 
@@ -555,11 +585,12 @@ class TransportEdgeLink:
         if msg.get("type") == fp.PING:
             self._ping(msg)
             return
-        if not self._transport.send_to_drone(self.drone_id, msg, timeout=self._send_timeout_s):
-            raise ConnectionError(
-                f"{msg.get('type')!r} was not delivered: drone {self.drone_id!r} "
-                f"is not connected to the ground transport"
-            )
+        with _fleet_span(f"fleet.command {msg.get('type')}", drone_id=self.drone_id, msg_type=msg.get("type")):
+            if not self._transport.send_to_drone(self.drone_id, msg, timeout=self._send_timeout_s):
+                raise ConnectionError(
+                    f"{msg.get('type')!r} was not delivered: drone {self.drone_id!r} "
+                    f"is not connected to the ground transport"
+                )
 
     def _ping(self, msg: dict) -> None:
         estimate = self._transport.sync_clock(
@@ -792,6 +823,8 @@ class FleetSupervisor:
         else:
             detail = "; ".join(f"{who}: {why}" for who, why in sorted(result.refusals.items()))
             log.warning("Fleet start refused: %s", detail)
+            for who in sorted(result.refusals):
+                obs_events.flight_safety("fleet_start_refused", reason="refused", drone_id=who, detail=str(result.refusals[who]))
             self._emit("fleet_event", {"event": "start_refused", "detail": detail})
         self.emit_status()
         return result
@@ -854,6 +887,7 @@ class FleetSupervisor:
                 if self._landed_all:
                     break
             log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
+            obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
             self.coordinator.on_drone_lost(drone_id)
             lost.append(drone_id)
         return lost
@@ -1150,14 +1184,25 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     log = app_state.logger
     log.info("pipeline_init", source=source, target_path=target_path)
 
+    # OpenTelemetry first, so model loads and the startup target are recorded.
+    if _HAS_TELEMETRY:
+        otel_enabled = init_telemetry()
+        if otel_enabled:
+            app_state.tracer = get_tracer()
+            app_state.otel_metrics = FlightRiskMetrics(get_meter())
+            log.info("opentelemetry_enabled")
+
     if app_state.detector is None:
         app_state.detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
+        obs_events.model_load("yolo", "ok")
 
     if app_state.reid is None:
         try:
             app_state.reid = PersonReID(match_threshold=0.55)
+            obs_events.model_load("reid", "ok")
         except Exception as e:
             log.warning("reid_unavailable", error=str(e))
+            obs_events.model_load("reid", "failed", error=e)
 
     # Appearance-only mode: faces are not resolvable at search altitude, so
     # face recognition is never constructed and the face signal is disabled
@@ -1175,8 +1220,10 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         try:
             from flightrisk.vision.face import FaceRecognizer
             app_state.face = FaceRecognizer(match_threshold=0.35)
+            obs_events.model_load("face", "ok")
         except Exception as e:
             log.warning("insightface_unavailable", error=str(e))
+            obs_events.model_load("face", "failed", error=e)
 
     if app_state.scorer is None:
         app_state.scorer = MatchScorer(match_threshold=0.45)
@@ -1191,6 +1238,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             )
         except Exception as e:
             log.warning("signal_registry_init_failed", error=str(e))
+            obs_events.model_load("signal_registry", "failed", error=e)
     if appearance_only and app_state.signal_registry is not None:
         app_state.signal_registry.disable_signal("insightface_face")
 
@@ -1213,6 +1261,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                 )
         except Exception as e:
             log.warning("reasoning_unavailable", error=str(e))
+            obs_events.model_load("reasoning", "failed", error=e)
 
     # Start the async reasoning worker thread (only if reasoning is available
     # and not already running from a previous init call, e.g. restart_dashboard).
@@ -1225,12 +1274,16 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         _, buf = cv2.imencode(".jpg", img)
         app_state.target_photo = base64.b64encode(buf).decode("utf-8")
         # Also set face recognition target
+        face_ok = None
         if app_state.face:
-            if not app_state.face.set_target_from_file(target_path):
+            face_ok = app_state.face.set_target_from_file(target_path)
+            if not face_ok:
                 log.warning("face_target_rejected_at_startup")
         # Set configurable signal targets
         if app_state.signal_registry:
             app_state.signal_registry.set_target(img)
+        obs_events.target_image(img, source="startup", raw=buf.tobytes(), face_report=_face_report(),
+                                face_detected=face_ok)
 
     # Initialize session persistence
     if app_state.db is None:
@@ -1243,20 +1296,18 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             from flightrisk.drone.obstacle import ObstacleGuard
             app_state.obstacle_guard = ObstacleGuard()
             log.info("obstacle_guard_initialized")
+            obs_events.model_load("obstacle_guard", "ok")
         except Exception as e:
             log.warning("obstacle_guard_unavailable", error=str(e))
+            obs_events.model_load("obstacle_guard", "failed", error=e)
+            # The search pattern then flies without obstacle checks.
+            obs_events.flight_safety("obstacle_guard_unavailable", reason="init_failed", error_type=type(e).__name__)
 
     if app_state.canon is None:
         app_state.canon = TargetCanon(session_db=app_state.db)
         log.info("target_canon_initialized")
 
-    # OpenTelemetry
-    if _HAS_TELEMETRY:
-        otel_enabled = init_telemetry()
-        if otel_enabled:
-            app_state.tracer = get_tracer()
-            app_state.otel_metrics = FlightRiskMetrics(get_meter())
-            log.info("opentelemetry_enabled")
+    obs_metrics.register_queue("reasoning", _gemma_queue.qsize)
 
     app_state.source_config = source_config
     app_state.source = source
@@ -1427,6 +1478,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         target_description=app_state.target_description,
     )
 
+    set_session_id(app_state.session_id)
     log.info("pipeline_ready", source=app_state.source, session_id=app_state.session_id)
 
 
@@ -1465,6 +1517,7 @@ def upload_target():
         app_state.signal_registry.set_target(img)
     _push_edge_target(img)
     log.info("upload_target_saved size_kb=%d", len(img_data) // 1024)
+    obs_events.target_image(img, source="upload", raw=img_data, face_report=_face_report(), face_detected=face_ok)
     return jsonify({"success": True, "face_detected": face_ok,
                     "face_report": _face_report()})
 
@@ -1528,6 +1581,7 @@ def clear_target():
         path.unlink()
     _push_edge_target(None)
     log.info("target_cleared")
+    obs_events.target_cleared()
     return jsonify({"success": True})
 
 
@@ -1743,6 +1797,8 @@ def on_set_target(data):
         # Score input image quality
         quality_scorer = ImageQualityScorer()
         quality_report = quality_scorer.score(img)
+        obs_events.target_image(img, source="socket_upload", raw=img_data, quality=quality_report,
+                                face_report=_face_report(), face_detected=face_ok)
         emit("target_set", {
             "success": True,
             "face_detected": face_ok,
@@ -1778,6 +1834,7 @@ def on_revert_target(data):
     if app_state.signal_registry:
         app_state.signal_registry.set_target(img)
     _push_edge_target(img)
+    obs_events.target_image(img, source="revert", raw=buf.tobytes(), face_report=_face_report(), face_detected=face_ok)
     emit("target_set", {"success": True, "face_detected": face_ok,
                         "face_report": _face_report(), "reverted_to": version_id})
 
@@ -1789,7 +1846,9 @@ def on_set_description(data):
     if desc:
         app_state.target_description = desc
         if app_state.logger:
-            app_state.logger.info("target_description_set", description=desc)
+            # The text itself is in the user_input event, and only with
+            # FLIGHTRISK_TELEMETRY_CONTENT on.
+            app_state.logger.info("target_description_set", description_chars=len(desc))
         emit("description_set", {"description": desc})
 
 
@@ -2082,7 +2141,8 @@ def _run_fleet_action(action: str) -> None:
 
     def _work():
         try:
-            getattr(supervisor, action)()
+            with _fleet_span(f"fleet.{action}"):
+                getattr(supervisor, action)()
         except Exception as exc:
             log.error("Fleet %s failed", action, exc_info=True)
             socketio.emit("error", {"message": f"Fleet {action} failed: {exc}"})
@@ -2159,10 +2219,16 @@ def on_start_search(data):
                 if frame is None:
                     if not frame_warned:
                         socketio.emit("warning", {"message": "No video frame -- obstacle check skipped"})
+                        obs_events.flight_safety("obstacle_check_skipped", reason="no_frame",
+                                                 drone_id=getattr(drone, "name", None), waypoint=i + 1)
                         frame_warned = True
                     break
 
                 check = obstacle_guard.check_path(frame)
+                obs_events.obstacle_check(
+                    check, min_safe_depth=getattr(obstacle_guard, "min_safe_depth", None),
+                    waypoint=i + 1, retry=avoidance_retries, drone_id=getattr(drone, "name", None),
+                )
                 if check["safe"]:
                     break
 
@@ -2178,6 +2244,8 @@ def on_start_search(data):
                     socketio.emit("warning", {
                         "message": f"Max avoidance retries ({MAX_AVOIDANCE_RETRIES}) reached at waypoint {i + 1}, skipping"
                     })
+                    obs_events.flight_safety("waypoint_skipped", reason="max_avoidance_retries",
+                                             drone_id=getattr(drone, "name", None), waypoint=i + 1)
                     skip_waypoint = True
                     break
 

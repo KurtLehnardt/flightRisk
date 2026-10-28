@@ -36,6 +36,7 @@ from typing import Any
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
 
+from flightrisk import obs_comm
 from flightrisk.observability import StructuredLogger
 
 __all__ = ["BULK", "TELEMETRY", "URGENT", "LinkOutbox", "is_open"]
@@ -160,6 +161,7 @@ class LinkOutbox:
 
     def _note_drop(self, kind: str) -> None:
         self.dropped[kind] += 1
+        obs_comm.edge_outbox_dropped(kind)
         count = self.dropped[kind]
         if count == 1 or count % 50 == 0:
             self._log.warning("link_outbox_dropped", url=self.label, queue=kind, dropped=count)

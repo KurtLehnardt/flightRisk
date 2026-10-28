@@ -4,10 +4,15 @@ Uses Ultralytics YOLO26n/YOLOv8n for real-time person detection.
 Runs on Apple Silicon via MPS backend. Filters to person class only.
 """
 
+import logging
+
 import numpy as np
 from ultralytics import YOLO
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import notice
+
+_log = logging.getLogger(__name__)
 
 
 class PersonDetector:
@@ -61,7 +66,7 @@ class PersonDetector:
         self.tile_size = tile_size
         self.overlap = overlap
         self._device = self._select_device()
-        print(f"[detector] Loaded {model_name} on {self._device}")
+        notice(_log, "model_loaded", f"[detector] Loaded {model_name} on {self._device}", model=model_name, device=str(self._device))
 
     def _select_device(self) -> str:
         """Pick the best available device."""

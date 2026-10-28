@@ -12,13 +12,18 @@ Usage:
 """
 
 import argparse
+import logging
 import time
 import sys
 
 import cv2
 
+from flightrisk.obs_log import notice
+
 from flightrisk.vision.detector import PersonDetector
 from flightrisk.vision.reid import PersonReID
+
+_log = logging.getLogger(__name__)
 
 
 def run_pipeline(
@@ -38,13 +43,13 @@ def run_pipeline(
         reasoning_provider: 'claude', 'gemma', or 'off' (default: config).
     """
     # --- Initialize detector ---
-    print("Loading YOLO detector...")
+    notice(_log, "pipeline_loading", "Loading YOLO detector...", model="yolo")
     detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
 
     # --- Initialize ReID (if target photo provided) ---
     reid = None
     if target_photo:
-        print("Loading ReID model...")
+        notice(_log, "pipeline_loading", "Loading ReID model...", model="reid")
         reid = PersonReID(match_threshold=match_threshold)
         reid.set_target_from_file(target_photo)
 
@@ -54,7 +59,8 @@ def run_pipeline(
         from flightrisk.reasoning import create_reasoning_agent
         reasoning_agent = create_reasoning_agent(reasoning_provider)
     except Exception as e:
-        print(f"[reasoning] Not available ({e}). Running without LLM reasoning.")
+        notice(_log, "reasoning_unavailable", f"[reasoning] Not available ({e}). Running without LLM reasoning.",
+               level=logging.WARNING, error_type=type(e).__name__)
 
     # --- Connect to video source ---
     cap = None
@@ -64,16 +70,16 @@ def run_pipeline(
         from flightrisk.drone.tello import TelloController
         drone = TelloController()
         if not drone.connect():
-            print("Failed to connect to Tello. Exiting.")
+            notice(_log, "tello_connect_failed", "Failed to connect to Tello. Exiting.", level=logging.ERROR)
             sys.exit(1)
     else:
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
-            print(f"Cannot open video: {source}. Exiting.")
+            notice(_log, "video_open_failed", f"Cannot open video: {source}. Exiting.", level=logging.ERROR)
             sys.exit(1)
 
     # --- Main loop ---
-    print("\nFlightRisk pipeline running. Press 'q' to quit.\n")
+    notice(_log, "pipeline_running", "\nFlightRisk pipeline running. Press 'q' to quit.\n")
     frame_count = 0
     fps_start = time.time()
     last_reasoning_time = 0
@@ -112,6 +118,7 @@ def run_pipeline(
                     candidate_crop = detections[match_idx]["crop"]
                     result = reasoning_agent.analyze_match(ref_img, candidate_crop)
                     last_reasoning_time = time.time()
+                    # Console only: reasoning text is never sent to the log pipeline.
                     print(f"\n[{reasoning_agent.label}] Match={result['match']}, "
                           f"Confidence={result['confidence']}")
                     print(f"  Reasoning: {result['reasoning']}\n")
@@ -165,7 +172,7 @@ def run_pipeline(
                     drone.land()
 
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        notice(_log, "pipeline_stopping", "\nShutting down...")
     finally:
         if drone:
             drone.disconnect()

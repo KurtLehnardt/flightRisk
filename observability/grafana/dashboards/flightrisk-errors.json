@@ -1,0 +1,157 @@
+{
+  "uid": "fr-errors",
+  "title": "FlightRisk / Errors & Logs",
+  "description": "Error rate, the most frequent error fingerprints, log volume and a log explorer filtered by node, level and component, with links from each line's trace_id to Tempo.",
+  "tags": [
+    "flightrisk",
+    "errors",
+    "logs"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "links": [
+    {
+      "title": "FlightRisk dashboards",
+      "type": "dashboards",
+      "tags": ["flightrisk"],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0},
+      {"name": "level", "label": "Level", "description": "Log levels to show. Select debug as well to see DEBUG records (written only while FLIGHTRISK_LOG_LEVEL=DEBUG).", "type": "custom", "query": "debug,info,warning,error,critical", "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["info", "warning", "error", "critical"], "value": ["info", "warning", "error", "critical"]}, "options": [{"selected": false, "text": "debug", "value": "debug"}, {"selected": true, "text": "info", "value": "info"}, {"selected": true, "text": "warning", "value": "warning"}, {"selected": true, "text": "error", "value": "error"}, {"selected": true, "text": "critical", "value": "critical"}], "hide": 0},
+      {"name": "component", "label": "Component", "description": "FlightRisk component that wrote the record", "type": "custom", "query": "dashboard,ground,edge,edge-device,lane-executor,ground-transport,tello,drone,vision,reasoning,transport,artifacts,events,comm", "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [{"selected": false, "text": "dashboard", "value": "dashboard"}, {"selected": false, "text": "ground", "value": "ground"}, {"selected": false, "text": "edge", "value": "edge"}, {"selected": false, "text": "edge-device", "value": "edge-device"}, {"selected": false, "text": "lane-executor", "value": "lane-executor"}, {"selected": false, "text": "ground-transport", "value": "ground-transport"}, {"selected": false, "text": "tello", "value": "tello"}, {"selected": false, "text": "drone", "value": "drone"}, {"selected": false, "text": "vision", "value": "vision"}, {"selected": false, "text": "reasoning", "value": "reasoning"}, {"selected": false, "text": "transport", "value": "transport"}, {"selected": false, "text": "artifacts", "value": "artifacts"}, {"selected": false, "text": "events", "value": "events"}, {"selected": false, "text": "comm", "value": "comm"}], "hide": 0}
+    ]
+  },
+  "annotations": {
+    "list": [
+      {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"},
+      {"name": "Flight safety", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "red", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "instant": false, "titleFormat": "{{kind}}", "textFormat": "{{kind}} {{reason}} {{drone_id}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Alerts", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "orange", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "instant": false, "titleFormat": "{{transition}}", "textFormat": "alert {{transition}} ({{awaiting_s}} s)", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Target changes", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "blue", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "instant": false, "titleFormat": "{{event}}", "textFormat": "target from {{source}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "refId": "Anno", "queryType": "range"}}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Errors",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Error rate by component",
+      "description": "ERROR and CRITICAL records per second (every one is counted, including repeats folded in the log).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (component) (rate(flightrisk_error_logs{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "{{component}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 2,
+      "gridPos": {"x": 0, "y": 1, "w": 12, "h": 8}
+    },
+    {
+      "type": "table",
+      "title": "Top error fingerprints (range)",
+      "description": "A fingerprint hashes the exception type and its top frames. Search the log for fingerprint=\"...\" to see the lines.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "topk(10, sum by (fingerprint, error_type, component) (increase(flightrisk_error_logs{service_instance_id=~\"$node\"}[$__range])))", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"Value": "count"}}}],
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "fields": ""}, "sortBy": [{"displayName": "count", "desc": true}]},
+      "id": 3,
+      "gridPos": {"x": 12, "y": 1, "w": 12, "h": 8}
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 9, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "description": "",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "sum by (level) (count_over_time({service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | level=~\"$level\" | component=~\"$component\" [$__interval]))", "legendFormat": "{{level}}", "refId": "A", "queryType": "range"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 5,
+      "gridPos": {"x": 0, "y": 10, "w": 12, "h": 7}
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by component",
+      "description": "",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "sum by (component) (count_over_time({service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | level=~\"$level\" | component=~\"$component\" [$__interval]))", "legendFormat": "{{component}}", "refId": "A", "queryType": "range"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 6,
+      "gridPos": {"x": 12, "y": 10, "w": 8, "h": 7}
+    },
+    {
+      "type": "stat",
+      "title": "Console records dropped",
+      "description": "Records the console log queue dropped instead of blocking a caller (should stay 0).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(flightrisk_log_dropped{service_instance_id=~\"$node\"})", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 7,
+      "gridPos": {"x": 20, "y": 10, "w": 4, "h": 7}
+    },
+    {
+      "type": "logs",
+      "title": "Errors (with fingerprint and trace)",
+      "description": "Stack traces are included only while FLIGHTRISK_LOG_LEVEL=DEBUG.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | level=~\"error|critical\" | component=~\"$component\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 8,
+      "gridPos": {"x": 0, "y": 17, "w": 24, "h": 9}
+    },
+    {
+      "type": "logs",
+      "title": "Log explorer",
+      "description": "Filtered by the Node, Level and Component variables. Add debug to Level to see DEBUG records.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | level=~\"$level\" | component=~\"$component\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 9,
+      "gridPos": {"x": 0, "y": 26, "w": 24, "h": 12}
+    },
+    {
+      "type": "table",
+      "title": "Traces with errors",
+      "description": "",
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [{"datasource": {"type": "tempo", "uid": "tempo"}, "queryType": "traceql", "query": "{resource.service.name=~\"flightrisk.*\" && status=error}", "limit": 20, "tableType": "traces", "refId": "A"}],
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
+      "options": {"showHeader": true},
+      "id": 10,
+      "gridPos": {"x": 0, "y": 38, "w": 24, "h": 8}
+    }
+  ]
+}

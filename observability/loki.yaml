@@ -29,11 +29,16 @@ schema_config:
 limits_config:
   # Required for OTLP ingest (resource/log attributes become structured metadata).
   allow_structured_metadata: true
-  retention_period: 168h
+  # Logs older than this are deleted by the compactor. Default 7 days; set
+  # LOKI_RETENTION_PERIOD (for example 72h) before `docker compose up` to change
+  # it (Loki runs with -config.expand-env=true).
+  retention_period: ${LOKI_RETENTION_PERIOD:-168h}
 
 compactor:
   working_directory: /loki/compactor
   retention_enabled: true
+  retention_delete_delay: 2h
+  compaction_interval: 10m
   delete_request_store: filesystem
 
 analytics:

@@ -67,6 +67,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from flightrisk import fleet_protocol as fp
+from flightrisk import obs_comm
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
 from flightrisk.fleet_ground_link import (
@@ -541,6 +542,7 @@ class EdgeTransport:
                 if not isinstance(data, dict):
                     logger.warning("recv: non-object message, ignoring: %r", data)
                     continue
+                obs_comm.edge_received(data, len(raw))
                 self._dispatch_incoming(ws, data, received_at)
         except ConnectionClosed:
             pass
@@ -693,8 +695,10 @@ class EdgeTransport:
             except Exception as exc:
                 self._retry_count += 1
                 logger.warning("[%s] Reconnect attempt failed: %s", self._ws_url, exc)
+                obs_comm.edge_reconnect("failed", self._retry_count)
                 continue
             logger.info("[%s] Reconnected successfully", self._ws_url)
+            obs_comm.edge_reconnect("ok", self._retry_count + 1)
             return True
 
         if self._should_reconnect:
@@ -702,6 +706,7 @@ class EdgeTransport:
                 "[%s] Giving up reconnecting after %d attempts",
                 self._ws_url, self._retry_count,
             )
+            obs_comm.edge_reconnect("gave_up", self._retry_count)
         return False
 
     def hold_reconnect(self, seconds: float) -> None:
@@ -748,7 +753,9 @@ class EdgeTransport:
             return
         data = self._runner.to_dict(msg)
         try:
-            await self._ws.send(json.dumps(data))
+            payload = json.dumps(data)
+            await self._ws.send(payload)
+            obs_comm.edge_sent(data, True, len(payload))
         except ConnectionClosed:
             logger.warning("send_detections: connection closed")
             self._connected = False
@@ -799,16 +806,20 @@ class EdgeTransport:
         fp.validate_message(message, proto=self.proto if proto is None else proto)
         if not self._connected or self._ws is None:
             self._schedule_reconnect()
+            obs_comm.edge_sent(message, False)
             return False
         if ws is not None and ws is not self._ws:
             return False
         try:
-            await self._ws.send(json.dumps(message))
+            payload = json.dumps(message)
+            await self._ws.send(payload)
         except ConnectionClosed:
             logger.warning("send: connection closed")
             self._connected = False
             self._schedule_reconnect()
+            obs_comm.edge_sent(message, False)
             return False
+        obs_comm.edge_sent(message, True, len(payload))
         return True
 
     async def drop_connection(self, ws: Any, code: int, reason: str) -> None:
@@ -1116,6 +1127,7 @@ class GroundTransport(GroundV2Mixin):
                     continue
 
                 msg_type = data.get("type")
+                obs_comm.ground_received(data, len(raw), self._socket_drones.get(websocket))
                 if msg_type == "detections":
                     try:
                         msg = EdgeRunner.from_dict(data)
@@ -1271,6 +1283,7 @@ class GroundTransport(GroundV2Mixin):
                 self._socket_drones.pop(previous, None)
             self._drone_sockets[drone_id] = websocket
             self._socket_drones[websocket] = drone_id
+            obs_comm.link_state(drone_id, True)
         self._last_seen_s[drone_id] = received_at
 
     def _record_control(self, data: dict[str, Any]) -> None:
@@ -1285,6 +1298,7 @@ class GroundTransport(GroundV2Mixin):
         if drone_id is not None and self._drone_sockets.get(drone_id) is websocket:
             del self._drone_sockets[drone_id]
             logger.warning("Drone %r disconnected", drone_id)
+            obs_comm.link_state(drone_id, False)
         pending = self._pending_pings.pop(websocket, None) or {}
         for future in pending.values():
             if not future.done():
@@ -1659,6 +1673,8 @@ class GroundTransport(GroundV2Mixin):
         as eligible, matching pre-auth behavior.
         """
         clients = list(self._authenticated_clients) if self._token is not None else list(self._clients)
+        obs_comm.ground_broadcast({"type": "set_target", "reid_embedding": reid_embedding,
+                                   "face_embedding": face_embedding}, len(clients), len(clients))
         if not clients:
             return
         await asyncio.gather(
@@ -1688,6 +1704,7 @@ class GroundTransport(GroundV2Mixin):
         connected clients are treated as eligible, matching broadcast_target.
         """
         clients = list(self._authenticated_clients) if self._token is not None else list(self._clients)
+        obs_comm.ground_broadcast({"type": "stream_video", "enabled": enabled}, len(clients), len(clients))
         if not clients:
             return
         await asyncio.gather(
@@ -1743,14 +1760,18 @@ class GroundTransport(GroundV2Mixin):
         websocket = self._drone_sockets.get(drone_id)
         if websocket is None:
             logger.log(level, "Cannot send %r: drone %r is not connected", mtype, drone_id)
+            obs_comm.ground_sent(message, drone_id, outcome="not_connected")
             return False
         payload = self._payload_for(websocket, message)
         if payload is None:
             logger.log(level, "Cannot send %r to drone %r before this ground's hello", mtype, drone_id)
+            obs_comm.ground_sent(message, drone_id, outcome="no_hello")
             return False
         if await self._send_json(websocket, payload):
+            obs_comm.ground_sent(message, drone_id, len(payload))
             return True
         logger.log(level, "Failed to send %r to drone %r: connection closed", mtype, drone_id)
+        obs_comm.ground_sent(message, drone_id, outcome="closed")
         return False
 
     async def broadcast_control(self, message: dict[str, Any]) -> int:
@@ -1765,6 +1786,7 @@ class GroundTransport(GroundV2Mixin):
             return await self.emergency_land_all()
         clients = self._eligible_clients()
         if not clients:
+            obs_comm.ground_broadcast(message, 0, 0)
             return 0
         sends = []
         for ws in clients:
@@ -1776,9 +1798,12 @@ class GroundTransport(GroundV2Mixin):
             if payload is not None:
                 sends.append(self._send_json(ws, payload))
         if not sends:
+            obs_comm.ground_broadcast(message, 0, len(clients))
             return 0
         results = await asyncio.gather(*sends, return_exceptions=True)
-        return sum(1 for result in results if result is True)
+        reached = sum(1 for result in results if result is True)
+        obs_comm.ground_broadcast(message, reached, len(clients), len(payload))
+        return reached
 
     def _validation_proto(self, message: dict[str, Any]) -> int:
         """Validate a fenced message under v2 (it is shaped per link later), anything else under v1."""
@@ -1796,10 +1821,12 @@ class GroundTransport(GroundV2Mixin):
         client, or having no client at all, is logged as an error rather than
         dropped silently.
         """
-        payload = json.dumps(fp.make_emergency_land_all())
+        message = fp.make_emergency_land_all()
+        payload = json.dumps(message)
         clients = list(self._clients)
         if not clients:
             logger.error("emergency_land_all: no edge clients are connected; nothing was sent")
+            obs_comm.ground_broadcast(message, 0, 0)
             return 0
         results = await asyncio.gather(
             *(self._send_json(ws, payload) for ws in clients),
@@ -1816,6 +1843,7 @@ class GroundTransport(GroundV2Mixin):
                     result,
                 )
         logger.warning("emergency_land_all sent to %d of %d edge client(s)", sent, len(clients))
+        obs_comm.ground_broadcast(message, sent, len(clients), len(payload))
         return sent
 
     async def send_heartbeat(self) -> int:
@@ -1919,6 +1947,7 @@ class GroundTransport(GroundV2Mixin):
             "Clock sync with %s: offset %.6f s, rtt %.6f s over %d rounds",
             label, estimate.offset_s, estimate.rtt_s, estimate.rounds,
         )
+        obs_comm.clock_sync(drone_id, estimate)
         return estimate
 
     def clock_estimate(self, drone_id: str) -> fp.ClockEstimate | None:

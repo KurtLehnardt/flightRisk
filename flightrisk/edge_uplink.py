@@ -64,6 +64,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from flightrisk import fleet_protocol as fp
+from flightrisk import obs_comm
 from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
 from flightrisk.fleet_authority import ACCEPT, CLOSE, HANDLED, LAND, EdgeAuthority
@@ -432,6 +433,7 @@ class EdgeUplink:
         except fp.ProtocolError:
             self.authority.on_decode_error(ws, size)
             return
+        obs_comm.edge_received(msg, size)
         if msg.get("type") not in fp.FAILSAFE_TYPES and (transport.websocket is not ws or ws in self._closing):
             # Anything but a landing from a connection that is gone or being
             # closed is dropped.
@@ -582,7 +584,9 @@ class EdgeUplink:
             except fp.ProtocolError as exc:
                 self._log.warning("edge_send_invalid", type=out.get("type"), url=outbox.label, error=str(exc)[:200])
                 continue
-            outbox.put(kind, json.dumps(out))
+            payload = json.dumps(out)
+            outbox.put(kind, payload)
+            obs_comm.edge_sent(out, True, len(payload))
 
     def _post_detections(self, payload: str | None) -> None:
         """Queue a serialized detection message for the authority only (event loop); None counts a drop."""

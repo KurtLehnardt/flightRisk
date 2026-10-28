@@ -1,6 +1,9 @@
 global:
   scrape_interval: 10s
   evaluation_interval: 10s
+  # OpenMetrics first, so exemplars from the collector are kept
+  # (docker-compose.grafana.yml enables --enable-feature=exemplar-storage).
+  scrape_protocols: [OpenMetricsText1.0.0, OpenMetricsText0.0.1, PrometheusText0.0.4]
 
 scrape_configs:
   # FlightRisk metrics arrive via OTLP -> collector, which re-exposes them here.

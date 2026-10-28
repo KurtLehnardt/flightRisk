@@ -1,0 +1,180 @@
+{
+  "uid": "fr-operator",
+  "title": "FlightRisk / Operator Input & Target",
+  "description": "Every operator action (Socket.IO and REST) with its outcome, the target image in use with its hash and quality numbers, and the alert responses.",
+  "tags": [
+    "flightrisk",
+    "operator"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "links": [
+    {
+      "title": "FlightRisk dashboards",
+      "type": "dashboards",
+      "tags": ["flightrisk"],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "",
+      "url": ""
+    }
+  ],
+  "templating": {
+    "list": [
+      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0}
+    ]
+  },
+  "annotations": {
+    "list": [
+      {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts", "type": "dashboard"},
+      {"name": "Flight safety", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "red", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "instant": false, "titleFormat": "{{kind}}", "textFormat": "{{kind}} {{reason}} {{drone_id}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | category=\"flight_safety\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Alerts", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "orange", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "instant": false, "titleFormat": "{{transition}}", "textFormat": "alert {{transition}} ({{awaiting_s}} s)", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|confirmed|dismissed\"", "refId": "Anno", "queryType": "range"}},
+      {"name": "Target changes", "datasource": {"type": "loki", "uid": "loki"}, "enable": true, "hide": false, "iconColor": "blue", "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "instant": false, "titleFormat": "{{event}}", "textFormat": "target from {{source}}", "tagKeys": "category,kind", "target": {"expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "refId": "Anno", "queryType": "range"}}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Operator actions",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Actions by event and outcome",
+      "description": "Socket.IO events and state-changing REST requests.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (event, outcome) (increase(flightrisk_socket_events{service_instance_id=~\"$node\"}[$__rate_interval]))", "legendFormat": "{{event}} {{outcome}}", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (route, outcome) (increase(flightrisk_http_requests{service_instance_id=~\"$node\", method!=\"GET\"}[$__rate_interval]))", "legendFormat": "REST {{route}} {{outcome}}", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "normal", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 2,
+      "gridPos": {"x": 0, "y": 1, "w": 12, "h": 8}
+    },
+    {
+      "type": "stat",
+      "title": "Target changes (range)",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(flightrisk_target_changes{service_instance_id=~\"$node\"}[$__range]))", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 3,
+      "gridPos": {"x": 12, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Rejected or denied (range)",
+      "description": "Socket.IO events answered with an error, refused at connect, or failed.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(flightrisk_socket_events{service_instance_id=~\"$node\", outcome!=\"ok\"}[$__range])) or vector(0)", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 4,
+      "gridPos": {"x": 16, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "stat",
+      "title": "Unauthorized REST (range)",
+      "description": "Requests refused by the API-key gate.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(flightrisk_http_requests{service_instance_id=~\"$node\", outcome=\"unauthorized\"}[$__range])) or vector(0)", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {}, "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "textMode": "auto", "wideLayout": true, "showPercentChange": false},
+      "id": 5,
+      "gridPos": {"x": 20, "y": 1, "w": 4, "h": 4}
+    },
+    {
+      "type": "gauge",
+      "title": "Socket p95 latency",
+      "description": "",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(flightrisk_socket_duration_ms_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {}, "min": 0, "max": 1000, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 250}, {"color": "red", "value": 750}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "id": 6,
+      "gridPos": {"x": 0, "y": 9, "w": 12, "h": 4}
+    },
+    {
+      "type": "logs",
+      "title": "Operator input",
+      "description": "Each Socket.IO event and state-changing REST call: action, sanitized input, actor, remote address, outcome. Free text (description, notes) appears only with FLIGHTRISK_TELEMETRY_CONTENT=1.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"user_input\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 7,
+      "gridPos": {"x": 0, "y": 13, "w": 24, "h": 10}
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Target image",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 23, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Target image (latest first)",
+      "description": "Numbers only, plus (with content capture on) the sha256, artifact reference and a signed thumbnail URL served by the loopback-only preview server. The URL expires (FLIGHTRISK_PREVIEW_TTL_S, default 24 h).",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\" | source!=\"clear\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "transformations": [{"id": "extractFields", "options": {"source": "Line", "format": "json", "keepTime": true, "replace": true, "jsonPaths": [{"path": "source", "alias": "source"}, {"path": "width", "alias": "width"}, {"path": "height", "alias": "height"}, {"path": "bytes", "alias": "bytes"}, {"path": "mime", "alias": "mime"}, {"path": "quality.overall_score", "alias": "quality"}, {"path": "quality.grade", "alias": "grade"}, {"path": "face_detected", "alias": "face"}, {"path": "sha256", "alias": "sha256"}, {"path": "artifact", "alias": "artifact"}, {"path": "preview_url", "alias": "preview"}, {"path": "preview_expires", "alias": "expires"}]}}, {"id": "limit", "options": {"limitField": 5}}],
+      "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": [{"matcher": {"id": "byName", "options": "preview"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "image"}}, {"id": "custom.width", "value": 170}]}, {"matcher": {"id": "byName", "options": "sha256"}, "properties": [{"id": "custom.width", "value": 160}]}]},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "fields": ""}, "sortBy": []},
+      "id": 9,
+      "gridPos": {"x": 0, "y": 24, "w": 18, "h": 9}
+    },
+    {
+      "type": "text",
+      "title": "About the preview",
+      "options": {"mode": "markdown", "content": "The thumbnail is served by FlightRisk's preview server on **127.0.0.1 only**, from the artifact store (`~/.flightrisk/artifacts`, mode 0700, files 0600, deleted after `FLIGHTRISK_ARTIFACT_RETENTION_DAYS`).\n\nEach `target_image` event carries a capability URL signed with HMAC-SHA256 over the image hash and an expiry. Anyone who can read this log and reach this machine's loopback can open it until it expires. No image is stored, and no URL is logged, unless `FLIGHTRISK_TELEMETRY_CONTENT=1`."},
+      "targets": [],
+      "id": 10,
+      "gridPos": {"x": 18, "y": 24, "w": 6, "h": 9}
+    },
+    {
+      "type": "logs",
+      "title": "Target image events",
+      "description": "",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 11,
+      "gridPos": {"x": 0, "y": 33, "w": 24, "h": 7}
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Alert responses",
+      "collapsed": false,
+      "gridPos": {"x": 0, "y": 40, "w": 24, "h": 1},
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "Alerts and responses",
+      "description": "Alert opened, re-announced, and the operator's Confirm or Dismiss with the time it took (awaiting_s).",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"alert\" | transition=~\"opened|renotified|confirmed|dismissed\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
+      "options": {"showTime": true, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none", "showCommonLabels": false, "showLabels": false},
+      "id": 13,
+      "gridPos": {"x": 0, "y": 41, "w": 24, "h": 8}
+    }
+  ]
+}

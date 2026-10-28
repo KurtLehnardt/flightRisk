@@ -4,6 +4,7 @@ Provides JSON-formatted logging with component/event context and
 per-session metrics tracking for detection, matching, and reasoning.
 """
 
+import datetime
 import json
 import logging
 import time
@@ -11,6 +12,13 @@ import threading
 from typing import Any, Optional
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import Throttle, setup_logging
+
+#: Per-frame convenience events (``face_result``, ``scoring``, ``battery``)
+#: are logged at most once per this many seconds per component and level;
+#: the skipped ones are counted in the next line's ``suppressed`` field.
+PER_FRAME_LOG_INTERVAL_S = 5.0
+_per_frame_throttle = Throttle(PER_FRAME_LOG_INTERVAL_S)
 
 
 # StructuredLogger loggers don't propagate, so a handler on a parent logger
@@ -34,18 +42,25 @@ class StructuredLogger:
 
     Each log entry includes: timestamp, level, component, event,
     and arbitrary context kwargs.
+
+    Records propagate to the ``flightrisk`` logger configured by
+    :func:`flightrisk.obs_log.setup_logging`, which writes the shared JSON
+    line format (with trace ids, node, session and redacted fields) to the
+    console and, when OpenTelemetry is on, to Loki. The record's message is
+    still this entry as JSON, for handlers attached with
+    :func:`register_log_handler`. ``level`` defaults to the
+    ``FLIGHTRISK_LOG_LEVEL`` of the ``flightrisk`` logger.
     """
 
-    def __init__(self, component: str = "flightrisk", level: int = logging.INFO):
+    def __init__(self, component: str = "flightrisk", level: int | None = None):
         self.component = component
+        setup_logging()
         self._logger = logging.getLogger(f"flightrisk.{component}")
-        self._logger.setLevel(level)
-
-        if not self._logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(message)s"))
-            self._logger.addHandler(handler)
-            self._logger.propagate = False
+        if level is not None:
+            self._logger.setLevel(level)
+        # Older versions gave every StructuredLogger its own stderr handler
+        # and stopped propagation; the shared pipeline replaces both.
+        self._logger.propagate = True
 
         if self._logger not in _structured_loggers:
             _structured_loggers.append(self._logger)
@@ -54,15 +69,38 @@ class StructuredLogger:
                 self._logger.addHandler(extra)
 
     def _emit(self, level: str, event: str, **kwargs: Any) -> None:
+        log_level = getattr(logging, level.upper(), logging.INFO)
+        if not self._logger.isEnabledFor(log_level):
+            return
         entry = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
             "level": level,
             "component": self.component,
             "event": event,
         }
         entry.update(kwargs)
-        log_level = getattr(logging, level.upper(), logging.INFO)
-        self._logger.log(log_level, json.dumps(entry, default=str))
+        category = None
+        try:
+            from flightrisk.obs_events import route_structured
+
+            category = route_structured(self.component, event, kwargs)
+        except Exception:  # noqa: BLE001 -- routing is best effort
+            category = None
+        extra = {
+            "fr_event": event,
+            "fr_fields": kwargs,
+            "fr_component": self.component,
+            "fr_category": category,
+        }
+        self._logger.log(log_level, json.dumps(entry, default=str), extra=extra)
+
+    def _per_frame(self, level: str, event: str, **kwargs: Any) -> None:
+        allowed, suppressed = _per_frame_throttle.allow((self.component, event, level))
+        if not allowed:
+            return
+        if suppressed:
+            kwargs["suppressed"] = suppressed
+        self._emit(level, event, **kwargs)
 
     def info(self, event: str, **kwargs: Any) -> None:
         self._emit("info", event, **kwargs)
@@ -87,29 +125,33 @@ class StructuredLogger:
         self._emit("info", "match", score=round(score, 4), match_type=match_type, **kwargs)
 
     def face_result(self, success: bool, score: float = 0.0, **kwargs: Any) -> None:
-        """Log a face recognition result."""
-        self._emit("info", "face_result", success=success, score=round(score, 4), **kwargs)
+        """Log a face recognition result (per frame, so throttled)."""
+        self._per_frame("info", "face_result", success=success, score=round(score, 4), **kwargs)
 
     def reasoning(self, duration_ms: float, result: Optional[dict] = None, **kwargs: Any) -> None:
         """Log a reasoning/LLM call."""
         self._emit("info", "reasoning", duration_ms=round(duration_ms, 1), result=result, **kwargs)
 
     def scoring(self, combined: float, reid: float = 0.0, face: float = 0.0, **kwargs: Any) -> None:
-        """Log a multi-feature scoring result."""
-        self._emit("info", "scoring", combined=round(combined, 4),
-                   reid=round(reid, 4), face=round(face, 4), **kwargs)
+        """Log a multi-feature scoring result (per matched frame, so throttled)."""
+        self._per_frame("info", "scoring", combined=round(combined, 4),
+                        reid=round(reid, 4), face=round(face, 4), **kwargs)
 
     def drone_command(self, command: str, **kwargs: Any) -> None:
         """Log a drone command."""
         self._emit("info", "drone_command", command=command, **kwargs)
 
     def battery(self, battery_level: int, is_flying: bool = False, **kwargs: Any) -> None:
-        """Log a battery status event."""
+        """Log a battery status event.
+
+        Called every frame while flying, so it is throttled per level: a
+        change of level (info, warning, error) is logged at once.
+        """
         cfg = get_config().drone
         lvl = "warning" if battery_level <= cfg.battery_warn_threshold else "info"
         if battery_level <= cfg.battery_critical_threshold:
             lvl = "error"
-        self._emit(lvl, "battery", battery_level=battery_level, is_flying=is_flying, **kwargs)
+        self._per_frame(lvl, "battery", battery_level=battery_level, is_flying=is_flying, **kwargs)
 
 
 class MetricsCollector:

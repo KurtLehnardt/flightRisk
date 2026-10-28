@@ -64,10 +64,17 @@ class BackendSpec:
         return self.factory(drone_id, host, options)
 
     def fleet_factory(self, options: Mapping[str, Any]) -> Callable[[str, str], DroneController]:
-        """A ``DroneFleet`` factory bound to ``options``."""
+        """A ``DroneFleet`` factory bound to ``options``.
+
+        Every drone it builds has its flight commands instrumented (spans,
+        command metrics and ``drone_comm`` events; see
+        :mod:`flightrisk.drone.instrument`), whatever the backend.
+        """
 
         def _factory(drone_id: str, host: str) -> DroneController:
-            return self.factory(drone_id, host, options)
+            from flightrisk.drone.instrument import instrument_drone
+
+            return instrument_drone(self.factory(drone_id, host, options), self.name)
 
         return _factory
 

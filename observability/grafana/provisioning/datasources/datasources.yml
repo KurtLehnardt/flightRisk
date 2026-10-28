@@ -1,5 +1,13 @@
 apiVersion: 1
 
+# Links between the signals:
+#   Prometheus exemplar (trace_id) -> Tempo trace
+#   Tempo span                    -> Loki lines with the same trace_id
+#   Loki line (trace_id)          -> Tempo trace
+# Every FlightRisk log line carries trace_id/span_id of the span that was active
+# when it was written (flightrisk/obs_log.py); the OTLP log record carries the
+# same ids, which Loki stores as structured metadata `trace_id` / `span_id`.
+
 datasources:
   - name: Prometheus
     uid: prometheus
@@ -9,6 +17,9 @@ datasources:
     isDefault: true
     jsonData:
       timeInterval: 10s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
 
   - name: Tempo
     uid: tempo
@@ -18,13 +29,36 @@ datasources:
     jsonData:
       tracesToLogsV2:
         datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
         filterByTraceID: false
         filterBySpanID: false
         customQuery: true
-        query: '{service_name="flightrisk"}'
+        query: '{service_name=~"flightrisk.*"} | trace_id="${__span.traceId}"'
+      lokiSearch:
+        datasourceUid: loki
+      nodeGraph:
+        enabled: true
 
   - name: Loki
     uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # trace_id is OTLP structured metadata on every line written inside a span.
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: tempo
+          url: '${__value.raw}'
+          urlDisplayLabel: 'View trace'
+        # Fallback for lines whose trace id is only in the JSON body.
+        - name: TraceID
+          matcherType: regex
+          matcherRegex: '"trace_id": "([0-9a-f]{32})"'
+          datasourceUid: tempo
+          url: '${__value.raw}'
+          urlDisplayLabel: 'View trace'

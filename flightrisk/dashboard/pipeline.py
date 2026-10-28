@@ -37,8 +37,22 @@ from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot 
 )
 from flightrisk.dashboard.alert_latch import alert_latch
 from flightrisk.dashboard.safety import SafetyPolicy
+from flightrisk import obs_events
 
 _log = logging.getLogger(__name__)
+
+#: One frame in this many gets a ``frame`` trace (with one span per stage).
+#: Every frame is timed in the stage metrics regardless.
+FRAME_TRACE_EVERY_ENV = "FLIGHTRISK_FRAME_TRACE_EVERY"
+
+
+def _frame_trace_every() -> int:
+    import os
+
+    try:
+        return max(1, int(os.environ.get(FRAME_TRACE_EVERY_ENV, "5")))
+    except ValueError:
+        return 5
 
 #: Seconds between attempts at a critical-battery land that the drone did not
 #: execute (for example dropped because its command channel was busy).
@@ -97,9 +111,14 @@ def _apply_battery_policy(socketio, drone, snapshot: TelemetrySnapshot, battery,
     if log:
         log.battery(battery_level=battery, is_flying=snapshot.is_flying)
     if policy.battery_critical(snapshot) and not app_state.battery_critical:
+        if app_state.battery_critical_retry_at == 0.0:
+            obs_events.flight_safety("battery_critical", reason="critical_threshold", drone_id=snapshot.drone_id,
+                                     level=logging.ERROR, battery_pct=battery, threshold=policy.battery_critical_pct)
         _land_for_critical_battery(socketio, drone, snapshot, battery, log)
     elif policy.battery_low(snapshot) and not app_state.battery_warned:
         app_state.battery_warned = True
+        obs_events.flight_safety("battery_low", reason="warn_threshold", drone_id=snapshot.drone_id,
+                                 battery_pct=battery, threshold=policy.battery_warn_pct)
         socketio.emit("battery_warning", {"battery": battery})
 
 
@@ -215,12 +234,20 @@ def _frame_loop(socketio):
 
     otel_m = app_state.otel_metrics
     tracer = app_state.tracer
+    stats = obs_events.PipelineStats()
+    trace_every = _frame_trace_every()
+    frames_seen = 0
 
     def _span(name: str):
-        # No-op context manager when OTel is disabled.
-        return tracer.start_as_current_span(name) if tracer else nullcontext()
+        # A stage span only inside a sampled frame trace (one frame in
+        # trace_every); otherwise, and when OTel is disabled, a no-op.
+        return tracer.start_as_current_span(name) if (tracer and frame_span is not None) else nullcontext()
+
+    def _stage(name: str):
+        return obs_events.StageTimer(stats, name)
 
     while app_state.running:
+        frame_span = None
         try:
             frame_start = time.time()
             _emit_due_reminder(socketio, log)
@@ -241,12 +268,20 @@ def _frame_loop(socketio):
                 time.sleep(0.01)
                 continue
 
-            with _span("detect"):
+            # One frame in ``trace_every`` is traced end to end; the stage
+            # spans below become its children.
+            frames_seen += 1
+            if tracer and frames_seen % trace_every == 1 % trace_every:
+                frame_span = tracer.start_as_current_span("frame", attributes={"flightrisk.source": str(app_state.source)})
+                frame_span.__enter__()
+
+            with _span("detect"), _stage("detect"):
                 detections = app_state.detector.detect(frame)
             app_state.persons_detected = len(detections)
 
             tracker = app_state.tracker
-            tracked_detections = tracker.update(detections) if tracker else []
+            with _stage("track"):
+                tracked_detections = tracker.update(detections) if tracker else []
             if tracker and frame_start - last_track_emit >= TRACK_UPDATE_INTERVAL:
                 last_track_emit = frame_start
                 socketio.emit("track_update", {"active_tracks": len(tracked_detections)})
@@ -279,7 +314,7 @@ def _frame_loop(socketio):
             matching_on = alert_latch.matching_allowed()
 
             if app_state.reid and has_target and detections and matching_on:
-                with _span("reid_match"):
+                with _span("reid_match"), _stage("reid"):
                     match_idx, reid_score = app_state.reid.find_match(detections)
                 if reid_score > 0 and log and time.time() - last_detection_log >= 5:
                     log.info("reid_score", score=round(reid_score, 3), matched=(match_idx is not None))
@@ -287,7 +322,7 @@ def _frame_loop(socketio):
             # Face recognition matching
             face_match_idx = None
             if app_state.face and app_state.face.has_target and detections and matching_on:
-                with _span("face_match"):
+                with _span("face_match"), _stage("face"):
                     face_match_idx, face_score = _safe_face_call(
                         lambda: app_state.face.find_match(detections), (None, 0.0), log)
                 if metrics:
@@ -312,6 +347,7 @@ def _frame_loop(socketio):
             # Combined score via multi-feature scorer
             current_alert_level = "no_match"
             if match_idx is not None and app_state.scorer:
+                _t_score = time.perf_counter()
                 det_reid = app_state.reid.compare(detections[match_idx]["crop"]) if has_target else 0.0
                 det_face = (
                     _safe_face_call(lambda: app_state.face.compare(detections[match_idx]["crop"]), 0.0, log)
@@ -356,6 +392,9 @@ def _frame_loop(socketio):
                         current_alert_level = "confirmed_match"
                         match_score = max(match_score, track_summary.avg_reid_score)
 
+                stats.stage("score", (time.perf_counter() - _t_score) * 1000.0)
+                stats.signal_scores({"reid": det_reid, "face": det_face, "combined": match_score, **extra_signals})
+                stats.alert_level(current_alert_level)
                 if log:
                     log.scoring(combined=match_score, reid=det_reid, face=det_face, alert=current_alert_level)
 
@@ -449,7 +488,7 @@ def _frame_loop(socketio):
                                     try:
                                         gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy()))
                                     except queue.Full:
-                                        pass  # drop if queue is full, don't block
+                                        obs_events.queue_dropped("reasoning", kind="analyze")  # drop, don't block
             elif match_idx is not None:
                 match_score = max(reid_score, face_score)
 
@@ -477,7 +516,7 @@ def _frame_loop(socketio):
                         try:
                             gemma_queue.put_nowait(("describe", track_key, crop.copy(), app_state.target_description))
                         except queue.Full:
-                            pass  # drop if queue is full, don't block
+                            obs_events.queue_dropped("reasoning", kind="describe")  # drop, don't block
 
             # Note: photo-based Gemma 4 reasoning (analyze_match) is no longer
             # called synchronously here -- see the immediate-alert block above,
@@ -485,7 +524,8 @@ def _frame_loop(socketio):
             # the async worker thread (_gemma_worker).
 
             # Annotate frame
-            annotated = app_state.detector.annotate(frame, detections, match_idx)
+            with _stage("annotate"):
+                annotated = app_state.detector.annotate(frame, detections, match_idx)
 
             if match_idx is not None and current_alert_level in ("confirmed_match", "possible_match"):
                 h, w = annotated.shape[:2]
@@ -509,8 +549,9 @@ def _frame_loop(socketio):
                 fps_start = time.time()
 
             # Encode and emit
-            _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            frame_b64 = base64.b64encode(buffer).decode("utf-8")
+            with _stage("encode"):
+                _, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                frame_b64 = base64.b64encode(buffer).decode("utf-8")
 
             if app_state.recorder and app_state.recorder.is_recording:
                 app_state.recorder.write_frame(annotated)
@@ -518,6 +559,7 @@ def _frame_loop(socketio):
             telemetry = {}
             if drone:
                 snapshot = read_telemetry(drone)
+                obs_events.telemetry_snapshot(snapshot)
                 telemetry = legacy_telemetry_payload(snapshot)
                 _apply_battery_policy(socketio, drone, snapshot, telemetry["battery"], log)
 
@@ -532,15 +574,17 @@ def _frame_loop(socketio):
                 if telemetry.get("battery"):
                     otel_m.record_battery(telemetry["battery"])
 
-            socketio.emit("frame", {
-                "image": frame_b64,
-                "fps": app_state.fps,
-                "persons": app_state.persons_detected,
-                "match": match_idx is not None,
-                "match_score": round(match_score, 3),
-                "telemetry": telemetry,
-                "recording": app_state.recorder.is_recording if app_state.recorder else False,
-            })
+            with _stage("emit"):
+                socketio.emit("frame", {
+                    "image": frame_b64,
+                    "fps": app_state.fps,
+                    "persons": app_state.persons_detected,
+                    "match": match_idx is not None,
+                    "match_score": round(match_score, 3),
+                    "telemetry": telemetry,
+                    "recording": app_state.recorder.is_recording if app_state.recorder else False,
+                })
+            stats.frame_done(len(detections), source=str(app_state.source or "unknown"))
 
             now = time.time()
             if metrics and now - last_metrics_emit >= METRICS_INTERVAL:
@@ -549,8 +593,14 @@ def _frame_loop(socketio):
 
         except Exception as e:
             if log:
-                log.error("frame_loop_error", error=str(e), traceback=traceback.format_exc())
+                log.error("frame_loop_error", error=str(e), error_type=type(e).__name__, traceback=traceback.format_exc())
             if otel_m:
                 otel_m.record_error("frame_loop", type(e).__name__)
+            if frame_span is not None:
+                frame_span.__exit__(type(e), e, e.__traceback__)
+                frame_span = None
+        finally:
+            if frame_span is not None:
+                frame_span.__exit__(None, None, None)
 
         time.sleep(0.05)
