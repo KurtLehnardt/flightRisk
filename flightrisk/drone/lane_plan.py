@@ -10,7 +10,9 @@ This module holds the plan half of the edge lane executor
   ordering"). Plans are ordered by ``(epoch, plan_seq)``. A plan older than
   the newest one accepted is refused with ``stale_plan``; one with the same
   ``(epoch, plan_seq)`` but another ``plan_id`` (or another content) with
-  ``plan_mismatch``; and an exact resend of the current, still valid plan is
+  ``plan_mismatch``; the same ``plan_id`` and order after a landing
+  invalidated the plan with ``stale_plan``, whatever its content (the plan
+  may not restart); and an exact resend of the current, still valid plan is
   acknowledged without touching the plan or the drone.
 * ``parse_on_complete`` reads ``on_complete`` (``hover`` or ``land``) and
   ``hover_timeout_s`` (above 0 and at most 120 s, 20 s when absent).
@@ -250,8 +252,10 @@ class LanePlanMixin:
         with an out-of-range altitude (``altitude``), whose dead-reckoned path
         leaves the geofence (``geofence``), or while the battery level cannot
         be read (``battery``), because the ``ack`` must carry it. A plan older
-        than the newest accepted is refused with ``stale_plan``, and a plan
-        that reuses an order or a ``plan_id`` for different content with
+        than the newest accepted is refused with ``stale_plan``, and so is
+        a copy of the current plan after a landing invalidated it, whatever
+        its content. A plan that reuses an order or a ``plan_id`` for
+        different content while the plan is valid is refused with
         ``plan_mismatch`` (see ``classify_plan``). A refused plan is logged
         and answered with a ``nack`` carrying the reason and the number of
         lanes received; the current plan is kept unchanged. An exact resend
