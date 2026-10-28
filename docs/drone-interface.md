@@ -91,7 +91,10 @@ What callers do with a result that is not OK:
   dead-reckoned pose; outside a landing it ends the flight with a land. A
   takeoff that was not executed is never logged or acknowledged as a
   takeoff. A land that was not executed is logged and retried by the
-  monitor while the drone reports flying.
+  monitor while the drone reports flying. An operator nudge (protocol v2)
+  that was not executed is answered with a `nack` and is not recorded, and
+  the drone keeps hovering: the nudge is not part of a lane, so nothing is
+  left half-flown.
 * **Confirm recovery:** a land that was not executed is a failed land, like
   an exception: it falls back to the fail-safe land, and if that is not
   executed either the outcome is `failsafe_land_failed` with an `error`
