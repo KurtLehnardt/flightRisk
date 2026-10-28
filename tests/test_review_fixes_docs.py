@@ -88,6 +88,7 @@ def test_demo_script_rung2_and_geofence_450():
     assert "refuses a second live edge" in rung
     assert "swap routing" not in rung
     assert "450 cm geofence around its takeoff point by default" in text
+    assert "300 cm geofence around its takeoff point by default" not in text
     assert "500 cm geofence around its takeoff point by default" not in text
 
 

@@ -9,7 +9,7 @@ a ``register`` call, and nothing else in the code branches on profile names.
 The built-in profiles are:
 
 * ``default``: exactly the detector the edge built before profiles existed
-  (``yolo11n.pt`` at confidence 0.4, tiled only when
+  (``FLIGHTRISK_DETECTOR_MODEL``, else ``yolo11n.pt``, at confidence 0.4, tiled only when
   ``FLIGHTRISK_DETECTOR_TILED`` says so). An edge with no profile selected
   runs this one, so behaviour without a selection is unchanged.
 * ``top_down``: people seen from above. The HERIDAL fine-tuned YOLO11s
@@ -113,6 +113,9 @@ class DetectionProfile:
         reid_weight_scale: Multiplier for the ground's ReID signal weight.
         fallback: Profile to use instead when this one's required weights
             are missing, or None.
+        weights_env: Name of an environment variable that, when set to a
+            non-empty value, replaces ``weights`` (for example
+            ``FLIGHTRISK_DETECTOR_MODEL`` for the ``default`` profile), or None.
     """
 
     name: str
@@ -131,6 +134,7 @@ class DetectionProfile:
     face_weight_scale: float = 1.0
     reid_weight_scale: float = 1.0
     fallback: str | None = None
+    weights_env: str | None = None
 
     def __post_init__(self) -> None:
         if not is_profile_name(self.name):
@@ -153,6 +157,14 @@ class DetectionProfile:
             raise ValueError("tile_overlap must be in [0, 1)")
         if self.face_weight_scale < 0 or self.reid_weight_scale < 0:
             raise ValueError("weight scales must not be negative")
+
+    def effective_weights(self, environ: Mapping[str, str] | None = None) -> str:
+        """``weights``, or the value of ``weights_env`` when that variable is set and not blank."""
+        if self.weights_env:
+            override = (os.environ if environ is None else environ).get(self.weights_env, "").strip()
+            if override:
+                return override
+        return self.weights
 
     def weight_scale(self) -> dict[str, float] | None:
         """The scorer weight multipliers, or None when they are all 1 (no change)."""
@@ -248,7 +260,7 @@ class ProfileRegistry:
 
     def available(self, profile: DetectionProfile, *, exists: Callable[[str], bool] = os.path.exists) -> bool:
         """True when *profile* can be loaded without fetching anything it requires."""
-        return not profile.weights_required or resolve_weights(profile.weights, exists=exists) is not None
+        return not profile.weights_required or resolve_weights(profile.effective_weights(), exists=exists) is not None
 
     def resolve(self, name: str, *, exists: Callable[[str], bool] = os.path.exists) -> Resolution:
         """The profile to load for a request for *name*.
@@ -291,6 +303,8 @@ def builtin_profiles() -> tuple[DetectionProfile, ...]:
             weights="yolo11n.pt",
             weights_required=False,
             confidence=0.4,
+            # The edge's existing setting for other weights (PR #123).
+            weights_env="FLIGHTRISK_DETECTOR_MODEL",
         ),
         DetectionProfile(
             name="top_down",
@@ -325,8 +339,9 @@ def build_detector(profile: DetectionProfile, *, detector_cls: Any = None, exist
     """Construct the person detector *profile* describes.
 
     Only settings the profile sets are passed, so the ``default`` profile
-    builds exactly ``PersonDetector(model_name="yolo11n.pt", confidence=0.4)``,
-    the edge's detector before profiles existed. Raises whatever the
+    builds exactly ``PersonDetector(model_name=<FLIGHTRISK_DETECTOR_MODEL or
+    yolo11n.pt>, confidence=0.4)``, the edge's detector before profiles
+    existed. Raises whatever the
     detector raises when the model cannot be loaded.
     """
     if detector_cls is None:
@@ -336,9 +351,9 @@ def build_detector(profile: DetectionProfile, *, detector_cls: Any = None, exist
     # Required weights are resolved to the file found on disk (the working
     # directory or the repository root). Stock model names go to Ultralytics
     # unchanged, exactly as before profiles existed.
-    weights = profile.weights
+    weights = profile.effective_weights()
     if profile.weights_required:
-        weights = resolve_weights(profile.weights, exists=exists) or profile.weights
+        weights = resolve_weights(weights, exists=exists) or weights
     kwargs: dict[str, Any] = {"model_name": weights, "confidence": profile.confidence}
     optional = {
         "tiled": profile.tiled,

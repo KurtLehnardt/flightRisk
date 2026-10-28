@@ -20,7 +20,15 @@ _spec.loader.exec_module(hw)
 class FakeTello:
     """UDP responder on 127.0.0.1 that mimics a Tello EDU command socket."""
 
-    def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10):
+    def __init__(self, video_port=None, port_supported=False, ap_supported=True, video_packets=10,
+                 strict_source=False, edu_queries=True, raw_replies=None, lead_replies=None):
+        # strict_source: like a real Tello, answer only the source port that sent "command".
+        # edu_queries=False: like a standard Tello, "sdk?" and "sn?" are unknown commands.
+        self.strict_source = strict_source
+        self.edu_queries = edu_queries
+        self.raw_replies = raw_replies or {}  # command -> exact reply bytes (for undecodable replies)
+        self.lead_replies = lead_replies or {}  # command -> extra datagrams sent before the real reply
+        self.locked_addr = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.sock.settimeout(0.1)
@@ -46,9 +54,9 @@ class FakeTello:
         if cmd == "command":
             return "ok"
         if cmd == "sdk?":
-            return "30"
+            return "30" if self.edu_queries else "unknown command: sdk?"
         if cmd == "sn?":
-            return "0TQDG12345"
+            return "0TQDG12345" if self.edu_queries else "unknown command: sn?"
         if cmd == "battery?":
             return "87"
         if cmd == "wifi?":
@@ -73,7 +81,15 @@ class FakeTello:
                 return
             cmd = data.decode().strip()
             self.received.append(cmd)
-            self.sock.sendto(self._reply(cmd).encode(), addr)
+            if self.strict_source:
+                if cmd == "command" and self.locked_addr is None:
+                    self.locked_addr = addr
+                if addr != self.locked_addr:
+                    continue
+            for lead in self.lead_replies.get(cmd, []):
+                self.sock.sendto(lead, addr)
+            raw = self.raw_replies.get(cmd)
+            self.sock.sendto(raw if raw is not None else self._reply(cmd).encode(), addr)
             if cmd == "streamon" and self.video_port:
                 for _ in range(self.video_packets):
                     self.sock.sendto(b"\x00" * 1460, ("127.0.0.1", self.video_port))
@@ -99,6 +115,90 @@ def test_commands_against_fake_udp_drone(capsys):
     assert {c["name"]: c["value"] for c in doc["checks"]}["cmd:battery?"] == "87"
     assert drone.received == ["command", "sdk?", "sn?", "battery?", "wifi?"]
     assert set(doc["checks"][0]) == {"name", "target", "status", "detail", "value"}
+
+
+def test_commands_use_one_source_port_so_a_strict_tello_answers_all(capsys):
+    # A real Tello answers only the port that sent "command"; a new socket per command used to time out.
+    with FakeTello(strict_source=True) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert [c["status"] for c in doc["checks"]] == ["PASS"] * 5
+    assert drone.received == ["command", "sdk?", "sn?", "battery?", "wifi?"]
+
+
+def test_standard_tello_without_sdk_and_sn_queries_is_info_not_fail(capsys):
+    with FakeTello(strict_source=True, edu_queries=False) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:sdk?"]["status"] == "INFO"
+    assert by_name["cmd:sn?"]["status"] == "INFO"
+    assert by_name["cmd:battery?"]["status"] == "PASS"
+    assert doc["overall"] == "PASS"
+
+
+def test_real_command_port_sends_from_local_8889_like_djitellopy():
+    try:
+        sock = hw._command_socket("127.0.0.1", hw.CMD_PORT)
+        local = sock.getsockname()[1]
+    finally:
+        hw.close_command_sockets()
+    if local != hw.CMD_PORT:
+        pytest.skip("local UDP 8889 is in use on this machine")
+    assert local == 8889
+
+
+def test_undecodable_reply_does_not_crash_the_report_on_a_cp1252_stdout(monkeypatch):
+    # Seen on a real Tello: U+FFFD in the report crashed the table print on a redirected cp1252 stdout. Non-text
+    # replies are now skipped, but any printable character cp1252 cannot encode must still not crash the report.
+    import io
+
+    raw = io.BytesIO()
+    stdout = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    with FakeTello(raw_replies={"wifi?": "\u26039".encode("utf-8")}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])
+    stdout.flush()
+    text = raw.getvalue().decode("cp1252")
+    assert rc == 0
+    assert "cmd:wifi?" in text
+    assert "OVERALL: PASS" in text
+
+
+def test_non_text_reply_before_ok_is_skipped_and_reported(capsys):
+    with FakeTello(lead_replies={"command": [b"\xff\xfeVl\x00"]}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:command"]["status"] == "PASS"
+    assert by_name["stray-replies"]["status"] == "INFO"
+    assert "binary" in by_name["stray-replies"]["detail"]
+
+
+def test_stale_ok_before_a_query_value_is_skipped(capsys):
+    with FakeTello(lead_replies={"battery?": [b"ok"]}) as drone:
+        rc = hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    by_name = {c["name"]: c for c in doc["checks"]}
+    assert by_name["cmd:battery?"]["status"] == "PASS" and by_name["cmd:battery?"]["value"] == "87"
+    assert by_name["stray-replies"]["status"] == "INFO"
+
+
+def test_a_clean_run_reports_no_stray_row(capsys):
+    with FakeTello() as drone:
+        hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1", "--json"])
+    names = [c["name"] for c in json.loads(capsys.readouterr().out)["checks"]]
+    assert "stray-replies" not in names
+
+
+def test_command_sockets_are_closed_after_main():
+    with FakeTello() as drone:
+        hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])
+    assert hw._CMD_SOCKETS == {}
 
 
 def test_unreachable_drone_fails(capsys):

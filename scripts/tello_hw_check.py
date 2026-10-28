@@ -56,6 +56,7 @@ FAIL = "FAIL"
 INFO = "INFO"
 
 STATUS_COMMANDS = ("command", "sdk?", "sn?", "battery?", "wifi?")
+OPTIONAL_COMMANDS = ("sdk?", "sn?")
 
 
 @dataclass
@@ -78,6 +79,67 @@ def _clean(reply: bytes) -> str:
     return reply.decode("utf-8", errors="replace").strip().strip("\x00").strip()
 
 
+# One UDP socket per (host, port), reused for every command. A real Tello answers only the
+# source port that sent it ``command``, so a new socket per command gets no reply after the first.
+# For the real command port the socket binds local UDP 8889, the port djitellopy (the dashboard
+# and the edge) always sends from, so a later FlightRisk process is not locked out by this check.
+_CMD_SOCKETS: dict[tuple[str, int], socket.socket] = {}
+
+
+def _command_socket(host: str, port: int) -> socket.socket:
+    key = (host, port)
+    sock = _CMD_SOCKETS.get(key)
+    if sock is None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if port == CMD_PORT:
+            try:
+                sock.bind(("", CMD_PORT))
+            except OSError:
+                pass  # port busy (another Tello program is running): fall back to any free port
+        _CMD_SOCKETS[key] = sock
+    return sock
+
+
+# A real Tello can send duplicate or late "ok" replies, and a reply that is not text. Those are skipped
+# (so they are not read as the answer to the next command) and listed per host in one INFO row.
+_STRAYS: dict[str, list[str]] = {}
+
+
+def close_command_sockets() -> None:
+    """Close the shared command sockets (call once the report is done)."""
+    for sock in _CMD_SOCKETS.values():
+        try:
+            sock.close()
+        except OSError:
+            pass
+    _CMD_SOCKETS.clear()
+    _STRAYS.clear()
+
+
+def _is_text(data: bytes) -> bool:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return all(ch.isprintable() or ch in "\r\n\t\x00" for ch in text)
+
+
+def _note_stray(host: str, data: bytes) -> None:
+    shown = _clean(data) if _is_text(data) else "binary " + data[:8].hex()
+    _STRAYS.setdefault(host, []).append(shown)
+
+
+def _drain(sock: socket.socket, host: str) -> None:
+    """Drop late replies to earlier commands so they are not read as the next reply."""
+    sock.settimeout(0.0)
+    try:
+        while True:
+            data, _ = sock.recvfrom(2048)
+            _note_stray(host, data)
+    except (BlockingIOError, socket.timeout, OSError):
+        pass
+
+
 def send_command(
     host: str,
     command: str,
@@ -85,17 +147,39 @@ def send_command(
     port: int = CMD_PORT,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> Optional[str]:
-    """Send one SDK command and return the stripped reply, or None on timeout."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    """Send one SDK command and return the stripped reply, or None on timeout.
+
+    Every command to the same host and port goes out from the same local UDP port. Replies that are not
+    text are skipped, and so is a bare "ok" when the command is a query (ends with "?"), because that is a
+    duplicate or late acknowledgement and not the value asked for. Skipped replies are noted per host.
+    """
+    sock = _command_socket(host, port)
+    wants_value = command.strip().endswith("?")
     try:
-        sock.settimeout(timeout)
+        _drain(sock, host)
         sock.sendto(command.encode("utf-8"), (host, port))
-        data, _ = sock.recvfrom(2048)
-        return _clean(data)
-    except (socket.timeout, OSError):
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            sock.settimeout(remaining)
+            data, _ = sock.recvfrom(2048)
+            text = _clean(data)
+            if not _is_text(data) or (wants_value and text.lower() == "ok"):
+                _note_stray(host, data)
+                continue
+            return text
+    except socket.timeout:
         return None
-    finally:
-        sock.close()
+    except OSError:
+        # A broken socket is dropped so the next command starts a fresh one.
+        _CMD_SOCKETS.pop((host, port), None)
+        try:
+            sock.close()
+        except OSError:
+            pass
+        return None
 
 
 def _is_error(reply: str) -> bool:
@@ -110,11 +194,15 @@ def _is_error(reply: str) -> bool:
 def check_drone(host: str, *, port: int = CMD_PORT, timeout: float = DEFAULT_TIMEOUT) -> list[CheckResult]:
     """Run the five status commands against one drone."""
     results: list[CheckResult] = []
+    _STRAYS.pop(host, None)
     for cmd in STATUS_COMMANDS:
         reply = send_command(host, cmd, port=port, timeout=timeout)
         name = f"cmd:{cmd}"
         if reply is None:
             results.append(CheckResult(name, host, FAIL, "no reply (timeout)"))
+        elif cmd in OPTIONAL_COMMANDS and reply.lower().startswith("unknown command"):
+            # sdk? and sn? exist only on a Tello EDU (or newer firmware); no flight needs them.
+            results.append(CheckResult(name, host, INFO, f"not supported by this drone: {reply}", reply))
         elif _is_error(reply):
             results.append(CheckResult(name, host, FAIL, f"drone replied: {reply}", reply))
         elif cmd == "command" and reply.lower() != "ok":
@@ -123,6 +211,10 @@ def check_drone(host: str, *, port: int = CMD_PORT, timeout: float = DEFAULT_TIM
             results.append(CheckResult(name, host, FAIL, f"battery not 0-100: {reply}", reply))
         else:
             results.append(CheckResult(name, host, PASS, "", reply))
+    strays = _STRAYS.get(host)
+    if strays:
+        shown = ", ".join(repr(s) for s in strays[:6])
+        results.append(CheckResult("stray-replies", host, INFO, f"ignored {len(strays)} duplicate or non-text reply(ies): {shown}", strays[:6]))
     return results
 
 
@@ -543,9 +635,19 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[Check
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # A drone reply can hold bytes that are not valid text (shown as U+FFFD). With stdout redirected to a file
+    # or pipe on Windows the encoding is cp1252, and printing that character used to crash the whole report.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
-    results = run(args, parser)
+    try:
+        results = run(args, parser)
+    finally:
+        close_command_sockets()
     print(to_json(results) if args.json else format_table(results))
     return 0 if overall_status(results) == PASS else 1
 
