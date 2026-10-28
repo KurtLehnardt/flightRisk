@@ -1603,6 +1603,14 @@
         .fleet-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
         .fleet-controls #land-all { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--red); border-radius: 4px; cursor: pointer; font-size: 13px; }
         .fleet-controls-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; overflow-wrap: anywhere; }
+        .profile-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+        .profile-label { font-size: 11px; color: var(--text-muted); min-width: 80px; }
+        .profile-drone-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+        .profile-drone { padding: 6px 8px; border: 1px solid var(--bg-card); border-radius: 4px; display: flex; flex-direction: column; gap: 4px; }
+        .profile-drone .drone-name { color: var(--cyan); font-weight: 600; }
+        .profile-status { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; color: var(--text-muted); }
+        .profile-status.warn { color: var(--amber, #F59E0B); }
+        .profile-status.bad { color: var(--red, #EF4444); }
         #search-map { height: 260px; width: 100%; background: #0b1220; border-radius: 4px; }
         #fleet-panel { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; }
         #fleet-panel th, #fleet-panel td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--bg-card); }
@@ -1786,6 +1794,20 @@
                             <button id="land-all" onclick="landAll()" aria-label="Land all drones" title="Shift+L (Ctrl/Cmd+Shift+L inside text fields)">LAND ALL drones</button>
                             <div class="fleet-controls-hint">Shift+L lands every drone. Inside a text field use Ctrl/Cmd+Shift+L. The Land button under Flight Controls lands only the selected drone.</div>
                         </div>
+                    </div>
+
+                    <!-- Detection profiles (edge source): which model each drone runs -->
+                    <div class="panel-section" id="detection-profiles-section">
+                        <div class="panel-title">Detection Profile</div>
+                        <div class="profile-row">
+                            <label for="profile-fleet-default" class="profile-label">Fleet default</label>
+                            <select id="profile-fleet-default" class="fleet-select" onchange="setFleetDetectionProfile(this.value)">
+                                <option value="">Keep each drone's startup profile</option>
+                            </select>
+                        </div>
+                        <div id="profile-controls-note" class="profile-status warn" style="display:none;"></div>
+                        <div id="profile-drone-list" class="profile-drone-list" aria-live="polite"></div>
+                        <div class="fleet-controls-hint">Top-down suits a camera looking straight down (HERIDAL model, tiled). Level suits level flight with faces in view. A drone switches only while it is on the ground; in the air the edge refuses and the reason is shown here.</div>
                     </div>
 
                     <!-- D-pad Flight Controls -->
@@ -2286,6 +2308,7 @@
             showToast('Connected to FlightRisk');
             socket.emit('get_fleet_status');
             socket.emit('get_reasoning_provider');
+            socket.emit('get_detection_profiles');
         });
 
         socket.on('disconnect', () => {
@@ -3083,6 +3106,117 @@
             }
         }
 
+        // ========== DETECTION PROFILES ==========
+        // Built with DOM nodes only: drone ids, profile names and refusal
+        // details come from the edges and must never be parsed as HTML.
+        let detectionProfiles = { profiles: [], fleet_default: null, drones: {} };
+
+        function profileLabel(name) {
+            const p = (detectionProfiles.profiles || []).find(x => x.name === name);
+            return p ? p.label : (name || '--');
+        }
+
+        function profileOptions(select, firstText, selected) {
+            select.innerHTML = '';
+            const first = document.createElement('option');
+            first.value = '';
+            first.textContent = firstText;
+            select.appendChild(first);
+            (detectionProfiles.profiles || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.name;
+                opt.textContent = p.label;
+                opt.title = p.description || '';
+                select.appendChild(opt);
+            });
+            select.value = selected || '';
+        }
+
+        function profileStatus(d) {
+            const [text, cls] = profileStatusCore(d);
+            if (d.detector_ok === false) {
+                return ['DETECTOR FAILING: the edge cannot process frames. ' + text, 'bad'];
+            }
+            return [text, cls];
+        }
+
+        function profileStatusCore(d) {
+            if (!d.supported) return ['This edge does not report detection profiles (older edge); it keeps its own model.', 'warn'];
+            if (d.pending) return ['Switching to ' + profileLabel(d.requested) + '...', ''];
+            if (d.refusal) {
+                if (d.mismatch && d.refusal.reason === 'in_flight') {
+                    return ['MISMATCH: chosen ' + profileLabel(d.desired) + ', edge runs ' + profileLabel(d.active)
+                        + '. Refused in flight; sent again when the drone is on the ground.', 'bad'];
+                }
+                const why = d.refusal.reason === 'in_flight' ? 'refused in flight' : 'refused (' + d.refusal.reason + ')';
+                return ['Active: ' + profileLabel(d.active) + '. Switch ' + why + ': ' + (d.refusal.detail || ''), 'bad'];
+            }
+            if (d.note === 'no_reply') return ['Active: ' + profileLabel(d.active) + '. No reply from the edge; try again.', 'warn'];
+            if (d.note === 'not_connected') return ['Active: ' + profileLabel(d.active) + '. Not connected; the choice is sent again when it reconnects.', 'warn'];
+            if (d.note === 'send_failed') return ['Active: ' + profileLabel(d.active) + '. The command could not be sent.', 'bad'];
+            if (d.fallback) {
+                const asked = d.requested ? profileLabel(d.requested) : 'the requested profile';
+                const why = d.fallback_reason === 'weights_missing' ? 'weights missing on the edge'
+                    : 'could not be used (' + (d.fallback_reason || 'unknown') + ')';
+                return ['Active: ' + profileLabel(d.active) + ' (fallback: ' + asked + ' ' + why + ').', 'warn'];
+            }
+            const air = d.flying ? ' In flight: profile changes will be refused.' : '';
+            if (d.mismatch) {
+                return ['MISMATCH: chosen ' + profileLabel(d.desired) + ', edge runs ' + profileLabel(d.active)
+                    + '. Sent again when the drone is on the ground or reconnects.' + air, 'warn'];
+            }
+            return ['Active: ' + profileLabel(d.active) + '.' + air, ''];
+        }
+
+        function renderDetectionProfiles(data) {
+            detectionProfiles = data || detectionProfiles;
+            const section = document.getElementById('detection-profiles-section');
+            if (!section) return;
+            if (data && data.available === false) { section.style.display = 'none'; return; }
+            section.style.display = '';
+            const controls = detectionProfiles.controls_enabled !== false;
+            const fleetSelect = document.getElementById('profile-fleet-default');
+            profileOptions(fleetSelect, "Keep each drone's startup profile", detectionProfiles.fleet_default);
+            fleetSelect.disabled = !controls;
+            fleetSelect.parentElement.style.display = controls ? '' : 'none';
+            const note = document.getElementById('profile-controls-note');
+            note.textContent = detectionProfiles.controls_note || '';
+            note.style.display = detectionProfiles.controls_note ? '' : 'none';
+            const list = document.getElementById('profile-drone-list');
+            list.innerHTML = '';
+            const drones = detectionProfiles.drones || {};
+            Object.keys(drones).sort().forEach(id => {
+                const d = drones[id] || {};
+                const row = document.createElement('div');
+                row.className = 'profile-drone';
+                const head = document.createElement('div');
+                head.className = 'profile-row';
+                const name = document.createElement('span');
+                name.className = 'drone-name';
+                name.textContent = id;
+                const select = document.createElement('select');
+                select.className = 'fleet-select';
+                select.setAttribute('aria-label', 'Detection profile for ' + id);
+                profileOptions(select, 'Fleet default', d.override);
+                select.disabled = !controls || !d.supported || !!d.pending;
+                select.style.display = controls ? '' : 'none';
+                select.addEventListener('change', () => socket.emit('set_detection_profile', { drone_id: id, profile: select.value }));
+                head.append(name, select);
+                const status = document.createElement('div');
+                const [text, cls] = profileStatus(d);
+                status.className = 'profile-status' + (cls ? ' ' + cls : '');
+                status.textContent = text;
+                row.append(head, status);
+                list.appendChild(row);
+            });
+        }
+
+        function setFleetDetectionProfile(name) {
+            socket.emit('set_fleet_detection_profile', { profile: name });
+        }
+
+        socket.on('detection_profiles', renderDetectionProfiles);
+
         function updateFleetTelemetry(data) {
             const container = document.getElementById('fleet-drone-list');
             if (!container) return;
@@ -3607,6 +3741,7 @@
             if (kind === 'retask') showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
             else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
             else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
+            else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
             else if (kind) showFleetBanner(String(kind));
         });
 
@@ -3703,7 +3838,12 @@
             const who = n > 0 ? n + ' drone' + (n === 1 ? '' : 's') : 'The drones';
             // Each drone's geofence and lanes are measured from the spot it takes
             // off from, so every drone must be back on its marked start spot.
-            if (!window.confirm(who + ' will take off. Each drone flies its lanes and keeps its geofence '
+            const pendingProfiles = Object.keys(detectionProfiles.drones || {}).filter(id => (detectionProfiles.drones[id] || {}).pending);
+            const profileWarning = pendingProfiles.length
+                ? 'WARNING: a detection profile switch is still pending for ' + pendingProfiles.join(', ')
+                    + '. Once flying, the edge refuses it and keeps its current profile.\n\n'
+                : '';
+            if (!window.confirm(profileWarning + who + ' will take off. Each drone flies its lanes and keeps its geofence '
                 + 'around the spot it takes off from, so every drone must be on its marked start spot, '
                 + 'nose into the area. Start the search?')) return;
             showFleetError('');

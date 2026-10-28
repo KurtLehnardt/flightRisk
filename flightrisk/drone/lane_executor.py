@@ -40,7 +40,11 @@ and battery landings, land retries, the end-of-lanes hover timeout and
 telemetry.
 
 Fail-safe rules: any unexpected exception while flying a sequence or running
-the monitor lands the drone. Takeoff is refused below the battery threshold,
+the monitor lands the drone. Takeoff is refused while the drone controller
+reports that it cannot reach the drone (``link_status()``: no Tello state
+for ``_STATE_LOST_S``, or a failed keepalive or send), both when ``start_at``
+arrives and right before the takeoff is sent; landing never looks at the
+drone link. Takeoff is refused below the battery threshold,
 and any move the geofence refuses ends the flight with a landing. Position is
 dead-reckoned from the commanded moves (the frame is described in
 ``flightrisk.drone.safety``). Every move is claimed under the executor lock
@@ -56,7 +60,7 @@ from collections.abc import Callable
 from typing import Any
 
 from flightrisk.drone.command_cache import CommandCache
-from flightrisk.drone.controller import command_result
+from flightrisk.drone.controller import DroneLinkStatus, command_result
 from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
     COMMAND_TYPES,
@@ -74,7 +78,7 @@ from flightrisk.drone.lane_plan import (
     split_lane_moves,
 )
 from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
-from flightrisk.fleet_protocol import is_identifier
+from flightrisk.fleet_protocol import MAX_TEXT_LEN, is_identifier
 from flightrisk.observability import StructuredLogger
 
 __all__ = [
@@ -134,6 +138,7 @@ _START_NACK_REASONS = {
     "shut_down": "busy",
     "landing": "landing",
     "geofence": "geofence",
+    "drone_unreachable": "drone_unreachable",
 }
 
 
@@ -269,6 +274,13 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
         self._telemetry_cv = threading.Condition()
         self._telemetry_sender: threading.Thread | None = None
         self._telemetry_dropped = 0
+        # The drone-link problem (reason, detail) the monitor last logged,
+        # or None while the link is healthy (or not reported), so each
+        # change is logged once (see ``lane_monitor``).
+        self._link_problem: tuple[str | None, str | None] | None = None
+        # Operator text of the last takeoff refused because the drone was
+        # unreachable; written and read on the flight sequence thread.
+        self._unreachable_detail: str | None = None
 
     # ------------------------------------------------------------------
     # Introspection
@@ -370,6 +382,33 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
 
     def _is_flying(self) -> bool:
         return bool(getattr(self.drone.state, "is_flying", False))
+
+    def _drone_link(self) -> DroneLinkStatus | None:
+        """The drone controller's link status, or None when it reports none. Never raises.
+
+        Only a controller with ``link_status()`` (the Tello) reports one;
+        the fake Tello and MAVLink do not, and are never refused for it. A
+        ``link_status()`` that raises counts as an unhealthy link
+        (``unreadable``), so a takeoff is refused rather than flown blind.
+        Takeoff only: no landing ever looks at this.
+        """
+        probe = getattr(self.drone, "link_status", None)
+        if not callable(probe):
+            return None
+        try:
+            status = probe()
+        except Exception as exc:  # noqa: BLE001 - an unreadable link refuses takeoff
+            # Not logged here (this runs with every telemetry); the monitor
+            # logs the change and a refused takeoff logs the detail.
+            return DroneLinkStatus(False, None, "unreadable", f"drone link status unreadable ({type(exc).__name__})")
+        if not isinstance(status, DroneLinkStatus):
+            return DroneLinkStatus(False, None, "unreadable", "drone link status unreadable")
+        if status.ok:
+            return status
+        # The detail travels in nacks and telemetry: printable, at most
+        # MAX_TEXT_LEN characters, never empty.
+        detail = "".join(ch for ch in str(status.detail or "") if ch.isprintable())[:MAX_TEXT_LEN]
+        return DroneLinkStatus(False, status.age_s, status.reason, detail or "drone unreachable")
 
     def _read_battery(self) -> Any:
         reader = getattr(self.drone, "read_battery", None)
@@ -494,6 +533,10 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
         plan (``plan_mismatch``); also while holding (``busy``), and, for a
         v2 command, when the rest of the plan, flown from the current
         dead-reckoned position, would leave the geofence (``geofence``).
+        A start that would take off is refused with ``drone_unreachable``
+        (``detail`` naming the problem, for example ``Tello unreachable (no
+        state for 12 s)``) while the drone controller reports its link down;
+        the link is checked again right before the takeoff.
         """
         t_ground = msg.get("t_ground_s")
         if not is_finite_number(t_ground):
@@ -503,6 +546,8 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
             return self._refuse_start(msg, "invalid_plan_id")
         refusal: str | None = None
         lead = 0.0
+        # Read before the executor lock: the controller takes its own locks.
+        link = self._drone_link()
         with self._lock:
             offset = self._offset_s
             if offset is None:
@@ -524,6 +569,10 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
                 refusal = "holding"
             elif self._landing_wanted_locked():
                 refusal = "landing"
+            elif link is not None and not link.ok and not self._is_flying():
+                # The start would take off into a dead drone link. Checked
+                # again right before the takeoff (``_do_takeoff``).
+                refusal = "drone_unreachable"
             else:
                 t_edge = float(t_ground) + offset
                 lead = t_edge - self._clock()
@@ -535,7 +584,10 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
                     refusal = "shut_down" if self._closed else "landing"
         if refusal is not None:
             # The nack is sent outside the lock, like every other message.
-            fields = {"lead_s": lead} if refusal in ("too_far_ahead", "too_late") else {}
+            fields: dict[str, Any] = {"lead_s": lead} if refusal in ("too_far_ahead", "too_late") else {}
+            if refusal == "drone_unreachable" and link is not None:
+                fields.update(link_reason=link.reason, drone_link_age_s=link.age_s)
+                return self._refuse_start(msg, refusal, detail=link.detail or "drone unreachable", **fields)
             return self._refuse_start(msg, refusal, **fields)
         self._log.info(
             "edge_start_scheduled",
@@ -548,10 +600,15 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
         )
         return True
 
-    def _refuse_start(self, msg: dict[str, Any], reason: str, **fields: Any) -> bool:
+    def _refuse_start(self, msg: dict[str, Any], reason: str, detail: str | None = None, **fields: Any) -> bool:
+        """Log and nack a refused start. *detail* (operator text) overrides the nack's default detail."""
+        if detail is not None:
+            fields["detail"] = detail
         self._log.warning("edge_start_refused", drone_id=self.drone_id, reason=reason, **fields)
         nack = _START_NACK_REASONS.get(reason, "invalid")
-        self._nack(msg, nack, **({"detail": reason} if reason != nack else {}))
+        if detail is None and reason != nack:
+            detail = reason
+        self._nack(msg, nack, **({"detail": detail} if detail is not None else {}))
         return False
 
     def handle_takeoff(self, msg: dict[str, Any] | None = None) -> bool:

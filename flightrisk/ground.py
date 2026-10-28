@@ -8,6 +8,7 @@ import numpy as np
 from typing import Any
 
 from flightrisk.edge import DetectionMessage
+from flightrisk.vision.profiles import weight_scale_for
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ class GroundStation:
     def process_message(self, msg: DetectionMessage) -> list[dict[str, Any]]:
         """Process a detection message, return scored results."""
         results = []
+        # A detection profile can weight face or ReID matching differently
+        # (flightrisk/vision/profiles.py). None, the default and an unknown
+        # profile all leave the scorer's weights unchanged.
+        weight_scale = weight_scale_for(getattr(msg, "detection_profile", None))
 
         for det in msg.detections:
             reid_score = 0.0
@@ -86,7 +91,12 @@ class GroundStation:
             # Score
             score_result = None
             if self._scorer:
-                score_result = self._scorer.score(reid_score=reid_score, face_score=face_score)
+                if weight_scale is None:
+                    score_result = self._scorer.score(reid_score=reid_score, face_score=face_score)
+                else:
+                    score_result = self._scorer.score(
+                        reid_score=reid_score, face_score=face_score, weight_scale=weight_scale,
+                    )
 
             results.append({
                 "bbox": det.bbox,
@@ -104,6 +114,7 @@ class GroundStation:
                 "heading_deg": getattr(msg, "heading_deg", None),
                 "lat": getattr(msg, "lat", None),
                 "lon": getattr(msg, "lon", None),
+                "detection_profile": getattr(msg, "detection_profile", None),
             })
 
         return results

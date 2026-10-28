@@ -29,6 +29,7 @@ from flightrisk.drone.controller import (
     CommandResult,
     DroneCapabilities,
     DroneController,
+    DroneLinkStatus,
     DroneState,
 )
 from flightrisk.drone.snapshot import (
@@ -108,6 +109,18 @@ _STATE_FRESH_S = 0.5
 # drone still hovers. So during a gap a land waits for the stream to come
 # back, and only once the stream is lost does a land's own ``ok`` confirm it.
 _STATE_LOST_S = 3.0
+# The drone link counts as down for a takeoff (``TelloController.link_status``)
+# once no state packet has arrived for this long. It is the same threshold
+# landing uses for a lost state stream: about 30 missed packets at 10 a
+# second, well past the brief Wi-Fi gaps described above, and state packets
+# keep arriving while a command holds the channel, so a drone in the middle
+# of a command is never counted as unreachable. A refused takeoff costs the
+# operator one retry; a takeoff sent into a dead link cost a land loop for a
+# drone that never left the ground (incident of 2026-10-28).
+_LINK_STATE_MAX_AGE_S = _STATE_LOST_S
+# The link detail text (sent to the ground in nacks and telemetry) is cut to
+# this many characters; the protocol allows 200.
+_LINK_DETAIL_MAX_LEN = 160
 # This many recent state packets are kept, enough to cover _MOTOR_OFF_S at
 # up to 20 packets a second.
 _STATE_READINGS_KEPT = 128
@@ -553,6 +566,16 @@ class TelloController:
         self._measured_at: dict[str, float] = {}
         self._extended: dict[str, Reading] = {}
         self._poll_failures = 0
+        # Drone-link bookkeeping for link_status(), guarded by _link_lock:
+        # the error of the last command-channel exchange (keepalive, stream
+        # command or flight command) that raised or got no reply, or None
+        # once an exchange was answered since. Landing does not touch it.
+        # _state_arrivals is True when state packet arrival times are
+        # recorded (see _stamp_state_packets); without them the state age is
+        # unknown and does not gate a takeoff.
+        self._link_lock = threading.Lock()
+        self._command_error: str | None = None
+        self._state_arrivals = False
         self._stamp_state_packets(host)
 
     def _stamp_state_packets(self, host: str) -> None:
@@ -561,6 +584,7 @@ class TelloController:
             udp = _djitello.drones.get(host)
             if type(udp) is dict:
                 _djitello.drones[host] = _StateStampedUdpObject(udp, self._note_state_packet, self.name)
+                self._state_arrivals = True
         except Exception as e:
             # No arrival times: landing falls back to reply-based confirmation.
             notice(
@@ -700,6 +724,64 @@ class TelloController:
             f"height {newest.height} cm, tof {newest.tof} cm, motor time {newest.motor_s} s "
             f"({time.monotonic() - newest.at:.1f} s ago)"
         )
+
+    # --- Drone link health (read-only) ---
+
+    def link_status(self) -> DroneLinkStatus:
+        """Whether this controller can talk to the Tello right now. Sends nothing and never blocks on a command.
+
+        Unhealthy (``ok`` false), in this order, when:
+
+        * the controller is not connected (``not_connected``);
+        * no state packet has ever arrived (``no_state``), or none for more
+          than ``_LINK_STATE_MAX_AGE_S`` (``state_stale``). The Tello sends
+          state about ten times a second whatever the command channel is
+          doing, so this does not depend on the state poller, which skips
+          while a command holds the channel;
+        * the last command-channel exchange (keepalive, stream command or
+          flight command) raised, for example ``OSError`` 51 (network
+          unreachable), or got no reply, and no exchange has been answered
+          since (``command_failed``). The keepalive runs every
+          ``_KEEPALIVE_INTERVAL_S``, so a recovered link clears this within
+          that time.
+
+        ``age_s`` is the age of the newest state packet (rounded to 0.1 s),
+        or ``None`` when unknown. When state arrival times cannot be
+        recorded (``_stamp_state_packets`` failed) the state age is unknown
+        and only the other checks apply.
+        """
+        if not self.state.is_connected:
+            return DroneLinkStatus(False, None, "not_connected", "Tello not connected")
+        age: float | None = None
+        if self._state_arrivals:
+            with self._state_lock:
+                newest = self._state_readings[-1].at if self._state_readings else None
+            if newest is None:
+                return DroneLinkStatus(False, None, "no_state", "Tello unreachable (no state received)")
+            age = max(0.0, time.monotonic() - newest)
+            if age > _LINK_STATE_MAX_AGE_S:
+                return DroneLinkStatus(
+                    False, round(age, 1), "state_stale", f"Tello unreachable (no state for {age:.0f} s)"
+                )
+            age = round(age, 1)
+        with self._link_lock:
+            error = self._command_error
+        if error is not None:
+            detail = f"Tello unreachable (last command failed: {error})"
+            if len(detail) > _LINK_DETAIL_MAX_LEN:
+                detail = detail[: _LINK_DETAIL_MAX_LEN - 4] + "...)"
+            return DroneLinkStatus(False, age, "command_failed", detail)
+        return DroneLinkStatus(True, age)
+
+    def _note_command_outcome(self, error: BaseException | str | None) -> None:
+        """Record how the last command-channel exchange ended: ``None`` when it was answered."""
+        if isinstance(error, BaseException):
+            error = f"{type(error).__name__}: {error}"
+        if error is not None:
+            # Printable text only: it travels to the ground in nacks and telemetry.
+            error = "".join(ch if ch.isprintable() else " " for ch in str(error))
+        with self._link_lock:
+            self._command_error = error
 
     def connect(self) -> bool:
         """Connect to the Tello and start video stream."""
@@ -883,12 +965,19 @@ class TelloController:
                     return False
                 # Replies queued while the channel was free are stale.
                 del responses[:]
-                tello.send_command_without_return(command)
+                try:
+                    tello.send_command_without_return(command)
+                except Exception as e:
+                    self._note_command_outcome(e)
+                    raise
             reply = self._await_reply(responses, _STREAM_REPLY_TIMEOUT_S)
             if reply is None:
+                self._note_command_outcome(f"no reply to '{command}' within {_STREAM_REPLY_TIMEOUT_S:g} s")
                 raise RuntimeError(
                     f"[{self.name}] no reply to '{command}' within {_STREAM_REPLY_TIMEOUT_S:g} s"
                 )
+            # Any reply proves the link works.
+            self._note_command_outcome(None)
             if reply.lower() != "ok":
                 raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r}")
             # The bookkeeping that djitellopy's streamon() and streamoff() do
@@ -1577,7 +1666,13 @@ class TelloController:
                 # and land of an interrupting landing. Drop them so this command
                 # reads its own reply.
                 del responses[:]
-                tello.send_command_without_return(command)
+                try:
+                    tello.send_command_without_return(command)
+                except Exception as e:
+                    # For example OSError 51 (network unreachable): the
+                    # drone link is down (see link_status).
+                    self._note_command_outcome(e)
+                    raise
             reply = self._await_reply(responses, timeout_s)
         finally:
             if is_takeoff:
@@ -1585,6 +1680,8 @@ class TelloController:
                     if self._takeoff_in_flight:
                         self._takeoff_answered_ok = reply is not None and reply.lower() == "ok"
                     self._takeoff_in_flight = False
+        # Any reply proves the link works; none means it may not.
+        self._note_command_outcome(None if reply is not None else f"no reply to '{command}' within {timeout_s:g} s")
         if reply is None:
             raise RuntimeError(
                 f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
@@ -1811,8 +1908,13 @@ class TelloController:
             except Exception:
                 pass
             self.tello.send_control_command("command", timeout=_KEEPALIVE_TIMEOUT_S)
+            self._note_command_outcome(None)
             return True
         except Exception as e:
+            # Unanswered, answered with an error, or the send itself raised
+            # (OSError 51 when this laptop is not on the Tello's Wi-Fi): the
+            # drone link counts as down until an exchange is answered.
+            self._note_command_outcome(e)
             _log_failure(self.name, "tello_keepalive_failed", e)
             return False
         finally:

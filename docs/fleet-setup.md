@@ -493,6 +493,25 @@ On Windows set the same variables with `OTEL_ENDPOINT=http://10.42.0.1:4317` and
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |
 
+## Troubleshooting: Start refused: drone-1: Tello unreachable
+
+The dashboard shows this when the edge laptop cannot talk to its Tello even though the edge itself is connected to the ground, for example `Start refused: drone-1: Tello unreachable (no state for 143 s)` or `Start refused: drone-1: Tello unreachable (last command failed: OSError: [Errno 51] Network is unreachable)`. The edge refuses to take off in that state (see `docs/fleet-protocol-v2.md`, "Drone link preflight"); nothing is sent to the drone and nothing needs to land.
+
+What the text means:
+
+- `no state for N s`: the Tello's state packets (UDP 8890, about ten a second) stopped more than 3 s ago. Usually the edge laptop has left the Tello's Wi-Fi (AP mode) or the Tello is off, asleep or out of range.
+- `last command failed: ...`: the last keepalive or command failed. `[Errno 51] Network is unreachable` means the laptop has no route to the Tello: it is on another network. A missing reply means packets are lost or the Tello is busy or off.
+- `no state received` or `Tello not connected`: the edge never got state from this Tello since it started, or gave up on it.
+
+What to do:
+
+1. On the edge laptop, check it is on the right Tello's Wi-Fi (AP mode) or that the Tello is on the router and `FLIGHTRISK_TELLO_HOST` is its address (station mode). macOS can silently switch back to a known network.
+2. Check the Tello is on and its LED is not showing low battery.
+3. Look for `edge_drone_link_unhealthy` and `edge_drone_link_restored` in the edge log. Once the Wi-Fi is back the state stream resumes (at the latest after the next keepalive, every 10 s, because the Tello sends state to the address that last sent it a command), the next answered keepalive clears a failed command, and the edge logs `edge_drone_link_restored`.
+4. Press Start again. No restart is needed. If the edge was not on the Tello's network when it started, it exits with `edge_drone_connect_failed`; start it again once it is.
+
+The edge also sends `drone_link_ok: false` in its telemetry, so a ground on this version refuses the start before any `start_at` is sent. An older ground does not know the field: it may send `start_at`, and the edge then refuses it and logs `edge_start_refused` with `reason=drone_unreachable`.
+
 ## Troubleshooting: edge_auth_rejected
 
 If an edge logs a line like this, the ground refused its authentication handshake:

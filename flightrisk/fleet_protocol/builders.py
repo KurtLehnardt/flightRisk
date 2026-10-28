@@ -34,6 +34,7 @@ from flightrisk.fleet_protocol.constants import (
     PONG,
     PROTOCOL_VERSION,
     RESUME,
+    SET_DETECTION_PROFILE,
     START_AT,
     TAKEOFF,
     TELEMETRY,
@@ -485,3 +486,90 @@ def make_peer_heartbeat(seq: int, epoch: int, *, node_id: str | None = None) -> 
     if node_id is not None:
         msg["node_id"] = node_id
     return _checked(msg, 2)
+
+
+# ---------------------------------------------------------------------------
+# Configuration commands (any link version)
+# ---------------------------------------------------------------------------
+
+
+def make_set_detection_profile(
+    profile: str, *, drone_id: str | None = None, cmd_id: str | None = None
+) -> dict[str, Any]:
+    """Ground -> edge: switch the edge's detection profile (model and detection settings).
+
+    Carries a fresh ``cmd_id`` unless one is given. It is not fenced and is
+    valid on every link version; the edge answers with ``make_profile_ack``
+    or ``make_profile_nack``.
+    """
+    msg: dict[str, Any] = {
+        "type": SET_DETECTION_PROFILE,
+        "profile": profile,
+        "cmd_id": cmd_id if cmd_id is not None else new_cmd_id(),
+    }
+    if drone_id is not None:
+        msg["drone_id"] = drone_id
+    return _checked(msg)
+
+
+def make_profile_ack(
+    drone_id: str,
+    cmd_id: str,
+    profile: str,
+    *,
+    requested: str | None = None,
+    fallback: bool = False,
+    fallback_reason: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Edge -> ground: *profile* is now active for the ``set_detection_profile`` *cmd_id*.
+
+    *fallback* is true when *profile* is not the one *requested* (for
+    example its weights file is missing), with *fallback_reason*.
+    """
+    msg: dict[str, Any] = {
+        "type": ACK,
+        "for": SET_DETECTION_PROFILE,
+        "drone_id": drone_id,
+        "cmd_id": cmd_id,
+        "result": "ok",
+        "profile": profile,
+        "fallback": bool(fallback),
+    }
+    if requested is not None:
+        msg["requested"] = requested
+    if fallback:
+        msg["fallback_reason"] = fallback_reason
+    if detail is not None:
+        msg["detail"] = detail
+    return _checked(msg)
+
+
+def make_profile_nack(
+    drone_id: str,
+    cmd_id: str,
+    reason: str,
+    *,
+    profile: str | None = None,
+    requested: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Edge -> ground: the ``set_detection_profile`` *cmd_id* was refused for *reason*.
+
+    *profile* is the profile that stays active; *detail* is a short
+    operator-facing explanation (printable, at most 200 characters).
+    """
+    msg: dict[str, Any] = {
+        "type": NACK,
+        "for": SET_DETECTION_PROFILE,
+        "drone_id": drone_id,
+        "cmd_id": cmd_id,
+        "reason": reason,
+    }
+    if profile is not None:
+        msg["profile"] = profile
+    if requested is not None:
+        msg["requested"] = requested
+    if detail is not None:
+        msg["detail"] = detail
+    return _checked(msg)

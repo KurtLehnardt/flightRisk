@@ -108,6 +108,7 @@ class AppState:
     ground_station: Any = None  # GroundStation (scorer over edge detections)
     stream_video: bool = False  # whether edge devices should stream full frames
     fleet_supervisor: Any = None  # FleetSupervisor (edge source with a fleet)
+    profile_board: Any = None  # ProfileBoard (edge source): per-drone detection profiles
 
     # -- Privacy mode (set by _init_pipeline) --
     appearance_only: bool = False

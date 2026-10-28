@@ -16,7 +16,11 @@
 * notices a landing the executor did not ask for (the Tello's own auto-land
   or a crash), and then invalidates the plan and clears any hold, as for
   every other landing;
-* emits ``telemetry`` every 0.5 s.
+* emits ``telemetry`` every 0.5 s, and at the same pace logs each change
+  of the drone link (``edge_drone_link_unhealthy`` when the controller can
+  no longer reach its drone, ``edge_drone_link_restored`` when it can
+  again). An unhealthy drone link is only reported: it refuses takeoffs
+  (``lane_flight``) and never lands, holds or delays anything.
 
 The monitor never waits on the ground link: it hands telemetry to a sender
 thread through a small queue that drops its oldest message when full, so a
@@ -26,7 +30,12 @@ Telemetry is the v1 message with the optional ``ceiling_cm``,
 ``ceiling_margin_cm`` and ``alt_slot_cm`` fields, plus the protocol v2 fields ``epoch``,
 ``plan_id``, ``state`` and ``plan_valid`` once the executor is in v2 mode
 (constructed with ``fleet_v2=True``, or after its first command with a
-``cmd_id``). A v1 ground accepts the extra fields.
+``cmd_id``). A v1 ground accepts the extra fields. When the drone controller
+reports its link (``link_status()``, the Tello), telemetry on every version
+also carries ``drone_link_ok``, ``drone_link_age_s`` and
+``drone_link_detail``: while the link is down, ``battery`` and
+``height_cm`` are the controller's last cached values, and the flag tells
+the ground so.
 """
 from __future__ import annotations
 
@@ -102,6 +111,10 @@ class MonitorMixin:
         if self._next_telemetry_s is None or now >= self._next_telemetry_s:
             self._next_telemetry_s = now + self.telemetry_interval_s
             try:
+                self._watch_drone_link()
+            except Exception as exc:  # noqa: BLE001 - logging only, never a reason to land
+                self._log.warning("edge_drone_link_watch_error", drone_id=self.drone_id, error=repr(exc))
+            try:
                 self._post_telemetry(self.telemetry())
             except Exception as exc:
                 self._log.warning("edge_telemetry_error", drone_id=self.drone_id, error=repr(exc))
@@ -146,6 +159,25 @@ class MonitorMixin:
             self._hover_since = now
             return False
         return now - self._hover_since >= self._hover_timeout_s
+
+    def _watch_drone_link(self) -> None:
+        """Log each change of the drone link once. Never lands or holds: takeoff checks it itself."""
+        link = self._drone_link()
+        problem = None if link is None or link.ok else (link.reason, link.detail)
+        previous, self._link_problem = self._link_problem, problem
+        if problem is None:
+            if previous is not None:
+                self._log.info("edge_drone_link_restored", drone_id=self.drone_id, reason=previous[0])
+            return
+        if previous is None or previous[0] != problem[0]:
+            self._log.warning(
+                "edge_drone_link_unhealthy",
+                drone_id=self.drone_id,
+                reason=link.reason,
+                detail=link.detail,
+                drone_link_age_s=link.age_s,
+                is_flying=self._is_flying(),
+            )
 
     def _post_telemetry(self, msg: dict[str, Any]) -> None:
         """Queue telemetry for the sender thread; never waits on the ground link.
@@ -216,4 +248,11 @@ class MonitorMixin:
         msg.update(self.envelope.ceiling_status())
         if v2:
             msg.update(epoch=self.epoch_seen, plan_id=self.plan_id, state=state, plan_valid=plan_valid)
+        link = self._drone_link()
+        if link is not None:
+            msg.update(
+                drone_link_ok=link.ok,
+                drone_link_age_s=link.age_s,
+                drone_link_detail=None if link.ok else (link.detail or "drone unreachable"),
+            )
         return msg

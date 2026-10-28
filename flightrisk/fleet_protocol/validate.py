@@ -30,6 +30,7 @@ from flightrisk.fleet_protocol.checks import (
     _require_text,
     _short,
     _validate_proto_field,
+    is_profile_name,
 )
 from flightrisk.fleet_protocol.constants import (
     _KNOWN_TYPES,
@@ -40,6 +41,7 @@ from flightrisk.fleet_protocol.constants import (
     ASSIGN_LANES,
     CLOCK,
     COMMAND_TYPES,
+    CONFIG_COMMAND_TYPES,
     DIRECTION_EDGE_TO_GROUND,
     DIRECTION_GROUND_TO_EDGE,
     DIRECTION_PEER,
@@ -84,8 +86,11 @@ from flightrisk.fleet_protocol.constants import (
     PEER_TYPES,
     PING,
     PONG,
+    PROFILE_FALLBACK_REASONS,
+    PROFILE_NACK_REASONS,
     PROTOCOL_VERSION,
     RESUME,
+    SET_DETECTION_PROFILE,
     START_AT,
     TAKEOFF,
     TELEMETRY,
@@ -194,6 +199,17 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
         _require_choice(msg, "state", EDGE_STATES)
     if proto >= 2 or "plan_valid" in msg:
         _require_bool(msg, "plan_valid")
+    # Optional on every version (TELEMETRY_DRONE_LINK_FIELDS): checked only
+    # when present, so telemetry from an edge without them is unchanged.
+    if "drone_link_ok" in msg:
+        _require_bool(msg, "drone_link_ok")
+    if "drone_link_age_s" in msg:
+        _require_optional_number(msg, "drone_link_age_s")
+        age = msg["drone_link_age_s"]
+        if age is not None and age < 0:
+            raise ProtocolError(f"'telemetry' field 'drone_link_age_s' must not be negative, got {_short(age)}")
+    if msg.get("drone_link_detail") is not None:
+        _require_text(msg, "drone_link_detail")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:
@@ -209,6 +225,71 @@ def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> N
         _require_text(msg, "detail")
 
 
+def _require_profile_name(msg: Mapping[str, Any], key: str, *, nullable: bool = False) -> str | None:
+    value = _require(msg, key)
+    if value is None and nullable:
+        return None
+    if not is_profile_name(value):
+        raise ProtocolError(
+            f"{msg.get('type')!r} field {key!r} must be a profile name (lowercase letters, digits and "
+            f"underscores, starting with a letter, at most 32 characters){' or null' if nullable else ''}, "
+            f"got {_short(value)}"
+        )
+    return value
+
+
+def _validate_set_detection_profile(msg: Mapping[str, Any]) -> None:
+    """A configuration command: ``profile`` and ``cmd_id`` on every link version, no fence.
+
+    ``drone_id`` is optional (the ground addresses the edge's connection);
+    a fence, when a ground adds one, is checked as a pair like on any other
+    message. The profile only has to be a well-formed name: whether the edge
+    knows it is the edge's answer (``nack{reason: unknown_profile}``).
+    """
+    _require_profile_name(msg, "profile")
+    _require_id(msg, "cmd_id")
+    if "drone_id" in msg:
+        _require_drone_id(msg)
+    if "epoch" in msg or "leader_id" in msg:
+        _require_int_range(msg, "epoch", 1, MAX_EPOCH)
+        _require_id(msg, "leader_id")
+
+
+def _validate_profile_reply(msg: Mapping[str, Any], *, ack: bool) -> None:
+    """An ``ack`` or ``nack`` for a configuration command, under any protocol version.
+
+    Both carry ``drone_id`` and ``cmd_id`` and may carry ``requested`` (the
+    profile asked for), ``epoch_seen`` and ``detail``. An ack carries the
+    ``profile`` now active and ``fallback`` (true when it is not the one
+    requested, with ``fallback_reason``). A nack carries a reason from
+    ``PROFILE_NACK_REASONS`` and may carry the ``profile`` still active.
+    """
+    _require_drone_id(msg)
+    _require_id(msg, "cmd_id")
+    if "epoch_seen" in msg:
+        _require_int_range(msg, "epoch_seen", 0, MAX_EPOCH)
+    if "detail" in msg:
+        _require_text(msg, "detail")
+    if "requested" in msg:
+        _require_profile_name(msg, "requested")
+    if ack:
+        if "result" in msg and msg["result"] != "ok":
+            raise ProtocolError(f"'ack' field 'result' must be 'ok', got {_short(msg['result'])}")
+        _require_profile_name(msg, "profile")
+        if _require_bool(msg, "fallback"):
+            _require_choice(msg, "fallback_reason", PROFILE_FALLBACK_REASONS)
+        elif "fallback_reason" in msg:
+            raise ProtocolError("'ack' field 'fallback_reason' needs 'fallback' to be true")
+        return
+    reason = _require(msg, "reason")
+    if not _is_member(reason, PROFILE_NACK_REASONS):
+        raise ProtocolError(
+            f"'nack' field 'reason' must be one of {sorted(PROFILE_NACK_REASONS)}, got {_short(reason)}"
+        )
+    if "profile" in msg:
+        _require_profile_name(msg, "profile", nullable=True)
+
+
 def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
     if is_ceiling_reply(msg):
         # A configuration command's reply has its own rules on every link
@@ -216,6 +297,9 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
         validate_ceiling_reply(msg)
         return
     target = _require(msg, "for")
+    if _is_member(target, CONFIG_COMMAND_TYPES):
+        _validate_profile_reply(msg, ack=True)
+        return
     if not isinstance(target, str) or not target or len(target) > MAX_ID_LEN:
         raise ProtocolError(f"'ack' field 'for' must be a non-empty string, got {_short(target)}")
     if proto >= 2 and target not in COMMAND_TYPES:
@@ -242,6 +326,11 @@ def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
         validate_ceiling_reply(msg)
         return
     target = _require(msg, "for")
+    if _is_member(target, CONFIG_COMMAND_TYPES):
+        # Configuration commands are refused the same way on every link
+        # version (they are newer than v1's lane-only nack).
+        _validate_profile_reply(msg, ack=False)
+        return
     if proto < 2:
         # v1: only lane assignments are refused, for the v1 reasons.
         if target != ASSIGN_LANES:
@@ -365,6 +454,8 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
         _require_int_range(msg, "seq", 0, _MAX_SAFE_INT)
     elif mtype == TAKEOFF:
         pass
+    elif mtype == SET_DETECTION_PROFILE:
+        _validate_set_detection_profile(msg)
     elif mtype == HOLD:
         if "reason" in msg:
             _require_choice(msg, "reason", HOLD_REASONS)
@@ -433,6 +524,9 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
     is not a ground-to-edge type of that version: unknown commands, edge or
     peer messages, an edge-form ``hello``, and v2-only commands on a v1 link.
     The legacy ``set_target`` and ``stream_video`` messages pass by type only.
+    Configuration commands (``set_detection_profile``) are accepted on every
+    link version and checked against their own schema; they are never
+    fenced, because they cannot move the drone.
 
     With *require_fence*, motion and control (``FENCED_COMMAND_TYPES`` and
     ``FENCED_CONTROL_TYPES``) must carry a valid fence, and commands a
@@ -454,9 +548,9 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
         return mtype
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES:
         return mtype
-    if mtype == SET_CEILING:
-        # A configuration command: accepted on every link version, checked
-        # against its own schema, never a flight command.
+    if mtype == SET_CEILING or mtype in CONFIG_COMMAND_TYPES:
+        # Configuration commands: allowed on every link version, checked
+        # against their own schema; they never move the drone.
         return validate_message(msg, proto=proto)
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
     if mtype not in allowed:

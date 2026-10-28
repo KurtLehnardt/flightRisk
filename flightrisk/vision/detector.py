@@ -29,6 +29,8 @@ class PersonDetector:
         tiled: bool | None = None,
         tile_size: int | None = None,
         overlap: float | None = None,
+        nms_iou: float | None = None,
+        imgsz: int | None = None,
     ):
         """Initialize the detector.
 
@@ -44,6 +46,11 @@ class PersonDetector:
                        Defaults to `config.vision.detector_tile_size`.
             overlap: Fraction of tile size shared by neighboring tiles, in [0, 1).
                      Defaults to `config.vision.detector_tile_overlap`.
+            nms_iou: IoU threshold for non-maximum suppression, in (0, 1],
+                     used by each model call and when merging tiles. None
+                     keeps today's behaviour: the model's own default for
+                     each call and `NMS_IOU_THRESHOLD` when merging tiles.
+            imgsz: Model input size in pixels. None keeps the model default.
         """
         cfg = get_config().vision
         if model_name is None:
@@ -60,6 +67,13 @@ class PersonDetector:
             raise ValueError("tile_size must be positive")
         if not 0.0 <= overlap < 1.0:
             raise ValueError("overlap must be in [0, 1)")
+        if nms_iou is not None and not 0.0 < nms_iou <= 1.0:
+            raise ValueError("nms_iou must be in (0, 1]")
+        if imgsz is not None and imgsz < 32:
+            raise ValueError("imgsz must be at least 32")
+        self.model_name = model_name
+        self.nms_iou = nms_iou
+        self.imgsz = imgsz
         self.model = YOLO(model_name)
         self.confidence = confidence
         self.tiled = tiled
@@ -77,6 +91,20 @@ class PersonDetector:
             return "cuda"
         return "cpu"
 
+    def _predict_kwargs(self) -> dict:
+        """Keyword arguments for one model call; unset options are left to the model."""
+        kwargs = {
+            "classes": [self.PERSON_CLASS_ID],
+            "conf": self.confidence,
+            "device": self._device,
+            "verbose": False,
+        }
+        if self.nms_iou is not None:
+            kwargs["iou"] = self.nms_iou
+        if self.imgsz is not None:
+            kwargs["imgsz"] = self.imgsz
+        return kwargs
+
     def detect(self, frame: np.ndarray) -> list[dict]:
         """Detect people in a frame.
 
@@ -91,13 +119,7 @@ class PersonDetector:
         """
         if self.tiled:
             return self._detect_tiled(frame)
-        results = self.model(
-            frame,
-            classes=[self.PERSON_CLASS_ID],
-            conf=self.confidence,
-            device=self._device,
-            verbose=False,
-        )
+        results = self.model(frame, **self._predict_kwargs())
 
         detections = []
         for result in results:
@@ -153,13 +175,7 @@ class PersonDetector:
             height, width, self.tile_size, self.overlap
         ):
             tile = frame[ty1:ty2, tx1:tx2]
-            results = self.model(
-                tile,
-                classes=[self.PERSON_CLASS_ID],
-                conf=self.confidence,
-                device=self._device,
-                verbose=False,
-            )
+            results = self.model(tile, **self._predict_kwargs())
             for result in results:
                 boxes = result.boxes
                 if boxes is None:
@@ -176,7 +192,8 @@ class PersonDetector:
             return []
 
         xywh = [[x1, y1, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes_xyxy]
-        keep = cv2.dnn.NMSBoxes(xywh, scores, 0.0, self.NMS_IOU_THRESHOLD)
+        iou = self.nms_iou if self.nms_iou is not None else self.NMS_IOU_THRESHOLD
+        keep = cv2.dnn.NMSBoxes(xywh, scores, 0.0, iou)
         keep_idx = sorted(int(k) for k in np.array(keep).flatten())
 
         detections = []

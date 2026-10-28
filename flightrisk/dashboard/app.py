@@ -91,6 +91,8 @@ from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for ba
     _frame_loop,
 )
 from flightrisk.dashboard.alert_latch import AlertPhase, alert_latch
+from flightrisk.dashboard.detection_profiles import EVENT as DETECTION_PROFILES_EVENT
+from flightrisk.dashboard.detection_profiles import ProfileBoard
 from flightrisk.dashboard.recovery import handle_alert_response, reset_alert_flow
 
 # ---------------------------------------------------------------------------
@@ -458,7 +460,11 @@ def _edge_process_and_emit(socketio, msg, fps_state=None):
         if msg.thumbnail_jpeg
         else None
     )
-    _edge_stats.frame_done(len(results), source="edge")
+    profile = getattr(msg, "detection_profile", None)
+    if profile is None:
+        _edge_stats.frame_done(len(results), source="edge")
+    else:
+        _edge_stats.frame_done(len(results), source="edge", profile=profile)
 
     socketio.emit("frame", {
         "image": image_b64,
@@ -647,6 +653,9 @@ class FleetSupervisor:
     is refused when a slot is above the ceiling limit, and Start when the
     planned slots are above it or no longer match the settings.
     """
+
+    # No ceiling board unless one is given (also for a supervisor built without __init__).
+    _ceiling: CeilingBoard | None = None
 
     def __init__(
         self,
@@ -1456,9 +1465,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.ground_station = station
 
         _fps_state = {"last": None}
-        # The fleet supervisor needs the transport and the transport's
-        # callbacks need the supervisor, so the callbacks look it up here.
-        _fleet: dict = {"supervisor": None}
+        # The fleet supervisor and the profile board need the transport and
+        # the transport's callbacks need them, so the callbacks look them up here.
+        _fleet: dict = {"supervisor": None, "profiles": None}
 
         def _on_edge_message(msg):
             # Runs in a GroundTransport executor thread -- plain socketio.emit
@@ -1470,6 +1479,15 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                     app_state.logger.error(
                         "edge_message_error", traceback=traceback.format_exc()
                     )
+            profiles = _fleet["profiles"]
+            if profiles is not None:
+                try:
+                    profiles.observe_detections(msg)
+                except Exception:  # noqa: BLE001 - profile display must never stop scoring or fleet control
+                    if app_state.logger:
+                        app_state.logger.warning(
+                            "detection_profile_observe_failed", traceback=traceback.format_exc()
+                        )
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 try:
@@ -1482,6 +1500,18 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
         def _on_edge_control(msg):
             # Edge ack, nack and telemetry messages, on a transport executor thread.
+            profiles = _fleet["profiles"]
+            if profiles is not None:
+                try:
+                    # A reply to a profile command is the board's alone; the
+                    # fleet coordinator never sent that command.
+                    if profiles.observe_control(msg):
+                        return
+                except Exception:  # noqa: BLE001 - profile display must never stop scoring or fleet control
+                    if app_state.logger:
+                        app_state.logger.warning(
+                            "detection_profile_observe_failed", traceback=traceback.format_exc()
+                        )
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 supervisor.handle_control(msg)
@@ -1502,6 +1532,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             CeilingStore(), transport, socketio.emit, fleet_drones=source_config.fleet_drones,
         )
         app_state.ceiling_board = ceiling_board
+        profile_board = ProfileBoard(transport, socketio.emit, fleet_drones=source_config.fleet_drones)
+        _fleet["profiles"] = profile_board
+        app_state.profile_board = profile_board
         supervisor = None
         if source_config.fleet_drones:
             supervisor = FleetSupervisor(
@@ -2118,6 +2151,50 @@ def on_set_stream_video(data):
     emit("stream_video_state", {"enabled": app_state.stream_video})
 
 
+def _no_profile_board_payload() -> dict:
+    """The ``detection_profiles`` event outside the edge source: choices only, no drones."""
+    return {"profiles": [], "fleet_default": None, "drones": {}, "available": False}
+
+
+@socketio.on("get_detection_profiles")
+def on_get_detection_profiles(data=None):
+    """Send the detection profile choices and each drone's active profile."""
+    board = app_state.profile_board
+    emit(DETECTION_PROFILES_EVENT, board.payload() if board is not None else _no_profile_board_payload())
+
+
+@socketio.on("set_detection_profile")
+def on_set_detection_profile(data):
+    """Choose a detection profile for one drone (``profile`` empty: follow the fleet default).
+
+    The edge refuses the switch while its drone flies; its reason reaches
+    the browser in the next ``detection_profiles`` event.
+    """
+    board = app_state.profile_board
+    if board is None:
+        emit("error", {"message": "Detection profiles need the edge source (--source edge)."})
+        return
+    data = data if isinstance(data, dict) else {}
+    error = board.select(data.get("drone_id"), data.get("profile"))
+    if error:
+        emit("error", {"message": error})
+    emit(DETECTION_PROFILES_EVENT, board.payload())
+
+
+@socketio.on("set_fleet_detection_profile")
+def on_set_fleet_detection_profile(data):
+    """Set the fleet default detection profile (``profile`` empty: no default, keep each edge's own)."""
+    board = app_state.profile_board
+    if board is None:
+        emit("error", {"message": "Detection profiles need the edge source (--source edge)."})
+        return
+    data = data if isinstance(data, dict) else {}
+    error, _ = board.set_fleet_default(data.get("profile"))
+    if error:
+        emit("error", {"message": error})
+    emit(DETECTION_PROFILES_EVENT, board.payload())
+
+
 #: Capability each manual dashboard command needs. "land" is deliberately
 #: absent: a land command must always be attempted, whatever the backend
 #: declares, because refusing it could leave a drone in the air.
@@ -2273,9 +2350,28 @@ def on_plan_fleet(data=None):
     _run_fleet_action("plan")
 
 
+def _warn_pending_profile_switch() -> None:
+    """Tell the operator when Start is pressed while a detection profile switch is still pending.
+
+    It is a warning, not a refusal: the start goes ahead, and the edge refuses
+    the switch once its drone is flying, so that drone keeps its old profile.
+    """
+    board = app_state.profile_board
+    pending = board.pending_drones() if board is not None else []
+    if not pending:
+        return
+    detail = (
+        f"detection profile switch still pending for {', '.join(pending)}; "
+        f"once flying, the edge refuses it and keeps its current profile"
+    )
+    log.warning("Fleet start with a pending detection profile switch: %s", ", ".join(pending))
+    emit("fleet_event", {"event": "profile_switch_pending", "drone_ids": pending, "detail": detail})
+
+
 @socketio.on("start_fleet")
 def on_start_fleet(data=None):
     """Re-sync clocks and schedule one common start for the fleet."""
+    _warn_pending_profile_switch()
     _run_fleet_action("start")
 
 

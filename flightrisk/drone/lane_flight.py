@@ -237,6 +237,8 @@ class FlightSequenceMixin:
             return True
         if refusal == "battery":
             reason, detail = "battery", None
+        elif refusal == "drone_unreachable":
+            reason, detail = "drone_unreachable", self._unreachable_detail or "drone unreachable"
         elif refusal == "link_loss":
             reason, detail = "busy", "link_loss"
         else:
@@ -259,7 +261,26 @@ class FlightSequenceMixin:
                 self._sleep(0.0005)
 
     def _do_takeoff(self, t_exec: float) -> str | None:
-        """Take off. Returns None once airborne, else why not (battery, link_loss, aborted, not_executed)."""
+        """Take off. Returns None once airborne, else why not.
+
+        The reasons are drone_unreachable, battery, link_loss, aborted and
+        not_executed. The drone link is checked first, immediately before
+        the takeoff is claimed and sent: a drone the controller cannot reach
+        (see ``LaneExecutor._drone_link``) is refused with nothing sent and
+        nothing changed, so there is no landing to retry afterwards.
+        """
+        link = self._drone_link()
+        if link is not None and not link.ok:
+            self._unreachable_detail = link.detail or "drone unreachable"
+            self._log.warning(
+                "edge_takeoff_refused",
+                drone_id=self.drone_id,
+                reason="drone_unreachable",
+                link_reason=link.reason,
+                detail=self._unreachable_detail,
+                drone_link_age_s=link.age_s,
+            )
+            return "drone_unreachable"
         battery = self._read_battery()
         if not self.envelope.can_takeoff(battery):
             self._log.warning(

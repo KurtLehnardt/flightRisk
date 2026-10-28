@@ -59,6 +59,12 @@ NACK_REASONS_V2 = NACK_REASONS | frozenset({
     "not_flying",
     "plan_mismatch",
     "stale_plan",
+    # The edge cannot talk to its drone (no state, failed keepalive or send),
+    # so it refuses a takeoff or a start that would take off. ``detail``
+    # carries the operator text, for example ``Tello unreachable (no state
+    # for 12 s)``. A ground without this reason logs the nack as malformed
+    # and ignores it.
+    "drone_unreachable",
 })
 # Optional numeric fields of a ``geofence`` nack for ``assign_lanes`` (v1 and
 # v2), all in cm and relative to the drone's takeoff point of its current
@@ -92,6 +98,27 @@ PEER_TYPES = frozenset({NODE_STATE, HANDOVER_OFFER, HANDOVER_ACCEPT, HANDOVER_RE
 # appearance-only; nothing in this module adds to either.
 LEGACY_GROUND_TO_EDGE_TYPES = frozenset({"set_target", "stream_video"})
 LEGACY_EDGE_TO_GROUND_TYPES = frozenset({"detections"})
+
+# Ground -> edge configuration commands. They never move a drone and never
+# change who commands it, so they carry no fence, but they are commands: each
+# carries a ``cmd_id`` and is answered with an ``ack`` or ``nack`` whose
+# ``for`` names it, on every link version. An edge in multi-ground mode obeys
+# them only from its authority, like ``stream_video``. Older edges reject the
+# type as unknown and ignore it, and older grounds never send it, so adding
+# one needs no protocol version change. A ground sends one only to an edge
+# that has advertised the feature (see ``docs/detection-profiles.md``).
+SET_DETECTION_PROFILE = "set_detection_profile"
+CONFIG_COMMAND_TYPES = frozenset({SET_DETECTION_PROFILE})
+# Why an edge refused a ``set_detection_profile``. ``in_flight`` means the
+# drone is flying or a flight sequence (takeoff, lanes, landing) is under
+# way; profiles change only on the ground.
+PROFILE_NACK_REASONS = frozenset({"in_flight", "unknown_profile", "unavailable", "load_failed", "busy", "invalid"})
+# Why an edge loaded another profile than the one requested.
+PROFILE_FALLBACK_REASONS = frozenset({"weights_missing"})
+# A detection profile name: lowercase letters, digits and underscores,
+# starting with a letter, at most 32 characters (``is_profile_name``).
+MAX_PROFILE_NAME_LEN = 32
+_PROFILE_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 
 # Landing is never fenced: an edge executes these from any authenticated
 # ground at any epoch, and never refuses one for a malformed optional field.
@@ -316,6 +343,14 @@ TELEMETRY_FIELDS = (
     "takeoff_at_local_s",
 )
 TELEMETRY_FIELDS_V2 = TELEMETRY_FIELDS + ("epoch", "plan_id", "state", "plan_valid")
+# Optional telemetry fields, v1 and v2, sent by an edge whose drone controller
+# reports its link (a Tello): ``drone_link_ok`` (boolean), ``drone_link_age_s``
+# (seconds since the drone last sent state, or null when unknown) and
+# ``drone_link_detail`` (operator text while the link is down, else null).
+# While ``drone_link_ok`` is false, ``battery`` and ``height_cm`` are the last
+# values the drone reported, not fresh ones. Checked when present; older
+# grounds ignore them.
+TELEMETRY_DRONE_LINK_FIELDS = ("drone_link_ok", "drone_link_age_s", "drone_link_detail")
 
 _ZONE_FIELDS = ("x_cm", "y_cm", "w_cm", "h_cm")
 
@@ -349,4 +384,4 @@ _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 
 # Every fleet type this module checks; anything else is passed through by
 # ``validate_message`` and rejected by the strict directional validators.
-_KNOWN_TYPES = GROUND_TO_EDGE_TYPES_V2 | EDGE_TO_GROUND_TYPES_V2 | PEER_TYPES
+_KNOWN_TYPES = GROUND_TO_EDGE_TYPES_V2 | EDGE_TO_GROUND_TYPES_V2 | PEER_TYPES | CONFIG_COMMAND_TYPES

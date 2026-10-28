@@ -467,9 +467,15 @@ class PipelineStats:
             self._levels[level] = self._levels.get(level, 0) + 1
 
     @_safe
-    def frame_done(self, persons: int, source: str, component: str = "dashboard") -> None:
-        M.detections_per_frame.record(persons)
-        M.frames.add(1, {"source": safe_token(source)})
+    def frame_done(self, persons: int, source: str, component: str = "dashboard", profile: str | None = None) -> None:
+        """Record one frame. *profile* (an edge's detection profile) becomes a bounded ``profile`` label."""
+        if profile is None:
+            M.detections_per_frame.record(persons)
+            M.frames.add(1, {"source": safe_token(source)})
+        else:
+            label = _profile_label(profile)
+            M.detections_per_frame.record(persons, {"profile": label})
+            M.frames.add(1, {"source": safe_token(source), "profile": label})
         M.note_frame()
         now = self._clock()
         with self._lock:
@@ -582,6 +588,8 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_shutdown_land_error": ("land_failed", "shutdown"),
     "edge_geofence_refused": ("geofence_refused", "geofence"),
     "edge_takeoff_refused": ("takeoff_refused", None),
+    "edge_drone_link_unhealthy": ("drone_link_unhealthy", None),
+    "edge_drone_link_restored": ("drone_link_restored", None),
     "edge_assign_lanes_refused": ("plan_refused", None),
     "edge_start_refused": ("start_refused", None),
     "edge_fail_safe_idle": ("fail_safe", None),
@@ -627,6 +635,20 @@ COMM_EVENTS = frozenset({
 
 ALERT_EVENTS = frozenset({"match_alert_unanswered"})
 
+#: StructuredLogger events about detection profiles (flightrisk/edge_profiles.py).
+PROFILE_EVENTS = frozenset({"profile_selected", "profile_fallback", "profile_switch_refused"})
+#: Reasons a profile event may carry as a label; anything else is "other".
+_PROFILE_REASONS = frozenset({
+    "in_flight", "unknown_profile", "unavailable", "load_failed", "busy", "invalid", "weights_missing",
+})
+
+
+def _profile_label(value: Any) -> str:
+    """A bounded ``profile`` label: a registered profile name, ``none`` or ``other``."""
+    from flightrisk.vision.profiles import profile_label
+
+    return profile_label(value)
+
 
 def route_structured(component: str, event: str, fields: Mapping[str, Any]) -> str | None:
     """Category for a StructuredLogger event, counting flight-safety and comm ones.
@@ -658,6 +680,14 @@ def route_structured(component: str, event: str, fields: Mapping[str, Any]) -> s
             M.comm_dropped.add(1, {"side": "edge", "type": safe_token(fields.get("type"), "telemetry"),
                                    "reason": "queue_full" if event == "edge_telemetry_dropped" else "send_error"})
         return "drone_comm"
+    if event in PROFILE_EVENTS:
+        reason = fields.get("reason")
+        M.profile_events.add(1, {
+            "event": event,
+            "profile": _profile_label(fields.get("profile")),
+            "reason": reason if isinstance(reason, str) and reason in _PROFILE_REASONS else "none",
+        })
+        return "detection_pipeline"
     if event in ALERT_EVENTS:
         return "alert"
     if event in ("frame_loop_error", "gemma_worker_error"):
