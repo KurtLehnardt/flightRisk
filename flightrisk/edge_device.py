@@ -844,7 +844,8 @@ def _run_flight_edge(
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
     """Export this edge's logs and spans over OTLP, like the dashboard does.
 
-    A no-op unless ``FLIGHTRISK_OTEL_ENABLED=true`` (see ``flightrisk.telemetry``).
+    A no-op unless ``FLIGHTRISK_OTEL_ENABLED`` is on (see ``flightrisk.telemetry``,
+    which warns when it is on but the packages are missing).
     Telemetry must never stop an edge from flying, so any failure is logged
     and ignored. Imported here to keep ``import flightrisk.edge_device`` cheap.
     """

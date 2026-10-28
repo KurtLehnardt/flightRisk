@@ -31,9 +31,9 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
+      - "${OTLP_BIND:-127.0.0.1}:16686:16686"
+      - "${OTLP_BIND:-127.0.0.1}:4317:4317"
+      - "${OTLP_BIND:-127.0.0.1}:4318:4318"
     environment:
       - COLLECTOR_OTLP_ENABLED=true
 
