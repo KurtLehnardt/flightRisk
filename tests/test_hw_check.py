@@ -134,6 +134,17 @@ def test_standard_tello_without_sdk_and_sn_queries_is_info_not_fail(capsys):
     assert doc["overall"] == "PASS"
 
 
+def test_real_command_port_sends_from_local_8889_like_djitellopy():
+    try:
+        sock = hw._command_socket("127.0.0.1", hw.CMD_PORT)
+        local = sock.getsockname()[1]
+    finally:
+        hw.close_command_sockets()
+    if local != hw.CMD_PORT:
+        pytest.skip("local UDP 8889 is in use on this machine")
+    assert local == 8889
+
+
 def test_command_sockets_are_closed_after_main():
     with FakeTello() as drone:
         hw.main(["--drones", "127.0.0.1", "--cmd-port", str(drone.port), "--timeout", "1"])

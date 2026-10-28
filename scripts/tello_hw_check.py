@@ -81,6 +81,8 @@ def _clean(reply: bytes) -> str:
 
 # One UDP socket per (host, port), reused for every command. A real Tello answers only the
 # source port that sent it ``command``, so a new socket per command gets no reply after the first.
+# For the real command port the socket binds local UDP 8889, the port djitellopy (the dashboard
+# and the edge) always sends from, so a later FlightRisk process is not locked out by this check.
 _CMD_SOCKETS: dict[tuple[str, int], socket.socket] = {}
 
 
@@ -89,6 +91,11 @@ def _command_socket(host: str, port: int) -> socket.socket:
     sock = _CMD_SOCKETS.get(key)
     if sock is None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if port == CMD_PORT:
+            try:
+                sock.bind(("", CMD_PORT))
+            except OSError:
+                pass  # port busy (another Tello program is running): fall back to any free port
         _CMD_SOCKETS[key] = sock
     return sock
 
