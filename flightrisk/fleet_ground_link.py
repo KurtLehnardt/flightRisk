@@ -34,16 +34,24 @@ policy belongs to the leader (PR-6/PR-8), not to the transport.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from websockets.exceptions import ConnectionClosed
+
 from flightrisk import fleet_protocol as fp
+
+# The mixin logs as the transport always did.
+logger = logging.getLogger("flightrisk.transport")
 
 __all__ = [
     "CommandTracker",
     "GroundIdentity",
     "GroundLinks",
+    "GroundV2Mixin",
     "LinkVerdict",
     "PeerVersionError",
 ]
@@ -272,3 +280,134 @@ class CommandTracker:
                 entry.future.set_result(None)
                 stopped += 1
         return stopped
+
+
+class GroundV2Mixin:
+    """``GroundTransport``'s protocol v2 methods: the ground ``hello``, the edge's answer, identity and commands.
+
+    Mixed into ``GroundTransport`` (``flightrisk/transport.py``), whose state
+    these methods use (``_links``, ``_commands``, ``_clients``,
+    ``_drone_sockets``, ``_send_json``, ``_claim_drone``, ``send_to_drone``
+    and the rest). They live here to keep the transport module smaller.
+    """
+
+    @property
+    def identity(self) -> GroundIdentity | None:
+        return self._links.identity if self._links is not None else None
+
+    async def _open_v2_link(self, websocket) -> bool:
+        """Send this ground's ``hello`` as the first message on a new connection."""
+        self._links.opened(websocket, self._clock())
+        identity = self._links.identity
+        if not await self._send_json(websocket, json.dumps(identity.hello())):
+            return False
+        self._links.mark_hello_sent(websocket)
+        if self._links.identity is not identity:
+            # set_identity ran while this hello was being written and skipped
+            # this connection: announce the current role and epoch too.
+            return await self._send_json(websocket, json.dumps(self._links.identity.hello()))
+        return True
+
+    async def _on_edge_hello(self, websocket, data: dict[str, Any], received_at: float) -> bool:
+        verdict = self._links.on_edge_hello(websocket, data, received_at)
+        if verdict.close:
+            await self._close_protocol(websocket, verdict.reason)
+            return False
+        if verdict.reason:
+            logger.warning("Ignoring an edge hello: %s", verdict.reason)
+            return True
+        if not await self._claim_drone(websocket, data.get("drone_id"), received_at):
+            return False
+        if verdict.epoch_seen is not None and verdict.epoch_seen > self._links.identity.epoch:
+            self._note_stale(verdict.epoch_seen)
+        return True
+
+    async def _close_protocol(self, websocket, reason: str) -> None:
+        logger.warning("Closing %s: %s", self._describe(websocket), reason)
+        try:
+            await websocket.close(code=CLOSE_PROTOCOL, reason=reason)
+        except ConnectionClosed:
+            pass
+
+    def _note_stale(self, epoch_seen: int | None) -> None:
+        # Only a leader can be stale; a standby is expected to be behind.
+        if epoch_seen is None or self._links.identity.role != "leader":
+            return
+        logger.warning(
+            "An edge follows leader epoch %d, above this ground's epoch %d",
+            epoch_seen, self._links.identity.epoch,
+        )
+        if self._on_stale_epoch is not None:
+            try:
+                self._on_stale_epoch(epoch_seen)
+            except Exception:
+                logger.exception("on_stale_epoch callback raised")
+
+    async def set_identity(self, identity: GroundIdentity) -> int:
+        """Change this ground's role or epoch and announce it with a new ``hello``.
+
+        Only for a ground started with an ``identity``. Returns how many
+        connections the new ``hello`` reached.
+        """
+        if self._links is None:
+            raise RuntimeError("set_identity needs a ground started with an identity")
+        if identity.node_id != self._links.identity.node_id:
+            raise ValueError("a ground's node_id cannot change while it runs")
+        self._links.identity = identity
+        payload = json.dumps(identity.hello())
+        clients = [ws for ws in self._clients if self._links.hello_sent(ws)]
+        results = await asyncio.gather(*(self._send_json(ws, payload) for ws in clients), return_exceptions=True)
+        return sum(1 for result in results if result is True)
+
+    def _payload_for(self, websocket, message: dict[str, Any]) -> str | None:
+        """The JSON to send *message* on *websocket*, or ``None`` when it must not go there yet.
+
+        Raises ``PeerVersionError`` when the link's version cannot carry it.
+        """
+        if self._links is None:
+            return json.dumps(message)
+        if not self._links.may_send(websocket, message):
+            return None
+        return json.dumps(self._links.shape(websocket, message, self._clock()))
+
+    def peer_proto(self, drone_id: str) -> int | None:
+        """The protocol version agreed with *drone_id*'s edge (``None`` when not yet agreed or unknown)."""
+        websocket = self._drone_sockets.get(drone_id)
+        if websocket is None or self._links is None:
+            return None
+        return self._links.peer_proto(websocket)
+
+    async def send_command(
+        self,
+        drone_id: str,
+        message: dict[str, Any],
+        *,
+        timeout_s: float = 2.0,
+        attempts: int = 1,
+    ) -> dict[str, Any] | None:
+        """Send a command to *drone_id* and wait for its ack or nack, matched by ``(drone_id, cmd_id)``.
+
+        Only ``RETRYABLE_COMMAND_TYPES`` are sent more than once (up to
+        *attempts* times, with the same ``cmd_id``); every other command is
+        sent once. A newer command that supersedes this one (see
+        ``CommandTracker.supersede``) ends the wait. Returns the reply, or
+        ``None`` on timeout, supersession or when the drone is not
+        connected. Raises ``PeerVersionError`` when the drone's link cannot
+        carry the command (for example ``hold`` to a v1 edge): the caller
+        decides the fallback.
+        """
+        mtype = fp.validate_message(message, proto=self._validation_proto(message))
+        self._commands.supersede(drone_id, mtype)
+        tries = max(1, attempts) if mtype in fp.RETRYABLE_COMMAND_TYPES else 1
+        entry = self._commands.register(drone_id, message)
+        try:
+            for _ in range(tries):
+                if not await self.send_to_drone(drone_id, message):
+                    return None
+                try:
+                    return await asyncio.wait_for(asyncio.shield(entry.future), timeout=timeout_s)
+                except (asyncio.TimeoutError, TimeoutError):
+                    continue
+            return None
+        finally:
+            self._commands.unregister(entry)
