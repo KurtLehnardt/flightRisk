@@ -14,6 +14,7 @@ Usage:
 """
 
 import base64
+import logging
 import os
 from typing import Any
 
@@ -21,6 +22,9 @@ import cv2
 import numpy as np
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import notice
+
+_log = logging.getLogger(__name__)
 
 try:
     import ollama
@@ -57,10 +61,13 @@ class FlightRiskAgent:
         else:
             self._client = ollama.Client()
         self._available = self._check_model()
+        #: Metadata of the last call (token counts, error type); never its text.
+        self.last_usage: dict[str, Any] = {}
         if self._available:
-            print(f"[reasoning] Gemma 4 ({model}) ready")
+            notice(_log, "reasoning_ready", f"[reasoning] Gemma 4 ({model}) ready", provider=self.provider, model=model)
         else:
-            print(f"[reasoning] Model {model} not found. Run: ollama pull {model}")
+            notice(_log, "reasoning_model_missing", f"[reasoning] Model {model} not found. Run: ollama pull {model}",
+                   level=logging.WARNING, provider=self.provider, model=model)
 
     def _check_model(self) -> bool:
         """Check if the model is available in Ollama."""
@@ -89,7 +96,17 @@ class FlightRiskAgent:
                 "images": images_b64,
             }],
         )
+        self.last_usage = {
+            "input_tokens": getattr(response, "prompt_eval_count", None),
+            "output_tokens": getattr(response, "eval_count", None),
+        }
         return response.message.content.strip()
+
+    def _call_failed(self, kind: str, exc: Exception) -> None:
+        """Log a reasoning call that failed (type and redacted message, never the prompt)."""
+        self.last_usage = {"error_type": type(exc).__name__}
+        _log.warning("reasoning_call_failed provider=%s kind=%s error_type=%s error=%s",
+                     self.provider, kind, type(exc).__name__, exc)
 
     def analyze_match(
         self, reference: np.ndarray, candidate: np.ndarray
@@ -121,9 +138,11 @@ class FlightRiskAgent:
         )
 
         try:
+            self.last_usage = {}
             text = self._ask(prompt, [ref_b64, cand_b64])
             return self._parse_match_response(text)
         except Exception as e:
+            self._call_failed("analyze", e)
             return {"match": False, "confidence": "error", "reasoning": str(e)}
 
     def describe_person(self, image: np.ndarray) -> str:
@@ -185,9 +204,11 @@ class FlightRiskAgent:
         )
 
         try:
+            self.last_usage = {}
             text = self._ask(prompt, [b64])
             return self._parse_match_response(text)
         except Exception as e:
+            self._call_failed("describe", e)
             return {"match": False, "confidence": "error", "reasoning": str(e)}
 
     def _parse_match_response(self, text: str) -> dict[str, Any]:

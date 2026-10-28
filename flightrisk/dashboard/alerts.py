@@ -26,6 +26,7 @@ from flightrisk.dashboard.state import (
     gemma_queue,
 )
 from flightrisk.dashboard.alert_latch import alert_latch
+from flightrisk import obs_events
 
 # Match screenshots directory
 # The directory is created lazily when a snapshot is actually written, never at
@@ -125,6 +126,37 @@ def maybe_save_match_snapshot(frame, crop, match_score, reasoning_result,
 # Gemma worker
 # ---------------------------------------------------------------------------
 
+def _timed_reasoning(agent, kind: str, call):
+    """Run one reasoning call and record its metadata (never its text).
+
+    Records provider, model, latency, outcome and, when the backend reports
+    them (``agent.last_usage``), token counts, as a ``reasoning`` event and
+    the ``flightrisk_reasoning_*`` metrics.
+    """
+    t0 = time.perf_counter()
+    result = None
+    error = None
+    try:
+        result = call()
+        return result
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        usage = getattr(agent, "last_usage", None)
+        usage = usage if isinstance(usage, dict) else {}
+        obs_events.reasoning_call(
+            provider=str(getattr(agent, "provider", "unknown")),
+            model=getattr(agent, "model", None),
+            kind=kind,
+            duration_ms=(time.perf_counter() - t0) * 1000.0,
+            outcome="error" if error is not None else obs_events.reasoning_outcome(result),
+            tokens_in=usage.get("input_tokens"),
+            tokens_out=usage.get("output_tokens"),
+            error_type=type(error).__name__ if error is not None else usage.get("error_type"),
+        )
+
+
 def _gemma_worker(socketio):
     """Background worker that drains the Gemma reasoning queue.
 
@@ -166,7 +198,7 @@ def _gemma_worker(socketio):
                 agent = app_state.reasoning
                 if agent is None:
                     continue
-                result = agent.match_description(crop, description)
+                result = _timed_reasoning(agent, "describe", lambda: agent.match_description(crop, description))
                 socketio.emit("reasoning_result", {
                     "track_id": track_key,
                     "result": result,
@@ -246,7 +278,7 @@ def _gemma_worker(socketio):
                     # call but still back-fill the history entry and DB row.
                     result = {"match": False, "confidence": "off", "reasoning": ""}
                 else:
-                    result = agent.analyze_match(reference, crop)
+                    result = _timed_reasoning(agent, "analyze", lambda: agent.analyze_match(reference, crop))
                     socketio.emit("reasoning_result", {
                         "track_id": track_key,
                         "result": result,
@@ -280,6 +312,7 @@ def _gemma_worker(socketio):
                     })
         except Exception as e:
             if app_state.logger:
-                app_state.logger.error("gemma_worker_error", error=str(e), traceback=traceback.format_exc())
+                app_state.logger.error("gemma_worker_error", error=str(e), error_type=type(e).__name__,
+                                       traceback=traceback.format_exc())
         finally:
             gemma_queue.task_done()

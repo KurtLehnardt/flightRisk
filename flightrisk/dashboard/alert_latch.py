@@ -79,7 +79,31 @@ class MatchAlertLatch:
         self.renotify_interval = renotify_interval
         self._clock = clock
         self._lock = threading.RLock()
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
         self._reset_locked()
+
+    # ------------------------------------------------------------------
+    # Transition listeners (telemetry)
+    # ------------------------------------------------------------------
+
+    def add_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """Call ``listener(event)`` after every transition.
+
+        ``event`` has ``transition`` (opened, renotified, confirmed,
+        dismissed, aborted, reset), ``alert_id``, ``phase`` (after the
+        transition), ``awaiting_s`` (seconds since the alert opened, for
+        confirm/dismiss/renotify) and ``renotify_count``. Listeners run
+        outside the latch lock and their errors are ignored, so they can
+        never change the latch's behaviour.
+        """
+        self._listeners.append(listener)
+
+    def _notify(self, event: dict[str, Any]) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(event)
+            except Exception:  # noqa: BLE001 -- telemetry must never affect the latch
+                pass
 
     # ------------------------------------------------------------------
     # Internal helpers (caller holds the lock)
@@ -186,7 +210,9 @@ class MatchAlertLatch:
             self._last_notified = now
             self._renotify_count = 0
             self._resolution = None
-            return self._alert_id
+            alert_id = self._alert_id
+        self._notify({"transition": "opened", "alert_id": alert_id, "phase": AlertPhase.AWAITING_RESPONSE.value})
+        return alert_id
 
     def attach(self, alert_id: str, payload: dict) -> None:
         """Store the emitted alert payload so it can be re-announced verbatim."""
@@ -217,7 +243,10 @@ class MatchAlertLatch:
             reminder["renotify"] = True
             reminder["renotify_count"] = self._renotify_count
             reminder["awaiting_seconds"] = round(now - self._opened_at, 1)
-            return reminder
+            event = {"transition": "renotified", "alert_id": self._alert_id, "phase": self._phase.value,
+                     "awaiting_s": now - self._opened_at, "renotify_count": self._renotify_count}
+        self._notify(event)
+        return reminder
 
     def abort(self, alert_id: str) -> None:
         """Release a claimed slot whose alert could not be delivered.
@@ -226,12 +255,14 @@ class MatchAlertLatch:
         frame can retry. No-op for any id other than the outstanding one.
         """
         with self._lock:
-            if self._phase is AlertPhase.AWAITING_RESPONSE and alert_id == self._alert_id:
-                self._phase = AlertPhase.SEARCHING
-                self._alert_id = None
-                self._candidate_keys = ()
-                self._payload = None
-                self._renotify_count = 0
+            if not (self._phase is AlertPhase.AWAITING_RESPONSE and alert_id == self._alert_id):
+                return
+            self._phase = AlertPhase.SEARCHING
+            self._alert_id = None
+            self._candidate_keys = ()
+            self._payload = None
+            self._renotify_count = 0
+        self._notify({"transition": "aborted", "alert_id": alert_id, "phase": AlertPhase.SEARCHING.value})
 
     def dismiss(self, alert_id: str) -> dict | None:
         """Operator said "not a match": resume searching, suppress the candidate.
@@ -247,13 +278,18 @@ class MatchAlertLatch:
             for k in self._candidate_keys:
                 self._suppressed[k] = now + self.dismiss_suppress_seconds
             payload = dict(self._payload or {})
+            renotified = self._renotify_count
             self._phase = AlertPhase.SEARCHING
             self._alert_id = None
             self._candidate_keys = ()
             self._payload = None
             self._renotify_count = 0
             self._resolution = "dismissed"
-            return payload
+            event = {"transition": "dismissed", "alert_id": alert_id, "phase": AlertPhase.SEARCHING.value,
+                     "awaiting_s": now - self._opened_at, "renotify_count": renotified,
+                     "alert_level": payload.get("alert_level")}
+        self._notify(event)
+        return payload
 
     def confirm(self, alert_id: str) -> dict | None:
         """Operator said "yes, that's my child": stop matching for good.
@@ -267,13 +303,34 @@ class MatchAlertLatch:
             payload = dict(self._payload or {})
             self._phase = AlertPhase.RESOLVED
             self._resolution = "confirmed"
-            return payload
+            event = {"transition": "confirmed", "alert_id": alert_id, "phase": AlertPhase.RESOLVED.value,
+                     "awaiting_s": self._clock() - self._opened_at, "renotify_count": self._renotify_count,
+                     "alert_level": payload.get("alert_level")}
+        self._notify(event)
+        return payload
 
     def reset(self) -> None:
         """Return to a fresh ``SEARCHING`` state (new session / pipeline restart)."""
         with self._lock:
             self._reset_locked()
+        self._notify({"transition": "reset", "alert_id": None, "phase": AlertPhase.SEARCHING.value})
 
 
 #: Process-wide latch shared by every dashboard alert path.
 alert_latch = MatchAlertLatch()
+
+
+def _export_transition(event: dict[str, Any]) -> None:
+    from flightrisk import obs_events
+
+    obs_events.alert(
+        event["transition"],
+        alert_id=event.get("alert_id"),
+        phase=event["phase"],
+        awaiting_s=event.get("awaiting_s"),
+        renotify_count=event.get("renotify_count"),
+        alert_level=event.get("alert_level"),
+    )
+
+
+alert_latch.add_listener(_export_transition)

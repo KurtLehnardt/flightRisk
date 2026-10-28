@@ -13,11 +13,15 @@ never enables uploads by accident. The key is never logged or included in
 error results.
 """
 
+import logging
 import os
 from typing import Any
 
 from flightrisk.config import get_config
+from flightrisk.obs_log import notice
 from flightrisk.reasoning.agent import FlightRiskAgent
+
+_log = logging.getLogger(__name__)
 
 # Models that accept the server-side refusal fallback (Claude API only).
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
@@ -74,11 +78,14 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         self._anthropic = anthropic
         self._client = anthropic.Anthropic(api_key=key, timeout=60.0, max_retries=2)
         self._available = True
+        self.last_usage: dict[str, Any] = {}
         # Say where the key came from (never the key itself) and that data
         # leaves the device, so the operator can see cloud use is active.
-        print(
+        notice(
+            _log, "reasoning_ready",
             f"[reasoning] Claude ({self.model}) ready; API key from {key_source}. "
-            "Cloud reasoning is ON: person crops and the reference photo are sent to Anthropic."
+            "Cloud reasoning is ON: person crops and the reference photo are sent to Anthropic.",
+            provider=self.provider, model=self.model, key_source=key_source, cloud=True,
         )
 
     def _ask(self, prompt: str, images_b64: list[str]) -> str:
@@ -103,6 +110,11 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             kwargs["betas"] = [_FALLBACK_BETA]
             kwargs["fallbacks"] = "default"
         response = self._client.beta.messages.create(**kwargs)
+        usage = getattr(response, "usage", None)
+        self.last_usage = {
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+        }
 
         if response.stop_reason == "refusal":
             category = getattr(response.stop_details, "category", None)
