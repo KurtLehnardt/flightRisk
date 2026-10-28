@@ -22,11 +22,12 @@ interface and change a dashboard query when you rename one.
 | `node` | `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES` (or `FLIGHTRISK_NODE`), for example `mac-ground` |
 | `session_id` | Current search session |
 | `drone_id` | When the event is about one drone |
-| `fingerprint`, `error_type`, `error_message`, `where` | On ERROR and CRITICAL lines: a hash of the exception type and its innermost frames that groups repeats, the exception type and redacted message, and the innermost frame. A repeat within 10 s is not written again; the next one carries `suppressed` (the count). The stack trace (`stack`) is included only while `FLIGHTRISK_LOG_LEVEL=DEBUG` |
+| `fingerprint`, `error_type`, `error_message`, `where` | On ERROR and CRITICAL lines: a hash of the exception type and its innermost frames that groups repeats, the exception type and redacted message, and the innermost frame. A repeat within 10 s is not written again; the next one carries `suppressed` (the count). A repeat means the same fingerprint for the same drone, kind, command, action, type, reason, peer, model and queue: a failure on another drone is written at once The stack trace (`stack`) is included only while `FLIGHTRISK_LOG_LEVEL=DEBUG` |
 
 Every field value passes through `flightrisk/obs_redact.py`: API keys (`sk-ant-...`, `sk-...`,
 `ghp_...`, `AKIA...`, `AIza...`, JWTs), bearer and basic credentials, `Authorization` headers,
-`token=...` style pairs, mapping keys that name a credential, and the values of
+`token=...` style pairs, the user-info of a URL (`ws://user:pass@host` becomes
+`ws://[REDACTED]@host`), mapping keys that name a credential, and the values of
 `FLIGHTRISK_EDGE_TOKEN`, `FLIGHTRISK_API_KEY`, `FLIGHTRISK_CLAUDE_API_KEY` and similar
 variables become `[REDACTED]`. Strings are capped at 500 characters.
 
@@ -39,7 +40,7 @@ variables become `[REDACTED]`. Strings are capped at 500 characters.
 | `drone_comm` (`drone_comm`) | INFO; WARNING for nacks, emergency lands, failed sends, link down; ERROR when reconnecting gave up | `flightrisk/obs_comm.py` from the ground and edge transports; `flightrisk/drone/instrument.py` for local drone commands | `direction` (`in`, `out`, `link`), `type` (message type or `command`), `peer`/`drone_id`, `size` (bytes), `outcome`, and when present `cmd_id`, `epoch`, `plan_id`, `seq`, `for_`, `reason`, `lanes`, `detections`, `reached`/`clients` (broadcasts), `has_reid_embedding`/`has_face_embedding` (target pushes; never the vectors). Local commands add `channel=local`, `command`, `backend`, `duration_ms`, `move_direction`, `distance_cm`, `degrees`, `detail`. High-rate types (`telemetry`, `heartbeat`, `ping`, `pong`, `detections`, `peer_heartbeat`, `node_state`) are logged once per 5 s per side, direction, type and drone with `aggregated`, `count`, `bytes`, `window_s`, `rate_per_s`. A clock sync is `type=clock_sync` with `rtt_ms` and `offset_ms` |
 | `drone_telemetry_snapshot` (`drone_telemetry`) | INFO, once per drone every 5 s | frame loop (local drones) and the ground transport (edge `telemetry`) | `backend`, `connected`, `is_flying`, `is_flying_source` (`commanded`/`sensed`), `flight_mode`, `readings` (per reading: `value`, `unit`, `source` such as `tello.h`, `tello.tof`, `sim.height`, `mavlink.position`, and `age_s`), `oldest_age_s`, `quality_flags` (`height_zero_while_flying`), `samples_since_last`. Edge snapshots carry the telemetry message fields plus `height_source` and `position_source` |
 | `alert` (`alert`) | WARNING for opened, renotified, confirmed; INFO for dismissed and aborted; DEBUG for the per-session reset | alert latch listener (`flightrisk/dashboard/alert_latch.py`) | `transition`, `phase`, `alert_id`, `awaiting_s` (operator response time), `renotify_count`, `alert_level` |
-| `flight_safety` (`flight_safety`) | WARNING; ERROR for critical battery, land failures, a failed confirm sequence | pipeline battery policy, search executor, fleet supervisor, recovery, drone instrumentation | `kind` (`battery_low`, `battery_critical`, `land_failed`, `drone_lost`, `fleet_start_refused`, `obstacle`, `obstacle_check_skipped`, `obstacle_guard_unavailable`, `waypoint_skipped`, `confirm_recovery`), `reason`, `drone_id` and kind-specific numbers (`battery_pct`, `threshold`, `center_depth`, `margin`, `confidence`, `waypoint`, `retry`, `duration_s`) |
+| `flight_safety` (`flight_safety`) | WARNING; ERROR for critical battery, land failures, a failed confirm sequence | pipeline battery policy, search executor, fleet supervisor, recovery, drone instrumentation | `kind` (the edge events above add `land`, `link_loss`, `watchdog_land`, `manual_land` and the other kinds of `SAFETY_EVENTS` in `flightrisk/obs_events.py`; the dashboard adds `battery_low`, `battery_critical`, `land_failed`, `drone_lost`, `fleet_start_refused`, `obstacle`, `obstacle_check_skipped`, `obstacle_guard_unavailable`, `waypoint_skipped`, `confirm_recovery`), `reason`, `drone_id` and kind-specific numbers (`battery_pct`, `threshold`, `center_depth`, `margin`, `confidence`, `waypoint`, `retry`, `duration_s`) |
 | Lane-executor and edge events | as logged | `flightrisk/drone/lane_executor.py`, `flightrisk/edge_device.py` (unchanged) | `edge_land`, `edge_link_lost`, `edge_land_not_executed`, `edge_land_error`, `edge_geofence_refused`, `edge_takeoff_refused`, `edge_assign_lanes_refused`, `edge_start_refused`, `edge_fail_safe_idle`, `edge_altitude_unknown`, `edge_local_land_key`, `edge_sigint_land` and similar get `category=flight_safety` and are counted in `flightrisk_flight_safety_events`; an `edge_land` with reason `link_loss` counts as `kind=watchdog_land`. `edge_telemetry_dropped` and `edge_send_error` count as dropped messages |
 | `detection_pipeline` (`detection_pipeline`) | INFO, once per 5 s | frame loop and the edge-detection consumer | `source`, `frames`, `window_s`, `fps`, `persons`, `stages_ms` (mean and max per stage), `scores` (mean, max, n per signal), `alert_levels` |
 | `model_load` (`detection_pipeline`) | INFO when loaded, WARNING when it failed or is unavailable | dashboard initialisation, signal registry | `model`, `outcome`, `error_type`, `error` |
@@ -72,11 +73,14 @@ series also carries `service_name` and `service_instance_id` (the node).
 
 | Metric | Type | Labels |
 | --- | --- | --- |
-| `flightrisk_http_requests`, `flightrisk_http_duration_ms` | counter, histogram | `route`, `method`, `status_class`, `outcome` |
-| `flightrisk_socket_events`, `flightrisk_socket_duration_ms` | counter, histogram | `event`, `outcome` |
+| `flightrisk_http_requests` | counter | `route`, `method`, `status_class`, `outcome` |
+| `flightrisk_http_duration_ms` | histogram | `route`, `method` |
+| `flightrisk_socket_events` | counter | `event`, `outcome` |
+| `flightrisk_socket_duration_ms` | histogram | `event` |
 | `flightrisk_socket_emits` | counter | `event` |
 | `flightrisk_stage_duration_ms` | histogram | `stage` (`detect`, `track`, `reid`, `face`, `score`, `annotate`, `encode`, `emit`, `edge_score`) |
-| `flightrisk_frames`, `flightrisk_detections_per_frame` | counter, histogram | `source` |
+| `flightrisk_frames` | counter | `source` |
+| `flightrisk_detections_per_frame` | histogram | none |
 | `flightrisk_signal_score` | histogram (0 to 1) | `signal` |
 | `flightrisk_alert_levels` | counter | `level` |
 | `flightrisk_alert_transitions`, `flightrisk_alert_phase`, `flightrisk_alert_response_s` | counter, gauge, histogram | `transition`, `phase`, `action` |
@@ -90,13 +94,16 @@ series also carries `service_name` and `service_instance_id` (the node).
 | `flightrisk_drone_speed_mps` | gauge | `drone_id`, `backend`, `axis`, `source` |
 | `flightrisk_drone_attitude_deg` | gauge | `drone_id`, `backend`, `axis` |
 | `flightrisk_drone_telemetry_age_s` | gauge, computed at collection | `drone_id`, `backend` |
-| `flightrisk_drone_commands`, `flightrisk_drone_command_duration_ms`, `flightrisk_drone_land_duration_ms` | counter, histograms | `drone_id`, `backend`, `command`, `outcome` |
+| `flightrisk_drone_commands` | counter | `drone_id`, `backend`, `command`, `outcome` |
+| `flightrisk_drone_command_duration_ms` | histogram | `backend`, `command`, `outcome` |
+| `flightrisk_drone_land_duration_ms` | histogram | `backend`, `outcome` |
 | `flightrisk_flight_safety_events` | counter | `kind`, `reason`, `drone_id` |
 | `flightrisk_obstacle_checks`, `flightrisk_obstacle_depth_ratio` | counter, histogram | `action` |
 | `flightrisk_comm_messages`, `flightrisk_comm_bytes` | counters | `side`, `direction`, `type`, `drone_id`, `outcome` |
 | `flightrisk_comm_acks`, `flightrisk_comm_dropped` | counters | `kind`, `for`, `reason`, `drone_id`, `side`, `type` |
 | `flightrisk_comm_rtt_ms`, `flightrisk_link_clock_offset_ms` | histogram, gauge | `drone_id` |
-| `flightrisk_link_age_s`, `flightrisk_link_connected` | gauges, computed at collection | `drone_id`, `side` |
+| `flightrisk_link_age_s` | gauge, computed at collection | `drone_id`, `side` |
+| `flightrisk_link_connected` | gauge, computed at collection | `drone_id` |
 | `flightrisk_link_reconnects` | counter | `outcome` |
 | `flightrisk_frame_loop_last_frame_age_s` | gauge, computed at collection | `source_active` |
 | `flightrisk_process_usage` | gauge | `resource` (`cpu_percent`, `memory_rss_bytes`, `threads`, `open_fds`) |
@@ -106,7 +113,10 @@ The PR #88 metrics (`flightrisk_fps`, `flightrisk_drone_battery`, `flightrisk_fr
 `flightrisk_match_count`, `flightrisk_match_score`, `flightrisk_face_detection_rate`,
 `flightrisk_detections_count`, `flightrisk_errors_count`) are unchanged.
 
-Labels never carry alert ids, track ids, file names or free text.
+Labels never carry alert ids, track ids, file names or free text. A `type` label is a known
+protocol message type (anything else is `other`), and at most 64 distinct drone ids from the
+network become a `drone_id` label (later ones are `other`), so a client that invents ids
+cannot create series without end. Every series from a process also carries `process_pid`.
 
 ## Traces
 

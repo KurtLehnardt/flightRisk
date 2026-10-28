@@ -208,8 +208,8 @@ anything matching a known key pattern are redacted before a line is written).
 ### The target image preview
 
 With content capture on, the target photo is stored once per distinct image in
-`~/.flightrisk/artifacts/targets/` (`FLIGHTRISK_ARTIFACT_DIR`): the photo as uploaded
-(`<sha256>.jpg`) and a thumbnail of at most 160 px (`<sha256>.thumb.jpg`). The directory is
+`~/.flightrisk/artifacts/targets/` (`FLIGHTRISK_ARTIFACT_DIR`): the photo re-encoded as JPEG,
+which drops EXIF and GPS metadata (`<sha256>.jpg`, named by the hash of the upload) and a thumbnail of at most 160 px (`<sha256>.thumb.jpg`). The directory is
 mode 0700 and the files 0600. Files older than `FLIGHTRISK_ARTIFACT_RETENTION_DAYS` (default 7)
 are deleted, and at most `FLIGHTRISK_ARTIFACT_MAX_FILES` (default 50) targets are kept.
 
@@ -220,12 +220,15 @@ allow one. Instead, FlightRisk runs a separate preview server that:
 - listens on `127.0.0.1` only (`FLIGHTRISK_PREVIEW_PORT`, default 5560; `0` turns it off),
 - serves only thumbnails, never the full photo,
 - requires a capability URL signed with HMAC-SHA256 over the image hash and an expiry
-  (`FLIGHTRISK_PREVIEW_TTL_S`, default 24 h), with the key from `FLIGHTRISK_PREVIEW_SECRET` or
+  (`FLIGHTRISK_PREVIEW_TTL_S`, default 1 h, limited to 30 s to 7 days), with the key from `FLIGHTRISK_PREVIEW_SECRET` or
   a random key kept in `<artifact dir>/preview.key` (mode 0600),
-- answers 404 to anything else (wrong signature, expired, unknown hash, other paths).
+- answers 404 to anything else (wrong signature, expired, unknown hash, other paths), and
+  429 above 20 requests per second.
 
-Each `target_image` event carries its `preview_url`. The trade-off: anyone who can read the
-Loki logs and reach this machine's loopback can open that thumbnail until the URL expires.
+Each `target_image` event carries its `preview_url`, valid for one image only. The trade-off:
+anyone who can read the Loki logs and reach this machine's loopback can open that thumbnail
+until the URL expires. Shorten `FLIGHTRISK_PREVIEW_TTL_S` (for example 600) if you only look
+at the dashboard live; a link that has expired is simply a broken image.
 The URL is a bearer capability, so treat the logs as sensitive while it is valid (they
 describe an active search anyway). Set `FLIGHTRISK_PREVIEW_PORT=0` to keep the artifact but
 serve no preview.
