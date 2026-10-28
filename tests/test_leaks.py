@@ -101,3 +101,36 @@ def test_error_watch_records_thread_and_log_errors():
         logging.getLogger("websockets.server").error("handler failed")
     assert any("boom" in e for e in watch.errors)
     assert any("handler failed" in e for e in watch.errors)
+
+
+def test_the_process_wide_logging_listener_started_after_a_snapshot_is_not_a_leak():
+    """The first structured logger starts a QueueListener thread that lives on; that is not a test's leak.
+
+    Runs in a fresh interpreter so the listener really starts after the snapshot, whatever ran before.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent(
+        """
+        from tests.support.leaks import snapshot
+        before = snapshot()
+        from flightrisk import obs_log
+        obs_log.setup_logging()
+        assert obs_log._listener is not None and obs_log._listener._thread.is_alive()
+        print(snapshot().leaked_since(before, settle_s=0.3))
+        """
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip().splitlines()[-1] == "{}"
+
+
+def test_a_leaked_thread_named_like_the_logging_listener_is_still_found():
+    before = snapshot()
+    impostor = _Parked("Thread-1 (_monitor)")
+    try:
+        assert snapshot().leaked_since(before, settle_s=0.3) == {"threads": ["Thread-1 (_monitor)"]}
+    finally:
+        impostor.stop()

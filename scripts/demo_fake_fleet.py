@@ -13,9 +13,10 @@ re-tasks its lanes to the others. No real drone is involved.
     python scripts/demo_fake_fleet.py --n 2 --nodes 2       # two ground nodes, edges on node 1
 
 With ``--nodes 2`` a second ground station starts beside the first (edge port
-and dashboard port one higher, 9001 and 5556 by default). An edge connects to
-one ground today, so all edges attach to node 1, or to the node named by
-``--edge-node``; the other node idles as a standby. The ports reserved for the
+and dashboard port one higher, 9001 and 5556 by default). The script drives the single-transport path
+(``--ws-url``), which connects an edge to one ground; the multi-ground uplink
+(``--ground-urls``) is not driven by it yet. So all edges attach to node 1, or
+to the node named by ``--edge-node``; the other node idles as a standby. The ports reserved for the
 future peer link (9100 and 9101) are printed but nothing listens on them yet.
 
 Every command line is printed before it runs, so each process can be started

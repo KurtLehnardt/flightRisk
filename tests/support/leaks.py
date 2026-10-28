@@ -48,6 +48,23 @@ def live_tasks() -> list[asyncio.Task]:
     return [task for task in list(registry) if not task.done()]
 
 
+def process_wide_threads() -> frozenset[threading.Thread]:
+    """Threads the process starts once and keeps for good, which are never a test's leak.
+
+    ``flightrisk.obs_log.setup_logging()`` starts a ``QueueListener`` thread the first time any structured logger
+    is created and leaves it running. Which test creates the first logger depends on the order the tests run in,
+    so a snapshot taken before that moment would count the thread as a leak. The thread is identified by being the
+    one the listener object holds, not by its name, so a leaked thread that happens to carry the same name is
+    still reported.
+    """
+    try:
+        from flightrisk import obs_log
+    except ImportError:  # pragma: no cover - the package always imports in this repository
+        return frozenset()
+    thread = getattr(getattr(obs_log, "_listener", None), "_thread", None)
+    return frozenset({thread}) if thread is not None else frozenset()
+
+
 @dataclass(frozen=True)
 class ResourceSnapshot:
     fds: int
@@ -65,7 +82,7 @@ class ResourceSnapshot:
                 leaks["fds"] = now.fds - before.fds
             if now.tasks > before.tasks:
                 leaks["tasks"] = list(now.task_names)
-            extra = sorted(t.name for t in now.threads - before.threads)
+            extra = sorted(t.name for t in now.threads - before.threads - process_wide_threads())
             if extra:
                 leaks["threads"] = extra
             if not leaks or time.monotonic() >= deadline:
@@ -79,7 +96,7 @@ def snapshot() -> ResourceSnapshot:
     return ResourceSnapshot(
         fds=open_fds(),
         tasks=len(tasks),
-        threads=frozenset(t for t in threading.enumerate() if t.is_alive()),
+        threads=frozenset(t for t in threading.enumerate() if t.is_alive()) - process_wide_threads(),
         task_names=names,
     )
 

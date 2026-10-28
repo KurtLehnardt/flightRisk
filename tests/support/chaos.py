@@ -48,19 +48,24 @@ from tests.support.netsim import BOTH, DOWN, UP
 KINDS = ("latency", "loss", "reorder", "partition", "partition_all", "sever", "flap", "busy", "emergency", "quiet")
 _WEIGHTS = (14, 10, 6, 18, 8, 7, 10, 6, 8, 5)
 
-#: The shortest run that fits the guaranteed episodes with room for random ones around them.
+#: The shortest run that fits the guaranteed episodes. The clearance windows (a few seconds each) leave random
+#: episodes covering about 16 percent of a run this short, and more as the run grows (see
+#: tests/test_chaos_plan.py for the floor that is checked).
 MIN_SOAK_S = 45.0
 #: Where the guaranteed episodes start, as fractions of the run.
 BUSY_AT, DOWN_AT, SEVER_AT, EMERGENCY_AT = 0.15, 0.30, 0.50, 0.65
 BUSY_S = 4.0
 EMERGENCY_WAIT_S = 1.6
-#: The least time between an emergency and a later down partition of the same drone. A takeoff ordered right
-#: after the emergency landing is re-landed by the monitor 2 s later (and again 2 s after that), which can put
-#: a re-landing inside the partition so that the watchdog finds the drone already on the ground.
+#: The least time kept between a random emergency and the guaranteed down partition that follows it. This is a
+#: conservative separation, not a workaround for a live bug: a takeoff ordered right after an emergency landing
+#: used to be re-landed 2 s later because the stale landing reason was never cleared, which could put a
+#: re-landing inside the partition. That race was fixed by PR #105 (``LaneExecutor._do_takeoff`` and the lane
+#: monitor clear the reason) and is guarded by tests/test_lane_executor_model.py. The gap stays so that the
+#: guaranteed watchdog check does not depend on that fix. The chaos suite alone would not catch a regression of
+#: it; the executor model tests would. Only random emergencies are moved, only around the guaranteed partition.
 EMERGENCY_TO_PARTITION_S = 8.0
 #: Clear space kept around a guaranteed episode: (seconds before its start, seconds after its end).
-_CLEARANCE = {"busy": (3.0, 1.0), "partition": (EMERGENCY_TO_PARTITION_S, 1.0), "sever": (3.0, 3.0),
-              "emergency": (3.0, EMERGENCY_TO_PARTITION_S)}
+_CLEARANCE = {"busy": (3.0, 1.0), "partition": (3.0, 1.0), "sever": (3.0, 3.0), "emergency": (3.0, 3.0)}
 
 #: A square flown by the lane drone; repeating it keeps the drone inside its geofence.
 LANE_SQUARE = (
@@ -147,12 +152,17 @@ def plan_episodes(rng: random.Random, duration_s: float, drone_ids: list[str], *
     lane_drone = lane_drone or drone_ids[-1]
     fixed = guaranteed_episodes(rng, duration_s, drone_ids, limit_s=limit_s, slack_s=slack_s, lane_drone=lane_drone)
     windows = []
+    emergency_windows = []
     for ep in fixed:
         before, after = _CLEARANCE[ep.kind]
         windows.append((ep.start_s - before, ep.end_s + after))
+        if ep.kind == "partition":
+            emergency_windows.append((ep.start_s - EMERGENCY_TO_PARTITION_S, ep.start_s))
     random_part = [
         ep for ep in _random_episodes(rng, duration_s, drone_ids)
         if not any(ep.start_s < w_end and ep.end_s > w_start for w_start, w_end in windows)
+        and not (ep.kind == "emergency"
+                 and any(ep.start_s < w_end and ep.end_s > w_start for w_start, w_end in emergency_windows))
     ]
     return sorted(fixed + random_part, key=lambda ep: ep.start_s)
 

@@ -15,8 +15,10 @@ uses the real transports and the real ``LaneExecutor`` and drives a
   through its own proxy link, created on first use (``harness.link``), so a
   test can fault one edge-to-ground path at a time.
 
-Today an edge talks to one ground at a time. Once an edge can hold several
-ground connections, a test attaches it to both links the same way.
+The harness drives the single-transport path (``--ws-url``), where an edge talks
+to one ground at a time, as ``edge_device``'s single-URL path does. The
+multi-ground uplink (``--ground-urls``) is not driven by this harness yet; once
+it is, a test attaches an edge to both links the same way.
 
 Settings mirror the product unless a test overrides them: heartbeats every
 ``fp.HEARTBEAT_INTERVAL_S`` (1 s), a 3 s link-loss watchdog, reconnect backoff

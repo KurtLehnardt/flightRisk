@@ -7,7 +7,7 @@ import pytest
 from tests.support.chaos import (
     _CLEARANCE,
     BUSY_S,
-    EMERGENCY_TO_PARTITION_S,
+    DOWN_AT,
     MIN_SOAK_S,
     check_flight_log,
     guaranteed_episodes,
@@ -68,12 +68,49 @@ def test_nothing_else_overlaps_a_guaranteed_episode(seed):
 @pytest.mark.parametrize("duration", [MIN_SOAK_S, 60.0, 180.0])
 @pytest.mark.parametrize("seed", range(100))
 def test_no_emergency_comes_shortly_before_the_guaranteed_partition(seed, duration):
+    """The gap is checked against a literal 8 s, not against the constant the generator uses."""
     episodes = plan(seed, duration)
     (down,) = [e for e in episodes if e.kind == "partition" and e.direction in (DOWN, BOTH)
-               and e.duration_s >= LIMIT + SLACK + 1.0 and e.start_s == pytest.approx(0.3 * duration, abs=0.01)]
-    close = [e for e in episodes if e.kind == "emergency" and e.start_s < down.start_s
-             and e.end_s > down.start_s - EMERGENCY_TO_PARTITION_S]
-    assert close == [], f"{close} is too close before {down}"
+               and e.duration_s >= LIMIT + SLACK + 1.0 and e.start_s == pytest.approx(DOWN_AT * duration, abs=0.01)]
+    for e in episodes:
+        if e.kind == "emergency" and e.start_s <= down.start_s:
+            assert down.start_s - e.end_s >= 8.0, f"{e} is less than 8 s before {down}"
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_the_clearance_around_each_guaranteed_episode_holds_by_a_brute_force_scan(seed):
+    """Sample the timeline every 0.1 s and look for random episodes inside the required clear space."""
+    duration = 60.0
+    episodes = plan(seed, duration)
+    fixed = guaranteed_episodes(NetSim(seed=seed).rng("chaos"), duration, IDS, limit_s=LIMIT, slack_s=SLACK,
+                                lane_drone="drone-2")
+    literal = {"busy": (3.0, 1.0), "partition": (3.0, 1.0), "sever": (3.0, 3.0), "emergency": (3.0, 3.0)}
+    others = [e for e in episodes if e not in fixed]
+    for guaranteed in fixed:
+        before, after = literal[guaranteed.kind]
+        t = guaranteed.start_s - before
+        while t < guaranteed.end_s + after:
+            for e in others:
+                assert not (e.start_s <= t < max(e.end_s, e.start_s + 1e-9)), f"{e} is active at {t:.1f} s, inside the clear space of {guaranteed}"
+            t += 0.1
+
+
+def test_random_episodes_still_cover_a_fair_share_of_a_60_s_run():
+    """The clearance windows must not thin the random chaos out: at least 20 percent of the run on average."""
+    shares = []
+    for seed in range(100):
+        episodes = plan(seed, 60.0)
+        fixed = guaranteed_episodes(NetSim(seed=seed).rng("chaos"), 60.0, IDS, limit_s=LIMIT, slack_s=SLACK,
+                                    lane_drone="drone-2")
+        spans = sorted((e.start_s, min(e.end_s, 60.0)) for e in episodes if e not in fixed and e.duration_s > 0)
+        covered, reached = 0.0, 0.0
+        for start, end in spans:
+            start = max(start, reached)
+            if end > start:
+                covered += end - start
+                reached = end
+        shares.append(covered / 60.0)
+    assert sum(shares) / len(shares) >= 0.20, sum(shares) / len(shares)
 
 
 def test_a_run_too_short_for_the_guaranteed_episodes_is_refused():
