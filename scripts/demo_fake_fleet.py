@@ -129,6 +129,12 @@ def build_commands(
         raise ValueError(f"--nodes must be between 1 and {MAX_NODES}, got {nodes}")
     if not 1 <= edge_node <= nodes:
         raise ValueError(f"--edge-node must be between 1 and {nodes}, got {edge_node}")
+    if nodes > 1:
+        for node in range(1, nodes + 1):
+            if DEFAULT_PEER_PORT <= edge_port + node - 1 < DEFAULT_PEER_PORT + MAX_NODES:
+                raise ValueError(
+                    f"node {node} would listen for edges on port {edge_port + node - 1}, which is reserved for the "
+                    f"peer link ({DEFAULT_PEER_PORT} to {DEFAULT_PEER_PORT + MAX_NODES - 1}); pick another --edge-port")
     if area_cm is None:
         area_cm = default_area_cm(n)
     commands: list[tuple[str, list[str]]] = []
@@ -359,7 +365,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Loopback only ({LOOPBACK}); token {'set from the environment' if args.attach and token else 'random per run' if token else 'not set'}.")
     for label, argv_ in commands:
         print(f"[{label}] {format_command(argv_, token_env=token is not None)}")
-    if args.nodes > 1:
+    if args.nodes > 1 and args.attach:
+        print(f"Attaching to the ground station already listening on :{edge_port} (node {args.edge_node}); "
+              "no ground station is started here.")
+    elif args.nodes > 1:
         print("Ground nodes: " + ", ".join(
             f"node {k}: edges :{args.edge_port + k - 1}, dashboard :{args.dashboard_port + k - 1}, "
             f"peer :{DEFAULT_PEER_PORT + k - 1} (reserved, unused)" for k in range(1, args.nodes + 1)))

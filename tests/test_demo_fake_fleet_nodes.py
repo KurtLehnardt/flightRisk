@@ -62,3 +62,21 @@ def test_dry_run_with_one_node_prints_no_node_summary(capsys):
 def test_a_bad_edge_node_exits_with_status_two(capsys):
     assert launcher.main(["--n", "2", "--nodes", "2", "--edge-node", "5", "--dry-run"]) == 2
     assert "--edge-node" in capsys.readouterr().err
+
+
+def test_attach_with_two_nodes_starts_no_ground_and_names_no_standby(capsys):
+    assert launcher.main(["--n", "2", "--nodes", "2", "--attach", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "standby" not in out and "peer :" not in out
+    assert "no ground station is started" in out
+    assert "flightrisk.dashboard" not in out
+
+
+def test_an_edge_port_that_puts_a_node_on_the_reserved_peer_port_is_refused(capsys):
+    with pytest.raises(ValueError, match="reserved for the peer link"):
+        launcher.build_commands(2, 9099, 5555, nodes=2)
+    assert launcher.main(["--n", "2", "--nodes", "2", "--edge-port", "9099", "--dry-run"]) == 2
+    assert "reserved" in capsys.readouterr().err
+    # One node keeps working on any port, as before.
+    assert launcher.build_commands(2, 9099, 5555, nodes=1)
+    assert launcher.build_commands(2, 9098, 5555, nodes=2)
