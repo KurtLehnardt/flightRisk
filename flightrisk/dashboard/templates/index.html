@@ -2076,7 +2076,7 @@
             <!-- build:t25 end -->
             <div id="search-map"></div>
             <table id="fleet-panel">
-                <thead><tr><th>Drone</th><th>Bat</th><th>Alt cm</th><th>Lane</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
+                <thead><tr><th>Drone</th><th>Status</th><th>Bat</th><th>Alt cm</th><th>Lane</th><th>Offset ms</th><th>RTT ms</th><th>Skew ms</th></tr></thead>
                 <tbody id="fleet-panel-body"></tbody>
             </table>
         </div>
@@ -3055,7 +3055,7 @@
                 selector.value = currentVal;
             }
 
-            if (data.count > 1) {
+            if (droneIds.length > 1) {
                 container.innerHTML = '';
                 droneIds.forEach(id => {
                     const info = drones[id] || {};
@@ -3488,17 +3488,37 @@
 
         function fmt(v) { return (v === undefined || v === null) ? '--' : (typeof v === 'number' ? Math.round(v * 10) / 10 : v); }
 
+        function fleetConnState(d) {
+            if (d.lost === true) return { text: 'LOST', color: 'var(--red)' };
+            if (d.connected === false) return { text: 'DOWN', color: 'var(--amber)' };
+            if (d.connected === true) return { text: 'CONNECTED', color: 'var(--green, #22C55E)' };
+            return { text: '--', color: '' };
+        }
+
         function renderFleetPanel(list) {
             const body = document.getElementById('fleet-panel-body');
             body.innerHTML = '';
             list.forEach(([id, d]) => {
                 d = d || {};
                 const tr = document.createElement('tr');
+                const state = fleetConnState(d);
+                const stale = state.text === 'DOWN' || state.text === 'LOST';
+                if (stale) {
+                    tr.style.opacity = '0.5';
+                    tr.style.textDecoration = 'line-through';
+                    tr.title = 'No live link: values are the last ones received';
+                }
                 const lane = (d.lane_index !== undefined && d.lanes_total !== undefined) ? d.lane_index + '/' + d.lanes_total : '--';
-                [id, d.battery !== undefined ? fmt(d.battery) + '%' : '--', fmt(d.height_cm), lane,
-                 fmt(d.offset_ms), fmt(d.rtt_ms), fmt(d.skew_ms)].forEach(v => {
+                [id, state.text, d.battery !== undefined ? fmt(d.battery) + '%' : '--', fmt(d.height_cm), lane,
+                 fmt(d.offset_ms), fmt(d.rtt_ms), fmt(d.skew_ms)].forEach((v, i) => {
                     const td = document.createElement('td');
                     td.textContent = v;
+                    if (i === 1) {
+                        td.className = 'fleet-status-cell';
+                        td.style.fontWeight = '700';
+                        td.style.textDecoration = 'none';
+                        if (state.color) td.style.color = state.color;
+                    }
                     tr.appendChild(td);
                 });
                 body.appendChild(tr);
