@@ -54,7 +54,7 @@ from flightrisk.transport import EdgeTransportSync, GroundTransportSync, _call_o
 from tests.support.netsim import LOOPBACK, NetLink, NetSim
 
 WAIT_S = 20.0
-ALT_SLOTS_CM = (100, 160)
+ALT_SLOTS_CM = (100, 130)  # the coordinator default, under the 140 cm ceiling limit
 
 #: The product's settings (see ``flightrisk/fleet_protocol/constants.py`` and ``edge_device``).
 PRODUCT_LINK_LOSS_LAND_S = DEFAULT_LINK_LOSS_LAND_S

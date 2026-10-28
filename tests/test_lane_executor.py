@@ -45,6 +45,10 @@ TELEMETRY_KEYS = {
     "lanes_total",
     "link_age_s",
     "takeoff_at_local_s",
+    # Optional fields: the active ceiling, margin and altitude slot.
+    "ceiling_cm",
+    "ceiling_margin_cm",
+    "alt_slot_cm",
 }
 
 LANES = [
@@ -354,7 +358,7 @@ def test_assign_lanes_ack_and_refusals(make_executor):
     accepted = {
         "type": "assign_lanes",
         "drone_id": "drone-1",
-        "alt_cm": 160,
+        "alt_cm": 130,
         "lanes": LANES[:3],
         "zone": {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400},
     }
@@ -362,7 +366,7 @@ def test_assign_lanes_ack_and_refusals(make_executor):
     acks = of_type(sent, "ack", "assign_lanes")
     assert len(acks) == 1 and acks[0]["lanes_total"] == 3 and acks[0]["battery"] == 90
     # The coordinator's slot replaces the local one.
-    assert executor.envelope.alt_slot_cm == 160
+    assert executor.envelope.alt_slot_cm == 130
     assert parse_lanes(LANES[:2]) == [("forward", 200), ("right", 100)]
 
 

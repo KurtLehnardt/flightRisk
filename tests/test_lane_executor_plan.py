@@ -44,7 +44,9 @@ from tests.lane_executor_support import (
     wait_for,
 )
 
-TELEMETRY_V2_KEYS = set(fp.TELEMETRY_FIELDS_V2) | {"type"}
+# The optional ceiling fields (docs/ceiling-and-altitude.md) come with every telemetry message.
+CEILING_KEYS = {"ceiling_cm", "ceiling_margin_cm", "alt_slot_cm"}
+TELEMETRY_V2_KEYS = set(fp.TELEMETRY_FIELDS_V2) | {"type"} | CEILING_KEYS
 
 
 @pytest.fixture
@@ -586,7 +588,7 @@ def test_is_active_counts_an_unreadable_flight_state_as_active(executors):
 def test_telemetry_switches_to_v2_on_the_first_v2_command(executors):
     executor, _, sent, _, _ = executors(fleet_v2=False)
     executor.tick()
-    assert set(of_type(sent, "telemetry")[-1]) == set(fp.TELEMETRY_FIELDS) | {"type"}
+    assert set(of_type(sent, "telemetry")[-1]) == set(fp.TELEMETRY_FIELDS) | {"type"} | CEILING_KEYS
     send(executor, hold(cmd_id="h1"))
     telemetry = executor.telemetry()
     assert set(telemetry) == TELEMETRY_V2_KEYS

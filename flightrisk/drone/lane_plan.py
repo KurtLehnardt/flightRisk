@@ -41,8 +41,8 @@ from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
     MIN_MOVE_CM,
+    CeilingError,
     RelativePose,
-    SafetyEnvelope,
     is_finite_number,
 )
 from flightrisk.fleet_protocol import (
@@ -250,7 +250,8 @@ class LanePlanMixin:
 
         Refuses a plan addressed to another drone (``other_drone``), with
         malformed lanes, plan identity or end-of-lanes action (``invalid``),
-        with an out-of-range altitude (``altitude``), whose dead-reckoned path
+        with an out-of-range altitude or one above this edge's ceiling limit
+        (``altitude``), whose dead-reckoned path
         leaves the geofence (``geofence``), or while the battery level cannot
         be read (``battery``), because the ``ack`` must carry it. A plan older
         than the newest accepted is refused with ``stale_plan``, and so is
@@ -290,7 +291,20 @@ class LanePlanMixin:
         alt_cm = msg.get("alt_cm")
         if alt_cm is not None:
             try:
-                alt_cm = SafetyEnvelope.validate_alt_slot(alt_cm)
+                # The slot range and this edge's own ceiling limit, whatever
+                # the ground checked.
+                alt_cm = self.envelope.check_alt_slot(alt_cm)
+            except CeilingError as exc:
+                self._log.error(
+                    "slot_refused_above_ceiling",
+                    drone_id=self.drone_id,
+                    source="assign_lanes",
+                    alt_slot_cm=alt_cm,
+                    ceiling_cm=self.envelope.ceiling_cm,
+                    ceiling_margin_cm=self.envelope.ceiling_margin_cm,
+                    max_alt_slot_cm=self.envelope.max_alt_slot_cm,
+                )
+                return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
             except ValueError as exc:
                 return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
         battery = self._read_battery()

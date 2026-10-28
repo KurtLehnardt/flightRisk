@@ -104,6 +104,7 @@ class AppState:
 
     # -- Edge / ground-station (source == "edge") --
     ground_transport: Any = None  # GroundTransportSync (WebSocket server)
+    ceiling_board: Any = None  # CeilingBoard (edge source): ceiling height and altitude slots
     ground_station: Any = None  # GroundStation (scorer over edge detections)
     stream_video: bool = False  # whether edge devices should stream full frames
     fleet_supervisor: Any = None  # FleetSupervisor (edge source with a fleet)

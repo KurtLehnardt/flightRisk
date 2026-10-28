@@ -5,8 +5,9 @@
 
 * retries a landing that has not taken effect while the drone still reports
   flying;
-* lands the drone when the ground link has been silent past the threshold,
-  when the battery is low, or when the plan's end-of-lanes hover
+* lands the drone when its measured height is above the ceiling
+  (``SafetyEnvelope.above_ceiling``), when the ground link has been silent
+  past the threshold, when the battery is low, or when the plan's end-of-lanes hover
   (``on_complete: hover``) has lasted ``hover_timeout_s`` with the drone
   idle (a hold restarts that countdown: it starts again from zero once the
   drone is idle after its lanes; the hover timeout is checked again under
@@ -21,7 +22,8 @@ The monitor never waits on the ground link: it hands telemetry to a sender
 thread through a small queue that drops its oldest message when full, so a
 stalled uplink cannot hold up the link-loss, battery and land-retry checks.
 
-Telemetry is the v1 message, plus the protocol v2 fields ``epoch``,
+Telemetry is the v1 message with the optional ``ceiling_cm``,
+``ceiling_margin_cm`` and ``alt_slot_cm`` fields, plus the protocol v2 fields ``epoch``,
 ``plan_id``, ``state`` and ``plan_valid`` once the executor is in v2 mode
 (constructed with ``fleet_v2=True``, or after its first command with a
 ``cmd_id``). A v1 ground accepts the extra fields.
@@ -56,9 +58,21 @@ class MonitorMixin:
             if unplanned:
                 self._log.error("edge_unplanned_landing", drone_id=self.drone_id, plan_id=self.plan_id)
             if flying:
+                height = self._read_height()
                 if land_reason is not None:
                     if retry_due:
                         self.land_now(land_reason)
+                elif self.envelope.above_ceiling(height):
+                    # The measured height is above the ceiling itself: stop
+                    # climbing (the landing aborts any sequence) and land.
+                    self._log.error(
+                        "edge_ceiling_exceeded",
+                        drone_id=self.drone_id,
+                        height_cm=height,
+                        ceiling_cm=self.envelope.ceiling_cm,
+                        alt_slot_cm=self.envelope.alt_slot_cm,
+                    )
+                    self.land_now("ceiling_exceeded")
                 elif self.envelope.link_lost():
                     self._log.error(
                         "edge_link_lost",
@@ -196,6 +210,10 @@ class MonitorMixin:
             "link_age_s": round(self.envelope.link_age_s(), 3),
             "takeoff_at_local_s": takeoff_at,
         }
+        # Optional fields (every ground accepts extra telemetry fields): the
+        # active ceiling, margin and altitude slot. Their presence also tells
+        # the ground that this edge takes ``set_ceiling``.
+        msg.update(self.envelope.ceiling_status())
         if v2:
             msg.update(epoch=self.epoch_seen, plan_id=self.plan_id, state=state, plan_valid=plan_valid)
         return msg

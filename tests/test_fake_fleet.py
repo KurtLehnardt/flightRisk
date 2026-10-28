@@ -98,7 +98,7 @@ def test_launcher_builds_n_edge_commands():
         ids.append(label)
         slots.append(argv[argv.index("--alt-slot") + 1])
     assert len(set(ids)) == 4
-    assert slots == ["100", "160", "100", "160"]  # the coordinator's slot order
+    assert slots == ["100", "130", "100", "130"]  # the coordinator's slot order
 
     # The ids in --fleet are exactly the ids the edges announce.
     assert ground[ground.index("--fleet") + 1].split(",") == ids
@@ -334,7 +334,7 @@ def test_n_edges_plan_and_retask_on_loopback(fleet_of_four):
     plan = supervisor.plan()
     assert [z.drone_id for z in plan.zones] == list(edges)
     assert len(plan.zones) == 4
-    assert [z.alt_cm for z in plan.zones] == [100, 160, 100, 160]
+    assert [z.alt_cm for z in plan.zones] == [100, 130, 100, 130]
     assert len({z.x_cm for z in plan.zones}) == 4
     lanes_before = {d: len(coordinator.lanes(d)) for d in edges}
     assert all(count >= 3 for count in lanes_before.values())

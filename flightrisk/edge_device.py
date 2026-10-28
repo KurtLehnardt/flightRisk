@@ -60,7 +60,7 @@ Run it with::
     FLIGHTRISK_EDGE_TOKEN=secret python -m flightrisk.edge_device --ws-url ws://ground:9000
     python -m flightrisk.edge_device --source tello --tello-host 192.168.10.1 \
         --drone-id drone-1 --alt-slot 100
-    python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 160
+    python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 130
 
 The core loop (``run_edge_device``) is dependency-injected -- the frame
 source, transport, and runner are all passed in -- so it can be unit-tested
@@ -82,7 +82,11 @@ from typing import Any, Callable, Iterable, TextIO
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import CONTROL_TYPES, LaneExecutor
-from flightrisk.drone.safety import SafetyEnvelope
+from flightrisk.drone.safety import (
+    CEILING_CM_ENV,
+    CEILING_MARGIN_CM_ENV,
+    SafetyEnvelope,
+)
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_uplink import (
     ENV_FLEET_LEGACY,
@@ -230,6 +234,13 @@ def _handle_control(
                 log.debug("edge_control_no_flight", type=mtype)
             else:
                 flight.handle_message(msg, recv_t=recv_t)
+        elif mtype == fp.SET_CEILING:
+            # Ceiling, margin and altitude slot (docs/ceiling-and-altitude.md);
+            # the executor applies them only on the ground and always answers.
+            if flight is None:
+                log.debug("edge_control_no_flight", type=mtype)
+            else:
+                flight.handle_set_ceiling(msg)
         elif mtype == "stream_video":
             enabled = bool(msg.get("enabled"))
             runner.set_stream_video(enabled)
@@ -715,7 +726,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--alt-slot", type=_parse_alt_slot, default=100.0,
-        help="Altitude slot in cm (default 100); values below 10 are metres, so 1.6 means 160 cm",
+        help="Altitude slot in cm (default 100); values below 10 are metres, so 1.6 means 1.6 m. It must not "
+             "be above the ceiling limit, FLIGHTRISK_CEILING_CM minus FLIGHTRISK_CEILING_MARGIN_CM "
+             "(200 - 60 = 140 cm by default), or the edge refuses to start",
     )
     face = parser.add_mutually_exclusive_group()
     face.add_argument(
@@ -771,16 +784,36 @@ def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
     return TelloController(name=args.drone_id, host=args.tello_host)
 
 
+def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
+    """The flying edge's safety envelope from ``--alt-slot`` and the environment.
+
+    Raises ``SystemExit`` with an operator-facing message when the limits
+    are invalid, in particular when the altitude slot is above the ceiling
+    limit (``FLIGHTRISK_CEILING_CM`` minus ``FLIGHTRISK_CEILING_MARGIN_CM``,
+    200 - 60 = 140 cm by default): the edge refuses to start rather than
+    clamp the slot.
+    """
+    try:
+        return SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot, environ=environ)
+    except ValueError as exc:
+        raise SystemExit(
+            f"edge_device: {exc}. Refusing to start: lower --alt-slot (ALT_CM), or set "
+            f"{CEILING_CM_ENV} / {CEILING_MARGIN_CM_ENV} for this room (docs/ceiling-and-altitude.md)."
+        ) from exc
+
+
 def _run_flight_edge(
     args: argparse.Namespace,
     log: StructuredLogger,
     stop_event: threading.Event | None = None,
+    envelope: SafetyEnvelope | None = None,
 ) -> None:
     """Run a flying edge: drone, lane executor, safety controls and the edge loop.
 
     Setting ``stop_event`` ends the edge loop; the drone lands first.
     """
-    envelope = SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot)
+    if envelope is None:
+        envelope = _startup_envelope(args)
     runner = _build_runner(args, log, pose_provider=_envelope_pose_provider(envelope))
     drone = _build_drone(args, log)
 
@@ -810,6 +843,8 @@ def _run_flight_edge(
             authenticated=token is not None,
             drone_id=args.drone_id,
             alt_slot_cm=envelope.alt_slot_cm,
+            ceiling_cm=envelope.ceiling_cm,
+            ceiling_margin_cm=envelope.ceiling_margin_cm,
             geofence_cm=envelope.geofence_cm,
             link_loss_land_s=envelope.link_watchdog.timeout_s,
             reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
@@ -893,7 +928,10 @@ def main(argv: list[str] | None = None) -> None:
     _init_edge_telemetry(log)
 
     if args.source in _FLIGHT_SOURCES:
-        _run_flight_edge(args, log)
+        # Checked before anything connects, so a slot above the ceiling
+        # limit stops the edge at once with the reason.
+        envelope = _startup_envelope(args)
+        _run_flight_edge(args, log, envelope=envelope)
         return
 
     source = _build_source(args, parser, log)

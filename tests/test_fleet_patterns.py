@@ -168,7 +168,9 @@ def test_feasible_plans_are_accepted_by_a_real_lane_executor():
             sent: list[dict] = []
             executor = LaneExecutor(
                 fake,
-                SafetyEnvelope(geofence_cm=450),
+                # The pattern's 160 cm slot needs a room configured for it: the
+                # default ceiling limit is 140 cm (docs/ceiling-and-altitude.md).
+                SafetyEnvelope(geofence_cm=450, ceiling_cm=250),
                 drone.drone_id,
                 send=sent.append,
                 logger=StructuredLogger(component="test-fleet-patterns"),

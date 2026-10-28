@@ -46,7 +46,7 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
-from flightrisk.drone.coordinator import FleetCoordinator
+from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, FleetCoordinator, StartResult
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_events
@@ -54,6 +54,8 @@ from flightrisk import obs_metrics
 from flightrisk.obs_log import set_session_id
 from flightrisk.canon import TargetCanon
 from flightrisk.dashboard.obs_hooks import install_http_observability, install_socketio_observability
+from flightrisk.dashboard.ceiling import EVENT as CEILING_EVENT
+from flightrisk.dashboard.ceiling import CeilingBoard, CeilingRefusal, CeilingStore
 
 try:
     from flightrisk.telemetry import init_telemetry, get_tracer, get_meter, FlightRiskMetrics
@@ -639,6 +641,11 @@ class FleetSupervisor:
     worker thread, never on a transport delivery thread. Re-tasked lanes are
     planned against ``geofence_cm`` (by default ``FLIGHTRISK_GEOFENCE_CM``,
     the value the edges enforce).
+
+    With a ``ceiling`` board (``flightrisk/dashboard/ceiling.py``) each
+    drone's altitude slot comes from the dashboard's ceiling settings, Plan
+    is refused when a slot is above the ceiling limit, and Start when the
+    planned slots are above it or no longer match the settings.
     """
 
     def __init__(
@@ -650,7 +657,7 @@ class FleetSupervisor:
         area_cm=(400, 400),
         strip_cm: int = 75,
         net: str = "station",
-        alt_slots_cm: tuple[int, ...] = (100, 160),
+        alt_slots_cm: tuple[int, ...] = DEFAULT_ALT_SLOTS_CM,
         clock=None,
         loss_timeout_s: float = FLEET_LOSS_TIMEOUT_S,
         takeoff_grace_s: float = FLEET_TAKEOFF_GRACE_S,
@@ -658,8 +665,13 @@ class FleetSupervisor:
         ping_timeout_s: float = FLEET_PING_TIMEOUT_S,
         geofence_cm: float | None = None,
         retask_wait_s: float = FLEET_RETASK_WAIT_S,
+        ceiling: CeilingBoard | None = None,
     ):
         self.net = net
+        self._ceiling = ceiling
+        # Each drone's slot for the plan being made, checked by the ceiling
+        # board just before the coordinator plans (see plan()).
+        self._plan_slots: dict[str, int] = {}
         self._transport = transport
         self._socketio = socketio
         self._clock = clock if clock is not None else transport.now
@@ -678,6 +690,7 @@ class FleetSupervisor:
             on_event=self._on_coordinator_event,
             geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
             retask_wait_s=retask_wait_s,
+            alt_slot_of=self._plan_slot if ceiling is not None else None,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -688,6 +701,30 @@ class FleetSupervisor:
         self._landed_all = False
         self._stop = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        if ceiling is not None:
+            ceiling.bind_activity(self.flight_activity)
+
+    def _plan_slot(self, drone_id: str, index: int) -> int:
+        return self._plan_slots[drone_id]
+
+    def flight_activity(self) -> str | None:
+        """Why the drones are not all on the ground, or None.
+
+        A drone whose latest telemetry says it flies counts as flying, however
+        old that report is, and so does a scheduled start until
+        ``takeoff_grace_s`` after its start time. The ceiling settings change
+        only while this is None.
+        """
+        flying = sorted(
+            drone_id for drone_id, info in self.coordinator.status().items() if info.get("is_flying") is True
+        )
+        if flying:
+            return f"{', '.join(flying)} reported flying"
+        with self._lock:
+            start = self._start_t_ground_s
+        if start is not None and self._clock() < start + self._takeoff_grace_s:
+            return "a start is scheduled"
+        return None
 
     # -- Browser events -----------------------------------------------------
 
@@ -801,9 +838,17 @@ class FleetSupervisor:
     def plan(self):
         """Sync every clock, split the area and send ``assign_lanes``.
 
-        Raises ``RuntimeError`` while a drone reports flying.
+        Raises ``RuntimeError`` while a drone reports flying, and
+        ``CeilingRefusal`` (a ``RuntimeError``) when a drone's altitude slot
+        is above the ceiling limit; nothing is sent to any drone then.
         """
         with self._busy:
+            if self._ceiling is not None:
+                try:
+                    self._plan_slots = self._ceiling.plan_slots(self.coordinator.drone_ids)
+                except CeilingRefusal as exc:
+                    self._emit("fleet_event", {"event": "plan_refused", "detail": str(exc)})
+                    raise
             self.coordinator.sync()
             plan = self.coordinator.plan()
             with self._lock:
@@ -824,9 +869,15 @@ class FleetSupervisor:
         the browser as a ``fleet_event``.
         """
         with self._busy:
-            if not self.coordinator.started:
-                self.coordinator.sync()
-            result = self.coordinator.start(lead_s=lead_s)
+            refusals = {}
+            if self._ceiling is not None and not self.coordinator.started:
+                refusals = self._ceiling.check_start(self.coordinator.current_plan())
+            if refusals:
+                result = StartResult(ok=False, t_ground_s=None, refusals=refusals)
+            else:
+                if not self.coordinator.started:
+                    self.coordinator.sync()
+                result = self.coordinator.start(lead_s=lead_s)
         if result.ok:
             with self._lock:
                 self._start_t_ground_s = result.t_ground_s
@@ -1434,6 +1485,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             supervisor = _fleet["supervisor"]
             if supervisor is not None:
                 supervisor.handle_control(msg)
+            _observe_ceiling(msg)
 
         # Heartbeats are on in edge mode: a fleet edge lands its drone when
         # ground messages stop for FLIGHTRISK_LINK_LOSS_LAND_S.
@@ -1445,6 +1497,11 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
             on_control=_on_edge_control,
             heartbeat_interval_s=fp.HEARTBEAT_INTERVAL_S,
         )
+        # Ceiling height and altitude slots (docs/ceiling-and-altitude.md).
+        ceiling_board = CeilingBoard(
+            CeilingStore(), transport, socketio.emit, fleet_drones=source_config.fleet_drones,
+        )
+        app_state.ceiling_board = ceiling_board
         supervisor = None
         if source_config.fleet_drones:
             supervisor = FleetSupervisor(
@@ -1454,6 +1511,7 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
                 area_cm=source_config.fleet_area_cm,
                 strip_cm=source_config.fleet_strip_cm,
                 net=source_config.fleet_net,
+                ceiling=ceiling_board,
             )
             _fleet["supervisor"] = supervisor
         transport.start()
@@ -2143,6 +2201,45 @@ def on_land_all(data=None):
     """
     report = _land_all()
     emit("land_all_ack", report)
+
+
+def _observe_ceiling(msg) -> None:
+    """Show an edge's telemetry or ``set_ceiling`` reply on the ceiling board; never raises."""
+    board = app_state.ceiling_board
+    if board is None:
+        return
+    try:
+        board.observe_control(msg)
+    except Exception:  # the ceiling display must never stop fleet control
+        log.warning("ceiling board failed to read an edge message", exc_info=True)
+
+
+@socketio.on("get_ceiling_settings")
+def on_get_ceiling_settings(data=None):
+    """Send the ceiling height, margin, per-drone altitude slots and each edge's state."""
+    board = app_state.ceiling_board
+    if board is None:
+        emit(CEILING_EVENT, {"available": False})
+        return
+    emit(CEILING_EVENT, board.payload())
+
+
+@socketio.on("set_ceiling_settings")
+def on_set_ceiling_settings(data):
+    """Change the ceiling, the margin or per-drone slots; refused unless every drone is on the ground.
+
+    The board validates every value (the browser's checks are a convenience)
+    and answers this browser with ``ceiling_settings_result``.
+    """
+    board = app_state.ceiling_board
+    if board is None:
+        emit("ceiling_settings_result", {"ok": False, "message": "The ceiling settings need the edge source."})
+        return
+    error = board.update(data)
+    if error:
+        log.warning("Ceiling settings refused: %s", error)
+    emit("ceiling_settings_result", {"ok": error is None, "message": error or "Saved."})
+    emit(CEILING_EVENT, board.payload())
 
 
 def _run_fleet_action(action: str) -> None:

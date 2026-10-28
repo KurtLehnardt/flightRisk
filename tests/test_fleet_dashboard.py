@@ -235,7 +235,7 @@ def test_plan_emits_fleet_plan_and_assigns_lanes():
 
     plan = sio.named("fleet_plan")[-1]
     assert [z["drone_id"] for z in plan["zones"]] == ["drone-1", "drone-2"]
-    assert [z["alt_cm"] for z in plan["zones"]] == [100, 160]
+    assert [z["alt_cm"] for z in plan["zones"]] == [100, 130]
     assert all(z["lanes"] for z in plan["zones"])
     assert plan["grid"] == {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400}
     for drone_id in ("drone-1", "drone-2"):

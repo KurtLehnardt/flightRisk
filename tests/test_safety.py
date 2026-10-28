@@ -154,11 +154,11 @@ def test_battery_gate(make_executor):
 
 
 def test_altitude_slot_applied(make_executor):
-    executor, drone, _, _ = make_executor(alt_slot_cm=160, takeoff_height_cm=80)
+    executor, drone, _, _ = make_executor(alt_slot_cm=130, takeoff_height_cm=80)
     executor.handle_takeoff()
     assert executor.wait_idle(WAIT_S)
-    assert drone.calls == [("takeoff",), ("move", "up", 80)]
-    assert drone.state.height == 160
+    assert drone.calls == [("takeoff",), ("move", "up", 50)]
+    assert drone.state.height == 130
 
     # Within one minimum move of the slot: no correction.
     executor, drone, _, _ = make_executor(alt_slot_cm=100, takeoff_height_cm=90)
@@ -191,12 +191,16 @@ def test_envelope_reads_env_overrides():
         "FLIGHTRISK_GEOFENCE_CM": "300",
         "FLIGHTRISK_MIN_TAKEOFF_BATTERY": "45",
         "FLIGHTRISK_LINK_LOSS_LAND_S": "1.5",
+        # A 160 cm slot needs a room with a ceiling of at least 220 cm.
+        "FLIGHTRISK_CEILING_CM": "250",
+        "FLIGHTRISK_CEILING_MARGIN_CM": "70",
     }
     envelope = SafetyEnvelope.from_env(alt_slot_cm=160, environ=env)
     assert envelope.geofence_cm == 300
     assert envelope.min_takeoff_battery == 45
     assert envelope.link_watchdog.timeout_s == 1.5
     assert envelope.alt_slot_cm == 160
+    assert (envelope.ceiling_cm, envelope.ceiling_margin_cm, envelope.max_alt_slot_cm) == (250, 70, 180)
 
     defaults = SafetyEnvelope.from_env(environ={})
     assert (defaults.geofence_cm, defaults.min_takeoff_battery, defaults.land_battery) == (500, 30, 15)

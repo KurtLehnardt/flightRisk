@@ -1,0 +1,171 @@
+<!-- Ceiling height and altitude slots (docs/ceiling-and-altitude.md). Included by index.html.
+     The server validates every value; the checks here only explain a value before it is sent. -->
+<style>
+    .ceiling-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; font-size: 12px; }
+    .ceiling-grid label { color: var(--text-muted); white-space: nowrap; }
+    .ceiling-grid input { width: 100%; box-sizing: border-box; padding: 5px 7px; background: var(--bg-card);
+        border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius-btn); font-family: var(--font-mono); }
+    .ceiling-grid input.ceiling-bad { border-color: var(--red); }
+    .ceiling-max { margin: 8px 0 6px; font-size: 12px; color: var(--text-secondary); }
+    .ceiling-max strong { color: var(--text-primary); font-family: var(--font-mono); }
+    .ceiling-msg { font-size: 11px; margin-top: 6px; white-space: pre-line; }
+    .ceiling-msg.error { color: var(--red); }
+    .ceiling-msg.ok { color: var(--green, #22c55e); }
+    .ceiling-edge { grid-column: 1 / -1; font-size: 10px; color: var(--text-muted); margin-top: -3px; }
+    .ceiling-edge.warn { color: var(--amber); }
+</style>
+<div class="panel-section" id="ceiling-section">
+    <div class="panel-title">Ceiling and altitude</div>
+    <div id="ceiling-unavailable" class="ceiling-msg" style="display:none;">Ceiling settings need the edge source (--source edge).</div>
+    <div id="ceiling-body">
+        <div class="ceiling-grid">
+            <label for="ceiling-cm">Ceiling height (cm)</label>
+            <input type="number" id="ceiling-cm" step="1" inputmode="numeric" oninput="ceilingCheck()">
+            <label for="ceiling-margin-cm">Safety margin (cm)</label>
+            <input type="number" id="ceiling-margin-cm" step="1" inputmode="numeric" oninput="ceilingCheck()">
+        </div>
+        <div class="ceiling-max">Highest allowed slot: <strong id="ceiling-max">--</strong> cm (ceiling minus margin)</div>
+        <div id="ceiling-slots" class="ceiling-grid"></div>
+        <div class="fleet-controls-hint">Measure the ceiling from the surface the drones take off from. Heights are the Tello's own reading, a few cm off. Takeoff alone hovers at about 80 cm, so a lower slot means a short descent after takeoff. Leave a slot empty for the default.</div>
+        <div class="fleet-controls-row" style="margin-top:6px;">
+            <button id="ceiling-save" class="btn-ghost" onclick="ceilingSave()">Save ceiling settings</button>
+        </div>
+        <div id="ceiling-msg" class="ceiling-msg"></div>
+    </div>
+</div>
+<script>
+    (function () {
+        let ceilingState = null;
+
+        function ceilingNumber(id) {
+            const raw = document.getElementById(id).value.trim();
+            return raw === '' ? null : Number(raw);
+        }
+
+        function ceilingEdgeText(d) {
+            const e = d.edge || {};
+            if (!e.supported) return {text: 'edge does not report a ceiling (older edge): it flies the planned slot only', warn: false};
+            if (e.pending) return {text: 'sending to the edge...', warn: false};
+            if (e.refusal) return {text: 'edge refused: ' + (e.refusal.detail || e.refusal.reason), warn: true};
+            if (e.note) return {text: 'edge: ' + e.note.replace('_', ' '), warn: true};
+            const s = 'edge: ceiling ' + e.ceiling_cm + ', margin ' + e.margin_cm + ', slot ' + e.slot_cm + ' cm';
+            return {text: e.in_sync ? s : s + ' (not yet applied)', warn: !e.in_sync};
+        }
+
+        function ceilingRender(state) {
+            ceilingState = state;
+            const available = state && state.available !== false;
+            document.getElementById('ceiling-unavailable').style.display = available ? 'none' : '';
+            document.getElementById('ceiling-body').style.display = available ? '' : 'none';
+            if (!available) return;
+            const active = document.activeElement;
+            const editing = active && document.getElementById('ceiling-section').contains(active) && active.tagName === 'INPUT';
+            if (!editing) {
+                document.getElementById('ceiling-cm').value = state.ceiling_cm;
+                document.getElementById('ceiling-margin-cm').value = state.margin_cm;
+                const box = document.getElementById('ceiling-slots');
+                box.innerHTML = '';
+                (state.drones || []).forEach(d => {
+                    const label = document.createElement('label');
+                    label.textContent = d.drone_id + ' slot (cm)';
+                    const input = document.createElement('input');
+                    input.type = 'number';
+                    input.step = '1';
+                    input.dataset.droneId = d.drone_id;
+                    input.placeholder = 'default ' + d.default_slot_cm;
+                    input.value = d.own_slot_cm == null ? '' : d.own_slot_cm;
+                    input.oninput = ceilingCheck;
+                    const edge = document.createElement('div');
+                    const info = ceilingEdgeText(d);
+                    edge.className = 'ceiling-edge' + (info.warn ? ' warn' : '');
+                    edge.textContent = info.text;
+                    box.append(label, input, edge);
+                });
+            }
+            const locked = !state.editable;
+            document.querySelectorAll('#ceiling-section input').forEach(el => { el.disabled = locked; });
+            const msg = document.getElementById('ceiling-msg');
+            if (state.load_error) {
+                msg.className = 'ceiling-msg error';
+                msg.textContent = 'Saved settings could not be read (' + state.load_error + '). Plan and Start are refused until you save valid settings.';
+            } else if (locked) {
+                msg.className = 'ceiling-msg';
+                msg.textContent = 'Locked: ' + state.locked_reason;
+            }
+            ceilingCheck();
+        }
+
+        // Explains a value before it is sent; the server decides.
+        window.ceilingCheck = function () {
+            if (!ceilingState) return [];
+            const lim = ceilingState.limits;
+            const problems = [];
+            const ceiling = ceilingNumber('ceiling-cm');
+            const margin = ceilingNumber('ceiling-margin-cm');
+            const ceilingInput = document.getElementById('ceiling-cm');
+            const marginInput = document.getElementById('ceiling-margin-cm');
+            ceilingInput.classList.remove('ceiling-bad');
+            marginInput.classList.remove('ceiling-bad');
+            if (ceiling == null || !Number.isInteger(ceiling) || ceiling < lim.min_ceiling_cm || ceiling > lim.max_ceiling_cm) {
+                problems.push('Ceiling height must be a whole number of cm within ' + lim.min_ceiling_cm + '-' + lim.max_ceiling_cm + '.');
+                ceilingInput.classList.add('ceiling-bad');
+            }
+            if (margin == null || !Number.isInteger(margin) || margin < lim.min_margin_cm) {
+                problems.push('Safety margin must be a whole number of at least ' + lim.min_margin_cm + ' cm.');
+                marginInput.classList.add('ceiling-bad');
+            }
+            const max = (ceiling != null && margin != null) ? ceiling - margin : null;
+            document.getElementById('ceiling-max').textContent = max == null || Number.isNaN(max) ? '--' : max;
+            document.querySelectorAll('#ceiling-slots input').forEach(input => {
+                input.classList.remove('ceiling-bad');
+                const raw = input.value.trim();
+                const id = input.dataset.droneId;
+                const drone = (ceilingState.drones || []).find(d => d.drone_id === id) || {};
+                const slot = raw === '' ? drone.default_slot_cm : Number(raw);
+                const which = raw === '' ? ' (default)' : '';
+                if (!Number.isInteger(slot) || slot < lim.min_slot_cm || slot > lim.max_slot_cm) {
+                    problems.push(id + ' slot must be a whole number of cm within ' + lim.min_slot_cm + '-' + lim.max_slot_cm + '.');
+                    input.classList.add('ceiling-bad');
+                } else if (max != null && slot > max) {
+                    problems.push(id + ' slot ' + slot + ' cm' + which + ' is above the ceiling limit ' + max + ' cm (ceiling ' + ceiling + ' cm minus margin ' + margin + ' cm).');
+                    input.classList.add('ceiling-bad');
+                }
+            });
+            const msg = document.getElementById('ceiling-msg');
+            if (problems.length) {
+                msg.className = 'ceiling-msg error';
+                msg.textContent = problems.join('\n');
+            } else if (msg.classList.contains('error') && !ceilingState.load_error) {
+                msg.className = 'ceiling-msg';
+                msg.textContent = '';
+            }
+            document.getElementById('ceiling-save').disabled = !ceilingState.editable || problems.length > 0;
+            return problems;
+        };
+
+        window.ceilingSave = function () {
+            const slots = {};
+            document.querySelectorAll('#ceiling-slots input').forEach(input => {
+                const raw = input.value.trim();
+                slots[input.dataset.droneId] = raw === '' ? null : Number(raw);
+            });
+            socket.emit('set_ceiling_settings', {
+                ceiling_cm: ceilingNumber('ceiling-cm'),
+                margin_cm: ceilingNumber('ceiling-margin-cm'),
+                slots_cm: slots,
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            socket.on('ceiling_settings', ceilingRender);
+            socket.on('ceiling_settings_result', r => {
+                const msg = document.getElementById('ceiling-msg');
+                msg.className = 'ceiling-msg ' + (r.ok ? 'ok' : 'error');
+                msg.textContent = r.message;
+                if (document.activeElement) document.activeElement.blur();
+            });
+            socket.on('connect', () => socket.emit('get_ceiling_settings'));
+            if (socket.connected) socket.emit('get_ceiling_settings');
+        });
+    })();
+</script>

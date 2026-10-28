@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from flightrisk.fleet_protocol.ceiling import SET_CEILING, is_ceiling_reply
 from flightrisk.fleet_protocol.checks import (
     ProtocolError,
     _is_id,
@@ -231,6 +232,8 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     A v1 edge ignores ``on_complete`` and hovers at the end of its lanes.
     The legacy ``set_target``, ``stream_video`` and ``detections`` messages
     are copied unchanged; a type this protocol does not define raises.
+    ``set_ceiling`` and its acks and nacks are checked under *peer_proto*
+    and copied unchanged for every version.
     """
     mtype = _message_type(msg)
     if mtype in FAILSAFE_TYPES:
@@ -240,6 +243,11 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     if not (_is_int(peer_proto) and peer_proto >= MIN_PROTOCOL_VERSION):
         raise ProtocolError(f"peer protocol version must be an integer >= 1, got {_short(peer_proto)}")
     if mtype in LEGACY_GROUND_TO_EDGE_TYPES or mtype in LEGACY_EDGE_TO_GROUND_TYPES:
+        return dict(msg)
+    if mtype == SET_CEILING or is_ceiling_reply(msg):
+        # A configuration command and its replies are the same on every
+        # version, so the cmd_id survives a v1 link.
+        validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype not in _KNOWN_TYPES:
         raise ProtocolError(f"{_short(mtype)} is not a fleet protocol message")

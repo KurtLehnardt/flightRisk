@@ -44,6 +44,9 @@ _MAX_UNANNOUNCED_EPOCH = fp.MAX_EPOCH - EPOCH_ADOPT_HEADROOM
 _MOTION_TYPES = fp.FENCED_COMMAND_TYPES - {fp.HANDOVER}
 _PLAN_BOUND_TYPES = frozenset({fp.START_AT, fp.RESUME})
 _UNFENCED_AUTHORITY_TYPES = frozenset({fp.PING}) | fp.LEGACY_GROUND_TO_EDGE_TYPES
+# ``set_ceiling`` is taken only from the authority's connection too; the
+# executor then checks its fence against the epoch the edge obeys.
+_UNFENCED_AUTHORITY_TYPES |= {fp.SET_CEILING}
 _FLEET_TYPES = fp.FENCED_COMMAND_TYPES | fp.FENCED_CONTROL_TYPES
 _REFUSAL_EVENTS = {"epoch_conflict_in_flight": "epoch_conflict_in_flight", "stale_epoch": "fleet_stale_epoch_rejected"}
 # A ground that floods landings must not flood the log: per connection and

@@ -24,6 +24,11 @@ accepts those control messages, flies the lanes through a drone controller
   landing clears a hold and invalidates the plan.
 * ``ping`` is answered with ``pong`` timestamps for clock sync, and
   ``heartbeat`` (like every ground message) resets the link-loss watchdog.
+* ``set_ceiling`` (``handle_set_ceiling``, ``flightrisk.drone.lane_ceiling``)
+  changes the ceiling, its margin and the altitude slot, only while the
+  drone is on the ground. The envelope refuses any slot or climb above the
+  ceiling minus margin, and the monitor lands a drone whose measured height
+  is above the ceiling (``docs/ceiling-and-altitude.md``).
 * Protocol v2 adds ``hold``, ``resume`` and ``nudge`` (``V2_CONTROL_TYPES``),
   ``cmd_id`` idempotency, generic acks and nacks, and the authority hook;
   see ``flightrisk.drone.lane_commands``. Their routing from the edge's
@@ -52,6 +57,7 @@ from typing import Any
 
 from flightrisk.drone.command_cache import CommandCache
 from flightrisk.drone.controller import command_result
+from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
     COMMAND_TYPES,
     V2_CONTROL_TYPES,
@@ -131,7 +137,7 @@ _START_NACK_REASONS = {
 }
 
 
-class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin):
+class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin):
     """Executes ground control messages against one drone inside a safety envelope."""
 
     CONTROL_TYPES = CONTROL_TYPES
