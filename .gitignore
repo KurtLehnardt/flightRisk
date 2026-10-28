@@ -58,3 +58,8 @@ demo/*.mp4
 demo/*.jpg
 demo/*.png
 demo/screenshots/
+
+# Reference photo written by the dashboard (target_reference.jpg) and similar
+# root-level captures; never commit a person's image
+/target_reference.jpg
+/target_reference.*

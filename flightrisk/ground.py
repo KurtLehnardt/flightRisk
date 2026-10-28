@@ -15,8 +15,15 @@ logger = logging.getLogger(__name__)
 class GroundStation:
     """Processes detection messages and produces match scores."""
 
-    def __init__(self, scorer=None, target_reid_embedding=None, target_face_embedding=None):
+    def __init__(self, scorer=None, target_reid_embedding=None, target_face_embedding=None,
+                 face_model: str | None = None):
         self._scorer = scorer
+        # Face model pack of the ground's own recogniser (the one the target
+        # embedding came from). Edge messages naming a different model are
+        # not scored on face: embeddings from different models are not
+        # comparable.
+        self._face_model = face_model
+        self._warned_face_models: set = set()
         # Use `is not None` rather than truthiness — target_*_embedding may be a
         # numpy array, whose truthiness is ambiguous for arrays with >1 element
         # and raises ValueError.
@@ -26,6 +33,20 @@ class GroundStation:
     def set_target(self, reid_embedding: list[float] | None = None, face_embedding: list[float] | None = None):
         self._target_reid = np.array(reid_embedding) if reid_embedding is not None else None
         self._target_face = np.array(face_embedding) if face_embedding is not None else None
+
+    def _face_model_mismatch(self, msg) -> bool:
+        """True (and one ERROR per drone/model pair) if the edge used another face model."""
+        edge_model = getattr(msg, "face_model", None)
+        if not edge_model or not self._face_model or edge_model == self._face_model:
+            return False
+        key = (getattr(msg, "drone_id", None), edge_model)
+        if key not in self._warned_face_models:
+            self._warned_face_models.add(key)
+            logger.error(
+                "face_model_mismatch drone=%s edge_model=%s ground_model=%s: face scores from "
+                "this edge are ignored. Set the same FLIGHTRISK_FACE_MODEL on the ground and "
+                "every edge.", key[0], edge_model, self._face_model)
+        return True
 
     def process_message(self, msg: DetectionMessage) -> list[dict[str, Any]]:
         """Process a detection message, return scored results."""
@@ -50,7 +71,8 @@ class GroundStation:
                     reid_score = 0.0
 
             # Compare face embeddings
-            if det.face_embedding is not None and self._target_face is not None:
+            if det.face_embedding is not None and self._target_face is not None \
+                    and not self._face_model_mismatch(msg):
                 try:
                     candidate = np.array(det.face_embedding)
                     face_score = float(np.dot(self._target_face, candidate) / (

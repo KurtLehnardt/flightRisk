@@ -24,8 +24,14 @@ Requires: pip install insightface onnxruntime
 
 from __future__ import annotations
 
+import glob
+import inspect
 import logging
+import os
+import os.path as osp
+import re
 import threading
+import types
 from dataclasses import dataclass, field
 
 import cv2
@@ -36,15 +42,22 @@ try:
     from insightface.utils import face_align
 
     HAS_INSIGHTFACE = True
-except ImportError:  # pragma: no cover - exercised only without insightface
+except Exception as _exc:  # noqa: BLE001 - a broken install must not break importers
+    # ImportError (not installed) and also ValueError/OSError from a binary
+    # mismatch (e.g. "numpy.dtype size changed"). Appearance-only mode never
+    # requires insightface, so importing this module must always succeed.
     HAS_INSIGHTFACE = False
+    _INSIGHTFACE_IMPORT_ERROR = _exc
+    if not isinstance(_exc, ImportError):
+        logging.getLogger(__name__).warning(
+            "insightface is installed but could not be imported (%s: %s); "
+            "face recognition is disabled", type(_exc).__name__, _exc)
 
 logger = logging.getLogger(__name__)
 
 # Reference-photo acceptance limits (pixels / unitless).
 MIN_REF_FACE_PX = 32      # hard reject below this: embedding would be unreliable
 WARN_REF_FACE_PX = 80     # warn below this
-MIN_REF_DET_SCORE = 0.5
 WARN_REF_YAW = 0.45       # |nose offset| / inter-eye distance (profile-ish)
 WARN_REF_BLUR = 60.0      # Laplacian variance of the aligned 112px face
 
@@ -58,6 +71,11 @@ TOP_REGION_FRACTION = 0.6
 # is nearly orthogonal to the track's aggregate means the id switched people.
 TRACK_STALE_CALLS = 60
 TRACK_SWITCH_SIM = 0.1
+# A stored face observation older than this many find_match calls is dropped.
+# Without it a track keeps its high score for as long as the id lives, even
+# when the face is no longer visible, and a tracker that hands the id to a
+# bystander after an occlusion would pass the score to the wrong person.
+TRACK_OBS_MAX_AGE = 60
 
 
 def _providers() -> list[str]:
@@ -71,6 +89,79 @@ def _providers() -> list[str]:
     wanted = ["CoreMLExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
     chosen = [p for p in wanted if p in available]
     return chosen or ["CPUExecutionProvider"]
+
+
+def _pack_dir(model_name: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_name or "") or model_name in (".", ".."):
+        raise ValueError(f"invalid face model name: {model_name!r}")
+    return osp.join(osp.expanduser("~/.insightface"), "models", model_name)
+
+
+def _load_models(model_name: str, providers: list[str]) -> dict:
+    """Load only the SCRFD detector and the ArcFace recogniser of a pack.
+
+    ``FaceAnalysis(allowed_modules=...)`` builds an onnxruntime session for
+    every ``.onnx`` file in the pack (landmark, gender/age too) and discards
+    the ones not allowed, which costs startup time and memory. The detector
+    (``det_*``) and recogniser (``w600k_*``) files of the buffalo packs are
+    picked by name and loaded directly. A pack with another layout falls back
+    to ``FaceAnalysis`` (same result, slower start).
+
+    Nothing is downloaded unless ``FLIGHTRISK_ALLOW_MODEL_DOWNLOAD=1``: a
+    misspelt ``FLIGHTRISK_FACE_MODEL`` or a fresh machine must not trigger a
+    silent multi-hundred-MB download at startup.
+    """
+    pack = _pack_dir(model_name)
+    files = sorted(glob.glob(osp.join(pack, "*.onnx")))
+    if not files:
+        if os.environ.get("FLIGHTRISK_ALLOW_MODEL_DOWNLOAD") != "1":
+            raise RuntimeError(
+                f"Face model pack {model_name!r} is not installed in {pack} and automatic "
+                "download is disabled; face matching is off. Install the pack, or set "
+                "FLIGHTRISK_ALLOW_MODEL_DOWNLOAD=1 to let InsightFace download it.")
+        logger.warning("face_model_download model=%s (FLIGHTRISK_ALLOW_MODEL_DOWNLOAD=1)", model_name)
+        from insightface.utils.storage import ensure_available
+
+        ensure_available("models", model_name)
+        files = sorted(glob.glob(osp.join(pack, "*.onnx")))
+    det_files = [f for f in files if osp.basename(f).startswith("det_")]
+    rec_files = [f for f in files if osp.basename(f).startswith("w600k_")]
+    if len(det_files) == 1 and len(rec_files) == 1:
+        from insightface.model_zoo import model_zoo
+
+        det = model_zoo.get_model(det_files[0], providers=["CPUExecutionProvider"])
+        rec = model_zoo.get_model(rec_files[0], providers=providers)
+        if det is not None and rec is not None:
+            return {"detection": det, "recognition": rec}
+    logger.info("face_model_fallback_faceanalysis model=%s (unrecognised pack layout)", model_name)
+    app = FaceAnalysis(name=model_name, allowed_modules=["detection", "recognition"],
+                       providers=providers)
+    return dict(app.models)
+
+
+def _accepts_kwarg(fn, name: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):  # pragma: no cover
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _force_cpu(det) -> None:
+    """Run the SCRFD detector session on the CPU provider only.
+
+    The detector is fed a per-call input size (any multiple of 32, e.g.
+    128x192 or 640x448). The CoreML execution provider compiles a static
+    graph and fails every call whose input is not the 640x640 it was prepared
+    with ("CoreML static output shape ... and inferred shape ... have
+    different ranks"). Padding every call to 640x640 would waste most of the
+    detector time on small probe crops, so the detector stays on CPU, where
+    it is also fast enough (small inputs). The recognition model has a fixed
+    112x112 input and may keep CoreML/CUDA.
+    """
+    session = getattr(det, "session", None)
+    if session is not None and hasattr(session, "set_providers"):
+        session.set_providers(["CPUExecutionProvider"])
 
 
 def _l2(v: np.ndarray) -> np.ndarray:
@@ -109,7 +200,7 @@ class FaceObservation:
 
 @dataclass
 class _TrackFace:
-    obs: list = field(default_factory=list)  # [(quality, emb)], best first
+    obs: list = field(default_factory=list)  # [(quality, emb, call)], best first
     last_call: int = 0
     last_embed_call: int = -10**9
     misses: int = 0
@@ -140,6 +231,9 @@ class TargetReport:
 
 class FaceRecognizer:
     """Face detection + ArcFace embedding extraction and matching."""
+
+    # Set at init from the detector's signature; class default for stubs.
+    _det_accepts_thresh = False
 
     def __init__(
         self,
@@ -208,15 +302,16 @@ class FaceRecognizer:
         self._lock = threading.RLock()
 
         # Detection + recognition only: landmark_3d_68 / landmark_2d_106 /
-        # genderage are never used and cost ~2x the whole pipeline.
-        self.app = FaceAnalysis(
-            name=model_name,
-            allowed_modules=["detection", "recognition"],
-            providers=_providers(),
-        )
-        self.app.prepare(ctx_id=0, det_size=det_size)
-        self._det = self.app.models["detection"]
-        self._rec = self.app.models["recognition"]
+        # genderage are never used and cost ~2x the whole pipeline, so their
+        # sessions are not even built (see _load_models).
+        models = _load_models(model_name, _providers())
+        self.app = types.SimpleNamespace(models=models)  # kept for introspection
+        self._det = models["detection"]
+        self._rec = models["recognition"]
+        self._det.prepare(0, input_size=tuple(det_size), det_thresh=0.5)
+        self._rec.prepare(0)
+        _force_cpu(self._det)  # also covers the FaceAnalysis fallback path
+        self._det_accepts_thresh = _accepts_kwarg(self._det.detect, "det_thresh")
         self._ref_det_size = tuple(det_size)
         logger.info("face_ready model=%s ref_det_size=%s", model_name, det_size)
 
@@ -242,23 +337,22 @@ class FaceRecognizer:
             work = img
         wh, ww = work.shape[:2]
         inp = (int(-(-ww // 32) * 32), int(-(-wh // 32) * 32))
-        kwargs = {"input_size": inp}
-        if thresh is not None:
-            kwargs["det_thresh"] = thresh
-        try:
-            det, kps = self._det.detect(work, **kwargs)
-        except TypeError:
-            # Older insightface: no per-call det_thresh.
+        # Whether detect() takes a per-call det_thresh is decided once at init
+        # (insightface 1.x does not; the threshold is an attribute then, set
+        # for the duration of the call - callers hold self._lock).
+        if thresh is None or self._det_accepts_thresh:
+            kwargs = {"input_size": inp}
             if thresh is not None:
-                old = getattr(self._det, "det_thresh", None)
-                self._det.det_thresh = thresh
-                try:
-                    det, kps = self._det.detect(work, input_size=inp)
-                finally:
-                    if old is not None:
-                        self._det.det_thresh = old
-            else:
+                kwargs["det_thresh"] = thresh
+            det, kps = self._det.detect(work, **kwargs)
+        else:
+            old = getattr(self._det, "det_thresh", None)
+            self._det.det_thresh = thresh
+            try:
                 det, kps = self._det.detect(work, input_size=inp)
+            finally:
+                if old is not None:
+                    self._det.det_thresh = old
         if det is None or len(det) == 0:
             return np.empty((0, 5), np.float32), np.empty((0, 5, 2), np.float32)
         if kps is None:
@@ -405,17 +499,16 @@ class FaceRecognizer:
                            "is needed. Use a closer or higher-resolution photo.")
             logger.warning("face_target_rejected reason=face_too_small px=%d", rep.face_px)
             return False
-        if rep.det_score < MIN_REF_DET_SCORE:
-            rep.reason = "low_confidence"
-            rep.message = "The face in the photo is too unclear to use. Try a sharper photo."
-            return False
+        # (A separate low-confidence rejection is unnecessary: the reference
+        # detector already drops anything below 0.5, and unclear faces are
+        # reported through the blur / small / turned warnings below.)
 
         if rep.n_faces > 1:
-            second = sorted(widths)[-2]
-            if second >= 0.6 * widths[i]:
-                rep.warnings.append(
-                    f"{rep.n_faces} faces found in the photo; using the most prominent one. "
-                    "Crop the photo to the child to be sure the right face is used.")
+            # Always warn: the most prominent face is not necessarily the
+            # child's (an adult holding the child has the larger face).
+            rep.warnings.append(
+                f"{rep.n_faces} faces found in the photo; using the most prominent one. "
+                "Crop the photo to the child to be sure the right face is used.")
         if rep.face_px < WARN_REF_FACE_PX:
             rep.warnings.append(f"Face is small ({rep.face_px}px); a closer photo matches better.")
         if abs(rep.yaw) > WARN_REF_YAW:
@@ -510,6 +603,8 @@ class FaceRecognizer:
                 del self._tracks[oldest]
             tr = self._tracks[tid] = _TrackFace()
         tr.last_call = self._call
+        if tr.obs and any(self._call - o[2] > TRACK_OBS_MAX_AGE for o in tr.obs):
+            tr.obs = [o for o in tr.obs if self._call - o[2] <= TRACK_OBS_MAX_AGE]
 
         settled = len(tr.obs) >= self.track_settled_obs and tr.obs[0][0] >= 0.5
         due = self._call - tr.last_embed_call >= self.track_refresh_every
@@ -524,7 +619,7 @@ class FaceRecognizer:
                 tr.misses = 0
                 if tr.obs and float(_l2(np.sum([o[1] for o in tr.obs], axis=0)) @ obs.embedding) < TRACK_SWITCH_SIM:
                     tr.obs.clear()  # track id jumped to a different person
-                tr.obs.append((obs.quality, obs.embedding))
+                tr.obs.append((obs.quality, obs.embedding, self._call))
                 tr.obs.sort(key=lambda o: -o[0])
                 del tr.obs[self.track_top_k:]
         if not tr.obs:

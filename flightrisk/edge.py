@@ -45,6 +45,11 @@ class DetectionMessage:
     heading_deg: float | None = None
     lat: float | None = None
     lon: float | None = None
+    # Name of the face model pack (e.g. "buffalo_l") that produced the face
+    # embeddings. Optional: omitted from the wire when unknown, and ignored by
+    # peers that predate it. Lets the ground detect embeddings from a
+    # different model, whose cosine similarity is meaningless.
+    face_model: str | None = None
 
 
 # DetectionMessage fleet fields carried on the wire when set.
@@ -105,6 +110,9 @@ class EdgeRunner:
             frame_height=frame.shape[0],
             drone_id=self.drone_id,
         )
+        if self._face is not None and not self.appearance_only:
+            name = getattr(self._face, "model_name", None)
+            msg.face_model = name if isinstance(name, str) else None
         self._stamp_pose(msg)
 
         # Generate thumbnail only when streaming video is enabled. When off
@@ -207,6 +215,8 @@ class EdgeRunner:
         }
         if msg.drone_id is not None:
             data["drone_id"] = msg.drone_id
+        if msg.face_model is not None and not self.appearance_only:
+            data["face_model"] = msg.face_model
         for key in FLEET_POSE_FIELDS:
             value = getattr(msg, key)
             if value is not None:
@@ -228,6 +238,7 @@ class EdgeRunner:
             heading_deg=data.get("heading_deg"),
             lat=data.get("lat"),
             lon=data.get("lon"),
+            face_model=data.get("face_model") if isinstance(data.get("face_model"), str) else None,
         )
         for d in data.get("detections", []):
             det = Detection(

@@ -1619,6 +1619,7 @@
             <div id="status-dot" class="status-dot"></div>
             <span id="status-label" class="status-label">OFFLINE</span>
             <span id="appearance-only-badge">APPEARANCE ONLY</span>
+            <span id="face-off-badge" class="status-label" style="display:none;color:var(--red, #ff5555)"></span>
         </div>
         <div class="header-right">
             <div class="battery-widget">
@@ -2249,11 +2250,15 @@
         }
 
         // ========== TOAST ==========
+        let toastTimer = null;
         function showToast(msg) {
             const t = document.getElementById('toast');
             t.textContent = msg;
             t.classList.add('active');
-            setTimeout(() => t.classList.remove('active'), msg.length > 60 ? 8000 : 2500);
+            // Cancel the previous timer so an earlier short toast cannot hide
+            // a newer, longer one (e.g. the 8 s FACE MATCHING OFF notice).
+            if (toastTimer !== null) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => { t.classList.remove('active'); toastTimer = null; }, msg.length > 60 ? 8000 : 2500);
         }
 
         // ========== CONNECTION ==========
@@ -2394,10 +2399,28 @@
             const r = data && data.face_report;
             if (!r) return '';
             if (!r.ok) return ' - FACE MATCHING OFF: ' + (r.message || 'face not usable');
-            return r.warnings && r.warnings.length ? ' - ' + r.warnings[0] : '';
+            return r.warnings && r.warnings.length ? ' - ' + r.warnings.join(' ') : '';
         }
 
+        // Persistent "face matching off" indicator (textContent only).
+        function setFaceState(data) {
+            const el = document.getElementById('face-off-badge');
+            if (!el) return;
+            const r = data && data.face_report;
+            if (r && !r.ok) {
+                el.textContent = 'FACE MATCHING OFF';
+                el.title = r.message || '';
+                el.style.display = '';
+            } else {
+                el.textContent = '';
+                el.title = '';
+                el.style.display = 'none';
+            }
+        }
+        socket.on('face_report', (data) => setFaceState(data));
+
         socket.on('target_set', (data) => {
+            setFaceState(data);
             showToast((data.reverted_to ? 'Target reverted to version ' + data.reverted_to : 'Target photo set') + faceNotice(data));
             if (targetHistoryOpen) loadTargetHistory();
 
@@ -2482,6 +2505,7 @@
                             document.getElementById('target-upload-zone').classList.add('has-image');
                         };
                         reader.readAsDataURL(file);
+                        setFaceState(data);
                         showToast('Target photo set' + (data.face_detected ? ' (face detected)' : '') + faceNotice(data));
                         document.getElementById('clear-target-btn').style.display = '';
                     } else {
@@ -2502,6 +2526,7 @@
                         document.getElementById('target-upload-zone').classList.remove('has-image');
                         document.getElementById('clear-target-btn').style.display = 'none';
                         document.getElementById('target-upload').value = '';
+                        setFaceState(null);
                         showToast('Target photo cleared');
                     }
                 });
