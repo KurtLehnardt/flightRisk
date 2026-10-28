@@ -13,7 +13,8 @@ How it works:
 
 * One ``EdgeTransport`` per URL, all on one background event loop, each in
   raw mode: every frame comes here. Each keeps reconnecting on its own with
-  the fleet backoff (1 s doubling to 2 s), so one ground being down never
+  the fleet backoff (1 s doubling to 2 s; a ground that rejects the
+  token waits up to 10 s, see ``link_log_limits``), so one ground being down never
   affects the link to another.
 * Every frame is decoded with ``fleet_protocol.decode`` in the
   ground-to-edge direction, with the connection's agreed version (1 until a
@@ -61,7 +62,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_comm
@@ -69,6 +70,7 @@ from flightrisk.async_bridge import AsyncBridge
 from flightrisk.edge import DetectionMessage, EdgeRunner
 from flightrisk.fleet_authority import ACCEPT, CLOSE, HANDLED, LAND, EdgeAuthority
 from flightrisk.fleet_ground_link import CLOSE_PROTOCOL
+from flightrisk.link_log_limits import safe_url
 from flightrisk.link_outbox import BULK, TELEMETRY, URGENT, LinkOutbox
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import (
@@ -136,20 +138,6 @@ def parse_ground_urls(raw: str | Iterable[str] | None) -> tuple[str, ...]:
         if url not in urls:
             urls.append(url)
     return tuple(urls)
-
-
-def safe_url(url: str) -> str:
-    """*url* without any user name or password, for logs."""
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return "<invalid url>"
-    if parts.username is None and parts.password is None:
-        return url
-    host = parts.hostname or ""
-    if parts.port is not None:
-        host = f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
 
 
 def default_node_id(environ: Mapping[str, str] | None = None) -> str:

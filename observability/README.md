@@ -46,9 +46,24 @@ If the app itself runs in Docker, set `OTEL_ENDPOINT=http://host.docker.internal
 (or put it on the same network and use `http://otel-collector:4317`).
 
 The collector uses host ports 4317/4318, the same as Jaeger in
-`docker-compose.otel.yml` and in `docker-compose.yml`. Run one or the other.
+`docker-compose.otel.yml` and in `docker-compose.yml`. Run one or the other. All three
+files publish those ports (and Jaeger's UI on 16686) on `127.0.0.1` unless `OTLP_BIND` is
+set.
+
+If the collector cannot start (for example `OTLP_BIND` names an address this machine does
+not have), Prometheus, Tempo, Loki and Grafana still start, because they do not depend on
+it; only OTLP ingest is missing.
+
+On the Windows edge laptop, `scripts\install_windows.ps1` installs
+`requirements-edge.txt`, which includes the OpenTelemetry packages. If
+`FLIGHTRISK_OTEL_ENABLED` is on but they are missing, the edge logs a warning
+(`opentelemetry_unavailable`) and exports nothing.
 
 ## Two laptops on the Thunderbolt cable
+
+**Limitation: `OTLP_BIND=10.42.0.1` fails under Colima, so the cable path does not work
+there. Docker Desktop and Linux are untested.** Read the Colima note below before you
+start.
 
 One stack on the ground station collects from both laptops, and one Grafana shows both.
 
@@ -61,9 +76,12 @@ The OTLP ports (4317 gRPC, 4318 HTTP) listen on the cable address only, so the
 ZBook can reach them and nothing on Wi-Fi can. Grafana, Prometheus, Tempo and Loki
 stay on `127.0.0.1`.
 
-Start the stack on the Mac:
+Start the stack on the Mac. First check the value: `scripts/check_otlp_bind.sh` accepts
+only `127.0.0.1` and `10.42.0.1` and refuses anything else (`0.0.0.0` or `::` would put the
+OTLP receiver, which has no authentication, on Wi-Fi).
 
 ```bash
+OTLP_BIND=10.42.0.1 scripts/check_otlp_bind.sh
 OTLP_BIND=10.42.0.1 docker compose -f docker-compose.grafana.yml up -d
 # if port 3000 is already taken (e.g. a Homebrew Grafana), also set GRAFANA_PORT=3001
 ```
@@ -110,7 +128,9 @@ The edge process (`python -m flightrisk.edge_device`) exports its logs the same 
 dashboard does, plus its side of the drone communication (message counts, sends, reconnects)
 and the lane executor's flight-safety events. In Grafana, pick nodes with the **Node**
 drop-down at the top of each dashboard (multi-select, *All* by default). A process that does not set
-`service.instance.id` appears as `unknown`.
+`service.instance.id` appears as `unknown`: FlightRisk sets that itself, because the
+OpenTelemetry SDK would otherwise pick a random id on every start and each restart would be
+a new node.
 
 The cable path does not use Wi-Fi, so exporting keeps working while the ZBook's Wi-Fi is
 joined to a Tello. If the collector is unreachable (cable out, stack stopped), telemetry is
@@ -259,7 +279,7 @@ that never answers.
 
 ## Notes
 
-- All published ports bind to `127.0.0.1`. Do not expose them; logs and traces describe an active search.
+- All published ports bind to `127.0.0.1`, in all three compose files. Do not expose them; logs and traces describe an active search.
   The one exception is opt-in: `OTLP_BIND=10.42.0.1` puts the OTLP ports on the Thunderbolt cable address.
   Change the Grafana admin password (`GRAFANA_ADMIN_PASSWORD`) before using this anywhere shared.
 - Image versions are pinned in `docker-compose.grafana.yml`. Retention is 7 days for metrics, logs and traces

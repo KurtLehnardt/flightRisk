@@ -80,6 +80,7 @@ from flightrisk.fleet_ground_link import (
 from flightrisk.link_log_limits import (
     CLOSE_UNAUTHORIZED,
     CLOSE_UNAUTHORIZED_REASON,
+    CLOSE_UNAUTHORIZED_REASON_NO_MESSAGE,
     STABLE_UPTIME_S,
     RateLimitedLog,
     auth_backoff_s,
@@ -103,6 +104,8 @@ __all__ = [
     "check_literal_hosts",
 ]
 
+# How long a new client may take to send its auth message before it is closed.
+_AUTH_RECV_TIMEOUT_S = 10.0
 _CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 
 # Hosts treated as local-only. Binding one of these without a token is
@@ -557,7 +560,10 @@ class EdgeTransport:
             if not cancelled and self._ws is ws and self._connected:
                 self._connected = False
                 if self._should_reconnect:
-                    self._log_close_and_back_off(ws)
+                    try:
+                        self._log_close_and_back_off(ws)
+                    except Exception:
+                        logger.exception("[%s] Logging the close failed", self._ws_url)
                     self._schedule_reconnect()
             self._inbox_event.set()
             if self._on_closed is not None:
@@ -568,17 +574,18 @@ class EdgeTransport:
 
     def _log_close_and_back_off(self, ws) -> None:
         """Log why the ground closed *ws* (rate limited) and pace the retry."""
-        up_s = self._clock() - (self._connected_at_s or self._clock())
+        now = self._clock()
+        up_s = now - (now if self._connected_at_s is None else self._connected_at_s)
         code, reason = getattr(ws, "close_code", None), getattr(ws, "close_reason", None) or ""
         if up_s >= STABLE_UPTIME_S:  # a healthy link: a new problem is a new episode
             self._auth_rejections = 0
-            self._closed_log.reset()
+            self._closed_log.reset_all()
         if code == CLOSE_UNAUTHORIZED:
             self._auth_rejections += 1
             self.hold_reconnect(auth_backoff_s(self._auth_rejections))  # not fatal
             if self._auth_rejections % 20 == 1:
                 logger.error(auth_rejected_line(self._ws_url, code, reason, self._auth_rejections))
-        elif count := self._closed_log.should_log():
+        elif count := self._closed_log.should_log(code):
             logger.warning(closed_line(self._ws_url, code, reason, count))
 
     def _dispatch_incoming(self, ws, data: dict[str, Any], received_at: float) -> None:
@@ -1064,6 +1071,13 @@ class GroundTransport(GroundV2Mixin):
             return ()
         return tuple(host for host in self._hosts if host not in self._servers)
 
+    def _token_matches(self, offered: object) -> bool:
+        """Constant-time token comparison on UTF-8 bytes; any failure is a mismatch."""
+        try:
+            return hmac.compare_digest(str(offered).encode("utf-8"), str(self._token).encode("utf-8"))
+        except (TypeError, ValueError, UnicodeError):
+            return False
+
     async def _authenticate(self, websocket) -> bool:
         """Consume the first message as an auth handshake.
 
@@ -1073,9 +1087,16 @@ class GroundTransport(GroundV2Mixin):
         the connection closing before a message arrives) rejects and closes
         the connection.
         """
+        host = (getattr(websocket, "remote_address", None) or ("unknown",))[0]
         try:
-            raw = await websocket.recv()
+            raw = await asyncio.wait_for(websocket.recv(), _AUTH_RECV_TIMEOUT_S)
         except ConnectionClosed:
+            return False
+        except asyncio.TimeoutError:
+            try:
+                await websocket.close(code=CLOSE_UNAUTHORIZED, reason=CLOSE_UNAUTHORIZED_REASON_NO_MESSAGE)
+            except ConnectionClosed:
+                pass
             return False
 
         try:
@@ -1086,12 +1107,12 @@ class GroundTransport(GroundV2Mixin):
         if (
             isinstance(data, dict)
             and data.get("type") == "auth"
-            and hmac.compare_digest(str(data.get("token", "")), self._token)
+            and self._token_matches(data.get("token", ""))
         ):
             self._authenticated_clients.add(websocket)
+            self._reject_log.reset(host)
             return True
 
-        host = (getattr(websocket, "remote_address", None) or ("unknown",))[0]
         if count := self._reject_log.should_log(host):
             more = f" ({count} rejections since last report)" if count > 1 else ""
             logger.warning("Rejecting client %s: failed auth handshake%s", host, more)

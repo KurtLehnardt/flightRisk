@@ -17,6 +17,8 @@
 # not be reachable from the network. The one exception is opt-in: with
 # OTLP_BIND=10.42.0.1 the OTLP ports listen on the Thunderbolt cable address
 # so a second laptop can export to this stack (observability/README.md).
+# Before using OTLP_BIND, run scripts/check_otlp_bind.sh: it rejects any value
+# other than 127.0.0.1 or 10.42.0.1 (the OTLP receiver has no authentication).
 # See observability/README.md for details.
 
 services:
@@ -47,8 +49,8 @@ services:
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
-    depends_on:
-      - otel-collector
+    # No depends_on the collector: Prometheus scrapes it with retries, and a
+    # collector that cannot bind OTLP_BIND must not stop Prometheus or Grafana.
     restart: unless-stopped
 
   tempo:
@@ -88,10 +90,8 @@ services:
     ports:
       # GRAFANA_PORT moves Grafana off 3000 when something else uses it.
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
-    depends_on:
-      - prometheus
-      - tempo
-      - loki
+    # No depends_on: the data sources are reachable by name once they are up,
+    # and Grafana must start even if the collector could not bind OTLP_BIND.
     restart: unless-stopped
 
 volumes:

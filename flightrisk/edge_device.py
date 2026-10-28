@@ -93,6 +93,7 @@ from flightrisk.edge_uplink import (
     env_flag,
     parse_ground_urls,
 )
+from flightrisk.link_log_limits import AUTH_BACKOFF_MAX_S
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import EdgeTransportSync
 
@@ -122,7 +123,8 @@ _CONTROL_RECV_TIMEOUT_S = 0.1
 # backoff still starts at 1 s but stops doubling at 2 s, so after a cable or
 # LAN blip the edge tries again at least every 2 s instead of backing off to
 # 30 s (each attempt can still take up to the connect timeout while the link
-# is down). Other sources keep the transport's 30 s default.
+# is down). A ground that rejects the token holds the retry up to
+# AUTH_BACKOFF_MAX_S (10 s). Other sources keep the transport's 30 s default.
 _FLEET_RECONNECT_MAX_DELAY_S = 2.0
 
 
@@ -805,6 +807,7 @@ def _run_flight_edge(
             geofence_cm=envelope.geofence_cm,
             link_loss_land_s=envelope.link_watchdog.timeout_s,
             reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
+            auth_backoff_max_s=AUTH_BACKOFF_MAX_S,
             appearance_only=runner.appearance_only,
         )
         transport.connect()
@@ -841,7 +844,8 @@ def _run_flight_edge(
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
     """Export this edge's logs and spans over OTLP, like the dashboard does.
 
-    A no-op unless ``FLIGHTRISK_OTEL_ENABLED=true`` (see ``flightrisk.telemetry``).
+    A no-op unless ``FLIGHTRISK_OTEL_ENABLED`` is on (see ``flightrisk.telemetry``,
+    which warns when it is on but the packages are missing).
     Telemetry must never stop an edge from flying, so any failure is logged
     and ignored. Imported here to keep ``import flightrisk.edge_device`` cheap.
     """

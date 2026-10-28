@@ -36,7 +36,8 @@ class AsyncBridge:
 
     @property
     def is_running(self) -> bool:
-        return bool(self.loop and self.loop.is_running())
+        loop = self.loop  # one read: stop_loop() may clear it from another thread
+        return bool(loop and loop.is_running())
 
     def start_loop(self) -> None:
         """Start the background event loop.
@@ -85,7 +86,14 @@ class AsyncBridge:
                 close()
             raise RuntimeError("Event loop is not running")
         effective_timeout = self._cmd_timeout if timeout is None else timeout
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # The loop closed between the check and the schedule.
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
+            raise
         try:
             return future.result(timeout=effective_timeout)
         except TimeoutError:
