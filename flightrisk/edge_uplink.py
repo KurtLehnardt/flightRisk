@@ -173,7 +173,10 @@ class LaneExecutorHooks:
             return True
 
     def supports(self, mtype: str) -> bool:
-        return mtype in getattr(self._executor, "CONTROL_TYPES", frozenset())
+        executor = self._executor
+        return mtype in getattr(executor, "CONTROL_TYPES", frozenset()) or mtype in getattr(
+            executor, "MANUAL_CONTROL_TYPES", frozenset()
+        )
 
     def snapshot(self) -> Mapping[str, Any]:
         telemetry = self._executor.telemetry()

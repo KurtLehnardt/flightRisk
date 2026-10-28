@@ -173,7 +173,7 @@ class FleetCommandMixin:
             return "holding"
         if phase in ("taking_off", "climbing"):
             return "taking_off"
-        if phase == "lanes":
+        if phase in ("lanes", "returning"):
             return "flying_lanes"
         return "hovering"
 
@@ -222,9 +222,12 @@ class FleetCommandMixin:
             self.handle_takeoff(msg)
         elif cmd_id is None and mtype != "hold":
             # resume and nudge move the drone and exist only in v2, which
-            # always carries a cmd_id. A hold is executed even without one:
-            # stopping is always safe, though it cannot be answered.
+            # always carries a cmd_id; so do the manual commands. A hold is
+            # executed even without one: stopping is always safe, though it
+            # cannot be answered.
             self._log.warning("edge_command_refused", drone_id=self.drone_id, type=mtype, reason="no_cmd_id")
+        elif mtype in self.MANUAL_CONTROL_TYPES:
+            self._dispatch_manual(msg)
         elif mtype == "hold":
             self.handle_hold(msg)
         elif mtype == "resume":
@@ -378,6 +381,9 @@ class FleetCommandMixin:
                 refusal = "plan_mismatch"
             elif not flying:
                 refusal = "not_flying"
+            elif self._manual is not None:
+                # Manual control ends only with resume_search (lane_manual).
+                refusal, detail = "busy", "manual_control"
             elif not self._held:
                 detail = "not_holding"
             elif self._worker_alive() and (self._active_kind == "nudge" or self._abort.is_set()):
@@ -405,7 +411,7 @@ class FleetCommandMixin:
             self._log.warning(
                 "edge_resume_refused", drone_id=self.drone_id, reason=refusal, cmd_id=msg.get("cmd_id"), **fields
             )
-            self._nack(msg, refusal)
+            self._nack(msg, refusal, **({"detail": detail} if detail else {}))
             return False
         self._log.warning(
             "edge_resume", drone_id=self.drone_id, cmd_id=msg.get("cmd_id"), plan_id=plan_id,
@@ -427,7 +433,8 @@ class FleetCommandMixin:
                 refusal = "landing"
             elif not flying:
                 refusal = "not_flying"
-            elif self._worker_alive():
+            elif self._worker_alive() or self._manual is not None:
+                # Under manual control the operator moves with manual_move.
                 refusal = "busy"
             elif not self.envelope.check_move(direction, distance):
                 refusal = "geofence"

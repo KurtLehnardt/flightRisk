@@ -270,7 +270,7 @@ class CommandTracker:
             if entry.future.done():
                 continue
             if mtype == fp.EMERGENCY_LAND_ALL:
-                hit = entry.mtype in fp.FENCED_COMMAND_TYPES
+                hit = entry.mtype in fp.FENCED_COMMAND_TYPES or entry.mtype in fp.MANUAL_COMMAND_TYPES
             elif mtype in (fp.HOLD, fp.ASSIGN_LANES, fp.LAND):
                 hit = entry.drone_id == drone_id and entry.mtype == fp.ASSIGN_LANES
             else:

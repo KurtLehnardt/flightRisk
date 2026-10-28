@@ -89,7 +89,11 @@ import time
 from typing import Any, Callable, Iterable, TextIO
 
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.lane_executor import CONTROL_TYPES, LaneExecutor
+from flightrisk.drone.lane_executor import (
+    CONTROL_TYPES,
+    MANUAL_CONTROL_TYPES,
+    LaneExecutor,
+)
 from flightrisk.drone.safety import (
     CEILING_CM_ENV,
     CEILING_MARGIN_CM_ENV,
@@ -236,7 +240,8 @@ def _handle_control(
     frame loop down. With a ``flight`` executor, every message resets the
     link-loss watchdog (unless ``feed_watchdog`` is False: the multi-ground
     uplink feeds it itself, from the authority only), fleet control types
-    (``CONTROL_TYPES``) go to the executor, and an unexpected exception lands
+    (``CONTROL_TYPES``) and manual-takeover commands
+    (``MANUAL_CONTROL_TYPES``) go to the executor, and an unexpected exception lands
     the drone (fail safe). ``recv_t`` is the edge clock reading taken when
     the message arrived.
     """
@@ -245,7 +250,8 @@ def _handle_control(
         if flight is not None and feed_watchdog:
             # Any message from the ground proves the link is alive.
             flight.note_ground_message()
-        if mtype in CONTROL_TYPES:
+        if mtype in CONTROL_TYPES or mtype in MANUAL_CONTROL_TYPES:
+            # Fleet control and manual takeover (docs/manual-takeover.md).
             if flight is None:
                 log.debug("edge_control_no_flight", type=mtype)
             else:

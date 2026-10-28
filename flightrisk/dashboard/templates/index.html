@@ -244,6 +244,39 @@
             letter-spacing: 1px;
         }
         .tile-nodata.active { display: flex; }
+        /* Manual takeover (docs/manual-takeover.md): click a tile to fly that drone by hand. */
+        #video-tiles.manual-available .video-tile[data-drone-id] { cursor: pointer; }
+        .video-tile.manual-selected { outline: 3px solid var(--amber); outline-offset: -3px; }
+        .video-tile.manual-held { outline: 2px dashed var(--amber); outline-offset: -2px; }
+        .tile-manual-badge {
+            position: absolute; top: 8px; left: 8px; z-index: 6; padding: 2px 8px; border-radius: 10px;
+            background: var(--amber); color: #0A0F1A; font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+        }
+        .tile-manual-badge:empty { display: none; }
+        #manual-overlay {
+            position: absolute; right: 12px; bottom: 28px; z-index: 850;
+            width: min(360px, calc(100% - 24px)); padding: 10px; border-radius: 8px;
+            background: rgba(10, 15, 26, 0.92); border: 1px solid var(--amber); color: var(--text-primary);
+            font-size: 12px;
+        }
+        #manual-overlay .manual-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        #manual-overlay .manual-badge {
+            background: var(--amber); color: #0A0F1A; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+            font-family: var(--font-mono); font-size: 11px; letter-spacing: 1px;
+        }
+        #manual-overlay .manual-drone { font-family: var(--font-mono); font-weight: 700; color: var(--cyan); }
+        #manual-overlay .manual-mode { color: var(--text-muted); margin-left: auto; }
+        #manual-overlay .manual-reason { min-height: 16px; color: var(--amber); margin-bottom: 6px; }
+        #manual-overlay .manual-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+        #manual-overlay .manual-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 6px; }
+        #manual-overlay button {
+            padding: 6px 4px; border-radius: 4px; border: 1px solid var(--text-muted); cursor: pointer;
+            background: var(--bg-card); color: var(--text-primary); font-size: 12px;
+        }
+        #manual-overlay button:disabled { opacity: 0.4; cursor: not-allowed; }
+        #manual-overlay #manual-land { border-color: var(--red); color: var(--red); font-weight: 700; }
+        #manual-overlay #manual-resume { border-color: var(--cyan); color: var(--cyan); font-weight: 700; }
+        #manual-overlay .manual-hint { margin-top: 6px; color: var(--text-muted); font-size: 11px; }
         /* "detections only -- video off" indicator (edge not streaming video) */
         .detections-only-indicator {
             position: absolute;
@@ -1786,6 +1819,34 @@
 
             <!-- Safety disclaimer -->
             <div class="safety-disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</div>
+
+            <!-- Manual takeover controls (docs/manual-takeover.md). Shown only for the drone under manual control,
+                 over the video panel and outside every collapsible card, so collapsing a card never hides them.
+                 LAND ALL (sidebar button and Shift+L) and the fleet status panel stay available at all times. -->
+            <div id="manual-overlay" role="region" aria-label="Manual flight controls" hidden>
+                <div class="manual-head">
+                    <span class="manual-badge">MANUAL</span>
+                    <span id="manual-drone-id" class="manual-drone"></span>
+                    <span id="manual-mode" class="manual-mode"></span>
+                </div>
+                <div id="manual-reason" class="manual-reason" aria-live="polite"></div>
+                <div class="manual-grid">
+                    <button type="button" id="manual-ccw" data-manual="ccw" title="Rotate left (Q)">Rotate left</button>
+                    <button type="button" id="manual-forward" data-manual="forward" title="Forward (W)">Forward</button>
+                    <button type="button" id="manual-cw" data-manual="cw" title="Rotate right (E)">Rotate right</button>
+                    <button type="button" id="manual-up" data-manual="up" title="Up (X)">Up</button>
+                    <button type="button" id="manual-left" data-manual="left" title="Left (A)">Left</button>
+                    <button type="button" id="manual-back" data-manual="back" title="Back (S)">Back</button>
+                    <button type="button" id="manual-right" data-manual="right" title="Right (D)">Right</button>
+                    <button type="button" id="manual-down" data-manual="down" title="Down (Z)">Down</button>
+                </div>
+                <div class="manual-actions">
+                    <button type="button" id="manual-takeoff" data-manual="takeoff" title="Takeoff (T)">Takeoff</button>
+                    <button type="button" id="manual-land" data-manual="land" title="Land this drone (L)">Land</button>
+                    <button type="button" id="manual-resume" title="End manual control; the drone resumes its search">Resume search</button>
+                </div>
+                <div class="manual-hint">Keys: W/S/A/D move, X/Z up/down, Q/E rotate, T takeoff, L land. Shift+L lands every drone.</div>
+            </div>
         </div>
 
         <!-- SIDEBAR -->
@@ -3098,6 +3159,8 @@
 
         document.addEventListener('keydown', function(e) {
             if (!keyboardControlEnabled) return;
+            // While a drone is under manual takeover the overlay's own keys fly it (one handler, no double send).
+            if (typeof manualDroneId !== 'undefined' && manualDroneId) return;
 
             // Don't capture when typing in input fields
             const tag = e.target.tagName.toLowerCase();
@@ -4152,5 +4215,171 @@
         initFleetMaps();
     </script>
     <!-- build:t10 end -->
+    <script>
+        // ========== MANUAL TAKEOVER (docs/manual-takeover.md) ==========
+        // Click a drone's video tile to take manual control of it: its search pauses and it hovers. Clicking the
+        // same tile again does nothing. Clicking another tile switches control (the previous drone resumes its
+        // search). Resume search is the only other way to release control. LAND ALL and Shift+L always work.
+        let manualAvailable = false;     // true once the server reports manual takeover (fleet mode)
+        let manualDroneId = null;        // drone under manual control, as the server reports it
+        let manualDrones = {};           // drone id -> latest fleet status entry (link, flying, control mode)
+        let manualReason = '';           // why the last command was refused, for the controlled drone
+        let manualRefused = {};          // action -> true while a limit refuses that step
+        let manualPendingSince = 0;      // a step is waiting for its answer since this time (ms)
+        const MANUAL_PENDING_MS = 4000;
+        const MANUAL_KEYS = { w: 'forward', s: 'back', a: 'left', d: 'right', q: 'ccw', e: 'cw',
+                              x: 'up', z: 'down', t: 'takeoff', l: 'land' };
+        const MANUAL_STEPS = ['forward', 'back', 'left', 'right', 'up', 'down', 'cw', 'ccw'];
+        const manualOverlay = document.getElementById('manual-overlay');
+
+        function manualTileFor(droneId) {
+            const tiles = document.querySelectorAll('#video-tiles .video-tile');
+            for (let i = 0; i < tiles.length; i++) if (tiles[i].dataset.droneId === droneId) return tiles[i];
+            return null;
+        }
+
+        function manualTileBadge(tile) {
+            let badge = tile.querySelector('.tile-manual-badge');
+            if (!badge) {
+                badge = document.createElement('div');
+                badge.className = 'tile-manual-badge';
+                tile.appendChild(badge);
+            }
+            return badge;
+        }
+
+        function manualDisabledReason(d) {
+            if (!d) return '';
+            if (d.connected === false) return 'Edge disconnected: controls are off (Land still works).';
+            if (d.drone_link_ok === false) return 'Drone link down: ' + (d.drone_link_detail || 'the edge cannot reach the drone') + '. Land still works.';
+            return '';
+        }
+
+        function renderManual() {
+            document.getElementById('video-tiles').classList.toggle('manual-available', manualAvailable);
+            document.querySelectorAll('#video-tiles .video-tile').forEach((tile) => {
+                const id = tile.dataset.droneId;
+                const d = id ? manualDrones[id] : null;
+                const selected = !!id && id === manualDroneId;
+                const held = !selected && !!d && d.control_mode === 'held';
+                tile.classList.toggle('manual-selected', selected);
+                tile.classList.toggle('manual-held', held);
+                // A held drone with no controller lands when the ground's countdown runs out (orphan_land_in_s).
+                const landIn = d && typeof d.orphan_land_in_s === 'number' ? d.orphan_land_in_s : null;
+                let badge = selected ? 'MANUAL' : (held ? 'HELD' : '');
+                if (landIn !== null) badge = 'HELD: auto-landing in ' + landIn + ' s, no controller';
+                if (id) manualTileBadge(tile).textContent = badge;
+            });
+            if (!manualDroneId) { manualOverlay.hidden = true; return; }
+            manualOverlay.hidden = false;
+            const d = manualDrones[manualDroneId] || {};
+            document.getElementById('manual-drone-id').textContent = manualDroneId;
+            const flying = d.is_flying === true;
+            document.getElementById('manual-mode').textContent =
+                d.edge_control_mode === 'held' ? (flying ? 'Hovering (no input)' : 'On the ground') : (flying ? 'Flying' : 'On the ground');
+            const down = manualDisabledReason(d);
+            const pending = manualPendingSince && (Date.now() - manualPendingSince) < MANUAL_PENDING_MS;
+            MANUAL_STEPS.forEach((action) => {
+                const btn = document.getElementById('manual-' + action);
+                btn.disabled = !!down || !flying || !!manualRefused[action] || !!pending;
+            });
+            document.getElementById('manual-takeoff').disabled = !!down || flying || !!pending;
+            document.getElementById('manual-land').disabled = false;  // landing is never gated
+            let reason = down || manualReason;
+            if (!reason && !flying) reason = 'On the ground: use Takeoff to fly by hand, or Resume search.';
+            document.getElementById('manual-reason').textContent = reason;
+        }
+
+        function manualCmd(action) {
+            if (!manualDroneId) return;
+            if (action !== 'land') {
+                if (manualPendingSince && (Date.now() - manualPendingSince) < MANUAL_PENDING_MS) return;
+                manualPendingSince = Date.now();
+            }
+            socket.emit('manual_command', { drone_id: manualDroneId, command: action, distance: 30, degrees: 30 });
+            renderManual();
+        }
+
+        function manualResumeSearch() {
+            if (!manualDroneId) return;
+            socket.emit('manual_resume_search', { drone_id: manualDroneId });
+        }
+
+        function manualTakeControl(droneId) {
+            if (!manualAvailable || !droneId) return;
+            if (droneId === manualDroneId) return;  // the active tile: clicking it again does nothing
+            manualReason = '';
+            manualRefused = {};
+            manualPendingSince = 0;
+            socket.emit('manual_take_control', { drone_id: droneId });
+        }
+
+        document.getElementById('video-tiles').addEventListener('click', (e) => {
+            const tile = e.target.closest('.video-tile');
+            if (!tile || !tile.dataset.droneId) return;
+            manualTakeControl(tile.dataset.droneId);
+        });
+        manualOverlay.querySelectorAll('button[data-manual]').forEach((btn) => {
+            btn.addEventListener('click', () => manualCmd(btn.dataset.manual));
+        });
+        document.getElementById('manual-resume').addEventListener('click', manualResumeSearch);
+
+        // Keys fly the controlled drone only while one is under manual control and the focus is not in a field.
+        // Shift+L is LAND ALL (its own capture-phase handler) and is never taken here.
+        document.addEventListener('keydown', (e) => {
+            if (!manualDroneId || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.shiftKey) return;
+            const t = e.target;
+            if (isEditableTarget(t) || (t && t.tagName && t.tagName.toUpperCase() === 'SELECT')) return;
+            const action = MANUAL_KEYS[(e.key || '').toLowerCase()];
+            if (!action) return;
+            e.preventDefault();
+            manualCmd(action);
+        });
+
+        socket.on('manual_status', (data) => {
+            if (!data) return;
+            manualAvailable = true;
+            if (data.controlled !== manualDroneId) { manualReason = ''; manualRefused = {}; manualPendingSince = 0; }
+            manualDroneId = data.controlled || null;
+            Object.keys(data.drones || {}).forEach((id) => {
+                manualDrones[id] = Object.assign(manualDrones[id] || {}, data.drones[id]);
+            });
+            renderManual();
+        });
+
+        socket.on('fleet_status', (data) => {
+            if (!data || !('manual_controlled' in data)) return;
+            manualAvailable = true;
+            if (data.manual_controlled !== manualDroneId) { manualReason = ''; manualRefused = {}; manualPendingSince = 0; }
+            manualDroneId = data.manual_controlled || null;
+            Object.keys(data.drones || {}).forEach((id) => { manualDrones[id] = data.drones[id]; });
+            renderManual();
+        });
+
+        socket.on('manual_result', (r) => {
+            if (!r) return;
+            if (r.drone_id === manualDroneId) {
+                if (r.action !== 'land') manualPendingSince = 0;
+                if (r.ok) {
+                    manualReason = '';
+                    if (MANUAL_STEPS.indexOf(r.action) !== -1 || r.action === 'takeoff') manualRefused = {};
+                } else {
+                    manualReason = r.action + ' refused: ' + (r.detail || r.reason || 'refused');
+                    if (['geofence', 'ceiling', 'floor', 'slot_band'].indexOf(r.reason) !== -1) manualRefused[r.action] = true;
+                }
+            }
+            if (!r.ok) showToast(r.drone_id + ': ' + r.action + ' refused (' + (r.detail || r.reason) + ')');
+            else if (r.action === 'resume_search') showToast(r.drone_id + ': search resumed' + (r.detail ? ' (' + r.detail + ')' : ''));
+            renderManual();
+        });
+
+        socket.on('manual_ack', (r) => {
+            if (r && !r.ok && r.drone_id === manualDroneId) { manualPendingSince = 0; manualReason = r.detail || r.reason || ''; renderManual(); }
+        });
+
+        socket.on('connect', () => socket.emit('get_manual_status'));
+        setInterval(renderManual, 1000);  // re-enable controls once a pending step times out
+    </script>
 </body>
 </html>

@@ -619,6 +619,19 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "slot_changed": ("slot_changed", None),
     "slot_refused_above_ceiling": ("slot_refused_above_ceiling", "above_ceiling"),
     "edge_ceiling_exceeded": ("ceiling_exceeded", "ceiling_exceeded"),
+    # Manual takeover (docs/manual-takeover.md), logged by the edge.
+    "edge_manual_hold": ("manual_hold", None),
+    "edge_manual_hold_refused": ("manual_hold_refused", None),
+    "edge_manual_hold_point": ("manual_hold_point", None),
+    "edge_manual_move": ("manual_move", None),
+    "edge_manual_takeoff": ("manual_takeoff", None),
+    "edge_manual_takeoff_refused": ("manual_takeoff_refused", None),
+    "edge_manual_refused": ("manual_refused", None),
+    "edge_manual_deadman_hold": ("manual_deadman_hold", "deadman"),
+    "edge_manual_released": ("manual_release", None),
+    "edge_resume_search": ("resume_search", None),
+    "edge_resume_search_refused": ("resume_search_refused", None),
+    "edge_resume_search_returned": ("resume_search_returned", None),
 }
 
 #: StructuredLogger events about the ground/edge link.

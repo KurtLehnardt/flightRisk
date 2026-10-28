@@ -32,6 +32,7 @@ from flightrisk.fleet_protocol.constants import (
     V2_FIELDS,
     V2_ONLY_COMMAND_TYPES,
 )
+from flightrisk.fleet_protocol.manual import MANUAL_COMMAND_TYPES, is_manual_reply
 from flightrisk.fleet_protocol.validate import (
     _checked,
     _is_ground_hello,
@@ -239,7 +240,8 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     Configuration commands (``CONFIG_COMMAND_TYPES``) and their acks and
     nacks are checked under *peer_proto* and copied unchanged for every
     version, so their ``cmd_id`` survives on a v1 link.
-    ``set_ceiling`` and its acks and nacks are handled the same way.
+    ``set_ceiling`` and its acks and nacks are handled the same way, and so
+    are the manual commands (``MANUAL_COMMAND_TYPES``) and their replies.
     """
     mtype = _message_type(msg)
     if mtype in FAILSAFE_TYPES:
@@ -252,7 +254,7 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         return dict(msg)
     if mtype == SET_CEILING or is_ceiling_reply(msg) or mtype in CONFIG_COMMAND_TYPES or (
         mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)
-    ):
+    ) or mtype in MANUAL_COMMAND_TYPES or is_manual_reply(msg):
         # Configuration commands and their replies are the same on every
         # version, so the cmd_id survives a v1 link.
         validate_message(msg, proto=peer_proto)

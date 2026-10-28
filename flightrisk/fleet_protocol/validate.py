@@ -96,6 +96,13 @@ from flightrisk.fleet_protocol.constants import (
     TELEMETRY,
     V2_ONLY_COMMAND_TYPES,
 )
+from flightrisk.fleet_protocol.manual import (
+    CONTROL_MODES,
+    MANUAL_COMMAND_TYPES,
+    is_manual_reply,
+    validate_manual_command,
+    validate_manual_reply,
+)
 from flightrisk.fleet_protocol.peer import (
     _validate_node_state,
 )
@@ -210,6 +217,10 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
             raise ProtocolError(f"'telemetry' field 'drone_link_age_s' must not be negative, got {_short(age)}")
     if msg.get("drone_link_detail") is not None:
         _require_text(msg, "drone_link_detail")
+    # Optional on every version: an edge that takes the manual commands
+    # reports its control mode (``flightrisk/fleet_protocol/manual.py``).
+    if "control_mode" in msg:
+        _require_choice(msg, "control_mode", CONTROL_MODES)
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:
@@ -296,6 +307,10 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
         # version (flightrisk/fleet_protocol/ceiling.py).
         validate_ceiling_reply(msg)
         return
+    if is_manual_reply(msg):
+        # So does a manual command's (flightrisk/fleet_protocol/manual.py).
+        validate_manual_reply(msg)
+        return
     target = _require(msg, "for")
     if _is_member(target, CONFIG_COMMAND_TYPES):
         _validate_profile_reply(msg, ack=True)
@@ -324,6 +339,9 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
 def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
     if is_ceiling_reply(msg):
         validate_ceiling_reply(msg)
+        return
+    if is_manual_reply(msg):
+        validate_manual_reply(msg)
         return
     target = _require(msg, "for")
     if _is_member(target, CONFIG_COMMAND_TYPES):
@@ -425,6 +443,11 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
     if mtype == SET_CEILING:
         # A configuration command, the same on every link version.
         validate_set_ceiling(msg)
+        return mtype
+    if mtype in MANUAL_COMMAND_TYPES:
+        # Manual flight commands: valid on every link version, always with a
+        # cmd_id, fenced in v2 (flightrisk/fleet_protocol/manual.py).
+        validate_manual_command(msg, proto=proto)
         return mtype
     if mtype not in _KNOWN_TYPES:
         return mtype
@@ -552,6 +575,18 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
         # Configuration commands: allowed on every link version, checked
         # against their own schema; they never move the drone.
         return validate_message(msg, proto=proto)
+    if mtype in MANUAL_COMMAND_TYPES:
+        # Manual flight commands: allowed on every link version; fenced in v2
+        # and wherever the edge requires a fence, like takeoff.
+        validate_message(msg, proto=proto)
+        if require_fence:
+            try:
+                validate_manual_command(msg, require_fence=True)
+            except ProtocolError as exc:
+                raise ProtocolError(
+                    f"unfenced or incomplete {mtype!r} refused: this edge requires the v2 form on every link ({exc})"
+                ) from exc
+        return mtype
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
     if mtype not in allowed:
         raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")

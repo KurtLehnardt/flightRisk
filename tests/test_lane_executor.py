@@ -45,7 +45,9 @@ TELEMETRY_KEYS = {
     "lanes_total",
     "link_age_s",
     "takeoff_at_local_s",
-    # Optional fields: the active ceiling, margin and altitude slot.
+    # Optional fields: the active ceiling, margin and altitude slot, and the
+    # manual-control mode (docs/manual-takeover.md).
+    "control_mode",
     "ceiling_cm",
     "ceiling_margin_cm",
     "alt_slot_cm",
