@@ -2230,9 +2230,28 @@ def on_plan_fleet(data=None):
     _run_fleet_action("plan")
 
 
+def _warn_pending_profile_switch() -> None:
+    """Tell the operator when Start is pressed while a detection profile switch is still pending.
+
+    It is a warning, not a refusal: the start goes ahead, and the edge refuses
+    the switch once its drone is flying, so that drone keeps its old profile.
+    """
+    board = app_state.profile_board
+    pending = board.pending_drones() if board is not None else []
+    if not pending:
+        return
+    detail = (
+        f"detection profile switch still pending for {', '.join(pending)}; "
+        f"once flying, the edge refuses it and keeps its current profile"
+    )
+    log.warning("Fleet start with a pending detection profile switch: %s", ", ".join(pending))
+    emit("fleet_event", {"event": "profile_switch_pending", "drone_ids": pending, "detail": detail})
+
+
 @socketio.on("start_fleet")
 def on_start_fleet(data=None):
     """Re-sync clocks and schedule one common start for the fleet."""
+    _warn_pending_profile_switch()
     _run_fleet_action("start")
 
 

@@ -79,12 +79,13 @@ def no_heridal(path):
     return "heridal" not in path
 
 
-def make_switcher(*, exists=all_weights_present, is_active=None, loader=fake_loader, start="default"):
+def make_switcher(*, exists=all_weights_present, is_active=None, loader=fake_loader, start="default", **kwargs):
     log = RecordingLog()
     sent: list[dict] = []
+    kwargs.setdefault("drone_id", "drone-1")
     switcher = ProfileSwitcher(
-        None, drone_id="drone-1", send=sent.append, is_active=is_active, loader=loader,
-        exists=exists, logger=log, run_async=False,
+        None, send=sent.append, is_active=is_active, loader=loader,
+        exists=exists, logger=log, run_async=False, **kwargs,
     )
     detector, name = switcher.startup_detector(start)
     runner = EdgeRunner(detector=detector)
@@ -110,7 +111,9 @@ def test_registry_has_the_builtin_profiles_in_order():
     assert top.confidence == 0.5 and top.fallback == "level"
     level = REGISTRY.get("level")
     assert level.weights == "yolo11n.pt" and level.tiled is False
-    assert level.face_weight_scale > 1.0 > top.face_weight_scale
+    # The weight scales stay neutral until they are measured.
+    assert level.face_weight_scale == top.face_weight_scale == 1.0
+    assert level.reid_weight_scale == top.reid_weight_scale == 1.0
 
 
 def test_registry_lookup_of_unknown_or_non_string_names_raises():
@@ -182,7 +185,10 @@ def test_profile_label_and_weight_scale_are_bounded():
     assert P.weight_scale_for("default") is None
     assert P.weight_scale_for("made_up") is None
     assert P.weight_scale_for(None) is None
-    assert P.weight_scale_for("level") == {"face": 1.5, "reid": 1.0}
+    assert P.weight_scale_for("level") is None
+    assert P.weight_scale_for("top_down") is None
+    scaled = DetectionProfile(name="scaled", label="S", description="", weights="w.pt", face_weight_scale=1.5)
+    assert scaled.weight_scale() == {"face": 1.5, "reid": 1.0}
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +359,8 @@ def test_switch_swaps_the_model_and_settings_and_acks():
     assert selected["drone_id"] == "drone-1"
     # The next frame runs the new detector and says which profile ran.
     msg = runner.process_frame(np.zeros((8, 8, 3), dtype=np.uint8))
-    assert runner.detector.calls == 1 and old.calls == 0
+    # One warm-up call on a blank frame before the swap, then the frame itself.
+    assert runner.detector.calls == 2 and old.calls == 0
     assert msg.detection_profile == "top_down"
     assert runner.to_dict(msg)["detection_profile"] == "top_down"
 
@@ -584,23 +591,263 @@ def test_startup_profile_comes_from_the_environment_when_no_flag(monkeypatch):
 
 
 def test_the_real_lane_executor_state_gates_the_switch():
+    """Flying, a scheduled start and a landing in progress each refuse a switch; idle allows it.
+
+    The flight check goes through the edge device's own wiring
+    (``_bind_profile_switcher``), so a check that only looked at
+    ``is_flying`` would let the scheduled start and the landing through.
+    """
     from flightrisk.drone.lane_executor import LaneExecutor
     from flightrisk.drone.safety import SafetyEnvelope
     from flightrisk.drone.tello import FakeTelloController
+    from tests.lane_executor_support import FakeClock, wait_for
 
+    clock = FakeClock()
     drone = FakeTelloController(name="drone-1", battery=90)
     drone.connect()
-    executor = LaneExecutor(drone, SafetyEnvelope(alt_slot_cm=100), "drone-1", send=lambda msg: None)
+    executor = LaneExecutor(drone, SafetyEnvelope(alt_slot_cm=100, clock=clock), "drone-1",
+                            send=lambda msg: None, clock=clock)
+    switcher, runner, sent, _ = make_switcher(flies=True)
+    edge_device._bind_profile_switcher(runner, MagicMock(), RecordingLog(), executor)
+    switcher.bind_sender(sent.append)
+    release_land = threading.Event()
+    lander = None
     try:
-        switcher, runner, sent, _ = make_switcher()
-        edge_device._bind_profile_switcher(runner, MagicMock(), RecordingLog(), executor)
-        switcher.bind_sender(sent.append)
+        # 1. Flying.
         drone.state.is_flying = True
         switcher.handle(request("level", cmd_id="c1"))
-        assert sent[-1]["reason"] == "in_flight" and runner.detection_profile == "default"
+        assert sent[-1]["reason"] == "in_flight"
         drone.state.is_flying = False
+
+        # 2. On the ground with a start scheduled (the worker waits for start_at).
+        executor.handle_clock({"type": "clock", "offset_s": 0.0})
+        assert executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1",
+                                             "lanes": [{"direction": "forward", "distance_cm": 100}]})
+        assert executor.handle_start_at({"type": "start_at", "t_ground_s": clock() + 30.0})
+        assert not drone.state.is_flying and executor.is_active()
         switcher.handle(request("level", cmd_id="c2"))
+        assert sent[-1]["reason"] == "in_flight" and runner.detection_profile == "default"
+        executor.land_now("test_cancel_start")
+        assert wait_for(lambda: not executor.is_active())
+
+        # 3. On the ground with a landing in progress.
+        drone.land = lambda *a, **k: release_land.wait(5) or True
+        lander = threading.Thread(target=executor.land_now, args=("test_pending_land",), daemon=True)
+        lander.start()
+        assert wait_for(executor.is_active)
+        assert not drone.state.is_flying
+        switcher.handle(request("level", cmd_id="c3"))
+        assert sent[-1]["reason"] == "in_flight" and runner.detection_profile == "default"
+        release_land.set()
+        lander.join(5)
+        assert wait_for(lambda: not executor.is_active())
+
+        # 4. Idle on the ground.
+        switcher.handle(request("level", cmd_id="c4"))
         assert sent[-1]["type"] == "ack" and runner.detection_profile == "level"
     finally:
+        release_land.set()
+        if lander is not None:
+            lander.join(5)
         executor.shutdown()
         drone.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: fail closed, warm-up, stuck switches, edges without a drone id
+# ---------------------------------------------------------------------------
+
+
+def test_a_flying_edge_without_its_flight_check_refuses_every_switch():
+    switcher, runner, sent, _ = make_switcher(flies=True)
+    switcher.handle(request("level"))
+    assert sent[-1]["reason"] == "in_flight" and runner.detection_profile == "default"
+    switcher.bind_safety(lambda: False)
+    switcher.handle(request("level", cmd_id="c2"))
+    assert sent[-1]["type"] == "ack" and runner.detection_profile == "level"
+
+
+def test_build_runner_marks_flying_sources_and_uses_the_runner_drone_id(monkeypatch):
+    stub_modules(monkeypatch)
+    log = RecordingLog()
+    fake = edge_device._build_runner(edge_device._build_parser().parse_args(
+        ["--source", "fake", "--drone-id", "drone-7"]), log)
+    assert fake.profile_switcher._flies is True and fake.profile_switcher.drone_id == "drone-7" == fake.drone_id
+    camera = edge_device._build_runner(edge_device._build_parser().parse_args(["--source", "camera"]), log)
+    assert camera.profile_switcher._flies is False
+    assert camera.drone_id is None and camera.profile_switcher.drone_id is None
+
+
+def stub_modules(monkeypatch):
+    """Stand-ins for the detector and ReID modules, so no model is loaded."""
+    import sys
+    import types
+
+    detector_mod = types.ModuleType("flightrisk.vision.detector")
+    detector_mod.PersonDetector = lambda **kw: FakeDetector(**kw)
+    reid_mod = types.ModuleType("flightrisk.vision.reid")
+
+    def no_reid(**kw):
+        raise RuntimeError("no ReID model in tests")
+
+    reid_mod.PersonReID = no_reid
+    monkeypatch.setitem(sys.modules, "flightrisk.vision.detector", detector_mod)
+    monkeypatch.setitem(sys.modules, "flightrisk.vision.reid", reid_mod)
+
+
+def test_the_flight_edge_binds_the_lane_executor_as_the_flight_check(monkeypatch):
+    """Runs the real flying-edge wiring (fake Tello, fake transport) and checks what the switcher obeys."""
+    from flightrisk.drone.lane_executor import LaneExecutor
+
+    stub_modules(monkeypatch)
+    executors: list[LaneExecutor] = []
+    runners: list[EdgeRunner] = []
+
+    class RecordingExecutor(LaneExecutor):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            executors.append(self)
+
+    class FakeTransport:
+        def __init__(self, runner):
+            runners.append(runner)
+            self.sent = []
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+        def send(self, msg):
+            self.sent.append(msg)
+            return True
+
+        def send_detections(self, msg):
+            pass
+
+        def recv(self, recv_timeout=None):
+            return None
+
+    monkeypatch.setattr(edge_device, "LaneExecutor", RecordingExecutor)
+    monkeypatch.setattr(edge_device, "_build_transport", lambda args, runner, token: FakeTransport(runner))
+    monkeypatch.setattr(edge_device, "start_local_land_key", lambda *a, **k: None)
+    args = edge_device._build_parser().parse_args(["--source", "fake", "--drone-id", "drone-7"])
+    stop = threading.Event()
+    stop.set()
+    edge_device._run_flight_edge(args, RecordingLog(), stop_event=stop)
+
+    (executor,), (runner,) = executors, runners
+    switcher = runner.profile_switcher
+    assert switcher._is_active == executor.is_active
+    assert switcher._send is not None and switcher.drone_id == "drone-7"
+
+
+def test_a_model_that_loads_but_cannot_run_is_refused_and_the_old_one_stays():
+    class Broken(FakeDetector):
+        def detect(self, frame):
+            raise RuntimeError("bad tensor shape")
+
+    switcher, runner, sent, _log = make_switcher()
+    old = runner.detector
+    switcher._loader = lambda profile: Broken()
+    switcher.handle(request("level"))
+    assert runner.detector is old and runner.detection_profile == "default"
+    assert sent[-1]["reason"] == "load_failed" and "bad tensor shape" in sent[-1]["detail"]
+
+
+def test_flight_state_is_checked_after_the_warm_up():
+    flying = {"now": False}
+
+    class TakesOffDuringWarmUp(FakeDetector):
+        def detect(self, frame):
+            flying["now"] = True
+            return []
+
+    switcher, runner, sent, _ = make_switcher(is_active=lambda: flying["now"])
+    old = runner.detector
+    switcher._loader = lambda profile: TakesOffDuringWarmUp()
+    switcher.handle(request("level"))
+    assert runner.detector is old and sent[-1]["reason"] == "in_flight"
+
+
+def test_the_switcher_is_freed_even_when_the_same_profile_path_raises():
+    switcher, runner, sent, log = make_switcher()
+    real = switcher._finish
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ack could not be built")
+        return real(*a, **k)
+
+    switcher._finish = boom
+    switcher.handle(request("default", cmd_id="c1"))  # already active: the inline path raises
+    assert log.events("profile_switch_error")
+    switcher.handle(request("level", cmd_id="c2"))  # not refused as busy
+    assert sent[-1]["type"] == "ack" and runner.detection_profile == "level"
+
+
+def test_a_stuck_switch_is_reported_cleared_after_the_timeout_and_its_result_discarded():
+    now = {"t": 100.0}
+    gate = threading.Event()
+    started = threading.Event()
+
+    def slow(profile):
+        if profile.name == "top_down":
+            started.set()
+            gate.wait(5)
+        return fake_loader(profile)
+
+    switcher, runner, sent, log = make_switcher(clock=lambda: now["t"], busy_timeout_s=60.0)
+    switcher._loader = slow
+    switcher._run_async = True
+    switcher.handle(request("top_down", cmd_id="c1"))
+    stuck_worker = switcher._worker
+    assert started.wait(5)
+    now["t"] += 59.0
+    switcher.handle(request("level", cmd_id="c2"))
+    assert sent[-1]["reason"] == "busy"
+    now["t"] += 2.0  # 61 s after the first switch started
+    switcher.handle(request("level", cmd_id="c3"))
+    assert switcher.wait(5)
+    assert sent[-1]["type"] == "ack" and runner.detection_profile == "level"
+    assert log.events("profile_switch_stuck")[0]["cmd_id"] == "c1"
+    gate.set()
+    stuck_worker.join(5)
+    assert runner.detection_profile == "level"  # the stuck result never replaces the newer one
+    assert log.events("profile_switch_discarded")[0]["cmd_id"] == "c1"
+    assert sent[-1]["cmd_id"] == "c1" and sent[-1]["reason"] == "load_failed"
+
+
+def test_an_edge_without_a_drone_id_logs_but_never_replies():
+    switcher, runner, sent, log = make_switcher(drone_id=None)
+    switcher.handle(request("level"))
+    assert runner.detection_profile == "level" and sent == []
+    switcher._is_active = lambda: True
+    switcher.handle(request("default", cmd_id="c2"))
+    assert sent == [] and log.events("profile_switch_refused")[-1]["reason"] == "in_flight"
+    assert log.events("profile_switch_error") == []  # no reply was even attempted
+
+
+def test_a_failing_frame_never_ends_the_edge_loop():
+    class Runner:
+        stream_video = False
+
+        def __init__(self):
+            self.n = 0
+
+        def process_frame(self, frame):
+            self.n += 1
+            if self.n == 2:
+                raise RuntimeError("detector crashed")
+            return DetectionMessage(timestamp=1.0, frame_id=self.n)
+
+    transport = MagicMock()
+    transport.recv.return_value = None
+    log = RecordingLog()
+    frames = [np.zeros((4, 4, 3), dtype=np.uint8)] * 3
+    count = edge_device.run_edge_device(frames, transport, Runner(), logger=log)
+    assert count == 2 and transport.send_detections.call_count == 2
+    assert log.events("edge_frame_error")[0]["count"] == 1

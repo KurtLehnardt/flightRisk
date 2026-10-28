@@ -1803,6 +1803,7 @@
                                 <option value="">Keep each drone's startup profile</option>
                             </select>
                         </div>
+                        <div id="profile-controls-note" class="profile-status warn" style="display:none;"></div>
                         <div id="profile-drone-list" class="profile-drone-list" aria-live="polite"></div>
                         <div class="fleet-controls-hint">Top-down suits a camera looking straight down (HERIDAL model, tiled). Level suits level flight with faces in view. A drone switches only while it is on the ground; in the air the edge refuses and the reason is shown here.</div>
                     </div>
@@ -3133,16 +3134,25 @@
             if (!d.supported) return ['This edge does not report detection profiles (older edge); it keeps its own model.', 'warn'];
             if (d.pending) return ['Switching to ' + profileLabel(d.requested) + '...', ''];
             if (d.refusal) {
+                if (d.mismatch && d.refusal.reason === 'in_flight') {
+                    return ['MISMATCH: chosen ' + profileLabel(d.desired) + ', edge runs ' + profileLabel(d.active)
+                        + '. Refused in flight; sent again when the drone is on the ground.', 'bad'];
+                }
                 const why = d.refusal.reason === 'in_flight' ? 'refused in flight' : 'refused (' + d.refusal.reason + ')';
                 return ['Active: ' + profileLabel(d.active) + '. Switch ' + why + ': ' + (d.refusal.detail || ''), 'bad'];
             }
             if (d.note === 'no_reply') return ['Active: ' + profileLabel(d.active) + '. No reply from the edge; try again.', 'warn'];
+            if (d.note === 'not_connected') return ['Active: ' + profileLabel(d.active) + '. Not connected; the choice is sent again when it reconnects.', 'warn'];
             if (d.note === 'send_failed') return ['Active: ' + profileLabel(d.active) + '. The command could not be sent.', 'bad'];
             if (d.fallback) {
                 const asked = d.requested ? profileLabel(d.requested) : 'the requested profile';
                 return ['Active: ' + profileLabel(d.active) + ' (fallback: ' + asked + ' weights missing on the edge).', 'warn'];
             }
             const air = d.flying ? ' In flight: profile changes will be refused.' : '';
+            if (d.mismatch) {
+                return ['MISMATCH: chosen ' + profileLabel(d.desired) + ', edge runs ' + profileLabel(d.active)
+                    + '. Sent again when the drone is on the ground or reconnects.' + air, 'warn'];
+            }
             return ['Active: ' + profileLabel(d.active) + '.' + air, ''];
         }
 
@@ -3152,7 +3162,14 @@
             if (!section) return;
             if (data && data.available === false) { section.style.display = 'none'; return; }
             section.style.display = '';
-            profileOptions(document.getElementById('profile-fleet-default'), "Keep each drone's startup profile", detectionProfiles.fleet_default);
+            const controls = detectionProfiles.controls_enabled !== false;
+            const fleetSelect = document.getElementById('profile-fleet-default');
+            profileOptions(fleetSelect, "Keep each drone's startup profile", detectionProfiles.fleet_default);
+            fleetSelect.disabled = !controls;
+            fleetSelect.parentElement.style.display = controls ? '' : 'none';
+            const note = document.getElementById('profile-controls-note');
+            note.textContent = detectionProfiles.controls_note || '';
+            note.style.display = detectionProfiles.controls_note ? '' : 'none';
             const list = document.getElementById('profile-drone-list');
             list.innerHTML = '';
             const drones = detectionProfiles.drones || {};
@@ -3169,7 +3186,8 @@
                 select.className = 'fleet-select';
                 select.setAttribute('aria-label', 'Detection profile for ' + id);
                 profileOptions(select, 'Fleet default', d.override);
-                select.disabled = !d.supported || !!d.pending;
+                select.disabled = !controls || !d.supported || !!d.pending;
+                select.style.display = controls ? '' : 'none';
                 select.addEventListener('change', () => socket.emit('set_detection_profile', { drone_id: id, profile: select.value }));
                 head.append(name, select);
                 const status = document.createElement('div');
@@ -3691,6 +3709,7 @@
             if (kind === 'retask') showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
             else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
             else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
+            else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
             else if (kind) showFleetBanner(String(kind));
         });
 
@@ -3787,7 +3806,12 @@
             const who = n > 0 ? n + ' drone' + (n === 1 ? '' : 's') : 'The drones';
             // Each drone's geofence and lanes are measured from the spot it takes
             // off from, so every drone must be back on its marked start spot.
-            if (!window.confirm(who + ' will take off. Each drone flies its lanes and keeps its geofence '
+            const pendingProfiles = Object.keys(detectionProfiles.drones || {}).filter(id => (detectionProfiles.drones[id] || {}).pending);
+            const profileWarning = pendingProfiles.length
+                ? 'WARNING: a detection profile switch is still pending for ' + pendingProfiles.join(', ')
+                    + '. Once flying, the edge refuses it and keeps its current profile.\n\n'
+                : '';
+            if (!window.confirm(profileWarning + who + ' will take off. Each drone flies its lanes and keeps its geofence '
                 + 'around the spot it takes off from, so every drone must be on its marked start spot, '
                 + 'nose into the area. Start the search?')) return;
             showFleetError('');

@@ -17,8 +17,7 @@ The built-in profiles are:
   overlapping tiles at confidence 0.5. Its weights are not in git; when the
   file is missing the edge falls back to ``level`` and says so.
 * ``level``: level flight with more direct views of faces. The general
-  ``yolo11n.pt`` on the whole frame (no tiling) at confidence 0.4, with face
-  matching weighted higher on the ground.
+  ``yolo11n.pt`` on the whole frame (no tiling) at confidence 0.4.
 
 Tiling reuses ``PersonDetector``'s tiled mode. A profile that leaves the tile
 size or overlap unset uses ``FLIGHTRISK_DETECTOR_TILE_SIZE`` and
@@ -28,9 +27,12 @@ existing settings keep working.
 
 The face and ReID weight scales are hints for the ground's match scorer:
 the ground multiplies the scorer's signal weights by them for detections
-from a drone running the profile (``weight_scale``). They never turn face
-recognition on; the appearance-only rules decide whether an edge sends face
-embeddings at all.
+from a drone running the profile (``weight_scale``). Every built-in profile
+uses 1.0 (no change) until scales are measured. A scale changes a score
+only when both signals are present: the scorer normalises the weights of
+the signals it has, so on an appearance-only edge (ReID alone) any scale
+cancels out. They never turn face recognition on; the appearance-only rules
+decide whether an edge sends face embeddings at all.
 
 This module imports no model code at import time; ``build_detector`` imports
 ``PersonDetector`` (and so Ultralytics) only when it is called.
@@ -283,7 +285,7 @@ def builtin_profiles() -> tuple[DetectionProfile, ...]:
     return (
         DetectionProfile(
             name=DEFAULT_PROFILE,
-            label="Default (startup settings)",
+            label="Startup default (yolo11n)",
             description="The edge detector as it was before profiles: yolo11n at confidence 0.4, "
                         "tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
             weights="yolo11n.pt",
@@ -293,28 +295,24 @@ def builtin_profiles() -> tuple[DetectionProfile, ...]:
         DetectionProfile(
             name="top_down",
             label="Top-down search (HERIDAL)",
-            description="People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles. "
-                        "Faces are rarely resolvable, so face matching counts for less.",
+            description="People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
             weights="models/heridal_yolo11s.pt",
             weights_required=True,
             confidence=0.5,
             tiled=True,
             min_person_px=32,
             view="nadir",
-            face_weight_scale=0.5,
             fallback="level",
         ),
         DetectionProfile(
             name="level",
             label="Level flight (faces)",
-            description="More direct views of people and faces: the general yolo11n on the whole frame, "
-                        "with face matching weighted higher.",
+            description="More direct views of people and faces: the general yolo11n on the whole frame.",
             weights="yolo11n.pt",
             weights_required=False,
             confidence=0.4,
             tiled=False,
             view="oblique",
-            face_weight_scale=1.5,
         ),
     )
 

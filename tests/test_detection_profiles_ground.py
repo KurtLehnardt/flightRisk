@@ -279,14 +279,19 @@ def _scored(profile, reid=0.5, face=0.9):
 
 
 def test_default_and_unknown_profiles_score_exactly_as_before():
-    before = _scored(None)
-    assert _scored("default") == before
-    assert _scored("made_up") == before
+    # 0.35 * 0.5 + 0.40 * 0.9 over 0.75, rounded: the score before profiles existed.
+    assert _scored(None) == 0.713
+    for profile in ("default", "top_down", "level", "made_up"):
+        assert _scored(profile) == 0.713, profile
 
 
-def test_level_weights_faces_higher_and_top_down_lower():
-    before = _scored(None)
-    assert _scored("level") > before > _scored("top_down")
+def test_a_measured_weight_scale_changes_the_score_only_with_both_signals(monkeypatch):
+    from flightrisk import ground
+
+    monkeypatch.setattr(ground, "weight_scale_for", lambda name: {"face": 1.5} if name == "scaled" else None)
+    assert _scored("scaled") > 0.713
+    # ReID alone (an appearance-only edge): the scale cancels out in the normalisation.
+    assert _scored("scaled", face=0.0) == _scored(None, face=0.0)
 
 
 def test_scorer_weight_scale_is_neutral_when_absent():
@@ -414,3 +419,128 @@ def test_profile_switch_round_trip_over_the_real_transport():
             edge.disconnect()
     finally:
         ground.stop()
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: mismatch and re-send, standby ground, not connected, start warning
+# ---------------------------------------------------------------------------
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def telemetry(drone_id, profile, flying, **extra):
+    return {"type": "telemetry", "drone_id": drone_id, "is_flying": flying, "detection_profile": profile, **extra}
+
+
+def test_a_refused_choice_is_flagged_and_sent_again_once_the_drone_lands():
+    clock = Clock()
+    board, transport, _ = make_board(reply=nack_for("in_flight", detail="land first"), clock=clock)
+    board.observe_control(telemetry("drone-1", "default", True))
+    board.select("drone-1", "top_down")
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["mismatch"] and drone["desired"] == "top_down" and drone["active"] == "default"
+    assert len(transport.sent) == 1
+    board.observe_control(telemetry("drone-1", "default", True))  # still flying: nothing new
+    assert len(transport.sent) == 1
+    transport.reply = ack_for("top_down")
+    board.observe_control(telemetry("drone-1", "default", False))  # landed: sent again, once
+    assert len(transport.sent) == 2 and transport.sent[-1][1]["profile"] == "top_down"
+    assert not board.payload()["drones"]["drone-1"]["mismatch"]
+    board.observe_control(telemetry("drone-1", "top_down", False))
+    assert len(transport.sent) == 2
+
+
+def test_a_restarted_edge_gets_the_operators_choice_again_when_it_reconnects():
+    clock = Clock()
+    board, transport, _ = make_board(reply=ack_for("level"), clock=clock)
+    board.observe_detections(detections("drone-1", "default"))
+    board.select("drone-1", "level")
+    board.observe_detections(detections("drone-1", "level"))
+    assert len(transport.sent) == 1
+    clock.t += 1.0
+    board.observe_detections(detections("drone-1", "default"))  # no gap: flagged, not re-sent
+    assert board.payload()["drones"]["drone-1"]["mismatch"] and len(transport.sent) == 1
+    clock.t += 10.0  # silent for 10 s, then back on its startup profile
+    board.observe_detections(detections("drone-1", "default"))
+    assert len(transport.sent) == 2 and transport.sent[-1][1]["profile"] == "level"
+
+
+def test_a_fallback_for_the_chosen_profile_is_not_a_mismatch():
+    clock = Clock()
+    board, transport, _ = make_board(reply=ack_for("level", fallback=True, fallback_reason="weights_missing"),
+                                     clock=clock)
+    board.observe_detections(detections("drone-1", "default"))
+    board.select("drone-1", "top_down")
+    board.observe_control(telemetry("drone-1", "level", True, detection_profile_fallback=True,
+                                    detection_profile_requested="top_down"))
+    board.observe_control(telemetry("drone-1", "level", False, detection_profile_fallback=True,
+                                    detection_profile_requested="top_down"))
+    drone = board.payload()["drones"]["drone-1"]
+    assert not drone["mismatch"] and drone["fallback"] and len(transport.sent) == 1
+
+
+def test_a_standby_ground_refuses_locally_and_hides_the_controls():
+    board, transport, _ = make_board(reply=ack_for("level"))
+    transport.identity = MagicMock(role="standby")
+    board.observe_detections(detections("drone-1", "default"))
+    assert "standby" in board.select("drone-1", "level")
+    assert "standby" in board.set_fleet_default("level")[0]
+    payload = board.payload()
+    assert payload["controls_enabled"] is False and "leader" in payload["controls_note"]
+    assert transport.sent == []
+    transport.identity = MagicMock(role="leader")
+    assert board.select("drone-1", "level") is None and len(transport.sent) == 1
+    assert board.payload()["controls_enabled"] is True
+
+
+def test_a_disconnected_drone_is_reported_as_not_connected():
+    board, transport, _ = make_board(reply=ack_for("level"))
+    transport.drone_ids = lambda timeout: ["drone-2"]
+    board.observe_detections(detections("drone-1", "default"))
+    board.select("drone-1", "level")
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["note"] == "not_connected" and not drone["pending"] and transport.sent == []
+
+
+def test_start_warns_while_a_profile_switch_is_pending(clean_app_state, monkeypatch):
+    board, _, _ = make_board(reply=None)
+    board._spawn = lambda fn, *args: None  # the command stays pending
+    board.observe_detections(detections("drone-1", "default"))
+    board.select("drone-1", "level")
+    assert board.pending_drones() == ["drone-1"]
+    app_state.profile_board = board
+    app_state.logger = None
+    monkeypatch.setattr(app_module, "_run_fleet_action", lambda action: None)
+    client = _client()
+    client.emit("start_fleet")
+    received = client.get_received()
+    client.disconnect()
+    events = _events(received, "fleet_event")
+    assert events and events[0]["event"] == "profile_switch_pending" and events[0]["drone_ids"] == ["drone-1"]
+
+
+def test_start_without_a_pending_switch_sends_no_warning(clean_app_state, monkeypatch):
+    board, _, _ = make_board()
+    app_state.profile_board = board
+    app_state.logger = None
+    monkeypatch.setattr(app_module, "_run_fleet_action", lambda action: None)
+    client = _client()
+    client.emit("start_fleet")
+    received = client.get_received()
+    client.disconnect()
+    assert _events(received, "fleet_event") == []
+
+
+def test_the_ground_transport_reports_its_role():
+    from flightrisk.fleet_ground_link import GroundIdentity
+    from flightrisk.transport import GroundTransportSync
+
+    assert GroundTransportSync(host="127.0.0.1", port=0).identity is None
+    standby = GroundIdentity(node_id="win", role="standby", epoch=0)
+    assert GroundTransportSync(host="127.0.0.1", port=0, identity=standby).identity.role == "standby"

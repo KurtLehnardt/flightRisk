@@ -12,9 +12,9 @@ profile name.
 
 | Name | Label | Weights | Tiling | Confidence | Face / ReID weight | Fallback |
 | --- | --- | --- | --- | --- | --- | --- |
-| `default` | Default (startup settings) | `yolo11n.pt` (stock, fetched by Ultralytics when missing) | follows `FLIGHTRISK_DETECTOR_TILED` (off by default) | 0.4 | 1.0 / 1.0 | none |
-| `top_down` | Top-down search (HERIDAL) | `models/heridal_yolo11s.pt` (required on disk) | on, tile size and overlap from `FLIGHTRISK_DETECTOR_TILE_SIZE` / `FLIGHTRISK_DETECTOR_TILE_OVERLAP` (640 px, 0.2) | 0.5 | 0.5 / 1.0 | `level` |
-| `level` | Level flight (faces) | `yolo11n.pt` | off (whole frame at the model's native 640 px input) | 0.4 | 1.5 / 1.0 | none |
+| `default` | Startup default (yolo11n) | `yolo11n.pt` (stock, fetched by Ultralytics when missing) | follows `FLIGHTRISK_DETECTOR_TILED` (off by default) | 0.4 | 1.0 / 1.0 | none |
+| `top_down` | Top-down search (HERIDAL) | `models/heridal_yolo11s.pt` (required on disk) | on, tile size and overlap from `FLIGHTRISK_DETECTOR_TILE_SIZE` / `FLIGHTRISK_DETECTOR_TILE_OVERLAP` (640 px, 0.2) | 0.5 | 1.0 / 1.0 | `level` |
+| `level` | Level flight (faces) | `yolo11n.pt` | off (whole frame at the model's native 640 px input) | 0.4 | 1.0 / 1.0 | none |
 
 - `default` is exactly the detector the edge built before profiles existed
   (`PersonDetector(model_name="yolo11n.pt", confidence=0.4)`). An edge with no
@@ -32,15 +32,20 @@ profile name.
 
 ### Weighting hints
 
-The face and ReID weight scales are applied by the ground, which does the
-matching. For a detection message from a drone running a profile, the
-ground multiplies the scorer's signal weights by the profile's scales before
-normalising them (`MatchScorer.score(weight_scale=...)`). `default`, an
-unknown profile and an edge that reports no profile use the configured
-weights unchanged. The hints never turn face recognition on: whether an edge
-sends face embeddings at all is still decided by the appearance-only rules
-(`--with-face`, `FLIGHTRISK_APPEARANCE_ONLY`), so with the default
-appearance-only flying edge only the ReID scale has an effect.
+Each profile has a face and a ReID weight scale for the ground's match
+scorer. For a detection message from a drone running a profile, the ground
+multiplies the scorer's signal weights by the profile's scales before
+normalising them (`MatchScorer.score(weight_scale=...)`). Every built-in
+profile uses 1.0 for both until the scales are measured, so today no
+profile changes a score; the mechanism is there for a measured profile.
+
+A scale only matters when both signals are present. The scorer normalises
+the weights of the signals it has, so with a single signal any scale
+cancels out. A flying edge is appearance-only by default (ReID alone, no
+face embedding), so there a scale has no effect at all. The scales never
+turn face recognition on: whether an edge sends face embeddings is still
+decided by the appearance-only rules (`--with-face`,
+`FLIGHTRISK_APPEARANCE_ONLY`).
 
 ### Adding a profile
 
@@ -87,13 +92,28 @@ has a fleet default selector and one row per drone with its active profile.
   the default and runs another profile, and once to each drone that first
   reports profile support later. "Keep each drone's startup profile" (no
   default) sends nothing.
+- **Mismatch.** A drone whose active profile differs from its choice (its
+  own, else the fleet default) is flagged "MISMATCH", unless it runs that
+  choice's fallback. The choice is sent again once each time the drone first
+  reports profile support, reports that it is back on the ground after
+  flying, or reconnects after 5 s of silence (for example after an edge
+  restart). The edge's flight check still decides.
+- **Standby ground.** In the two-ground fleet an edge takes profile commands
+  only from the leader. A standby ground refuses the choice at once and the
+  dashboard hides the selectors with a note to use the leader ground.
+- **Start warning.** Pressing Start while a switch is pending warns in the
+  confirmation and in the fleet banner; the start still goes ahead.
 - **Status.** Each row shows the active profile, "Switching...", a fallback
   ("fallback: Top-down weights missing on the edge"), a refusal with the
   edge's reason ("refused in flight: Detection profiles can only change on
-  the ground..."), no reply, or that the edge is too old to switch.
+  the ground..."), no reply, not connected, or that the edge is too old to
+  switch.
 
 ## Safety
 
+- A flying edge (`--source tello` or `fake`) fails closed: its switcher
+  refuses every switch with `nack{reason: in_flight}` until the lane
+  executor's flight check is bound at startup.
 - A switch happens only on the ground. The edge refuses it with
   `nack{reason: in_flight}` while the lane executor reports activity
   (`LaneExecutor.is_active`): the drone flying, a takeoff, a lane run, a
@@ -105,13 +125,21 @@ has a fleet default selector and one row per drone with its active profile.
   Its `handle` never raises, so a bad profile message can never reach the
   edge device's fail-safe landing path.
 - The swap is atomic. The new detector is built first, on its own thread, so
-  the frame loop and the control thread never wait for a model load; it then
-  replaces the old detector and the profile name in one step
-  (`EdgeRunner.swap_detector`). A frame already being processed finishes on
-  the old detector. If the load fails, the old detector keeps running and
-  the edge answers `nack{reason: load_failed}`.
+  the frame loop and the control thread never wait for a model load, and it
+  must run once on a blank 640 x 480 frame. Only then, after the flight
+  check again, does it replace the old detector and the profile name in one
+  step (`EdgeRunner.swap_detector`). A frame already being processed
+  finishes on the old detector. If the load or the warm-up fails, the old
+  detector keeps running and the edge answers `nack{reason: load_failed}`.
+- A frame whose processing raises (for example a detector failure) is
+  skipped and logged as `edge_frame_error` (the first, then every 100th). It
+  never ends the edge loop, so it never triggers the landing that runs when
+  the loop exits.
 - One switch runs at a time; another request meanwhile gets
-  `nack{reason: busy}`.
+  `nack{reason: busy}`. A switch still running after 60 s is logged as
+  `profile_switch_stuck` and stops blocking; if it ever finishes, its
+  detector is discarded (`profile_switch_discarded`) and it is answered
+  with `nack{reason: load_failed}`.
 
 ## Fallback
 
@@ -158,7 +186,7 @@ the message table.
 
 | Ground | Edge | What happens |
 | --- | --- | --- |
-| old | new | The ground never sends the command. It ignores the extra fields in detections and telemetry. The edge runs its startup profile. In a mixed two-ground fleet, a multi-ground edge sends its profile ack to every ground; an old ground drops it with a "Malformed ack message, ignoring" warning. |
+| old | new | The ground never sends the command. It ignores the extra fields in detections and telemetry. The edge runs its startup profile. In a mixed two-ground fleet, a multi-ground edge sends its profile replies to every ground. On a v1 link an old ground accepts the ack and ignores it, and rejects the nack with a "Malformed nack message" warning; on a v2 link it rejects both with a "Malformed ack message" or "Malformed nack message" warning. |
 | new | old | The old edge never reports a profile, so the dashboard shows it as not supporting profiles and the ground never sends it the command. Had one been sent, the old edge would drop it as an unknown type (both the single-ground and the multi-ground edges do). |
 | new | new | Full support on v1 and v2 links. |
 
@@ -185,8 +213,9 @@ allowed under "Unknown fields" in `docs/fleet-protocol-v2.md`.
   the command from a v1 ground, as it ignores `stream_video` there; the
   dashboard then shows "no reply".
 - The edge `hello` does not carry the profile; detections and telemetry do.
-- An edge that restarts comes back on its startup profile. The dashboard
-  shows the profile it reports; it does not re-send the operator's earlier
-  per-drone choice.
+- An edge that restarts comes back on its startup profile; the ground sends
+  the operator's choice again when it reconnects (see "Mismatch").
+- A camera or file edge has no drone id, so it logs a refused or completed
+  switch but sends no reply.
 - The thresholds and weight scales are first settings, not tuned values.
   Only `top_down` has measured numbers (`docs/altitude-benchmark.md`).

@@ -135,6 +135,10 @@ _CONTROL_RECV_TIMEOUT_S = 0.1
 # is down). A ground that rejects the token holds the retry up to
 # AUTH_BACKOFF_MAX_S (10 s). Other sources keep the transport's 30 s default.
 _FLEET_RECONNECT_MAX_DELAY_S = 2.0
+# A frame that fails to process is skipped; the error is logged for the
+# first failure and then every this many, so a broken detector cannot flood
+# the log at the frame rate.
+_FRAME_ERROR_LOG_EVERY = 100
 
 
 # ---------------------------------------------------------------------------
@@ -486,11 +490,16 @@ def run_edge_device(
             frame loop no longer drains them), and the drone is landed
             before the transport is disconnected on any exit.
 
+    A frame whose processing raises (for example a detector failure) is
+    skipped and logged as ``edge_frame_error`` (the first, then every 100th);
+    it never ends the loop, so it never triggers the landing on exit.
+
     Returns:
         The number of frames processed and sent.
     """
     log = logger if logger is not None else StructuredLogger(component="edge-device")
     frame_count = 0
+    frame_errors = 0
 
     log.info("edge_device_start", stream_video=getattr(runner, "stream_video", None))
     pump_stop = threading.Event()
@@ -509,9 +518,16 @@ def run_edge_device(
                 log.info("edge_device_stop_requested", frames=frame_count)
                 break
 
-            msg = runner.process_frame(frame)
-            transport.send_detections(msg)
-            frame_count += 1
+            try:
+                msg = runner.process_frame(frame)
+            except Exception as exc:  # noqa: BLE001 - one bad frame must not end the loop or land the drone
+                frame_errors += 1
+                if frame_errors == 1 or frame_errors % _FRAME_ERROR_LOG_EVERY == 0:
+                    log.error("edge_frame_error", error=repr(exc)[:200], count=frame_errors)
+                msg = None
+            if msg is not None:
+                transport.send_detections(msg)
+                frame_count += 1
 
             # Apply any ground->edge control messages queued since last frame.
             # A flying edge receives them on its own control thread instead.
@@ -660,7 +676,11 @@ def _build_runner(
     # heavy and unnecessary for importing this module or unit-testing the loop.
     from flightrisk.edge_profiles import ProfileSwitcher
 
-    switcher = ProfileSwitcher(None, drone_id=getattr(args, "drone_id", None) or "drone-1", logger=log)
+    flying = args.source in _FLIGHT_SOURCES
+    # The switcher's replies carry the runner's drone id: None on a camera or
+    # file edge, which then logs refusals without replying. A flying source
+    # refuses every switch until the lane executor's flight check is bound.
+    switcher = ProfileSwitcher(None, drone_id=args.drone_id if flying else None, flies=flying, logger=log)
     detector, profile_name = switcher.startup_detector(_startup_profile_name(args))
 
     reid = None
@@ -680,7 +700,6 @@ def _build_runner(
         except Exception as e:
             log.warning("insightface_unavailable", error=str(e))
 
-    flying = args.source in _FLIGHT_SOURCES
     runner = EdgeRunner(
         detector=detector,
         reid=reid,
@@ -697,7 +716,12 @@ def _build_runner(
 
 
 def _bind_profile_switcher(runner: EdgeRunner, transport: Any, log: StructuredLogger, flight: Any = None) -> None:
-    """Give the runner's profile switcher its reply sender and, on a flying edge, the flight state."""
+    """Give the runner's profile switcher its reply sender and, on a flying edge, the flight state.
+
+    On a flying edge this binds ``LaneExecutor.is_active`` as the switcher's
+    flight check. Until it is bound, a flying edge's switcher refuses every
+    switch (it fails closed).
+    """
     switcher = getattr(runner, "profile_switcher", None)
     if switcher is None:
         return

@@ -2132,6 +2132,11 @@ class GroundTransportSync:
         return self._transport.port
 
     @property
+    def identity(self) -> GroundIdentity | None:
+        """This ground's protocol v2 identity (node id, role, epoch), or None for a v1 ground. Read only."""
+        return self._transport.identity
+
+    @property
     def bound_hosts(self) -> tuple[str, ...]:
         """The bind hosts that currently have a listener."""
         return self._transport.bound_hosts
