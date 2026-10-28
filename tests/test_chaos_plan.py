@@ -7,6 +7,7 @@ import pytest
 from tests.support.chaos import (
     _CLEARANCE,
     BUSY_S,
+    EMERGENCY_TO_PARTITION_S,
     MIN_SOAK_S,
     check_flight_log,
     guaranteed_episodes,
@@ -62,6 +63,17 @@ def test_nothing_else_overlaps_a_guaranteed_episode(seed):
         others = [e for e in episodes if e not in fixed and e.start_s < guaranteed.end_s + after
                   and e.end_s > guaranteed.start_s - before]
         assert others == [], f"{others} overlaps {guaranteed}"
+
+
+@pytest.mark.parametrize("duration", [MIN_SOAK_S, 60.0, 180.0])
+@pytest.mark.parametrize("seed", range(100))
+def test_no_emergency_comes_shortly_before_the_guaranteed_partition(seed, duration):
+    episodes = plan(seed, duration)
+    (down,) = [e for e in episodes if e.kind == "partition" and e.direction in (DOWN, BOTH)
+               and e.duration_s >= LIMIT + SLACK + 1.0 and e.start_s == pytest.approx(0.3 * duration, abs=0.01)]
+    close = [e for e in episodes if e.kind == "emergency" and e.start_s < down.start_s
+             and e.end_s > down.start_s - EMERGENCY_TO_PARTITION_S]
+    assert close == [], f"{close} is too close before {down}"
 
 
 def test_a_run_too_short_for_the_guaranteed_episodes_is_refused():

@@ -54,8 +54,13 @@ MIN_SOAK_S = 45.0
 BUSY_AT, DOWN_AT, SEVER_AT, EMERGENCY_AT = 0.15, 0.30, 0.50, 0.65
 BUSY_S = 4.0
 EMERGENCY_WAIT_S = 1.6
+#: The least time between an emergency and a later down partition of the same drone. A takeoff ordered right
+#: after the emergency landing is re-landed by the monitor 2 s later (and again 2 s after that), which can put
+#: a re-landing inside the partition so that the watchdog finds the drone already on the ground.
+EMERGENCY_TO_PARTITION_S = 8.0
 #: Clear space kept around a guaranteed episode: (seconds before its start, seconds after its end).
-_CLEARANCE = {"busy": (3.0, 1.0), "partition": (3.0, 1.0), "sever": (3.0, 3.0), "emergency": (3.0, 3.0)}
+_CLEARANCE = {"busy": (3.0, 1.0), "partition": (EMERGENCY_TO_PARTITION_S, 1.0), "sever": (3.0, 3.0),
+              "emergency": (3.0, EMERGENCY_TO_PARTITION_S)}
 
 #: A square flown by the lane drone; repeating it keeps the drone inside its geofence.
 LANE_SQUARE = (

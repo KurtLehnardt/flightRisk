@@ -65,6 +65,16 @@ Not asserted yet, because it is not true or not observable on main today: no lan
 
 The run prints a report with the number of watchdog landings, emergency checks (and why any were skipped), lane plans and moves, and moves sent during the busy fault so you can see that faults really fired. The monitor itself is tested by `tests/test_chaos_monitor.py`, which runs a short plan with the watchdog disabled, and again with the emergency landing removed, and requires the monitor to report both.
 
+## Known limits
+
+- The watchdog check in the chaos monitor trusts the product's own `link_age_s`. A mutant that feeds the watchdog on every loop is caught only by the `watchdog_landings >= 1` assertion, not by the continuous check.
+- The soak never uses backpressure partitions. The drop, loss and reorder modes are application-level faults that a real TCP stream cannot produce, so prefer `hold` or backpressure when you model a pulled cable.
+- `check_flight_log` reads `FakeDrone.calls`, which also records takeoffs that were refused because of an abort.
+- Data and FINs that are already queued in the proxy when a partition starts are still delivered during the partition.
+- A FIN fully closes the proxy's socket to the peer; there is no TCP half-close.
+- The chaos plan keeps at least 8 s between an emergency and a later down partition. A takeoff ordered right after an emergency landing is re-landed by the product 2 s later, and a re-landing inside the partition leaves nothing for the watchdog to land.
+- `pytest -m "not sitl"` also runs the slow tests, because an explicit `-m` replaces the one in `pytest.ini`. Use `-m "not sitl and not slow"`.
+
 ## Demo with two ground nodes
 
 `python scripts/demo_fake_fleet.py --n 2 --nodes 2` starts a second ground station beside the first (edge port 9001 and dashboard port 5556 by default) and the fake edges. An edge connects to one ground today, so all edges attach to node 1, or to the node named by `--edge-node`. The peer-link ports 9100 and 9101 are reserved and printed, but nothing listens on them yet, and an `--edge-port` that would put a node on them is refused. With `--attach` no ground station is started at all. Without `--nodes` the script behaves as before.
