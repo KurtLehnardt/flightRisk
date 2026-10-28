@@ -401,9 +401,11 @@ def obstacle_check(check: Mapping[str, Any] | None, *, action: str | None = None
     M.obstacle_checks.add(1, {"action": safe_token(act)})
     depth = (check or {}).get("center_depth")
     margin = None
-    if isinstance(depth, (int, float)) and isinstance(min_safe_depth, (int, float)):
-        margin = float(min_safe_depth) - float(depth)
-        M.obstacle_margin.record(margin, {"action": safe_token(act)})
+    if isinstance(depth, (int, float)) and isinstance(min_safe_depth, (int, float)) and min_safe_depth > 0:
+        # Histograms take non-negative values only, so the metric is the ratio
+        # (above 1 is blocked); the log keeps the signed margin.
+        margin = round(float(min_safe_depth) - float(depth), 4)
+        M.obstacle_depth_ratio.record(max(0.0, float(depth) / float(min_safe_depth)), {"action": safe_token(act)})
     if act == "clear":
         return
     flight_safety("obstacle", reason=act, drone_id=drone_id, center_depth=depth, margin=margin,

@@ -212,8 +212,9 @@ def _frame_loop(socketio):
     frames_seen = 0
 
     def _span(name: str):
-        # No-op context manager when OTel is disabled.
-        return tracer.start_as_current_span(name) if tracer else nullcontext()
+        # A stage span only inside a sampled frame trace (one frame in
+        # trace_every); otherwise, and when OTel is disabled, a no-op.
+        return tracer.start_as_current_span(name) if (tracer and frame_span is not None) else nullcontext()
 
     def _stage(name: str):
         return obs_events.StageTimer(stats, name)

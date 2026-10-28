@@ -49,7 +49,7 @@ except ImportError:  # pragma: no cover
 def _args_summary(command: str, args: tuple, kwargs: dict) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if command == "move" and args:
-        out["direction"] = safe_token(args[0])
+        out["move_direction"] = safe_token(args[0])
         if len(args) > 1 and isinstance(args[1], (int, float)):
             out["distance_cm"] = args[1]
     elif command == "rotate" and args and isinstance(args[0], (int, float)):

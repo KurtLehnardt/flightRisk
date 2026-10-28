@@ -211,11 +211,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Obstacle margin",
-      "description": "min_safe_depth minus centre depth (relative MiDaS units): below 0 the path is blocked.",
+      "title": "Obstacle depth ratio",
+      "description": "Centre depth over min_safe_depth (relative MiDaS units): above 1 the path is blocked. The signed margin is in each obstacle log line.",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.1, sum by (le) (rate(flightrisk_obstacle_margin_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p10", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.5, sum by (le) (rate(flightrisk_obstacle_margin_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p50", "refId": "B"}],
-      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "off"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.5, sum by (le) (rate(flightrisk_obstacle_depth_ratio_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p50", "refId": "A"}, {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.9, sum by (le) (rate(flightrisk_obstacle_depth_ratio_bucket{service_instance_id=~\"$node\"}[5m])))", "legendFormat": "p90", "refId": "B"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 12, "showPoints": "never", "spanNulls": true, "stacking": {"mode": "none", "group": "A"}, "thresholdsStyle": {"mode": "line"}}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "id": 16,
       "gridPos": {"x": 12, "y": 34, "w": 12, "h": 7}

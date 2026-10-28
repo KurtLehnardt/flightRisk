@@ -59,7 +59,7 @@ groups:
     annotations:
       summary: Battery of {{ $labels.drone_id }} is below 20 %
       description: Bring the drone back; the dashboard lands it automatically at 10 %.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
   - uid: fr-battery-critical
     title: Drone battery critical (< 10 %)
     condition: C
@@ -106,7 +106,7 @@ groups:
     annotations:
       summary: Battery of {{ $labels.drone_id }} is below 10 %
       description: The critical-battery land should be in progress. Check the drone and land it manually if it is still flying.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
   - uid: fr-telemetry-stale
     title: Drone telemetry stale (> 5 s)
     condition: C
@@ -154,7 +154,7 @@ groups:
     annotations:
       summary: No fresh telemetry from {{ $labels.drone_id }} for over 5 s while flying
       description: Height, battery and speed shown for this drone are stale.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
   - uid: fr-link-loss-landing
     title: Link loss or watchdog landing
     condition: C
@@ -201,7 +201,7 @@ groups:
     annotations:
       summary: '{{ $labels.drone_id }} lost its link or was landed by the watchdog'
       description: An edge landed its drone after ground silence, or the ground declared a drone lost and re-tasked its lanes.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
   - uid: fr-land-failure
     title: Land not executed or not confirmed
     condition: C
@@ -249,7 +249,7 @@ groups:
     annotations:
       summary: A land on {{ $labels.drone_id }} failed
       description: A land returned not executed, raised, or was not confirmed. Take manual control of the drone.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
   - uid: fr-outbox-drops
     title: Fleet messages dropped
     condition: C
@@ -296,7 +296,7 @@ groups:
     annotations:
       summary: '{{ $labels.side }} dropped {{ $labels.type }} messages ({{ $labels.reason }})'
       description: Telemetry queue overflow on an edge, or control messages that reached no connection.
-      __dashboardUid__: fr-flight-comm
+      dashboard_url: /d/fr-flight-comm
 - orgId: 1
   name: flightrisk-service
   folder: FlightRisk
@@ -348,7 +348,7 @@ groups:
     annotations:
       summary: More than 10 errors per minute
       description: Open FlightRisk / Errors & Logs and look at the top fingerprints.
-      __dashboardUid__: fr-errors
+      dashboard_url: /d/fr-errors
   - uid: fr-frame-loop-stalled
     title: Frame loop stalled
     condition: C
@@ -395,4 +395,4 @@ groups:
     annotations:
       summary: No frame processed for over 10 s on {{ $labels.service_instance_id }}
       description: 'Detection is not running: the video source stopped or the frame loop is stuck.'
-      __dashboardUid__: fr-detection
+      dashboard_url: /d/fr-detection

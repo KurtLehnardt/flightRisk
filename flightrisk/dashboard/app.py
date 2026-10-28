@@ -1184,6 +1184,14 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     log = app_state.logger
     log.info("pipeline_init", source=source, target_path=target_path)
 
+    # OpenTelemetry first, so model loads and the startup target are recorded.
+    if _HAS_TELEMETRY:
+        otel_enabled = init_telemetry()
+        if otel_enabled:
+            app_state.tracer = get_tracer()
+            app_state.otel_metrics = FlightRiskMetrics(get_meter())
+            log.info("opentelemetry_enabled")
+
     if app_state.detector is None:
         app_state.detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
         obs_events.model_load("yolo", "ok")
@@ -1299,13 +1307,6 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.canon = TargetCanon(session_db=app_state.db)
         log.info("target_canon_initialized")
 
-    # OpenTelemetry
-    if _HAS_TELEMETRY:
-        otel_enabled = init_telemetry()
-        if otel_enabled:
-            app_state.tracer = get_tracer()
-            app_state.otel_metrics = FlightRiskMetrics(get_meter())
-            log.info("opentelemetry_enabled")
     obs_metrics.register_queue("reasoning", _gemma_queue.qsize)
 
     app_state.source_config = source_config

@@ -47,8 +47,8 @@ SCORE_BUCKETS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.9, 1.0]
 COUNT_BUCKETS = [0, 1, 2, 3, 5, 8, 13, 20, 50]
 #: Buckets (s) for operator response time to an alert.
 RESPONSE_BUCKETS_S = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600]
-#: Buckets (m) for obstacle depth margins (relative units, may be negative).
-MARGIN_BUCKETS = [-0.5, -0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2, 0.5, 1.0]
+#: Buckets for the obstacle depth ratio (centre depth / min_safe_depth; above 1 is blocked).
+DEPTH_RATIO_BUCKETS = [0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0]
 
 #: Histogram name -> bucket boundaries, applied as SDK views in telemetry.py.
 HISTOGRAM_BUCKETS: dict[str, list[float]] = {
@@ -64,7 +64,7 @@ HISTOGRAM_BUCKETS: dict[str, list[float]] = {
     "flightrisk.match.score": SCORE_BUCKETS,
     "flightrisk.detections.per_frame": COUNT_BUCKETS,
     "flightrisk.alert.response_s": RESPONSE_BUCKETS_S,
-    "flightrisk.obstacle.margin": MARGIN_BUCKETS,
+    "flightrisk.obstacle.depth_ratio": DEPTH_RATIO_BUCKETS,
 }
 
 _STARTED = time.time()
@@ -149,7 +149,7 @@ drone_command_duration = _hist("flightrisk.drone.command_duration_ms", "ms", "Dr
 land_duration = _hist("flightrisk.drone.land_duration_ms", "ms", "Land command duration until confirmed or failed")
 flight_safety_events = _counter("flightrisk.flight_safety.events", description="Flight-safety events by kind and reason (battery, link loss, watchdog land, geofence, obstacle, land failures)")
 obstacle_checks = _counter("flightrisk.obstacle.checks", description="Obstacle guard checks by action (clear, go_left, go_right, reverse, unavailable, no_frame)")
-obstacle_margin = _hist("flightrisk.obstacle.margin", description="Obstacle guard margin: min_safe_depth - center depth (positive is clear)")
+obstacle_depth_ratio = _hist("flightrisk.obstacle.depth_ratio", description="Obstacle guard centre depth over min_safe_depth (relative MiDaS units; above 1 the path is blocked)")
 
 # --- Drone communication and fleet link -------------------------------------
 comm_messages = _counter("flightrisk.comm.messages", description="Ground/edge messages by side, direction, type and drone")

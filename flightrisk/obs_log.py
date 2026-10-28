@@ -358,6 +358,13 @@ class _NotEchoed(logging.Filter):
         return not getattr(record, "fr_console_echo", False)
 
 
+class _NotFlightRisk(logging.Filter):
+    """Passes only records from loggers outside ``flightrisk`` (those have their own handler)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        return not (record.name == ROOT_LOGGER or record.name.startswith(ROOT_LOGGER + "."))
+
+
 class DropQueueHandler(logging.handlers.QueueHandler):
     """A QueueHandler that never blocks: a full queue drops the record and counts it."""
 
@@ -436,6 +443,14 @@ def setup_logging(level: int | str | None = None, *, console: bool = True) -> lo
             handler.listener = listener
             root.addHandler(handler)
             _queue_handler, _listener = handler, listener
+            # Third-party loggers (werkzeug, socketio, the OTel SDK, ...) get the
+            # same JSON format through the same queue. A handler on the Python
+            # root logger also turns a library's implicit logging.basicConfig()
+            # into a no-op, so FlightRisk records are never printed twice.
+            others = DropQueueHandler(q)
+            others.addFilter(_NotFlightRisk())
+            others.addFilter(ContextFilter())
+            logging.getLogger().addHandler(others)
         _configured = True
         return root
 

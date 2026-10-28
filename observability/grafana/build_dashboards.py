@@ -229,10 +229,12 @@ def flight_comm() -> Dashboard:
     d.add(timeseries("Obstacle guard", [
         prom(f"sum by (action) (increase({q('flightrisk_obstacle_checks')}[{RI}]))", "{{action}}"),
     ], "short", "Obstacle checks by decision (clear, go_left, go_right, reverse).", 0, stack=True, bars=True), 12, 7)
-    d.add(timeseries("Obstacle margin", [
-        prom(p(0.1, "flightrisk_obstacle_margin", window="5m"), "p10"),
-        prom(p(0.5, "flightrisk_obstacle_margin", window="5m"), "p50", "B"),
-    ], "short", "min_safe_depth minus centre depth (relative MiDaS units): below 0 the path is blocked."), 12, 7)
+    d.add(timeseries("Obstacle depth ratio", [
+        prom(p(0.5, "flightrisk_obstacle_depth_ratio", window="5m"), "p50"),
+        prom(p(0.9, "flightrisk_obstacle_depth_ratio", window="5m"), "p90", "B"),
+    ], "short", "Centre depth over min_safe_depth (relative MiDaS units): above 1 the path is blocked. "
+       "The signed margin is in each obstacle log line.", 0,
+        thresholds=[("green", None), ("red", 1)], threshold_style="line"), 12, 7)
 
     d.row("Link health")
     d.add(timeseries("Link age", [prom(f"max by (drone_id, side) ({q('flightrisk_link_age_s', DRONE)})", "{{drone_id}} {{side}}")],

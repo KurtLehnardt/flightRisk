@@ -100,7 +100,7 @@ BINARY_KEYS = frozenset({"image", "photo", "frame", "thumbnail", "snapshot", "cr
 FREE_TEXT_KEYS = frozenset({"description", "notes", "note", "comment", "text", "query"})
 
 #: Short control tokens kept even with content capture off.
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:@+\-]{1,64}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:@+/\-]{1,64}$")
 
 
 def content_capture_enabled(environ: Mapping[str, str] | None = None) -> bool:
@@ -126,7 +126,10 @@ def cap(text: str, limit: int = MAX_FIELD_CHARS) -> str:
         return ""
     if len(text) <= limit:
         return text
-    return text[: max(0, limit - 12)] + "...[truncated]"
+    marker = "...[truncated]"
+    if limit <= len(marker):
+        return text[:limit]
+    return text[: limit - len(marker)] + marker
 
 
 def redact_text(text: Any, limit: int | None = MAX_FIELD_CHARS) -> str:

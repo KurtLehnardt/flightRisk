@@ -77,6 +77,11 @@ def install_http_observability(app) -> None:
     """Add RED metrics and ``user_input`` logging to every Flask request."""
     from flask import g, request
 
+    from flightrisk.obs_log import setup_logging
+
+    # Configure logging before any library can call logging.basicConfig().
+    setup_logging()
+
     if getattr(app, "_flightrisk_obs_installed", False):
         return
     app._flightrisk_obs_installed = True
@@ -141,8 +146,9 @@ def _rest_payload(request) -> Any:
     if body is not None:
         payload["body"] = body
     if request.files:
-        payload["files"] = {name: {"filename_chars": len(f.filename or ""), "mimetype": safe_token(f.mimetype)}
-                            for name, f in request.files.items()}
+        # Field names, file-name length and MIME type only; never the bytes or the file name.
+        payload["uploads"] = [{"field": name, "filename_chars": len(f.filename or ""), "mimetype": safe_token(f.mimetype)}
+                              for name, f in request.files.items()]
         if request.content_length:
             payload["content_length"] = request.content_length
     return payload or None
