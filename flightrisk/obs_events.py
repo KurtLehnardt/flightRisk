@@ -356,6 +356,8 @@ def alert(transition: str, *, alert_id: str | None, phase: str, awaiting_s: floa
     if transition in ("confirmed", "dismissed") and awaiting_s is not None:
         M.alert_response.record(awaiting_s, {"action": transition})
     level = logging.WARNING if transition in ("opened", "renotified", "confirmed") else logging.INFO
+    if transition == "reset":
+        level = logging.DEBUG  # every new session resets the latch
     fields: dict[str, Any] = {"transition": transition, "phase": phase}
     if alert_id:
         fields["alert_id"] = alert_id

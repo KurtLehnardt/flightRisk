@@ -8,11 +8,20 @@ Logs are only exported in the otlp-* modes. For the bundled Grafana stack
 Enable via env var: FLIGHTRISK_OTEL_ENABLED=true
 Configure exporter: OTEL_EXPORTER=console|otlp-grpc|otlp-http
 Configure endpoint: OTEL_ENDPOINT=http://localhost:4317
+Name this process: OTEL_RESOURCE_ATTRIBUTES=service.instance.id=edge-2
+(standard OTel variable; merged into the resource, so each laptop shows up
+as its own node in Grafana).
+
+Export never blocks the caller: spans, metrics and logs are queued and sent
+from SDK background threads. An unreachable collector only drops telemetry,
+and the flush at exit gives up after ``_SHUTDOWN_BUDGET_S`` seconds.
 """
 
+import atexit
 import os
 import logging
 import threading
+import time
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -43,6 +52,19 @@ _HAS_OTLP_GRPC = False
 _HAS_OTLP_HTTP = False
 _HAS_LOGS = False
 _log_handler = None
+
+# Set once the OTel providers exist; init_telemetry() is then a no-op.
+_initialized = False
+# Providers to flush and stop at exit (see shutdown_telemetry).
+_providers: list = []
+
+# One OTLP export attempt, retries included, gives up after this many
+# seconds (the SDK default is 10). Keeps the background export threads from
+# sitting on a dead collector. OTEL_EXPORTER_OTLP_TIMEOUT overrides it.
+_EXPORT_TIMEOUT_S = 3.0
+# Total time the exit-time flush may take. With an unreachable collector the
+# SDK defaults would hold the process for about 30 s.
+_SHUTDOWN_BUDGET_S = 3.0
 
 # Match scores live in [0, 1]; the SDK's default histogram buckets
 # (0, 5, 10, ...) would put every observation in the first bucket.
@@ -97,8 +119,11 @@ def init_telemetry(
 ) -> bool:
     """Initialise OpenTelemetry tracing and metrics.
 
-    Returns True when OTel providers are active, False otherwise.
+    Returns True when OTel providers are active, False otherwise. Safe to
+    call more than once: after the first successful call it returns True
+    without building a second set of providers and exporter threads.
     """
+    global _initialized
     # The JSON log format applies whether or not OpenTelemetry is on.
     from flightrisk.obs_log import setup_logging
 
@@ -115,6 +140,9 @@ def init_telemetry(
         trace.set_tracer_provider(trace.NoOpTracerProvider())
         return False
 
+    if _initialized:
+        return True
+
     exporter_type = os.environ.get("OTEL_EXPORTER", "console").lower()
     endpoint = os.environ.get("OTEL_ENDPOINT", "http://localhost:4317")
 
@@ -126,7 +154,9 @@ def init_telemetry(
 
     # --- Trace provider ---
     span_exporter = _build_span_exporter(exporter_type, endpoint)
-    tracer_provider = TracerProvider(resource=resource)
+    # shutdown_on_exit=False everywhere: shutdown_telemetry() replaces the
+    # SDK's unbounded atexit flush with one that has a time budget.
+    tracer_provider = TracerProvider(resource=resource, shutdown_on_exit=False)
     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
     trace.set_tracer_provider(tracer_provider)
 
@@ -139,12 +169,17 @@ def init_telemetry(
     meter_provider = MeterProvider(
         resource=resource,
         metric_readers=[metric_reader],
+        shutdown_on_exit=False,
         views=_histogram_views(),
     )
     metrics.set_meter_provider(meter_provider)
 
     # --- Log provider (OTLP only; console mode already prints to stdout) ---
-    _init_logs(resource, exporter_type, endpoint)
+    log_provider = _init_logs(resource, exporter_type, endpoint)
+
+    _providers.extend(p for p in (log_provider, tracer_provider, meter_provider) if p is not None)
+    atexit.register(shutdown_telemetry)
+    _initialized = True
 
     logger.info(
         "OpenTelemetry enabled (exporter=%s, endpoint=%s)", exporter_type, endpoint
@@ -168,6 +203,36 @@ def _histogram_views() -> list:
         View(instrument_name=name, aggregation=ExplicitBucketHistogramAggregation(bounds))
         for name, bounds in buckets.items()
     ]
+
+
+def shutdown_telemetry(timeout_s: float = _SHUTDOWN_BUDGET_S) -> bool:
+    """Flush and stop the OTel providers, giving up after ``timeout_s``.
+
+    Registered with ``atexit`` by ``init_telemetry``. Each provider shuts
+    down on its own daemon thread; whatever has not been sent when the budget
+    runs out is dropped, so a missing collector never holds up the exit.
+    Returns True when every provider finished in time.
+    """
+    providers = list(_providers)
+    _providers.clear()
+    threads = []
+    for provider in providers:
+        t = threading.Thread(
+            target=_shutdown_quietly, args=(provider,), name="otel-shutdown", daemon=True
+        )
+        t.start()
+        threads.append(t)
+    deadline = time.monotonic() + timeout_s
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    return not any(t.is_alive() for t in threads)
+
+
+def _shutdown_quietly(provider) -> None:
+    try:
+        provider.shutdown()
+    except Exception:  # never let telemetry teardown raise at exit
+        logger.debug("telemetry provider shutdown failed", exc_info=True)
 
 
 def get_tracer(name: str = "flightrisk") -> "trace.Tracer":
@@ -325,26 +390,33 @@ class FlightRiskMetrics:
 # Exporter builders (internal)
 # ---------------------------------------------------------------------------
 
+def _export_timeout():
+    """Per-export timeout in seconds; None lets OTEL_EXPORTER_OTLP_TIMEOUT decide."""
+    if os.environ.get("OTEL_EXPORTER_OTLP_TIMEOUT"):
+        return None
+    return _EXPORT_TIMEOUT_S
+
+
 def _build_span_exporter(exporter_type: str, endpoint: str):
     if exporter_type == "otlp-grpc" and _HAS_OTLP_GRPC:
-        return OTLPGrpcSpanExporter(endpoint=endpoint, insecure=True)
+        return OTLPGrpcSpanExporter(endpoint=endpoint, insecure=True, timeout=_export_timeout())
     if exporter_type == "otlp-http" and _HAS_OTLP_HTTP:
         http_endpoint = endpoint.replace(":4317", ":4318")
-        return OTLPHttpSpanExporter(endpoint=f"{http_endpoint}/v1/traces")
+        return OTLPHttpSpanExporter(endpoint=f"{http_endpoint}/v1/traces", timeout=_export_timeout())
     return ConsoleSpanExporter()
 
 
 def _build_log_exporter(exporter_type: str, endpoint: str):
     """Return an OTLP log exporter, or None for console mode / missing deps."""
     if exporter_type == "otlp-grpc" and _HAS_OTLP_GRPC:
-        return OTLPGrpcLogExporter(endpoint=endpoint, insecure=True)
+        return OTLPGrpcLogExporter(endpoint=endpoint, insecure=True, timeout=_export_timeout())
     if exporter_type == "otlp-http" and _HAS_OTLP_HTTP:
         http_endpoint = endpoint.replace(":4317", ":4318")
-        return OTLPHttpLogExporter(endpoint=f"{http_endpoint}/v1/logs")
+        return OTLPHttpLogExporter(endpoint=f"{http_endpoint}/v1/logs", timeout=_export_timeout())
     return None
 
 
-def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
+def _init_logs(resource, exporter_type: str, endpoint: str):
     """Ship every ``flightrisk.*`` log record to the OTLP backend.
 
     The handler sits on the ``flightrisk`` logger, which every module logger
@@ -354,19 +426,21 @@ def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
     exports from its own thread: a caller never waits on the collector, and
     when the collector is unreachable records are queued and then dropped,
     never blocked on.
+
+    Returns the new LoggerProvider, or None when nothing was set up.
     """
     global _log_handler
     # init_telemetry() runs again on every dashboard restart; a second handler
     # would ship each record twice.
     if not _HAS_LOGS or _log_handler is not None:
-        return
+        return None
     log_exporter = _build_log_exporter(exporter_type, endpoint)
     if log_exporter is None:
-        return
+        return None
 
     from flightrisk.obs_log import JsonFormatter, install_otel_handler
 
-    log_provider = LoggerProvider(resource=resource)
+    log_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
     log_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     set_logger_provider(log_provider)
     with warnings.catch_warnings():
@@ -377,6 +451,7 @@ def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
     handler.setFormatter(JsonFormatter())
     install_otel_handler(handler)
     _log_handler = handler
+    return log_provider
 
 
 if _HAS_LOGS:
@@ -415,10 +490,10 @@ if _HAS_LOGS:
 
 def _build_metric_exporter(exporter_type: str, endpoint: str):
     if exporter_type == "otlp-grpc" and _HAS_OTLP_GRPC:
-        return OTLPGrpcMetricExporter(endpoint=endpoint, insecure=True)
+        return OTLPGrpcMetricExporter(endpoint=endpoint, insecure=True, timeout=_export_timeout())
     if exporter_type == "otlp-http" and _HAS_OTLP_HTTP:
         http_endpoint = endpoint.replace(":4317", ":4318")
-        return OTLPHttpMetricExporter(endpoint=f"{http_endpoint}/v1/metrics")
+        return OTLPHttpMetricExporter(endpoint=f"{http_endpoint}/v1/metrics", timeout=_export_timeout())
     return ConsoleMetricExporter()
 
 

@@ -30,7 +30,6 @@ trace is included only while the log level is DEBUG.
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import contextvars
 import datetime as _dt
@@ -365,6 +364,19 @@ class DropQueueHandler(logging.handlers.QueueHandler):
     def __init__(self, q: queue.Queue):
         super().__init__(q)
         self.dropped = 0
+        self.listener = None
+
+    def close(self) -> None:
+        # logging.shutdown() (registered by the logging module at exit)
+        # closes every handler; stopping the listener here writes out what
+        # is still queued, so no exit hook of our own is needed.
+        listener, self.listener = self.listener, None
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:  # noqa: BLE001, S110 -- never raise from logging shutdown
+                pass
+        super().close()
 
     def enqueue(self, record: logging.LogRecord) -> None:
         try:
@@ -421,20 +433,11 @@ def setup_logging(level: int | str | None = None, *, console: bool = True) -> lo
             stderr.setFormatter(JsonFormatter())
             listener = logging.handlers.QueueListener(q, stderr, respect_handler_level=False)
             listener.start()
+            handler.listener = listener
             root.addHandler(handler)
             _queue_handler, _listener = handler, listener
-            atexit.register(_stop_listener)
         _configured = True
         return root
-
-
-def _stop_listener() -> None:
-    listener = _listener
-    if listener is not None:
-        try:
-            listener.stop()
-        except Exception:  # noqa: BLE001, S110
-            pass
 
 
 def console_dropped() -> int:
