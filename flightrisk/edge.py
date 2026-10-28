@@ -107,6 +107,9 @@ class EdgeRunner:
         # The edge's ProfileSwitcher (flightrisk/edge_profiles.py), which
         # handles set_detection_profile; None when profiles are not wired.
         self.profile_switcher: Any = None
+        # False while frames fail to process (set by the edge device's frame
+        # loop); flying edges report it in telemetry as ``detector_ok``.
+        self.detector_ok = True
         self._detector_lock = threading.Lock()
 
     @property

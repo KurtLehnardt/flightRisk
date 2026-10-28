@@ -18,13 +18,20 @@ profile (``flightrisk/vision/profiles.py``) and sends
   choice for it (its own choice, else the fleet default) is flagged as a
   mismatch, unless the edge is running that choice's fallback. The choice is
   sent again once each time such a drone first reports support, reports
-  that it is back on the ground after flying, or reconnects after being
-  silent for ``reconnect_gap_s`` (for example an edge restart). The edge's
-  own flight check still decides whether the switch happens.
+  that a switch is allowed again (``detection_profile_switchable`` in its
+  telemetry going from false to true, the edge's own flight check; an
+  ``in_flight`` refusal re-arms it), or reconnects after being silent for
+  ``reconnect_gap_s`` (for example an edge restart). Nothing is re-sent
+  while a command to that drone is still waiting for its answer. The
+  edge's own flight check still decides whether the switch happens.
 * **Replies.** The edge's ``ack`` (active profile, fallback) or ``nack``
   (reason and an operator-facing ``detail``, for example "only on the
-  ground") is shown per drone. A drone that is not connected, or that does
-  not answer within ``reply_timeout_s``, is shown as such.
+  ground") is shown per drone. A refusal is shown only when it answers the
+  latest command this ground sent to that drone, so a late refusal of an
+  older command never hides a newer result. A drone that is not connected,
+  or that does not answer within ``reply_timeout_s``, is shown as such.
+* **Detector health.** A flying edge reports ``detector_ok: false`` in
+  telemetry while its frames fail to process; the dashboard shows it.
 * **Standby ground.** In the two-ground fleet an edge obeys profile commands
   only from the leader ground. A ground whose role is ``standby`` refuses
   the operator's choice at once and the dashboard hides the controls,
@@ -75,14 +82,18 @@ class _DroneProfile:
     fallback_reason: str | None = None
     # What the edge says it was last asked for (it differs from active after a fallback).
     edge_requested: str | None = None
-    # What this ground last asked for.
+    # What this ground last asked for, and the cmd_id of that command.
     requested: str | None = None
+    last_cmd: str | None = None
     override: str | None = None
     pending_cmd: str | None = None
     refusal_reason: str | None = None
     refusal_detail: str | None = None
     note: str | None = None
     flying: bool | None = None
+    # The edge's own answer to "may the profile change now?"; None until reported.
+    switchable: bool | None = None
+    detector_ok: bool | None = None
     last_seen: float | None = None
 
 
@@ -195,6 +206,8 @@ class ProfileBoard:
             ),
             "note": state.note,
             "flying": state.flying,
+            "switchable": state.switchable,
+            "detector_ok": state.detector_ok,
         }
 
     # -- What the edges report ----------------------------------------------
@@ -237,23 +250,14 @@ class ProfileBoard:
             state = self._drone(drone_id)
             if state is None:
                 return True
-            state.supported = True
-            if msg.get("cmd_id") == state.pending_cmd:
-                state.pending_cmd = None
-            state.note = None
-            if fp.is_profile_name(msg.get("requested")):
-                state.edge_requested = msg["requested"]
-            if mtype == fp.ACK:
-                state.active = msg.get("profile") if fp.is_profile_name(msg.get("profile")) else state.active
-                state.fallback = msg.get("fallback") is True
-                state.fallback_reason = msg.get("fallback_reason") if state.fallback else None
-                state.refusal_reason = state.refusal_detail = None
-            else:
-                if fp.is_profile_name(msg.get("profile")):
-                    state.active = msg["profile"]
-                state.refusal_reason = str(msg.get("reason"))
-                detail = msg.get("detail")
-                state.refusal_detail = detail if isinstance(detail, str) else None
+            stale = mtype == fp.NACK and msg.get("cmd_id") != state.last_cmd
+            if not stale:
+                self._apply_reply_locked(state, msg, mtype)
+        if stale:
+            # A refusal of an older command (or of another ground's) must not
+            # overwrite the answer to the latest one.
+            log.info("detection profile: ignoring a refusal of an older command from %s", drone_id)
+            return True
         log.info(
             "detection profile %s from %s: %s",
             "ack" if mtype == fp.ACK else "nack", drone_id,
@@ -261,6 +265,29 @@ class ProfileBoard:
         )
         self.publish()
         return True
+
+    def _apply_reply_locked(self, state: _DroneProfile, msg: Mapping[str, Any], mtype: str) -> None:
+        """Record an edge's answer to a profile command. Caller holds the lock."""
+        state.supported = True
+        if msg.get("cmd_id") == state.pending_cmd:
+            state.pending_cmd = None
+        state.note = None
+        if fp.is_profile_name(msg.get("requested")):
+            state.edge_requested = msg["requested"]
+        if mtype == fp.ACK:
+            state.active = msg.get("profile") if fp.is_profile_name(msg.get("profile")) else state.active
+            state.fallback = msg.get("fallback") is True
+            state.fallback_reason = msg.get("fallback_reason") if state.fallback else None
+            state.refusal_reason = state.refusal_detail = None
+        else:
+            if fp.is_profile_name(msg.get("profile")):
+                state.active = msg["profile"]
+            if msg.get("reason") == "in_flight":
+                # Re-arm: the next report that a switch is allowed sends the choice again.
+                state.switchable = False
+            state.refusal_reason = str(msg.get("reason"))
+            detail = msg.get("detail")
+            state.refusal_detail = detail if isinstance(detail, str) else None
 
     def _observe_telemetry(self, drone_id: str, msg: Mapping[str, Any]) -> None:
         profile = msg.get("detection_profile")
@@ -270,23 +297,36 @@ class ProfileBoard:
             if state is None:
                 return
             reconnected = self._note_seen_locked(state)
-            landed = state.flying is True and flying is False
-            changed = state.flying != flying
+            switchable = msg.get("detection_profile_switchable")
+            if isinstance(switchable, bool):
+                allowed_again = state.switchable is False and switchable
+                changed = state.switchable != switchable
+                state.switchable = switchable
+            else:
+                # An edge that does not report it: fall back to its landing.
+                allowed_again = state.flying is True and flying is False
+                changed = False
+            changed = changed or state.flying != flying
             state.flying = flying
+            detector_ok = msg.get("detector_ok")
+            if isinstance(detector_ok, bool) and detector_ok != state.detector_ok:
+                state.detector_ok, changed = detector_ok, True
             appeared = False
             if fp.is_profile_name(profile):
                 fallback = msg.get("detection_profile_fallback") is True
-                if state.fallback != fallback:
-                    state.fallback, changed = fallback, True
-                    state.fallback_reason = "weights_missing" if fallback else None
+                reason = msg.get("detection_profile_fallback_reason")
+                reason = reason if fallback and isinstance(reason, str) and fp.is_profile_name(reason) else (
+                    "weights_missing" if fallback else None)
+                if state.fallback != fallback or state.fallback_reason != reason:
+                    state.fallback, state.fallback_reason, changed = fallback, reason, True
                 requested = msg.get("detection_profile_requested")
                 state.edge_requested = requested if fp.is_profile_name(requested) else profile
                 active_changed, appeared = self._note_active_locked(state, profile)
                 changed = changed or active_changed
         if changed:
             self.publish()
-        if appeared or reconnected or landed:
-            self._maybe_resend(drone_id, "appeared" if appeared else "reconnected" if reconnected else "landed")
+        if appeared or reconnected or allowed_again:
+            self._maybe_resend(drone_id, "appeared" if appeared else "reconnected" if reconnected else "switchable")
 
     def _note_seen_locked(self, state: _DroneProfile) -> bool:
         """Record that the drone was heard; True when it was silent long enough to count as reconnected."""
@@ -380,7 +420,7 @@ class ProfileBoard:
             state = self._drone(drone_id)
             if state is None:
                 return
-            state.pending_cmd = msg["cmd_id"]
+            state.pending_cmd = state.last_cmd = msg["cmd_id"]
             state.requested = profile
             state.note = None
             state.refusal_reason = state.refusal_detail = None

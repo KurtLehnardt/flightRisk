@@ -544,3 +544,72 @@ def test_the_ground_transport_reports_its_role():
     assert GroundTransportSync(host="127.0.0.1", port=0).identity is None
     standby = GroundIdentity(node_id="win", role="standby", epoch=0)
     assert GroundTransportSync(host="127.0.0.1", port=0, identity=standby).identity.role == "standby"
+
+
+# ---------------------------------------------------------------------------
+# Round 2: switch-allowed edge, late refusals, nothing re-sent while pending
+# ---------------------------------------------------------------------------
+
+
+def test_the_choice_is_sent_again_when_the_edge_reports_a_switch_is_allowed():
+    board, transport, _ = make_board(reply=nack_for("in_flight"), clock=Clock())
+    board.observe_control(telemetry("drone-1", "default", True, detection_profile_switchable=False))
+    board.select("drone-1", "level")
+    assert len(transport.sent) == 1
+    # Landed, but the edge still says no (its lane run is unwinding): nothing is sent.
+    board.observe_control(telemetry("drone-1", "default", False, detection_profile_switchable=False))
+    assert len(transport.sent) == 1
+    transport.reply = ack_for("level")
+    board.observe_control(telemetry("drone-1", "default", False, detection_profile_switchable=True))
+    assert len(transport.sent) == 2
+    board.observe_control(telemetry("drone-1", "level", False, detection_profile_switchable=True))
+    assert len(transport.sent) == 2 and not board.payload()["drones"]["drone-1"]["mismatch"]
+
+
+def test_an_in_flight_refusal_re_arms_the_re_send():
+    board, transport, _ = make_board(reply=nack_for("in_flight"), clock=Clock())
+    # The edge said "allowed" a moment before it took off; the command still raced the takeoff.
+    board.observe_control(telemetry("drone-1", "default", False, detection_profile_switchable=True))
+    board.select("drone-1", "level")
+    assert board.payload()["drones"]["drone-1"]["switchable"] is False  # re-armed by the refusal
+    transport.reply = ack_for("level")
+    board.observe_control(telemetry("drone-1", "default", False, detection_profile_switchable=True))
+    assert len(transport.sent) == 2 and board.payload()["drones"]["drone-1"]["active"] == "level"
+
+
+def test_a_late_refusal_of_an_older_command_does_not_overwrite_a_newer_ack():
+    board, transport, _ = make_board(reply=ack_for("level"))
+    board.observe_detections(detections("drone-1", "default"))
+    board.select("drone-1", "top_down")
+    first = transport.sent[0][1]["cmd_id"]
+    board.select("drone-1", "level")
+    late = fp.make_profile_nack("drone-1", first, "load_failed", profile="default", requested="top_down",
+                                detail="late")
+    assert board.observe_control(late) is True
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["active"] == "level" and drone["refusal"] is None
+
+
+def test_nothing_is_re_sent_while_a_command_is_pending():
+    clock = Clock()
+    board, _, _ = make_board(clock=clock)
+    spawned: list[str] = []
+    board._spawn = lambda fn, drone_id, msg: spawned.append(msg["cmd_id"])  # never answered
+    board.observe_control(telemetry("drone-1", "default", True, detection_profile_switchable=False))
+    board.select("drone-1", "level")
+    assert len(spawned) == 1
+    board.observe_control(telemetry("drone-1", "default", False, detection_profile_switchable=True))  # allowed
+    board.observe_control(telemetry("drone-1", "default", False))  # landed (older edge form)
+    clock.t += 30.0
+    board.observe_detections(detections("drone-1", "default"))  # reconnected
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["pending"] and drone["mismatch"]
+    assert len(spawned) == 1 and board._drones["drone-1"].pending_cmd == spawned[0]
+
+
+def test_detector_health_reaches_the_dashboard():
+    board, _, _emitted = make_board()
+    board.observe_control(telemetry("drone-1", "default", True, detector_ok=False))
+    assert board.payload()["drones"]["drone-1"]["detector_ok"] is False
+    board.observe_control(telemetry("drone-1", "default", True, detector_ok=True))
+    assert board.payload()["drones"]["drone-1"]["detector_ok"] is True

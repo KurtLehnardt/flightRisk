@@ -3131,6 +3131,14 @@
         }
 
         function profileStatus(d) {
+            const [text, cls] = profileStatusCore(d);
+            if (d.detector_ok === false) {
+                return ['DETECTOR FAILING: the edge cannot process frames. ' + text, 'bad'];
+            }
+            return [text, cls];
+        }
+
+        function profileStatusCore(d) {
             if (!d.supported) return ['This edge does not report detection profiles (older edge); it keeps its own model.', 'warn'];
             if (d.pending) return ['Switching to ' + profileLabel(d.requested) + '...', ''];
             if (d.refusal) {
@@ -3146,7 +3154,9 @@
             if (d.note === 'send_failed') return ['Active: ' + profileLabel(d.active) + '. The command could not be sent.', 'bad'];
             if (d.fallback) {
                 const asked = d.requested ? profileLabel(d.requested) : 'the requested profile';
-                return ['Active: ' + profileLabel(d.active) + ' (fallback: ' + asked + ' weights missing on the edge).', 'warn'];
+                const why = d.fallback_reason === 'weights_missing' ? 'weights missing on the edge'
+                    : 'could not be used (' + (d.fallback_reason || 'unknown') + ')';
+                return ['Active: ' + profileLabel(d.active) + ' (fallback: ' + asked + ' ' + why + ').', 'warn'];
             }
             const air = d.flying ? ' In flight: profile changes will be refused.' : '';
             if (d.mismatch) {

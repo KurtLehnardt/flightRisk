@@ -164,10 +164,25 @@ def test_resolve_raises_when_nothing_in_the_chain_can_load_and_survives_cycles()
         reg.resolve("a", exists=lambda path: False)
 
 
-def test_default_profile_builds_exactly_the_pre_profile_edge_detector():
+def test_default_profile_builds_exactly_the_pre_profile_edge_detector(monkeypatch):
     calls = []
-    build_detector(REGISTRY.get(DEFAULT_PROFILE), detector_cls=lambda **kw: calls.append(kw))
-    assert calls == [{"model_name": "yolo11n.pt", "confidence": 0.4}]
+    default = REGISTRY.get(DEFAULT_PROFILE)
+    monkeypatch.delenv("FLIGHTRISK_DETECTOR_MODEL", raising=False)
+    build_detector(default, detector_cls=lambda **kw: calls.append(kw))
+    monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", r"C:\models\heridal_yolo11s.pt")
+    build_detector(default, detector_cls=lambda **kw: calls.append(kw))
+    monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", "   ")
+    build_detector(default, detector_cls=lambda **kw: calls.append(kw))
+    assert calls == [
+        {"model_name": "yolo11n.pt", "confidence": 0.4},
+        {"model_name": r"C:\models\heridal_yolo11s.pt", "confidence": 0.4},
+        {"model_name": "yolo11n.pt", "confidence": 0.4},
+    ]
+    # FLIGHTRISK_DETECTOR_MODEL belongs to the default profile only.
+    calls.clear()
+    monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", "other.pt")
+    build_detector(REGISTRY.get("level"), detector_cls=lambda **kw: calls.append(kw))
+    assert calls[0]["model_name"] == "yolo11n.pt"
 
 
 def test_top_down_and_level_build_their_own_settings():
@@ -319,7 +334,9 @@ def test_startup_with_missing_weights_falls_back_and_warns():
     assert switcher.active == "level" and switcher.fallback_reason == "weights_missing"
     assert log.events("profile_fallback")[0]["requested"] == "top_down"
     assert switcher.status_fields() == {
-        "detection_profile": "level", "detection_profile_fallback": True, "detection_profile_requested": "top_down",
+        "detection_profile": "level", "detection_profile_fallback": True,
+        "detection_profile_fallback_reason": "weights_missing", "detection_profile_requested": "top_down",
+        "detection_profile_switchable": True,
     }
 
 
@@ -851,3 +868,188 @@ def test_a_failing_frame_never_ends_the_edge_loop():
     count = edge_device.run_edge_device(frames, transport, Runner(), logger=log)
     assert count == 2 and transport.send_detections.call_count == 2
     assert log.events("edge_frame_error")[0]["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 2: frame failure streaks, detector health, switchable, startup request
+# ---------------------------------------------------------------------------
+
+
+class FailingRunner:
+    """A runner whose frames fail while ``failing`` says so; records ``detector_ok``."""
+
+    stream_video = False
+
+    def __init__(self, failing):
+        self.failing = failing
+        self.n = 0
+        self.detector_ok = True
+        self.health: list[bool] = []
+
+    def process_frame(self, frame):
+        self.n += 1
+        if self.failing(self.n):
+            raise RuntimeError("detector crashed")
+        return DetectionMessage(timestamp=1.0, frame_id=self.n)
+
+
+class StepClock:
+    """Advances by ``step`` seconds on every reading."""
+
+    def __init__(self, step):
+        self.t, self.step = 0.0, step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+def _frames(n):
+    return [np.zeros((4, 4, 3), dtype=np.uint8)] * n
+
+
+def test_frames_failing_for_ten_seconds_in_a_row_end_the_loop_and_land_on_exit():
+    runner = FailingRunner(lambda n: True)
+    transport = MagicMock()
+    transport.recv.return_value = None
+    flight = MagicMock()
+    log = RecordingLog()
+    with pytest.raises(RuntimeError, match="detector crashed"):
+        edge_device.run_edge_device(_frames(1000), transport, runner, logger=log, flight=flight,
+                                    clock=StepClock(1.0))
+    assert runner.n == 11  # the first failure starts the streak; 10 s later it gives up
+    assert log.events("edge_frame_errors_fatal")[0]["count"] == 11
+    flight.shutdown.assert_called_once()  # the exit path lands the drone, as before
+    assert runner.detector_ok is False
+
+
+def test_a_success_resets_the_failure_streak():
+    # Fails 9 frames in every 10: never 10 s in a row at 1 s per frame.
+    runner = FailingRunner(lambda n: n % 10 != 0)
+    transport = MagicMock()
+    transport.recv.return_value = None
+    log = RecordingLog()
+    count = edge_device.run_edge_device(_frames(50), transport, runner, logger=log, clock=StepClock(1.0))
+    assert count == 5 and log.events("edge_frame_errors_fatal") == []
+    assert log.events("edge_frame_recovered")
+
+
+def test_detector_health_is_reported_in_telemetry():
+    runner = FailingRunner(lambda n: n == 1)
+    transport = MagicMock()
+    transport.recv.return_value = None
+    out: list[dict] = []
+    send = edge_device._with_profile_status(out.append, runner)
+    telemetry = {"type": "telemetry", **{key: None for key in fp.TELEMETRY_FIELDS},
+                 "drone_id": "drone-1", "battery": 80, "is_flying": False}
+    edge_device.run_edge_device(_frames(1), transport, runner, logger=RecordingLog())
+    send(telemetry)
+    edge_device.run_edge_device(_frames(1), transport, runner, logger=RecordingLog())
+    send(telemetry)
+    assert [m["detector_ok"] for m in out] == [False, True]
+    fp.validate_message(out[0], proto=1)
+
+
+def test_status_reports_whether_a_switch_is_allowed_now():
+    flying = {"now": False}
+    switcher, _, _, _ = make_switcher(is_active=lambda: flying["now"])
+    assert switcher.status_fields()["detection_profile_switchable"] is True
+    flying["now"] = True
+    assert switcher.status_fields()["detection_profile_switchable"] is False
+    unbound, _, _, _ = make_switcher(flies=True)
+    assert unbound.status_fields()["detection_profile_switchable"] is False
+
+
+def test_a_startup_profile_that_fails_reports_what_was_asked_for():
+    def fail_top_down(profile):
+        if profile.name == "top_down":
+            raise RuntimeError("corrupt weights")
+        return fake_loader(profile)
+
+    switcher, runner, _, log = make_switcher(start="top_down", loader=fail_top_down)
+    assert runner.detection_profile == "default"
+    fields = switcher.status_fields()
+    assert fields["detection_profile_requested"] == "top_down"
+    assert fields["detection_profile_fallback"] is True
+    assert fields["detection_profile_fallback_reason"] == "load_failed"
+    assert log.events("profile_fallback")[0]["requested"] == "top_down"
+
+    switcher, _, _, _ = make_switcher(start="nadir")
+    fields = switcher.status_fields()
+    assert fields["detection_profile_requested"] == "nadir"
+    assert fields["detection_profile_fallback_reason"] == "unknown_profile"
+
+    switcher, _, _, _ = make_switcher(start="Not A Name!")  # never echoed into telemetry
+    fields = switcher.status_fields()
+    assert "detection_profile_requested" not in fields and fields["detection_profile_fallback"] is False
+
+
+def test_a_choice_refused_in_flight_is_applied_once_the_lane_run_has_really_ended():
+    """The ground re-sends on the edge's own "switch allowed" report, not on is_flying turning false.
+
+    A real lane executor on a fake Tello whose move replies arrive late: the
+    operator lands mid-move, so the drone reports landed while the executor
+    is still unwinding (``is_active`` true). A re-send on landing alone
+    would be refused and never repeated.
+    """
+    import time as _time
+
+    from flightrisk.dashboard.detection_profiles import ProfileBoard
+    from flightrisk.drone.lane_executor import LaneExecutor
+    from flightrisk.drone.safety import SafetyEnvelope
+    from flightrisk.drone.tello import FakeTelloController
+    from tests.lane_executor_support import wait_for
+
+    move_s = 0.6
+
+    class SlowReplyTello(FakeTelloController):
+        def move(self, direction, distance_cm):
+            if not self.state.is_flying:
+                raise RuntimeError("landed")
+            self._record("move", direction, distance_cm)
+            _time.sleep(move_s)
+            return True
+
+    drone = SlowReplyTello(name="drone-1", battery=90)
+    drone.connect()
+    holder: dict = {}
+
+    def executor_send(msg):
+        board = holder.get("board")
+        if board is not None and msg.get("type") == "telemetry":
+            board.observe_control({**msg, **switcher.status_fields()})
+
+    executor = LaneExecutor(drone, SafetyEnvelope(alt_slot_cm=100), "drone-1", send=executor_send,
+                            telemetry_interval_s=0.05)
+    switcher, runner, replies, _ = make_switcher(flies=True)
+    switcher.bind_safety(executor.is_active)
+    sends: list[str] = []
+
+    class Transport:
+        def send_command(self, drone_id, msg, *, timeout_s, timeout):
+            sends.append(msg["profile"])
+            before = len(replies)
+            switcher.handle(msg)
+            return replies[-1] if len(replies) > before else None
+
+    board = ProfileBoard(Transport(), lambda *a: None, spawn=lambda fn, *a: fn(*a))
+    holder["board"] = board
+    executor.start()
+    try:
+        executor.handle_clock({"type": "clock", "offset_s": 0.0})
+        assert executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1", "lanes": [
+            {"direction": "forward", "distance_cm": 100}, {"direction": "right", "distance_cm": 100},
+            {"direction": "back", "distance_cm": 100}]})
+        assert executor.handle_start_at({"type": "start_at", "t_ground_s": executor.now() + 0.1})
+        assert wait_for(lambda: drone.state.is_flying)
+        assert wait_for(lambda: board.payload()["drones"].get("drone-1", {}).get("switchable") is False)
+        assert board.select("drone-1", "level") is None
+        assert board.payload()["drones"]["drone-1"]["refusal"]["reason"] == "in_flight"
+        threading.Thread(target=executor.land_now, args=("operator",), daemon=True).start()
+        assert wait_for(lambda: runner.detection_profile == "level", timeout=10)
+        drone_state = board.payload()["drones"]["drone-1"]
+        assert drone_state["active"] == "level" and not drone_state["mismatch"]
+        assert sends == ["level", "level"]  # the refused choice, then exactly one re-send
+    finally:
+        executor.shutdown()
+        drone.disconnect()

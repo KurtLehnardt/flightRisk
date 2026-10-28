@@ -139,6 +139,10 @@ _FLEET_RECONNECT_MAX_DELAY_S = 2.0
 # first failure and then every this many, so a broken detector cannot flood
 # the log at the frame rate.
 _FRAME_ERROR_LOG_EVERY = 100
+# Frames that keep failing for this long in a row end the edge loop with the
+# last error, so a broken detector still ends the edge (and lands a flying
+# drone on the way out) as it did before frame errors were tolerated.
+_FRAME_ERROR_GIVE_UP_S = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +472,7 @@ def run_edge_device(
     logger: StructuredLogger | None = None,
     stop_event: Any = None,
     flight: LaneExecutor | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Run the edge capture/detect/stream loop.
 
@@ -491,8 +496,12 @@ def run_edge_device(
             before the transport is disconnected on any exit.
 
     A frame whose processing raises (for example a detector failure) is
-    skipped and logged as ``edge_frame_error`` (the first, then every 100th);
-    it never ends the loop, so it never triggers the landing on exit.
+    skipped and logged as ``edge_frame_error`` (the first, then every 100th),
+    and ``runner.detector_ok`` is False until a frame succeeds again, so
+    telemetry can report it. A single bad frame never ends the loop. Frames
+    that keep failing for ``_FRAME_ERROR_GIVE_UP_S`` (10 s) in a row end it
+    with the last error (``edge_frame_errors_fatal``), so the exit path lands
+    a flying drone as it did before. ``clock`` times that streak.
 
     Returns:
         The number of frames processed and sent.
@@ -500,6 +509,7 @@ def run_edge_device(
     log = logger if logger is not None else StructuredLogger(component="edge-device")
     frame_count = 0
     frame_errors = 0
+    failing_since: float | None = None
 
     log.info("edge_device_start", stream_video=getattr(runner, "stream_video", None))
     pump_stop = threading.Event()
@@ -520,11 +530,25 @@ def run_edge_device(
 
             try:
                 msg = runner.process_frame(frame)
-            except Exception as exc:  # noqa: BLE001 - one bad frame must not end the loop or land the drone
+            except Exception as exc:  # one bad frame must not end the loop or land the drone
                 frame_errors += 1
+                now = clock()
+                if failing_since is None:
+                    failing_since = now
+                _set_detector_ok(runner, False)
                 if frame_errors == 1 or frame_errors % _FRAME_ERROR_LOG_EVERY == 0:
                     log.error("edge_frame_error", error=repr(exc)[:200], count=frame_errors)
+                if now - failing_since >= _FRAME_ERROR_GIVE_UP_S:
+                    log.error("edge_frame_errors_fatal", error=repr(exc)[:200], count=frame_errors,
+                              failing_s=round(now - failing_since, 1))
+                    raise
                 msg = None
+            else:
+                if failing_since is not None:
+                    log.info("edge_frame_recovered", failed_frames=frame_errors)
+                failing_since = None
+                frame_errors = 0
+                _set_detector_ok(runner, True)
             if msg is not None:
                 transport.send_detections(msg)
                 frame_count += 1
@@ -633,22 +657,31 @@ def _startup_profile_name(args: argparse.Namespace) -> str:
     return str(get_config().vision.detection_profile or "")
 
 
+def _set_detector_ok(runner: Any, ok: bool) -> None:
+    """Record on the runner whether the last frame processed; telemetry reports it."""
+    # A runner that cannot take the attribute (a test double) is left alone.
+    with contextlib.suppress(Exception):
+        runner.detector_ok = ok
+
+
 def _with_profile_status(send: Callable[[dict[str, Any]], Any], runner: EdgeRunner) -> Callable[[dict[str, Any]], Any]:
-    """Wrap the executor's sender so telemetry also reports the active detection profile.
+    """Wrap the executor's sender so telemetry also reports the detection profile and the detector's health.
 
     Only telemetry changes, and only by added fields, which every ground
-    version accepts (unknown fields on an edge link are allowed).
+    version accepts (unknown fields on an edge link are allowed):
+    ``detector_ok`` (False while frames fail to process) and the switcher's
+    ``status_fields``.
     """
 
     def _send(msg: dict[str, Any]) -> Any:
-        switcher = getattr(runner, "profile_switcher", None)
-        if switcher is not None and isinstance(msg, dict) and msg.get("type") == fp.TELEMETRY:
-            try:
-                fields = switcher.status_fields()
-            except Exception:  # noqa: BLE001 - telemetry goes out regardless
-                fields = {}
-            if fields:
-                msg = {**msg, **fields}
+        if isinstance(msg, dict) and msg.get("type") == fp.TELEMETRY:
+            fields: dict[str, Any] = {"detector_ok": getattr(runner, "detector_ok", True) is not False}
+            switcher = getattr(runner, "profile_switcher", None)
+            if switcher is not None:
+                # Telemetry goes out even when the switcher cannot report.
+                with contextlib.suppress(Exception):
+                    fields.update(switcher.status_fields())
+            msg = {**msg, **fields}
         return send(msg)
 
     return _send

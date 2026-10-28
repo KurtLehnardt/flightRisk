@@ -12,14 +12,16 @@ profile name.
 
 | Name | Label | Weights | Tiling | Confidence | Face / ReID weight | Fallback |
 | --- | --- | --- | --- | --- | --- | --- |
-| `default` | Startup default (yolo11n) | `yolo11n.pt` (stock, fetched by Ultralytics when missing) | follows `FLIGHTRISK_DETECTOR_TILED` (off by default) | 0.4 | 1.0 / 1.0 | none |
+| `default` | Startup default (yolo11n) | `FLIGHTRISK_DETECTOR_MODEL` when set, else `yolo11n.pt` (stock, fetched by Ultralytics when missing) | follows `FLIGHTRISK_DETECTOR_TILED` (off by default) | 0.4 | 1.0 / 1.0 | none |
 | `top_down` | Top-down search (HERIDAL) | `models/heridal_yolo11s.pt` (required on disk) | on, tile size and overlap from `FLIGHTRISK_DETECTOR_TILE_SIZE` / `FLIGHTRISK_DETECTOR_TILE_OVERLAP` (640 px, 0.2) | 0.5 | 1.0 / 1.0 | `level` |
 | `level` | Level flight (faces) | `yolo11n.pt` | off (whole frame at the model's native 640 px input) | 0.4 | 1.0 / 1.0 | none |
 
-- `default` is exactly the detector the edge built before profiles existed
-  (`PersonDetector(model_name="yolo11n.pt", confidence=0.4)`). An edge with no
-  profile selected runs it, so nothing changes until someone selects a
-  profile.
+- `default` is exactly the detector the edge built before profiles existed:
+  `PersonDetector(model_name=<weights>, confidence=0.4)`, where the weights
+  are `FLIGHTRISK_DETECTOR_MODEL` when it is set and not blank, else
+  `yolo11n.pt`. The profile names that variable in its `weights_env` field,
+  so no code branches on the profile's name. An edge with no profile
+  selected runs it, so nothing changes until someone selects a profile.
 - `top_down` is the fine-tuned YOLO11s from `docs/altitude-benchmark.md`, run
   tiled at confidence 0.5, the setting that benchmark measured. Its
   `min_person_px` is 32, the conservative reading of that benchmark; it is a
@@ -76,7 +78,10 @@ answers a request for a profile it does not know with
 
 The flag wins. An unknown name in the environment variable, or a profile
 whose model fails to load, starts the edge on `default` with a
-`profile_switch_refused` warning; a profile whose required weights are
+`profile_switch_refused` warning, and telemetry then reports the profile
+that was asked for as `detection_profile_requested` with
+`detection_profile_fallback: true` and the reason (`unknown_profile`,
+`unavailable` or `load_failed`); a profile whose required weights are
 missing starts on its fallback with a `profile_fallback` warning. Only a
 failure to load `default` itself stops the edge, as before.
 
@@ -95,9 +100,16 @@ has a fleet default selector and one row per drone with its active profile.
 - **Mismatch.** A drone whose active profile differs from its choice (its
   own, else the fleet default) is flagged "MISMATCH", unless it runs that
   choice's fallback. The choice is sent again once each time the drone first
-  reports profile support, reports that it is back on the ground after
-  flying, or reconnects after 5 s of silence (for example after an edge
-  restart). The edge's flight check still decides.
+  reports profile support, reports that a switch is allowed again, or
+  reconnects after 5 s of silence (for example after an edge restart).
+  "Allowed again" is the edge's own flight check, reported in telemetry as
+  `detection_profile_switchable` and used on its change from false to true,
+  so the re-send never races the end of a lane run; an `in_flight` refusal
+  re-arms it. Nothing is re-sent while a command to that drone is still
+  waiting for its answer. The edge's flight check still decides.
+- **Late refusals.** A refusal is shown only when it answers the latest
+  command this ground sent to that drone, so a late refusal of an older
+  command never overwrites a newer result.
 - **Standby ground.** In the two-ground fleet an edge takes profile commands
   only from the leader. A standby ground refuses the choice at once and the
   dashboard hides the selectors with a note to use the leader ground.
@@ -131,10 +143,17 @@ has a fleet default selector and one row per drone with its active profile.
   step (`EdgeRunner.swap_detector`). A frame already being processed
   finishes on the old detector. If the load or the warm-up fails, the old
   detector keeps running and the edge answers `nack{reason: load_failed}`.
+- A model load that is already under way when the drone takes off is not
+  interrupted: it finishes in the air, then the flight check refuses the
+  swap, the new detector is discarded, and the edge answers
+  `nack{reason: in_flight}`. The drone keeps flying on the old detector.
 - A frame whose processing raises (for example a detector failure) is
-  skipped and logged as `edge_frame_error` (the first, then every 100th). It
-  never ends the edge loop, so it never triggers the landing that runs when
-  the loop exits.
+  skipped and logged as `edge_frame_error` (the first, then every 100th),
+  and telemetry reports `detector_ok: false` until a frame succeeds again;
+  the dashboard shows "DETECTOR FAILING". A single bad frame never ends the
+  edge loop. Frames that keep failing for 10 s in a row end it with the
+  last error (`edge_frame_errors_fatal`), so the exit path lands a flying
+  drone, as before frame errors were tolerated.
 - One switch runs at a time; another request meanwhile gets
   `nack{reason: busy}`. A switch still running after 60 s is logged as
   `profile_switch_stuck` and stops blocking; if it ever finishes, its
@@ -179,7 +198,8 @@ the message table.
 - **Status.** An edge that supports profiles names its active profile in
   every `detections` message (`detection_profile`) and, when it flies, in its
   telemetry (`detection_profile`, `detection_profile_fallback`,
-  `detection_profile_requested`). These are additional fields, which every
+  `detection_profile_fallback_reason`, `detection_profile_requested`,
+  `detection_profile_switchable`, and `detector_ok`). These are additional fields, which every
   ground version accepts on an edge link.
 
 ### Compatibility

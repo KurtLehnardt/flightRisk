@@ -174,7 +174,9 @@ class ProfileSwitcher:
                 reason="unknown_profile" if isinstance(exc, UnknownProfileError) else "unavailable",
                 phase="startup", known=list(self._registry.names()),
             )
-            resolution = Resolution(requested=DEFAULT_PROFILE, profile=self._registry.get(DEFAULT_PROFILE))
+            resolution = self._startup_fallback(
+                wanted, "unknown_profile" if isinstance(exc, UnknownProfileError) else "unavailable",
+            )
         profile = resolution.profile
         try:
             detector = self._loader(profile)
@@ -185,24 +187,46 @@ class ProfileSwitcher:
                 "profile_switch_refused", drone_id=self.drone_id, requested=wanted, profile=DEFAULT_PROFILE,
                 reason="load_failed", phase="startup", error=repr(exc)[:200],
             )
-            resolution = Resolution(requested=DEFAULT_PROFILE, profile=self._registry.get(DEFAULT_PROFILE))
+            resolution = self._startup_fallback(wanted, "load_failed")
             profile = resolution.profile
             detector = self._loader(profile)
         self._set_state(resolution)
         self._log_selected(resolution, previous=None, phase="startup")
         return detector, profile.name
 
+    def _startup_fallback(self, wanted: str, reason: str) -> Resolution:
+        """``default`` in place of the startup profile *wanted*, still reporting what was asked for.
+
+        The request is reported only when it is a well-formed profile name,
+        so an arbitrary environment value never reaches telemetry.
+        """
+        requested = wanted if fp.is_profile_name(wanted) else DEFAULT_PROFILE
+        return Resolution(
+            requested=requested,
+            profile=self._registry.get(DEFAULT_PROFILE),
+            fallback_reason=reason if requested != DEFAULT_PROFILE else None,
+        )
+
     # -- Status -------------------------------------------------------------
 
     def status_fields(self) -> dict[str, Any]:
-        """Fields added to telemetry: the active profile and any fallback."""
+        """Fields added to telemetry: the active profile, any fallback, and whether a switch is allowed now.
+
+        ``detection_profile_switchable`` is the same flight check a switch
+        uses, so the ground can send a refused choice again the moment the
+        edge would accept it.
+        """
+        switchable = not self._flying()
         with self._lock:
             if self.active is None:
                 return {}
             out: dict[str, Any] = {
                 "detection_profile": self.active,
                 "detection_profile_fallback": self.fallback_reason is not None,
+                "detection_profile_switchable": switchable,
             }
+            if self.fallback_reason is not None:
+                out["detection_profile_fallback_reason"] = self.fallback_reason
             if self.requested is not None and self.requested != self.active:
                 out["detection_profile_requested"] = self.requested
             return out
@@ -404,14 +428,15 @@ class ProfileSwitcher:
         profile = resolution.profile
         self._log.info(
             "profile_selected", drone_id=self.drone_id, profile=profile.name, requested=resolution.requested,
-            previous=previous, changed=previous != profile.name, phase=phase, weights=profile.weights,
+            previous=previous, changed=previous != profile.name, phase=phase, weights=profile.effective_weights(),
             tiled=profile.tiled, confidence=profile.confidence, fallback=resolution.fallback,
         )
         if resolution.fallback:
+            asked = self._registry.get(resolution.requested) if resolution.requested in self._registry else None
             self._log.warning(
                 "profile_fallback", drone_id=self.drone_id, requested=resolution.requested, profile=profile.name,
                 reason=resolution.fallback_reason, phase=phase,
-                missing_weights=self._registry.get(resolution.requested).weights,
+                missing_weights=asked.effective_weights() if asked is not None else None,
             )
 
     def _refuse(
