@@ -56,6 +56,7 @@ FAIL = "FAIL"
 INFO = "INFO"
 
 STATUS_COMMANDS = ("command", "sdk?", "sn?", "battery?", "wifi?")
+OPTIONAL_COMMANDS = ("sdk?", "sn?")
 
 
 @dataclass
@@ -78,6 +79,47 @@ def _clean(reply: bytes) -> str:
     return reply.decode("utf-8", errors="replace").strip().strip("\x00").strip()
 
 
+# One UDP socket per (host, port), reused for every command. A real Tello answers only the
+# source port that sent it ``command``, so a new socket per command gets no reply after the first.
+# For the real command port the socket binds local UDP 8889, the port djitellopy (the dashboard
+# and the edge) always sends from, so a later FlightRisk process is not locked out by this check.
+_CMD_SOCKETS: dict[tuple[str, int], socket.socket] = {}
+
+
+def _command_socket(host: str, port: int) -> socket.socket:
+    key = (host, port)
+    sock = _CMD_SOCKETS.get(key)
+    if sock is None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if port == CMD_PORT:
+            try:
+                sock.bind(("", CMD_PORT))
+            except OSError:
+                pass  # port busy (another Tello program is running): fall back to any free port
+        _CMD_SOCKETS[key] = sock
+    return sock
+
+
+def close_command_sockets() -> None:
+    """Close the shared command sockets (call once the report is done)."""
+    for sock in _CMD_SOCKETS.values():
+        try:
+            sock.close()
+        except OSError:
+            pass
+    _CMD_SOCKETS.clear()
+
+
+def _drain(sock: socket.socket) -> None:
+    """Drop late replies to earlier timed-out commands so they are not read as the next reply."""
+    sock.settimeout(0.0)
+    try:
+        while True:
+            sock.recvfrom(2048)
+    except (BlockingIOError, socket.timeout, OSError):
+        pass
+
+
 def send_command(
     host: str,
     command: str,
@@ -85,17 +127,27 @@ def send_command(
     port: int = CMD_PORT,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> Optional[str]:
-    """Send one SDK command and return the stripped reply, or None on timeout."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    """Send one SDK command and return the stripped reply, or None on timeout.
+
+    Every command to the same host and port goes out from the same local UDP port.
+    """
+    sock = _command_socket(host, port)
     try:
+        _drain(sock)
         sock.settimeout(timeout)
         sock.sendto(command.encode("utf-8"), (host, port))
         data, _ = sock.recvfrom(2048)
         return _clean(data)
-    except (socket.timeout, OSError):
+    except socket.timeout:
         return None
-    finally:
-        sock.close()
+    except OSError:
+        # A broken socket is dropped so the next command starts a fresh one.
+        _CMD_SOCKETS.pop((host, port), None)
+        try:
+            sock.close()
+        except OSError:
+            pass
+        return None
 
 
 def _is_error(reply: str) -> bool:
@@ -115,6 +167,9 @@ def check_drone(host: str, *, port: int = CMD_PORT, timeout: float = DEFAULT_TIM
         name = f"cmd:{cmd}"
         if reply is None:
             results.append(CheckResult(name, host, FAIL, "no reply (timeout)"))
+        elif cmd in OPTIONAL_COMMANDS and reply.lower().startswith("unknown command"):
+            # sdk? and sn? exist only on a Tello EDU (or newer firmware); no flight needs them.
+            results.append(CheckResult(name, host, INFO, f"not supported by this drone: {reply}", reply))
         elif _is_error(reply):
             results.append(CheckResult(name, host, FAIL, f"drone replied: {reply}", reply))
         elif cmd == "command" and reply.lower() != "ok":
@@ -545,7 +600,10 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[Check
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    results = run(args, parser)
+    try:
+        results = run(args, parser)
+    finally:
+        close_command_sockets()
     print(to_json(results) if args.json else format_table(results))
     return 0 if overall_status(results) == PASS else 1
 
