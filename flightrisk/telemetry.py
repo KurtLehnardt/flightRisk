@@ -13,6 +13,7 @@ Configure endpoint: OTEL_ENDPOINT=http://localhost:4317
 import os
 import logging
 import threading
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,11 @@ def init_telemetry(
 
     Returns True when OTel providers are active, False otherwise.
     """
+    # The JSON log format applies whether or not OpenTelemetry is on.
+    from flightrisk.obs_log import setup_logging
+
+    setup_logging()
+
     if not HAS_OTEL:
         logger.debug("opentelemetry packages not installed — telemetry disabled")
         return False
@@ -133,12 +139,7 @@ def init_telemetry(
     meter_provider = MeterProvider(
         resource=resource,
         metric_readers=[metric_reader],
-        views=[
-            View(
-                instrument_name="flightrisk.match.score",
-                aggregation=ExplicitBucketHistogramAggregation(_MATCH_SCORE_BUCKETS),
-            ),
-        ],
+        views=_histogram_views(),
     )
     metrics.set_meter_provider(meter_provider)
 
@@ -149,6 +150,24 @@ def init_telemetry(
         "OpenTelemetry enabled (exporter=%s, endpoint=%s)", exporter_type, endpoint
     )
     return True
+
+
+def _histogram_views() -> list:
+    """Explicit bucket boundaries for every FlightRisk histogram.
+
+    The SDK default buckets (0, 5, 10, 25, ...) suit neither scores in [0, 1]
+    nor latencies that span 1 ms to a minute. Exemplars (the trace id of a
+    sampled observation) are attached by the SDK's default trace-based
+    exemplar filter and exposed by the collector in OpenMetrics format.
+    """
+    from flightrisk.obs_metrics import HISTOGRAM_BUCKETS
+
+    buckets = dict(HISTOGRAM_BUCKETS)
+    buckets.setdefault("flightrisk.match.score", _MATCH_SCORE_BUCKETS)
+    return [
+        View(instrument_name=name, aggregation=ExplicitBucketHistogramAggregation(bounds))
+        for name, bounds in buckets.items()
+    ]
 
 
 def get_tracer(name: str = "flightrisk") -> "trace.Tracer":
@@ -326,7 +345,16 @@ def _build_log_exporter(exporter_type: str, endpoint: str):
 
 
 def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
-    """Ship StructuredLogger output to the OTLP backend alongside stdout."""
+    """Ship every ``flightrisk.*`` log record to the OTLP backend.
+
+    The handler sits on the ``flightrisk`` logger, which every module logger
+    and every ``StructuredLogger`` propagates to, so one handler covers all
+    of them. Its body is the same JSON line the console shows (with the
+    trace and span ids of the active span), and the ``BatchLogRecordProcessor``
+    exports from its own thread: a caller never waits on the collector, and
+    when the collector is unreachable records are queued and then dropped,
+    never blocked on.
+    """
     global _log_handler
     # init_telemetry() runs again on every dashboard restart; a second handler
     # would ship each record twice.
@@ -336,13 +364,53 @@ def _init_logs(resource, exporter_type: str, endpoint: str) -> None:
     if log_exporter is None:
         return
 
-    from flightrisk.observability import register_log_handler
+    from flightrisk.obs_log import JsonFormatter, install_otel_handler
 
     log_provider = LoggerProvider(resource=resource)
     log_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     set_logger_provider(log_provider)
-    _log_handler = LoggingHandler(level=logging.INFO, logger_provider=log_provider)
-    register_log_handler(_log_handler)
+    with warnings.catch_warnings():
+        # The SDK marks its LoggingHandler deprecated in favour of a separate
+        # package; it is the same handler and works unchanged.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        handler = _FlightRiskLogHandler(level=logging.NOTSET, logger_provider=log_provider)
+    handler.setFormatter(JsonFormatter())
+    install_otel_handler(handler)
+    _log_handler = handler
+
+
+if _HAS_LOGS:
+
+    class _FlightRiskLogHandler(LoggingHandler):
+        """OTel log handler whose attributes are a few bounded fields.
+
+        The SDK default copies every ``LogRecord`` attribute; the FlightRisk
+        records carry their fields in the JSON body instead, so only the
+        event name, category, component and drone id are attached (as
+        ``fr.*``, which Loki stores as structured metadata ``fr_event`` and
+        so on, without clashing with the keys of the JSON body).
+        """
+
+        @staticmethod
+        def _get_attributes(record: logging.LogRecord):
+            attrs = {}
+            event = getattr(record, "fr_event", None)
+            if event:
+                attrs["fr.event"] = str(event)
+            category = getattr(record, "fr_category", None)
+            if category:
+                attrs["fr.category"] = str(category)
+            component = getattr(record, "fr_component", None)
+            if component:
+                attrs["fr.component"] = str(component)
+            fields = getattr(record, "fr_fields", None) or {}
+            drone_id = fields.get("drone_id") or getattr(record, "fr_drone_id", None)
+            if isinstance(drone_id, str) and drone_id:
+                attrs["fr.drone_id"] = drone_id
+            fingerprint = getattr(record, "fr_fingerprint", None)
+            if fingerprint:
+                attrs["fr.fingerprint"] = fingerprint
+            return attrs
 
 
 def _build_metric_exporter(exporter_type: str, endpoint: str):
