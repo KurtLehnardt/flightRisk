@@ -78,6 +78,10 @@ class SteppedTello(FakeTelloController):
         self.busy = False
         self.completed = 0
         self.move_log: list[dict[str, Any]] = []
+        # len(calls) at every takeoff attempt, refused ones included: the
+        # executor makes the drone's spot its takeoff point (resets the
+        # pose) just before each attempt.
+        self.takeoff_marks: list[int] = []
         self._permits = 0
         self._next_is_nudge = False
         self._cv = threading.Condition()
@@ -89,6 +93,11 @@ class SteppedTello(FakeTelloController):
 
     def expect_nudge(self, expected: bool = True) -> None:
         self._next_is_nudge = expected
+
+    def takeoff(self, abort: threading.Event | None = None) -> bool:
+        if not self.state.is_flying:
+            self.takeoff_marks.append(len(self.calls))
+        return super().takeoff(abort=abort)
 
     def release(self, n: int = 1) -> None:
         with self._cv:
@@ -151,10 +160,20 @@ def horizontal_moves(drone: FakeTelloController) -> list[tuple]:
     return [c for c in drone.calls if c[0] == "move" and c[1] in ("forward", "back", "left", "right")]
 
 
-def dead_reckoned(drone: FakeTelloController) -> tuple[float, float]:
-    """Position from every horizontal move the drone flew (heading 0)."""
+def dead_reckoned(drone: FakeTelloController, *, this_flight: bool = False) -> tuple[float, float]:
+    """Position from every horizontal move the drone flew (heading 0).
+
+    With *this_flight*, only the moves since the last takeoff attempt count
+    (a ``SteppedTello`` records them), because every takeoff from the ground
+    makes the drone's spot the origin again.
+    """
     x = y = 0.0
-    for _, direction, distance in horizontal_moves(drone):
+    moves = horizontal_moves(drone)
+    if this_flight:
+        marks = getattr(drone, "takeoff_marks", [])
+        start = marks[-1] if marks else 0
+        moves = [c for c in drone.calls[start:] if c[0] == "move" and c[1] in ("forward", "back", "left", "right")]
+    for _, direction, distance in moves:
         x += {"right": distance, "left": -distance}.get(direction, 0)
         y += {"forward": distance, "back": -distance}.get(direction, 0)
     return x, y

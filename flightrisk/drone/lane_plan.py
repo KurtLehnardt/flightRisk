@@ -41,6 +41,7 @@ from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
     MIN_MOVE_CM,
+    RelativePose,
     SafetyEnvelope,
     is_finite_number,
 )
@@ -304,6 +305,7 @@ class LanePlanMixin:
         content = (tuple(lanes), alt_cm, on_complete, hover_timeout_s)
 
         outside = None
+        start_pose: RelativePose | None = None
         carried_step: int | None = None
         accepted = (0, False)
         with self._lock:
@@ -325,8 +327,10 @@ class LanePlanMixin:
                 start_step = carried_step if carried_step is not None else 0
                 # Check the path still to be flown against the geofence before
                 # accepting anything. A move in progress is not in the pose yet,
-                # and it is still part of moves[start_step:].
-                outside = self._path_outside(moves, start_step)
+                # and it is still part of moves[start_step:]. On the ground
+                # the path starts at the next takeoff point (_path_start_pose).
+                start_pose = self._path_start_pose()
+                outside = self._path_outside(moves, start_step, start_pose)
                 # A re-task is launched before the plan is stored, so a
                 # landing that refuses the launch leaves the current plan
                 # untouched. The sequence waits for this lock before it
@@ -352,14 +356,22 @@ class LanePlanMixin:
         if verdict != NEW_PLAN:
             return self._refuse_lanes(msg, verdict, lanes_received, plan_id=identity.plan_id)
         if outside is not None:
-            # The nack is sent outside the lock, like every other message.
+            # The nack is sent outside the lock, like every other message. It
+            # says where the path would leave the fence and where it starts
+            # (both relative to the takeoff point), so the ground can show
+            # the operator why (see NACK_GEOFENCE_FIELDS).
+            start_pose = start_pose if start_pose is not None else RelativePose()
             return self._refuse_lanes(
                 msg,
                 "geofence",
                 lanes_received,
-                geofence_cm=self.envelope.geofence_cm,
-                x_cm=round(outside[0], 1),
-                y_cm=round(outside[1], 1),
+                nack_fields={
+                    "geofence_cm": self.envelope.geofence_cm,
+                    "x_cm": round(outside[0], 1),
+                    "y_cm": round(outside[1], 1),
+                    "rel_x_cm": round(start_pose.x_cm, 1),
+                    "rel_y_cm": round(start_pose.y_cm, 1),
+                },
             )
         lane_index, retask = accepted
         self._log.info(
@@ -375,11 +387,26 @@ class LanePlanMixin:
         self._ack_lanes(msg, battery, len(lanes))
         return True
 
+    def _path_start_pose(self) -> RelativePose:
+        """The pose the rest of a plan would be flown from.
+
+        In the air that is the dead-reckoned pose. On the ground it is the
+        origin: every takeoff from the ground makes the drone's spot the new
+        takeoff point (``_do_takeoff``), so a plan checked before takeoff is
+        flown from there, wherever the previous flight ended.
+        """
+        if self._is_flying():
+            return self.envelope.pose_snapshot()
+        return RelativePose()
+
     def _path_outside(
-        self, moves: list[tuple[int, int, str, int]], start_step: int
+        self, moves: list[tuple[int, int, str, int]], start_step: int, start: RelativePose | None = None
     ) -> tuple[float, float] | None:
-        """First dead-reckoned point of ``moves[start_step:]`` outside the geofence, or None."""
-        pose = self.envelope.pose_snapshot()
+        """First dead-reckoned point of ``moves[start_step:]`` outside the geofence, or None.
+
+        The path starts at *start*, by default ``_path_start_pose()``.
+        """
+        pose = self._path_start_pose() if start is None else RelativePose(start.x_cm, start.y_cm, start.heading_deg)
         for _, _, direction, distance in moves[start_step:]:
             pose.apply_move(direction, distance)
             if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
@@ -451,15 +478,25 @@ class LanePlanMixin:
             "lanes_total": lanes_total,
         })
 
-    def _refuse_lanes(self, msg: dict[str, Any], reason: str, lanes_total: int, **fields: Any) -> bool:
+    def _refuse_lanes(
+        self,
+        msg: dict[str, Any],
+        reason: str,
+        lanes_total: int,
+        nack_fields: dict[str, float] | None = None,
+        **fields: Any,
+    ) -> bool:
         """Log a refused lane plan and tell the ground with a ``nack``. Returns False.
 
         A v1 message gets the v1 nack, whose reason must be a v1 reason, so
         the v2-only reasons are reported to a v1 ground as ``invalid``.
+        *nack_fields* (the optional geofence fields) are logged and also
+        sent in the nack; *fields* are only logged.
         """
-        self._log.warning("edge_assign_lanes_refused", drone_id=self.drone_id, reason=reason, **fields)
+        extra = dict(nack_fields or {})
+        self._log.warning("edge_assign_lanes_refused", drone_id=self.drone_id, reason=reason, **extra, **fields)
         if self._is_v2(msg):
-            self._nack(msg, reason, lanes_total=lanes_total)
+            self._nack(msg, reason, lanes_total=lanes_total, **({"geofence": extra} if extra else {}))
             return False
         self._emit({
             "type": "nack",
@@ -467,6 +504,7 @@ class LanePlanMixin:
             "drone_id": self.drone_id,
             "reason": reason if reason in NACK_REASONS else "invalid",
             "lanes_total": lanes_total,
+            **extra,
         })
         return False
 

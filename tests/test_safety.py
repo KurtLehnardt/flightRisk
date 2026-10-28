@@ -107,7 +107,17 @@ def test_geofence_refuses_exit(make_executor):
     assert executor.handle_assign_lanes(
         {"type": "assign_lanes", "drone_id": "drone-1", "lanes": [{"direction": "forward", "distance_cm": 300}]}
     )
-    executor.envelope.record_move("forward", 300)  # the pose drifted after the plan was accepted
+    # The pose drifted after the plan was accepted. The drift is injected
+    # just after the takeoff, because every takeoff from the ground makes the
+    # drone's spot the origin again (a drift recorded on the ground is gone).
+    real_takeoff = drone.takeoff
+
+    def takeoff_then_drift(abort=None):
+        executed = real_takeoff(abort=abort)
+        executor.envelope.record_move("forward", 300)
+        return executed
+
+    drone.takeoff = takeoff_then_drift
     assert executor.handle_start_at({"type": "start_at", "t_ground_s": clock() + 0.5})
     clock.advance(0.5)
     assert executor.wait_idle(WAIT_S)

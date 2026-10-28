@@ -308,7 +308,9 @@ class Run:
             assert sneaked == [], (sneaked, self.trace[-8:])
         # A move still in flight is in the drone's log but not yet in the pose.
         in_flight = drone.move_log[-1] if drone.waiting else None
-        x, y = dead_reckoned(drone)
+        # The pose counts the moves of the current flight only: every takeoff
+        # from the ground makes the drone's spot the origin again.
+        x, y = dead_reckoned(drone, this_flight=True)
         if in_flight is not None and in_flight["direction"] in DIRECTIONS:
             dx, dy = {"right": (1, 0), "left": (-1, 0), "forward": (0, 1), "back": (0, -1)}[in_flight["direction"]]
             x, y = x - dx * in_flight["distance_cm"], y - dy * in_flight["distance_cm"]

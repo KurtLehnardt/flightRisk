@@ -603,6 +603,7 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_plan_invalidated": ("plan_invalidated", None),
     "edge_retask_not_flown": ("retask_not_flown", None),
     "edge_takeoff": ("takeoff", None),
+    "edge_pose_reset": ("pose_reset", None),
     "edge_lanes_complete": ("lanes_complete", None),
 }
 
