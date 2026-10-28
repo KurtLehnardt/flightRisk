@@ -1588,6 +1588,7 @@
         /* build:t10 start */
         #fleet-section { position: fixed; left: 12px; bottom: 12px; z-index: 900; width: 440px; max-width: calc(100vw - 24px);
             background: var(--bg-secondary); border: 1px solid var(--bg-card); border-radius: 8px; padding: 8px; font-size: 12px; }
+        @media (max-width: 900px) { #fleet-section { position: static; width: auto; max-width: none; margin: 8px 12px; } }
         #fleet-section.collapsed #fleet-body { display: none; }
         #fleet-section .fleet-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
         #fleet-section .fleet-head .spacer { flex: 1; }
@@ -1595,6 +1596,13 @@
             border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 12px; }
         #fleet-section button.active { border-color: var(--cyan); color: var(--cyan); }
         #land-all { background: var(--red) !important; border-color: var(--red) !important; color: #fff !important; font-weight: 700; }
+        .fleet-controls { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--bg-card); display: flex; flex-direction: column; gap: 8px; }
+        .fleet-controls-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); }
+        .fleet-controls-row { display: flex; flex-wrap: wrap; gap: 6px; }
+        .fleet-controls-row button { flex: 1 1 100px; }
+        .fleet-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .fleet-controls #land-all { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--red); border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .fleet-controls-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; overflow-wrap: anywhere; }
         #search-map { height: 260px; width: 100%; background: #0b1220; border-radius: 4px; }
         #fleet-panel { width: 100%; border-collapse: collapse; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; }
         #fleet-panel th, #fleet-panel td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--bg-card); }
@@ -1767,6 +1775,15 @@
                             <button class="btn-ghost btn-danger" onclick="restartDashboard()" title="Restart dashboard and reconnect">Restart</button>
                         </div>
                         <div id="fleet-drone-list" class="fleet-drone-list"></div>
+                        <div class="fleet-controls" role="group" aria-label="Fleet search controls">
+                            <div class="fleet-controls-title">Fleet</div>
+                            <div class="fleet-controls-row">
+                                <button id="fleet-plan" class="btn-ghost" onclick="planFleet()">Plan search</button>
+                                <button id="fleet-start" class="btn-ghost" onclick="startFleet()" disabled>Start search</button>
+                            </div>
+                            <button id="land-all" onclick="landAll()" aria-label="Land all drones" title="Shift+L (Ctrl/Cmd+Shift+L inside text fields)">LAND ALL drones</button>
+                            <div class="fleet-controls-hint">Shift+L lands every drone. Inside a text field use Ctrl/Cmd+Shift+L. The Land button under Flight Controls lands only the selected drone.</div>
+                        </div>
                     </div>
 
                     <!-- D-pad Flight Controls -->
@@ -1832,7 +1849,7 @@
                         </div>
                         <div class="flight-actions">
                             <button class="btn-takeoff" data-key="t" onclick="sendCmd('takeoff')">TAKEOFF</button>
-                            <button class="btn-land" data-key="l" onclick="sendCmd('land')">LAND</button>
+                            <button class="btn-land" data-key="l" onclick="sendCmd('land')" aria-label="Land this drone" title="Land this drone only (L)">Land this drone</button>
                         </div>
                     </div>
 
@@ -2049,9 +2066,6 @@
             <button id="map-mode-grid" class="active" onclick="setMapMode('grid')">Grid</button>
             <button id="map-mode-latlon" onclick="setMapMode('latlon')">Lat/Lon</button>
             <span class="spacer"></span>
-            <button id="fleet-plan" onclick="planFleet()">Plan search</button>
-            <button id="fleet-start" onclick="startFleet()" disabled>Start search</button>
-            <button id="land-all" onclick="landAll()" title="Shift+L (Ctrl/Cmd+Shift+L inside text fields)">LAND ALL</button>
             <button onclick="document.getElementById('fleet-section').classList.toggle('collapsed')">_</button>
         </div>
         <div id="fleet-body">
