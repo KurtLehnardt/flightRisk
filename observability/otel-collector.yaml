@@ -2,6 +2,10 @@
 #   traces  -> Tempo
 #   metrics -> exposed on :8889 for Prometheus to scrape
 #   logs    -> Loki (native OTLP ingest)
+#
+# Each node sets service.instance.id (e.g. mac-ground, edge-2) through
+# OTEL_RESOURCE_ATTRIBUTES. It becomes the Prometheus label and the Loki
+# label service_instance_id, which the dashboard's "node" variable filters on.
 receivers:
   otlp:
     protocols:
@@ -15,6 +19,14 @@ processors:
     check_interval: 1s
     limit_mib: 256
   batch: {}
+  # A node that does not set service.instance.id still gets a label value,
+  # so the dashboard's "node" filter never hides it. "insert" leaves a value
+  # the node did set untouched.
+  resource/node:
+    attributes:
+      - key: service.instance.id
+        value: unknown
+        action: insert
 
 exporters:
   otlp/tempo:
@@ -26,6 +38,10 @@ exporters:
     # Keep names as defined in flightrisk/telemetry.py (dots -> underscores)
     # with no _total / unit suffixes, so dashboard queries stay predictable.
     add_metric_suffixes: false
+    # Copy resource attributes (service.instance.id among them) onto every
+    # series, so each node's metrics carry service_instance_id.
+    resource_to_telemetry_conversion:
+      enabled: true
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
 
@@ -33,13 +49,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/node, batch]
       exporters: [otlp/tempo]
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/node, batch]
       exporters: [prometheus]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/node, batch]
       exporters: [otlphttp/loki]

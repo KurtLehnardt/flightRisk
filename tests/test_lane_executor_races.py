@@ -20,6 +20,7 @@ every message they send is validated.
 """
 from __future__ import annotations
 
+import sys
 import threading
 
 import pytest
@@ -182,6 +183,36 @@ def test_a_landing_requested_while_a_command_is_checked_stops_its_launch(executo
     assert drone.calls[mark:] == [("land",)]
 
 
+@pytest.mark.parametrize("command", ["resume", "nudge"])
+def test_a_landing_opened_inside_launch_after_its_check_still_aborts_the_sequence(executors, command):
+    # ``_launch`` clears the abort flag and only then checks for a landing. A
+    # landing that announces itself right after that check returned False must
+    # leave the flag set, so the sequence that is started sends no move. Were
+    # the order "check, then clear", the clear would wipe the landing's flag.
+    executor, drone, _, _, _ = held_mid_lane(executors)
+    mark = len(drone.calls)
+    original = executor._landing_wanted_locked
+    gaps: list[LandingGap] = []
+
+    def wanted_then_open_gap():
+        wanted = original()
+        if not wanted and not gaps and sys._getframe(1).f_code.co_name == "_launch":
+            gaps.append(LandingGap(executor))
+        return wanted
+
+    executor._landing_wanted_locked = wanted_then_open_gap
+    try:
+        send(executor, resume("p-1", cmd_id="c1") if command == "resume" else nudge("left", 50, cmd_id="c1"))
+    finally:
+        del executor._landing_wanted_locked
+    assert gaps
+    assert not wait_for(lambda: len(drone.calls) > mark, timeout=0.3)
+    gaps[0].close()
+    assert executor.wait_idle(WAIT_S)
+    assert drone.calls[mark:] == [("land",)]
+    assert executor.envelope.pose_snapshot().x_cm == pytest.approx(0)
+
+
 def test_hold_in_the_landing_gap_is_refused(executors):
     executor, drone, sent, _, _ = executors()
     send(executor, takeoff(cmd_id="t1"))
@@ -227,6 +258,46 @@ def test_retask_in_the_landing_gap_is_refused_and_keeps_the_plan(executors):
     assert reply is not None and (reply["type"], reply["reason"], reply["lanes_total"]) == ("nack", "landing", 4)
     assert executor.plan_id == "p-1" and executor.lanes_total == 3
     assert drone.calls[mark:] == [("land",)]
+
+
+@pytest.mark.parametrize("how", ["land_in_flight", "land_failed"])
+def test_assign_lanes_while_the_drone_still_descends_is_refused(executors, how):
+    # The landing is recorded, so land_now cleared the flying-lanes flag, but
+    # the drone still reports flying. A plan acknowledged now would stay valid
+    # after touchdown, against docs/fleet-protocol-v2.md ("Landing requested").
+    executor, drone, sent, clock, _ = executors()
+    send(executor, assign(cmd_id="a1"))
+    send(executor, start_at(clock() + 0.5, cmd_id="s1"))
+    clock.advance(0.5)
+    assert wait_for(lambda: executor.lane_index == 3 and not executor.is_busy)
+    real_land = drone.land
+    release = threading.Event()
+    entered = threading.Event()
+
+    def slow_land():
+        entered.set()
+        release.wait(WAIT_S)
+        real_land()
+
+    def failing_land():
+        raise RuntimeError("land failed")
+
+    drone.land = slow_land if how == "land_in_flight" else failing_land
+    lander = threading.Thread(target=executor.land_now, args=("low_battery",), daemon=True)
+    lander.start()
+    if how == "land_in_flight":
+        assert entered.wait(WAIT_S)
+    else:
+        lander.join(WAIT_S)
+    assert drone.state.is_flying and not executor.plan_valid
+    retask = LANES + [{"direction": "left", "distance_cm": 100}]
+    send(executor, assign(lanes=retask, plan_id="p-2", plan_seq=2, cmd_id="a2"))
+    reply = reply_for(sent, "a2")
+    assert reply is not None and (reply["type"], reply["reason"], reply["lanes_total"]) == ("nack", "landing", 4)
+    release.set()
+    lander.join(WAIT_S)
+    drone.land = real_land
+    assert executor.plan_id == "p-1" and executor.lanes_total == 3 and not executor.plan_valid
 
 
 def test_retask_after_a_nudge_is_not_flown_once_a_landing_is_requested(executors):
