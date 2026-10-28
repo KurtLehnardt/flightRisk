@@ -9,6 +9,7 @@ never touches the network, so the edge device can fly a simulated drone
 flight logic without hardware.
 """
 
+import contextlib
 import logging
 import math
 import threading
@@ -189,12 +190,20 @@ _LAND_GROUND_WAIT_S = 6.0
 # stale readings never cause a resend, so a drone already down that waits
 # for its motors-off evidence or the lift guard is not sent anything.
 _LAND_STALL_S = 1.0
+# ... and only once this many state packets in a row (each a new one) show the
+# drone no lower than the reference, so one stale or reordered packet cannot
+# send land again.
+_LAND_STALL_PACKETS = 2
 _LAND_DESCENT_STALL_S = 2.0
 _LAND_DESCENT_CM = 5
 # The state poller reads battery, height and temperature this often.
 _STATE_POLL_INTERVAL_S = 2.0
 # The poller's zero-height path acts after this many polls in a row at height 0.
 _ZERO_HEIGHT_POLLS = 3
+# After a confirmed land, the poller treats the land as unconfirmed again once
+# this many fresh polls in a row show the motors running with the drone off
+# the ground (see ``_guard_flight_after_land``).
+_POST_LAND_FLIGHT_POLLS = 2
 # Connect-time commands (``command``, ``streamon``) do not move the drone, so
 # they are tried up to this many times.
 _CONNECT_ATTEMPTS = 3
@@ -399,12 +408,14 @@ class _StateStampedUdpObject(dict):
                     # times a second.
                     if not self._failure_logged:
                         self._failure_logged = True
-                        notice(
-                            _log, "tello_state_record_failed",
-                            f"[{self._name}] Recording a state packet failed ({e!r}); "
-                            "further failures are not logged.",
-                            level=logging.WARNING, drone_id=self._name, error_type=type(e).__name__,
-                        )
+                        # A dead stdout must not stop the state thread either.
+                        with contextlib.suppress(Exception):
+                            notice(
+                                _log, "tello_state_record_failed",
+                                f"[{self._name}] Recording a state packet failed ({e!r}); "
+                                "further failures are not logged.",
+                                level=logging.WARNING, drone_id=self._name, error_type=type(e).__name__,
+                            )
 
 
 class TelloController:
@@ -497,6 +508,12 @@ class TelloController:
         # after it, because the Tello ignores commands sent too close
         # together.
         self._land_sent_at = 0.0
+        # Armed when a land is confirmed, cleared by the next takeoff: the
+        # state poller then watches for motors that keep running with the
+        # drone off the ground (see _check_flight_after_land).
+        # _post_land_flight_polls counts the fresh polls in a row that did.
+        self._post_land_watch = False
+        self._post_land_flight_polls = 0
         # True while the keepalive (or, for _stream_on_channel, a
         # stream-recovery command; for _land_on_channel, a land) holds
         # _cmd_lock. Guarded by _owner_lock, which is also held while any of
@@ -1088,6 +1105,8 @@ class TelloController:
             self.state.is_flying = False
             # djitellopy's end() lands only when its own flag says flying.
             self.tello.is_flying = False
+            self._post_land_watch = True
+            self._post_land_flight_polls = 0
         if how:
             notice(_log, "tello_land_confirmed", f"[{self.name}] Land confirmed: {how}.", drone_id=self.name, how=how)
         return True
@@ -1187,23 +1206,38 @@ class TelloController:
                             return
                         if not not_taking:
                             break
-                        notice(
-                            _log, "tello_land_not_taking",
-                            f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} ({outcome}) did not take: "
-                            f"{not_taking}; sending land again.",
-                            level=logging.WARNING, drone_id=self.name, attempt=attempt, attempts=_LAND_ATTEMPTS,
-                        )
                         if not self._take_channel_for_land(watch_until):
                             if not self._land_unconfirmed:
                                 return
                             break
                         holding_channel = True
                         try:
-                            # Its reply is waited for only until the wait ends.
-                            resent = self._send_confirming_land(min(deadline, watch_until))
+                            # Another land() may have sent a land since: they
+                            # share the one drone, so one land per
+                            # _LAND_STALL_S is enough. Wait for that land
+                            # instead, and measure the stall from it.
+                            with self._wire_lock:
+                                last_sent_at = self._land_sent_at
+                            if time.monotonic() - last_sent_at < _LAND_STALL_S:
+                                skipped = True
+                                land_attempt = land_attempt._replace(sent_at=max(land_attempt.sent_at, last_sent_at))
+                                resent = None
+                            else:
+                                skipped = False
+                                notice(
+                                    _log, "tello_land_not_taking",
+                                    f"[{self.name}] Land attempt {attempt}/{_LAND_ATTEMPTS} ({outcome}) did not take: "
+                                    f"{not_taking}; sending land again.",
+                                    level=logging.WARNING, drone_id=self.name, attempt=attempt,
+                                    attempts=_LAND_ATTEMPTS,
+                                )
+                                # Its reply is waited for only until the wait ends.
+                                resent = self._send_confirming_land(min(deadline, watch_until))
                         finally:
                             self._leave_channel_after_land()
                             holding_channel = False
+                        if skipped:
+                            continue
                         if resent.verdict == "confirmed":
                             return
                         # Whatever its reply (or none), the attempt keeps
@@ -1365,6 +1399,13 @@ class TelloController:
         stall_from = since if land_sent_at is None else land_sent_at
         lowest = ref_height
         lowest_at = stall_from
+        # When the reference height was first known, and how many packets in a
+        # row (each a new one) were no lower than it. With no reference at the
+        # start, the first airborne packet becomes the reference, and the stall
+        # is measured from then, not from the land.
+        ref_set_at = stall_from
+        flat_packets = 0
+        last_packet_at = None
         while True:
             if not self._land_unconfirmed:
                 return True, ""
@@ -1386,14 +1427,23 @@ class TelloController:
             if now >= deadline:
                 return False, ""
             reading = self._fresh_reading()
-            if reading is not None and _clearly_airborne(reading):
+            if reading is None or not _clearly_airborne(reading):
+                flat_packets = 0
+                last_packet_at = None
+            else:
                 height = reading.height
                 if ref_height is None:
                     ref_height = lowest = height
-                    lowest_at = now
+                    lowest_at = ref_set_at = now
                 elif height <= lowest - _LAND_DESCENT_CM:
                     lowest, lowest_at = height, now
-                if now - stall_from >= _LAND_STALL_S and height > ref_height - _LAND_DESCENT_CM:
+                if reading.at != last_packet_at:
+                    last_packet_at = reading.at
+                    flat_packets = flat_packets + 1 if height > ref_height - _LAND_DESCENT_CM else 0
+                if (
+                    now - max(stall_from, ref_set_at) >= _LAND_STALL_S
+                    and flat_packets >= _LAND_STALL_PACKETS
+                ):
                     return False, (
                         f"fresh state shows {self._state_height_text()}, no lower than the "
                         f"{ref_height} cm when the land was sent, {now - stall_from:.1f} s after it"
@@ -1511,6 +1561,8 @@ class TelloController:
                     if self._lands_in_progress or self._land_seq != rearm_after_land:
                         return False
                     self._landing = False
+                    self._post_land_watch = False
+                    self._post_land_flight_polls = 0
                     # A land that starts while this takeoff waits for its
                     # reply, or after a wait that ends without an "ok",
                     # starts the takeoff guards (see _TAKEOFF_LIFT_GUARD_S).
@@ -1798,6 +1850,7 @@ class TelloController:
             self._poll_failures = 0
             self._extended = self._read_extended_state(time.time())
             self._check_zero_height()
+            self._guard_flight_after_land()
         except Exception as e:
             self._poll_failures += 1
             _log_failure(self.name, "tello_poll_failed", e, consecutive=self._poll_failures)
@@ -1807,6 +1860,49 @@ class TelloController:
                 notice(_log, "tello_link_lost",
                        f"[{self.name}] Connection lost — {self._poll_failures} consecutive poll failures.",
                        level=logging.ERROR, drone_id=self.name, poll_failures=self._poll_failures)
+
+    def _guard_flight_after_land(self) -> None:
+        """Flag a drone that is flying after a land was confirmed, so the land is retried.
+
+        A land can be confirmed wrongly: with the state stream lost, a stale
+        ``ok`` (the answer to a move, say) is read as the land's reply. When
+        the stream returns, the drone may still hover with its motors
+        running while ``is_flying`` is false, and the keepalive would hold
+        off the Tello's 15 s auto-land. Once a land was confirmed and no
+        takeoff has been sent since, this counts fresh polls in a row whose
+        state shows the motor time advancing (see ``_motors_running``) with
+        the drone off the ground. After ``_POST_LAND_FLIGHT_POLLS`` of them
+        it sets ``_land_unconfirmed`` and ``is_flying`` again and logs once,
+        and the lane executor's monitor retries the land. It never sends a
+        command itself. The motor time, not the height, decides, so a drone
+        carried by hand with its motors off is never flagged.
+        """
+        with self._state_lock:
+            readings = list(self._state_readings)
+        with self._wire_lock:
+            if not self._post_land_watch or self._land_unconfirmed:
+                self._post_land_flight_polls = 0
+                return
+            fresh = bool(readings) and time.monotonic() - readings[-1].at <= _STATE_FRESH_S
+            if not (fresh and _motors_running(readings) and not _shows_ground(readings[-1])):
+                self._post_land_flight_polls = 0
+                return
+            self._post_land_flight_polls += 1
+            if self._post_land_flight_polls < _POST_LAND_FLIGHT_POLLS:
+                return
+            polls = self._post_land_flight_polls
+            self._post_land_watch = False
+            self._post_land_flight_polls = 0
+            self._land_unconfirmed = True
+            self.state.is_flying = True
+            self.tello.is_flying = True
+        notice(
+            _log, "tello_flying_after_land",
+            f"[{self.name}] State shows the drone flying (motors running, {self._state_height_text()}) "
+            f"after a land was confirmed, in {polls} polls in a row: the land is treated as unconfirmed "
+            "and will be retried.",
+            level=logging.ERROR, drone_id=self.name, polls=polls,
+        )
 
     def _check_zero_height(self) -> None:
         """The state poller's zero-height path, run after each successful poll.
