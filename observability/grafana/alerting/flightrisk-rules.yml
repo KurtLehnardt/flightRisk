@@ -6,6 +6,11 @@
 # local placeholder contact point in contact-points.yml; nothing leaves the
 # machine. Thresholds mirror the code: battery warning 20 %, critical land
 # 10 % (config.drone), edge link-loss land after 3 s (FLIGHTRISK_LINK_LOSS_LAND_S).
+#
+# Event counters (flight-safety events, failed lands, dropped messages) start
+# at 1 when the first event happens, and increase() cannot see that first
+# step. Those rules fire when the counter grew in the last 5 minutes OR the
+# series appeared in the last 5 minutes.
 apiVersion: 1
 groups:
 - orgId: 1
@@ -166,7 +171,9 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: sum by (drone_id) (increase(flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"}[5m]))
+        expr: ((sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"})) - (sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"}
+          offset 5m))) or ((sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"})) unless (sum by (drone_id)
+          (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"} offset 5m)))
         instant: true
         range: false
         intervalMs: 1000
@@ -213,8 +220,11 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: sum by (drone_id) (increase(flightrisk_flight_safety_events{kind="land_failed"}[5m])) or sum by (drone_id) (increase(flightrisk_drone_commands{command="land",
-          outcome!="ok"}[5m]))
+        expr: ((sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"})) - (sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"}
+          offset 5m))) or ((sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"})) unless (sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"}
+          offset 5m))) or ((sum by (drone_id) (flightrisk_drone_commands{command="land", outcome!="ok"})) - (sum by (drone_id) (flightrisk_drone_commands{command="land",
+          outcome!="ok"} offset 5m))) or ((sum by (drone_id) (flightrisk_drone_commands{command="land", outcome!="ok"})) unless (sum by (drone_id)
+          (flightrisk_drone_commands{command="land", outcome!="ok"} offset 5m)))
         instant: true
         range: false
         intervalMs: 1000
@@ -261,7 +271,8 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: sum by (side, type, reason) (increase(flightrisk_comm_dropped[5m]))
+        expr: ((sum by (side, type, reason) (flightrisk_comm_dropped)) - (sum by (side, type, reason) (flightrisk_comm_dropped offset 5m))) or
+          ((sum by (side, type, reason) (flightrisk_comm_dropped)) unless (sum by (side, type, reason) (flightrisk_comm_dropped offset 5m)))
         instant: true
         range: false
         intervalMs: 1000

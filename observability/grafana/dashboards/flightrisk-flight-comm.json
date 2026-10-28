@@ -188,10 +188,10 @@
     },
     {
       "type": "table",
-      "title": "Flight-safety events by kind (range)",
-      "description": "Counts in the selected time range.",
+      "title": "Flight-safety events by kind",
+      "description": "Events counted since each process started (a rare event's first occurrence is invisible to increase(), so this table shows the counters themselves).",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (kind, reason, drone_id) (increase(flightrisk_flight_safety_events{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__range]))", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (kind, reason, drone_id) (max_over_time(flightrisk_flight_safety_events{service_instance_id=~\"$node\", drone_id=~\"$drone_id\"}[$__range]))", "legendFormat": "", "refId": "A", "instant": true, "range": false}],
       "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"Value": "events"}}}],
       "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": []},
       "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "fields": ""}, "sortBy": [{"displayName": "events", "desc": true}]},

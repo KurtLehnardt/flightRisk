@@ -221,9 +221,10 @@ def flight_comm() -> Dashboard:
         f"sum by (kind, reason) (increase({q('flightrisk_flight_safety_events', DRONE)}[{RI}]))", "{{kind}} {{reason}}")],
         "short", "Battery warnings, critical lands, watchdog (link-loss) landings, geofence refusals, obstacle triggers, "
         "land failures, lost drones.", 0, stack=True, bars=True), 12, 8)
-    d.add(table("Flight-safety events by kind (range)", [prom(
-        f"sum by (kind, reason, drone_id) (increase({q('flightrisk_flight_safety_events', DRONE)}[$__range]))", instant=True)],
-        "Counts in the selected time range.",
+    d.add(table("Flight-safety events by kind", [prom(
+        f"sum by (kind, reason, drone_id) (max_over_time({q('flightrisk_flight_safety_events', DRONE)}[$__range]))", instant=True)],
+        "Events counted since each process started (a rare event's first occurrence is invisible to increase(), "
+        "so this table shows the counters themselves).",
         [{"id": "organize", "options": {"excludeByName": {"Time": True}, "renameByName": {"Value": "events"}}}],
         sort_by=[{"displayName": "events", "desc": True}]), 12, 8)
     d.add(timeseries("Obstacle guard", [

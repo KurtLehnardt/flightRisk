@@ -150,6 +150,12 @@ def init_telemetry(
         "service.name": service_name,
         "service.version": "0.1.0",
         "deployment.environment": environment,
+        # Several processes share one node (the ground station and edge-1 on
+        # the Mac, or the fake fleet's edges). Without a per-process
+        # attribute their series have identical labels and the collector's
+        # Prometheus exporter overwrites one process's counters with
+        # another's. Loki keeps it as structured metadata, not a label.
+        "process.pid": os.getpid(),
     })
 
     # --- Trace provider ---
