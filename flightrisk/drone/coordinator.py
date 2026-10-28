@@ -66,6 +66,9 @@ MIN_START_BATTERY = 30
 """Lowest battery percentage that lets a drone take part in ``start()``."""
 
 TELEMETRY_FRESH_S = 2.0
+# Edge refusals of an assign_lanes that are only true for now: the chunk waits
+# and is offered again once the drone's telemetry shows they are over.
+TRANSIENT_NACKS = frozenset({"landing", "busy"})
 """Telemetry older than this is ignored by the start battery gate."""
 
 TELLO_MIN_MOVE_CM = 20
@@ -223,7 +226,10 @@ class _Chunk:
     ``appended`` is what the offer added to the receiver's lanes for this
     run: the transit to its start, then its lanes. ``refusals`` maps each
     drone that refused the run to its reason, and ``reported`` is the status
-    last sent to the dashboard.
+    last sent to the dashboard. ``deferred`` maps a drone that refused only
+    for now (``landing`` or ``busy``, see ``TRANSIENT_NACKS``) to that
+    reason: the run waits and is offered to it again once its telemetry
+    shows the refusal is over.
     """
 
     lost_id: str
@@ -234,6 +240,7 @@ class _Chunk:
     receiver: str | None = None
     appended: list[dict] = field(default_factory=list)
     refusals: dict[str, str] = field(default_factory=dict)
+    deferred: dict[str, str] = field(default_factory=dict)
     reason: str | None = None
     reported: str | None = None
 
@@ -868,10 +875,17 @@ class FleetCoordinator:
         elif msg_type == "nack":
             self._on_nack(drone_id, msg)
         elif msg_type == "telemetry":
+            messages: list[tuple[str, dict]] = []
+            events: list[tuple[str, dict]] = []
             with self._lock:
                 state = self._drones[drone_id]
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
+                if self._release_deferred_locked(drone_id, state.telemetry):
+                    messages = self._dispatch_locked()
+                    events = self._settle_and_collect_locked()
+            self._emit_all(events)
+            self._send_offers(messages)
         elif msg_type == "detections":
             self.on_detection(drone_id, msg)
         else:
@@ -959,7 +973,7 @@ class FleetCoordinator:
                 return
             logger.warning("%s refused its assign_lanes (%s)", drone_id, reason)
             if state.offer is not None:
-                self._withdraw_offer_locked(drone_id, reason)
+                self._withdraw_offer_locked(drone_id, reason, transient=reason in TRANSIENT_NACKS)
                 messages = self._dispatch_locked()
                 events = self._settle_and_collect_locked()
             else:
@@ -1200,6 +1214,7 @@ class FleetCoordinator:
                     self._fail_locked(chunk, "LAND ALL issued")
                     continue
                 fits = []
+                waiting = False
                 for rid in self._receivers():
                     if rid in chunk.refusals:
                         continue
@@ -1207,7 +1222,12 @@ class FleetCoordinator:
                     end = _path_point(self._origin(self._drones[rid]), lanes)
                     added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
                     if self._path_inside_fence(rid, lanes + added):
-                        fits.append((rid, end, added))
+                        if rid in chunk.deferred:
+                            waiting = True  # refused for now: wait, do not fail
+                        else:
+                            fits.append((rid, end, added))
+                if not fits and waiting:
+                    continue
                 if not fits:
                     self._fail_locked(chunk, self._failure_reason(chunk))
                     continue
@@ -1260,11 +1280,38 @@ class FleetCoordinator:
         logger.error("Re-tasked lanes %s of %s are uncovered: %s",
                      ", ".join(str(entry["index"]) for entry in chunk.lane_entries()), chunk.lost_id, reason)
 
-    def _withdraw_offer_locked(self, drone_id: str, reason: str | None) -> None:
+    def _release_deferred_locked(self, drone_id: str, telemetry: dict) -> bool:
+        """Clear the transient refusals of *drone_id* that its telemetry shows are over.
+
+        A ``landing`` refusal is over once the drone reports ``idle`` (or,
+        without a state, not flying); a ``busy`` one once it is neither
+        taking off nor landing. Returns True if any queued chunk may now be
+        offered to the drone again. Caller holds ``_lock``.
+        """
+        released = False
+        state = telemetry.get("state")
+        flying = telemetry.get("is_flying")
+        for retask in self._retasks:
+            for chunk in retask.chunks:
+                reason = chunk.deferred.get(drone_id)
+                if reason is None:
+                    continue
+                if reason == "landing":
+                    over = state == "idle" if isinstance(state, str) else flying is False
+                else:
+                    over = state not in ("taking_off", "landing")
+                if over:
+                    del chunk.deferred[drone_id]
+                    released = released or chunk.status == "queued"
+        return released
+
+    def _withdraw_offer_locked(self, drone_id: str, reason: str | None, *, transient: bool = False) -> None:
         """Take back a drone's pending offer and queue its chunks again.
 
         ``reason`` records a refusal, so the chunks are not offered to this
-        drone again; ``None`` (the drone was lost) records nothing. The
+        drone again; ``None`` (the drone was lost) records nothing. With
+        ``transient`` the refusal is only for now (``deferred``): the chunks
+        are offered to the drone again once its telemetry shows it is over. The
         drone's lanes and ack state return to what they were before the
         offer, because the edge keeps its previous plan.
         """
@@ -1281,7 +1328,7 @@ class FleetCoordinator:
             chunk.receiver = None
             chunk.appended = []
             if reason is not None:
-                chunk.refusals[drone_id] = reason
+                (chunk.deferred if transient else chunk.refusals)[drone_id] = reason
 
     def _send_offers(self, messages: list[tuple[str, dict]]) -> None:
         """Send offers without the lock. A failed send counts as a refusal. Lock not held."""
