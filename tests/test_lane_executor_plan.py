@@ -543,6 +543,46 @@ def test_v2_telemetry_states_through_a_flight(executors):
     fp.validate_edge_to_ground(telemetry, proto=2)
 
 
+def test_fleet_status_and_is_active_through_a_flight(executors):
+    drone = SteppedTello(name="drone-1", battery=90)
+    executor, drone, _sent, clock, _ = executors(drone=drone, authority=FakeAuthority(epoch=7))
+    assert executor.fleet_status() == {"plan_id": None, "state": "idle", "plan_valid": False, "epoch": 7}
+    assert executor.is_active() is False
+    send(executor, assign(cmd_id="a1"))
+    assert executor.fleet_status() == {"plan_id": "p-1", "state": "idle", "plan_valid": True, "epoch": 7}
+    assert executor.is_active() is False
+    # A scheduled start counts as active while the drone is still on the ground.
+    send(executor, start_at(clock() + 0.5, cmd_id="s1"))
+    assert executor.is_active() is True and not drone.state.is_flying
+    clock.advance(0.5)
+    assert wait_for(lambda: drone.waiting)
+    status = executor.fleet_status()
+    assert executor.is_active() is True and status["state"] == "flying_lanes" and status["state"] in fp.EDGE_STATES
+    drone.auto = True
+    drone.release()
+    assert wait_for(lambda: executor.lane_index == 3 and not executor.is_busy)
+    assert executor.is_active() is True and executor.fleet_status()["state"] == "hovering"
+    send(executor, fp.make_land(cmd_id="l1"))
+    assert executor.wait_idle(WAIT_S)
+    assert executor.fleet_status() == {"plan_id": "p-1", "state": "idle", "plan_valid": False, "epoch": 7}
+    assert executor.is_active() is False
+
+
+def test_is_active_counts_an_unreadable_flight_state_as_active(executors):
+    executor, drone, _, _, _ = executors()
+
+    class Unreadable:
+        @property
+        def is_flying(self):
+            raise RuntimeError("state stream lost")
+
+    state, drone.state = drone.state, Unreadable()
+    try:
+        assert executor.is_active() is True
+    finally:
+        drone.state = state
+
+
 def test_telemetry_switches_to_v2_on_the_first_v2_command(executors):
     executor, _, sent, _, _ = executors(fleet_v2=False)
     executor.tick()

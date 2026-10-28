@@ -299,6 +299,42 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         worker.join(timeout)
         return not worker.is_alive()
 
+    def is_active(self) -> bool:
+        """True while the drone flies or anything that can make it fly or land is under way.
+
+        That is: the drone reports flying, a flight sequence (a scheduled
+        ``start_at`` still waiting, a takeoff, lanes, a climb or a nudge) is
+        running, or a landing is in progress or has been requested. The edge
+        authority adopts a new leader epoch only while this is False. An
+        unreadable flight state counts as active.
+        """
+        try:
+            flying = self._is_flying()
+        except Exception:  # noqa: BLE001 - an unreadable state counts as flying
+            return True
+        with self._lock:
+            worker = self._worker
+            busy = self._worker_alive() or self._land_inflight or self._land_requests > 0
+        return flying or busy or (worker is not None and worker.is_alive())
+
+    def fleet_status(self) -> dict[str, Any]:
+        """The protocol v2 status fields for telemetry and the edge ``hello``.
+
+        Returns ``plan_id`` (kept after the plan is invalidated, or None),
+        ``state`` (as in telemetry), ``plan_valid`` and ``epoch`` (the epoch
+        the authority reports the edge obeys, 0 before any), read together
+        under the executor lock.
+        """
+        flying = self._is_flying()
+        with self._lock:
+            status: dict[str, Any] = {
+                "plan_id": None if self._plan_identity is None else self._plan_identity.plan_id,
+                "state": self._state_locked(flying),
+                "plan_valid": self._plan_valid,
+            }
+        status["epoch"] = self.epoch_seen
+        return status
+
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
         return self._active_thread is not None

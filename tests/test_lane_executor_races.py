@@ -264,6 +264,16 @@ def test_takeoff_in_the_landing_gap_is_refused(executors):
     assert ("takeoff",) not in drone.calls
 
 
+def test_a_requested_landing_is_active_and_reported_as_landing(executors):
+    executor, drone, _, _, _ = executors()
+    drone.takeoff()
+    gap = LandingGap(executor, reason="local_key")
+    assert executor.is_active()
+    assert executor.state == "landing" and executor.fleet_status()["state"] == "landing"
+    gap.close()
+    assert not drone.state.is_flying and not executor.is_active()
+
+
 # ---------------------------------------------------------------------------
 # A hold against the hover timeout and the on_complete landing
 # ---------------------------------------------------------------------------
