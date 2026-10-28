@@ -4,7 +4,7 @@ Everything FlightRisk writes to logs, span attributes or metric labels passes
 through this module first. It has three jobs:
 
 * **Secrets never leave the process.** :func:`redact_text` replaces API keys,
-  bearer tokens, ``Authorization`` headers, the values of
+  bearer tokens, ``Authorization`` headers, the user-info of a URL (``ws://user:pass@host``), the values of
   ``FLIGHTRISK_EDGE_TOKEN`` / ``FLIGHTRISK_API_KEY`` /
   ``FLIGHTRISK_CLAUDE_API_KEY`` (and similar variables) and anything that
   matches a known key pattern (``sk-ant-...``, ``sk-...``, ``ghp_...``,
@@ -81,6 +81,9 @@ _KEY_RE = re.compile("|".join(_KEY_PATTERNS))
 _BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=\-]{4,}")
 _AUTH_HEADER_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+(?:\s+[^\s,;]+)?)")
 
+# Credentials in a URL's authority: ws://user:pass@host, rtsp://token@host.
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@?#]+@")
+
 # key=value / "key": "value" pairs whose key names a credential.
 _SECRET_WORDS = r"(?:token|secret|password|passwd|pwd|api[_\-]?key|apikey|auth[_\-]?key|private[_\-]?key|access[_\-]?key|session[_\-]?key|credentials?|authorization|auth|cookie)"
 # A key is a credential when its last segment is one of the words above, so
@@ -150,6 +153,7 @@ def redact_text(text: Any, limit: int | None = MAX_FIELD_CHARS) -> str:
         if secret in s:
             s = s.replace(secret, REDACTED)
     s = _KEY_RE.sub(REDACTED, s)
+    s = _URL_USERINFO_RE.sub(lambda m: f"{m.group(1)}{REDACTED}@", s)
     s = _AUTH_HEADER_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", s)
     s = _BEARER_RE.sub(lambda m: f"{m.group(1)} {REDACTED}", s)
     s = _KV_RE.sub(lambda m: f"{m.group('key')}{REDACTED}", s)
@@ -254,7 +258,9 @@ def sanitize_fields(fields: Mapping[str, Any], *, content: bool | None = None, l
 def safe_token(value: Any, default: str = "unknown", limit: int = 64) -> str:
     """A bounded, label-safe token for metric labels (never free text)."""
     if isinstance(value, str) and _TOKEN_RE.match(value):
-        return value[:limit]
+        # A stream or link URL (rtsp://user:pass@host/live) must not carry its
+        # credentials into a metric label.
+        return _URL_USERINFO_RE.sub(lambda m: m.group(1), value)[:limit]
     if isinstance(value, bool) or value is None:
         return default
     if isinstance(value, int):
