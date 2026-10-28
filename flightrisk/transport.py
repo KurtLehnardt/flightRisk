@@ -76,6 +76,15 @@ from flightrisk.fleet_ground_link import (
     GroundV2Mixin,
     PeerVersionError,
 )
+from flightrisk.link_log_limits import (
+    CLOSE_UNAUTHORIZED,
+    CLOSE_UNAUTHORIZED_REASON,
+    STABLE_UPTIME_S,
+    RateLimitedLog,
+    auth_backoff_s,
+    auth_rejected_line,
+    closed_line,
+)
 from flightrisk.link_outbox import is_open
 from flightrisk.observability import StructuredLogger
 
@@ -392,6 +401,10 @@ class EdgeTransport:
         self._connect_kwargs = dict(connect_kwargs or {})
         # One-shot minimum delay for the next reconnect (see hold_reconnect).
         self._reconnect_floor_s = 0.0
+        # Auth-rejection backoff and log limiting (see link_log_limits).
+        self._auth_rejections = 0
+        self._connected_at_s: float | None = None
+        self._closed_log = RateLimitedLog(clock=clock)
         self._ws = None
         self._connected = False
         self._runner = runner if runner is not None else EdgeRunner()
@@ -492,6 +505,7 @@ class EdgeTransport:
             return
         self._ws = await websockets.connect(self._ws_url, **self._connect_kwargs)
         self._connected = True
+        self._connected_at_s = self._clock()
         self._should_reconnect = True
         self._retry_count = 0
         # A new connection has agreed no version yet.
@@ -541,7 +555,7 @@ class EdgeTransport:
             if not cancelled and self._ws is ws and self._connected:
                 self._connected = False
                 if self._should_reconnect:
-                    logger.warning("[%s] Connection to ground closed", self._ws_url)
+                    self._log_close_and_back_off(ws)
                     self._schedule_reconnect()
             self._inbox_event.set()
             if self._on_closed is not None:
@@ -549,6 +563,21 @@ class EdgeTransport:
                     self._on_closed(ws)
                 except Exception:
                     logger.exception("[%s] on_closed callback raised", self._ws_url)
+
+    def _log_close_and_back_off(self, ws) -> None:
+        """Log why the ground closed *ws* (rate limited) and pace the retry."""
+        up_s = self._clock() - (self._connected_at_s or self._clock())
+        code, reason = getattr(ws, "close_code", None), getattr(ws, "close_reason", None) or ""
+        if up_s >= STABLE_UPTIME_S:  # a healthy link: a new problem is a new episode
+            self._auth_rejections = 0
+            self._closed_log.reset()
+        if code == CLOSE_UNAUTHORIZED:
+            self._auth_rejections += 1
+            self.hold_reconnect(auth_backoff_s(self._auth_rejections))  # not fatal
+            if self._auth_rejections % 20 == 1:
+                logger.error(auth_rejected_line(self._ws_url, code, reason, self._auth_rejections))
+        elif count := self._closed_log.should_log():
+            logger.warning(closed_line(self._ws_url, code, reason, count))
 
     def _dispatch_incoming(self, ws, data: dict[str, Any], received_at: float) -> None:
         """Handle one ground message without ever waiting, so the next is read at once."""
@@ -968,6 +997,7 @@ class GroundTransport(GroundV2Mixin):
         self._clients: set = set()
         self._token = token
         self._authenticated_clients: set = set()
+        self._reject_log = RateLimitedLog()
 
         # Fleet control state. All of it is touched only on the event loop.
         self._on_control = on_control
@@ -1050,9 +1080,12 @@ class GroundTransport(GroundV2Mixin):
             self._authenticated_clients.add(websocket)
             return True
 
-        logger.warning("Rejecting client: failed auth handshake")
+        host = (getattr(websocket, "remote_address", None) or ("unknown",))[0]
+        if count := self._reject_log.should_log(host):
+            more = f" ({count} rejections since last report)" if count > 1 else ""
+            logger.warning("Rejecting client %s: failed auth handshake%s", host, more)
         try:
-            await websocket.close(code=4001, reason="unauthorized")
+            await websocket.close(code=CLOSE_UNAUTHORIZED, reason=CLOSE_UNAUTHORIZED_REASON)
         except ConnectionClosed:
             pass
         return False
@@ -1989,6 +2022,11 @@ class EdgeTransportSync:
 
     def send(self, message: dict[str, Any], timeout: float = _CMD_TIMEOUT) -> bool:
         """Send one edge -> ground control message; see ``EdgeTransport.send``."""
+        if not self._bridge.is_running:
+            # Not connected yet (or already stopped): building the coroutine
+            # first would leave it never awaited.
+            logger.debug("[edge-transport] send before the link is up: dropped")
+            return False
         return self._bridge.run(self._transport.send(message), timeout=timeout)
 
     def disconnect(self, timeout: float = _CMD_TIMEOUT) -> None:

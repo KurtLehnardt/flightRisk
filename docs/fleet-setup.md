@@ -462,3 +462,21 @@ Confirming a match on a fleet lands every drone in place with LAND ALL. The Tell
 | `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the Mac (ground station and edge-1), unset on Windows |
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |
+
+## Troubleshooting: edge_auth_rejected
+
+If an edge logs a line like this, the ground refused its authentication handshake:
+
+```
+ERROR flightrisk.transport: edge_auth_rejected ground=ws://10.42.0.1:9000 code=4001 reason="unauthorized: edge token mismatch" attempts=1 hint="check FLIGHTRISK_EDGE_TOKEN matches the ground"
+```
+
+The ground closes the connection with code 4001 when the token the edge sent does not match its own `FLIGHTRISK_EDGE_TOKEN`. Neither side ever logs the token itself.
+
+What to check:
+
+- `FLIGHTRISK_EDGE_TOKEN` must be exactly the same on the ground and on every edge. Look for stray whitespace, a different shell session, or a value exported before it was changed.
+- If the ground was started without a token, an edge that sends one is accepted; a ground that has a token rejects an edge that sends none.
+- The line is logged once per episode (and again every 20th attempt). The edge keeps retrying, backing off from 1 s doubling up to 30 s, so it recovers on its own once the tokens match; no restart is needed. The backoff resets after a connection stays up for 10 s.
+- The ground logs `Rejecting client <address>: failed auth handshake` once per remote address, then a count every 10th rejection or once a minute.
+- Ordinary disconnects (cable pull, ground restart) are not affected: the edge still reconnects after 1 s (2 s cap for fleet edges), and logs `Connection to ground closed (code=... reason=...)` once, then a count every 10th close.
