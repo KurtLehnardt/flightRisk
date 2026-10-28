@@ -518,14 +518,43 @@ class TelloController:
     auto-land still fires if every land is lost.
     """
 
-    def __init__(self, name: str = "drone", host: str | None = None):
+    def __init__(
+        self,
+        name: str = "drone",
+        host: str | None = None,
+        local_ip: str | None = None,
+        ifindex: int | None = None,
+        *,
+        binding=None,
+        socket_factory=None,
+    ):
+        """Build the controller. Nothing is sent to the drone until ``connect()``.
+
+        Without ``local_ip`` (the default) the stock djitellopy client is
+        used, exactly as before. With ``local_ip`` (``--tello-local-ip``)
+        every Tello socket is bound to that adapter's IP through
+        ``flightrisk.drone.tello_bound.BoundTello``, so two controllers on
+        two adapters can each fly a Tello at the same address (see
+        docs/two-tellos-one-pc.md); ``ifindex`` (Windows only) also pins
+        outgoing commands to that interface. ``binding`` (a
+        ``TelloBinding``, which then replaces ``local_ip`` and ``ifindex``)
+        and ``socket_factory`` are seams for tests. Raises
+        ``TelloBindingError`` when the binding cannot work.
+        """
         if host is None:
             host = get_config().drone.tello_default_host
         self.name = name
         self.host = host
-        # retry_count=1: djitellopy sends every command once. A retried move
-        # could fly again after a landing interrupted it.
-        self.tello = Tello(host=host, retry_count=1)
+        # The adapter IP every Tello socket is bound to, or None for the
+        # stock djitellopy client.
+        self.local_ip: str | None = None
+        if local_ip is None and binding is None:
+            # retry_count=1: djitellopy sends every command once. A retried move
+            # could fly again after a landing interrupted it.
+            self.tello = Tello(host=host, retry_count=1)
+        else:
+            self.tello = self._bound_client(host, local_ip, ifindex, binding, socket_factory)
+            self.local_ip = self.tello.binding.local_ip
         self.state = DroneState()
         self.capabilities = DroneCapabilities(
             has_gps=False,
@@ -633,8 +662,23 @@ class TelloController:
         self._state_arrivals = False
         self._stamp_state_packets(host)
 
+    def _bound_client(self, host: str, local_ip: str | None, ifindex: int | None, binding, socket_factory):
+        """The Tello client for ``local_ip`` mode: every socket bound to one adapter (see ``__init__``)."""
+        from flightrisk.drone.tello_bound import BoundTello, TelloBinding, check_binding
+
+        if binding is None:
+            binding = TelloBinding(local_ip=local_ip, ifindex=ifindex)
+        if socket_factory is None:
+            check_binding(binding, host)
+            return BoundTello(host, binding, retry_count=1, name=self.name)
+        check_binding(binding, host, socket_factory=socket_factory)
+        return BoundTello(host, binding, retry_count=1, name=self.name, socket_factory=socket_factory)
+
     def _stamp_state_packets(self, host: str) -> None:
         """Have djitellopy report each state packet for ``host`` to ``_note_state_packet``."""
+        if self.local_ip is not None:
+            self._stamp_bound_state_packets()
+            return
         try:
             udp = _djitello.drones.get(host)
             if type(udp) is dict:
@@ -642,6 +686,21 @@ class TelloController:
                 self._state_arrivals = True
         except Exception as e:
             # No arrival times: landing falls back to reply-based confirmation.
+            notice(
+                _log, "tello_state_arrivals_unavailable",
+                f"[{self.name}] Could not record state packet arrivals ({e!r}); "
+                "lands are confirmed by replies once the state stream counts as lost.",
+                level=logging.WARNING, drone_id=self.name, error_type=type(e).__name__,
+            )
+
+    def _stamp_bound_state_packets(self) -> None:
+        """``_stamp_state_packets`` for a bound client: wrap its own per-drone table, not djitellopy's."""
+        try:
+            udp = self.tello.get_own_udp_object()
+            if type(udp) is dict:
+                self.tello.replace_udp_object(_StateStampedUdpObject(udp, self._note_state_packet, self.name))
+                self._state_arrivals = True
+        except Exception as e:  # noqa: BLE001 - as _stamp_state_packets: never stop the controller over this
             notice(
                 _log, "tello_state_arrivals_unavailable",
                 f"[{self.name}] Could not record state packet arrivals ({e!r}); "
@@ -804,7 +863,23 @@ class TelloController:
         or ``None`` when unknown. When state arrival times cannot be
         recorded (``_stamp_state_packets`` failed) the state age is unknown
         and only the other checks apply.
+
+        With a local IP (``--tello-local-ip``) an unhealthy ``detail`` ends
+        with ``via <local_ip>``, so the operator sees which adapter's drone
+        is unreachable.
         """
+        status = self._link_status()
+        local_ip = getattr(self, "local_ip", None)
+        if local_ip is None or status.ok:
+            return status
+        detail = f"{status.detail} via {local_ip}"
+        if len(detail) > _LINK_DETAIL_MAX_LEN:
+            suffix = f"... via {local_ip}"
+            detail = status.detail[: _LINK_DETAIL_MAX_LEN - len(suffix)] + suffix
+        return DroneLinkStatus(status.ok, status.age_s, status.reason, detail)
+
+    def _link_status(self) -> DroneLinkStatus:
+        """``link_status`` without the adapter suffix."""
         if not self.state.is_connected:
             return DroneLinkStatus(False, None, "not_connected", "Tello not connected")
         age: float | None = None

@@ -63,3 +63,6 @@ demo/screenshots/
 # root-level captures; never commit a person's image
 /target_reference.jpg
 /target_reference.*
+
+# Edge console logs written by scripts/demo_edge_pair.ps1
+logs/
