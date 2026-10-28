@@ -20,6 +20,7 @@ every message they send is validated.
 """
 from __future__ import annotations
 
+import sys
 import threading
 
 import pytest
@@ -180,6 +181,36 @@ def test_a_landing_requested_while_a_command_is_checked_stops_its_launch(executo
     assert executor.wait_idle(WAIT_S)
     assert reply is not None and (reply["type"], reply["reason"]) == ("nack", "landing")
     assert drone.calls[mark:] == [("land",)]
+
+
+@pytest.mark.parametrize("command", ["resume", "nudge"])
+def test_a_landing_opened_inside_launch_after_its_check_still_aborts_the_sequence(executors, command):
+    # ``_launch`` clears the abort flag and only then checks for a landing. A
+    # landing that announces itself right after that check returned False must
+    # leave the flag set, so the sequence that is started sends no move. Were
+    # the order "check, then clear", the clear would wipe the landing's flag.
+    executor, drone, sent, _, _ = held_mid_lane(executors)
+    mark = len(drone.calls)
+    original = executor._landing_wanted_locked
+    gaps: list[LandingGap] = []
+
+    def wanted_then_open_gap():
+        wanted = original()
+        if not wanted and not gaps and sys._getframe(1).f_code.co_name == "_launch":
+            gaps.append(LandingGap(executor))
+        return wanted
+
+    executor._landing_wanted_locked = wanted_then_open_gap
+    try:
+        send(executor, resume("p-1", cmd_id="c1") if command == "resume" else nudge("left", 50, cmd_id="c1"))
+    finally:
+        del executor._landing_wanted_locked
+    assert gaps
+    assert not wait_for(lambda: len(drone.calls) > mark, timeout=0.3)
+    gaps[0].close()
+    assert executor.wait_idle(WAIT_S)
+    assert drone.calls[mark:] == [("land",)]
+    assert executor.envelope.pose_snapshot().x_cm == pytest.approx(0)
 
 
 def test_hold_in_the_landing_gap_is_refused(executors):
