@@ -268,6 +268,12 @@ def edge_sent(msg: Any, ok: bool = True, size: int | None = None) -> None:
 
 
 @_safe
+def edge_outbox_dropped(queue: str) -> None:
+    """A message dropped from a full per-connection outbox on the edge (multi-ground uplink)."""
+    M.comm_dropped.add(1, {"side": "edge", "type": safe_token(queue), "reason": "outbox_full"})
+
+
+@_safe
 def edge_reconnect(outcome: str, attempt: int | None = None) -> None:
     """One edge reconnect attempt (``scheduled``, ``ok``, ``failed``, ``gave_up``)."""
     M.link_reconnects.add(1, {"outcome": safe_token(outcome)})

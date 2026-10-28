@@ -159,6 +159,7 @@ comm_acks = _counter("flightrisk.comm.acks", description="Edge acks and nacks by
 comm_dropped = _counter("flightrisk.comm.dropped", description="Messages not delivered by side, type and reason")
 link_reconnects = _counter("flightrisk.link.reconnects", description="Edge reconnect attempts by outcome")
 clock_offset = _gauge("flightrisk.link.clock_offset_ms", "ms", "Edge clock offset by drone")
+fleet_epoch = _gauge("flightrisk.fleet.epoch", description="Leader epoch an edge adopted, by drone")
 start_skew = _gauge("flightrisk.fleet.start_skew_ms", "ms", "Spread of start_at execution across the fleet")
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,17 @@ behind frame processing. Safety controls on the edge laptop:
     * no ground message for ``FLIGHTRISK_LINK_LOSS_LAND_S`` seconds lands it;
     * any exit from the edge loop lands the drone first.
 
+Several ground stations (the two-laptop fleet): with ``--ground-urls`` or
+``FLIGHTRISK_GROUND_URLS`` set to a comma-separated list, a flying edge
+connects to every ground through ``flightrisk.edge_uplink.EdgeUplink`` and
+obeys one of them, its authority (``flightrisk.fleet_authority``): it speaks
+protocol v2, executes landings from any ground, and only the authority's
+messages move the drone or feed the link-loss watchdog. ``--node-id`` (or
+``FLIGHTRISK_NODE_ID``) names this laptop in the edge ``hello``.
+``FLIGHTRISK_FLEET_LEGACY=1`` keeps v1 grounds connected as monitor-only
+links instead of closing them. Without a ground list the single
+``--ws-url`` path is unchanged.
+
 A flying edge stamps every detection message with its ``drone_id`` and its
 dead-reckoned pose (``rel_x_cm``, ``rel_y_cm``, ``heading_deg``) from the
 safety envelope, so the ground can place it on the shared fleet map.
@@ -72,6 +83,16 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import CONTROL_TYPES, LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.edge import EdgeRunner
+from flightrisk.edge_uplink import (
+    ENV_FLEET_LEGACY,
+    ENV_GROUND_URLS,
+    ENV_INFLIGHT_HANDOVER,
+    ENV_NODE_ID,
+    EdgeUplink,
+    default_node_id,
+    env_flag,
+    parse_ground_urls,
+)
 from flightrisk.observability import StructuredLogger
 from flightrisk.transport import EdgeTransportSync
 
@@ -184,18 +205,21 @@ def _handle_control(
     log: StructuredLogger,
     flight: LaneExecutor | None = None,
     recv_t: float | None = None,
+    feed_watchdog: bool = True,
 ) -> None:
     """Apply a single ground->edge control message.
 
     Never raises: an unexpected/malformed control message must not take the
     frame loop down. With a ``flight`` executor, every message resets the
-    link-loss watchdog, fleet control types (``CONTROL_TYPES``) go to the
-    executor, and an unexpected exception lands the drone (fail safe).
-    ``recv_t`` is the edge clock reading taken when the message arrived.
+    link-loss watchdog (unless ``feed_watchdog`` is False: the multi-ground
+    uplink feeds it itself, from the authority only), fleet control types
+    (``CONTROL_TYPES``) go to the executor, and an unexpected exception lands
+    the drone (fail safe). ``recv_t`` is the edge clock reading taken when
+    the message arrived.
     """
     try:
         mtype = msg.get("type")
-        if flight is not None:
+        if flight is not None and feed_watchdog:
             # Any message from the ground proves the link is alive.
             flight.note_ground_message()
         if mtype in CONTROL_TYPES:
@@ -253,6 +277,7 @@ def _control_pump(
     in that mode.
     """
     log.info("edge_control_thread_start")
+    feed_watchdog = not getattr(transport, "feeds_watchdog", False)
     while not stop_event.is_set():
         started = time.monotonic()
         try:
@@ -269,7 +294,7 @@ def _control_pump(
             continue
         recv_t = flight.now()
         if isinstance(ctrl, dict):
-            _handle_control(ctrl, runner, log, flight=flight, recv_t=recv_t)
+            _handle_control(ctrl, runner, log, flight=flight, recv_t=recv_t, feed_watchdog=feed_watchdog)
         else:
             log.debug("edge_control_non_dict", value=ctrl)
     log.info("edge_control_thread_stop")
@@ -660,6 +685,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Ground-station WebSocket URL (default: {_DEFAULT_WS_URL})",
     )
     parser.add_argument(
+        "--ground-urls", type=str, default=os.environ.get(ENV_GROUND_URLS, ""),
+        help="Comma-separated WebSocket URLs of every ground station (two-laptop fleet, "
+             "--source tello or fake). Overrides --ws-url. Default: $" + ENV_GROUND_URLS,
+    )
+    parser.add_argument(
+        "--node-id", type=str, default=None,
+        help="This laptop's node id in the fleet hello (default: $FLIGHTRISK_NODE_ID or the host name)",
+    )
+    parser.add_argument(
         "--stream-video", action="store_true",
         help="Stream full-frame thumbnails from the start (default: off)",
     )
@@ -690,8 +724,24 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | None) -> EdgeTransportSync:
-    """Construct the ground link; a flying source reconnects with a 2 s backoff cap."""
+def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | None) -> Any:
+    """Construct the ground link; a flying source reconnects with a 2 s backoff cap.
+
+    A flying source with ``--ground-urls`` gets an ``EdgeUplink`` to every
+    listed ground; otherwise the single ``--ws-url`` transport, unchanged.
+    """
+    urls = parse_ground_urls(getattr(args, "ground_urls", "")) if args.source in _FLIGHT_SOURCES else ()
+    if urls:
+        return EdgeUplink(
+            urls,
+            drone_id=args.drone_id,
+            node_id=getattr(args, "node_id", None) or default_node_id(),
+            runner=runner,
+            token=token,
+            max_delay=_FLEET_RECONNECT_MAX_DELAY_S,
+            legacy=env_flag(ENV_FLEET_LEGACY),
+            inflight_handover=env_flag(ENV_INFLIGHT_HANDOVER),
+        )
     if args.source in _FLIGHT_SOURCES:
         return EdgeTransportSync(
             ws_url=args.ws_url, runner=runner, token=token, max_delay=_FLEET_RECONNECT_MAX_DELAY_S,
@@ -729,6 +779,9 @@ def _run_flight_edge(
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
     flight = LaneExecutor(drone, envelope, args.drone_id, send=_make_sender(transport, log), logger=log)
+    bind_executor = getattr(transport, "bind_executor", None)
+    if callable(bind_executor):
+        bind_executor(flight)
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -744,7 +797,8 @@ def _run_flight_edge(
         previous_sigint = _install_sigint_land(flight, log)
         log.info(
             "edge_connect",
-            ws_url=args.ws_url,
+            ws_url=args.ws_url if not isinstance(transport, EdgeUplink) else None,
+            ground_urls=len(transport.urls) if isinstance(transport, EdgeUplink) else None,
             authenticated=token is not None,
             drone_id=args.drone_id,
             alt_slot_cm=envelope.alt_slot_cm,
@@ -810,6 +864,16 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.source == "file" and not args.video:
         parser.error("--video is required when --source=file")
+    try:
+        ground_urls = parse_ground_urls(args.ground_urls)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.node_id is not None and not fp.is_identifier(args.node_id):
+        parser.error(f"--node-id must be an identifier such as mac or win-1, got {args.node_id!r}")
+    env_node_id = os.environ.get(ENV_NODE_ID, "").strip()
+    uses_uplink = bool(ground_urls) and args.source in _FLIGHT_SOURCES
+    if uses_uplink and args.node_id is None and env_node_id and not fp.is_identifier(env_node_id):
+        parser.error(f"{ENV_NODE_ID} must be an identifier such as mac or win-1, got {env_node_id!r}")
     try:
         _resolve_appearance_only(args)
     except ValueError as exc:

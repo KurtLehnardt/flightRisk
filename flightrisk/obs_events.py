@@ -594,12 +594,23 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "battery_critical_land_failed": ("land_failed", "low_battery"),
     "land_all_sent": ("land_all", "operator"),
     "land_all_reached_no_drone": ("land_all_failed", "no_drone_reached"),
+    "edge_unplanned_landing": ("unplanned_landing", None),
+    "edge_hold_refused": ("hold_refused", None),
+    "edge_nudge_refused": ("nudge_refused", None),
+    "edge_launch_refused": ("launch_refused", None),
+    "edge_command_refused": ("command_refused", None),
+    "edge_plan_invalidated": ("plan_invalidated", None),
+    "edge_retask_not_flown": ("retask_not_flown", None),
     "edge_takeoff": ("takeoff", None),
     "edge_lanes_complete": ("lanes_complete", None),
 }
 
 #: StructuredLogger events about the ground/edge link.
 COMM_EVENTS = frozenset({
+    "link_outbox_send_timeout", "link_outbox_payload_error", "link_outbox_writer_error", "edge_ground_hello",
+    "edge_authority_released", "edge_connection_refused", "edge_handover_announced", "fleet_epoch_adopted",
+    "edge_message_refused", "edge_queued_motion_discarded", "edge_detections_dropped_no_authority",
+    "edge_uplink_frame_error", "edge_send_invalid", "edge_reply_invalid",
     "edge_telemetry_dropped", "edge_send_error", "edge_send_unavailable", "edge_control_recv_error",
     "edge_connect", "edge_control_stream_video", "edge_clock_offset", "edge_clock_invalid",
     "ground_bind_address_restored", "ground_bind_recovered", "ground_bind_listener_unreachable",
@@ -631,6 +642,10 @@ def route_structured(component: str, event: str, fields: Mapping[str, Any]) -> s
         })
         return "flight_safety"
     if event in COMM_EVENTS:
+        if event == "fleet_epoch_adopted" and isinstance(fields.get("epoch"), int):
+            M.fleet_epoch.set(fields["epoch"], {"drone_id": safe_token(fields.get("drone_id"))})
+        if event == "edge_detections_dropped_no_authority":
+            M.comm_dropped.add(1, {"side": "edge", "type": "detections", "reason": "no_authority"})
         if event in ("edge_telemetry_dropped", "edge_send_error", "edge_send_unavailable"):
             M.comm_dropped.add(1, {"side": "edge", "type": safe_token(fields.get("type"), "telemetry"),
                                    "reason": "queue_full" if event == "edge_telemetry_dropped" else "send_error"})

@@ -10,58 +10,81 @@ accepts those control messages, flies the lanes through a drone controller
   A plan it refuses is answered with a ``nack`` giving the reason, so the
   ground never counts refused lanes as searched. A plan that arrives while
   the drone is flying replaces the current one (re-tasking), and the drone
-  switches to it after its current move.
+  switches to it after its current move. Plans are ordered and invalidated
+  as described in ``flightrisk.drone.lane_plan``.
 * ``clock`` stores the ground clock offset (edge clock minus ground clock).
 * ``start_at`` schedules takeoff for the moment the edge's monotonic clock
   reaches ``t_ground_s + offset_s``, then the drone climbs to its altitude
   slot and flies its lanes. An ``ack`` reports when the start executed, in
-  ground time (``t_edge_exec - offset_s``).
+  ground time (``t_edge_exec - offset_s``). It is refused unless the current
+  plan is valid and, when the message names a ``plan_id``, is that plan.
 * ``takeoff`` takes off and climbs to the altitude slot without flying lanes.
 * ``land`` and ``emergency_land_all`` land at once from the calling thread.
-  They never wait behind a queued or running flight sequence.
+  They never wait behind a queued or running flight sequence, and every
+  landing clears a hold and invalidates the plan.
 * ``ping`` is answered with ``pong`` timestamps for clock sync, and
   ``heartbeat`` (like every ground message) resets the link-loss watchdog.
+* Protocol v2 adds ``hold``, ``resume`` and ``nudge`` (``V2_CONTROL_TYPES``),
+  ``cmd_id`` idempotency, generic acks and nacks, and the authority hook;
+  see ``flightrisk.drone.lane_commands``. Their routing from the edge's
+  control loop belongs to the edge authority: ``CONTROL_TYPES`` stays the
+  v1 set, and ``ALL_CONTROL_TYPES`` is everything ``handle_message`` takes.
 
-A monitor thread calls ``tick`` every 50 ms. It lands the drone when the
-ground link has been silent past the threshold or the battery is low, retries
-a landing that did not take, and emits ``telemetry`` every 0.5 s. The monitor
-never waits on the ground link: it hands telemetry to a sender thread through
-a small queue that drops its oldest message when full, so a stalled uplink
-cannot hold up the link-loss, battery and land-retry checks.
+The monitor (``flightrisk.drone.lane_monitor``) runs every 50 ms: link-loss
+and battery landings, land retries, the end-of-lanes hover timeout and
+telemetry.
 
 Fail-safe rules: any unexpected exception while flying a sequence or running
 the monitor lands the drone. Takeoff is refused below the battery threshold,
 and any move the geofence refuses ends the flight with a landing. Position is
 dead-reckoned from the commanded moves (the frame is described in
-``flightrisk.drone.safety``).
+``flightrisk.drone.safety``). Every move is claimed under the executor lock
+just before it is sent, so a hold or a landing stops the sequence before its
+next move and never interrupts the move in flight.
 """
 from __future__ import annotations
 
-import inspect
-import math
 import threading
 import time
 from collections import deque
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
+from flightrisk.drone.command_cache import CommandCache
 from flightrisk.drone.controller import command_result
-from flightrisk.drone.safety import (
-    HORIZONTAL_DIRECTIONS,
-    MAX_MOVE_CM,
-    MIN_MOVE_CM,
-    SafetyEnvelope,
-    is_finite_number,
+from flightrisk.drone.lane_commands import (
+    COMMAND_TYPES,
+    V2_CONTROL_TYPES,
+    CommandAuthority,
+    FleetCommandMixin,
+    PermissiveAuthority,
 )
+from flightrisk.drone.lane_flight import FlightSequenceMixin, MoveNotExecutedError
+from flightrisk.drone.lane_monitor import MonitorMixin
+from flightrisk.drone.lane_plan import (
+    LanePlanMixin,
+    PlanIdentity,
+    parse_lanes,
+    split_lane_moves,
+)
+from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
+from flightrisk.fleet_protocol import is_identifier
 from flightrisk.observability import StructuredLogger
 
 __all__ = [
+    "ALL_CONTROL_TYPES",
     "CONTROL_TYPES",
+    "V2_CONTROL_TYPES",
+    "CommandAuthority",
     "LaneExecutor",
+    "MoveNotExecutedError",
+    "PermissiveAuthority",
     "parse_lanes",
     "split_lane_moves",
 ]
 
-# Ground->edge message types the executor handles (design section 3).
+# Ground->edge message types the executor handles in protocol v1 (design
+# section 3). The edge device routes exactly these to the executor.
 CONTROL_TYPES = frozenset({
     "takeoff",
     "land",
@@ -72,6 +95,8 @@ CONTROL_TYPES = frozenset({
     "clock",
     "heartbeat",
 })
+# Everything ``handle_message`` takes, protocol v2 commands included.
+ALL_CONTROL_TYPES = CONTROL_TYPES | V2_CONTROL_TYPES
 
 TELEMETRY_INTERVAL_S = 0.5
 # Telemetry waiting for the sender thread. Only the newest matters, so when
@@ -87,48 +112,30 @@ LAND_RETRY_S = 2.0
 # a clock error and refused rather than flown.
 MAX_START_LEAD_S = 120.0
 MAX_START_LATE_S = 5.0
-# Below this much remaining time the start wait switches from event waits to
-# short sleeps, so takeoff fires close to the scheduled instant.
-_START_SPIN_S = 0.02
+
+# Why a start_at was refused (logged) -> the v2 nack reason.
+_START_NACK_REASONS = {
+    "invalid_t_ground_s": "invalid",
+    "invalid_plan_id": "invalid",
+    "no_clock_offset": "invalid",
+    "too_far_ahead": "invalid",
+    "too_late": "invalid",
+    "no_valid_plan": "no_valid_plan",
+    "no_lanes": "no_valid_plan",
+    "plan_mismatch": "plan_mismatch",
+    "busy": "busy",
+    "holding": "busy",
+    "shut_down": "busy",
+    "landing": "landing",
+    "geofence": "geofence",
+}
 
 
-def split_lane_moves(distance_cm: float) -> list[int]:
-    """Split one lane into Tello-sized moves of 20-500 cm each, as evenly as possible."""
-    total = int(round(distance_cm))
-    if total < MIN_MOVE_CM:
-        raise ValueError(f"lane distance {distance_cm!r} cm is below the {MIN_MOVE_CM} cm minimum move")
-    count = max(1, math.ceil(total / MAX_MOVE_CM))
-    base, extra = divmod(total, count)
-    return [base + (1 if i < extra else 0) for i in range(count)]
-
-
-def parse_lanes(raw: Any) -> list[tuple[str, int]]:
-    """Validate an ``assign_lanes`` lane list and return ``(direction, distance_cm)`` pairs.
-
-    Raises ``ValueError`` describing the first problem found. Only
-    horizontal directions are accepted, so a lane plan can never change the
-    drone's altitude slot.
-    """
-    if not isinstance(raw, list):
-        raise ValueError("lanes must be a list")
-    lanes: list[tuple[str, int]] = []
-    for index, lane in enumerate(raw):
-        if not isinstance(lane, dict):
-            raise ValueError(f"lane {index} is not an object")
-        direction = lane.get("direction")
-        distance = lane.get("distance_cm")
-        if direction not in HORIZONTAL_DIRECTIONS:
-            raise ValueError(f"lane {index} has unsupported direction {direction!r}")
-        if not is_finite_number(distance) or int(round(distance)) < MIN_MOVE_CM:
-            raise ValueError(f"lane {index} has invalid distance_cm {distance!r}")
-        lanes.append((direction, int(round(distance))))
-    return lanes
-
-
-class LaneExecutor:
+class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin):
     """Executes ground control messages against one drone inside a safety envelope."""
 
     CONTROL_TYPES = CONTROL_TYPES
+    ALL_CONTROL_TYPES = ALL_CONTROL_TYPES
 
     def __init__(
         self,
@@ -146,6 +153,9 @@ class LaneExecutor:
         max_start_lead_s: float = MAX_START_LEAD_S,
         max_start_late_s: float = MAX_START_LATE_S,
         telemetry_queue_size: int = TELEMETRY_QUEUE_SIZE,
+        authority: CommandAuthority | None = None,
+        fleet_v2: bool = False,
+        command_cache_size: int | None = None,
     ):
         self.drone = drone
         self.envelope = envelope
@@ -159,11 +169,21 @@ class LaneExecutor:
         self.land_retry_s = float(land_retry_s)
         self.max_start_lead_s = float(max_start_lead_s)
         self.max_start_late_s = float(max_start_late_s)
+        # Decides whether a fenced command comes from the leader the edge
+        # obeys (see ``lane_commands``). The default accepts everything.
+        self._authority = authority if authority is not None else PermissiveAuthority()
+        self._commands = CommandCache() if command_cache_size is None else CommandCache(command_cache_size)
+        # Telemetry carries the v2 fields once true (see ``lane_monitor``).
+        self._v2_telemetry = bool(fleet_v2)
 
         self._lock = threading.RLock()
-        # Set by every landing; tells a running flight sequence to stop
-        # sending commands. Cleared only when a new sequence is launched.
+        # Set by every landing (and by a hold that cancels a pending start);
+        # tells a running flight sequence to stop sending commands. Cleared
+        # only when a new sequence is launched.
         self._abort = threading.Event()
+        # (nack reason, detail) for a sequence aborted before it executed,
+        # when that was not a landing.
+        self._cancel: tuple[str, str | None] | None = None
         self._stop = threading.Event()
         # Set for good by shutdown(); no flight sequence may start afterwards.
         self._closed = False
@@ -172,6 +192,13 @@ class LaneExecutor:
         # clears it (under ``_lock``) once it will send no more commands, so
         # a re-task arriving as the last lane finishes still gets flown.
         self._active_thread: threading.Thread | None = None
+        # Kind and phase of that sequence: kind is start_at, takeoff, lanes,
+        # climb or nudge; phase is pre_takeoff, taking_off, climbing, lanes or
+        # nudge.
+        self._active_kind: str | None = None
+        self._phase: str | None = None
+        # True while a claimed move (or takeoff) is with the drone.
+        self._moving = False
         self._monitor: threading.Thread | None = None
 
         # Lane plan as received, and flattened into Tello-sized moves of
@@ -185,6 +212,19 @@ class LaneExecutor:
         self._plan_gen = 0
         self._linked_gens: set[int] = set()
         self._zone: Any = None
+        # Identity, validity, content and end-of-lanes action of the current
+        # plan, and the newest (epoch, plan_seq) ever accepted (lane_plan).
+        self._plan_identity: PlanIdentity | None = None
+        self._plan_newest: tuple[int, int] | None = None
+        self._plan_valid = False
+        self._plan_content: Any = None
+        self._on_complete: str | None = None
+        self._hover_timeout_s = 0.0
+        self._hover_since: float | None = None
+        # Hold state: whether a hold is in force, and what resume restarts
+        # (lanes, climb or hover).
+        self._held = False
+        self._parked: str | None = None
 
         self._offset_s: float | None = None
         self._takeoff_at_local_s: float | None = None
@@ -196,11 +236,22 @@ class LaneExecutor:
         # and the drone still reports flying, the monitor retries the land
         # and new takeoffs are refused.
         self._land_reason: str | None = None
+        # Landings announced by land_now that have not yet been recorded
+        # under ``_lock``. land_now counts itself here before it waits for
+        # the lock, so no flight sequence can be launched in between (see
+        # ``_landing_wanted_locked``). Guarded by ``_land_gate``, a lock that
+        # is never held while taking another. It is re-entrant: the SIGINT
+        # handler calls ``land_now`` on the main thread, which may be inside
+        # ``land_now`` itself (holding the gate) when a second Ctrl+C lands.
+        self._land_gate = threading.RLock()
+        self._land_requests = 0
         self._last_land_attempt_s = 0.0
         # True while some thread is inside drone.land(). A second land
         # request meanwhile (for example emergency_land_all arriving through
         # both the transport callback and recv()) does not send another one.
         self._land_inflight = False
+        # Flight state the monitor saw last, to notice an unrequested landing.
+        self._was_flying = False
         self._next_telemetry_s: float | None = None
         # Telemetry handed from the monitor to the sender thread. The deque
         # drops its oldest entry when full.
@@ -237,7 +288,7 @@ class LaneExecutor:
 
     @property
     def is_busy(self) -> bool:
-        """True while a flight sequence (scheduled start, takeoff or lanes) is running."""
+        """True while a flight sequence (scheduled start, takeoff, lanes or nudge) is running."""
         with self._lock:
             return self._worker_alive()
 
@@ -250,9 +301,59 @@ class LaneExecutor:
         worker.join(timeout)
         return not worker.is_alive()
 
+    def is_active(self) -> bool:
+        """True while the drone flies or anything that can make it fly or land is under way.
+
+        That is: the drone reports flying, a flight sequence (a scheduled
+        ``start_at`` still waiting, a takeoff, lanes, a climb or a nudge) is
+        running, or a landing is in progress or has been requested. The edge
+        authority adopts a new leader epoch only while this is False. An
+        unreadable flight state counts as active.
+        """
+        try:
+            flying = self._is_flying()
+        except Exception:  # noqa: BLE001 - an unreadable state counts as flying
+            return True
+        with self._lock:
+            worker = self._worker
+            busy = self._worker_alive() or self._land_inflight or self._land_requests > 0
+        return flying or busy or (worker is not None and worker.is_alive())
+
+    def fleet_status(self) -> dict[str, Any]:
+        """The protocol v2 status fields for telemetry and the edge ``hello``.
+
+        Returns ``plan_id`` (kept after the plan is invalidated, or None),
+        ``state`` (as in telemetry, or ``unknown`` while the flight state is
+        unreadable), ``plan_valid`` and ``epoch`` (the epoch the authority
+        reports the edge obeys, 0 before any), read together under the
+        executor lock. The authority's ``epoch_seen()`` must be non-blocking.
+        """
+        try:
+            flying: bool | None = self._is_flying()
+        except Exception:  # noqa: BLE001 - an unreadable state is reported, not raised
+            flying = None
+        with self._lock:
+            return {
+                "plan_id": None if self._plan_identity is None else self._plan_identity.plan_id,
+                "state": "unknown" if flying is None else self._state_locked(flying),
+                "plan_valid": self._plan_valid,
+                "epoch": self.epoch_seen,
+            }
+
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
         return self._active_thread is not None
+
+    def _landing_wanted_locked(self) -> bool:
+        """True from the moment ``land_now`` is called until that landing is over. Caller holds ``_lock``.
+
+        While it is true no flight sequence is launched (``_launch``) and
+        ``start_at``, ``resume``, ``nudge`` and ``hold`` are refused with
+        ``landing``.
+        """
+        if self._land_requests > 0:
+            return True
+        return self._land_reason is not None and (self._land_inflight or self._is_flying())
 
     def _is_flying(self) -> bool:
         return bool(getattr(self.drone.state, "is_flying", False))
@@ -297,6 +398,7 @@ class LaneExecutor:
         """
         with self._lock:
             self._closed = True
+            self._cancel = ("busy", "shut_down")
         self._stop.set()
         self._abort.set()
         with self._telemetry_cv:
@@ -329,29 +431,28 @@ class LaneExecutor:
         self.envelope.note_ground_message()
 
     def handle_message(self, msg: dict[str, Any], recv_t: float | None = None) -> None:
-        """Dispatch one ground control message of a type in ``CONTROL_TYPES``.
+        """Dispatch one ground control message of a type in ``ALL_CONTROL_TYPES``.
 
         ``recv_t`` is the edge clock reading taken when the message arrived;
         it becomes the ``t2`` of a ``pong``. Exceptions propagate to the
         caller, which must land (see ``edge_device._handle_control``).
+        Landing is executed every time, never fenced and never cached.
         """
         mtype = msg.get("type")
         if mtype == "emergency_land_all":
             self.land_now("emergency_land_all")
+            self._ack_landing(msg)
         elif mtype == "land":
             self.land_now("ground_land")
+            self._ack_landing(msg)
         elif mtype == "ping":
             self.handle_ping(msg, recv_t=recv_t)
         elif mtype == "heartbeat":
             self._log.debug("edge_heartbeat", drone_id=self.drone_id, seq=msg.get("seq"))
         elif mtype == "clock":
             self.handle_clock(msg)
-        elif mtype == "assign_lanes":
-            self.handle_assign_lanes(msg)
-        elif mtype == "start_at":
-            self.handle_start_at(msg)
-        elif mtype == "takeoff":
-            self.handle_takeoff()
+        elif isinstance(mtype, str) and mtype in COMMAND_TYPES:
+            self._dispatch_command(msg)
         else:
             self._log.debug("edge_flight_control_unknown", drone_id=self.drone_id, type=mtype)
 
@@ -372,198 +473,57 @@ class LaneExecutor:
         self._log.info("edge_clock_offset", drone_id=self.drone_id, offset_s=float(offset))
         return True
 
-    def handle_assign_lanes(self, msg: dict[str, Any]) -> bool:
-        """Validate and store a lane plan, then acknowledge it.
-
-        Refuses a plan addressed to another drone (``other_drone``), with
-        malformed lanes (``invalid``), with an out-of-range altitude
-        (``altitude``), whose dead-reckoned path leaves the geofence
-        (``geofence``), or while the battery level cannot be read
-        (``battery``), because the ``ack`` must carry it. A refused plan is
-        logged and answered with a ``nack`` carrying that reason and the
-        number of lanes received; the current plan is kept unchanged. An
-        ``alt_cm`` in the plan replaces the local altitude slot, because the
-        coordinator assigns slots across the whole fleet.
-
-        Re-tasking: when the drone is already flying its lanes and the new
-        plan starts with the lanes flown so far (including the current one)
-        unchanged, progress carries over. The drone keeps its lane index and
-        continues into the appended lanes instead of starting again from
-        lane 0. Any other plan starts from its first lane at the current
-        position.
-        """
-        raw_lanes = msg.get("lanes")
-        lanes_received = len(raw_lanes) if isinstance(raw_lanes, list) else 0
-        target = msg.get("drone_id")
-        if target is not None and str(target) != self.drone_id:
-            return self._refuse_lanes("other_drone", lanes_received, target=target)
-        try:
-            lanes = parse_lanes(raw_lanes)
-        except ValueError as exc:
-            return self._refuse_lanes("invalid", lanes_received, error=str(exc))
-        alt_cm = msg.get("alt_cm")
-        if alt_cm is not None:
-            try:
-                alt_cm = SafetyEnvelope.validate_alt_slot(alt_cm)
-            except ValueError as exc:
-                return self._refuse_lanes("altitude", lanes_received, error=str(exc))
-        battery = self._read_battery()
-        if not is_finite_number(battery):
-            return self._refuse_lanes("battery", lanes_received, battery=battery)
-
-        moves = [
-            (lane_index, chunk_index, direction, distance)
-            for lane_index, (direction, lane_cm) in enumerate(lanes)
-            for chunk_index, distance in enumerate(split_lane_moves(lane_cm))
-        ]
-
-        with self._lock:
-            carried_step = None
-            if self._flying_lanes and self._is_flying():
-                carried_step = self._carried_step(lanes, moves)
-            start_step = carried_step if carried_step is not None else 0
-
-            # Check the path still to be flown against the geofence before
-            # accepting anything. A move in progress is not in the pose yet,
-            # and it is still part of moves[start_step:].
-            pose = self.envelope.pose_snapshot()
-            outside = None
-            for _, _, direction, distance in moves[start_step:]:
-                pose.apply_move(direction, distance)
-                if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
-                    outside = (pose.x_cm, pose.y_cm)
-                    break
-            if outside is None:
-                accepted = self._store_plan(msg, lanes, moves, alt_cm, carried_step, start_step)
-        if outside is not None:
-            # The nack is sent outside the lock, like every other message.
-            return self._refuse_lanes(
-                "geofence",
-                lanes_received,
-                geofence_cm=self.envelope.geofence_cm,
-                x_cm=round(outside[0], 1),
-                y_cm=round(outside[1], 1),
-            )
-        lane_index, retask = accepted
-        self._log.info(
-            "edge_lanes_assigned",
-            drone_id=self.drone_id,
-            lanes_total=len(lanes),
-            lane_index=lane_index,
-            progress_carried=carried_step is not None,
-            alt_slot_cm=self.envelope.alt_slot_cm,
-            retask=retask,
-        )
-        self._emit({
-            "type": "ack",
-            "for": "assign_lanes",
-            "drone_id": self.drone_id,
-            "battery": battery,
-            "lanes_total": len(lanes),
-        })
-        return True
-
-    def _store_plan(
-        self,
-        msg: dict[str, Any],
-        lanes: list[tuple[str, int]],
-        moves: list[tuple[int, int, str, int]],
-        alt_cm: float | None,
-        carried_step: int | None,
-        start_step: int,
-    ) -> tuple[int, bool]:
-        """Make an accepted plan current. Caller holds ``_lock``.
-
-        Returns the lane index to report and whether a re-task sequence was
-        launched.
-        """
-        if alt_cm is not None and alt_cm != self.envelope.alt_slot_cm:
-            self._log.warning(
-                "edge_alt_slot_assigned",
-                drone_id=self.drone_id,
-                local_cm=self.envelope.alt_slot_cm,
-                assigned_cm=alt_cm,
-            )
-            self.envelope.set_alt_slot(alt_cm)
-        if carried_step is not None:
-            # A move of the old plan that is still in flight counts
-            # towards the new plan when it completes.
-            self._linked_gens.add(self._plan_gen)
-        else:
-            self._linked_gens.clear()
-        self._lanes = lanes
-        self._moves = moves
-        self._step = start_step
-        self._lanes_total = len(lanes)
-        self._plan_gen += 1
-        self._zone = msg.get("zone")
-        lane_index = self.lane_index
-        retask = (
-            self._flying_lanes
-            and self._is_flying()
-            and self._land_reason is None
-            and not self._worker_alive()
-        )
-        if retask:
-            retask = self._launch("lanes")
-        return lane_index, retask
-
-    def _refuse_lanes(self, reason: str, lanes_total: int, **fields: Any) -> bool:
-        """Log a refused lane plan and tell the ground with a ``nack``. Returns False."""
-        self._log.warning("edge_assign_lanes_refused", drone_id=self.drone_id, reason=reason, **fields)
-        self._emit({
-            "type": "nack",
-            "for": "assign_lanes",
-            "drone_id": self.drone_id,
-            "reason": reason,
-            "lanes_total": lanes_total,
-        })
-        return False
-
-    def _carried_step(
-        self, lanes: list[tuple[str, int]], moves: list[tuple[int, int, str, int]]
-    ) -> int | None:
-        """Step in a new plan that continues the current one, or None. Caller holds ``_lock``.
-
-        Progress carries over only if every lane flown so far, including the
-        lane in progress, is unchanged in the new plan.
-        """
-        if self._step < len(self._moves):
-            current = self._moves[self._step][:2]
-            lanes_fixed = current[0] + 1
-        else:
-            current = (self._lanes_total, 0)
-            lanes_fixed = self._lanes_total
-        if lanes[:lanes_fixed] != self._lanes[:lanes_fixed]:
-            return None
-        for index, move in enumerate(moves):
-            if move[:2] >= current:
-                return index
-        return len(moves)
-
     def handle_start_at(self, msg: dict[str, Any]) -> bool:
-        """Schedule takeoff plus lanes at ``t_ground_s + offset_s`` on the edge clock."""
+        """Schedule takeoff plus lanes at ``t_ground_s + offset_s`` on the edge clock.
+
+        Refused unless the current plan is valid (``no_valid_plan``) and,
+        when the message names a ``plan_id`` (a v2 command must), is that
+        plan (``plan_mismatch``); also while holding (``busy``), and, for a
+        v2 command, when the rest of the plan, flown from the current
+        dead-reckoned position, would leave the geofence (``geofence``).
+        """
         t_ground = msg.get("t_ground_s")
         if not is_finite_number(t_ground):
-            return self._refuse_start("invalid_t_ground_s", t_ground_s=t_ground)
+            return self._refuse_start(msg, "invalid_t_ground_s", t_ground_s=t_ground)
+        plan_id = msg.get("plan_id")
+        if (plan_id is not None or self._is_v2(msg)) and not is_identifier(plan_id):
+            return self._refuse_start(msg, "invalid_plan_id")
+        refusal: str | None = None
+        lead = 0.0
         with self._lock:
             offset = self._offset_s
             if offset is None:
-                return self._refuse_start("no_clock_offset")
-            if self._step >= len(self._moves):
-                return self._refuse_start("no_lanes")
-            if self._worker_alive():
-                return self._refuse_start("busy")
-            if self._land_reason is not None and self._is_flying():
-                return self._refuse_start("landing")
-            t_edge = float(t_ground) + offset
-            lead = t_edge - self._clock()
-            if lead > self.max_start_lead_s:
-                return self._refuse_start("too_far_ahead", lead_s=lead)
-            if lead < -self.max_start_late_s:
-                return self._refuse_start("too_late", lead_s=lead)
-            if not self._launch("start_at", t_edge=t_edge, offset_s=offset):
-                return self._refuse_start("shut_down")
+                refusal = "no_clock_offset"
+            elif not self._plan_valid:
+                refusal = "no_valid_plan"
+            elif plan_id is not None and plan_id != self.plan_id:
+                refusal = "plan_mismatch"
+            elif self._step >= len(self._moves):
+                refusal = "no_lanes"
+            elif self._is_v2(msg) and self._path_outside(self._moves, self._step) is not None:
+                # The drone moved since the plan was checked (a nudge). A v1
+                # start keeps the v1 behaviour: the in-flight geofence check
+                # lands the drone before the move that would leave the fence.
+                refusal = "geofence"
+            elif self._worker_alive():
+                refusal = "busy"
+            elif self._held:
+                refusal = "holding"
+            elif self._landing_wanted_locked():
+                refusal = "landing"
+            else:
+                t_edge = float(t_ground) + offset
+                lead = t_edge - self._clock()
+                if lead > self.max_start_lead_s:
+                    refusal = "too_far_ahead"
+                elif lead < -self.max_start_late_s:
+                    refusal = "too_late"
+                elif not self._launch("start_at", t_edge=t_edge, offset_s=offset, cmd=msg):
+                    refusal = "shut_down" if self._closed else "landing"
+        if refusal is not None:
+            # The nack is sent outside the lock, like every other message.
+            fields = {"lead_s": lead} if refusal in ("too_far_ahead", "too_late") else {}
+            return self._refuse_start(msg, refusal, **fields)
         self._log.info(
             "edge_start_scheduled",
             drone_id=self.drone_id,
@@ -571,26 +531,38 @@ class LaneExecutor:
             offset_s=offset,
             t_edge_s=t_edge,
             lead_s=round(lead, 4),
+            plan_id=self.plan_id,
         )
         return True
 
-    def _refuse_start(self, reason: str, **fields: Any) -> bool:
+    def _refuse_start(self, msg: dict[str, Any], reason: str, **fields: Any) -> bool:
         self._log.warning("edge_start_refused", drone_id=self.drone_id, reason=reason, **fields)
+        nack = _START_NACK_REASONS.get(reason, "invalid")
+        self._nack(msg, nack, **({"detail": reason} if reason != nack else {}))
         return False
 
-    def handle_takeoff(self) -> bool:
+    def handle_takeoff(self, msg: dict[str, Any] | None = None) -> bool:
         """Take off and climb to the altitude slot, then hover."""
         with self._lock:
             if self._is_flying():
-                self._log.info("edge_takeoff_ignored", drone_id=self.drone_id, reason="already_flying")
-                return False
-            if self._worker_alive():
-                self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason="busy")
-                return False
-            if not self._launch("takeoff"):
-                self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason="shut_down")
-                return False
-        return True
+                # A drone that is still landing is told so, as for every other
+                # command; only a drone flying for good is "already_flying".
+                refusal = "landing" if self._landing_wanted_locked() else "already_flying"
+            elif self._worker_alive():
+                refusal = "busy"
+            elif not self._launch("takeoff", cmd=msg):
+                refusal = "shut_down" if self._closed else "landing"
+            else:
+                return True
+        if refusal == "already_flying":
+            self._log.info("edge_takeoff_ignored", drone_id=self.drone_id, reason=refusal)
+        else:
+            self._log.warning("edge_takeoff_ignored", drone_id=self.drone_id, reason=refusal)
+        if refusal == "landing":
+            self._nack(msg, "landing")
+        else:
+            self._nack(msg, "busy", **({"detail": refusal} if refusal != "busy" else {}))
+        return False
 
     def fail_safe(self, reason: str) -> None:
         """React to an unexpected error: land unless the drone is idle on the ground.
@@ -605,29 +577,64 @@ class LaneExecutor:
         if flying or self.is_busy:
             self.land_now(reason)
         else:
+            with self._lock:
+                self._cancel = ("busy", "fail_safe")
             self._abort.set()
             self._log.warning("edge_fail_safe_idle", drone_id=self.drone_id, reason=reason)
 
-    def land_now(self, reason: str) -> None:
-        """Land immediately from the calling thread.
+    def land_now(self, reason: str, *, only_if: Callable[[], bool] | None = None) -> bool:
+        """Land immediately from the calling thread. Returns False if *only_if* stopped it.
 
-        Sets the abort flag first so a running sequence sends nothing more,
-        then calls ``drone.land()`` directly; nothing is queued. If another
-        thread is already inside ``drone.land()``, this call returns without
-        sending a second land. A failed land (one that raised, or returned a
-        result that was not executed) is logged and retried by the monitor
-        while the drone still reports flying.
+        Announces the landing and sets the abort flag before it waits for
+        the executor lock, so a running sequence sends nothing more and no
+        new sequence can be launched from that moment on (see
+        ``_landing_wanted_locked``); under the lock it records the landing
+        and sets the abort flag again. Then it calls ``drone.land()``
+        directly; nothing is queued. If another thread is already inside
+        ``drone.land()``, this call returns without sending a second land. A
+        failed land (one that raised, or returned a result that was not
+        executed) is logged and retried by the monitor while the drone still
+        reports flying. Every landing clears a hold and invalidates the plan.
+
+        *only_if* is for the landings a hold must be able to stop (the
+        end-of-lanes hover timeout and the plan's ``on_complete`` landing).
+        It is called under the executor lock, in the same step that records
+        the landing, and the landing is skipped when it returns False (for
+        example because a hold or a re-task arrived after the landing was
+        decided). Such a landing is not announced early. A landing for
+        battery, link loss, the geofence, an error or a ground or operator
+        command never passes *only_if*: a hold never stops it.
         """
-        self._abort.set()
+        announced = only_if is None
+        if announced:
+            with self._land_gate:
+                self._land_requests += 1
+            self._abort.set()
         with self._lock:
+            if announced:
+                with self._land_gate:
+                    self._land_requests -= 1
+            elif not only_if():
+                self._log.info("edge_land_skipped", drone_id=self.drone_id, reason=reason)
+                return False
             self._land_reason = reason
+            # Set again under the lock, together with _land_reason, so the
+            # abort flag is set from here on whatever ran before.
+            self._abort.set()
             self._last_land_attempt_s = self._clock()
             self._flying_lanes = False
             duplicate = self._land_inflight
             self._land_inflight = True
+            was_held, self._held, self._parked = self._held, False, None
+            was_valid, self._plan_valid = self._plan_valid, False
+            self._hover_since = None
+        if was_held:
+            self._log.warning("edge_hold_cleared", drone_id=self.drone_id, reason=reason)
+        if was_valid:
+            self._log.warning("edge_plan_invalidated", drone_id=self.drone_id, reason=reason, plan_id=self.plan_id)
         if duplicate:
             self._log.info("edge_land_already_in_progress", drone_id=self.drone_id, reason=reason)
-            return
+            return True
         self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
         try:
             result = command_result(self.drone.land(), "land")
@@ -645,112 +652,7 @@ class LaneExecutor:
         finally:
             with self._lock:
                 self._land_inflight = False
-
-    # ------------------------------------------------------------------
-    # Monitor: watchdog, battery, land retries, telemetry
-    # ------------------------------------------------------------------
-
-    def tick(self) -> None:
-        """Run one round of safety checks and send telemetry when due. Never raises.
-
-        Nothing here waits on the ground link: telemetry is queued for the
-        sender thread (see ``_post_telemetry``). The only blocking call is a
-        landing, which goes to the drone, not the ground.
-        """
-        now = self._clock()
-        try:
-            flying = self._is_flying()
-            with self._lock:
-                land_reason = self._land_reason
-                if land_reason is not None and not flying and not self._worker_alive():
-                    self._land_reason = None
-                retry_due = now - self._last_land_attempt_s >= self.land_retry_s
-            if flying:
-                if land_reason is not None:
-                    if retry_due:
-                        self.land_now(land_reason)
-                elif self.envelope.link_lost():
-                    self._log.error(
-                        "edge_link_lost",
-                        drone_id=self.drone_id,
-                        link_age_s=round(self.envelope.link_age_s(), 3),
-                    )
-                    self.land_now("link_loss")
-                elif self.envelope.should_land(self._read_battery()):
-                    self.land_now("low_battery")
-        except Exception as exc:
-            self._log.error("edge_monitor_error", drone_id=self.drone_id, error=repr(exc))
-            try:
-                self.fail_safe("monitor_error")
-            except Exception:
-                pass
-
-        if self._next_telemetry_s is None or now >= self._next_telemetry_s:
-            self._next_telemetry_s = now + self.telemetry_interval_s
-            try:
-                self._post_telemetry(self.telemetry())
-            except Exception as exc:
-                self._log.warning("edge_telemetry_error", drone_id=self.drone_id, error=repr(exc))
-
-    def _post_telemetry(self, msg: dict[str, Any]) -> None:
-        """Queue telemetry for the sender thread; never waits on the ground link.
-
-        When the queue is full the oldest message is dropped. Once the
-        executor is stopping the message is dropped: the sender thread is
-        exiting or gone, and sending from the calling thread could block the
-        monitor on a stalled uplink. Without a running sender thread
-        (``tick()`` called directly, before ``start()``) the message is sent
-        from the calling thread.
-        """
-        with self._telemetry_cv:
-            if self._stop.is_set():
-                return
-            sender = self._telemetry_sender
-            if sender is not None and sender.is_alive():
-                if len(self._telemetry_queue) == self._telemetry_queue.maxlen:
-                    self._telemetry_dropped += 1
-                    if self._telemetry_dropped == 1 or self._telemetry_dropped % 20 == 0:
-                        self._log.warning(
-                            "edge_telemetry_dropped",
-                            drone_id=self.drone_id,
-                            dropped=self._telemetry_dropped,
-                        )
-                self._telemetry_queue.append(msg)
-                self._telemetry_cv.notify()
-                return
-        self._emit(msg)
-
-    def _telemetry_loop(self) -> None:
-        """Send queued telemetry until the executor stops. Runs on its own thread."""
-        while True:
-            with self._telemetry_cv:
-                while not self._telemetry_queue and not self._stop.is_set():
-                    self._telemetry_cv.wait(0.5)
-                if self._stop.is_set():
-                    return
-                msg = self._telemetry_queue.popleft()
-            self._emit(msg)
-
-    def telemetry(self) -> dict[str, Any]:
-        """Build a ``telemetry`` message (design section 3)."""
-        pose = self.envelope.pose_snapshot()
-        with self._lock:
-            takeoff_at = self._takeoff_at_local_s
-            lanes_total = self._lanes_total
-        return {
-            "type": "telemetry",
-            "drone_id": self.drone_id,
-            "battery": self._read_battery(),
-            "height_cm": self._read_height(),
-            "is_flying": self._is_flying(),
-            "rel_x_cm": round(pose.x_cm, 1),
-            "rel_y_cm": round(pose.y_cm, 1),
-            "heading_deg": round(pose.heading_deg, 1),
-            "lane_index": self.lane_index,
-            "lanes_total": lanes_total,
-            "link_age_s": round(self.envelope.link_age_s(), 3),
-            "takeoff_at_local_s": takeoff_at,
-        }
+        return True
 
     def _emit(self, msg: dict[str, Any]) -> None:
         """Send a message to the ground. Transport errors are logged, never raised."""
@@ -758,226 +660,3 @@ class LaneExecutor:
             self._send_fn(msg)
         except Exception as exc:
             self._log.warning("edge_send_error", drone_id=self.drone_id, type=msg.get("type"), error=repr(exc))
-
-    # ------------------------------------------------------------------
-    # Flight sequences (worker thread)
-    # ------------------------------------------------------------------
-
-    def _launch(self, kind: str, t_edge: float | None = None, offset_s: float = 0.0) -> bool:
-        """Start a flight sequence thread. Caller holds ``_lock``.
-
-        Returns False (and starts nothing) once the executor is shut down.
-        """
-        if self._closed:
-            return False
-        self._abort.clear()
-        self._worker = threading.Thread(
-            target=self._run_sequence,
-            args=(kind, t_edge, offset_s),
-            daemon=True,
-            name=f"{self.drone_id}-flight",
-        )
-        self._active_thread = self._worker
-        self._worker.start()
-        return True
-
-    def _release_active(self) -> None:
-        """Mark the calling sequence as finished. Caller holds ``_lock``."""
-        if self._active_thread is threading.current_thread():
-            self._active_thread = None
-
-    def _run_sequence(self, kind: str, t_edge: float | None, offset_s: float) -> None:
-        try:
-            if kind == "start_at":
-                if not self._wait_until(t_edge):
-                    return
-                t_exec = self._clock()
-                if not self._is_flying() and not self._do_takeoff(t_exec):
-                    return
-                # The offset is the one the start was scheduled with, so the
-                # reported ground time matches the requested t_ground_s.
-                self._emit({
-                    "type": "ack",
-                    "for": "start_at",
-                    "drone_id": self.drone_id,
-                    "executed_at_ground_s": t_exec - offset_s,
-                })
-                self._fly_plan()
-            elif kind == "takeoff":
-                if self._do_takeoff(self._clock()):
-                    self._climb_to_slot()
-            elif kind == "lanes":
-                self._fly_plan()
-        except Exception as exc:
-            self._log.error("edge_executor_error", drone_id=self.drone_id, kind=kind, error=repr(exc))
-            self.land_now("executor_error")
-        finally:
-            with self._lock:
-                self._release_active()
-
-    def _wait_until(self, t_edge: float) -> bool:
-        """Wait for the edge clock to reach ``t_edge``. False if aborted first."""
-        while True:
-            if self._abort.is_set():
-                return False
-            remaining = t_edge - self._clock()
-            if remaining <= 0:
-                return True
-            if remaining > _START_SPIN_S:
-                self._abort.wait(min(remaining - _START_SPIN_S / 2, 0.05))
-            else:
-                self._sleep(0.0005)
-
-    def _do_takeoff(self, t_exec: float) -> bool:
-        battery = self._read_battery()
-        if not self.envelope.can_takeoff(battery):
-            self._log.warning(
-                "edge_takeoff_refused",
-                drone_id=self.drone_id,
-                reason="battery",
-                battery=battery,
-                min_takeoff_battery=self.envelope.min_takeoff_battery,
-            )
-            return False
-        if self.envelope.link_lost():
-            # The ground went silent while the start was pending; the
-            # watchdog would land the drone straight away, so do not lift.
-            self._log.warning(
-                "edge_takeoff_refused",
-                drone_id=self.drone_id,
-                reason="link_loss",
-                link_age_s=round(self.envelope.link_age_s(), 3),
-            )
-            return False
-        if self._abort.is_set():
-            return False
-        with self._lock:
-            self._flying_lanes = False
-        result = command_result(self._drone_takeoff(), "takeoff")
-        if not result.ok:
-            # Typically a landing started after the check above: the
-            # controller checked the abort flag under its command lock and
-            # sent nothing. Any other result that was not executed is
-            # treated the same way, so the drone is never recorded as
-            # airborne when it did not take off.
-            self._log.warning(
-                "edge_takeoff_refused",
-                drone_id=self.drone_id,
-                reason="landing",
-                outcome=result.outcome.value,
-            )
-            return False
-        with self._lock:
-            self._takeoff_at_local_s = t_exec
-        self._log.info("edge_takeoff", drone_id=self.drone_id, battery=battery, at_local_s=t_exec)
-        return not self._abort.is_set()
-
-    def _drone_takeoff(self) -> Any:
-        """Call ``drone.takeoff``, passing the abort flag when the controller takes one.
-
-        ``TelloController`` and ``FakeTelloController`` accept ``abort`` and
-        check it under their command lock immediately before sending the
-        takeoff, so a ``land_now`` that runs between the abort check in
-        ``_do_takeoff`` and the takeoff itself cannot be followed by a
-        takeoff. They return False when they refuse. The raw return value is
-        passed back for ``command_result()`` to normalize.
-        """
-        takeoff = self.drone.takeoff
-        try:
-            accepts_abort = "abort" in inspect.signature(takeoff).parameters
-        except (TypeError, ValueError):
-            accepts_abort = False
-        if accepts_abort:
-            return takeoff(abort=self._abort)
-        return takeoff()
-
-    def _climb_to_slot(self) -> bool:
-        """Move vertically to the altitude slot. Lands if the height is unknown."""
-        height = self._read_height()
-        try:
-            move = self.envelope.slot_move(height)
-        except ValueError as exc:
-            self._log.error("edge_altitude_unknown", drone_id=self.drone_id, error=str(exc))
-            self.land_now("height_unknown")
-            return False
-        if move is None:
-            return True
-        direction, distance = move
-        self._log.info(
-            "edge_alt_slot_climb",
-            drone_id=self.drone_id,
-            height_cm=height,
-            alt_slot_cm=self.envelope.alt_slot_cm,
-            direction=direction,
-            distance_cm=distance,
-        )
-        return self._command_move(direction, distance, record=False)
-
-    def _command_move(self, direction: str, distance: int, record: bool) -> bool:
-        if self._abort.is_set():
-            return False
-        # Every return value is normalized (None/True: executed; False or a
-        # non-OK CommandResult: not executed), so a move the controller did
-        # not fly is never recorded in the dead-reckoned pose.
-        result = command_result(self.drone.move(direction, distance), "move")
-        if not result.ok:
-            if self._abort.is_set():
-                return False
-            raise RuntimeError(
-                f"move {direction} {distance} cm was not executed by the drone controller "
-                f"({result.outcome.value})"
-            )
-        if record:
-            self.envelope.record_move(direction, distance)
-        return not self._abort.is_set()
-
-    def _fly_plan(self) -> None:
-        """Fly the current lane plan from its current step, following re-tasks."""
-        with self._lock:
-            if self._abort.is_set():
-                return
-            self._flying_lanes = True
-        climbed_gen: int | None = None
-        while not self._abort.is_set():
-            with self._lock:
-                gen = self._plan_gen
-                step = self._moves[self._step] if self._step < len(self._moves) else None
-                if step is None and climbed_gen == gen:
-                    # Done. Release under the lock so a plan that arrives
-                    # from now on starts a new sequence.
-                    self._release_active()
-            if climbed_gen != gen:
-                # New plan (or first plan): make sure the drone is at its slot,
-                # which a re-task may have changed.
-                if not self._climb_to_slot():
-                    return
-                climbed_gen = gen
-                continue
-            if step is None:
-                self._log.info("edge_lanes_complete", drone_id=self.drone_id, lanes_total=self.lanes_total)
-                return
-            lane_index, _, direction, distance = step
-            if not self.envelope.check_move(direction, distance):
-                pose = self.envelope.pose_snapshot()
-                self._log.error(
-                    "edge_geofence_refused",
-                    drone_id=self.drone_id,
-                    lane_index=lane_index,
-                    direction=direction,
-                    distance_cm=distance,
-                    x_cm=round(pose.x_cm, 1),
-                    y_cm=round(pose.y_cm, 1),
-                )
-                self.land_now("geofence")
-                return
-            if not self._command_move(direction, distance, record=True):
-                return
-            with self._lock:
-                same_plan = self._plan_gen == gen or gen in self._linked_gens
-                if (
-                    same_plan
-                    and not self._abort.is_set()
-                    and self._step < len(self._moves)
-                    and self._moves[self._step][:2] == step[:2]
-                ):
-                    self._step += 1
