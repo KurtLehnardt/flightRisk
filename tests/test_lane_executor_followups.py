@@ -48,7 +48,7 @@ def test_sigint_land_while_the_main_thread_holds_the_land_gate_does_not_deadlock
     # A second Ctrl+C can land while the main thread is inside land_now, which
     # holds the land gate. The handler's land_now runs on that same thread and
     # must get through; the monitor's link-loss land must not be blocked.
-    executor, drone, sent, _, _ = executors()
+    executor, drone, _, _, _ = executors()
     send(executor, takeoff(cmd_id="t1"))
     assert executor.wait_idle(WAIT_S)
     assert drone.state.is_flying
@@ -138,7 +138,7 @@ def test_takeoff_while_the_flying_drone_is_landing_is_nacked_landing(executors):
 
 
 def test_takeoff_of_a_drone_flying_for_good_is_still_busy_already_flying(executors):
-    executor, drone, sent, _, _ = executors()
+    executor, _, sent, _, _ = executors()
     send(executor, takeoff(cmd_id="t1"))
     assert executor.wait_idle(WAIT_S)
     send(executor, takeoff(cmd_id="t2"))
@@ -184,7 +184,7 @@ def test_fleet_status_reports_an_unreadable_flight_state_as_unknown(executors):
 
 
 def test_fleet_status_still_reports_the_real_state(executors):
-    executor, drone, _, _, _ = executors()
+    executor, _, _, _, _ = executors()
     assert executor.fleet_status()["state"] == "idle"
     send(executor, takeoff(cmd_id="t1"))
     assert executor.wait_idle(WAIT_S)
@@ -194,7 +194,7 @@ def test_fleet_status_still_reports_the_real_state(executors):
 def test_a_copy_of_the_plan_with_other_content_after_a_landing_is_stale_not_mismatched(executors):
     # The same plan_id and order, changed content, after a landing invalidated
     # the plan: refused as stale_plan (the plan may not restart), whatever it holds.
-    executor, drone, sent, clock, _ = executors()
+    executor, _, sent, clock, _ = executors()
     send(executor, assign(cmd_id="a1"))
     send(executor, start_at(clock() + 0.5, cmd_id="s1"))
     clock.advance(0.5)

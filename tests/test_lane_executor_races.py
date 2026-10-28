@@ -189,7 +189,7 @@ def test_a_landing_opened_inside_launch_after_its_check_still_aborts_the_sequenc
     # landing that announces itself right after that check returned False must
     # leave the flag set, so the sequence that is started sends no move. Were
     # the order "check, then clear", the clear would wipe the landing's flag.
-    executor, drone, sent, _, _ = held_mid_lane(executors)
+    executor, drone, _, _, _ = held_mid_lane(executors)
     mark = len(drone.calls)
     original = executor._landing_wanted_locked
     gaps: list[LandingGap] = []
