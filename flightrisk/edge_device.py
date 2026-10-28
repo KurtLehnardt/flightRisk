@@ -611,7 +611,9 @@ def _build_runner(
     # heavy and unnecessary for importing this module or unit-testing the loop.
     from flightrisk.vision.detector import PersonDetector
 
-    detector = PersonDetector(model_name="yolo11n.pt", confidence=0.4)
+    # FLIGHTRISK_DETECTOR_MODEL picks other weights (for example a fine-tuned model); unset keeps yolo11n.pt.
+    detector_model = os.environ.get("FLIGHTRISK_DETECTOR_MODEL", "").strip() or "yolo11n.pt"
+    detector = PersonDetector(model_name=detector_model, confidence=0.4)
 
     reid = None
     try:
