@@ -59,7 +59,7 @@ if ($altCm -lt 10) {
     exit 1
 }
 
-# The live floor is 4 m x 4 m, so the geofence is 450 cm unless the environment overrides it,
+# The live floor is 4 m x 4 m, so the geofence is 300 cm unless the environment overrides it,
 # and the edge matches on appearance only: it builds no face recognizer and sends no face embeddings.
 # These variables are set only for this script's run and restored in the finally block, so a later
 # run in the same PowerShell session does not inherit them.
@@ -67,7 +67,7 @@ $savedGeofence = $env:FLIGHTRISK_GEOFENCE_CM
 $savedAppearanceOnly = $env:FLIGHTRISK_APPEARANCE_ONLY
 $exitCode = 0
 try {
-    if (-not $env:FLIGHTRISK_GEOFENCE_CM) { $env:FLIGHTRISK_GEOFENCE_CM = "450" }
+    if (-not $env:FLIGHTRISK_GEOFENCE_CM) { $env:FLIGHTRISK_GEOFENCE_CM = "300" }
     $env:FLIGHTRISK_APPEARANCE_ONLY = "1"
 
     $python = if ($env:PYTHON) { $env:PYTHON } else { "venv\Scripts\python.exe" }

@@ -175,7 +175,7 @@ Run `venv/bin/python -m flightrisk.drone.coverage --min-px 32` and show the tabl
 
 ### E4 · Safety envelope (1:30)
 
-Each edge enforces its own limits, whatever the ground station says: a 450 cm geofence around its takeoff point by default, as set by the demo launchers (the code default is 500 cm; override with `FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard (Ctrl/Cmd+Shift+L while typing in a text field), `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
+Each edge enforces its own limits, whatever the ground station says: a 300 cm geofence around its takeoff point by default, as set by the demo launchers (the code default is 500 cm; override with `FLIGHTRISK_GEOFENCE_CM`), no takeoff below 30% battery, landing below 15%, and landing on its own after 3.0 s without a ground message (`FLIGHTRISK_LINK_LOSS_LAND_S`). There are three ways to land: the LAND ALL button or Shift+L on the dashboard (Ctrl/Cmd+Shift+L while typing in a text field), `l` and Enter in an edge terminal, and Ctrl-C on an edge, which lands and then exits. The dashboard binds 127.0.0.1 by default, and the edge link needs the shared `FLIGHTRISK_EDGE_TOKEN`.
 
 Confirming a match with a fleet lands every drone in place (LAND ALL); the Tello has no return-to-home, so drones land wherever they are.
 

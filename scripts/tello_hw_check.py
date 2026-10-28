@@ -598,6 +598,13 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[Check
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # A drone reply can hold bytes that are not valid text (shown as U+FFFD). With stdout redirected to a file
+    # or pipe on Windows the encoding is cp1252, and printing that character used to crash the whole report.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
