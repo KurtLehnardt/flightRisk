@@ -132,10 +132,13 @@ _BIND_CHECK_INTERVAL_S = 2.0
 _ADDRESS_MISSING_ERRNOS = frozenset({errno.EADDRNOTAVAIL, 10049})
 
 # Queued commands that an emergency_land_all supersedes: once the ground has
-# ordered every drone down, a takeoff, start_at, resume or nudge that was
-# still waiting in the edge's recv() queue must not fly the drone back up or
-# move it afterwards.
-_SUPERSEDED_BY_EMERGENCY = frozenset({fp.TAKEOFF, fp.START_AT, fp.RESUME, fp.NUDGE})
+# ordered every drone down, a takeoff, start_at, resume, nudge or manual
+# command (a manual step, manual takeoff or resume_search) that was still
+# waiting in the edge's recv() queue must not fly the drone back up or move
+# it afterwards.
+_SUPERSEDED_BY_EMERGENCY = frozenset({
+    fp.TAKEOFF, fp.START_AT, fp.RESUME, fp.NUDGE, fp.MANUAL_MOVE, fp.MANUAL_TAKEOFF, fp.RESUME_SEARCH,
+})
 
 # Per-client callback backlogs on the ground. When a callback falls this far
 # behind, the client's read loop waits (backpressure) instead of buffering

@@ -53,6 +53,7 @@ from flightrisk.fleet_authority_types import (
     _MOTION_TYPES,
     _PLAN_BOUND_TYPES,
     _REFUSAL_EVENTS,
+    _STOP_TYPES,
     _UNFENCED_AUTHORITY_TYPES,
     ACCEPT,
     CLOSE,
@@ -265,7 +266,7 @@ class EdgeAuthority:
                     decision = Decision(IGNORE, reason="not_authority")
             elif mtype in fp.FENCED_CONTROL_TYPES:
                 decision = self._control(key, conn, msg, mtype, active, post)
-            elif mtype in fp.FENCED_COMMAND_TYPES:
+            elif mtype in fp.FENCED_COMMAND_TYPES or mtype in fp.MANUAL_COMMAND_TYPES:
                 decision = self._command(key, conn, msg, mtype, supported)
             else:
                 decision = Decision(IGNORE, reason="unexpected_type")
@@ -375,7 +376,8 @@ class EdgeAuthority:
             if not self.legacy:
                 return self._close(conn, "v1_link_refused", type=mtype)
         self._note_refusal(conn, str(mtype), "no_hello")
-        return Decision(IGNORE if mtype not in fp.FENCED_COMMAND_TYPES else REFUSE, reason="no_hello")
+        command = mtype in fp.FENCED_COMMAND_TYPES or mtype in fp.MANUAL_COMMAND_TYPES
+        return Decision(REFUSE if command else IGNORE, reason="no_hello")
 
     def _close(self, conn: _Conn, reason: str, **fields: Any) -> Decision:
         slot = (conn.label, reason)
@@ -625,7 +627,7 @@ class EdgeAuthority:
             reason = None
             if admitted is not None and admitted != (self._epoch_seen, self._authority_leader):
                 reason = "stale_epoch"
-            elif mtype in _MOTION_TYPES and mtype != fp.HOLD and self._authority_key is None:
+            elif mtype in _MOTION_TYPES and mtype not in _STOP_TYPES and self._authority_key is None:
                 reason = "not_authority"
             if reason is not None:
                 self._drop_at_dispatch(msg, mtype, reason, admitted)
@@ -645,7 +647,7 @@ class EdgeAuthority:
             epoch_seen=self._epoch_seen,
         )
         cmd_id = fp.cmd_id_of(msg)
-        if mtype not in fp.FENCED_COMMAND_TYPES or cmd_id is None:
+        if (mtype not in fp.FENCED_COMMAND_TYPES and mtype not in fp.MANUAL_COMMAND_TYPES) or cmd_id is None:
             return
         lanes = msg.get("lanes")
         nack = fp.make_nack(
@@ -682,7 +684,7 @@ class EdgeAuthority:
                 return "stale_epoch"
             if fence is None or fence.epoch != self._epoch_seen or fence.leader_id != self._authority_leader:
                 return "not_authority"
-            if mtype in _MOTION_TYPES and mtype != fp.HOLD and self._authority_key is None:
+            if mtype in _MOTION_TYPES and mtype not in _STOP_TYPES and self._authority_key is None:
                 return "not_authority"
             return None
 

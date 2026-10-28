@@ -322,6 +322,7 @@ class LanePlanMixin:
         start_pose: RelativePose | None = None
         carried_step: int | None = None
         accepted = (0, False)
+        released_manual = False
         with self._lock:
             verdict = classify_plan(
                 identity,
@@ -355,6 +356,11 @@ class LanePlanMixin:
                     verdict = "landing"
                 elif outside is None:
                     accepted = self._store_plan(msg, lanes, moves, alt_cm, carried_step, start_step, retask)
+                    if self._manual is not None and not self._is_flying():
+                        # A new plan on the ground ends manual control
+                        # (lane_manual); in the air it waits for resume_search.
+                        self._release_manual_locked()
+                        released_manual = True
                     self._plan_identity = identity
                     if identity.order is not None:
                         self._plan_newest = max(identity.order, self._plan_newest or identity.order)
@@ -388,6 +394,8 @@ class LanePlanMixin:
                 },
             )
         lane_index, retask = accepted
+        if released_manual:
+            self._log.warning("edge_manual_released", drone_id=self.drone_id, reason="new_plan", plan_id=identity.plan_id)
         self._log.info(
             "edge_lanes_assigned",
             drone_id=self.drone_id,
@@ -404,13 +412,17 @@ class LanePlanMixin:
     def _path_start_pose(self) -> RelativePose:
         """The pose the rest of a plan would be flown from.
 
-        In the air that is the dead-reckoned pose. On the ground it is the
+        In the air that is the dead-reckoned pose, or, under manual control
+        or during the return of a ``resume_search``, the hold point the plan
+        will continue from (``lane_manual``). On the ground it is the
         origin: every takeoff from the ground makes the drone's spot the new
         takeoff point (``_do_takeoff``), so a plan checked before takeoff is
         flown from there, wherever the previous flight ended.
         """
         if self._is_flying():
-            return self.envelope.pose_snapshot()
+            with self._lock:
+                resume_point = self._resume_point_locked()
+            return resume_point if resume_point is not None else self.envelope.pose_snapshot()
         return RelativePose()
 
     def _path_outside(
@@ -476,6 +488,7 @@ class LanePlanMixin:
             and self._is_flying()
             and self._land_reason is None
             and not self._held
+            and self._manual is None
             and not self._worker_alive()
         )
 

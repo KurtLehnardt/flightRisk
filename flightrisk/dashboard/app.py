@@ -56,6 +56,7 @@ from flightrisk.canon import TargetCanon
 from flightrisk.dashboard.obs_hooks import install_http_observability, install_socketio_observability
 from flightrisk.dashboard.ceiling import EVENT as CEILING_EVENT
 from flightrisk.dashboard.ceiling import CeilingBoard, CeilingRefusal, CeilingStore
+from flightrisk.dashboard.manual_control import ManualControl
 
 try:
     from flightrisk.telemetry import init_telemetry, get_tracer, get_meter, FlightRiskMetrics
@@ -660,6 +661,14 @@ class FleetSupervisor:
     drone's altitude slot comes from the dashboard's ceiling settings, Plan
     is refused when a slot is above the ceiling limit, and Start when the
     planned slots are above it or no longer match the settings.
+
+    ``manual`` (``flightrisk/dashboard/manual_control.py``) is manual
+    takeover: one drone at a time is flown by hand from the video tiles
+    (``docs/manual-takeover.md``). Its replies are routed to it, each drone's
+    ``control_mode`` is in ``fleet_status``, Plan and Start are refused while
+    a drone's search is paused for manual control, and a paused drone is
+    never declared lost for being on the ground or not flying its lanes (only
+    for a lost link, as before).
     """
 
     # No ceiling board unless one is given (also for a supervisor built without __init__).
@@ -720,6 +729,18 @@ class FleetSupervisor:
         self._monitor_thread: threading.Thread | None = None
         if ceiling is not None:
             ceiling.bind_activity(self.flight_activity)
+        self.manual = ManualControl(
+            self.links, self._send_manual, self._emit, clock=self._clock, fence=self._manual_fence,
+        )
+
+    def _send_manual(self, drone_id: str, msg: dict) -> None:
+        """Send one manual command to *drone_id*'s edge; raises ``ConnectionError`` when it does not arrive."""
+        self.links[drone_id].send(msg)
+
+    def _manual_fence(self):
+        """The fence a v2 leader ground stamps on manual commands; None for today's v1 dashboard."""
+        identity = getattr(self._transport, "identity", None)
+        return getattr(identity, "fence", None)
 
     def _plan_slot(self, drone_id: str, index: int) -> int:
         return self._plan_slots[drone_id]
@@ -770,7 +791,10 @@ class FleetSupervisor:
             link = links.get(drone_id) or {}
             info["connected"] = bool(link.get("connected", False))
             info["link_age_s"] = link.get("link_age_s")
-        return {"drones": drones, "net": self.net, "synced": self.synced}
+            # autonomous / manual / held, so a reloaded browser shows who is
+            # under manual control (docs/manual-takeover.md).
+            info.update(self.manual.drone_status(drone_id))
+        return {"drones": drones, "net": self.net, "synced": self.synced, "manual_controlled": self.manual.controlled}
 
     def emit_status(self) -> None:
         self._emit("fleet_status", self.status_payload())
@@ -798,8 +822,13 @@ class FleetSupervisor:
         if link is None:
             log.warning("Ignoring %s from drone %r, which is not in the fleet", msg.get("type"), drone_id)
             return
-        if msg.get("type") == fp.TELEMETRY and self.coordinator.started:
-            self._note_flight(drone_id, msg)
+        if msg.get("type") in (fp.ACK, fp.NACK) and self.manual.on_reply(msg):
+            # The answer to a manual command; the coordinator never sent it.
+            return
+        if msg.get("type") == fp.TELEMETRY:
+            self.manual.observe_telemetry(drone_id, msg)
+            if self.coordinator.started:
+                self._note_flight(drone_id, msg)
         link.deliver(msg)
 
     def _note_flight(self, drone_id: str, telemetry: dict) -> None:
@@ -860,6 +889,11 @@ class FleetSupervisor:
         is above the ceiling limit; nothing is sent to any drone then.
         """
         with self._busy:
+            paused = self.manual.paused_drones()
+            if paused:
+                detail = f"{', '.join(paused)} under manual control; press Resume search first"
+                self._emit("fleet_event", {"event": "plan_refused", "detail": detail})
+                raise RuntimeError(f"Plan refused: {detail}")
             if self._ceiling is not None:
                 try:
                     self._plan_slots = self._ceiling.plan_slots(self.coordinator.drone_ids)
@@ -886,8 +920,10 @@ class FleetSupervisor:
         the browser as a ``fleet_event``.
         """
         with self._busy:
-            refusals = {}
-            if self._ceiling is not None and not self.coordinator.started:
+            refusals = {
+                drone_id: "under manual control; press Resume search first" for drone_id in self.manual.paused_drones()
+            }
+            if not refusals and self._ceiling is not None and not self.coordinator.started:
                 refusals = self._ceiling.check_start(self.coordinator.current_plan())
             if refusals:
                 result = StartResult(ok=False, t_ground_s=None, refusals=refusals)
@@ -915,6 +951,8 @@ class FleetSupervisor:
         """
         with self._lock:
             self._landed_all = True
+        # No manual command still waiting to be sent may follow the landing.
+        self.manual.on_land_all()
         return self.coordinator.land_all()
 
     # -- Loss detection -----------------------------------------------------
@@ -959,6 +997,7 @@ class FleetSupervisor:
                 continue
             reason = self._loss_reason(
                 links.get(drone_id), drone_id in flown, drone_id in landed_early, now - start_t,
+                paused=self.manual.paused(drone_id),
             )
             if reason is None:
                 continue
@@ -972,13 +1011,18 @@ class FleetSupervisor:
         return lost
 
     def _loss_reason(
-        self, link: dict | None, flown: bool, landed_early: bool, since_start_s: float,
+        self, link: dict | None, flown: bool, landed_early: bool, since_start_s: float, *, paused: bool = False,
     ) -> str | None:
         if link is None or not link.get("connected"):
             return "disconnected"
         age = link.get("link_age_s")
         if age is not None and age > self._loss_timeout_s:
             return f"silent for {age:.1f} s"
+        if paused:
+            # Held for manual control: on the ground or not flying its lanes
+            # on purpose. Its lanes stay its own until Resume search; only a
+            # lost link (above) makes it lost.
+            return None
         if landed_early:
             return "landed before finishing its lanes"
         if not flown and since_start_s > self._takeoff_grace_s:
@@ -1005,6 +1049,10 @@ class FleetSupervisor:
                 self.check_losses()
             except Exception:
                 log.error("Fleet loss check failed", exc_info=True)
+            try:
+                self.manual.check_timeouts()
+            except Exception:
+                log.error("Manual command timeout check failed", exc_info=True)
             self.emit_status()
 
 
@@ -2220,22 +2268,98 @@ _COMMAND_CAPABILITY = {
 }
 
 
+def _sid() -> str | None:
+    """The SocketIO session id of the browser that sent the current event."""
+    return getattr(request, "sid", None)
+
+
+def _manual_reply(result: dict) -> None:
+    """Answer a manual-control event; a refusal also shows as an error toast."""
+    emit("manual_ack", result)
+    if not result.get("ok"):
+        emit("error", {"message": f"{result.get('drone_id')}: {result.get('detail') or result.get('reason')}"})
+
+
+def _fleet_manual_command(supervisor, data) -> None:
+    """Route a ``drone_command`` in fleet mode to the drone under manual control (docs/manual-takeover.md)."""
+    data = data if isinstance(data, dict) else {}
+    cmd = data.get("command")
+    drone_id = data.get("drone_id") or supervisor.manual.controlled
+    if not drone_id:
+        emit("error", {"message": "Click a drone's video tile to take manual control of it first "
+                                  "(LAND ALL and Shift+L always work)."})
+        return
+    _manual_reply(supervisor.manual.command(
+        drone_id, cmd, sid=_sid(), distance_cm=data.get("distance"), degrees=data.get("degrees"),
+    ))
+
+
+@socketio.on("manual_take_control")
+def on_manual_take_control(data=None):
+    """Video tile click: pause that drone's search and give this browser its controls (one drone at a time)."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Manual takeover needs fleet mode (--source edge --fleet ...)"})
+        return
+    drone_id = (data or {}).get("drone_id") if isinstance(data, dict) else None
+    _manual_reply(supervisor.manual.take_control(str(drone_id), sid=_sid()))
+
+
+@socketio.on("manual_command")
+def on_manual_command(data=None):
+    """One manual step, rotation, Takeoff or Land for the drone under manual control."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Manual takeover needs fleet mode (--source edge --fleet ...)"})
+        return
+    _fleet_manual_command(supervisor, data)
+
+
+@socketio.on("manual_resume_search")
+def on_manual_resume_search(data=None):
+    """Resume search: end manual control of that drone only; it goes back to its search."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Manual takeover needs fleet mode (--source edge --fleet ...)"})
+        return
+    drone_id = (data or {}).get("drone_id") if isinstance(data, dict) else None
+    _manual_reply(supervisor.manual.resume_search(str(drone_id), sid=_sid()))
+
+
+@socketio.on("get_manual_status")
+def on_get_manual_status(data=None):
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        emit("manual_status", supervisor.manual.status())
+
+
+@socketio.on("disconnect")
+def on_disconnect(*args):
+    """A browser went away. If it held manual control, that drone stays held (hovering); see ManualControl."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        try:
+            supervisor.manual.controller_disconnected(_sid())
+        except Exception:  # noqa: BLE001 - a disconnect must never raise
+            log.warning("manual controller disconnect handling failed", exc_info=True)
+
+
 @socketio.on("drone_command")
 def on_drone_command(data):
-    """Send a command to the drone."""
+    """Send a command to the drone.
+
+    In fleet mode the command goes to the drone under manual control (or
+    the drone named in ``drone_id``) through manual takeover; Land always
+    goes through, to any fleet drone.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        _fleet_manual_command(supervisor, data)
+        return
     drone_id = data.get("drone_id")
     fleet = app_state.fleet
     if not fleet or not fleet.primary:
-        if app_state.fleet_supervisor is not None:
-            emit(
-                "error",
-                {
-                    "message": "No drones connected locally: manual flight commands are not available "
-                    "in fleet mode. Use Plan and Start to fly the fleet (LAND ALL still works)."
-                },
-            )
-        else:
-            emit("error", {"message": "No drones connected"})
+        emit("error", {"message": "No drones connected"})
         return
     drone: DroneController | None = fleet.get(drone_id) if drone_id else fleet.primary
     if not drone:

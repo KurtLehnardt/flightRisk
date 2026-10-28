@@ -417,6 +417,11 @@ class SafetyEnvelope:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)
         return self.inside_fence(x_cm, y_cm)
 
+    def move_endpoint(self, direction: str, distance_cm: float) -> tuple[float, float]:
+        """The dead-reckoned ``(x_cm, y_cm)`` a horizontal move from the current pose would reach."""
+        with self._lock:
+            return self.pose.endpoint(direction, distance_cm)
+
     def inside_fence(self, x_cm: float, y_cm: float) -> bool:
         """True if a point lies inside the geofence square around takeoff."""
         # A small tolerance absorbs floating-point error from rotated moves.
@@ -427,6 +432,11 @@ class SafetyEnvelope:
         """Update the dead-reckoned pose after a horizontal move completed."""
         with self._lock:
             self.pose.apply_move(direction, distance_cm)
+
+    def record_rotation(self, degrees: float) -> None:
+        """Update the dead-reckoned heading after a rotation completed (positive is clockwise)."""
+        with self._lock:
+            self.pose.apply_rotation(degrees)
 
     def reset_pose(self) -> RelativePose:
         """Make the drone's current spot the takeoff point; return the pose it replaces.

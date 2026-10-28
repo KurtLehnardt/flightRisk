@@ -56,7 +56,10 @@ def test_fleet_panel_has_a_status_column_rendered_with_text_content():
     assert not re.search(r"innerHTML\s*\+?=\s*[^'\s]", body)
 
 
-def test_manual_command_in_fleet_mode_explains_how_to_fly():
+def test_manual_command_in_fleet_mode_explains_how_to_take_control():
+    # Manual flight works in fleet mode through manual takeover
+    # (docs/manual-takeover.md); without a drone under control the error
+    # says how to take control, and that LAND ALL always works.
     previous = (app_state.fleet, app_state.fleet_supervisor)
     app_state.fleet = None
     app_state.fleet_supervisor = _supervisor()[0]
@@ -72,6 +75,6 @@ def test_manual_command_in_fleet_mode_explains_how_to_fly():
     errors = [r for r in received if r["name"] == "error"]
     assert len(errors) == 1
     message = errors[0]["args"][0]["message"]
-    assert "not available in fleet mode" in message
-    assert "Plan and Start" in message
+    assert "video tile" in message
+    assert "take manual control" in message
     assert "LAND ALL" in message

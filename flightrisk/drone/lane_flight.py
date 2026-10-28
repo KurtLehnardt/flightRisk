@@ -11,7 +11,10 @@ thread; ``_launch`` starts it under the executor lock. The kinds are:
   ``resume`` after a hold);
 * ``climb``: climb to the altitude slot (a ``resume`` of a hold that
   stopped a takeoff before its climb);
-* ``nudge``: one operator move (see ``flightrisk.drone.lane_commands``).
+* ``nudge``: one operator move (see ``flightrisk.drone.lane_commands``);
+* ``manual``, ``manual_takeoff`` and ``return``: a manual step, a manual
+  takeoff, and the way back to the hold point followed by the rest of the
+  plan (see ``flightrisk.drone.lane_manual``).
 
 Every move, and a takeoff, is *claimed* under the executor lock immediately
 before it is sent (``_claim_move``). A landing (the abort flag) or a hold
@@ -35,7 +38,16 @@ __all__ = ["FlightSequenceMixin", "MoveNotExecutedError"]
 # short sleeps, so takeoff fires close to the scheduled instant.
 _START_SPIN_S = 0.02
 # Phase of each flight sequence when it is launched.
-_FIRST_PHASE = {"start_at": "pre_takeoff", "takeoff": "pre_takeoff", "lanes": "lanes", "climb": "climbing", "nudge": "nudge"}
+_FIRST_PHASE = {
+    "start_at": "pre_takeoff",
+    "takeoff": "pre_takeoff",
+    "lanes": "lanes",
+    "climb": "climbing",
+    "nudge": "nudge",
+    "manual": "manual",
+    "manual_takeoff": "pre_takeoff",
+    "return": "returning",
+}
 
 
 class MoveNotExecutedError(RuntimeError):
@@ -52,6 +64,7 @@ class FlightSequenceMixin:
         offset_s: float = 0.0,
         cmd: dict[str, Any] | None = None,
         nudge: tuple[str, int, bool] | None = None,
+        payload: Any = None,
     ) -> bool:
         """Start a flight sequence thread. Caller holds ``_lock``.
 
@@ -77,7 +90,7 @@ class FlightSequenceMixin:
         self._cancel = None
         self._worker = threading.Thread(
             target=self._run_sequence,
-            args=(kind, t_edge, offset_s, cmd, nudge),
+            args=(kind, t_edge, offset_s, cmd, nudge, payload),
             daemon=True,
             name=f"{self.drone_id}-flight",
         )
@@ -93,11 +106,18 @@ class FlightSequenceMixin:
         return self._active_thread is threading.current_thread()
 
     def _release_active(self) -> None:
-        """Mark the calling sequence as finished. Caller holds ``_lock``."""
+        """Mark the calling sequence as finished. Caller holds ``_lock``.
+
+        Under manual control this is where the hold point is recorded when
+        the sequence that was running at the hold has stopped.
+        """
         if self._is_active():
             self._active_thread = None
             self._active_kind = None
             self._phase = None
+            manual = self._manual
+            if manual is not None and manual.capture_pending:
+                self._capture_hold_point_locked()
 
     def _set_phase(self, phase: str) -> None:
         with self._lock:
@@ -107,14 +127,15 @@ class FlightSequenceMixin:
     def _claim_move(self, allow_held: bool = False) -> bool:
         """Claim the right to send one move (or takeoff) now.
 
-        False if a landing aborted the sequence, or if a hold is in force
-        (unless *allow_held*, for a nudge flown while holding): the sequence
-        then stops, releasing its slot so ``resume`` can start it again.
+        False if a landing aborted the sequence, or if a hold or manual
+        control is in force (unless *allow_held*, for a nudge flown while
+        holding or a manual step): the sequence then stops, releasing its
+        slot so ``resume`` or ``resume_search`` can start it again.
         """
         with self._lock:
             if self._abort.is_set() or not self._is_active():
                 return False
-            if self._held and not allow_held:
+            if (self._held or self._manual is not None) and not allow_held:
                 self._log.info("edge_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
                 self._release_active()
                 return False
@@ -132,6 +153,7 @@ class FlightSequenceMixin:
         offset_s: float,
         cmd: dict[str, Any] | None,
         nudge: tuple[str, int, bool] | None,
+        payload: Any = None,
     ) -> None:
         try:
             if kind == "start_at":
@@ -147,6 +169,12 @@ class FlightSequenceMixin:
                 self._climb_to_slot()
             elif kind == "nudge":
                 self._run_nudge(cmd, nudge)
+            elif kind == "manual":
+                self._run_manual_move(cmd, payload)
+            elif kind == "manual_takeoff":
+                self._run_manual_takeoff(cmd)
+            elif kind == "return":
+                self._run_return(cmd, payload)
         except Exception as exc:
             self._log.error("edge_executor_error", drone_id=self.drone_id, kind=kind, error=repr(exc))
             self.land_now("executor_error")
@@ -171,6 +199,7 @@ class FlightSequenceMixin:
             self._flying_lanes
             and self._plan_valid
             and not self._held
+            and self._manual is None
             and not self._worker_alive()
             and self._land_reason is None
             and self._step < len(self._moves)
@@ -307,6 +336,9 @@ class FlightSequenceMixin:
             # lets it complete and stops the sequence before its next move.
             if self._abort.is_set() or not self._is_active() or self._land_inflight:
                 return "aborted"
+            if self._manual is not None and self._active_kind != "manual_takeoff":
+                # Under manual control only the operator's takeoff lifts the drone.
+                return "aborted"
             if not self._is_flying():
                 # No landing was requested since this sequence started (that
                 # would have set the abort flag), so any earlier one is
@@ -376,7 +408,7 @@ class FlightSequenceMixin:
             return takeoff(abort=self._abort)
         return takeoff()
 
-    def _climb_to_slot(self) -> bool:
+    def _climb_to_slot(self, allow_held: bool = False) -> bool:
         """Move vertically to the altitude slot, measured from the Tello's own height reading.
 
         Lands if the height is unknown, and lands instead of climbing when
@@ -408,7 +440,7 @@ class FlightSequenceMixin:
             direction=direction,
             distance_cm=distance,
         )
-        return self._command_move(direction, distance, record=False)
+        return self._command_move(direction, distance, record=False, allow_held=allow_held)
 
     def _refuse_climb(self, height: Any, distance: int | None, detail: str) -> None:
         """Do not climb above the ceiling limit: log it and land through the normal landing path."""
@@ -427,9 +459,9 @@ class FlightSequenceMixin:
         )
         self.land_now("ceiling")
 
-    def _command_move(self, direction: str, distance: int, record: bool) -> bool:
+    def _command_move(self, direction: str, distance: int, record: bool, allow_held: bool = False) -> bool:
         """Claim and fly one move; False if the sequence must stop (landing or hold)."""
-        if not self._claim_move():
+        if not self._claim_move(allow_held=allow_held):
             return False
         # Every return value is normalized (None/True: executed; False or a
         # non-OK CommandResult: not executed), so a move the controller did

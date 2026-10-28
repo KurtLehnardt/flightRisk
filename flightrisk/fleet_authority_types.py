@@ -41,7 +41,10 @@ CLOSE = "close"      # close this connection (protocol error)
 EPOCH_ADOPT_HEADROOM = 1024
 _MAX_UNANNOUNCED_EPOCH = fp.MAX_EPOCH - EPOCH_ADOPT_HEADROOM
 
-_MOTION_TYPES = fp.FENCED_COMMAND_TYPES - {fp.HANDOVER}
+# Manual-takeover commands (``fleet_protocol.manual``) are fenced like the
+# other flight commands. ``manual_hold``, like ``hold``, only stops the drone.
+_MOTION_TYPES = (fp.FENCED_COMMAND_TYPES - {fp.HANDOVER}) | fp.MANUAL_COMMAND_TYPES
+_STOP_TYPES = frozenset({fp.HOLD, fp.MANUAL_HOLD})
 _PLAN_BOUND_TYPES = frozenset({fp.START_AT, fp.RESUME})
 # Configuration commands (a detection profile switch) are obeyed only from
 # the authority, like a video toggle; they never move the drone.
@@ -49,7 +52,7 @@ _UNFENCED_AUTHORITY_TYPES = frozenset({fp.PING}) | fp.LEGACY_GROUND_TO_EDGE_TYPE
 # ``set_ceiling`` is taken only from the authority's connection too; the
 # executor then checks its fence against the epoch the edge obeys.
 _UNFENCED_AUTHORITY_TYPES |= {fp.SET_CEILING}
-_FLEET_TYPES = fp.FENCED_COMMAND_TYPES | fp.FENCED_CONTROL_TYPES
+_FLEET_TYPES = fp.FENCED_COMMAND_TYPES | fp.FENCED_CONTROL_TYPES | fp.MANUAL_COMMAND_TYPES
 _REFUSAL_EVENTS = {"epoch_conflict_in_flight": "epoch_conflict_in_flight", "stale_epoch": "fleet_stale_epoch_rejected"}
 # A ground that floods landings must not flood the log: per connection and
 # landing type, at most one ``edge_landing_command`` per this many seconds.

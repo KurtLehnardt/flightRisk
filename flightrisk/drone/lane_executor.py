@@ -29,6 +29,11 @@ accepts those control messages, flies the lanes through a drone controller
   drone is on the ground. The envelope refuses any slot or climb above the
   ceiling minus margin, and the monitor lands a drone whose measured height
   is above the ceiling (``docs/ceiling-and-altitude.md``).
+* Manual takeover (``manual_hold``, ``manual_move``, ``manual_takeoff``,
+  ``resume_search`` and the manual ``land``; ``MANUAL_CONTROL_TYPES``) is
+  ``flightrisk.drone.lane_manual``: the operator flies one drone in bounded
+  steps inside the same limits, and ``resume_search`` flies it back to where
+  its search stopped and continues it.
 * Protocol v2 adds ``hold``, ``resume`` and ``nudge`` (``V2_CONTROL_TYPES``),
   ``cmd_id`` idempotency, generic acks and nacks, and the authority hook;
   see ``flightrisk.drone.lane_commands``. Their routing from the edge's
@@ -70,6 +75,7 @@ from flightrisk.drone.lane_commands import (
     PermissiveAuthority,
 )
 from flightrisk.drone.lane_flight import FlightSequenceMixin, MoveNotExecutedError
+from flightrisk.drone.lane_manual import MANUAL_CONTROL_TYPES, ManualControlMixin, ManualState
 from flightrisk.drone.lane_monitor import MonitorMixin
 from flightrisk.drone.lane_plan import (
     LanePlanMixin,
@@ -78,12 +84,13 @@ from flightrisk.drone.lane_plan import (
     split_lane_moves,
 )
 from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
-from flightrisk.fleet_protocol import MAX_TEXT_LEN, is_identifier
+from flightrisk.fleet_protocol import MANUAL_DEADMAN_S, MAX_TEXT_LEN, is_identifier, is_manual_land
 from flightrisk.observability import StructuredLogger
 
 __all__ = [
     "ALL_CONTROL_TYPES",
     "CONTROL_TYPES",
+    "MANUAL_CONTROL_TYPES",
     "V2_CONTROL_TYPES",
     "CommandAuthority",
     "LaneExecutor",
@@ -105,8 +112,9 @@ CONTROL_TYPES = frozenset({
     "clock",
     "heartbeat",
 })
-# Everything ``handle_message`` takes, protocol v2 commands included.
-ALL_CONTROL_TYPES = CONTROL_TYPES | V2_CONTROL_TYPES
+# Everything ``handle_message`` takes, protocol v2 and manual commands included.
+# The edge device routes the manual commands to the executor too.
+ALL_CONTROL_TYPES = CONTROL_TYPES | V2_CONTROL_TYPES | MANUAL_CONTROL_TYPES
 
 TELEMETRY_INTERVAL_S = 0.5
 # Telemetry waiting for the sender thread. Only the newest matters, so when
@@ -142,10 +150,13 @@ _START_NACK_REASONS = {
 }
 
 
-class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin):
+class LaneExecutor(
+    FleetCommandMixin, CeilingCommandMixin, ManualControlMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin
+):
     """Executes ground control messages against one drone inside a safety envelope."""
 
     CONTROL_TYPES = CONTROL_TYPES
+    MANUAL_CONTROL_TYPES = MANUAL_CONTROL_TYPES
     ALL_CONTROL_TYPES = ALL_CONTROL_TYPES
 
     def __init__(
@@ -167,6 +178,7 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
         authority: CommandAuthority | None = None,
         fleet_v2: bool = False,
         command_cache_size: int | None = None,
+        manual_deadman_s: float = MANUAL_DEADMAN_S,
     ):
         self.drone = drone
         self.envelope = envelope
@@ -236,6 +248,12 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
         # (lanes, climb or hover).
         self._held = False
         self._parked: str | None = None
+        # Manual control (``lane_manual``): None while autonomous. While a
+        # ``resume_search`` flies back, ``_resume_target`` is the hold point
+        # it flies to (kept if a new manual_hold interrupts the return).
+        self._manual: ManualState | None = None
+        self._resume_target: Any = None
+        self.manual_deadman_s = float(manual_deadman_s)
 
         self._offset_s: float | None = None
         self._takeoff_at_local_s: float | None = None
@@ -495,7 +513,9 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
             self.land_now("emergency_land_all")
             self._ack_landing(msg)
         elif mtype == "land":
-            self.land_now("ground_land")
+            # The manual Land button sends an ordinary land; only the
+            # reason in the log differs.
+            self.land_now("manual_land" if is_manual_land(msg) else "ground_land")
             self._ack_landing(msg)
         elif mtype == "ping":
             self.handle_ping(msg, recv_t=recv_t)
@@ -503,7 +523,7 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
             self._log.debug("edge_heartbeat", drone_id=self.drone_id, seq=msg.get("seq"))
         elif mtype == "clock":
             self.handle_clock(msg)
-        elif isinstance(mtype, str) and mtype in COMMAND_TYPES:
+        elif isinstance(mtype, str) and (mtype in COMMAND_TYPES or mtype in MANUAL_CONTROL_TYPES):
             self._dispatch_command(msg)
         else:
             self._log.debug("edge_flight_control_unknown", drone_id=self.drone_id, type=mtype)
@@ -565,7 +585,7 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
                 refusal = "geofence"
             elif self._worker_alive():
                 refusal = "busy"
-            elif self._held:
+            elif self._held or self._manual is not None:
                 refusal = "holding"
             elif self._landing_wanted_locked():
                 refusal = "landing"
@@ -620,6 +640,9 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
                 refusal = "landing" if self._landing_wanted_locked() else "already_flying"
             elif self._worker_alive():
                 refusal = "busy"
+            elif self._manual is not None:
+                # Under manual control only manual_takeoff lifts the drone.
+                refusal = "manual_control"
             elif not self._launch("takeoff", cmd=msg):
                 refusal = "shut_down" if self._closed else "landing"
             else:
@@ -696,6 +719,10 @@ class LaneExecutor(FleetCommandMixin, CeilingCommandMixin, LanePlanMixin, Flight
                     self._last_land_attempt_s = self._clock()
                     self._flying_lanes = False
                     was_held, self._held, self._parked = self._held, False, None
+                    # A return to the hold point ends with the landing. Manual
+                    # control itself stays: the drone waits on the ground for
+                    # the operator (resume_search or a new plan).
+                    self._resume_target = None
                     was_valid, self._plan_valid = self._plan_valid, False
                     self._hover_since = None
                     # Last statement under the lock: from here the outer

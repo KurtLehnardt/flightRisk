@@ -46,7 +46,8 @@ from tests.lane_executor_support import (
 
 # The optional ceiling fields (docs/ceiling-and-altitude.md) come with every telemetry message.
 CEILING_KEYS = {"ceiling_cm", "ceiling_margin_cm", "alt_slot_cm"}
-TELEMETRY_V2_KEYS = set(fp.TELEMETRY_FIELDS_V2) | {"type"} | CEILING_KEYS
+# So does the optional manual-control mode (docs/manual-takeover.md).
+TELEMETRY_V2_KEYS = set(fp.TELEMETRY_FIELDS_V2) | {"type", "control_mode"} | CEILING_KEYS
 
 
 @pytest.fixture
@@ -588,7 +589,7 @@ def test_is_active_counts_an_unreadable_flight_state_as_active(executors):
 def test_telemetry_switches_to_v2_on_the_first_v2_command(executors):
     executor, _, sent, _, _ = executors(fleet_v2=False)
     executor.tick()
-    assert set(of_type(sent, "telemetry")[-1]) == set(fp.TELEMETRY_FIELDS) | {"type"} | CEILING_KEYS
+    assert set(of_type(sent, "telemetry")[-1]) == set(fp.TELEMETRY_FIELDS) | {"type", "control_mode"} | CEILING_KEYS
     send(executor, hold(cmd_id="h1"))
     telemetry = executor.telemetry()
     assert set(telemetry) == TELEMETRY_V2_KEYS
@@ -607,11 +608,12 @@ def test_v1_nack_keeps_v1_reasons(executors):
 
 
 def test_control_type_sets():
-    # The v1 set is unchanged (the edge device routes exactly these); the
-    # executor also takes the v2 commands through handle_message.
+    # The v1 set is unchanged (the edge device routes these and the manual
+    # commands); the executor also takes the v2 commands through
+    # handle_message.
     assert CONTROL_TYPES == fp.GROUND_TO_EDGE_TYPES
     assert V2_CONTROL_TYPES == {"hold", "resume", "nudge"}
-    assert ALL_CONTROL_TYPES == CONTROL_TYPES | V2_CONTROL_TYPES
+    assert ALL_CONTROL_TYPES == CONTROL_TYPES | V2_CONTROL_TYPES | fp.MANUAL_COMMAND_TYPES
 
 
 def test_hold_without_cmd_id_still_holds(executors):

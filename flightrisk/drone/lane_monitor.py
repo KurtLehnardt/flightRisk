@@ -64,6 +64,13 @@ class MonitorMixin:
                     self._land_reason = None
                 retry_due = now - self._last_land_attempt_s >= self.land_retry_s
                 hover_due = self._hover_timeout_due_locked(flying, now)
+                deadman = self._manual_deadman_due_locked(now)
+            if deadman:
+                # No manual command for the dead-man time: the drone hovers in
+                # place (held). This never lands; the checks below still do.
+                self._log.warning(
+                    "edge_manual_deadman_hold", drone_id=self.drone_id, deadman_s=self.manual_deadman_s, is_flying=flying
+                )
             if unplanned:
                 self._log.error("edge_unplanned_landing", drone_id=self.drone_id, plan_id=self.plan_id)
             if flying:
@@ -150,6 +157,7 @@ class MonitorMixin:
             and self._step >= len(self._moves)
             and not self._worker_alive()
             and not self._held
+            and self._manual is None
             and self._land_reason is None
         )
         if not idle_after_lanes:
@@ -228,6 +236,7 @@ class MonitorMixin:
             v2 = self._v2_telemetry
             state = self._state_locked(flying)
             plan_valid = self._plan_valid
+            control_mode = self._control_mode_locked()
         msg = {
             "type": "telemetry",
             "drone_id": self.drone_id,
@@ -246,6 +255,9 @@ class MonitorMixin:
         # active ceiling, margin and altitude slot. Their presence also tells
         # the ground that this edge takes ``set_ceiling``.
         msg.update(self.envelope.ceiling_status())
+        # Optional on every version: the manual-control mode. Its presence
+        # also tells the ground that this edge takes the manual commands.
+        msg["control_mode"] = control_mode
         if v2:
             msg.update(epoch=self.epoch_seen, plan_id=self.plan_id, state=state, plan_valid=plan_valid)
         link = self._drone_link()
