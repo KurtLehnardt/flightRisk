@@ -10,12 +10,14 @@ ground stations over the peer link. The code that defines and checks them is
 plan ordering and the v2-only primitives).
 
 Protocol v2 belongs to the two-laptop plan (two laptops, two Tellos, one leader
-dashboard over a Thunderbolt link). This document covers only the protocol
+dashboard over a Thunderbolt link). This document covers mainly the protocol
 layer: message schemas, validation, version negotiation, compatibility rules
-and the meaning of each field. The components that act on the messages (the
-edge authority, the lane executor changes and the leader/peer link) arrive in
-later pull requests, and the obligations they must meet are listed in
-"What PR-4/5 consumers must do" below.
+and the meaning of each field. The components that act on the messages are
+the edge authority, the lane executor and the leader/peer link. The
+obligations they must meet are listed in "What PR-4/5 consumers must do"
+below; the lane executor's side is described in "The edge lane executor
+(PR-5)", and the edge authority and the leader/peer link arrive in later pull
+requests.
 
 ## Contents
 
@@ -29,6 +31,7 @@ later pull requests, and the obligations they must meet are listed in
 - Privacy
 - What PR-4/5 consumers must do
 - Edge authority and multi-ground links (PR-4)
+- The edge lane executor (PR-5)
 - Differences from the plan text
 
 ## Versions and negotiation
@@ -790,25 +793,170 @@ send a second `start_at` while one is pending.
 
 ## Integration with the lane executor (PR-5)
 
-PR-5 (`feat/lane-executor-hold-resume`) and this change were reviewed in
-parallel; wiring them together is a follow-up after both merge. This side
-already provides PR-5's `authority=` contract: `EdgeAuthority.check(msg)`
+PR-5 (the lane executor with hold, resume and nudge) and this change were
+reviewed in parallel. PR-5 is now merged, and wiring the two together is
+the integration PR that follows this one. The contracts meet already:
+`LaneExecutor` provides the public `fleet_status()` and `is_active()` that
+`LaneExecutorHooks` calls by name, and it takes an `authority=` object with
+`check(msg)` and a callable `epoch_seen()`. `EdgeAuthority.check(msg)`
 returns `None`, `stale_epoch` or `not_authority` (`None` for every message
 the uplink accepted and handed out, and always for a landing), and
 `EdgeAuthority.epoch_seen` is an `int` that can also be called, so
-`authority.epoch_seen()` works as PR-5 expects while existing code keeps
-reading the property. The remaining mismatches:
+`authority.epoch_seen()` works as the executor expects while existing code
+keeps reading the property. `LaneExecutor.ALL_CONTROL_TYPES` is exported,
+and the executor keeps its own `CommandCache` for `cmd_id`s. The remaining
+mismatches are all handled in the integration PR that follows:
 
-| Topic | This change (PR-4) | PR-5 | What the integration must do |
+| Topic | This change (PR-4) | Lane executor (PR-5, merged) | What the integration must do |
 |---|---|---|---|
-| Routing `hold`, `resume`, `nudge` | The authority accepts them and the uplink delivers them, but `edge_device` routes only `CONTROL_TYPES` to the executor, and `LaneExecutorHooks.supports` reads `CONTROL_TYPES`, so they are refused with `invalid` | `LaneExecutor.ALL_CONTROL_TYPES` (`CONTROL_TYPES` plus the three) and `handle_message` handles them | Route `ALL_CONTROL_TYPES` in `edge_device._handle_control` and make `supports` read `ALL_CONTROL_TYPES` |
-| `supports(type)` | Sampled before the authority's lock (never under it) | No such method; the executor itself refuses what it cannot do | Keep the adapter on `ALL_CONTROL_TYPES`; it must stay non-blocking or at least never call back into the authority |
-| `fleet_status()` / `is_active()` | `LaneExecutorHooks` calls them by name when they exist, else falls back to `is_flying`/`is_busy` and fills `plan_valid: false` | No `fleet_status()` and no public `is_active()` (`_is_active` is private and means something else); it exposes `state`, `plan_id`, `plan_valid`, `epoch_seen` and fills the v2 telemetry fields itself (`fleet_v2=True`) | Build `fleet_status()` from `state`, `plan_id` and `plan_valid`, and `is_active()` from `state != "idle"` or `is_busy`; telemetry the executor completed is left as it is (`setdefault`) |
-| Landing ack | `_landing` acks every `land`/`emergency_land_all` on a v2 link, from the reader | `_ack_landing` acks every landing with a `cmd_id` again, from the control thread | Keep one: drop the reader's ack once the executor acks (the reader's is faster and also covers a landing the executor never sees), or suppress the executor's in uplink mode; the ground already tolerates a duplicate ack |
-| Command-id cache | The authority caches accepted and refused `cmd_id`s | The executor has its own `cmd_id` cache and reply cache | Either is enough; with both, a duplicate is answered by the authority and never reaches the executor |
-| Plan named in the edge `hello` | The authority's own record of the plan acked in this epoch, cleared on adoption and on every landing | `plan_id` is kept after invalidation; `plan_valid` says whether it can still be started | Take `plan_id` and `plan_valid` from the executor, and report `plan_valid` in the `hello` so a new leader does not trust a dead plan |
+| Routing `hold`, `resume`, `nudge` | The authority accepts them and the uplink delivers them, but `edge_device` routes only `CONTROL_TYPES` to the executor, and `LaneExecutorHooks.supports` reads `CONTROL_TYPES`, so they are refused with `invalid` | `LaneExecutor.ALL_CONTROL_TYPES` (`CONTROL_TYPES` plus the three) and `handle_message` handles them | Handled in the integration PR that follows: route `ALL_CONTROL_TYPES` in `edge_device` and make `supports` in `edge_uplink` read `ALL_CONTROL_TYPES` |
+| `supports(type)` | Sampled before the authority's lock (never under it) | No such method; the executor itself refuses what it cannot do | Handled in the integration PR that follows (with the routing row): keep the adapter on `ALL_CONTROL_TYPES`; it must stay non-blocking and never call back into the authority |
+| `fleet_status()` / `is_active()` | `LaneExecutorHooks` calls them by name when they exist | Both are public on `LaneExecutor`: `fleet_status()` returns `plan_id`, `state` and `plan_valid` (and the epoch seen), `is_active()` says whether a plan is running | Nothing more: the hooks pick them up by name. The fallbacks to `is_flying`/`is_busy` remain only for executors without them |
+| Landing ack | `_landing` acks every `land`/`emergency_land_all` on a v2 link, from the reader | The executor acks every landing with a `cmd_id` again, from the control thread | Handled in the integration PR that follows: keep one ack (drop the reader's once the executor acks, or suppress the executor's in uplink mode); the ground already tolerates a duplicate ack, so until then a landing is acked twice |
+| Command-id cache | The authority caches accepted and refused `cmd_id`s | The executor has its own `CommandCache` and reply cache | Either is enough; with both, a duplicate is answered by the authority and never reaches the executor |
+| Plan named in the edge `hello` | The authority's own record of the plan acked in this epoch, cleared on adoption and on every landing, so it can name a plan the executor has already invalidated | `plan_id` is kept after invalidation; `plan_valid` says whether it can still be started | Handled in the integration PR that follows: take `plan_id` and `plan_valid` from `fleet_status()` and report `plan_valid` in the `hello`, so a new leader does not trust a dead plan |
+| Epoch in telemetry | The authority completes v2 telemetry with `epoch` | The executor reports the epoch it saw from its `authority` | Handled in the integration PR that follows: take the epoch from one source so telemetry and the `hello` agree |
 | `start_at` ack `cmd_id` | Guessed from the latest accepted `start_at` (see the known issue above) | Echoed by the executor | Prefer the executor's `cmd_id`; the authority only fills it when absent |
 | `invalidate_plan` | Called after adopting an epoch | Provided; also called by the executor on every landing | Nothing more |
+
+## The edge lane executor (PR-5)
+
+The executor side of protocol v2 is implemented in
+`flightrisk/drone/lane_executor.py` and its sibling modules `lane_plan.py`
+(plans), `lane_commands.py` (v2 commands, replies and the authority hook),
+`lane_flight.py` (flight sequences), `lane_monitor.py` (monitor and
+telemetry) and `command_cache.py` (command ids). Tests:
+`tests/test_lane_executor_hold.py`, `tests/test_lane_executor_plan.py`,
+`tests/test_lane_executor_model.py` (seeded model-based interleavings) and
+`tests/test_lane_executor_wire.py` (the real Tello driver on the wire-level
+fake).
+
+- **Replies.** A command that carries a `cmd_id` gets the v2 `ack` or
+  `nack`, built and validated by `make_ack`/`make_nack`. A command without
+  one is a v1 command and gets exactly the v1 replies as before; a v2-only
+  nack reason (for example `stale_plan`) is reported to a v1 ground as
+  `invalid`, the nearest v1 reason. A landing that carried a `cmd_id` is
+  acknowledged only after `drone.land()` returns. On a real Tello that is
+  once the land is confirmed (the driver waits for state showing the drone
+  on the ground, up to 25 s), which takes seconds, longer than the ground's
+  2 s ack timeout. PR-4/6 must account for this: a land ack that arrives
+  late does not mean the land failed, and a resent `land` is executed
+  again (harmless). Every `assign_lanes` nack carries `lanes_total`
+  (the number of lanes received, 0 when `lanes` is not a list), including
+  an authority refusal (`stale_epoch`, `not_authority`) and a reused
+  `cmd_id`, so a stale leader always gets the nack it needs to step down.
+- **Command ids.** Every fenced command with a `cmd_id` is recorded as
+  pending when it arrives, so a duplicate is never executed again. A
+  duplicate of a finished command gets its first reply resent unchanged
+  (refusals included); a duplicate of a command that is still running (a
+  scheduled `start_at`, a `nudge` in flight) gets nothing, because the
+  original's reply follows. The cache holds the last 256 ids and evicts the
+  oldest finished entry first. Landing never goes through it.
+- **`hold`.** The drone finishes the move it is flying and then sends
+  nothing more until `resume`; a Tello hovers on its own once a move
+  completes. The executor never sends the Tello `stop` for a hold, for two
+  reasons. Interrupting a relative move leaves the distance actually flown
+  unknown, which would corrupt the dead-reckoned position that the geofence
+  relies on. And what `stop` does in the middle of a move on Tello EDU
+  firmware has not been verified on hardware (plan rung L2). Each move, and
+  a takeoff that has not been sent yet, is claimed under the executor's lock
+  just before it is sent, and no move is claimed once a hold is recorded;
+  the ack carries `detail: finishing_move` when a move was already claimed.
+  A hold also cancels a scheduled `start_at` that has not fired (that
+  `start_at` is answered `nack{reason: busy, detail: cancelled_by_hold}`),
+  stops before the altitude-slot climb if it arrives during a takeoff, holds
+  a plan with `on_complete: land` before its landing, and restarts (does
+  not pause) the end-of-lanes hover timeout: after the resume the drone
+  hovers the full `hover_timeout_s` again. The hover-timeout and
+  `on_complete` landings are checked again under the executor lock as
+  they are recorded, so a hold that was acknowledged first always stops
+  them. A hold has no time limit while the ground's heartbeats keep
+  arriving; the battery landing (below 15 %), the link-loss landing and
+  every operator or ground landing still end it, and every landing clears
+  it. A hold during a takeoff leaves the drone at its takeoff height
+  (about 80 cm on a Tello), not at its altitude slot, until the resume. A
+  hold on a drone that is on the ground with no start pending is refused
+  with `not_flying`.
+- **`resume`.** Restarts only the plan named by `plan_id`, and only while
+  it is valid, from the lane and move where the drone stopped (a plan
+  accepted while holding starts where that plan says). It is refused with
+  `landing`, `no_valid_plan`, `plan_mismatch`, `not_flying`, `busy` (a nudge
+  is flying) or `geofence` (the rest of the path, from the current
+  dead-reckoned position, would leave the geofence; the drone keeps
+  holding). A resume while not holding is acknowledged with
+  `detail: not_holding` and changes nothing.
+- **`nudge`.** Accepted only while the drone hovers idle or holds, never
+  while it flies lanes or runs another sequence (`busy`), only for a
+  horizontal direction and an integer distance from 20 to 500 cm
+  (`invalid`), and only inside the geofence (`geofence`). It is recorded in
+  the dead-reckoned position like a lane move and acknowledged once flown.
+  A nudge the controller did not execute is answered
+  `nack{reason: busy, detail: <outcome>}` and not recorded; a controller
+  error lands the drone, as for a lane move. A nudge that a landing cut
+  short is answered `nack{reason: landing}`, never acknowledged; the
+  controller reported the move executed, so it is recorded in the
+  dead-reckoned position like an interrupted lane move (the distance
+  actually flown is unknown either way). A later v2 `start_at` or a `resume`
+  re-checks the rest of the plan against the geofence from the nudged
+  position and refuses with `geofence` instead of flying out of it, and a
+  re-task that arrives while a nudge flies is flown after it only if it
+  passes the same check.
+- **Plan ordering and validity.** Plans are ordered by `(epoch, plan_seq)`
+  as described under "Plan ordering". A plan becomes valid when accepted
+  and stops being valid at every landing the executor requests or sees
+  (link loss, battery, local key, emergency, geofence, a ground `land`, the
+  hover timeout, the plan's own `on_complete` landing, an executor error,
+  and a landing the drone made on its own), and when the edge authority
+  calls `invalidate_plan`. `start_at` and `resume` are then refused with
+  `no_valid_plan`, and a late or retried copy of the old plan with
+  `stale_plan`, until a new plan is accepted. This applies to v1 commands
+  too: before this change, a v1 `start_at` after an unplanned landing
+  restarted the old lanes.
+- **Landing requested.** From the moment the executor is asked to land
+  (`land_now`: a ground or local landing, battery, link loss, the
+  geofence, an error) until that landing is over, no flight sequence is
+  launched: `start_at`, `resume`, `nudge`, `hold` and `takeoff` are refused
+  with `landing`, and an `assign_lanes` that would re-task the flying drone
+  is refused with `landing` and the current plan is kept. The executor
+  counts the request before it waits for its lock, so a command that is
+  being checked at that moment is refused too.
+- **End of lanes.** With `on_complete: land` the drone lands after its
+  last lane. With `on_complete: hover` it lands once it has hovered idle
+  for `hover_timeout_s` (20 s when absent) after its last lane; a hold
+  restarts that countdown, which starts again from zero after the resume.
+  A hold or a re-task that arrives after either landing was decided, but
+  before it was recorded, stops it (a re-task then flies its lanes). A
+  plan without `on_complete` hovers until the ground lands it, as in v1.
+- **Telemetry.** In v2 mode (constructed with `fleet_v2=True`, or after
+  the first command with a `cmd_id`) telemetry adds `epoch`, `plan_id`,
+  `state` and `plan_valid`. `plan_id` is kept after the plan is
+  invalidated, so the `hello` and telemetry still name it.
+
+What the edge authority (PR-4) has to wire to the executor:
+
+- Route `ALL_CONTROL_TYPES` (the v1 `CONTROL_TYPES` plus `hold`, `resume`
+  and `nudge`) to `LaneExecutor.handle_message`. The edge device still
+  routes only the v1 set, so until then a v2 command never reaches the
+  executor.
+- Pass `authority=` an object with `check(msg)` (None to accept a fenced
+  command, or `stale_epoch`/`not_authority`) and `epoch_seen()`. The
+  executor asks it about every fenced command and never about a landing,
+  sends the refusal as a nack carrying `epoch_seen`, and fails closed
+  (`not_authority`) if `check` raises or returns anything else. The default
+  accepts everything and reports the highest epoch it has seen.
+- Call `invalidate_plan(reason)` when the edge adopts a new epoch.
+- Use `is_active()` for the authority's "inactive" test (true while the
+  drone flies, a sequence runs or a `start_at` is pending, or a landing is
+  requested or in progress; an unreadable flight state counts as active)
+  and `fleet_status()` for the v2 telemetry and `hello` fields (`plan_id`,
+  `state`, `plan_valid` and `epoch`).
+- Construct the executor with `fleet_v2=True` in a v2 deployment, so
+  telemetry carries the v2 fields from the start.
+- Build the edge `hello` from `plan_id`, `lane_index`, `is_flying`
+  (telemetry), the battery and `epoch_seen`.
+- Validate the executor's messages with the agreed `proto` in the
+  transport, as required above: under the v1 default a v2 nack for `hold`
+  or `resume` is dropped.
 
 ## Differences from the plan text
 
@@ -828,6 +976,10 @@ reading the property. The remaining mismatches:
   `resume` as retried by `cmd_id`. Only `hold` is.
 - **No nack for landing.** A nack for `land` or `emergency_land_all` is
   invalid, which the plan implies but does not state.
+- **Every landing invalidates the plan.** Plan section 2.8 exempts the
+  plan's own `on_complete` landing. The executor invalidates the plan on
+  that landing too: by then every lane has been flown, so nothing is lost,
+  and one rule ("a landed drone needs a new plan") is simpler to check.
 - **Ground speaks first.** The edge sends its `hello` in reply to the
   ground's, not unprompted on connect. A v1 ground therefore never sees a
   message type it does not know.

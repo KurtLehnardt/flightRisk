@@ -838,6 +838,25 @@ def _run_flight_edge(
                 pass
 
 
+def _init_edge_telemetry(log: StructuredLogger) -> bool:
+    """Export this edge's logs and spans over OTLP, like the dashboard does.
+
+    A no-op unless ``FLIGHTRISK_OTEL_ENABLED=true`` (see ``flightrisk.telemetry``).
+    Telemetry must never stop an edge from flying, so any failure is logged
+    and ignored. Imported here to keep ``import flightrisk.edge_device`` cheap.
+    """
+    try:
+        from flightrisk.telemetry import init_telemetry
+
+        enabled = init_telemetry()
+    except Exception as exc:  # noqa: BLE001 - telemetry must never stop the edge
+        log.warning("opentelemetry_init_failed", error=repr(exc))
+        return False
+    if enabled:
+        log.info("opentelemetry_enabled")
+    return enabled
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point for ``python -m flightrisk.edge_device``."""
     parser = _build_parser()
@@ -861,6 +880,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(str(exc))
 
     log = StructuredLogger(component="edge-device")
+    _init_edge_telemetry(log)
 
     if args.source in _FLIGHT_SOURCES:
         _run_flight_edge(args, log)
