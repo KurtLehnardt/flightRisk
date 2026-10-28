@@ -260,6 +260,46 @@ def test_retask_in_the_landing_gap_is_refused_and_keeps_the_plan(executors):
     assert drone.calls[mark:] == [("land",)]
 
 
+@pytest.mark.parametrize("how", ["land_in_flight", "land_failed"])
+def test_assign_lanes_while_the_drone_still_descends_is_refused(executors, how):
+    # The landing is recorded, so land_now cleared the flying-lanes flag, but
+    # the drone still reports flying. A plan acknowledged now would stay valid
+    # after touchdown, against docs/fleet-protocol-v2.md ("Landing requested").
+    executor, drone, sent, clock, _ = executors()
+    send(executor, assign(cmd_id="a1"))
+    send(executor, start_at(clock() + 0.5, cmd_id="s1"))
+    clock.advance(0.5)
+    assert wait_for(lambda: executor.lane_index == 3 and not executor.is_busy)
+    real_land = drone.land
+    release = threading.Event()
+    entered = threading.Event()
+
+    def slow_land():
+        entered.set()
+        release.wait(WAIT_S)
+        real_land()
+
+    def failing_land():
+        raise RuntimeError("land failed")
+
+    drone.land = slow_land if how == "land_in_flight" else failing_land
+    lander = threading.Thread(target=executor.land_now, args=("low_battery",), daemon=True)
+    lander.start()
+    if how == "land_in_flight":
+        assert entered.wait(WAIT_S)
+    else:
+        lander.join(WAIT_S)
+    assert drone.state.is_flying and not executor.plan_valid
+    retask = LANES + [{"direction": "left", "distance_cm": 100}]
+    send(executor, assign(lanes=retask, plan_id="p-2", plan_seq=2, cmd_id="a2"))
+    reply = reply_for(sent, "a2")
+    assert reply is not None and (reply["type"], reply["reason"], reply["lanes_total"]) == ("nack", "landing", 4)
+    release.set()
+    lander.join(WAIT_S)
+    drone.land = real_land
+    assert executor.plan_id == "p-1" and executor.lanes_total == 3 and not executor.plan_valid
+
+
 def test_retask_after_a_nudge_is_not_flown_once_a_landing_is_requested(executors):
     executor, drone, sent, clock, _ = executors(drone=stepped())
     send(executor, assign(lanes=LANES[:1], cmd_id="a1"))

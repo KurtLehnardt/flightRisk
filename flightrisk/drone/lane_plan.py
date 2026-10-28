@@ -267,7 +267,9 @@ class LanePlanMixin:
         position. A drone that is holding stores the plan and flies it only
         after ``resume``. A plan that would re-task the drone after a landing
         was requested (``land_now`` called, the landing not yet recorded) is
-        refused with ``landing`` and the current plan is kept.
+        refused with ``landing`` and the current plan is kept. So is any new
+        plan while a landing is wanted: announced, in flight, or retried by
+        the monitor while the drone still descends.
         """
         raw_lanes = msg.get("lanes")
         lanes_received = len(raw_lanes) if isinstance(raw_lanes, list) else 0
@@ -308,6 +310,11 @@ class LanePlanMixin:
                 current_valid=self._plan_valid,
                 same_content=content == self._plan_content,
             )
+            if verdict == NEW_PLAN and self._landing_wanted_locked():
+                # A landing is wanted, announced, in flight or being retried:
+                # a plan accepted now would outlive the touchdown as a valid
+                # plan. The current plan is kept as it is.
+                verdict = "landing"
             if verdict == NEW_PLAN:
                 if self._flying_lanes and self._is_flying():
                     carried_step = self._carried_step(lanes, moves)
