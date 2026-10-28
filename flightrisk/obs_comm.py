@@ -26,6 +26,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from flightrisk import fleet_protocol as fp
 from flightrisk import obs_metrics as M
 from flightrisk.obs_log import log_event
 from flightrisk.obs_redact import safe_token
@@ -42,7 +43,27 @@ SAMPLED_TYPES = frozenset({"telemetry", "heartbeat", "ping", "pong", "detections
 _SCALAR_FIELDS = ("cmd_id", "epoch", "plan_id", "seq", "for", "reason", "leader_id", "node_id", "proto",
                   "lanes_total", "t_ground_s", "enabled", "epoch_next", "role")
 
+#: Message types that become a ``type`` label as themselves; anything else is "other",
+#: so a client that invents types cannot create series without end.
+KNOWN_TYPES = frozenset(
+    set(fp.GROUND_TO_EDGE_TYPES_V2) | set(fp.EDGE_TO_GROUND_TYPES_V2) | set(fp.PEER_TYPES)
+    | set(fp.LEGACY_GROUND_TO_EDGE_TYPES) | set(fp.LEGACY_EDGE_TO_GROUND_TYPES) | SAMPLED_TYPES
+    | {"command", "clock_sync", "link_up", "link_down", "reconnect", "unknown", "broadcast"}
+)
+
 _local_drone: list[str | None] = [None]
+
+
+def _reason_label(value: Any) -> str:
+    if value is None:
+        return "none"
+    return value if isinstance(value, str) and value in fp.NACK_REASONS else "other"
+
+
+def type_label(value: Any) -> str:
+    """A bounded ``type`` label: a known message type, or "other"."""
+    token = safe_token(value, "unknown")
+    return token if token in KNOWN_TYPES else "other"
 
 try:
     from opentelemetry import trace as _trace
@@ -68,7 +89,8 @@ class _Aggregator:
     def __init__(self, interval_s: float = AGGREGATE_INTERVAL_S, clock=time.monotonic):
         self._interval_s = interval_s
         self._clock = clock
-        self._lock = threading.Lock()
+        # Re-entrant: a signal handler may log while this thread is inside add().
+        self._lock = threading.RLock()
         self._windows: dict[tuple, list] = {}  # key -> [start, count, bytes]
 
     def add(self, key: tuple, size: int) -> tuple[int, int, float] | None:
@@ -116,17 +138,17 @@ def _record(side: str, direction: str, msg: Mapping[str, Any], drone_id: str | N
     labels = {
         "side": side,
         "direction": direction,
-        "type": safe_token(mtype),
-        "drone_id": safe_token(peer, "unknown"),
+        "type": type_label(mtype),
+        "drone_id": M.drone_label(peer),
         "outcome": safe_token(outcome),
     }
     M.comm_messages.add(1, labels)
     if size:
         M.comm_bytes.add(size, {"side": side, "direction": direction})
     if peer and direction == "in":
-        M.note_link(peer, side)
+        M.note_link(labels["drone_id"], side)
     if mtype in SAMPLED_TYPES and outcome == "ok":
-        window = _agg.add((side, direction, mtype, peer), size or 0)
+        window = _agg.add((side, direction, mtype, labels["drone_id"]), size or 0)
         if window is None:
             return
         count, nbytes, span_s = window
@@ -179,13 +201,13 @@ def ground_received(msg: Any, size: int | None, drone_id: str | None = None) -> 
         obs_events.edge_telemetry(peer, msg)
         link_age = msg.get("link_age_s")
         if isinstance(link_age, (int, float)) and not isinstance(link_age, bool):
-            M.note_link(peer, "edge_reported")
+            M.note_link(M.drone_label(peer), "edge_reported")
     elif mtype in ("ack", "nack"):
         M.comm_acks.add(1, {
             "kind": mtype,
-            "for": safe_token(msg.get("for")),
-            "reason": safe_token(msg.get("reason"), "none"),
-            "drone_id": safe_token(peer, "unknown"),
+            "for": type_label(msg.get("for")),
+            "reason": _reason_label(msg.get("reason")),
+            "drone_id": M.drone_label(peer),
         })
 
 
@@ -195,7 +217,7 @@ def ground_sent(msg: Any, drone_id: str | None, size: int | None = None, outcome
     if isinstance(msg, Mapping):
         _record("ground", "out", msg, drone_id, size, outcome)
         if outcome != "ok":
-            M.comm_dropped.add(1, {"side": "ground", "type": safe_token(msg.get("type")), "reason": safe_token(outcome)})
+            M.comm_dropped.add(1, {"side": "ground", "type": type_label(msg.get("type")), "reason": safe_token(outcome)})
 
 
 @_safe
@@ -214,9 +236,9 @@ def link_state(drone_id: Any, connected: bool, side: str = "ground") -> None:
     """An edge connection for ``drone_id`` appeared or went away."""
     if not isinstance(drone_id, str) or not drone_id:
         return
-    M.note_link_state(drone_id, connected)
+    M.note_link_state(M.drone_label(drone_id), connected)
     if connected:
-        M.note_link(drone_id, side)
+        M.note_link(M.drone_label(drone_id), side)
     log_event(_log, logging.INFO if connected else logging.WARNING, "drone_comm",
               f"link {'up' if connected else 'down'} {drone_id}", category="drone_comm", component=side,
               direction="link", type="link_up" if connected else "link_down", peer=drone_id, drone_id=drone_id)
@@ -231,9 +253,9 @@ def clock_sync(drone_id: str | None, estimate: Any) -> None:
     offset_s = getattr(estimate, "offset_s", None)
     peer = drone_id or "unknown"
     if isinstance(rtt_s, (int, float)):
-        M.comm_rtt.record(rtt_s * 1000.0, {"drone_id": safe_token(peer)})
+        M.comm_rtt.record(rtt_s * 1000.0, {"drone_id": M.drone_label(peer)})
     if isinstance(offset_s, (int, float)):
-        M.clock_offset.set(offset_s * 1000.0, {"drone_id": safe_token(peer)})
+        M.clock_offset.set(offset_s * 1000.0, {"drone_id": M.drone_label(peer)})
     log_event(_log, logging.INFO, "drone_comm", f"clock sync {peer}", category="drone_comm", component="ground",
               direction="out", type="clock_sync", peer=peer, drone_id=peer,
               rtt_ms=round(rtt_s * 1000.0, 3) if isinstance(rtt_s, (int, float)) else None,
@@ -251,7 +273,7 @@ def edge_received(msg: Any, size: int | None) -> None:
     if isinstance(msg, Mapping):
         _record("edge", "in", msg, _local_drone[0], size)
         if _local_drone[0]:
-            M.note_link(_local_drone[0], "edge")
+            M.note_link(M.drone_label(_local_drone[0]), "edge")
 
 
 @_safe
@@ -264,7 +286,7 @@ def edge_sent(msg: Any, ok: bool = True, size: int | None = None) -> None:
         _local_drone[0] = drone_id
     _record("edge", "out", msg, _local_drone[0], size, "ok" if ok else "not_sent")
     if not ok:
-        M.comm_dropped.add(1, {"side": "edge", "type": safe_token(msg.get("type")), "reason": "not_sent"})
+        M.comm_dropped.add(1, {"side": "edge", "type": type_label(msg.get("type")), "reason": "not_sent"})
 
 
 @_safe

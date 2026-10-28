@@ -376,7 +376,7 @@ def operator() -> Dashboard:
     d.row("Target image")
     d.add(table("Target image (latest first)", [loki(logql_events('event="target_image" | source!="clear"'))],
                 "Numbers only, plus (with content capture on) the sha256, artifact reference and a signed thumbnail URL served "
-                "by the loopback-only preview server. The URL expires (FLIGHTRISK_PREVIEW_TTL_S, default 24 h).",
+                "by the loopback-only preview server. The URL expires (FLIGHTRISK_PREVIEW_TTL_S, default 1 h).",
                 [
                     {"id": "extractFields", "options": {"source": "Line", "format": "json", "keepTime": True, "replace": True,
                                                          "jsonPaths": [{"path": pth, "alias": alias} for pth, alias in TARGET_PATHS]}},

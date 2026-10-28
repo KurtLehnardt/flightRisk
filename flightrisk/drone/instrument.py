@@ -31,7 +31,7 @@ from typing import Any
 from flightrisk import obs_events
 from flightrisk import obs_metrics as M
 from flightrisk.drone.controller import command_result
-from flightrisk.obs_log import log_event
+from flightrisk.obs_log import log_event, obs_enter, obs_exit
 from flightrisk.obs_redact import safe_token
 
 _log = logging.getLogger("flightrisk.drone.commands")
@@ -64,9 +64,18 @@ def _wrap(drone: Any, command: str, backend: str, original):
     def wrapper(*args, **kwargs):
         drone_id = getattr(drone, "name", None) or "unknown"
         t0 = time.perf_counter()
-        tracer = _trace.get_tracer("flightrisk.drone") if _trace is not None else None
-        span_cm = tracer.start_as_current_span(f"drone.{command}") if tracer is not None else None
-        span = span_cm.__enter__() if span_cm is not None else None
+        span_cm = span = None
+        # The span's processor takes locks. When this call comes from a signal
+        # handler that interrupted telemetry on the same thread (Ctrl+C lands
+        # the drone), skip the span rather than wait for those locks.
+        if _trace is not None and obs_enter():
+            try:
+                span_cm = _trace.get_tracer("flightrisk.drone").start_as_current_span(f"drone.{command}")
+                span = span_cm.__enter__()
+            except Exception:  # noqa: BLE001 -- tracing never changes a command
+                span_cm = span = None
+            finally:
+                obs_exit()
         outcome = "error"
         detail = None
         error: BaseException | None = None
@@ -85,11 +94,16 @@ def _wrap(drone: Any, command: str, backend: str, original):
                         _args_summary(command, args, kwargs), span)
             except Exception:  # noqa: BLE001, S110 -- telemetry never changes command behaviour
                 pass
-            if span_cm is not None:
-                if error is not None:
-                    span_cm.__exit__(type(error), error, error.__traceback__)
-                else:
-                    span_cm.__exit__(None, None, None)
+            if span_cm is not None and obs_enter():
+                try:
+                    if error is not None:
+                        span_cm.__exit__(type(error), error, error.__traceback__)
+                    else:
+                        span_cm.__exit__(None, None, None)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                finally:
+                    obs_exit()
 
     return wrapper
 

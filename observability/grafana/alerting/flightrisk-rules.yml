@@ -9,8 +9,11 @@
 #
 # Event counters (flight-safety events, failed lands, dropped messages) start
 # at 1 when the first event happens, and increase() cannot see that first
-# step. Those rules fire when the counter grew in the last 5 minutes OR the
-# series appeared in the last 5 minutes.
+# step. Those rules fire when a series grew in the last 5 minutes OR appeared
+# in the last 5 minutes. This is decided per series and summed afterwards:
+# every process (and every restart, which has a new process.pid) has its own
+# series, and a difference of sums would drop when an old process's series
+# expires, hiding events of the new one.
 apiVersion: 1
 groups:
 - orgId: 1
@@ -171,8 +174,9 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: ((sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"})) - (sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"}
-          offset 5m))) or ((sum by (drone_id) (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"})) unless (sum by (drone_id)
+        expr: sum by (drone_id)
+          ((increase(flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"}[5m]) > 0) or
+          (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"} unless
           (flightrisk_flight_safety_events{kind=~"link_loss|watchdog_land|drone_lost"} offset 5m)))
         instant: true
         range: false
@@ -220,10 +224,11 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: ((sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"})) - (sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"}
-          offset 5m))) or ((sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"})) unless (sum by (drone_id) (flightrisk_flight_safety_events{kind="land_failed"}
-          offset 5m))) or ((sum by (drone_id) (flightrisk_drone_commands{command="land", outcome!="ok"})) - (sum by (drone_id) (flightrisk_drone_commands{command="land",
-          outcome!="ok"} offset 5m))) or ((sum by (drone_id) (flightrisk_drone_commands{command="land", outcome!="ok"})) unless (sum by (drone_id)
+        expr: sum by (drone_id) ((increase(flightrisk_flight_safety_events{kind="land_failed"}[5m]) > 0) or
+          (flightrisk_flight_safety_events{kind="land_failed"} unless
+          (flightrisk_flight_safety_events{kind="land_failed"} offset 5m)) or
+          (increase(flightrisk_drone_commands{command="land", outcome!="ok"}[5m]) > 0) or
+          (flightrisk_drone_commands{command="land", outcome!="ok"} unless
           (flightrisk_drone_commands{command="land", outcome!="ok"} offset 5m)))
         instant: true
         range: false
@@ -271,8 +276,8 @@ groups:
       datasourceUid: prometheus
       model:
         refId: A
-        expr: ((sum by (side, type, reason) (flightrisk_comm_dropped)) - (sum by (side, type, reason) (flightrisk_comm_dropped offset 5m))) or
-          ((sum by (side, type, reason) (flightrisk_comm_dropped)) unless (sum by (side, type, reason) (flightrisk_comm_dropped offset 5m)))
+        expr: sum by (side, type, reason) ((increase(flightrisk_comm_dropped[5m]) > 0) or (flightrisk_comm_dropped
+          unless (flightrisk_comm_dropped offset 5m)))
         instant: true
         range: false
         intervalMs: 1000

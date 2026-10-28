@@ -131,7 +131,7 @@
     {
       "type": "table",
       "title": "Target image (latest first)",
-      "description": "Numbers only, plus (with content capture on) the sha256, artifact reference and a signed thumbnail URL served by the loopback-only preview server. The URL expires (FLIGHTRISK_PREVIEW_TTL_S, default 24 h).",
+      "description": "Numbers only, plus (with content capture on) the sha256, artifact reference and a signed thumbnail URL served by the loopback-only preview server. The URL expires (FLIGHTRISK_PREVIEW_TTL_S, default 1 h).",
       "datasource": {"type": "loki", "uid": "loki"},
       "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{service_name=~\"flightrisk.*\", service_instance_id=~\"$node\"} | json | event=\"target_image\" | source!=\"clear\"", "legendFormat": "", "refId": "A", "queryType": "range"}],
       "transformations": [{"id": "extractFields", "options": {"source": "Line", "format": "json", "keepTime": true, "replace": true, "jsonPaths": [{"path": "source", "alias": "source"}, {"path": "width", "alias": "width"}, {"path": "height", "alias": "height"}, {"path": "bytes", "alias": "bytes"}, {"path": "mime", "alias": "mime"}, {"path": "quality.overall_score", "alias": "quality"}, {"path": "quality.grade", "alias": "grade"}, {"path": "face_detected", "alias": "face"}, {"path": "sha256", "alias": "sha256"}, {"path": "artifact", "alias": "artifact"}, {"path": "preview_url", "alias": "preview"}, {"path": "preview_expires", "alias": "expires"}]}}, {"id": "limit", "options": {"limitField": 5}}],
