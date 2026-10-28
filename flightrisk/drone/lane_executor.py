@@ -240,8 +240,10 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         # under ``_lock``. land_now counts itself here before it waits for
         # the lock, so no flight sequence can be launched in between (see
         # ``_landing_wanted_locked``). Guarded by ``_land_gate``, a lock that
-        # is never held while taking another.
-        self._land_gate = threading.Lock()
+        # is never held while taking another. It is re-entrant: the SIGINT
+        # handler calls ``land_now`` on the main thread, which may be inside
+        # ``land_now`` itself (holding the gate) when a second Ctrl+C lands.
+        self._land_gate = threading.RLock()
         self._land_requests = 0
         self._last_land_attempt_s = 0.0
         # True while some thread is inside drone.land(). A second land
