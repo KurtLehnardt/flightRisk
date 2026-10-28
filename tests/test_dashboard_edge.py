@@ -58,6 +58,7 @@ class TestEdgeFramePayload:
     _FRAME_KEYS = {
         "image", "boxes", "fps", "persons", "match", "match_score",
         "stream_video", "telemetry", "recording",
+        "drone_id", "frame_width", "frame_height",
     }
 
     def test_frame_image_none_when_no_thumbnail(self, clean_app_state):
