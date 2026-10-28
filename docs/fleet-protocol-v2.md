@@ -916,8 +916,10 @@ fake).
   (`land_now`: a ground or local landing, battery, link loss, the
   geofence, an error) until that landing is over, no flight sequence is
   launched: `start_at`, `resume`, `nudge`, `hold` and `takeoff` are refused
-  with `landing`, and an `assign_lanes` that would re-task the flying drone
-  is refused with `landing` and the current plan is kept. The executor
+  with `landing`, and an `assign_lanes` is refused with `landing` and the
+  current plan is kept, whether it would re-task the flying drone or arrives
+  while the drone still descends after the landing was recorded (a plan
+  accepted then would stay valid after touchdown). The executor
   counts the request before it waits for its lock, so a command that is
   being checked at that moment is refused too.
 - **End of lanes.** With `on_complete: land` the drone lands after its
@@ -944,6 +946,9 @@ What the edge authority (PR-4) has to wire to the executor:
   sends the refusal as a nack carrying `epoch_seen`, and fails closed
   (`not_authority`) if `check` raises or returns anything else. The default
   accepts everything and reports the highest epoch it has seen.
+  `epoch_seen()` is called from the monitor thread (telemetry, the `hello`
+  and `fleet_status`, the last under the executor lock) as well as from the
+  command thread, so it must be non-blocking: no network, disk or long lock.
 - Call `invalidate_plan(reason)` when the edge adopts a new epoch.
 - Use `is_active()` for the authority's "inactive" test (true while the
   drone flies, a sequence runs or a `start_at` is pending, or a landing is

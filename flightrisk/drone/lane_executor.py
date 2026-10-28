@@ -240,8 +240,10 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         # under ``_lock``. land_now counts itself here before it waits for
         # the lock, so no flight sequence can be launched in between (see
         # ``_landing_wanted_locked``). Guarded by ``_land_gate``, a lock that
-        # is never held while taking another.
-        self._land_gate = threading.Lock()
+        # is never held while taking another. It is re-entrant: the SIGINT
+        # handler calls ``land_now`` on the main thread, which may be inside
+        # ``land_now`` itself (holding the gate) when a second Ctrl+C lands.
+        self._land_gate = threading.RLock()
         self._land_requests = 0
         self._last_land_attempt_s = 0.0
         # True while some thread is inside drone.land(). A second land
@@ -321,19 +323,22 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         """The protocol v2 status fields for telemetry and the edge ``hello``.
 
         Returns ``plan_id`` (kept after the plan is invalidated, or None),
-        ``state`` (as in telemetry), ``plan_valid`` and ``epoch`` (the epoch
-        the authority reports the edge obeys, 0 before any), read together
-        under the executor lock.
+        ``state`` (as in telemetry, or ``unknown`` while the flight state is
+        unreadable), ``plan_valid`` and ``epoch`` (the epoch the authority
+        reports the edge obeys, 0 before any), read together under the
+        executor lock. The authority's ``epoch_seen()`` must be non-blocking.
         """
-        flying = self._is_flying()
+        try:
+            flying: bool | None = self._is_flying()
+        except Exception:  # noqa: BLE001 - an unreadable state is reported, not raised
+            flying = None
         with self._lock:
-            status: dict[str, Any] = {
+            return {
                 "plan_id": None if self._plan_identity is None else self._plan_identity.plan_id,
-                "state": self._state_locked(flying),
+                "state": "unknown" if flying is None else self._state_locked(flying),
                 "plan_valid": self._plan_valid,
+                "epoch": self.epoch_seen,
             }
-        status["epoch"] = self.epoch_seen
-        return status
 
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
@@ -540,7 +545,9 @@ class LaneExecutor(FleetCommandMixin, LanePlanMixin, FlightSequenceMixin, Monito
         """Take off and climb to the altitude slot, then hover."""
         with self._lock:
             if self._is_flying():
-                refusal = "already_flying"
+                # A drone that is still landing is told so, as for every other
+                # command; only a drone flying for good is "already_flying".
+                refusal = "landing" if self._landing_wanted_locked() else "already_flying"
             elif self._worker_alive():
                 refusal = "busy"
             elif not self._launch("takeoff", cmd=msg):
