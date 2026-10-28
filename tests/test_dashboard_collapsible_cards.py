@@ -160,3 +160,39 @@ def test_history_and_sessions_headers_are_keyboard_accessible():
             and 'tabindex="0"' in m.group(1)
             and 'aria-expanded="false"' in m.group(1)
         )
+
+
+def _rule(selector):
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", INDEX)
+    assert match, f"missing CSS rule for {selector}"
+    return match.group(1)
+
+
+def test_chevron_is_large_with_a_comfortable_hit_area():
+    chevron = _rule(".card-chevron")
+    size = int(re.search(r"font-size:\s*(\d+)px", chevron).group(1))
+    assert 20 <= size <= 24
+    for prop in ("min-width", "min-height"):
+        assert int(re.search(prop + r":\s*(\d+)px", chevron).group(1)) >= 40
+    assert (
+        int(re.search(r"min-height:\s*(\d+)px", _rule(".card-toggle")).group(1)) >= 40
+    )
+
+
+def test_chevron_keeps_rotation_and_respects_reduced_motion():
+    assert "rotate(-90deg)" in _rule(".card-collapsed .card-chevron")
+    assert "transition: transform" in _rule(".card-chevron")
+    assert re.search(
+        r"prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.card-chevron[^}]*transition:\s*none",
+        INDEX,
+    )
+    assert "focus-visible" in INDEX and "outline: 2px solid var(--cyan)" in INDEX
+
+
+def test_ceiling_card_sits_directly_below_flight_controls():
+    flight = PAGE.index('data-card="flight-controls"')
+    ceiling = PAGE.index('data-card="ceiling"')
+    ai_reasoning = PAGE.index('data-card="ai-reasoning"')
+    assert flight < ceiling < ai_reasoning
+    # The fleet card (LAND ALL, fleet status) keeps its place ahead of flight controls.
+    assert PAGE.index('data-card="drone-fleet"') < flight

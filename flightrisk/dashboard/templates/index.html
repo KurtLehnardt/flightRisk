@@ -538,10 +538,24 @@
             cursor: pointer;
             text-transform: inherit;
             letter-spacing: inherit;
+            min-height: 40px;
         }
+        .card-toggle > span:first-child { min-width: 0; overflow-wrap: anywhere; }
         .card-toggle:focus-visible, .collapsible-header:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 4px; }
-        .card-chevron { font-size: 10px; transition: transform 150ms ease; }
+        .card-chevron {
+            font-size: 22px;
+            line-height: 1;
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 40px;
+            min-height: 40px;
+            color: inherit;
+            transition: transform 150ms ease;
+        }
         .card-collapsed .card-chevron { transform: rotate(-90deg); }
+        @media (prefers-reduced-motion: reduce) { .card-chevron { transition: none; } }
         .card-collapsed > .card-body { display: none; }
         .card-collapsed > .panel-title { margin-bottom: 0; }
 
@@ -1849,8 +1863,6 @@
                 <!-- CONTROLS TAB -->
                 <div id="tab-controls" class="tab-pane">
 
-                    {% include "ceiling_settings.html" %}
-
                     <!-- Fleet Selector -->
                     <div class="panel-section" data-card="drone-fleet">
                         <div class="panel-title">
@@ -1971,6 +1983,8 @@
                         </div>
                         </div>
                     </div>
+
+                    {% include "ceiling_settings.html" %}
 
                     <!-- AI Reasoning backend -->
                     <div class="panel-section" data-card="ai-reasoning">
