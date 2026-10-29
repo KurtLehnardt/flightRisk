@@ -35,6 +35,7 @@ from tests.support.fake_mavsdk import (
     ARDUPILOT_PARAMS,
     PX4_PARAMS,
     FixType,
+    SimActionError,
     SimVehicle,
     install,
 )
@@ -96,18 +97,54 @@ def test_plan_frame_round_trips(heading):
     assert (north, east) == pytest.approx((-1, 0))
 
 
-def test_failsafe_rules_fail_closed_per_autopilot():
-    assert failsafe_problems(ARDUPILOT, params_reader(ARDUPILOT_PARAMS)) == []
-    assert failsafe_problems(PX4, params_reader(PX4_PARAMS)) == []
-    off = {**ARDUPILOT_PARAMS, "FENCE_ENABLE": 0, "BATT_FS_LOW_ACT": 0}
-    problems = failsafe_problems(ARDUPILOT, params_reader(off))
-    assert any("FENCE_ENABLE=0" in p for p in problems)
-    assert any("BATT_FS_LOW_ACT=0" in p for p in problems)
-    no_threshold = {**ARDUPILOT_PARAMS, "BATT_LOW_VOLT": 0, "BATT_LOW_MAH": 0}
-    assert any("BATT_LOW_VOLT or BATT_LOW_MAH" in p for p in failsafe_problems(ARDUPILOT, params_reader(no_threshold)))
+def test_failsafe_rules_pass_the_reference_settings():
+    assert failsafe_problems(ARDUPILOT, params_reader(ARDUPILOT_PARAMS), geofence_cm=3000, ceiling_cm=3000,
+                             slot_cm=1500) == []
+    assert failsafe_problems(PX4, params_reader(PX4_PARAMS), geofence_cm=3000, ceiling_cm=3000, slot_cm=1500) == []
+    assert failsafe_problems(None, params_reader({})) == ["autopilot type unknown (None); cannot check its failsafes"]
+
+
+@pytest.mark.parametrize(
+    ("autopilot", "change", "needle"),
+    [
+        # Values that do nothing, hover, or stop the motors in the air (parameter references cited in autopilot.py).
+        (PX4, {"GF_ACTION": 1}, "GF_ACTION=1"),            # warning only
+        (PX4, {"GF_ACTION": 4}, "GF_ACTION=4"),            # terminate
+        (PX4, {"NAV_RCL_ACT": 6}, "NAV_RCL_ACT=6"),        # disarm
+        (PX4, {"NAV_RCL_ACT": 1}, "NAV_RCL_ACT=1"),        # hold: hovers
+        (PX4, {"NAV_DLL_ACT": 5}, "NAV_DLL_ACT=5"),        # terminate
+        (PX4, {"COM_LOW_BAT_ACT": 0}, "COM_LOW_BAT_ACT=0"),  # warning only
+        (PX4, {"GF_MAX_HOR_DIST": 0, "GF_MAX_VER_DIST": 500}, "GF_MAX_HOR_DIST above 0"),  # no horizontal fence
+        (PX4, {"GF_MAX_HOR_DIST": 40.0}, "GF_MAX_HOR_DIST=40 m is inside the edge geofence"),  # < sqrt(2)*30+5
+        (PX4, {"GF_MAX_VER_DIST": 25.0}, "above the 30 m ceiling"),
+        (PX4, {"RTL_RETURN_ALT": 60.0}, "RTL_RETURN_ALT return altitude 60 m is above"),  # PX4's default
+        (PX4, {"MAV_SYS_ID": 2}, "system id is 2, expected 1"),
+        (ARDUPILOT, {"BATT_FS_LOW_ACT": 5}, "BATT_FS_LOW_ACT=5"),  # terminate
+        (ARDUPILOT, {"BATT_FS_CRT_ACT": 0}, "BATT_FS_CRT_ACT=0"),
+        (ARDUPILOT, {"FENCE_ACTION": 0}, "FENCE_ACTION=0"),  # report only
+        (ARDUPILOT, {"FENCE_ENABLE": 0}, "FENCE_ENABLE=0"),
+        (ARDUPILOT, {"FENCE_TYPE": 1}, "need the circle fence"),  # altitude only: no horizontal fence
+        (ARDUPILOT, {"FENCE_TYPE": 6}, "need the max-altitude fence"),
+        (ARDUPILOT, {"FENCE_RADIUS": 30.0}, "FENCE_RADIUS=30 m is inside the edge geofence"),
+        (ARDUPILOT, {"FENCE_ALT_MAX": 150.0}, "FENCE_ALT_MAX=150 m"),
+        (ARDUPILOT, {"FS_THR_ENABLE": 2}, "FS_THR_ENABLE=2"),  # continue a mission
+        (ARDUPILOT, {"BATT_ARM_VOLT": 0}, "BATT_ARM_VOLT above 0"),  # remaining % counts mAh since boot
+        (ARDUPILOT, {"BATT_LOW_VOLT": 0, "BATT_LOW_MAH": 0}, "BATT_LOW_VOLT or BATT_LOW_MAH"),
+        (ARDUPILOT, {"RTL_ALT": 3000}, "RTL_ALT return altitude 30 m is above"),
+        (ARDUPILOT, {"SYSID_THISMAV": 3}, "system id is 3"),
+    ],
+)
+def test_failsafe_rules_refuse_unsafe_values(autopilot, change, needle):
+    params = {**(PX4_PARAMS if autopilot == PX4 else ARDUPILOT_PARAMS), **change}
+    problems = failsafe_problems(autopilot, params_reader(params), geofence_cm=3000, ceiling_cm=3000, slot_cm=1500)
+    assert any(needle in p for p in problems), problems
+
+
+def test_failsafe_rules_fail_closed_on_unreadable_parameters():
     unreadable = {k: v for k, v in PX4_PARAMS.items() if k != "NAV_DLL_ACT"}
     assert any("cannot read NAV_DLL_ACT" in p for p in failsafe_problems(PX4, params_reader(unreadable)))
-    assert failsafe_problems(None, params_reader({})) == ["autopilot type unknown (None); cannot check its failsafes"]
+    unreadable = {k: v for k, v in ARDUPILOT_PARAMS.items() if k != "RTL_ALT"}
+    assert any("cannot read RTL_ALT" in p for p in failsafe_problems(ARDUPILOT, params_reader(unreadable)))
 
 
 def test_rtl_altitude_units():
@@ -184,7 +221,7 @@ def test_ready_once_parameters_read_and_link_reports_age(make_drone):
         (lambda v: setattr(v, "satellites", 4), "GPS satellites"),
         (lambda v: v.params.update(FENCE_ENABLE=0), "FENCE_ENABLE=0"),
         (lambda v: v.params.update(FS_THR_ENABLE=0), "FS_THR_ENABLE=0"),
-        (lambda v: v.params.update(RTL_ALT=3000), "return-to-launch altitude 30 m is above"),
+        (lambda v: v.params.update(RTL_ALT=3000), "return altitude 30 m is above"),
         (lambda v: setattr(v, "armable", False), "not armable"),
     ],
 )
@@ -207,14 +244,16 @@ def test_rtl_altitude_checked_against_the_live_slot(make_drone):
     install_slot.bind_slot_source(lambda: slot["cm"])
     assert ready(install_slot)
     slot["cm"] = 1000.0  # a plan moved this drone to a lower slot
-    assert "return-to-launch altitude 15 m" in install_slot.link_status().detail
+    assert "return altitude 15 m is above this drone's slot 10 m" in install_slot.link_status().detail
 
 
-def test_land_action_needs_no_rtl_altitude(make_drone):
+def test_return_altitude_is_checked_whatever_the_failsafe_action(make_drone):
+    """The autopilot's own RC-loss and battery failsafes return by themselves, even with --failsafe-action land."""
     vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
-    vehicle.params["RTL_ALT"] = 9000
+    vehicle.params["RTL_ALT"] = 6000
     drone, _ = make_drone(vehicle, failsafe_action="land")
-    assert ready(drone), drone.link_status()
+    assert wait_for(lambda: "RTL_ALT return altitude 60 m is above" in (drone.link_status().detail or ""))
+    assert drone.check_slot(1500) is not None and "below the autopilot's return altitude" in drone.check_slot(1500)
 
 
 def test_unverified_failsafes_skip_only_the_parameter_checks(make_drone):
@@ -261,14 +300,25 @@ def test_lanes_fly_in_the_frame_heading(make_drone):
     assert vehicle.commands[-1][3] == pytest.approx(1615.0)
 
 
-def test_rotate_changes_what_forward_means(make_drone):
-    drone, vehicle = make_drone(frame_heading_deg=0.0)
+def test_px4_rotate_turns_the_vehicle(make_drone):
+    drone, vehicle = make_drone(SimVehicle(PX4, time_scale=20.0), frame_heading_deg=0.0)
     airborne(drone, vehicle)
     assert command_result(drone.rotate(90), "rotate").ok
     assert vehicle.heading == pytest.approx(90.0, abs=10.0)
     assert command_result(drone.move("forward", 500), "move").ok
     assert vehicle.east == pytest.approx(5.0, abs=0.6)
     assert drone.measured_pose().heading_deg == pytest.approx(90.0, abs=10.0)
+
+
+def test_ardupilot_rotate_turns_the_plan_without_waiting_for_a_yaw(make_drone):
+    """N9: ArduCopter ignores a reposition's yaw, so waiting for the heading would time out and land."""
+    drone, vehicle = make_drone(frame_heading_deg=0.0, move_timeout_margin_s=1.0)
+    airborne(drone, vehicle)
+    started = time.monotonic()
+    result = command_result(drone.rotate(90), "rotate")
+    assert result.ok and time.monotonic() - started < 1.0
+    assert command_result(drone.move("forward", 500), "move").ok
+    assert vehicle.east == pytest.approx(5.0, abs=0.6) and vehicle.north == pytest.approx(0.0, abs=0.6)
 
 
 def test_frame_heading_defaults_to_the_takeoff_heading(make_drone):
@@ -507,3 +557,128 @@ def test_each_link_runs_its_own_mavsdk_server(monkeypatch):
         for link in links:
             link.disconnect()
     assert len(ports) == 2 and ports[0] != ports[1] and 50051 not in ports
+
+
+# ---------------------------------------------------------------------------
+# Review round: landing never fights a pilot or the autopilot (B1, B2)
+# ---------------------------------------------------------------------------
+
+
+def test_autopilot_land_after_an_edge_return_is_not_overridden(make_drone):
+    """B1(b): the edge asked for RTL; the autopilot's critical-battery failsafe (or the pilot) switched to LAND."""
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+    vehicle.time_scale = 0.5
+    drone.land_for_reason("link_loss")
+    assert wait_for(lambda: drone.state.flight_mode == "RETURN_TO_LAUNCH")
+    vehicle.trigger_failsafe("LAND")
+    assert wait_for(lambda: drone.state.flight_mode == "LAND")
+    assert "from RETURN_TO_LAUNCH to LAND" in drone.external_control
+    sent = vehicle.commands.count(("return_to_launch",))
+    assert command_result(drone.land_for_reason("link_loss", retry=True), "land").ok
+    assert command_result(drone.land_for_reason("low_battery"), "land").ok
+    assert vehicle.commands.count(("return_to_launch",)) == sent
+    assert drone.state.flight_mode == "LAND"
+
+
+def test_edge_land_never_overrides_an_autopilot_return(make_drone):
+    """B1(c): the edge's own LAND (on_complete) must not pull a drone out of the autopilot's RTL."""
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+    vehicle.time_scale = 0.5
+    drone.land_for_reason("on_complete")
+    assert wait_for(lambda: drone.state.flight_mode == "LAND")
+    vehicle.trigger_failsafe("RETURN_TO_LAUNCH")
+    assert wait_for(lambda: drone.external_control is not None)
+    sent = vehicle.commands.count(("land",))
+    drone.land_for_reason("on_complete", retry=True)
+    drone.land_for_reason("on_complete")
+    assert vehicle.commands.count(("land",)) == sent
+
+
+def test_retries_resend_only_a_mode_the_autopilot_never_entered(make_drone):
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+    vehicle.time_scale = 0.5
+    real_land = drone.link.land
+    drone.link.land = lambda: vehicle._record("land")  # the command is lost: the mode never changes
+    drone.land_for_reason("ground_land")
+    drone.land_for_reason("ground_land", retry=True)
+    assert vehicle.commands.count(("land",)) == 2  # never entered: sent again
+    drone.link.land = real_land
+    drone.land_for_reason("ground_land", retry=True)
+    assert wait_for(lambda: drone.state.flight_mode == "LAND")
+    drone.land_for_reason("ground_land", retry=True)
+    assert vehicle.commands.count(("land",)) == 3  # entered: not sent again
+
+
+def test_a_refused_return_falls_back_to_land(make_drone):
+    """B2: GPS degraded and the ground link drops; RTL is denied, so the drone must land."""
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+
+    def refuse():
+        vehicle._record("return_to_launch")
+        raise SimActionError("COMMAND_DENIED: RTL needs position")
+
+    drone.link.return_to_launch = refuse
+    result = command_result(drone.land_for_reason("low_battery"), "land")
+    assert result.ok and result.detail == "LAND"
+    assert vehicle.commands[-2:] == [("return_to_launch",), ("land",)]
+    assert wait_for(lambda: not drone.state.is_flying)
+    # Later failsafe landings in this flight land in place.
+    assert drone._rtl_failed
+
+
+def test_a_return_never_entered_is_replaced_by_a_landing(make_drone):
+    drone, vehicle = make_drone(rtl_accept_s=0.5)
+    airborne(drone, vehicle)
+    drone.link.return_to_launch = lambda: vehicle._record("return_to_launch")  # accepted, never entered
+    drone.land_for_reason("link_loss")
+    assert command_result(drone.land_for_reason("link_loss", retry=True), "land").detail.startswith("waiting")
+    time.sleep(0.6)
+    assert command_result(drone.land_for_reason("link_loss", retry=True), "land").detail == "LAND"
+    assert vehicle.commands[-1] == ("land",)
+
+
+# ---------------------------------------------------------------------------
+# Review round: other fixes
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_system_id_is_not_ready(make_drone):
+    drone, _ = make_drone(sysid=7)
+    assert wait_for(lambda: "system id is 1, expected 7" in (drone.link_status().detail or ""))
+
+
+def test_altitude_reference_is_taken_at_each_send(make_drone):
+    """N4: home moves at arming (pre-arm barometer drift); targets follow the autopilot's own height."""
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+    vehicle.home_alt += 3.0  # the reference the autopilot reports heights against moved
+    assert wait_for(lambda: drone.link.state().abs_alt_m == pytest.approx(1608.0, abs=0.2))
+    assert command_result(drone.move("up", 500), "move").ok
+    assert vehicle.alt == pytest.approx(10.0, abs=0.7)
+
+
+def test_a_stale_stream_is_not_trusted(make_drone, monkeypatch):
+    """N7: the battery stream stopped while others go on; its last value must not count."""
+    drone, _ = make_drone()
+    assert ready(drone)
+    real_state = drone.link.state
+
+    def stale_battery():
+        st = real_state()
+        return type(st)(**{**st.__dict__, "stream_age_s": {**st.stream_age_s, "battery": 99.0}})
+
+    monkeypatch.setattr(drone.link, "state", stale_battery)
+    assert drone.read_battery() is None
+    assert "telemetry stale or missing: battery" in drone.link_status().detail
+
+
+def test_telemetry_fields_report_speed_and_mode(make_drone):
+    drone, vehicle = make_drone()
+    airborne(drone, vehicle)
+    fields = drone.telemetry_fields()
+    assert fields["autopilot"] == ARDUPILOT and fields["speed_set"] is True and fields["external_control"] is False
+    assert fields["flight_mode"] == "OFFBOARD"

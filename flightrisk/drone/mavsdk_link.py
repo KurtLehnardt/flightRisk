@@ -37,10 +37,35 @@ try:  # MAVSDK is optional: only an edge that flies an autopilot needs it.
     from mavsdk import System
 except ImportError:  # pragma: no cover - exercised only where mavsdk is absent
     System = None  # type: ignore[assignment]
+#: The real MAVSDK class; the link starts its own supervised server only for it.
+_REAL_SYSTEM = System
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MavsdkAutopilotLink", "System"]
+__all__ = ["ADDRESS_SCHEMES", "MavsdkAutopilotLink", "System", "validate_address"]
+
+#: Connection URL schemes MAVSDK accepts (``mavsdk_server --help``).
+ADDRESS_SCHEMES = ("serial", "udpin", "udpout", "tcpin", "tcpout")
+#: Telemetry streams and the cached values each one carries.
+_STREAMS = ("position", "in_air", "landed_state", "armed", "flight_mode", "health", "home", "battery", "gps",
+            "heading")
+
+
+def validate_address(address: str) -> str:
+    """Check a MAVSDK connection URL; return it. Raises ``ValueError``.
+
+    The scheme must be one of ``ADDRESS_SCHEMES`` and the address may not
+    start with ``-`` (it is passed to ``mavsdk_server`` as an argument).
+    """
+    text = str(address).strip()
+    scheme, sep, rest = text.partition("://")
+    if text.startswith("-") or not sep or scheme not in ADDRESS_SCHEMES or not rest:
+        raise ValueError(
+            f"MAVLink address must look like {'|'.join(ADDRESS_SCHEMES)}://..., for example "
+            f"serial:///dev/ttyAMA0:921600 or udpin://127.0.0.1:14540; got {address!r}"
+        )
+    return text
+
 
 #: How long connect() waits for the autopilot's first heartbeat.
 DEFAULT_CONNECT_TIMEOUT_S = 30.0
@@ -73,7 +98,7 @@ class MavsdkAutopilotLink:
     ):
         if autopilot is not None and autopilot not in AUTOPILOTS:
             raise ValueError(f"autopilot must be one of {AUTOPILOTS} or None, got {autopilot!r}")
-        self.address = address
+        self.address = validate_address(address)
         self._configured_autopilot = autopilot
         self._connect_timeout_s = float(connect_timeout_s)
         self._command_timeout_s = float(command_timeout_s)
@@ -92,6 +117,8 @@ class MavsdkAutopilotLink:
         self._param_lock = threading.Lock()
         self._values: dict[str, Any] = {}
         self._last_message_s: float | None = None
+        self._stream_at: dict[str, float] = {}
+        self._server: Any = None
         self._connected = False
         self._autopilot: str | None = autopilot
 
@@ -129,12 +156,44 @@ class MavsdkAutopilotLink:
             self._connected = False
         self._system = None
         self._bridge.stop_loop()
+        server, self._server = self._server, None
+        if server is not None:
+            try:
+                server.terminate()
+                server.wait(timeout=5.0)
+            except Exception as exc:  # noqa: BLE001 - teardown continues
+                logger.warning("mavsdk link: stopping mavsdk_server failed: %r", exc)
+
+    def _start_own_server(self, port: int) -> str | None:
+        """Start ``mavsdk_server`` tied to this process (``flightrisk.drone.supervised``); its host, or None.
+
+        Only for the real MAVSDK. MAVSDK's own launcher kills the server
+        only at a clean exit, so a crashed edge would leave it running,
+        heartbeating and holding the serial port.
+        """
+        if System is not _REAL_SYSTEM or System is None or self._server_address is not None:
+            return None
+        try:
+            from importlib.resources import files
+
+            import mavsdk.bin as mavsdk_bin
+
+            binary = files(mavsdk_bin) / "mavsdk_server"
+            from flightrisk.drone.supervised import spawn_tied_to_parent
+
+            self._server = spawn_tied_to_parent([str(binary), "-p", str(port), self.address], log_name="mavsdk_server")
+        except Exception as exc:  # noqa: BLE001 - fall back to MAVSDK's own launcher
+            logger.warning("mavsdk link: could not start a supervised mavsdk_server (%r); MAVSDK starts its own, "
+                           "which outlives a crashed edge", exc)
+            return None
+        return "127.0.0.1"
 
     async def _connect_async(self) -> None:
         port = self._server_port if self._server_port is not None else _free_local_port()
         kwargs: dict[str, Any] = {"port": port}
-        if self._server_address is not None:
-            kwargs["mavsdk_server_address"] = self._server_address
+        host = self._server_address or self._start_own_server(port)
+        if host is not None:
+            kwargs["mavsdk_server_address"] = host
         system = System(**kwargs)
         await system.connect(system_address=self.address)
 
@@ -199,43 +258,45 @@ class MavsdkAutopilotLink:
     # Telemetry handlers (event-loop thread)
     # ------------------------------------------------------------------
 
-    def _store(self, **values: Any) -> None:
+    def _store(self, stream: str, **values: Any) -> None:
+        now = time.monotonic()
         with self._lock:
             self._values.update(values)
-            self._last_message_s = time.monotonic()
+            self._last_message_s = now
+            self._stream_at[stream] = now
 
     def _on_value(self, key: str, cast: Any):
-        return lambda item: self._store(**{key: cast(item)})
+        return lambda item: self._store(key, **{key: cast(item)})
 
     def _on_enum(self, key: str):
-        return lambda item: self._store(**{key: getattr(item, "name", str(item))})
+        return lambda item: self._store(key, **{key: getattr(item, "name", str(item))})
 
     def _on_position(self, p: Any) -> None:
         self._store(
-            lat_deg=p.latitude_deg, lon_deg=p.longitude_deg,
+            "position", lat_deg=p.latitude_deg, lon_deg=p.longitude_deg,
             abs_alt_m=p.absolute_altitude_m, rel_alt_m=p.relative_altitude_m,
         )
 
     def _on_home(self, p: Any) -> None:
-        self._store(home_lat_deg=p.latitude_deg, home_lon_deg=p.longitude_deg, home_abs_alt_m=p.absolute_altitude_m)
+        self._store("home", home_lat_deg=p.latitude_deg, home_lon_deg=p.longitude_deg, home_abs_alt_m=p.absolute_altitude_m)
 
     def _on_health(self, h: Any) -> None:
         self._store(
-            global_position_ok=bool(h.is_global_position_ok),
+            "health", global_position_ok=bool(h.is_global_position_ok),
             home_position_ok=bool(h.is_home_position_ok),
             armable=bool(h.is_armable),
         )
 
     def _on_battery(self, b: Any) -> None:
         pct = b.remaining_percent
-        self._store(battery_pct=float(pct) if isinstance(pct, (int, float)) and math.isfinite(pct) else None)
+        self._store("battery", battery_pct=float(pct) if isinstance(pct, (int, float)) and math.isfinite(pct) else None)
 
     def _on_gps_info(self, g: Any) -> None:
         fix = getattr(g.fix_type, "value", g.fix_type)
-        self._store(gps_fix_type=int(fix), satellites=int(g.num_satellites))
+        self._store("gps", gps_fix_type=int(fix), satellites=int(g.num_satellites))
 
     def _on_heading(self, h: Any) -> None:
-        self._store(heading_deg=float(h.heading_deg) % 360.0)
+        self._store("heading", heading_deg=float(h.heading_deg) % 360.0)
 
     def _on_connection(self, c: Any) -> None:
         with self._lock:
@@ -253,8 +314,12 @@ class MavsdkAutopilotLink:
             values = dict(self._values)
             last = self._last_message_s
             connected = self._connected
-        age = None if last is None else max(0.0, time.monotonic() - last)
-        return AutopilotState(connected=connected, telemetry_age_s=age, autopilot=self._autopilot, **values)
+            streams = dict(self._stream_at)
+        now = time.monotonic()
+        age = None if last is None else max(0.0, now - last)
+        ages = {name: max(0.0, now - at) for name, at in streams.items()}
+        return AutopilotState(connected=connected, telemetry_age_s=age, autopilot=self._autopilot,
+                              stream_age_s=ages, **values)
 
     # ------------------------------------------------------------------
     # Commands
@@ -317,6 +382,12 @@ class MavsdkAutopilotLink:
             except Exception as exc:  # noqa: BLE001 - a float parameter: retried below
                 logger.debug("mavsdk link: set_param_int(%s) failed, trying float: %r", name, exc)
         self._call(lambda s: s.param.set_param_float(name, float(value)))
+
+    def refresh_autopilot(self) -> str | None:
+        """Probe the autopilot type again when it is still unknown (a parameter read failed at connect)."""
+        if self._autopilot is None and self._system is not None:
+            self._autopilot = self._probe_autopilot()
+        return self._autopilot
 
     def _probe_autopilot(self) -> str | None:
         for autopilot, name in _PROBE_PARAMS:

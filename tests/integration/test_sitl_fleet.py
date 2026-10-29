@@ -36,12 +36,15 @@ FLIGHT_TIMEOUT_S = 600.0
 
 ARDUPILOT_SETUP = {
     "FENCE_ENABLE": 1, "FENCE_ACTION": 1, "FENCE_TYPE": 3, "FENCE_RADIUS": 150, "FENCE_ALT_MAX": 40,
-    "BATT_FS_LOW_ACT": 2, "BATT_LOW_VOLT": 10.5, "FS_THR_ENABLE": 1, "RTL_ALT": 0,
+    "BATT_FS_LOW_ACT": 2, "BATT_FS_CRT_ACT": 1, "BATT_LOW_VOLT": 10.5, "BATT_ARM_VOLT": 11.0, "FS_THR_ENABLE": 1,
+    "RTL_ALT": 0,
 }
 PX4_SETUP = {
     "GF_ACTION": 2, "GF_MAX_HOR_DIST": 150.0, "GF_MAX_VER_DIST": 40.0, "COM_LOW_BAT_ACT": 3, "NAV_RCL_ACT": 2,
     "NAV_DLL_ACT": 2, "RTL_RETURN_ALT": 0.0,
 }
+#: How long a silent ground holds the drone before its return (the field default is 10 s).
+LINK_LOSS_HOLD_S = 5.0
 
 
 def _need(address: str) -> None:
@@ -62,7 +65,7 @@ def wait_for(predicate, timeout, interval=0.2):
         time.sleep(interval)
 
 
-def _connect(address: str, drone_id: str, slot_cm: float):
+def _connect(address: str, drone_id: str, slot_cm: float, envelope=None):
     from flightrisk.drone.autopilot import ARDUPILOT
     from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone, MavlinkFleetOptions
     from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
@@ -70,6 +73,8 @@ def _connect(address: str, drone_id: str, slot_cm: float):
     link = MavsdkAutopilotLink(address, connect_timeout_s=120.0)
     drone = MavlinkFleetDrone(drone_id, link, MavlinkFleetOptions(frame_heading_deg=0.0, speed_mps=3.0))
     drone.bind_slot_source(lambda: slot_cm)
+    if envelope is not None:
+        drone.bind_envelope(envelope)
     assert drone.connect(), f"cannot connect to SITL at {address}"
     setup = ARDUPILOT_SETUP if link.state().autopilot == ARDUPILOT else PX4_SETUP
     for name, value in setup.items():
@@ -94,9 +99,8 @@ class SitlEdge:
         self.on_message = None
         self.replies: list[dict] = []
         self.envelope = SafetyEnvelope.for_field(alt_slot_cm=slot_cm, geofence_cm=geofence_cm,
-                                                 link_loss_land_s=link_loss_land_s)
-        self.drone = _connect(address, drone_id, slot_cm)
-        self.drone.bind_slot_source(lambda: self.envelope.alt_slot_cm)
+                                                 link_loss_land_s=link_loss_land_s, link_loss_hold_s=LINK_LOSS_HOLD_S)
+        self.drone = _connect(address, drone_id, slot_cm, self.envelope)
         self.executor = LaneExecutor(self.drone, self.envelope, drone_id, send=self._reply,
                                      logger=StructuredLogger(component=f"sitl-{drone_id}"))
         self.executor.start()
@@ -165,13 +169,17 @@ def _fly_field_plan(addresses: list[str]) -> None:
                             FLIGHT_TIMEOUT_S, 1.0)
             assert done, (edge.drone_id, edge.executor.lane_index, total)
         flight_s = time.monotonic() - started
-        for i, edge in enumerate(edges.values()):
+        vectors = {"forward": (0, 1), "back": (0, -1), "right": (1, 0), "left": (-1, 0)}
+        for i, zone in enumerate(coord.plan_result.zones):
+            edge = edges[zone.drone_id]
             pose = edge.drone.measured_pose()
             height = edge.drone.read_height_cm()
-            print(f"\n{edge.drone_id}: lanes done in {flight_s:.0f} s, end pose x={pose.x_cm:.0f} cm "
-                  f"y={pose.y_cm:.0f} cm, height {height} cm (slot {settings[i]['alt_slot_m'] * 100:.0f} cm)")
-            # A parallel track of one strip ends one strip to the right of the takeoff point.
-            assert math.hypot(pose.x_cm - scale.strip_cm, pose.y_cm) < 300, pose
+            end_x = sum(vectors[lane["direction"]][0] * lane["distance_cm"] for lane in zone.lanes)
+            end_y = sum(vectors[lane["direction"]][1] * lane["distance_cm"] for lane in zone.lanes)
+            print(f"\n{edge.drone_id}: {len(zone.lanes)} lane moves done in {flight_s:.0f} s, end pose "
+                  f"x={pose.x_cm:.0f} cm y={pose.y_cm:.0f} cm (planned {end_x} / {end_y}), height {height} cm "
+                  f"(slot {settings[i]['alt_slot_m'] * 100:.0f} cm); {scale.coverage_note}")
+            assert math.hypot(pose.x_cm - end_x, pose.y_cm - end_y) < 300, pose
             assert abs(height - settings[i]["alt_slot_m"] * 100) < 150, height
         coord.land_all()
         for edge in edges.values():
@@ -201,12 +209,65 @@ def test_ground_link_loss_returns_to_launch_in_sitl():
 
         assert wait_for(lambda: edge.drone.state.is_flying and not edge.executor.is_busy, 180.0, 0.5)
         edge.ground_alive.clear()  # the ground link goes silent
-        # The ground goes silent: after 3 s the edge asks the autopilot to return.
+        # The ground goes silent: after 3 s the edge holds, LINK_LOSS_HOLD_S later it asks for a return.
+        silent_at = time.monotonic()
         mode = wait_for(lambda: edge.drone.state.flight_mode == "RETURN_TO_LAUNCH" and "RETURN_TO_LAUNCH",
                         60.0, 0.5)
+        assert time.monotonic() - silent_at >= 3.0 + LINK_LOSS_HOLD_S - 1.0
         assert mode, edge.drone.state
         assert wait_for(lambda: not edge.drone.state.is_flying, 240.0, 1.0)
         pose = edge.drone.measured_pose()
         print(f"\nreturned and landed {math.hypot(pose.x_cm, pose.y_cm):.0f} cm from the takeoff point")
+    finally:
+        edge.close()
+
+
+def test_rotate_on_arducopter_turns_the_plan_not_the_vehicle_in_sitl():
+    """N9: ArduCopter ignores a reposition's yaw; the rotation must not wait for it (and then land)."""
+    _need(ADDRESS)
+    edge = SitlEdge("sitl-1", ADDRESS, 1000.0, 3000.0)
+    try:
+        edge.send({"type": "takeoff"})
+        assert wait_for(lambda: edge.drone.state.is_flying and not edge.executor.is_busy, 180.0, 0.5)
+        if edge.drone.link.state().autopilot != "ardupilot":
+            pytest.skip("ArduCopter-specific")
+        before = edge.drone.link.state().heading_deg
+        started = time.monotonic()
+        result = edge.drone.rotate(90)
+        print(f"\nrotate: {result} in {time.monotonic() - started:.2f} s, heading {before} -> "
+              f"{edge.drone.link.state().heading_deg}")
+        assert result.ok
+        pose0 = edge.drone.measured_pose()
+        assert edge.drone.move("forward", 800).ok
+        pose1 = edge.drone.measured_pose()
+        print(f"forward after rotate 90: moved x {pose1.x_cm - pose0.x_cm:.0f} cm, y {pose1.y_cm - pose0.y_cm:.0f} cm")
+        assert pose1.x_cm - pose0.x_cm > 600 and abs(pose1.y_cm - pose0.y_cm) < 200
+    finally:
+        edge.close()
+
+
+def test_pilot_takeover_after_land_all_is_not_fought_in_sitl():
+    """B1(a): after LAND ALL a pilot switch to LOITER (MAVSDK hold) latches external control; no LAND is re-sent."""
+    _need(ADDRESS)
+    edge = SitlEdge("sitl-1", ADDRESS, 1000.0, 3000.0)
+    try:
+        edge.send({"type": "takeoff"})
+        assert wait_for(lambda: edge.drone.state.is_flying and not edge.executor.is_busy, 180.0, 0.5)
+        if edge.drone.link.state().autopilot != "ardupilot":
+            pytest.skip("ArduCopter-specific (LOITER is a pilot mode)")
+        edge.send({"type": "emergency_land_all"})
+        assert wait_for(lambda: edge.drone.state.flight_mode == "LAND", 20.0, 0.2)
+        edge.drone.link._call(lambda s: s.action.hold())  # the pilot flips to LOITER
+        assert wait_for(lambda: edge.drone.external_control is not None, 20.0, 0.2), edge.drone.state
+        modes = set()
+        deadline = time.monotonic() + 7.0  # three monitor retries
+        while time.monotonic() < deadline:
+            modes.add(edge.drone.state.flight_mode)
+            time.sleep(0.2)
+        print(f"\nmodes after the pilot took over: {sorted(m for m in modes if m)}")
+        assert "LAND" not in modes, "the edge sent LAND again over the pilot"
+        edge.send({"type": "emergency_land_all"})  # a new operator command is sent once
+        assert wait_for(lambda: edge.drone.state.flight_mode == "LAND", 20.0, 0.2)
+        assert wait_for(lambda: not edge.drone.state.is_flying, 180.0, 1.0)
     finally:
         edge.close()

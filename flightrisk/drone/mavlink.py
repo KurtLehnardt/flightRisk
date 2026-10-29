@@ -10,6 +10,7 @@ import asyncio
 import logging
 import math
 import re
+import socket
 import threading
 import time
 from pathlib import Path
@@ -67,6 +68,13 @@ _GIMBAL_ID = 0  # MAVSDK gimbal id of the primary gimbal
 _MOVE_DIRECTIONS = ("forward", "back", "left", "right", "up", "down")
 _REPLAY_PREFIX = "dir://"  # rtsp_url scheme that selects aerial frame replay
 _REPLAY_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def _free_local_port() -> int:
+    """A TCP port on 127.0.0.1 that is free right now (for this controller's mavsdk_server)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _extract_ip(address: str) -> str:
@@ -207,7 +215,8 @@ class MavlinkController:
 
     async def _subscribe_battery(self, system: System) -> None:
         async for battery in system.telemetry.battery():
-            self.state.battery = int(battery.remaining_percent * 100)
+            # MAVSDK 2 and later report remaining_percent from 0 to 100.
+            self.state.battery = round(battery.remaining_percent)
             self._measured_at["battery"] = time.time()
             self._last_telemetry_time = time.monotonic()
 
@@ -248,7 +257,10 @@ class MavlinkController:
     # ------------------------------------------------------------------
 
     async def _connect_async(self) -> bool:
-        system = System()
+        # Its own mavsdk_server on a free port: with MAVSDK's fixed default
+        # (50051) two controllers on one computer share one server, and so
+        # one vehicle.
+        system = System(port=_free_local_port())
         await system.connect(system_address=self.host)
 
         logger.info("[%s] Waiting for drone connection...", self.name)

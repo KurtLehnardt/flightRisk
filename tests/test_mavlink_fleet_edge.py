@@ -69,9 +69,9 @@ def parse(argv):
         (["--source", "fake"], "fake", "fake"),
         (["--drone", "tello"], "tello", "tello"),
         (["--drone", "fake", "--source", "fake"], "fake", "fake"),
-        (["--drone", "mavlink"], "camera", "mavlink"),
-        (["--drone", "mavlink", "--source", "url", "--video-url", "rtsp://cam/1"], "url", "mavlink"),
-        (["--drone", "mavlink", "--source", "file", "--video", "x.mp4"], "file", "mavlink"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0"], "camera", "mavlink"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "url", "--video-url", "rtsp://cam/1"], "url", "mavlink"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "file", "--video", "x.mp4"], "file", "mavlink"),
     ],
 )
 def test_drone_and_source_resolve(argv, source, kind):
@@ -94,13 +94,13 @@ def test_existing_parsing_is_unchanged():
     ("argv", "message"),
     [
         (["--drone", "tello", "--source", "camera"], "takes its frames from the drone"),
-        (["--drone", "mavlink", "--source", "tello"], "camera, file or url"),
-        (["--drone", "mavlink", "--alt-slot", "120"], "use --alt-slot-m"),
-        (["--drone", "mavlink", "--tello-host", "10.0.0.1"], "do not apply to --drone mavlink"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "tello"], "camera, file or url"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--alt-slot", "120"], "use --alt-slot-m"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--tello-host", "10.0.0.1"], "do not apply to --drone mavlink"),
         (["--source", "fake", "--alt-slot-m", "15"], "only apply to --drone mavlink"),
         (["--mavlink-address", "udpin://0.0.0.0:14540"], "only apply to --drone mavlink"),
         (["--drone", "fake", "--allow-unverified-failsafes"], "only apply to --drone mavlink"),
-        (["--drone", "mavlink", "--speed-mps", "40"], "speed_mps"),
+        (["--drone", "mavlink", "--frame-heading-deg", "0", "--speed-mps", "40"], "speed_mps"),
     ],
 )
 def test_invalid_combinations_are_refused(argv, message, capsys):
@@ -111,18 +111,18 @@ def test_invalid_combinations_are_refused(argv, message, capsys):
 
 def test_url_source_needs_a_url(capsys):
     with pytest.raises(SystemExit):
-        edge_device.main(["--drone", "mavlink", "--source", "url"])
+        edge_device.main(["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "url"])
     assert "--video-url is required" in capsys.readouterr().err
 
 
 def test_field_envelope_defaults_flags_and_environment():
     env = {"FLIGHTRISK_CEILING_CM": "200", "FLIGHTRISK_GEOFENCE_CM": "450"}  # room settings never leak outdoors
-    envelope = _startup_envelope(parse(["--drone", "mavlink"]), environ=env)
+    envelope = _startup_envelope(parse(["--drone", "mavlink", "--frame-heading-deg", "0"]), environ=env)
     assert envelope.limits is FIELD_LIMITS
     assert (envelope.alt_slot_cm, envelope.ceiling_cm, envelope.ceiling_margin_cm, envelope.geofence_cm) == (
         1500, 3000, 500, 3000)
     envelope = _startup_envelope(
-        parse(["--drone", "mavlink", "--alt-slot-m", "20", "--ceiling-m", "40", "--geofence-m", "80"]),
+        parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--alt-slot-m", "20", "--ceiling-m", "40", "--geofence-m", "80"]),
         environ={"FLIGHTRISK_FIELD_CEILING_MARGIN_M": "6", "FLIGHTRISK_MIN_TAKEOFF_BATTERY": "50"},
     )
     assert (envelope.alt_slot_cm, envelope.ceiling_cm, envelope.ceiling_margin_cm, envelope.geofence_cm) == (
@@ -140,31 +140,31 @@ def test_field_envelope_defaults_flags_and_environment():
         ["--ceiling-m", "150"],  # above 120 m
         ["--ceiling-margin-m", "1"],
         ["--geofence-m", "900"],
-        ["--alt-slot-m", "2"],  # below the 5 m minimum
+        ["--alt-slot-m", "8"],  # below the 10 m minimum
     ],
 )
 def test_unsafe_field_limits_refuse_the_start(argv):
     with pytest.raises(SystemExit, match="Refusing to start"):
-        _startup_envelope(parse(["--drone", "mavlink", *argv]), environ={})
+        _startup_envelope(parse(["--drone", "mavlink", "--frame-heading-deg", "0", *argv]), environ={})
 
 
 def test_mavlink_address_and_failsafe_action_resolution(monkeypatch):
-    args = parse(["--drone", "mavlink"])
-    assert edge_device._mavlink_address(args, environ={}) == "udpin://0.0.0.0:14540"
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0"])
+    assert edge_device._mavlink_address(args, environ={}) == "udpin://127.0.0.1:14540"  # loopback by default
     assert edge_device._mavlink_address(args, environ={"FLIGHTRISK_MAVLINK_ADDRESS": "serial:///dev/ttyAMA0:921600"}) \
         == "serial:///dev/ttyAMA0:921600"
-    args = parse(["--drone", "mavlink", "--mavlink-address", "tcpout://127.0.0.1:5760"])
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--mavlink-address", "tcpout://127.0.0.1:5760"])
     assert edge_device._mavlink_address(args, environ={"FLIGHTRISK_MAVLINK_ADDRESS": "x"}) == "tcpout://127.0.0.1:5760"
-    assert edge_device._failsafe_action(parse(["--drone", "mavlink"]), environ={}) == "rtl"
-    assert edge_device._failsafe_action(parse(["--drone", "mavlink"]), environ={"FLIGHTRISK_FAILSAFE_ACTION": "land"}) \
+    assert edge_device._failsafe_action(parse(["--drone", "mavlink", "--frame-heading-deg", "0"]), environ={}) == "rtl"
+    assert edge_device._failsafe_action(parse(["--drone", "mavlink", "--frame-heading-deg", "0"]), environ={"FLIGHTRISK_FAILSAFE_ACTION": "land"}) \
         == "land"
     with pytest.raises(ValueError, match="rtl or land"):
-        edge_device._failsafe_action(parse(["--drone", "mavlink"]), environ={"FLIGHTRISK_FAILSAFE_ACTION": "hover"})
+        edge_device._failsafe_action(parse(["--drone", "mavlink", "--frame-heading-deg", "0"]), environ={"FLIGHTRISK_FAILSAFE_ACTION": "hover"})
 
 
 def test_build_drone_makes_a_mavlink_fleet_drone():
-    args = parse(["--drone", "mavlink", "--mavlink-address", "tcpout://127.0.0.1:1", "--autopilot", "px4",
-                  "--frame-heading-deg", "0", "--failsafe-action", "land", "--drone-id", "drone-3"])
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--mavlink-address", "tcpout://127.0.0.1:1", "--autopilot", "px4",
+                  "--failsafe-action", "land", "--drone-id", "drone-3"])
     drone = edge_device._build_drone(args, StructuredLogger(component="test"))
     assert isinstance(drone, MavlinkFleetDrone)
     assert drone.name == "drone-3" and drone.host == "tcpout://127.0.0.1:1"
@@ -213,13 +213,15 @@ def test_resilient_capture_reopens_and_stops_only_on_request():
 class Edge:
     """A MavlinkFleetDrone on a simulated autopilot under a real LaneExecutor; records what it sends."""
 
-    def __init__(self, monkeypatch, vehicle=None, *, link_loss_land_s=30.0, geofence_cm=3000, **options):
+    def __init__(self, monkeypatch, vehicle=None, *, link_loss_land_s=30.0, geofence_cm=3000, link_loss_hold_s=0.0,
+                 **options):
         self.vehicle = vehicle or SimVehicle(ARDUPILOT, time_scale=20.0)
         install(monkeypatch, self.vehicle)
         self.drone = MavlinkFleetDrone("drone-1", MavsdkAutopilotLink("tcpout://127.0.0.1:1"),
                                        MavlinkFleetOptions(frame_heading_deg=0.0, **options))
-        self.envelope = SafetyEnvelope.for_field(geofence_cm=geofence_cm, link_loss_land_s=link_loss_land_s)
-        self.drone.bind_slot_source(lambda: self.envelope.alt_slot_cm)
+        self.envelope = SafetyEnvelope.for_field(geofence_cm=geofence_cm, link_loss_land_s=link_loss_land_s,
+                                                 link_loss_hold_s=link_loss_hold_s)
+        self.drone.bind_envelope(self.envelope)
         self.sent: list[dict] = []
         self.log = QuietLogger()
         self.executor = LaneExecutor(self.drone, self.envelope, "drone-1", send=self._send, logger=self.log,
@@ -337,6 +339,7 @@ def test_measured_geofence_breach_returns_to_launch(make_edge):
 
 def test_slots_above_the_field_ceiling_are_refused(make_edge):
     edge = make_edge()
+    assert edge.ready()
     edge.handle({"type": "assign_lanes", "drone_id": "drone-1", "alt_cm": 2800, "lanes": LANES})
     nack = edge.of("nack", "assign_lanes")
     assert nack and nack[0]["reason"] == "altitude"
@@ -442,7 +445,7 @@ def test_mavlink_edge_end_to_end_over_the_ground_transport(monkeypatch):
                                  on_message=detections.append)
     ground.start()
     stop = threading.Event()
-    args = parse(["--drone", "mavlink", "--source", "camera", "--mavlink-address", "tcpout://127.0.0.1:1",
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "camera", "--mavlink-address", "tcpout://127.0.0.1:1",
                   "--drone-id", "drone-1", "--frame-heading-deg", "0", "--ws-url", f"ws://127.0.0.1:{ground.port}"])
     envelope = _startup_envelope(args, environ={})
     edge = threading.Thread(target=edge_device._run_flight_edge,
@@ -470,3 +473,134 @@ def test_mavlink_edge_end_to_end_over_the_ground_transport(monkeypatch):
         edge.join(20.0)
         ground.stop()
     assert not edge.is_alive()
+
+
+# ---------------------------------------------------------------------------
+# Review round: safety fixes
+# ---------------------------------------------------------------------------
+
+
+def test_mavlink_needs_a_frame_heading(capsys):
+    with pytest.raises(SystemExit):
+        parse(["--drone", "mavlink"])
+    assert "needs --frame-heading-deg" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("address", ["-p", "--help", "udp://:14540", "http://x", "tcpout://", "udpin"])
+def test_mavlink_address_is_validated(address, capsys):
+    with pytest.raises(SystemExit):
+        parse(["--drone", "mavlink", "--frame-heading-deg", "0", f"--mavlink-address={address}"])
+    assert "MAVLink address must look like" in capsys.readouterr().err
+
+
+def test_mavlink_sysid_reaches_the_drone():
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--mavlink-sysid", "7"])
+    assert edge_device._build_drone(args, StructuredLogger(component="test")).options.sysid == 7
+    with pytest.raises(SystemExit):
+        parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--mavlink-sysid", "300"])
+
+
+def test_video_url_from_the_environment(monkeypatch):
+    monkeypatch.setenv("FLIGHTRISK_VIDEO_URL", "rtsp://user:secret@cam/1")
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "url"])
+    assert edge_device._video_url(args) == "rtsp://user:secret@cam/1"
+
+
+def test_field_envelope_holds_ten_seconds_by_default():
+    envelope = _startup_envelope(parse(["--drone", "mavlink", "--frame-heading-deg", "0"]), environ={})
+    assert envelope.link_loss_hold_s == 10.0
+    envelope = _startup_envelope(parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--link-loss-hold-s", "4"]),
+                                 environ={})
+    assert envelope.link_loss_hold_s == 4.0
+    assert _startup_envelope(parse(["--source", "fake"]), environ={}).link_loss_hold_s is None  # Tello unchanged
+
+
+def test_camera_failures_are_logged_once_and_reported():
+    log = QuietLogger()
+    states = []
+    frame = np.zeros((4, 4, 3), np.uint8)
+    script = [[(False, None)], [(False, None)], [(True, frame)]]
+
+    def _open():
+        return _FlakyCapture(script.pop(0) if script else [])
+
+    source = ResilientCaptureSource(_open, threading.Event(), min_interval_s=0.0, retry_s=0.0, log=log,
+                                    on_status=states.append)
+    assert next(source) is frame
+    assert log.names().count("edge_camera_failed") == 1  # rate limited
+    assert "edge_camera_recovered" in log.names()
+    assert states == [False, True] and source.ok is True
+
+
+def test_camera_status_goes_into_telemetry():
+    runner = types.SimpleNamespace(detector_ok=True, camera_ok=False)
+    sent = []
+    edge_device._with_profile_status(sent.append, runner)({"type": fp.TELEMETRY, "drone_id": "d"})
+    assert sent[-1]["camera_ok"] is False
+    runner = types.SimpleNamespace(detector_ok=True)
+    edge_device._with_profile_status(sent.append, runner)({"type": fp.TELEMETRY, "drone_id": "d"})
+    assert "camera_ok" not in sent[-1]  # Tello edges send exactly what they sent before
+
+
+def test_link_loss_holds_then_returns(make_edge):
+    """A silent ground first holds the drone in place (default 10 s for MAVLink), then returns it."""
+    edge = make_edge(link_loss_land_s=0.5, link_loss_hold_s=1.5, speed_mps=1.0, geofence_cm=5000)
+    assert edge.ready()
+    edge.vehicle.time_scale = 5.0
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 4000}])
+    # The ground goes silent from here (no more messages are handled).
+    assert wait_for(lambda: "edge_link_lost_holding" in edge.log.names())
+    held_at = time.monotonic()
+    assert ("return_to_launch",) not in edge.vehicle.commands
+    assert wait_for(lambda: ("return_to_launch",) in edge.vehicle.commands)
+    assert time.monotonic() - held_at >= 1.0  # it held for the delay first
+    assert edge.vehicle.north < 40.0  # and never flew the rest of the lane
+
+
+def test_link_hold_resumes_the_plan_when_the_ground_returns(make_edge):
+    edge = make_edge(link_loss_land_s=0.5, link_loss_hold_s=30.0, speed_mps=1.0)
+    assert edge.ready()
+    edge.vehicle.time_scale = 5.0
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 2000}])
+    assert wait_for(lambda: "edge_link_hold_stopped" in edge.log.names())
+    stopped_at = edge.executor.lane_index
+
+    def ground_back_and_done():
+        edge.handle({"type": "heartbeat", "seq": 1})  # the ground is back and keeps talking
+        return edge.executor.lane_index == 1 and not edge.executor.is_busy
+
+    assert wait_for(ground_back_and_done)
+    assert "edge_link_restored" in edge.log.names()
+    assert stopped_at == 0 and edge.vehicle.north == pytest.approx(20.0, abs=1.0)
+    assert ("return_to_launch",) not in edge.vehicle.commands
+
+
+def test_slot_below_the_return_altitude_is_refused_in_flight(make_edge):
+    edge = make_edge()  # the autopilot returns at 15 m (RTL_ALT 1500)
+    assert edge.ready()
+    edge.handle({"type": "takeoff"})
+    assert wait_for(lambda: edge.drone.state.is_flying and not edge.executor.is_busy)
+    edge.handle({"type": "assign_lanes", "drone_id": "drone-1", "alt_cm": 1100, "lanes": LANES})
+    nack = edge.of("nack", "assign_lanes")
+    assert nack and nack[-1]["reason"] == "altitude"
+    assert edge.envelope.alt_slot_cm == 1500
+
+
+def test_pilot_takeover_after_land_all_is_never_fought(make_edge):
+    """B1(a): LAND ALL, then the safety pilot flips to LOITER; the monitor's retries must not send LAND again."""
+    edge = make_edge()
+    assert edge.ready()
+    start_lanes(edge)
+    assert wait_for(lambda: edge.vehicle.alt > 10, timeout=20)
+    edge.vehicle.time_scale = 0.2  # slow descent
+    edge.handle({"type": "emergency_land_all"})
+    assert wait_for(lambda: edge.drone.state.flight_mode == "LAND")
+    edge.vehicle.set_pilot_mode("HOLD")  # ArduCopter LOITER
+    assert wait_for(lambda: edge.drone.external_control is not None)
+    sent = edge.vehicle.commands.count(("land",))
+    time.sleep(5.0)  # two monitor retries
+    assert edge.vehicle.commands.count(("land",)) == sent
+    assert edge.drone.state.flight_mode == "HOLD"
+    # A new operator command is sent once.
+    edge.handle({"type": "emergency_land_all"})
+    assert edge.vehicle.commands.count(("land",)) == sent + 1

@@ -315,6 +315,12 @@ class LanePlanMixin:
                 return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
             except ValueError as exc:
                 return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
+            # A controller that knows more limits for its slot (an autopilot's
+            # own return altitude) is asked too, on the ground and in the air.
+            check_slot = getattr(self.drone, "check_slot", None)
+            slot_problem = check_slot(alt_cm) if callable(check_slot) else None
+            if slot_problem:
+                return self._refuse_lanes(msg, "altitude", lanes_received, error=str(slot_problem))
         battery = self._read_battery()
         if not is_finite_number(battery):
             return self._refuse_lanes(msg, "battery", lanes_received, battery=battery)

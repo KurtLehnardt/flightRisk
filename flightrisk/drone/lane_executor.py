@@ -284,6 +284,13 @@ class LaneExecutor(
         # handler calls ``land_now`` on the main thread, which may be inside
         # ``land_now`` itself (holding the gate) when a second Ctrl+C lands.
         self._land_gate = threading.RLock()
+        # Link-loss hold (``SafetyEnvelope.link_loss_hold_s``): True while the
+        # ground is silent and the drone holds before the link-loss landing;
+        # ``_link_parked`` when that hold stopped a running sequence.
+        self._link_holding = False
+        self._link_parked = False
+        # Set by the monitor while it retries a landing (see land_now's *retry*).
+        self._retrying = threading.local()
         self._land_requests = 0
         self._last_land_attempt_s = 0.0
         # True while some thread is inside drone.land(). A second land
@@ -692,7 +699,7 @@ class LaneExecutor(
             self._abort.set()
             self._log.warning("edge_fail_safe_idle", drone_id=self.drone_id, reason=reason)
 
-    def land_now(self, reason: str, *, only_if: Callable[[], bool] | None = None) -> bool:
+    def land_now(self, reason: str, *, only_if: Callable[[], bool] | None = None, retry: bool = False) -> bool:
         """Land immediately from the calling thread. Returns False if *only_if* stopped it.
 
         Announces the landing and sets the abort flag before it waits for
@@ -714,6 +721,11 @@ class LaneExecutor(
         decided). Such a landing is not announced early. A landing for
         battery, link loss, the geofence, an error or a ground or operator
         command never passes *only_if*: a hold never stops it.
+
+        *retry* marks the monitor's repeat of a landing that has not taken
+        effect yet. It changes nothing for the Tello; a controller with
+        ``land_for_reason`` gets it, so it never re-sends a landing over a
+        pilot or autopilot that has taken control since.
         """
         announced = only_if is None
         counted = False
@@ -762,7 +774,8 @@ class LaneExecutor(
                 return True
             self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
             try:
-                result = command_result(self._drone_land(reason), "land")
+                retrying = retry or bool(getattr(self._retrying, "active", False))
+                result = command_result(self._drone_land(reason, retrying), "land")
                 if not result.ok:
                     # A land that was not executed is a failed land: the monitor
                     # retries it while the drone still reports flying.
@@ -780,7 +793,7 @@ class LaneExecutor(
                 with self._lock:
                     self._land_inflight = False
 
-    def _drone_land(self, reason: str) -> Any:
+    def _drone_land(self, reason: str, retry: bool = False) -> Any:
         """Call the controller's landing for *reason*.
 
         A controller with ``land_for_reason`` (an autopilot backend, see
@@ -790,6 +803,8 @@ class LaneExecutor(
         """
         land_for = getattr(self.drone, "land_for_reason", None)
         if callable(land_for):
+            if retry:
+                return land_for(reason, retry=True)
             return land_for(reason)
         return self.drone.land()
 

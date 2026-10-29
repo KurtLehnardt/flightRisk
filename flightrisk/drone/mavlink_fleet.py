@@ -45,23 +45,30 @@ Watchdogs
 
 External control
 ----------------
-While the drone flies, a flight mode the edge did not put it in (an RC pilot
-flipped the mode switch, or a ground control station changed it), or a
-landing or return the edge did not ask for (the autopilot's own failsafe),
-*latches external control* for the rest of the flight. From then on the
-drone sends no move or takeoff, and the edge's automatic landings (link
-loss, battery, geofence, errors) send nothing either, so it never fights
-the pilot or the autopilot's failsafe. An explicit operator landing (LAND
-ALL, a ground ``land``, the local land key, Ctrl+C) is still sent.
+While the drone flies, any flight-mode change the edge did not make
+*latches external control* for the rest of the flight (until it has landed
+and disarmed): a mode outside the edge's own (an RC pilot flipped the mode
+switch, a ground control station changed it), a landing or return the edge
+did not ask for (the autopilot's own failsafe), and, once the autopilot has
+entered a landing or return the edge asked for, any other mode, including
+the other landing mode (a critical-battery LAND during the edge's return,
+or a return during the edge's landing). From then on the drone sends no
+move or takeoff, none of the edge's automatic landings and none of the
+monitor's landing retries, so it never fights the pilot or the autopilot. A
+new operator landing command (LAND ALL, a ground ``land``, the local land
+key, Ctrl+C) sends one LAND, once per command. PX4 limitation: the edge uses
+PX4's HOLD itself, so a pilot's HOLD switch is not told apart.
 
 Landing and failsafe mapping
 ----------------------------
 ``land_for_reason`` maps the executor's landing reasons: ``link_loss``,
 ``low_battery`` and ``geofence_breach`` use ``failsafe_action`` (``rtl``
 by default: the autopilot's return to launch; ``land`` lands in place); every
-other reason lands in place. A landing or return already under way is not
-sent again, so the executor's land retries never turn a return into a
-landing. Landing on the ground is a no-op that succeeds.
+other reason lands in place. A return the autopilot refuses, or has not
+entered within ``rtl_accept_s``, is replaced by a LAND, and later failsafe
+landings of that flight land in place. The monitor's retries re-send the
+edge's mode only while the autopilot has not entered it. Landing on the
+ground is a no-op that succeeds.
 
 Preflight
 ---------
@@ -70,9 +77,11 @@ it is on the ground and any of these fail: fresh telemetry, a known
 autopilot (PX4 or ArduPilot), a 3D GPS fix with enough satellites, the
 autopilot's own global-position, home-position and arming checks, a battery
 reading, and the required failsafes read from parameters
-(``flightrisk.drone.autopilot.FAILSAFE_RULES``). With ``failsafe_action``
-``rtl``, the return altitude must also be at or below this drone's altitude
-slot, so a return never climbs above its slot (or another drone's).
+(``flightrisk.drone.autopilot.failsafe_problems``): only actions that land
+or return, a horizontal fence containing the edge's geofence, an altitude
+fence above the ceiling, a battery check at arming, the system id, and a
+return altitude at or below this drone's slot, whatever ``failsafe_action``
+(the autopilot's own RC-loss and battery failsafes return by themselves).
 Parameters are read in the background after ``connect()`` and every
 ``param_refresh_s`` while on the ground; until the first read completes the
 drone is not ready. The lane executor refuses a takeoff while the link is
@@ -94,7 +103,10 @@ from typing import Any
 import numpy as np
 
 from flightrisk.drone.autopilot import (
+    ARDUPILOT,
     DEFAULT_MIN_SATELLITES,
+    DEFAULT_SYSID,
+    FAILSAFE_PARAMS,
     AutopilotLink,
     AutopilotState,
     autonomous_modes,
@@ -158,7 +170,9 @@ _HORIZONTAL = {"forward": (0.0, 1.0), "back": (0.0, -1.0), "right": (1.0, 0.0), 
 _POLL_S = 0.1
 _TAKEOFF_RETRY_S = 2.0
 _HEADING_TOLERANCE_DEG = 10.0
-_DETAIL_MAX = 200
+_DETAIL_MAX = 600
+#: Takeoff height range (metres): above ground effect, below any sensible slot.
+_TAKEOFF_ALT_RANGE_M = (2.0, 20.0)
 
 
 @dataclass(frozen=True)
@@ -194,18 +208,26 @@ class MavlinkFleetOptions:
     #: How far outside the geofence the measured position may be before the
     #: edge lands for a breach (GPS noise allowance), in centimetres.
     fence_breach_margin_cm: float = 300.0
+    #: The autopilot's MAVLink system id; the preflight refuses another one
+    #: (None skips the check). Every factory autopilot is 1.
+    sysid: int | None = DEFAULT_SYSID
+    #: A return to launch the autopilot has not entered within this many
+    #: seconds (refused, or no position for it) is replaced by a landing.
+    rtl_accept_s: float = 5.0
 
     def __post_init__(self) -> None:
         if self.failsafe_action not in FAILSAFE_ACTIONS:
             raise ValueError(f"failsafe_action must be one of {FAILSAFE_ACTIONS}, got {self.failsafe_action!r}")
         for name in ("takeoff_alt_m", "speed_mps", "stale_after_s", "takeoff_timeout_s", "arrival_radius_m",
-                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s"):
+                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s", "rtl_accept_s"):
             value = getattr(self, name)
             if not (isinstance(value, (int, float)) and math.isfinite(value) and value > 0):
                 raise ValueError(f"{name} must be a positive number, got {value!r}")
-        if not FIELD_LIMITS.min_alt_slot_cm <= self.takeoff_alt_m * 100 <= FIELD_LIMITS.max_alt_slot_cm:
-            raise ValueError(f"takeoff_alt_m must be within {FIELD_LIMITS.min_alt_slot_cm / 100:g}-"
-                             f"{FIELD_LIMITS.max_alt_slot_cm / 100:g} m, got {self.takeoff_alt_m!r}")
+        lo, hi = _TAKEOFF_ALT_RANGE_M
+        if not lo <= self.takeoff_alt_m <= hi:
+            raise ValueError(f"takeoff_alt_m must be within {lo:g}-{hi:g} m, got {self.takeoff_alt_m!r}")
+        if self.sysid is not None and not (isinstance(self.sysid, int) and 1 <= self.sysid <= 255):
+            raise ValueError(f"sysid must be 1 to 255 or None, got {self.sysid!r}")
         if self.speed_mps > 15:
             raise ValueError(f"speed_mps must be at most 15, got {self.speed_mps!r}")
         if self.frame_heading_deg is not None and not math.isfinite(self.frame_heading_deg):
@@ -234,10 +256,11 @@ class _Target:
 
 @dataclass
 class _ParamCheck:
-    problems: list[str] = field(default_factory=lambda: ["failsafe parameters not checked yet"])
+    """The failsafe parameters as last read; the checks run on them against the live envelope."""
+
+    values: dict[str, float | None] = field(default_factory=dict)
+    autopilot: str | None = None
     checked_at: float | None = None
-    #: The return-to-launch altitude read (cm), or None when unreadable.
-    rtl_cm: float | None = None
 
 
 def _clean(text: str) -> str:
@@ -280,12 +303,21 @@ class MavlinkFleetDrone:
         self._interrupt = threading.Event()
         self._external: str | None = None
         # The landing mode the edge asked for this flight (LAND or
-        # RETURN_TO_LAUNCH), or None.
+        # RETURN_TO_LAUNCH), or None; when it asked, and whether the
+        # autopilot has reported that mode since.
         self._requested_landing: str | None = None
+        self._landing_requested_at = 0.0
+        self._landing_accepted = False
+        # A return the autopilot refused (or never entered) this flight:
+        # every later failsafe landing lands in place.
+        self._rtl_failed = False
+        # Whether the autopilot took the requested cruise speed (None: not tried).
+        self._speed_set: bool | None = None
         self._params = _ParamCheck()
         self._param_stop = threading.Event()
         self._param_thread: threading.Thread | None = None
         self._slot_cm: Callable[[], float | None] | None = None
+        self._envelope: Any = None
         self._connected = False
 
     # ------------------------------------------------------------------
@@ -295,6 +327,23 @@ class MavlinkFleetDrone:
     def bind_slot_source(self, slot_cm: Callable[[], float | None]) -> None:
         """Give the drone its current altitude slot (for the return-altitude check)."""
         self._slot_cm = slot_cm
+
+    def bind_envelope(self, envelope: Any) -> None:
+        """Check the autopilot's fence, altitude fence and return altitude against this live envelope.
+
+        The edge binds its ``SafetyEnvelope``: its geofence, ceiling and
+        altitude slot (which a plan can change) are read at every check.
+        """
+        self._envelope = envelope
+        self._slot_cm = lambda: envelope.alt_slot_cm
+
+    def _limits(self) -> dict[str, float | None]:
+        env = self._envelope
+        return {
+            "geofence_cm": getattr(env, "geofence_cm", None) if env is not None else None,
+            "ceiling_cm": getattr(env, "ceiling_cm", None) if env is not None else None,
+            "slot_cm": self._slot_cm() if self._slot_cm is not None else None,
+        }
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -343,7 +392,15 @@ class MavlinkFleetDrone:
         return bool(state.armed) and isinstance(state.rel_alt_m, (int, float)) and state.rel_alt_m > 1.0
 
     def _note_mode(self, state: AutopilotState) -> None:
-        """Latch external control when the flight mode is not one the edge set (see the module docstring)."""
+        """Latch external control on any flight-mode change the edge did not make (see the module docstring).
+
+        While no landing is requested, only the edge's own flight modes are
+        expected. Once it requested a landing or a return, that mode is
+        expected (the previous one is tolerated until the autopilot enters
+        it); after the autopilot entered it, any other mode, including the
+        other landing mode, is someone else: a pilot, a ground control
+        station or the autopilot's own failsafe.
+        """
         mode = state.flight_mode
         if not self._flying(state):
             if state.armed is False:
@@ -355,15 +412,26 @@ class MavlinkFleetDrone:
             return
         if mode is None:
             return
+        autonomous = autonomous_modes(state.autopilot)
         with self._lock:
             if self._external is not None:
                 return
-            if mode not in autonomous_modes(state.autopilot):
-                reason = f"flight mode {mode} set outside FlightRisk (RC pilot or ground control station)"
-            elif mode in _LANDING_MODES and self._requested_landing is None:
-                reason = f"autopilot switched to {mode} by itself (its own failsafe)"
-            else:
+            requested = self._requested_landing
+            if requested is None:
+                if mode not in autonomous:
+                    reason = f"flight mode {mode} set outside FlightRisk (RC pilot or ground control station)"
+                elif mode in _LANDING_MODES:
+                    reason = f"autopilot switched to {mode} by itself (its own failsafe)"
+                else:
+                    return
+            elif mode == requested:
+                self._landing_accepted = True
                 return
+            elif self._landing_accepted or mode not in autonomous or mode in _LANDING_MODES:
+                reason = f"flight mode changed from {requested} to {mode} outside FlightRisk " \
+                         "(RC pilot, ground control station or the autopilot's own failsafe)"
+            else:
+                return  # still in the previous mode, waiting for the autopilot to switch
             self._external = reason
         self._interrupt.set()
         logger.warning("[%s] external control latched: %s", self.name, reason)
@@ -396,17 +464,23 @@ class MavlinkFleetDrone:
             flight_mode=st.flight_mode,
         )
 
+    def _fresh(self, st: AutopilotState, stream: str) -> bool:
+        """The link and *stream* are fresh (a stream that ended keeps its last, stale values)."""
+        if not st.stream_age_s:
+            return st.fresh(self.options.stale_after_s)
+        return st.stream_fresh(stream, self.options.stale_after_s)
+
     def read_battery(self) -> int | None:
         """Battery percentage, or None when unknown or stale (an unknown battery never permits a takeoff)."""
         st = self._autopilot_state()
-        if not st.fresh(self.options.stale_after_s) or not _number(st.battery_pct):
+        if not self._fresh(st, "battery") or not _number(st.battery_pct):
             return None
         return round(st.battery_pct)
 
     def read_height_cm(self) -> int | None:
         """Height above home in centimetres, or None when unknown or stale."""
         st = self._autopilot_state()
-        if not st.fresh(self.options.stale_after_s) or not _number(st.rel_alt_m):
+        if not self._fresh(st, "position") or not _number(st.rel_alt_m):
             return None
         return round(st.rel_alt_m * 100)
 
@@ -415,7 +489,7 @@ class MavlinkFleetDrone:
         st = self._autopilot_state()
         with self._lock:
             frame, heading = self._frame, self._target.heading_deg
-        if frame is None or not st.has_position or not st.fresh(self.options.stale_after_s):
+        if frame is None or not st.has_position or not self._fresh(st, "position"):
             return None
         north, east = _offset_m(frame.lat_deg, frame.lon_deg, st.lat_deg, st.lon_deg)
         x_m, y_m = _to_plan(north, east, frame.heading_deg)
@@ -426,9 +500,42 @@ class MavlinkFleetDrone:
     def geo_position(self) -> tuple[float, float] | None:
         """Latitude and longitude in degrees, or None."""
         st = self._autopilot_state()
-        if not st.has_position or not st.fresh(self.options.stale_after_s):
+        if not st.has_position or not self._fresh(st, "position"):
             return None
         return float(st.lat_deg), float(st.lon_deg)
+
+    def telemetry_fields(self) -> dict[str, Any]:
+        """Optional telemetry fields the executor adds (every ground accepts extra fields)."""
+        st = self.link.state()
+        return {
+            "autopilot": st.autopilot,
+            "flight_mode": st.flight_mode,
+            "speed_set": self._speed_set,
+            "external_control": self._external_latched() is not None,
+        }
+
+    def check_slot(self, alt_cm: float) -> str | None:
+        """Why the altitude slot *alt_cm* is not allowed for this drone, or None.
+
+        The autopilot's own return altitude must not be above the slot: its
+        RC-loss and battery failsafes return by themselves, and a return
+        from a lower slot would climb through the other drones' slots. The
+        lane executor asks this before it accepts a plan's slot, in the air
+        too.
+        """
+        if not self.options.require_failsafes:
+            return None
+        with self._lock:
+            check = self._params
+        if check.checked_at is None:
+            return "the autopilot's return altitude has not been read yet"
+        rtl_cm = rtl_altitude_cm(check.autopilot, check.values.get)
+        if rtl_cm is None:
+            return "the autopilot's return altitude cannot be read"
+        if rtl_cm > alt_cm + 1e-6:
+            return (f"slot {alt_cm / 100:g} m is below the autopilot's return altitude {rtl_cm / 100:g} m; "
+                    "an autopilot return would climb through other slots")
+        return None
 
     def snapshot(self) -> TelemetrySnapshot:
         st = self._autopilot_state()
@@ -457,17 +564,21 @@ class MavlinkFleetDrone:
     def preflight_problems(self, state: AutopilotState | None = None) -> list[str]:
         """Why a takeoff would be refused now (empty when ready). See the module docstring."""
         st = self._autopilot_state() if state is None else state
-        with self._lock:
-            check = self._params
-        params = list(check.problems) if self.options.require_failsafes else []
-        if self.options.require_failsafes and check.checked_at is not None:
-            params.extend(self._rtl_problems(st, check.rtl_cm))
+        params = self._param_problems() if self.options.require_failsafes else []
         return preflight_problems(
             st,
             stale_after_s=self.options.stale_after_s,
             min_satellites=self.options.min_satellites,
             param_problems=params,
         )
+
+    def _param_problems(self) -> list[str]:
+        """The failsafe checks on the parameters as last read, against the live envelope."""
+        with self._lock:
+            check = self._params
+        if check.checked_at is None:
+            return ["failsafe parameters not checked yet"]
+        return failsafe_problems(check.autopilot, check.values.get, sysid=self.options.sysid, **self._limits())
 
     def link_status(self) -> DroneLinkStatus:
         """Whether the edge may command this drone now (read-only; sends nothing)."""
@@ -497,31 +608,19 @@ class MavlinkFleetDrone:
             self._param_stop.wait(self.options.param_refresh_s)
 
     def refresh_params(self) -> list[str]:
-        """Read the failsafe parameters now; returns (and stores) the problems found."""
-        st = self.link.state()
-        read = self.link.get_param
-        problems = failsafe_problems(st.autopilot, read)
-        rtl_cm = rtl_altitude_cm(st.autopilot, read) if self.options.failsafe_action == "rtl" else None
+        """Read the failsafe parameters now; returns the problems found (stored for later checks)."""
+        refresh = getattr(self.link, "refresh_autopilot", None)
+        if callable(refresh) and self.link.state().autopilot is None:
+            refresh()  # the type could not be probed at connect; try again
+        autopilot = self.link.state().autopilot
+        names = FAILSAFE_PARAMS.get(autopilot or "", ())
+        values = {name: self.link.get_param(name) for name in names}
         with self._lock:
-            self._params = _ParamCheck(problems=problems, checked_at=self._clock(), rtl_cm=rtl_cm)
-        found = problems + self._rtl_problems(st, rtl_cm)
+            self._params = _ParamCheck(values=values, autopilot=autopilot, checked_at=self._clock())
+        found = self._param_problems()
         if found:
             logger.warning("[%s] autopilot failsafes not ready: %s", self.name, "; ".join(found))
         return found
-
-    def _rtl_problems(self, st: AutopilotState, rtl_cm: float | None) -> list[str]:
-        """With ``failsafe_action`` rtl: the return altitude must be readable and at or below the live slot."""
-        if self.options.failsafe_action != "rtl" or st.autopilot is None:
-            return []
-        if rtl_cm is None:
-            return ["cannot read the return-to-launch altitude"]
-        slot = self._slot_cm() if self._slot_cm is not None else None
-        if slot is not None and rtl_cm > slot + 1e-6:
-            return [(
-                f"return-to-launch altitude {rtl_cm / 100:g} m is above this drone's slot {slot / 100:g} m; "
-                "a return would climb (set it at or below the slot)"
-            )]
-        return []
 
     # ------------------------------------------------------------------
     # Flight commands
@@ -556,9 +655,12 @@ class MavlinkFleetDrone:
             self._target = _Target(alt_cm=alt_m * 100.0)
             self._external = None
             self._requested_landing = None
+            self._landing_accepted = False
+            self._rtl_failed = False
             self._interrupt.clear()
         logger.info("[%s] takeoff to %.1f m (frame heading %.0f deg)", self.name, alt_m, heading)
         speed_set = self._try_set_speed(quiet=True)
+        self._speed_set = speed_set
         deadline = self._clock() + self.options.takeoff_timeout_s
         refused = self._arm_and_take_off(alt_m, abort, deadline)
         if refused is not None:
@@ -570,7 +672,7 @@ class MavlinkFleetDrone:
             if self._flying(st) and _number(st.rel_alt_m) and st.rel_alt_m >= alt_m - self.options.arrival_alt_m:
                 if not speed_set:
                     # ArduCopter SITL refuses the speed change on the ground.
-                    self._try_set_speed(quiet=False)
+                    self._speed_set = self._try_set_speed(quiet=False)
                 return CommandResult("takeoff")
             if self._clock() >= deadline:
                 raise TimeoutError(f"takeoff did not reach {alt_m:g} m within {self.options.takeoff_timeout_s:g} s")
@@ -648,6 +750,17 @@ class MavlinkFleetDrone:
         with self._lock:
             target = _Target(**vars(self._target))
         target.heading_deg = (target.heading_deg + degrees) % 360.0
+        if self.link.state().autopilot == ARDUPILOT:
+            # ArduCopter ignores the yaw of a reposition (MAV_CMD_DO_REPOSITION)
+            # and, in GUIDED, turns to face its direction of travel
+            # (WP_YAW_BEHAVIOR). The rotation therefore turns the plan frame's
+            # "forward" for the next moves without waiting for a heading the
+            # autopilot will never hold.
+            with self._lock:
+                if self._interrupt.is_set():
+                    return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, "interrupted by a landing")
+                self._target = target
+            return CommandResult("rotate", CommandOutcome.OK, "plan heading turned; ArduCopter faces its travel")
         timeout = abs(degrees) / self.options.yaw_rate_dps * 2 + self.options.move_timeout_margin_s
         return self._fly_to(target, "rotate", timeout, 0.0, check_heading=True)
 
@@ -694,8 +807,11 @@ class MavlinkFleetDrone:
         assert frame is not None
         north, east = _to_ned(target.x_cm / 100.0, target.y_cm / 100.0, frame.heading_deg)
         lat, lon = offset_latlon(frame.lat_deg, frame.lon_deg, north, east)
-        self.link.goto(lat, lon, frame.home_abs_alt_m + target.alt_cm / 100.0,
-                       (frame.heading_deg + target.heading_deg) % 360.0)
+        # Both autopilots reset home at arming, so the altitude reference is
+        # taken now: the AMSL of the height the autopilot reports as 0.
+        st = self.link.state()
+        base = st.abs_alt_m - st.rel_alt_m if _number(st.abs_alt_m) and _number(st.rel_alt_m) else frame.home_abs_alt_m
+        self.link.goto(lat, lon, base + target.alt_cm / 100.0, (frame.heading_deg + target.heading_deg) % 360.0)
 
     def _fly_to(
         self, target: _Target, command: str, timeout_s: float, distance_m: float, check_heading: bool = False
@@ -720,7 +836,7 @@ class MavlinkFleetDrone:
 
     def _arrived(self, target: _Target, radius_m: float, check_heading: bool) -> bool:
         st = self._autopilot_state()
-        if not st.fresh(self.options.stale_after_s) or not st.has_position:
+        if not self._fresh(st, "position") or not st.has_position:
             return False
         with self._lock:
             frame = self._frame
@@ -748,11 +864,24 @@ class MavlinkFleetDrone:
         """Land in place (an operator's land). Never dropped; see ``land_for_reason``."""
         return self.land_for_reason("land")
 
-    def land_for_reason(self, reason: str) -> CommandResult:
+    def land_for_reason(self, reason: str, *, retry: bool = False) -> CommandResult:
         """Land, or return to launch, for the executor's landing *reason*. Returns once the autopilot accepted it.
 
-        Raises when the autopilot is not connected or refuses the command,
-        so the executor retries. On the ground it succeeds without sending.
+        *retry* is True when the executor's monitor repeats a landing that
+        has not finished yet. Rules (conservative; see the module docstring):
+
+        * On the ground (disarmed) it succeeds without sending.
+        * Under external control a retry and every automatic reason send
+          nothing; a new operator command (LAND ALL, a ground land, the
+          local key, Ctrl+C) sends one LAND.
+        * A retry re-sends the edge's own mode only while the autopilot has
+          not entered it yet. A return the autopilot refused, or has not
+          entered within ``rtl_accept_s``, is replaced by a LAND.
+        * The failsafe reasons return (``failsafe_action`` ``rtl``) unless a
+          return already failed this flight; every other reason lands.
+
+        Raises when the autopilot is not connected or refuses a LAND, so the
+        executor retries.
         """
         st = self._autopilot_state()
         if not st.connected:
@@ -761,22 +890,55 @@ class MavlinkFleetDrone:
         self._interrupt.set()
         if not self._flying(st) and st.landed_state not in ("TAKING_OFF",) and not st.armed:
             return CommandResult("land")
-        external = self._external_latched()
-        if external is not None and reason in AUTOMATIC_LAND_REASONS:
-            logger.warning("[%s] %s landing not sent: %s", self.name, reason, external)
-            return CommandResult("land", CommandOutcome.OK, "external control; not sent")
-        mode = "RETURN_TO_LAUNCH" if (reason in FAILSAFE_REASONS and self.options.failsafe_action == "rtl") else "LAND"
+        now = self._clock()
         with self._lock:
-            already = self._requested_landing == mode and st.flight_mode == mode
+            external = self._external
+            requested, accepted = self._requested_landing, self._landing_accepted
+            waited = now - self._landing_requested_at
+            rtl_failed = self._rtl_failed
+        if external is not None:
+            if retry or reason in AUTOMATIC_LAND_REASONS:
+                logger.warning("[%s] %s landing not sent: %s", self.name, reason, external)
+                return CommandResult("land", CommandOutcome.OK, "external control; not sent")
+            logger.warning("[%s] operator %s under external control: sending LAND once", self.name, reason)
+            return self._send_landing("LAND", reason)
+        wanted = "RETURN_TO_LAUNCH" if (
+            reason in FAILSAFE_REASONS and self.options.failsafe_action == "rtl" and not rtl_failed
+        ) else "LAND"
+        if requested == "RETURN_TO_LAUNCH" and not accepted and waited >= self.options.rtl_accept_s:
+            logger.error("[%s] the autopilot did not enter RETURN_TO_LAUNCH within %.0f s; landing instead",
+                         self.name, self.options.rtl_accept_s)
+            with self._lock:
+                self._rtl_failed = True
+            return self._send_landing("LAND", reason)
+        if retry and requested is not None:
+            if accepted:
+                return CommandResult("land", CommandOutcome.OK, f"{requested} in progress")
+            if requested == "RETURN_TO_LAUNCH":
+                return CommandResult("land", CommandOutcome.OK, "waiting for the autopilot to enter RETURN_TO_LAUNCH")
+            return self._send_landing(requested, reason)  # never accepted: send it again
+        if requested == wanted and accepted and st.flight_mode == wanted:
+            return CommandResult("land", CommandOutcome.OK, f"{wanted} already in progress")
+        return self._send_landing(wanted, reason)
+
+    def _send_landing(self, mode: str, reason: str) -> CommandResult:
+        """Send LAND or RETURN_TO_LAUNCH and record it. A refused return falls back to LAND at once."""
+        with self._lock:
             self._requested_landing = mode
-        if already:
-            return CommandResult("land", CommandOutcome.OK, f"{mode} already in progress")
+            self._landing_requested_at = self._clock()
+            self._landing_accepted = False
         logger.warning("[%s] %s for %s", self.name, "return to launch" if mode != "LAND" else "land", reason)
         if mode == "LAND":
             self.link.land()
-        else:
+            return CommandResult("land", CommandOutcome.OK, "LAND")
+        try:
             self.link.return_to_launch()
-        return CommandResult("land", CommandOutcome.OK, mode)
+        except Exception as exc:  # noqa: BLE001 - a refused return must still bring the drone down
+            logger.error("[%s] return to launch refused (%r); landing instead", self.name, exc)
+            with self._lock:
+                self._rtl_failed = True
+            return self._send_landing("LAND", reason)
+        return CommandResult("land", CommandOutcome.OK, "RETURN_TO_LAUNCH")
 
 
 # ---------------------------------------------------------------------------

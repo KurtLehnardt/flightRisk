@@ -66,6 +66,7 @@ __all__ = [
     "DEFAULT_ALT_SLOT_CM",
     "DEFAULT_CEILING_CM",
     "DEFAULT_CEILING_MARGIN_CM",
+    "DEFAULT_FIELD_LINK_LOSS_HOLD_S",
     "DEFAULT_GEOFENCE_CM",
     "DEFAULT_LAND_BATTERY",
     "DEFAULT_LINK_LOSS_LAND_S",
@@ -105,6 +106,10 @@ DEFAULT_MIN_TAKEOFF_BATTERY = 30
 DEFAULT_LAND_BATTERY = 15
 DEFAULT_GEOFENCE_CM = 500
 DEFAULT_ALT_SLOT_CM = 100
+#: Outdoor drones hold their position this long after the ground link is
+#: lost before the link-loss failsafe (a ground-station crash or a radio
+#: blip must not send a whole fleet home at once).
+DEFAULT_FIELD_LINK_LOSS_HOLD_S = 10.0
 
 # The Tello SDK accepts relative moves between 20 cm and 500 cm. Shorter or
 # longer requests are clamped by the controller, which would make the
@@ -191,7 +196,9 @@ FIELD_LIMITS = EnvelopeLimits(
     name="field",
     min_move_cm=MIN_MOVE_CM,
     max_move_cm=5000,
-    min_alt_slot_cm=500,
+    # 10 m: a slot must clear people and most low obstacles; it is still
+    # below many trees, so slots must be chosen above the local obstacles.
+    min_alt_slot_cm=1000,
     max_alt_slot_cm=12000,
     min_ceiling_cm=1000,
     max_ceiling_cm=12000,
@@ -352,6 +359,7 @@ class SafetyEnvelope:
         ceiling_cm: float = DEFAULT_CEILING_CM,
         ceiling_margin_cm: float = DEFAULT_CEILING_MARGIN_CM,
         limits: EnvelopeLimits | None = None,
+        link_loss_hold_s: float | None = None,
     ):
         #: The ranges this envelope allows (``ROOM_LIMITS`` unless given).
         self.limits = ROOM_LIMITS if limits is None else limits
@@ -375,6 +383,13 @@ class SafetyEnvelope:
         self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
+        if link_loss_hold_s is not None and (not is_finite_number(link_loss_hold_s) or link_loss_hold_s < 0):
+            raise ValueError(f"link_loss_hold_s must be 0 or more, got {link_loss_hold_s!r}")
+        #: Seconds the drone holds its position after the ground link is lost
+        #: before the link-loss landing (None or 0: land at once, the Tello's
+        #: behaviour). The lane executor stops before its next move meanwhile
+        #: and resumes the plan if the link comes back.
+        self.link_loss_hold_s = float(link_loss_hold_s) if link_loss_hold_s else None
 
     @classmethod
     def from_env(
@@ -426,6 +441,7 @@ class SafetyEnvelope:
         link_loss_land_s: float = DEFAULT_LINK_LOSS_LAND_S,
         limits: EnvelopeLimits | None = None,
         clock: Callable[[], float] = time.monotonic,
+        link_loss_hold_s: float | None = DEFAULT_FIELD_LINK_LOSS_HOLD_S,
     ) -> "SafetyEnvelope":
         """An outdoor envelope (``FIELD_LIMITS`` unless given); every value not given is the profile default."""
         lim = FIELD_LIMITS if limits is None else limits
@@ -439,6 +455,7 @@ class SafetyEnvelope:
             ceiling_cm=lim.default_ceiling_cm if ceiling_cm is None else ceiling_cm,
             ceiling_margin_cm=lim.default_ceiling_margin_cm if ceiling_margin_cm is None else ceiling_margin_cm,
             limits=lim,
+            link_loss_hold_s=link_loss_hold_s,
         )
 
     # --- Altitude slot ---
@@ -612,6 +629,10 @@ class SafetyEnvelope:
     def link_age_s(self) -> float:
         """Seconds since the last ground message."""
         return self.link_watchdog.age_s()
+
+    def link_loss_due(self) -> bool:
+        """True once the ground has been silent for the threshold plus the hold delay (``link_loss_hold_s``)."""
+        return self.link_watchdog.age_s() >= self.link_watchdog.timeout_s + (self.link_loss_hold_s or 0.0)
 
     def link_lost(self) -> bool:
         """True once the ground has been silent for the link-loss threshold."""

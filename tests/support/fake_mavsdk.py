@@ -32,15 +32,17 @@ from typing import Any
 EARTH_RADIUS_M = 6_371_008.8
 
 ARDUPILOT_PARAMS = {
-    "FENCE_ENABLE": 1, "FENCE_ACTION": 1, "BATT_FS_LOW_ACT": 2, "BATT_LOW_VOLT": 10.5, "BATT_LOW_MAH": 0,
+    "FENCE_ENABLE": 1, "FENCE_TYPE": 3, "FENCE_ACTION": 1, "FENCE_RADIUS": 100.0, "FENCE_ALT_MAX": 40.0,
+    "BATT_FS_LOW_ACT": 2, "BATT_FS_CRT_ACT": 1, "BATT_LOW_VOLT": 10.5, "BATT_LOW_MAH": 0, "BATT_ARM_VOLT": 11.4,
     "FS_THR_ENABLE": 1, "RTL_ALT": 1500, "SYSID_THISMAV": 1,
 }
 PX4_PARAMS = {
-    "GF_ACTION": 2, "GF_MAX_HOR_DIST": 100.0, "GF_MAX_VER_DIST": 40.0, "COM_LOW_BAT_ACT": 3, "NAV_RCL_ACT": 2,
+    "GF_ACTION": 3, "GF_MAX_HOR_DIST": 100.0, "GF_MAX_VER_DIST": 40.0, "COM_LOW_BAT_ACT": 3, "NAV_RCL_ACT": 2,
     "NAV_DLL_ACT": 2, "RTL_RETURN_ALT": 15.0, "MAV_SYS_ID": 1,
 }
 #: Parameters stored as floats (get_param_int refuses them, as MAVSDK does).
-_FLOAT_PARAMS = {"BATT_LOW_VOLT", "GF_MAX_HOR_DIST", "GF_MAX_VER_DIST", "RTL_RETURN_ALT"}
+_FLOAT_PARAMS = {"BATT_LOW_VOLT", "BATT_ARM_VOLT", "FENCE_RADIUS", "FENCE_ALT_MAX", "GF_MAX_HOR_DIST",
+                 "GF_MAX_VER_DIST", "RTL_RETURN_ALT"}
 
 
 class FlightMode(Enum):
@@ -214,7 +216,9 @@ class SimVehicle:
                 raise SimActionError("COMMAND_DENIED: not flying")
             north, east = self.ned_of(lat, lon)
             self.goal = _Goal(north, east, abs_alt - self.home_alt)
-            self.goal_yaw = yaw if math.isfinite(yaw) else None
+            # ArduCopter ignores a reposition's yaw (it faces its travel in
+            # GUIDED); PX4 turns to it.
+            self.goal_yaw = yaw if (math.isfinite(yaw) and self.autopilot == "px4") else None
             self.mode = self._guided()
 
     def land(self) -> None:

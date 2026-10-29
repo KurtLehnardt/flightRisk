@@ -135,6 +135,13 @@ class FlightSequenceMixin:
         with self._lock:
             if self._abort.is_set() or not self._is_active():
                 return False
+            if self._link_holding:
+                # The ground link is lost and the drone holds position until
+                # the link-loss failsafe; the sequence stops before this move.
+                self._log.info("edge_link_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
+                self._link_parked = True
+                self._release_active()
+                return False
             if (self._held or self._manual is not None) and not allow_held:
                 self._log.info("edge_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
                 self._release_active()

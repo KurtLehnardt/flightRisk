@@ -101,31 +101,56 @@ def test_room_scale_matches_the_coordinator_defaults():
     assert ROOM_SCALE.coordinator_kwargs()["area_cm"] == (400, 400)
 
 
-def test_field_lane_spacing_comes_from_the_camera_footprint():
+def test_field_lanes_cover_the_whole_area():
+    """N1: lanes inset by half a swath, the count rounded up, so the zone is seen edge to edge."""
     scale = field_scale(2, area_m=(70, 30), alt_slots_m=(15, 20), overlap=0.2)
     swath = nadir_swath_m(PI_CAMERA_MODULE_3, 15.0)
     assert swath == pytest.approx(2 * 15 * math.tan(math.radians(33)))
-    assert scale.strip_cm == math.floor(swath * 0.8 * 100)
-    assert scale.area_cm == (7000, 3000)
+    assert scale.swath_cm == pytest.approx(swath * 100)
+    assert scale.strip_cm <= swath * 0.8 * 100  # at least the requested overlap
     assert scale.alt_slots_cm == (1500, 2000)
-    # Zone 32.5 m wide, 30 m deep: the fence must reach the far corner plus a margin.
-    assert scale.zone_width_cm(2) == 3250
-    assert scale.geofence_cm == pytest.approx(3750)
+    assert scale.coverage_fraction == pytest.approx(1.0, abs=0.001)  # centimetre rounding only
+    assert scale.coverage_note == "the lanes cover the whole area at the lowest slot"
     settings = scale.edge_settings(2)
-    assert settings[0] == {"alt_slot_m": 15.0, "geofence_m": 37.5, "zone_x_m": 0.0}
-    assert settings[1]["alt_slot_m"] == 20.0 and settings[1]["zone_x_m"] == 37.5
+    # Each drone takes off half a swath inside its 35 m zone.
+    assert settings[0]["zone_x_m"] == pytest.approx(swath / 2)
+    assert settings[1]["zone_x_m"] == pytest.approx(35 + swath / 2)
+    # The coordinator lays exactly the lanes that cover the zone, with the zones 35 m apart.
+    zone_c = scale.zone_width_cm(2)
+    assert zone_c // scale.strip_cm == 2
+    assert zone_c + scale.zone_gap_cm == 3500
+    # Lane span 35 - swath across, 30 m deep: the fence reaches the far corner plus 5 m.
+    assert scale.geofence_cm == pytest.approx(3500)
     # A wider lens at the same height spaces lanes further apart.
-    assert field_scale(1, camera=OPEN_QUAD_4K).strip_cm > field_scale(1).strip_cm
+    assert field_scale(1, camera=OPEN_QUAD_4K, area_m=(200, 60)).strip_cm > field_scale(1, area_m=(200, 60)).strip_cm
+
+
+def test_the_sitl_plan_that_left_holes_is_now_covered():
+    """The 24 m SITL zone used to be flown at x = 0 and 10.4 m with a 13 m swath: about 30% unseen."""
+    scale = field_scale(1, area_m=(24, 20), alt_slots_m=(10,))
+    assert scale.coverage_fraction == pytest.approx(1.0, abs=0.001)  # centimetre rounding only
+    assert scale.zone_width_cm(1) // scale.strip_cm == 3
+
+
+def test_gaps_between_zones_are_reported_not_refused():
+    scale = field_scale(2, area_m=(70, 30), alt_slots_m=(15, 20), zone_gap_m=10)
+    assert scale.coverage_fraction == pytest.approx(60 / 70, abs=0.01)
+    assert "not seen: 30.0-40.0 m" in scale.coverage_note
+
+
+def test_every_drone_needs_its_own_slot():
+    with pytest.raises(ValueError, match="3 drones need 3 altitude slots"):
+        field_scale(3, area_m=(150, 60), alt_slots_m=(15, 20))
 
 
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
         ({"alt_slots_m": (15, 18)}, "at least 5 m apart"),
-        ({"alt_slots_m": (2,)}, "outside 5-120 m"),
-        ({"alt_slots_m": (130,)}, "outside 5-120 m"),
+        ({"alt_slots_m": (8, 15)}, "outside 10-120 m"),
+        ({"alt_slots_m": (130, 15)}, "outside 10-120 m"),
         ({"area_m": (600, 100)}, "at most 500 m"),
-        ({"geofence_m": 10.0}, "smaller than a zone"),
+        ({"geofence_m": 10.0}, "smaller than a drone's lanes"),
         ({"overlap": 1.0}, "overlap"),
         ({"alt_slots_m": ()}, "at least one slot"),
     ],
@@ -152,7 +177,7 @@ class FieldEdge:
         self.envelope = SafetyEnvelope.for_field(alt_slot_cm=slot_cm, geofence_cm=geofence_cm)
         self.drone = MavlinkFleetDrone(drone_id, MavsdkAutopilotLink("tcpout://127.0.0.1:1"),
                                        MavlinkFleetOptions(frame_heading_deg=0.0))
-        self.drone.bind_slot_source(lambda: self.envelope.alt_slot_cm)
+        self.drone.bind_envelope(self.envelope)
         assert self.drone.connect()
         self.executor = LaneExecutor(self.drone, self.envelope, drone_id, send=self._reply, logger=QuietLogger())
         self.executor.start()
@@ -200,11 +225,15 @@ def test_two_mavlink_drones_fly_a_field_plan_end_to_end(monkeypatch):
             assert lanes > 0
             assert wait_for(lambda e=edge, n=lanes: e.executor.lane_index == n and not e.executor.is_busy, 60.0), (
                 edge.drone_id, edge.executor.lane_index, lanes)
-        # Each zone: forward 30 m, right one strip, back 30 m, from its own takeoff point.
-        for edge, slot_m in ((edges["drone-1"], 15.0), (edges["drone-2"], 20.0)):
+        # Each drone ends where its lanes end, relative to its own takeoff point.
+        vectors = {"forward": (0, 1), "back": (0, -1), "right": (1, 0), "left": (-1, 0)}
+        for zone, slot_m in zip(plan.zones, (15.0, 20.0), strict=True):
+            edge = edges[zone.drone_id]
+            end_x = sum(vectors[lane["direction"]][0] * lane["distance_cm"] for lane in zone.lanes) / 100
+            end_y = sum(vectors[lane["direction"]][1] * lane["distance_cm"] for lane in zone.lanes) / 100
             assert edge.vehicle.alt == pytest.approx(slot_m, abs=0.7), edge.drone_id
-            assert edge.vehicle.north == pytest.approx(0.0, abs=1.0), edge.drone_id
-            assert edge.vehicle.east == pytest.approx(scale.strip_cm / 100, abs=1.0), edge.drone_id
+            assert edge.vehicle.north == pytest.approx(end_y, abs=1.0), edge.drone_id
+            assert edge.vehicle.east == pytest.approx(end_x, abs=1.0), edge.drone_id
         status = coord.status()
         assert set(status) == {"drone-1", "drone-2"}
         coord.land_all()

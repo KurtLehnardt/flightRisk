@@ -80,11 +80,19 @@ class MonitorMixin:
                 )
             if unplanned:
                 self._log.error("edge_unplanned_landing", drone_id=self.drone_id, plan_id=self.plan_id)
+            if self._link_holding and not self.envelope.link_lost():
+                self._end_link_hold()
             if flying:
                 height = self._read_height()
                 if land_reason is not None:
                     if retry_due:
-                        self.land_now(land_reason)
+                        # Marked as a retry (thread-local, so a test double of
+                        # land_now keeps its one-argument signature).
+                        self._retrying.active = True
+                        try:
+                            self.land_now(land_reason)
+                        finally:
+                            self._retrying.active = False
                 elif self.envelope.above_ceiling(height):
                     # The measured height is above the ceiling itself: stop
                     # climbing (the landing aborts any sequence) and land.
@@ -107,6 +115,11 @@ class MonitorMixin:
                         geofence_cm=self.envelope.geofence_cm,
                     )
                     self.land_now("geofence_breach")
+                elif self.envelope.link_lost() and not self._link_loss_landing_due():
+                    # Outdoor drones first hold position (link_loss_hold_s):
+                    # the next move is not sent; the plan resumes if the
+                    # ground comes back.
+                    self._begin_link_hold()
                 elif self.envelope.link_lost():
                     self._log.error(
                         "edge_link_lost",
@@ -160,6 +173,43 @@ class MonitorMixin:
         self._flying_lanes = False
         self._hover_since = None
         return True
+
+    def _link_loss_landing_due(self) -> bool:
+        """True when a link loss must land now: no hold delay, or the delay is over."""
+        hold_s = getattr(self.envelope, "link_loss_hold_s", None)
+        return not hold_s or self.envelope.link_loss_due()
+
+    def _begin_link_hold(self) -> None:
+        with self._lock:
+            started, self._link_holding = not self._link_holding, True
+        if started:
+            self._log.warning(
+                "edge_link_lost_holding",
+                drone_id=self.drone_id,
+                link_age_s=round(self.envelope.link_age_s(), 3),
+                hold_s=self.envelope.link_loss_hold_s,
+            )
+
+    def _end_link_hold(self) -> None:
+        """The ground link is back: end a link-loss hold and continue the plan where it stopped."""
+        with self._lock:
+            if not self._link_holding:
+                return
+            self._link_holding = False
+            parked, self._link_parked = self._link_parked, False
+            resume = (
+                parked
+                and self._flying_lanes
+                and self._plan_valid
+                and not self._held
+                and self._manual is None
+                and self._land_reason is None
+                and not self._worker_alive()
+                and self._step < len(self._moves)
+                and self._is_flying()
+            )
+            launched = resume and self._launch("lanes")
+        self._log.info("edge_link_restored", drone_id=self.drone_id, resumed=bool(launched))
 
     def _measured_fence_breach(self) -> tuple[float, float] | None:
         """The measured position when it is outside the geofence plus the drone's margin, else None.

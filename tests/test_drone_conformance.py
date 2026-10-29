@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from flightrisk.drone.autopilot import ARDUPILOT
+from flightrisk.drone.controller import CommandResult
 from flightrisk.drone.fake import FakeDrone
 from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone, MavlinkFleetOptions
 from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
@@ -73,7 +74,8 @@ def _mavlink_controller_subject(monkeypatch) -> Subject:
         if ctrl._loop is not None:
             ctrl.disconnect()
 
-    return Subject("mavlink", _make, rc_sent=_rc_sent, teardown=_teardown, move_cm=50, slow_move_cm=200)
+    return Subject("mavlink", _make, rc_sent=_rc_sent, teardown=_teardown, move_cm=50, slow_move_cm=200,
+                   land_sent=lambda ctrl: vehicle.commands.count(("land",)))
 
 
 def _mavlink_fleet_subject(monkeypatch) -> Subject:
@@ -95,18 +97,21 @@ def _mavlink_fleet_subject(monkeypatch) -> Subject:
             time.sleep(0.02)
 
     return Subject("mavlink-fleet", _make, ready=_ready, teardown=lambda d: d.disconnect(), move_cm=100,
-                   slow_move_cm=3000)
+                   slow_move_cm=3000, land_sent=lambda d: vehicles[-1].commands.count(("land",)))
 
 
 SUBJECTS = {
     "sim": lambda mp: Subject("sim", lambda: FakeDrone(name="conf-1"),
-                              rc_sent=lambda d: _last(d.calls, "rc_control")),
+                              rc_sent=lambda d: _last(d.calls, "rc_control"),
+                              land_sent=lambda d: sum(1 for c in d.calls if c[0] == "land")),
     "fake": lambda mp: Subject("fake", lambda: FakeTelloController(name="conf-1", speed_cm_s=100.0),
-                               rc_sent=lambda d: _last(d.calls, "rc"), slow_move_cm=400),
+                               rc_sent=lambda d: _last(d.calls, "rc"), slow_move_cm=400,
+                               land_sent=lambda d: sum(1 for c in d.calls if c[0] == "land")),
     "mavlink": _mavlink_controller_subject,
     "mavlink-fleet": _mavlink_fleet_subject,
     "template": lambda mp: Subject("template", lambda: TemplateDrone("conf-1"),
-                                   rc_sent=lambda d: _last(d.sent, "rc")),
+                                   rc_sent=lambda d: _last(d.sent, "rc"),
+                                   land_sent=lambda d: sum(1 for c in d.sent if c[0] == "land")),
 }
 
 
@@ -120,3 +125,16 @@ def test_template_is_not_registered():
     from flightrisk.drone import registry
 
     assert "template" not in registry.names()
+
+
+def test_the_land_hook_catches_a_land_that_sends_nothing():
+    """A backend whose land() reports OK without sending anything fails the conformance check."""
+
+    class SilentLand(TemplateDrone):
+        def land(self):
+            self.state.is_flying = False
+            return CommandResult("land")
+
+    subject = Subject("silent", lambda: SilentLand("conf-1"), land_sent=lambda d: sum(1 for c in d.sent if c[0] == "land"))
+    with pytest.raises(AssertionError, match="sent no land"):
+        CHECKS["land_idempotent"](subject)

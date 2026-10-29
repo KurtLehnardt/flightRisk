@@ -19,7 +19,8 @@ The rules (``docs/drone-interface.md``):
   ``field``.
 * Every command's return value normalizes with ``command_result`` to its
   own command name; declared flight commands succeed while flying.
-* ``land()`` is idempotent and never dropped: on the ground it succeeds,
+* ``land()`` is idempotent and never dropped: on the ground it succeeds, in
+  the air it really sends a land (``Subject.land_sent``),
   while a move is in progress it is not refused for being busy, and it
   never returns ``DROPPED_BUSY``.
 * ``rc_control`` never passes a stick value outside -100..100 to the drone:
@@ -88,6 +89,10 @@ class Subject:
     make: Callable[[], Any]
     ready: Callable[[Any], None] = field(default=lambda ctrl: None)
     rc_sent: Callable[[Any], tuple | None] | None = None
+    #: How many land commands the backend has passed to the drone so far;
+    #: None when that cannot be observed. It catches a ``land()`` that
+    #: reports OK while sending nothing.
+    land_sent: Callable[[Any], int] | None = None
     teardown: Callable[[Any], None] = field(default=lambda ctrl: None)
     move_cm: int = 50
     slow_move_cm: int = 0
@@ -210,7 +215,10 @@ def check_land_idempotent(subject: Subject) -> None:
     try:
         assert command_result(ctrl.land(), "land").ok, f"{subject.name}: land on the ground must succeed"
         assert command_result(ctrl.takeoff(), "takeoff").ok
+        before = subject.land_sent(ctrl) if subject.land_sent is not None else None
         assert command_result(ctrl.land(), "land").ok
+        if before is not None:
+            assert subject.land_sent(ctrl) > before, f"{subject.name}: land() reported OK but sent no land"
         assert _wait(lambda: not read_telemetry(ctrl).is_flying), f"{subject.name}: still flying after land"
         assert command_result(ctrl.land(), "land").ok
     finally:

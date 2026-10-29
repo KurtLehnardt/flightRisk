@@ -29,7 +29,7 @@ _mavsdk_manual_control = types.ModuleType("mavsdk.manual_control")
 class _FakeSystem:
     """Stand-in for mavsdk.System that wires up async mocks."""
 
-    def __init__(self):
+    def __init__(self, *_args, **_kwargs):
         self.action = MagicMock()
         self.offboard = MagicMock()
         self.telemetry = MagicMock()
@@ -128,7 +128,7 @@ class _HeadingItem:
 
 
 class _BatteryItem:
-    def __init__(self, pct=0.85):
+    def __init__(self, pct=85.0):
         self.remaining_percent = pct
 
 
@@ -588,7 +588,7 @@ class TestTelemetryUpdates:
     def test_battery_updates_state(self):
         system = _FakeSystem()
         system.telemetry.battery = MagicMock(
-            return_value=_make_async_iter([_BatteryItem(0.42)])
+            return_value=_make_async_iter([_BatteryItem(42.0)])  # MAVSDK 2+: percent, 0 to 100
         )
         ctrl = _make_controller(system)
         try:
@@ -712,3 +712,30 @@ class TestOnFrame:
         ctrl._frame_callbacks = []
         ctrl.on_frame(cb)
         assert cb in ctrl._frame_callbacks
+
+
+def test_battery_is_a_percentage_not_a_fraction():
+    """MAVSDK 2 and later report 0-100; multiplying by 100 hid every low-battery landing (95% read as 9500)."""
+    system = _FakeSystem()
+    system.telemetry.battery = MagicMock(return_value=_make_async_iter([_BatteryItem(95.0)]))
+    ctrl = _make_controller(system)
+    try:
+        with pytest.raises(TimeoutError):
+            ctrl._run(ctrl._subscribe_battery(system), timeout=0.3)
+        assert ctrl.state.battery == 95
+    finally:
+        _teardown_controller(ctrl)
+
+
+def test_each_controller_gets_its_own_mavsdk_server_port():
+    ports = []
+
+    def _system(**kwargs):
+        ports.append(kwargs.get("port"))
+        raise RuntimeError("stop after construction")
+
+    with patch("flightrisk.drone.mavlink.System", side_effect=_system):
+        for name in ("a", "b"):
+            ctrl = MavlinkController(name=name)
+            assert ctrl.connect() is False
+    assert len(ports) == 2 and None not in ports and ports[0] != ports[1] and 50051 not in ports

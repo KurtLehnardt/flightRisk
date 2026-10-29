@@ -87,6 +87,17 @@ Machine: Apple Silicon Mac, macOS, ArduCopter 4.6.3 SITL built natively (no Dock
 | `test_ground_link_loss_returns_to_launch_in_sitl`: take off, then the ground's heartbeats stop | Passed. 3 s later the edge asked for a return to launch; the copter returned and landed 0.02 m from its takeoff point. |
 | The real edge process, `python -m flightrisk.edge_device --drone mavlink --source file ...` with the YOLO detector, and `scripts/field_fleet_ground.py` as the ground over the WebSocket link | Passed. The ground planned, synced and started the edge; all lanes flown in 41 s (telemetry: x 10.42 m, y 0.11 m, 10.70 m high, with GPS position); LAND ALL landed it; Ctrl+C stopped the edge after 1999 frames. |
 
+Review round (same day, after the safety fixes; ArduCopter 4.6.3 SITL rebuilt natively, every run on a fresh SITL instance, `mavsdk_server` now started by the edge under its supervisor):
+
+| Run | Result |
+|---|---|
+| `test_one_sitl_drone_flies_a_field_plan` (24 m by 20 m, slot 10 m, three lanes inset half a swath) | Passed. 16 lane moves in 51 s; ended at x 10.98 m, y 19.85 m against the planned 11.0 m and 20.0 m, 10.67 m high; coverage of the whole width at the lowest slot. |
+| `test_two_sitl_drones_fly_a_field_plan` (slots 10 m and 15 m) | Passed. Both flew 16 moves in 53 s and ended within 0.3 m of their planned end points, at 10.56 m and 15.61 m. |
+| `test_ground_link_loss_returns_to_launch_in_sitl` | Passed. The edge held for the configured delay, then asked for the return; the copter landed 3 cm from its takeoff point. |
+| `test_rotate_on_arducopter_turns_the_plan_not_the_vehicle_in_sitl` (N9) | Passed. ArduCopter did not turn to the reposition's yaw (heading 0.49 deg before and after); `rotate(90)` returned at once and the next "forward" 8 m move went east (7.0 m east, 0 m north on arrival). |
+| `test_pilot_takeover_after_land_all_is_not_fought_in_sitl` (B1) | Passed. After LAND ALL, a switch to LOITER (MAVSDK `hold`, as a pilot's mode switch) latched external control; over 7 s of monitor retries the mode stayed LOITER (no LAND was re-sent); a new LAND ALL then sent one LAND and the copter landed. |
+| The real edge process and `scripts/field_fleet_ground.py --sitl --yes` | Passed. The ground printed each not-ready reason as the autopilot warmed up (no GPS, no home, not armable), then planned and started; all lanes flown in 52 s, staggered landing; no `mavsdk_server` was left running after the edge exited. |
+
 What SITL found that the simulated-MAVSDK tests could not, all fixed in this change:
 
 - Two MAVSDK links in one process shared MAVSDK's default gRPC port (50051), so one drone's commands reached the other drone. Each link now starts its own `mavsdk_server` on a free port.
@@ -96,7 +107,7 @@ What SITL found that the simulated-MAVSDK tests could not, all fixed in this cha
 - ArduCopter refuses a speed change on the ground; it is retried once airborne, otherwise the autopilot's cruise speed applies.
 - An in-process ground must send heartbeats, or the edge's 3 s link-loss watchdog returns the drone (it did, correctly).
 
-Not proved in SITL: PX4 (no PX4 SITL was run), an RC pilot taking over, the autopilot's own failsafes triggering, a geofence breach, wind or GPS noise, long flights, and anything about real hardware or radios. Those paths are covered only by the simulated-MAVSDK tests.
+Not proved in SITL: PX4 (no PX4 SITL was run), a pilot taking over by RC (the SITL test switches the mode over MAVLink, as a ground control station would), the autopilot's own failsafes triggering, a geofence breach, a refused return, wind or GPS noise, long flights, the supervisor after a SIGKILL of the real edge (tested only with a stand-in child process), and anything about real hardware or radios. Those paths are covered only by the simulated-MAVSDK tests.
 
 ### Build and run ArduCopter SITL natively (macOS or Linux)
 
@@ -131,13 +142,13 @@ FLIGHTRISK_SITL_ADDRESS=tcpout://127.0.0.1:5760 FLIGHTRISK_SITL_ADDRESS_2=tcpout
     python -m pytest tests/integration/test_sitl_fleet.py -m sitl -s -p no:cacheprovider -k two
 ```
 
-The tests set the failsafe parameters the edge requires on the simulated autopilot. For the CLI path, put them in the SITL defaults instead (`FENCE_ENABLE 1`, `FENCE_ACTION 1`, `BATT_FS_LOW_ACT 2`, `BATT_LOW_VOLT 10.5`, `FS_THR_ENABLE 1`, `RTL_ALT 0`), then:
+The tests set the failsafe parameters the edge requires on the simulated autopilot. For the CLI path, put them in the SITL defaults instead (`FENCE_ENABLE 1`, `FENCE_TYPE 3`, `FENCE_ACTION 1`, `FENCE_RADIUS 150`, `FENCE_ALT_MAX 40`, `BATT_FS_LOW_ACT 2`, `BATT_FS_CRT_ACT 1`, `BATT_LOW_VOLT 10.5`, `BATT_ARM_VOLT 11.0`, `FS_THR_ENABLE 1`, `RTL_ALT 0`), then (in SITL only, `--sitl --yes` skips the typed confirmation):
 
 ```bash
 export FLIGHTRISK_EDGE_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(16))")
-python scripts/field_fleet_ground.py --drones sitl-1 --area-m 24x20 --slots-m 10 --port 9100 &
+python scripts/field_fleet_ground.py --drones sitl-1 --area-m 24x20 --slots-m 10 --port 9100 --sitl --yes &
 python -m flightrisk.edge_device --drone mavlink --mavlink-address tcpout://127.0.0.1:5760 \
-    --source file --video clip.mp4 --drone-id sitl-1 --alt-slot-m 10 --geofence-m 29 \
+    --source file --video clip.mp4 --drone-id sitl-1 --alt-slot-m 10 --geofence-m 25 \
     --frame-heading-deg 0 --ws-url ws://127.0.0.1:9100
 ```
 

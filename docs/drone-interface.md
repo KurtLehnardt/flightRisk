@@ -51,7 +51,8 @@ controller: connect and disconnect (twice), the telemetry snapshot's types
 and units, honest capabilities (no undeclared method that pretends to work,
 no `NotImplementedError` anywhere in the module), command results with the
 right names, `land()` idempotent and never dropped (also while a move is in
-progress), and stick values never passed outside -100..100.
+progress, and, with a `land_sent` hook, really sent rather than only reported
+OK), and stick values never passed outside -100..100.
 
 ## The pieces
 

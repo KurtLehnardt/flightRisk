@@ -30,17 +30,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
     "ARDUPILOT",
     "AUTOPILOTS",
+    "DEFAULT_SYSID",
+    "FAILSAFE_PARAMS",
     "FAILSAFE_RULES",
+    "FENCE_MARGIN_M",
     "PX4",
     "AutopilotLink",
     "AutopilotState",
-    "FailsafeRule",
     "autonomous_modes",
     "failsafe_problems",
     "preflight_problems",
@@ -87,6 +89,15 @@ class AutopilotState:
     home_lat_deg: float | None = None
     home_lon_deg: float | None = None
     home_abs_alt_m: float | None = None
+    #: Age in seconds of each telemetry stream's last message (``position``,
+    #: ``gps``, ``health``, ``battery``, ``in_air``, ``flight_mode``, ...).
+    #: A stream that stopped keeps its last values; its age says so.
+    stream_age_s: Mapping[str, float] = field(default_factory=dict)
+
+    def stream_fresh(self, stream: str, stale_after_s: float) -> bool:
+        """True when *stream* delivered a message within *stale_after_s* (and the link is fresh)."""
+        age = self.stream_age_s.get(stream)
+        return self.fresh(stale_after_s) and age is not None and age < stale_after_s
 
     def fresh(self, stale_after_s: float) -> bool:
         """True when connected and the newest message is younger than *stale_after_s*."""
@@ -155,105 +166,187 @@ def autonomous_modes(autopilot: str | None) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 # Failsafe parameters
 # ---------------------------------------------------------------------------
+#
+# Parameter meanings are taken from the parameter references:
+#   ArduCopter: https://ardupilot.org/copter/docs/parameters.html
+#     (FENCE_ENABLE, FENCE_TYPE, FENCE_ACTION, FENCE_RADIUS, FENCE_ALT_MAX,
+#     BATT_FS_LOW_ACT, BATT_FS_CRT_ACT, BATT_LOW_VOLT, BATT_LOW_MAH,
+#     BATT_ARM_VOLT, FS_THR_ENABLE, RTL_ALT, SYSID_THISMAV / MAV_SYSID)
+#   PX4: https://docs.px4.io/main/en/advanced_config/parameter_reference.html
+#     (GF_ACTION, GF_MAX_HOR_DIST, GF_MAX_VER_DIST, COM_LOW_BAT_ACT,
+#     NAV_RCL_ACT, NAV_DLL_ACT, RTL_RETURN_ALT, MAV_SYS_ID)
+# Only values that make the aircraft land or return are accepted: "report
+# only" or "warning" does nothing, "hold" hovers until something else acts,
+# and "terminate" or "disarm" stops the motors in the air.
 
+#: ArduCopter FENCE_TYPE bits: 1 max altitude, 2 circle, 4 polygon, 8 min altitude.
+_AP_FENCE_ALT_MAX_BIT = 1
+_AP_FENCE_CIRCLE_BIT = 2
+#: ArduCopter FENCE_ACTION: 0 report only (refused); 1 RTL or land; 2 always
+#: land; 3 SmartRTL or RTL or land; 4 brake or land; 5 SmartRTL or land.
+_AP_FENCE_ACTIONS = frozenset({1, 2, 3, 4, 5})
+#: ArduCopter BATT_FS_LOW_ACT / BATT_FS_CRT_ACT: 0 none and 5 terminate are
+#: refused; 1 land, 2 RTL, 3 SmartRTL or RTL, 4 SmartRTL or land,
+#: 6 DO_LAND_START or RTL, 7 brake or land.
+_AP_BATT_ACTIONS = frozenset({1, 2, 3, 4, 6, 7})
+#: ArduCopter FS_THR_ENABLE (RC loss): 0 disabled and 2 (continue a mission)
+#: are refused; 1 RTL, 3 land, 4 SmartRTL or RTL, 5 SmartRTL or land,
+#: 6 DO_LAND_START or RTL, 7 brake or land.
+_AP_RC_LOSS_ACTIONS = frozenset({1, 3, 4, 5, 6, 7})
+#: PX4 GF_ACTION: 0 none, 1 warning and 4 terminate are refused; 2 hold,
+#: 3 return, 5 land.
+_PX4_FENCE_ACTIONS = frozenset({2, 3, 5})
+#: PX4 COM_LOW_BAT_ACT: 0 warning only is refused; 2 land, 3 return at
+#: critical then land at emergency.
+_PX4_BATT_ACTIONS = frozenset({2, 3})
+#: PX4 NAV_RCL_ACT / NAV_DLL_ACT: 0 disabled, 1 hold (hovers), 5 terminate,
+#: 6 disarm are refused; 2 return, 3 land.
+_PX4_LOSS_ACTIONS = frozenset({2, 3})
 
-@dataclass(frozen=True)
-class FailsafeRule:
-    """One required autopilot setting, checked from parameters.
+#: The autopilot's own horizontal fence must contain the edge's square
+#: geofence (corners at sqrt(2) times the half-width) plus this margin.
+FENCE_MARGIN_M = 5.0
+#: Regulatory ceiling (AGL) no altitude fence may exceed.
+MAX_FENCE_ALT_M = 120.0
+#: The system id every factory autopilot uses.
+DEFAULT_SYSID = 1
 
-    ``names`` are alternative parameter names (the first that exists is
-    used, for renames across firmware versions); ``ok`` decides whether the
-    value is acceptable; ``needs`` is the operator-facing requirement.
-    """
-
-    names: tuple[str, ...]
-    ok: Callable[[float], bool]
-    needs: str
-
-
-def _nonzero(value: float) -> bool:
-    return value != 0
-
-
-def _positive(value: float) -> bool:
-    return value > 0
-
-
-#: Required failsafes per autopilot. Each is a reason the edge refuses to
-#: take off when it is not configured. These are the minimum for a drone the
-#: edge flies beyond a few metres: a geofence the autopilot enforces itself,
-#: a battery failsafe that lands or returns before the pack is empty (so a
-#: drone whose companion computer dies never hovers until it falls), and an
-#: RC-loss failsafe (a safety pilot with a transmitter is required).
-FAILSAFE_RULES: dict[str, tuple[FailsafeRule, ...]] = {
+#: Every parameter the checks read, per autopilot (read once, then cached).
+FAILSAFE_PARAMS: dict[str, tuple[str, ...]] = {
     ARDUPILOT: (
-        FailsafeRule(("FENCE_ENABLE",), lambda v: v == 1, "FENCE_ENABLE=1 (autopilot geofence on)"),
-        FailsafeRule(("FENCE_ACTION",), _nonzero, "FENCE_ACTION not 0 (geofence breach must act)"),
-        FailsafeRule(("BATT_FS_LOW_ACT",), _nonzero, "BATT_FS_LOW_ACT not 0 (low-battery failsafe action)"),
-        FailsafeRule(
-            ("BATT_LOW_VOLT", "BATT_LOW_MAH"),
-            _positive,
-            "BATT_LOW_VOLT or BATT_LOW_MAH above 0 (low-battery failsafe threshold)",
-        ),
-        FailsafeRule(("FS_THR_ENABLE",), _nonzero, "FS_THR_ENABLE not 0 (RC-loss failsafe)"),
+        "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_RADIUS", "FENCE_ALT_MAX", "BATT_FS_LOW_ACT",
+        "BATT_FS_CRT_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_ARM_VOLT", "FS_THR_ENABLE", "RTL_ALT",
+        "SYSID_THISMAV", "MAV_SYSID",
     ),
     PX4: (
-        FailsafeRule(("GF_ACTION",), _nonzero, "GF_ACTION not 0 (geofence breach must act)"),
-        FailsafeRule(
-            ("GF_MAX_HOR_DIST", "GF_MAX_VER_DIST"),
-            _positive,
-            "GF_MAX_HOR_DIST or GF_MAX_VER_DIST above 0 (autopilot geofence on)",
-        ),
-        FailsafeRule(("COM_LOW_BAT_ACT",), _nonzero, "COM_LOW_BAT_ACT not 0 (low-battery failsafe action)"),
-        FailsafeRule(("NAV_RCL_ACT",), _nonzero, "NAV_RCL_ACT not 0 (RC-loss failsafe)"),
-        FailsafeRule(("NAV_DLL_ACT",), _nonzero, "NAV_DLL_ACT not 0 (data-link-loss failsafe)"),
+        "GF_ACTION", "GF_MAX_HOR_DIST", "GF_MAX_VER_DIST", "COM_LOW_BAT_ACT", "NAV_RCL_ACT", "NAV_DLL_ACT",
+        "RTL_RETURN_ALT", "MAV_SYS_ID",
     ),
 }
 
-#: Return-to-launch altitude parameter: name and the factor to centimetres.
-_RTL_ALT_PARAM = {ARDUPILOT: ("RTL_ALT", 1.0), PX4: ("RTL_RETURN_ALT", 100.0)}
+#: Kept for callers that list the rules; the checks themselves are in ``failsafe_problems``.
+FAILSAFE_RULES = FAILSAFE_PARAMS
 
 
-def _first_value(read: Callable[[str], float | None], names: tuple[str, ...]) -> tuple[str, float | None]:
-    """The first of *names* that reads as a number (and its value), else the first name and None."""
-    for name in names:
-        value = read(name)
-        if _finite(value):
-            return name, float(value)
-    return names[0], None
+def _int_in(value: float | None, allowed: frozenset[int]) -> bool:
+    return value is not None and float(value).is_integer() and int(value) in allowed
 
 
-def failsafe_problems(autopilot: str | None, read: Callable[[str], float | None]) -> list[str]:
-    """Required failsafes that are not configured, as operator-facing text. Fails closed.
+def failsafe_problems(
+    autopilot: str | None,
+    read: Callable[[str], float | None],
+    *,
+    geofence_cm: float | None = None,
+    ceiling_cm: float | None = None,
+    slot_cm: float | None = None,
+    sysid: int | None = DEFAULT_SYSID,
+) -> list[str]:
+    """Required autopilot settings that are missing or unsafe, as operator-facing text. Fails closed.
 
     *read* returns a parameter's value, or None when it does not exist or
-    cannot be read. An unknown autopilot, or a parameter that cannot be
-    read, is itself a problem.
+    cannot be read; an unreadable parameter is a problem. With the edge's
+    *geofence_cm*, *ceiling_cm* and *slot_cm* the autopilot's fence must
+    contain the edge's geofence, its altitude fence must be above the
+    ceiling (and at most 120 m), and its return altitude must be at or below
+    the slot, whatever the edge's own failsafe action: the autopilot's own
+    RC-loss and battery failsafes return by themselves. With *sysid* the
+    autopilot's system id must match.
     """
-    rules = FAILSAFE_RULES.get(autopilot or "")
-    if rules is None:
+    if autopilot not in AUTOPILOTS:
         return [f"autopilot type unknown ({autopilot!r}); cannot check its failsafes"]
     problems: list[str] = []
-    for rule in rules:
-        if len(rule.names) > 1:
-            values = [(name, read(name)) for name in rule.names]
-            readable = [float(v) for _, v in values if _finite(v)]
-            if not readable:
-                problems.append(f"cannot read {' / '.join(rule.names)}; need {rule.needs}")
-            elif not any(rule.ok(v) for v in readable):
-                problems.append(f"need {rule.needs}")
-            continue
-        name, value = _first_value(read, rule.names)
-        if value is None:
-            problems.append(f"cannot read {name}; need {rule.needs}")
-        elif not rule.ok(value):
-            problems.append(f"{name}={value:g}; need {rule.needs}")
+
+    def value(name: str) -> float | None:
+        v = read(name)
+        return float(v) if _finite(v) else None
+
+    def need(name: str, allowed: frozenset[int], what: str) -> None:
+        v = value(name)
+        if v is None:
+            problems.append(f"cannot read {name}; need {what}")
+        elif not _int_in(v, allowed):
+            problems.append(f"{name}={v:g}; need one of {sorted(allowed)} ({what})")
+
+    fence_needed_m = None if geofence_cm is None else math.sqrt(2) * geofence_cm / 100.0 + FENCE_MARGIN_M
+    ceiling_m = None if ceiling_cm is None else ceiling_cm / 100.0
+
+    if autopilot == ARDUPILOT:
+        enable = value("FENCE_ENABLE")
+        if enable != 1:
+            problems.append(f"FENCE_ENABLE={'unreadable' if enable is None else f'{enable:g}'}; need 1 (autopilot fence on)")
+        ftype = value("FENCE_TYPE")
+        if ftype is None or not float(ftype).is_integer():
+            problems.append("cannot read FENCE_TYPE; need the circle (2) and max-altitude (1) fences")
+        else:
+            bits = int(ftype)
+            if not bits & _AP_FENCE_CIRCLE_BIT:
+                problems.append(f"FENCE_TYPE={bits}; need the circle fence (bit 2) so its radius can be checked")
+            if not bits & _AP_FENCE_ALT_MAX_BIT:
+                problems.append(f"FENCE_TYPE={bits}; need the max-altitude fence (bit 1)")
+        need("FENCE_ACTION", _AP_FENCE_ACTIONS, "a fence breach must land or return")
+        radius = value("FENCE_RADIUS")
+        if radius is None:
+            problems.append("cannot read FENCE_RADIUS")
+        elif fence_needed_m is not None and radius < fence_needed_m:
+            problems.append(f"FENCE_RADIUS={radius:g} m is inside the edge geofence; need at least {fence_needed_m:.0f} m")
+        alt_max = value("FENCE_ALT_MAX")
+        if alt_max is None:
+            problems.append("cannot read FENCE_ALT_MAX")
+        elif alt_max > MAX_FENCE_ALT_M or (ceiling_m is not None and alt_max <= ceiling_m):
+            low = "" if ceiling_m is None else f"above the {ceiling_m:g} m ceiling and "
+            problems.append(f"FENCE_ALT_MAX={alt_max:g} m; need {low}at most {MAX_FENCE_ALT_M:g} m")
+        need("BATT_FS_LOW_ACT", _AP_BATT_ACTIONS, "low battery must land or return; 5 terminates")
+        need("BATT_FS_CRT_ACT", _AP_BATT_ACTIONS, "critical battery must land or return; 5 terminates")
+        thresholds = [v for v in (value("BATT_LOW_VOLT"), value("BATT_LOW_MAH")) if v is not None]
+        if not any(v > 0 for v in thresholds):
+            problems.append("need BATT_LOW_VOLT or BATT_LOW_MAH above 0 (low-battery threshold)")
+        arm_volt = value("BATT_ARM_VOLT")
+        if arm_volt is None or arm_volt <= 0:
+            # ArduPilot's remaining percentage counts mAh since boot, so a
+            # half-empty pack reads 100%: arming must check the voltage.
+            problems.append("need BATT_ARM_VOLT above 0 (a partly used pack reads 100% after boot)")
+        need("FS_THR_ENABLE", _AP_RC_LOSS_ACTIONS, "RC loss must land or return")
+        rtl_name, rtl_factor = "RTL_ALT", 1.0
+        sysid_names = ("SYSID_THISMAV", "MAV_SYSID")
+    else:
+        need("GF_ACTION", _PX4_FENCE_ACTIONS, "a fence breach must hold, return or land")
+        hor = value("GF_MAX_HOR_DIST")
+        if hor is None or hor <= 0:
+            problems.append("need GF_MAX_HOR_DIST above 0 (horizontal autopilot fence)")
+        elif fence_needed_m is not None and hor < fence_needed_m:
+            problems.append(f"GF_MAX_HOR_DIST={hor:g} m is inside the edge geofence; need at least {fence_needed_m:.0f} m")
+        ver = value("GF_MAX_VER_DIST")
+        if ver is None or ver <= 0 or ver > MAX_FENCE_ALT_M or (ceiling_m is not None and ver <= ceiling_m):
+            low = "" if ceiling_m is None else f"above the {ceiling_m:g} m ceiling and "
+            shown = "unreadable" if ver is None else f"{ver:g} m"
+            problems.append(f"GF_MAX_VER_DIST={shown}; need {low}at most {MAX_FENCE_ALT_M:g} m")
+        need("COM_LOW_BAT_ACT", _PX4_BATT_ACTIONS, "low battery must land or return")
+        need("NAV_RCL_ACT", _PX4_LOSS_ACTIONS, "RC loss must return or land; 1 hovers, 5 and 6 stop the motors")
+        need("NAV_DLL_ACT", _PX4_LOSS_ACTIONS, "data-link loss must return or land; 1 hovers, 5 and 6 stop the motors")
+        rtl_name, rtl_factor = "RTL_RETURN_ALT", 100.0
+        sysid_names = ("MAV_SYS_ID",)
+
+    rtl = value(rtl_name)
+    if rtl is None:
+        problems.append(f"cannot read {rtl_name} (return altitude)")
+    elif slot_cm is not None and rtl * rtl_factor > slot_cm + 1e-6:
+        problems.append(
+            f"{rtl_name} return altitude {rtl * rtl_factor / 100:g} m is above this drone's slot {slot_cm / 100:g} m; "
+            "the autopilot's own RC-loss or battery return would climb through other slots (set it at or below "
+            "the slot; 0 returns at the current height)"
+        )
+    if sysid is not None:
+        found = next((v for v in (value(n) for n in sysid_names) if v is not None), None)
+        if found is None:
+            problems.append(f"cannot read {' / '.join(sysid_names)} (system id)")
+        elif int(found) != int(sysid):
+            problems.append(f"autopilot system id is {found:g}, expected {sysid} (--mavlink-sysid)")
     return problems
 
 
 def rtl_altitude_cm(autopilot: str | None, read: Callable[[str], float | None]) -> float | None:
     """The autopilot's return-to-launch altitude in centimetres above home, or None if unreadable."""
-    entry = _RTL_ALT_PARAM.get(autopilot or "")
+    entry = {ARDUPILOT: ("RTL_ALT", 1.0), PX4: ("RTL_RETURN_ALT", 100.0)}.get(autopilot or "")
     if entry is None:
         return None
     name, factor = entry
@@ -288,6 +381,12 @@ def preflight_problems(
         age = state.telemetry_age_s
         return [f"autopilot telemetry stale ({'never received' if age is None else f'{age:.0f} s old'})"]
     problems: list[str] = []
+    if state.stream_age_s:
+        # A stream that ended keeps its last values; refuse on stale ones.
+        stale = [name for name in ("position", "gps", "health", "battery")
+                 if not state.stream_fresh(name, stale_after_s)]
+        if stale:
+            problems.append(f"telemetry stale or missing: {', '.join(stale)}")
     if state.autopilot not in AUTOPILOTS:
         problems.append("autopilot type unknown (PX4 or ArduPilot required)")
     fix = state.gps_fix_type

@@ -48,6 +48,8 @@ def test_plan_only_prints_the_edge_settings(capsys):
     out = capsys.readouterr().out
     assert "--drone-id a-1 --alt-slot-m 10 --geofence-m" in out
     assert "--drone-id a-2 --alt-slot-m 15" in out
+    assert out.count("--frame-heading-deg 0") == 2
+    assert "coverage: the lanes cover the whole area" in out
 
 
 def test_unsafe_plan_is_refused(capsys):
@@ -93,7 +95,7 @@ def test_ground_script_flies_a_simulated_mavlink_edge(monkeypatch, capsys):
     script = _load()
     result: dict = {}
     ground = threading.Thread(target=lambda: result.setdefault("rc", script.main([
-        "--drones", "f-1", "--area-m", "24x20", "--slots-m", "10", "--port", str(port),
+        "--drones", "f-1", "--area-m", "24x20", "--slots-m", "10", "--port", str(port), "--sitl", "--yes",
         "--connect-timeout-s", "30", "--flight-timeout-s", "60"])), daemon=True)
     ground.start()
 
@@ -113,10 +115,35 @@ def test_ground_script_flies_a_simulated_mavlink_edge(monkeypatch, capsys):
         out = capsys.readouterr().out
         assert result.get("rc") == 0, out
         assert "all lanes flown" in out
-        # One 24 m wide zone with ~10 m strips: forward 20 m, right one strip, back 20 m.
-        assert vehicle.north == pytest.approx(0.0, abs=1.5)
-        assert vehicle.east > 5.0
-        assert ("land",) in vehicle.commands  # LAND ALL at the end
+        # One 24 m wide zone: three lanes inset by half a swath, ending at the far side and far end.
+        assert vehicle.north == pytest.approx(20.0, abs=1.5)
+        assert vehicle.east > 10.0
+        assert ("land",) in vehicle.commands  # landed at the end
+        assert "landing f-1 (slot 10 m)" in out
     finally:
         stop.set()
         edge.join(20.0)
+
+
+def test_yes_needs_sitl(capsys):
+    assert _load().main(["--drones", "a-1", "--yes"]) == 2
+    assert "--yes is only allowed with --sitl" in capsys.readouterr().err
+
+
+def test_confirmation_needs_the_exact_phrase():
+    script = _load()
+    asked = []
+    assert script._confirm(2, lambda prompt: asked.append(prompt) or "") is False  # Enter alone
+    assert script._confirm(2, lambda prompt: "yes") is False
+    assert script._confirm(2, lambda prompt: "start 2 drones") is True
+    assert '"start 2 drones"' in asked[0]
+
+    def eof(prompt):
+        raise EOFError
+
+    assert script._confirm(2, eof) is False
+
+
+def test_close_launch_points_are_warned_about(capsys):
+    _load().main(["--drones", "a-1,a-2", "--area-m", "16x20", "--slots-m", "10,15", "--plan-only"])
+    assert "WARNING: launch points closer than 10 m" in capsys.readouterr().out
