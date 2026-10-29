@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="launcher-session" content="__SESSION__">
+<title>FlightRisk launcher</title>
+<link rel="stylesheet" href="/launcher.css">
+</head>
+<body>
+<header class="top">
+  <h1>FlightRisk launcher</h1>
+  <span id="platform" class="muted"></span>
+  <span id="token" class="badge">token: ...</span>
+  <span class="spacer"></span>
+  <button id="quit" class="ghost" type="button">Quit launcher</button>
+</header>
+
+<main class="grid">
+  <section class="panel" id="setup">
+    <h2>Setup</h2>
+
+    <div class="row">
+      <label for="preset">Preset</label>
+      <select id="preset"></select>
+      <button id="preset-load" type="button">Load</button>
+      <button id="preset-save" type="button">Save as...</button>
+      <button id="preset-delete" type="button" class="ghost">Delete</button>
+    </div>
+    <p id="store-problems" class="warn-text" hidden></p>
+
+    <fieldset>
+      <legend>This computer runs</legend>
+      <label class="choice"><input type="radio" name="role" value="ground"> The ground station and dashboard (and any edges marked "here")</label>
+      <label class="choice"><input type="radio" name="role" value="edges"> Edges only, dialling a ground station on another computer</label>
+    </fieldset>
+
+    <fieldset id="ground-net">
+      <legend>Edge link of the ground station</legend>
+      <label class="choice"><input type="radio" name="network" value="loopback"> Loopback only: everything on this computer (layout B, single drone, rehearsal)</label>
+      <label class="choice"><input type="radio" name="network" value="cable"> Loopback plus the cable address: edges on another computer dial in (layout A)</label>
+      <div class="row" id="cable-row">
+        <label for="cable_address">Cable address of this computer</label>
+        <input id="cable_address" data-field="cable_address" size="16">
+      </div>
+    </fieldset>
+
+    <fieldset id="edges-net">
+      <legend>Ground station to dial</legend>
+      <div class="row">
+        <label for="ground_host">Host</label>
+        <input id="ground_host" data-field="ground_host" size="18">
+        <label for="ground_port">Port</label>
+        <input id="ground_port" data-field="ground_port" type="number" min="1024" max="65535">
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Drones</legend>
+      <div class="row">
+        <label for="drone-count">Number of drones</label>
+        <select id="drone-count"></select>
+        <button id="refresh-adapters" type="button" class="ghost">Refresh adapters</button>
+      </div>
+      <div class="scroll">
+        <table id="drones">
+          <thead>
+            <tr>
+              <th>Drone id</th><th>Source</th><th class="where-col">Edge runs</th><th>Tello host</th>
+              <th>Local IP (adapter)</th><th>Interface index</th><th>Altitude slot (cm)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <datalist id="adapter-ips"></datalist>
+      <p class="muted small" id="fleet-line"></p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Shared options</legend>
+      <div class="cols">
+        <label>Ceiling (cm) <input data-field="ceiling_cm" type="number" min="150" max="1000"></label>
+        <label>Safety margin (cm) <input data-field="margin_cm" type="number" min="30"></label>
+        <span class="muted" id="max-slot"></span>
+        <label>Geofence (cm) <input data-field="geofence_cm" type="number" min="1"></label>
+        <label>Detector profile <select data-field="detector_profile" id="detector_profile"></select></label>
+        <label class="check"><input data-field="stream_video" type="checkbox"> Video on at start</label>
+        <label class="check"><input data-field="llm" type="checkbox"> Language model on</label>
+        <label class="ground-only">Dashboard port <input data-field="dashboard_port" type="number" min="1024" max="65535"></label>
+        <label class="ground-only">Edge link port <input data-field="edge_port" type="number" min="1024" max="65535"></label>
+        <label class="check"><input data-field="otel_enabled" type="checkbox"> Observability export</label>
+        <label>Endpoint <input data-field="otel_endpoint" size="26"></label>
+      </div>
+    </fieldset>
+
+    <div id="issues"></div>
+    <details>
+      <summary>Command lines</summary>
+      <pre id="plan" class="code"></pre>
+    </details>
+  </section>
+
+  <section class="panel" id="run">
+    <h2>Run</h2>
+    <div class="row buttons">
+      <button id="check" type="button">Check</button>
+      <button id="check-drones" type="button">Check drones</button>
+      <button id="start" type="button" class="primary">Start</button>
+      <button id="stop" type="button" class="danger">Stop</button>
+      <button id="open-dashboard" type="button">Open dashboard</button>
+    </div>
+    <p id="run-message" class="muted"></p>
+
+    <h3>Preflight</h3>
+    <table id="checks" class="compact"><tbody><tr><td class="muted">Press Check or Start.</td></tr></tbody></table>
+
+    <h3>Processes</h3>
+    <table id="procs" class="compact">
+      <thead><tr><th>Process</th><th>Status</th><th>Detail</th><th></th></tr></thead>
+      <tbody><tr><td colspan="4" class="muted">Nothing started yet.</td></tr></tbody>
+    </table>
+
+    <h3>Log <select id="log-name"></select> <label class="check small"><input type="checkbox" id="log-follow" checked> follow</label></h3>
+    <pre id="log" class="log"></pre>
+
+    <h3>Events</h3>
+    <pre id="events" class="log short"></pre>
+  </section>
+</main>
+
+<dialog id="confirm">
+  <form method="dialog">
+    <h3 id="confirm-title"></h3>
+    <p id="confirm-text"></p>
+    <div id="confirm-input-row" class="row" hidden><input id="confirm-input" size="30" maxlength="60"></div>
+    <div class="row buttons" id="confirm-buttons"></div>
+  </form>
+</dialog>
+
+<script src="/launcher.js"></script>
+</body>
+</html>

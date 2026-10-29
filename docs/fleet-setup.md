@@ -4,6 +4,8 @@ This guide gets two Tello EDU drones flying under one FlightRisk ground station.
 
 Layout in both paths: the ground station and edge-1 run on the Mac, and edge-2 runs on the Windows laptop. Drone 1 is controlled from the Mac and drone 2 from the Windows laptop.
 
+Once the network is set up, the launcher window ([launcher.md](launcher.md)) can start the ground station and the edges on each computer instead of the scripts below.
+
 | | Path 1: station mode | Path 2: AP mode |
 |---|---|---|
 | Drones join | one shared 2.4 GHz router or phone hotspot | their own Wi-Fi, one drone per laptop |

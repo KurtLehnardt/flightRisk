@@ -1,0 +1,63 @@
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --ink: #1d232b; --muted: #66707c; --line: #d9dde3;
+  --ok: #1d7a3a; --warn: #9a6200; --bad: #b3261e; --info: #315f9e; --accent: #1f5fbf;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c; --panel: #1e2228; --ink: #e6e9ed; --muted: #9aa3ad; --line: #343a42;
+    --ok: #5cc27e; --warn: #e3a948; --bad: #ef6b62; --info: #7fa9e8; --accent: #6b9ff0;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.top { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+.top h1 { font-size: 17px; margin: 0; }
+.spacer { flex: 1; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; padding: 14px 16px; }
+@media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+h3 { font-size: 13px; margin: 14px 0 6px; display: flex; gap: 8px; align-items: center; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 10px 0; padding: 8px 10px; min-width: 0; }
+legend { font-weight: 600; padding: 0 4px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.choice { display: block; margin: 3px 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; align-items: center; }
+.cols label { display: flex; flex-direction: column; gap: 2px; }
+.cols label.check { flex-direction: row; align-items: center; gap: 6px; }
+input, select, button { font: inherit; color: inherit; }
+input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; min-width: 0; }
+input[type="number"] { width: 7em; }
+input.invalid, select.invalid { border-color: var(--bad); outline: 1px solid var(--bad); }
+button { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 5px 11px; cursor: pointer; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.danger { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+button.ghost { background: transparent; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+#drones input { width: 100%; min-width: 5em; }
+#drones input.w-ip { min-width: 9.5em; }
+#drones input.w-id { min-width: 6.5em; }
+#drones input[type="number"] { min-width: 5em; }
+table.compact td { font-size: 13px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.badge { border: 1px solid var(--line); border-radius: 10px; padding: 1px 9px; font-size: 12px; }
+.st { font-weight: 700; font-size: 12px; white-space: nowrap; }
+.PASS, .running { color: var(--ok); }
+.WARN, .starting, .stopping, .warning { color: var(--warn); }
+.FAIL, .exited, .error { color: var(--bad); }
+.INFO, .stopped, .pending { color: var(--info); }
+.warn-text { color: var(--warn); }
+#issues div { margin: 3px 0; }
+pre.code, pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; margin: 0; }
+pre.log { height: 300px; overflow: auto; }
+pre.log.short { height: 110px; }
+dialog { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); max-width: 520px; }
+dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.buttons { justify-content: flex-start; }
