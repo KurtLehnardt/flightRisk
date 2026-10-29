@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "FlightRisk"
 include(":app")
+include(":contract")
