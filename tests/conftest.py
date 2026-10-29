@@ -83,6 +83,17 @@ def _isolate_ceiling_settings(tmp_path, monkeypatch):
     monkeypatch.delenv("FLIGHTRISK_CEILING_MARGIN_CM", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_map_files(tmp_path, monkeypatch):
+    """Keep saved plans and cached map tiles in per-test directories.
+
+    No test may read or write the operator's ``~/.flightrisk/plans`` or
+    ``~/.flightrisk/tiles`` (docs/map-and-plan-editing.md).
+    """
+    monkeypatch.setenv("FLIGHTRISK_PLANS_DIR", str(tmp_path / "plans"))
+    monkeypatch.setenv("FLIGHTRISK_TILES_DIR", str(tmp_path / "tiles"))
+
+
 # ---------------------------------------------------------------------------
 # A fake Tello command socket under the real djitellopy client
 # ---------------------------------------------------------------------------

@@ -60,6 +60,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -131,9 +132,25 @@ class ZoneAssignment:
     h_cm: int
     alt_cm: int
     lanes: tuple[dict, ...]
+    # Where the drone takes off on the shared grid, when that is not the
+    # zone's near-left corner (a plan edited on the map). The drone's lanes
+    # and reported position are relative to this point. The zone carries it
+    # as ``takeoff_x_cm``/``takeoff_y_cm``, which the fleet protocol allows.
+    takeoff_x_cm: int | None = None
+    takeoff_y_cm: int | None = None
+
+    @property
+    def origin(self) -> tuple[int, int]:
+        """The takeoff point on the shared grid: the explicit one, else the zone corner."""
+        if self.takeoff_x_cm is not None and self.takeoff_y_cm is not None:
+            return self.takeoff_x_cm, self.takeoff_y_cm
+        return self.x_cm, self.y_cm
 
     def zone_dict(self) -> dict:
-        return {"x_cm": self.x_cm, "y_cm": self.y_cm, "w_cm": self.w_cm, "h_cm": self.h_cm}
+        zone = {"x_cm": self.x_cm, "y_cm": self.y_cm, "w_cm": self.w_cm, "h_cm": self.h_cm}
+        if self.takeoff_x_cm is not None and self.takeoff_y_cm is not None:
+            zone["takeoff_x_cm"], zone["takeoff_y_cm"] = self.takeoff_x_cm, self.takeoff_y_cm
+        return zone
 
     def to_dict(self) -> dict:
         return {
@@ -153,6 +170,14 @@ class FleetPlan:
     depth_cm: int
     gap_cm: int
     strip_cm: int
+    # A plan made on the map (``plan_zones``): the search area's near-left
+    # corner on the shared grid, the rectangles of the area no camera sees
+    # (``uncovered`` entries of ``kind: "area"``) and the map's own details
+    # (pattern, drawn and generated paths, coverage), shown by the browser.
+    grid_x_cm: int = 0
+    grid_y_cm: int = 0
+    uncovered_areas: tuple[dict, ...] = ()
+    details: Mapping[str, Any] | None = None
 
     def zone_for(self, drone_id: str) -> ZoneAssignment | None:
         for zone in self.zones:
@@ -162,12 +187,15 @@ class FleetPlan:
 
     def to_dict(self) -> dict:
         """Shape of the dashboard ``fleet_plan`` event."""
-        return {
+        out = {
             "zones": [zone.to_dict() for zone in self.zones],
-            "grid": {"x_cm": 0, "y_cm": 0, "w_cm": self.width_cm, "h_cm": self.depth_cm},
+            "grid": {"x_cm": self.grid_x_cm, "y_cm": self.grid_y_cm, "w_cm": self.width_cm, "h_cm": self.depth_cm},
             "gap_cm": self.gap_cm,
             "strip_cm": self.strip_cm,
         }
+        if self.details is not None:
+            out["details"] = dict(self.details)
+        return out
 
 
 @dataclass(frozen=True)
@@ -259,6 +287,9 @@ class _Chunk:
     deferred: dict[str, str] = field(default_factory=dict)
     reason: str | None = None
     reported: str | None = None
+    # Drones the run could not go to because their new path would come
+    # closer than the zone gap to another drone's path: rid -> why.
+    too_close: dict[str, str] = field(default_factory=dict)
 
     @property
     def start(self) -> tuple[int, int]:
@@ -445,6 +476,10 @@ class FleetCoordinator:
             passes the drones held for manual control
             (``docs/manual-takeover.md``), whose lanes would otherwise wait
             for the operator.
+        retask_separation: Offer re-tasked lanes only to a drone whose new
+            path stays the zone gap away from every other drone's path (the
+            default). False switches that check off; only tests of the offer
+            and refusal mechanics use it.
     """
 
     def __init__(
@@ -463,6 +498,7 @@ class FleetCoordinator:
         retask_wait_s: float = RETASK_WAIT_S,
         alt_slot_of: Callable[[str, int], int] | None = None,
         retask_excluded: Callable[[str], bool] | None = None,
+        retask_separation: bool = True,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -499,6 +535,7 @@ class FleetCoordinator:
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
         self._retask_wait_s = float(retask_wait_s)
         self._retask_excluded = retask_excluded
+        self._retask_separation = bool(retask_separation)
 
         self._lock = threading.RLock()
         self._drones: dict[str, _DroneState] = {drone_id: _DroneState() for drone_id in self._links}
@@ -560,7 +597,7 @@ class FleetCoordinator:
                 for chunk in retask.chunks
                 if chunk.status == "failed"
                 for entry in chunk.lane_entries()
-            ]
+            ] + [dict(area) for area in self._plan.uncovered_areas]
             return out
 
     def detections(self) -> list[FleetDetection]:
@@ -641,16 +678,7 @@ class FleetCoordinator:
         drone's telemetry from the last ``TELEMETRY_FRESH_S`` seconds says it
         is flying, because replacing a flying drone's lanes is unsafe.
         """
-        with self._lock:
-            now = self._clock()
-            flying = [
-                drone_id for drone_id, state in self._drones.items()
-                if state.telemetry_at is not None
-                and now - state.telemetry_at <= TELEMETRY_FRESH_S
-                and (state.telemetry or {}).get("is_flying") is True
-            ]
-        if flying:
-            raise RuntimeError(f"cannot plan while drones are flying: {', '.join(flying)}")
+        self._refuse_plan_while_flying()
         drone_ids = list(self._links)
         n = len(drone_ids)
         zone_w = (self._width_cm - self._zone_gap_cm * (n - 1)) // n
@@ -685,7 +713,65 @@ class FleetCoordinator:
             gap_cm=self._zone_gap_cm,
             strip_cm=self._strip_cm,
         )
+        return self._install_plan(plan)
 
+    def plan_zones(
+        self,
+        zones: tuple[ZoneAssignment, ...] | list[ZoneAssignment],
+        *,
+        grid_cm: tuple[int, int, int, int],
+        gap_cm: int,
+        strip_cm: int,
+        uncovered_areas: tuple[dict, ...] | list[dict] = (),
+        details: Mapping[str, Any] | None = None,
+    ) -> FleetPlan:
+        """Install zones made elsewhere (a plan built on the map) and send their ``assign_lanes``.
+
+        The caller has already checked the zones (``flightrisk.drone.plan_edit``).
+        There must be exactly one zone per link. ``grid_cm`` is the search
+        area ``(x, y, w, h)`` on the shared grid. Otherwise this behaves like
+        ``plan()``: it is refused while a drone flies, starts a new mission
+        and sends each drone its lanes.
+        """
+        self._refuse_plan_while_flying()
+        zones = tuple(zones)
+        ids = [zone.drone_id for zone in zones]
+        if sorted(ids) != sorted(self._links) or len(set(ids)) != len(ids):
+            raise ValueError(f"the zones must cover exactly the fleet's drones {sorted(self._links)}, got {ids}")
+        x, y, w, h = (int(v) for v in grid_cm)
+        plan = FleetPlan(
+            zones=zones,
+            width_cm=w,
+            depth_cm=h,
+            gap_cm=int(gap_cm),
+            strip_cm=int(strip_cm),
+            grid_x_cm=x,
+            grid_y_cm=y,
+            uncovered_areas=tuple(dict(area) for area in uncovered_areas),
+            details=details,
+        )
+        return self._install_plan(plan)
+
+    def zone_alt_cm(self, drone_id: str, index: int) -> int:
+        """The altitude slot ``plan()`` would give *drone_id* as zone *index*."""
+        return self._zone_alt_cm(drone_id, index)
+
+    def _refuse_plan_while_flying(self) -> None:
+        """Raise ``RuntimeError`` while fresh telemetry says a drone flies."""
+        with self._lock:
+            now = self._clock()
+            flying = [
+                drone_id for drone_id, state in self._drones.items()
+                if state.telemetry_at is not None
+                and now - state.telemetry_at <= TELEMETRY_FRESH_S
+                and (state.telemetry or {}).get("is_flying") is True
+            ]
+        if flying:
+            raise RuntimeError(f"cannot plan while drones are flying: {', '.join(flying)}")
+
+    def _install_plan(self, plan: FleetPlan) -> FleetPlan:
+        """Make *plan* the mission and send every drone its ``assign_lanes``."""
+        zones = plan.zones
         messages = {}
         with self._lock:
             self._plan = plan
@@ -740,7 +826,7 @@ class FleetCoordinator:
     def _origin(state: _DroneState) -> tuple[int, int]:
         if state.zone is None:
             return 0, 0
-        return state.zone.x_cm, state.zone.y_cm
+        return state.zone.origin
 
     # ------------------------------------------------------------------
     # Clock sync
@@ -1334,6 +1420,11 @@ class FleetCoordinator:
                     end = _path_point(self._origin(self._drones[rid]), lanes)
                     added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
                     if self._path_inside_fence(rid, lanes + added):
+                        crowded = self._too_close(rid, lanes + added, planned)
+                        if crowded is not None:
+                            chunk.too_close[rid] = crowded
+                            continue
+                        chunk.too_close.pop(rid, None)
                         if rid in chunk.deferred:
                             waiting = True  # refused for now: wait, do not fail
                         else:
@@ -1384,10 +1475,39 @@ class FleetCoordinator:
         refused = [rid for rid in receivers if rid in chunk.refusals]
         if refused:
             parts.append("refused by " + ", ".join(f"{rid} ({chunk.refusals[rid]})" for rid in refused))
-        outside = [rid for rid in receivers if rid not in chunk.refusals]
+        crowded = [rid for rid in receivers if rid not in chunk.refusals and rid in chunk.too_close]
+        if crowded:
+            parts.append("; ".join(f"{rid} would {chunk.too_close[rid]}" for rid in crowded))
+        outside = [rid for rid in receivers if rid not in chunk.refusals and rid not in chunk.too_close]
         if outside:
             parts.append("outside the geofence of " + ", ".join(outside))
         return "; ".join(parts)
+
+    def _too_close(self, rid: str, lanes: list[dict], planned: dict[str, list[dict]]) -> str | None:
+        """Why giving *rid* the path *lanes* would break the zone gap, or None.
+
+        The whole path *rid* would have, flown from its takeoff point, is
+        compared with the whole planned path of every other drone that is not
+        lost (also a drone held for manual control, which may still fly). The
+        comparison ignores timing, like the plan's own separation check, so a
+        re-task never brings two drones closer than the gap at any point.
+        """
+        gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
+        if gap <= 0 or not self._retask_separation:
+            return None
+        mine = [self._origin(self._drones[rid])]
+        for lane in lanes:
+            mine.append(_path_point(mine[-1], [lane]))
+        for other_id, other in self._drones.items():
+            if other_id == rid or other.lost or other.zone is None:
+                continue
+            theirs = [self._origin(other)]
+            for lane in planned.get(other_id, other.lanes):
+                theirs.append(_path_point(theirs[-1], [lane]))
+            distance, _, _ = closest_approach(mine, theirs)
+            if distance < gap:
+                return f"come within {distance:.0f} cm of {other_id}, below the {gap} cm gap"
+        return None
 
     def _fail_locked(self, chunk: _Chunk, reason: str) -> None:
         chunk.status = "failed"

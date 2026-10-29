@@ -316,7 +316,7 @@ kbd {
 
 /* ---------- Map ---------- */
 .map-card { display: flex; flex-direction: column; gap: 8px; }
-#search-map { height: 300px; width: 100%; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface-2); }
+#search-map { height: 420px; width: 100%; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface-2); }
 .leaflet-container { background: var(--surface-2); font-family: var(--font); }
 .banner { padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--warn); color: var(--warn); font-weight: 600; font-size: var(--fs-xs); }
 .uncovered {
@@ -566,8 +566,52 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     .land-all { padding: 8px 12px; }
     .land-all kbd { display: none; }
     .drone-cards { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-    #search-map { height: 240px; }
+    #search-map { height: 340px; }
     .target { flex-direction: column; align-items: stretch; }
     .target-text { width: 100%; }
     .target-photo { flex-basis: auto; width: 88px; }
+}
+
+/* ---------- Search plan editor (static/ui/map_plan.js, docs/map-and-plan-editing.md) ---------- */
+.plan-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.plan-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.plan-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.plan-grid label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--muted); min-width: 0; }
+.plan-grid input { padding: 6px 7px; min-width: 0; }
+.plan-grid input:disabled { opacity: 0.55; }
+/* The map's own controls stay below the sticky top bar. */
+#search-map { position: relative; z-index: 0; }
+#plan-drone { flex: 1 0 110px; }
+#plan-name { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+#plan-anchor-pick.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+#plan-check .plan-check-head { font-weight: 600; }
+.plan-icon { background: none; border: 0; }
+.plan-vertex {
+    width: 14px; height: 14px; border-radius: 3px; border: 2px solid currentColor; background: var(--surface);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); cursor: grab; font-size: 9px; font-weight: 700; line-height: 10px;
+    text-align: center; color: inherit;
+}
+.plan-vertex.start { border-radius: 50%; }
+.plan-vertex.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+.plan-vertex.bad { background: #dc2626; border-color: #7f1d1d; color: #ffffff; }
+.plan-arrow { font-size: 10px; line-height: 14px; text-align: center; text-shadow: 0 0 2px rgba(255, 255, 255, 0.9); }
+.plan-handle {
+    width: 18px; height: 18px; margin: -2px; border-radius: 50%; background: var(--surface); color: var(--text);
+    border: 1px solid var(--muted); font-size: 11px; line-height: 16px; text-align: center; cursor: move;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.plan-anchor {
+    width: 18px; height: 18px; margin: -2px; border-radius: 50%; background: #111827; color: #ffffff; font-weight: 700;
+    font-size: 12px; line-height: 18px; text-align: center; box-shadow: 0 0 0 2px #ffffff;
+}
+.map-note {
+    max-width: 280px; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2);
+    font-size: var(--fs-xs); line-height: 1.35; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); opacity: 0.94;
+}
+.map-note-line + .map-note-line { margin-top: 2px; }
+.leaflet-control-layers, .leaflet-control-attribution { background: var(--surface); color: var(--text-2); }
+.leaflet-control-attribution a { color: var(--accent); }
+@media (max-width: 520px) {
+    .plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .map-note { max-width: 200px; }
 }

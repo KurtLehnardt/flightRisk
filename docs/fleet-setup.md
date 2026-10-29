@@ -22,7 +22,7 @@ Do this before every flight, in both paths. The coordinator assumes this layout,
 
 1. Mark a 4 m × 4 m area and a takeoff line along its near edge.
 2. Put drone-1 at the near-left corner of the area.
-3. Put drone-2 250 cm to its right on the takeoff line.
+3. Put drone-2 250 cm to its right on the takeoff line. These marks come from `--fleet-area-cm` and the number of drones (250 cm with the default 400 cm area and two drones); the Plan card and the Start confirmation list each drone's mark. Editing the plan on the map never moves a mark: it changes where the drones fly, not where they take off ([map and plan editing](map-and-plan-editing.md), section 3.3).
 4. Point both noses into the area along the 4 m depth.
 5. Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence and never in a flight path.
 
@@ -36,7 +36,7 @@ The Tello has no GPS. Each edge tracks its drone by dead reckoning from the spot
 
 What this means for you:
 
-- The plan's zones assume each drone takes off from its mark (drone-1 on the near-left corner, drone-2 250 cm to its right). A Tello lands where it is, so after every run, and after every LAND ALL, put each drone back on its mark, nose into the area, before the next Start. The Start confirmation reminds you of this.
+- The plan assumes each drone takes off from its mark (drone-1 on the near-left corner, drone-2 250 cm to its right), also a plan edited on the map, whose geofence and separation checks use these marks. A Tello lands where it is, so after every run, and after every LAND ALL, put each drone back on its mark, nose into the area, before the next Start. The Start confirmation reminds you of this.
 - If you do not, the drone flies its lanes, and keeps its geofence, around the spot where it landed. It still never flies further than the geofence from the spot it took off from, but its search pattern is shifted by however far it was from its mark.
 - After a landing, the dashboard shows the drone where it landed. It shows it at its zone's start again once it takes off.
 - A lane plan sent while a drone is on the ground is checked against the geofence from the spot it will take off from. A plan sent while it flies (a re-task) is checked from its dead-reckoned position.

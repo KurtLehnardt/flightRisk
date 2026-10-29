@@ -46,7 +46,8 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
-from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, FleetCoordinator, StartResult
+from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM, FleetCoordinator, StartResult
+from flightrisk.drone import plan_edit
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_events
@@ -57,6 +58,7 @@ from flightrisk.dashboard.obs_hooks import install_http_observability, install_s
 from flightrisk.dashboard.ceiling import EVENT as CEILING_EVENT
 from flightrisk.dashboard.ceiling import CeilingBoard, CeilingRefusal, CeilingStore
 from flightrisk.dashboard.manual_control import ManualControl
+from flightrisk.dashboard import map_tiles, plan_store
 
 try:
     from flightrisk.telemetry import init_telemetry, get_tracer, get_meter, FlightRiskMetrics
@@ -673,6 +675,13 @@ class FleetSupervisor:
 
     # No ceiling board unless one is given (also for a supervisor built without __init__).
     _ceiling: CeilingBoard | None = None
+    # No map plan has been edited after Plan (also for a supervisor built without __init__).
+    _plan_stale: bool = False
+    # Counts the edits the browsers reported (fleet_plan_edited); a Plan that
+    # an edit overtook leaves the plan stale (docs/map-and-plan-editing.md).
+    _edit_version: int = 0
+    # The map plan the drones hold (None for a plan made without the map).
+    _map_spec = None
     # Manual takeover; None only for a supervisor built without __init__.
     manual: ManualControl | None = None
 
@@ -697,6 +706,14 @@ class FleetSupervisor:
     ):
         self.net = net
         self._ceiling = ceiling
+        # Defaults for plans made on the map (docs/map-and-plan-editing.md).
+        width, depth = (area_cm, area_cm) if isinstance(area_cm, (int, float)) else area_cm
+        self.map_area_cm = (int(width), int(depth))
+        self.map_strip_cm = int(strip_cm)
+        self.map_gap_cm = DEFAULT_ZONE_GAP_CM
+        # True once the plan was edited on the map after Plan was pressed:
+        # Start is refused until Plan is pressed again.
+        self._plan_stale = False
         # Each drone's slot for the plan being made, checked by the ceiling
         # board just before the coordinator plans (see plan()).
         self._plan_slots: dict[str, int] = {}
@@ -709,6 +726,7 @@ class FleetSupervisor:
             drone_id: TransportEdgeLink(transport, drone_id, send_timeout_s, ping_timeout_s)
             for drone_id in drone_ids
         }
+        self.geofence_cm = float(geofence_cm) if geofence_cm is not None else fleet_geofence_cm()
         self.coordinator = FleetCoordinator(
             self.links,
             area_cm=area_cm,
@@ -716,7 +734,7 @@ class FleetSupervisor:
             alt_slots_cm=alt_slots_cm,
             clock=self._clock,
             on_event=self._on_coordinator_event,
-            geofence_cm=geofence_cm if geofence_cm is not None else fleet_geofence_cm(),
+            geofence_cm=self.geofence_cm,
             retask_wait_s=retask_wait_s,
             alt_slot_of=self._plan_slot if ceiling is not None else None,
             # A drone held for manual control is never offered a lost
@@ -928,14 +946,117 @@ class FleetSupervisor:
 
     # -- Operator actions ---------------------------------------------------
 
-    def plan(self):
+    # -- Plans made on the map (docs/map-and-plan-editing.md) ----------------
+
+    def map_defaults(self) -> dict:
+        """What the map editor starts from: the configured area, lane spacing, zone gap and geofence."""
+        width, depth = self.map_area_cm
+        return {
+            "mode": "fleet",
+            "drone_ids": list(self.coordinator.drone_ids),
+            "area": {"x_cm": 0, "y_cm": 0, "w_cm": width, "h_cm": depth},
+            "strip_cm": self.map_strip_cm,
+            "gap_cm": self.map_gap_cm,
+            "geofence_cm": self.geofence_cm,
+            "takeoffs": {drone_id: list(point) for drone_id, point in self.layout_takeoffs().items()},
+            "camera_footprint_cm": plan_edit.camera_footprint_cm() or self.map_strip_cm,
+        }
+
+    def layout_takeoffs(self) -> dict:
+        """Each drone's physical takeoff mark: the near-left corner of its zone of the configured area.
+
+        This is the layout of docs/fleet-setup.md (drone-2 250 cm right of
+        drone-1 for the default 400 cm area). The map editor never moves
+        these marks: every map plan starts each drone at its mark, and its
+        separation check uses them (map-and-plan-editing.md, section 3.3).
+        """
+        width, depth = self.map_area_cm
+        ids = list(self.coordinator.drone_ids)
+        try:
+            zones = plan_edit.pp.split_area(plan_edit.pp.Rect(0, 0, width, depth), len(ids), self.map_gap_cm)
+        except ValueError:
+            return {}
+        return {drone_id: (zone.x, zone.y) for drone_id, zone in zip(ids, zones)}
+
+    def _preview_slot(self, drone_id: str, index: int) -> int:
+        """A drone's slot for a preview, read without the side effects of ``plan_slots``.
+
+        Raises ``ValueError`` with the ceiling board's text when the slot is
+        above the ceiling limit, so the preview shows it as a problem.
+        """
+        if self._ceiling is None:
+            return self.coordinator.zone_alt_cm(drone_id, index)
+        settings = self._ceiling.settings
+        slot = self._ceiling.slot_for(drone_id, index, settings)
+        problem = settings.slot_problem(drone_id, slot)
+        if problem is not None:
+            raise ValueError(problem)
+        return slot
+
+    def build_map_plan(self, spec: "plan_edit.PlanSpec", *, for_plan: bool = False) -> "plan_edit.BuiltPlan":
+        """Build and check *spec* for this fleet; nothing is sent.
+
+        With *for_plan* the slots are the ones ``plan()`` has just taken from
+        the ceiling board; otherwise they are read without side effects.
+        """
+        if for_plan and self._ceiling is not None:
+            slot_of = self._plan_slot
+        else:
+            slot_of = self._preview_slot
+        return plan_edit.build_plan(
+            spec,
+            self.coordinator.drone_ids,
+            strip_cm=self.map_strip_cm,
+            gap_cm=self.map_gap_cm,
+            geofence_cm=self.geofence_cm,
+            alt_slot_of=slot_of,
+            takeoffs=self.layout_takeoffs(),
+            footprint_cm=plan_edit.camera_footprint_cm(),
+        )
+
+    def mark_plan_edited(self) -> bool:
+        """The operator edited the plan on the map: refuse Start until Plan is pressed again.
+
+        Every edit counts, also one that arrives while a Plan is being made:
+        that Plan then leaves the plan stale (``plan``). Returns True when a
+        plan that had not started was invalidated. A started mission is never
+        touched.
+        """
+        if self.coordinator.started:
+            return False
+        with self._lock:
+            self._edit_version += 1
+            was_stale, self._plan_stale = self._plan_stale, True
+        if self.coordinator.current_plan() is None:
+            return False
+        if not was_stale:
+            log.warning("Fleet plan edited after Plan; Start refused until Plan is pressed again")
+            self._emit("fleet_event", {
+                "event": "plan_invalidated",
+                "detail": "the plan was edited on the map after Plan; press Plan search again",
+            })
+        return True
+
+    def _refuse_map_plan(self, built: "plan_edit.BuiltPlan") -> None:
+        """Show why a map plan was refused (its problems on the map) and refuse Plan."""
+        self._emit("plan_preview", built.payload())
+        self._refuse_plan(built.problem_text() or "the plan has no flyable path")
+
+    def plan(self, spec: "plan_edit.PlanSpec | None" = None):
         """Sync every clock, split the area and send ``assign_lanes``.
+
+        With *spec* (a plan made on the map), the spec's paths are checked
+        first (``plan_edit.build_plan``) and the plan is refused, with
+        nothing sent, when any check fails; otherwise its lanes are sent.
 
         Raises ``RuntimeError`` while a drone reports flying, and
         ``CeilingRefusal`` (a ``RuntimeError``) when a drone's altitude slot
         is above the ceiling limit; nothing is sent to any drone then.
         """
         with self._busy:
+            with self._lock:
+                # An edit reported after this point makes this Plan stale.
+                edit_version = self._edit_version
             paused = self._paused_drones()
             if paused:
                 detail = f"{', '.join(paused)} under manual control; press Resume search first"
@@ -953,6 +1074,12 @@ class FleetSupervisor:
             unready = self._unready_drones(self.coordinator.drone_ids)
             if unready:
                 self._refuse_plan(self._not_ready_detail(unready))
+            # A plan made on the map is checked before anything is sent.
+            built = None
+            if spec is not None:
+                built = self.build_map_plan(spec, for_plan=True)
+                if not built.ok:
+                    self._refuse_map_plan(built)
             self.coordinator.sync()
             unready = {
                 drone_id: "clock not synced"
@@ -961,8 +1088,22 @@ class FleetSupervisor:
             }
             if unready:
                 self._refuse_plan(self._not_ready_detail(unready))
-            plan = self.coordinator.plan()
+            if built is None:
+                plan = self.coordinator.plan()
+            else:
+                area = built.spec.area
+                plan = self.coordinator.plan_zones(
+                    built.zone_assignments(),
+                    grid_cm=(area.x, area.y, area.w, area.h),
+                    gap_cm=built.gap_cm,
+                    strip_cm=built.strip_cm,
+                    uncovered_areas=built.uncovered,
+                    details=built.payload(),
+                )
             with self._lock:
+                if self._edit_version == edit_version:
+                    self._plan_stale = False
+                self._map_spec = built.spec if built is not None else None
                 self._flown.clear()
                 self._flying.clear()
                 self._landed_early.clear()
@@ -977,17 +1118,31 @@ class FleetSupervisor:
         self._emit("fleet_event", {"event": "plan_refused", "detail": detail})
         raise RuntimeError(f"Plan refused: {detail}")
 
-    def start(self, lead_s: float = 2.0):
+    def start(self, lead_s: float = 2.0, spec: "plan_edit.PlanSpec | None" = None):
         """Re-sync every clock, then schedule one common start.
 
         The coordinator refuses the start unless every drone is synced, has
-        acked its lanes and reports enough battery. The outcome is sent to
-        the browser as a ``fleet_event``.
+        acked its lanes and reports enough battery. A map plan starts only
+        when *spec*, the plan the browser shows, is the plan that was sent,
+        and no edit was reported since. The outcome is sent to the browser
+        as a ``fleet_event``.
         """
         with self._busy:
             refusals = {
                 drone_id: "under manual control; press Resume search first" for drone_id in self._paused_drones()
             }
+            if not refusals and self._plan_stale and not self.coordinator.started:
+                refusals = {"fleet": "the plan was edited on the map after Plan; press Plan search again"}
+            if not refusals and not self.coordinator.started:
+                with self._lock:
+                    held = self._map_spec
+                # The browser sends the plan it shows (*spec*); the drones fly
+                # only the plan they were sent, so the two must be the same.
+                if (held is not None or spec is not None) and spec != held:
+                    refusals = {
+                        "fleet": "the plan shown on the map is not the plan that was sent to the drones; "
+                        "press Plan search again"
+                    }
             if not refusals and not self.coordinator.started:
                 planned = self.coordinator.current_plan()
                 if planned is not None:
@@ -1726,6 +1881,11 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
 
 
 # --- Routes ---
+
+# Cached map tiles (docs/map-and-plan-editing.md, section 6). The route reads
+# only the local cache and is behind the API-key gate like every other route.
+app.register_blueprint(map_tiles.tiles_bp)
+
 
 @app.route("/")
 def index():
@@ -2536,11 +2696,12 @@ def on_set_ceiling_settings(data):
     emit(CEILING_EVENT, board.payload())
 
 
-def _run_fleet_action(action: str) -> None:
+def _run_fleet_action(action: str, **kwargs) -> None:
     """Run the fleet ``plan`` or ``start`` action on a worker thread.
 
     Both block on clock sync, which must never run on a transport delivery
-    thread or hold up other socket events such as ``land_all``.
+    thread or hold up other socket events such as ``land_all``. *kwargs* go to
+    the action (the map plan spec of ``plan``).
     """
     supervisor = app_state.fleet_supervisor
     if supervisor is None:
@@ -2553,7 +2714,7 @@ def _run_fleet_action(action: str) -> None:
     def _work():
         try:
             with _fleet_span(f"fleet.{action}"):
-                getattr(supervisor, action)()
+                getattr(supervisor, action)(**kwargs)
         except Exception as exc:
             log.error("Fleet %s failed", action, exc_info=True)
             socketio.emit("error", {"message": f"Fleet {action} failed: {exc}"})
@@ -2563,8 +2724,184 @@ def _run_fleet_action(action: str) -> None:
 
 @socketio.on("plan_fleet")
 def on_plan_fleet(data=None):
-    """Sync clocks, split the search area and send each drone its lanes."""
+    """Sync clocks, split the search area and send each drone its lanes.
+
+    With ``{"plan": spec}`` (a plan made on the map) the spec's paths are
+    checked first and refused with nothing sent when a check fails
+    (``FleetSupervisor.plan``). Without it the area is split as before.
+    """
+    if isinstance(data, dict) and data.get("plan") is not None:
+        spec = _map_spec(data.get("plan"))
+        if spec is None:
+            return
+        _run_fleet_action("plan", spec=spec)
+        return
     _run_fleet_action("plan")
+
+
+# --- Map plans (docs/map-and-plan-editing.md) ---
+
+#: The single-drone plan's defaults: the area starts where the drone hovers.
+SINGLE_PLAN_AREA_CM = (400, 400)
+SINGLE_PLAN_DRONE_ID = "primary"
+
+
+def _map_spec(raw) -> "plan_edit.PlanSpec | None":
+    """Parse a plan spec from the browser; on a malformed one, report it and return None."""
+    try:
+        return plan_edit.PlanSpec.from_payload(raw)
+    except plan_edit.PlanSpecError as exc:
+        emit("plan_preview", {"ok": False, "problems": [{"kind": "spec", "text": str(exc)}]})
+        emit("error", {"message": f"Plan not valid: {exc}"})
+        return None
+
+
+def _single_plan(spec: "plan_edit.PlanSpec") -> "plan_edit.BuiltPlan":
+    """The single-drone plan of *spec*: one path from where the drone hovers, every check applied.
+
+    The path starts at the origin, the point where the drone hovers when
+    Start pattern is pressed, and its geofence is around that point (not
+    around the takeoff point, which this flow does not know).
+    """
+    return plan_edit.build_plan(
+        spec,
+        [SINGLE_PLAN_DRONE_ID],
+        strip_cm=plan_edit.DEFAULT_STRIP_CM,
+        gap_cm=DEFAULT_ZONE_GAP_CM,
+        geofence_cm=fleet_geofence_cm(),
+        mode="single",
+        takeoffs={SINGLE_PLAN_DRONE_ID: (0, 0)},
+        footprint_cm=plan_edit.camera_footprint_cm(),
+    )
+
+
+def _map_plan_locked() -> str | None:
+    """Why the map plan may not be replaced now (drones fly or a pattern runs), or None."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        return supervisor.flight_activity()
+    if app_state.search_active:
+        return "a search pattern is running"
+    return None
+
+
+def _map_config() -> dict:
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        config = supervisor.map_defaults()
+    else:
+        width, depth = SINGLE_PLAN_AREA_CM
+        config = {
+            "mode": "single",
+            "drone_ids": [SINGLE_PLAN_DRONE_ID],
+            "area": {"x_cm": 0, "y_cm": 0, "w_cm": width, "h_cm": depth},
+            "strip_cm": plan_edit.DEFAULT_STRIP_CM,
+            "gap_cm": DEFAULT_ZONE_GAP_CM,
+            "geofence_cm": fleet_geofence_cm(),
+            "takeoffs": {SINGLE_PLAN_DRONE_ID: [0, 0]},
+            "camera_footprint_cm": plan_edit.camera_footprint_cm() or plan_edit.DEFAULT_STRIP_CM,
+        }
+    config["patterns"] = list(plan_edit.pp.PATTERNS)
+    config["snap_tolerance_cm"] = plan_edit.pp.SNAP_TOLERANCE_CM
+    config["providers"] = map_tiles.providers_payload()
+    return config
+
+
+@socketio.on("get_map_config")
+def on_get_map_config(data=None):
+    """Defaults, map layers and cached areas for the map editor."""
+    try:
+        emit("map_config", _map_config())
+    except ValueError as exc:  # a malformed FLIGHTRISK_GEOFENCE_CM
+        emit("error", {"message": f"Map plan unavailable: {exc}"})
+
+
+@socketio.on("preview_plan")
+def on_preview_plan(data=None):
+    """Build and check a plan spec without sending anything to a drone."""
+    spec = _map_spec((data or {}).get("plan") if isinstance(data, dict) else None)
+    if spec is None:
+        return
+    supervisor = app_state.fleet_supervisor
+    try:
+        built = supervisor.build_map_plan(spec) if supervisor is not None else _single_plan(spec)
+    except ValueError as exc:  # a malformed FLIGHTRISK_GEOFENCE_CM or FLIGHTRISK_CAMERA_FOOTPRINT_CM
+        emit("error", {"message": f"Map plan unavailable: {exc}"})
+        return
+    emit("plan_preview", built.payload())
+
+
+@socketio.on("fleet_plan_edited")
+def on_fleet_plan_edited(data=None):
+    """The operator edited the plan after Plan: Start is refused until Plan is pressed again."""
+    supervisor = app_state.fleet_supervisor
+    if supervisor is not None:
+        supervisor.mark_plan_edited()
+
+
+def _finite(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+@socketio.on("map_cache_status")
+def on_map_cache_status(data=None):
+    """How much of a map view is cached for one layer: ``{provider, bbox: [s, w, n, e], zoom}``."""
+    data = data if isinstance(data, dict) else {}
+    provider, bbox, zoom = data.get("provider"), data.get("bbox"), data.get("zoom")
+    valid = (
+        isinstance(provider, str) and provider in map_tiles.PROVIDERS
+        and isinstance(bbox, list) and len(bbox) == 4 and all(_finite(v) for v in bbox)
+        and -90 <= bbox[0] <= bbox[2] <= 90 and -180 <= bbox[1] <= bbox[3] <= 180
+        and isinstance(zoom, int) and not isinstance(zoom, bool) and 0 <= zoom <= 22
+    )
+    if not valid:
+        emit("map_cache_status", {"provider": provider, "error": "invalid request"})
+        return
+    if not map_tiles.PROVIDERS[provider].cacheable:
+        emit("map_cache_status", {"provider": provider, "zoom": zoom, "cacheable": False})
+        return
+    status = map_tiles.cache_status(provider, tuple(bbox), zoom)
+    status["cacheable"] = True
+    emit("map_cache_status", status)
+
+
+@socketio.on("save_plan")
+def on_save_plan(data=None):
+    """Save the plan, its anchor and the map view under a name (``~/.flightrisk/plans``)."""
+    data = data if isinstance(data, dict) else {}
+    try:
+        doc = plan_store.save_plan(data.get("name"), data.get("plan"), data.get("anchor"), data.get("view"))
+    except plan_store.PlanStoreError as exc:
+        emit("plan_saved", {"ok": False, "message": str(exc)})
+        return
+    except OSError as exc:
+        log.warning("Saving plan failed: %s", exc)
+        emit("plan_saved", {"ok": False, "message": "the plan could not be written"})
+        return
+    emit("plan_saved", {"ok": True, "name": doc["name"]})
+    emit("plan_list", {"plans": plan_store.list_plans()})
+
+
+@socketio.on("list_plans")
+def on_list_plans(data=None):
+    emit("plan_list", {"plans": plan_store.list_plans()})
+
+
+@socketio.on("load_plan")
+def on_load_plan(data=None):
+    """Send a saved plan to the browser. Nothing is sent to any drone; Plan checks it again."""
+    data = data if isinstance(data, dict) else {}
+    locked = _map_plan_locked()
+    if locked:
+        # The map shows the plan being flown; a loaded plan would replace it.
+        emit("plan_loaded", {"ok": False, "message": f"a plan cannot be loaded now: {locked}"})
+        return
+    try:
+        doc = plan_store.load_plan(data.get("name"))
+    except plan_store.PlanStoreError as exc:
+        emit("plan_loaded", {"ok": False, "message": str(exc)})
+        return
+    emit("plan_loaded", dict(doc, ok=True))
 
 
 def _warn_pending_profile_switch() -> None:
@@ -2587,8 +2924,18 @@ def _warn_pending_profile_switch() -> None:
 
 @socketio.on("start_fleet")
 def on_start_fleet(data=None):
-    """Re-sync clocks and schedule one common start for the fleet."""
+    """Re-sync clocks and schedule one common start for the fleet.
+
+    With ``{"plan": spec}``, the plan the browser shows, the start is refused
+    unless that is the plan the drones were sent (``FleetSupervisor.start``).
+    """
     _warn_pending_profile_switch()
+    if isinstance(data, dict) and data.get("plan") is not None:
+        spec = _map_spec(data.get("plan"))
+        if spec is None:
+            return
+        _run_fleet_action("start", spec=spec)
+        return
     _run_fleet_action("start")
 
 
@@ -2604,14 +2951,34 @@ def on_start_search(data):
         emit("error", {"message": "Match already confirmed; restart the dashboard to start a new search"})
         return
 
-    from flightrisk.drone.search import get_search_pattern, PatternType
+    from flightrisk.drone.search import get_search_pattern, PatternType, Waypoint
 
-    pattern_name = data.get("pattern", "expanding_square")
-    pattern_type = PatternType(pattern_name)
-    waypoints = get_search_pattern(pattern_type)
+    edited = isinstance(data, dict) and data.get("plan") is not None
+    if edited:
+        # A plan made on the map: its path is flown from where the drone
+        # hovers, as axis-aligned moves without turning, after every check
+        # of a fleet plan that applies to one drone (map-and-plan-editing.md).
+        spec = _map_spec(data.get("plan"))
+        if spec is None:
+            return
+        try:
+            built = _single_plan(spec)
+        except ValueError as exc:
+            emit("error", {"message": f"Pattern refused: {exc}"})
+            return
+        if not built.ok:
+            emit("plan_preview", built.payload())
+            emit("error", {"message": f"Pattern refused: {built.problem_text()}"})
+            return
+        pattern_name = spec.pattern
+        waypoints = [Waypoint(lane["direction"], lane["distance_cm"]) for lane in built.drones[0].converted.lanes]
+    else:
+        pattern_name = data.get("pattern", "expanding_square")
+        pattern_type = PatternType(pattern_name)
+        waypoints = get_search_pattern(pattern_type)
 
     app_state.search_active = True
-    emit("search_started", {"pattern": pattern_name, "waypoints": len(waypoints)})
+    emit("search_started", {"pattern": pattern_name, "waypoints": len(waypoints), "edited": edited})
 
     def _execute_search():
         MAX_AVOIDANCE_RETRIES = 5
@@ -2662,6 +3029,25 @@ def on_start_search(data):
                 if check["safe"]:
                     break
 
+                if edited:
+                    # A map plan is flown exactly as drawn and checked: a side-step,
+                    # a skipped waypoint or a turn would shift every later lane
+                    # outside what was checked. Stop and hover; the operator decides.
+                    message = (
+                        f"Obstacle ahead before waypoint {i + 1}: the map plan stopped and the drone hovers. "
+                        "A side-step, skip or turn would move every later lane away from the checked plan; "
+                        "fly it by hand or plan again."
+                    )
+                    socketio.emit("warning", {"message": message})
+                    obs_events.flight_safety("map_plan_stopped", reason="obstacle",
+                                             drone_id=getattr(drone, "name", None), waypoint=i + 1)
+                    try:
+                        drone.hover()
+                    except Exception:  # the pattern stops either way
+                        log.warning("Hover after an obstacle failed", exc_info=True)
+                    app_state.search_active = False
+                    break
+
                 avoidance_retries += 1
                 socketio.emit("obstacle_detected", {
                     "action": check["action"],
@@ -2695,6 +3081,9 @@ def on_start_search(data):
                     socketio.emit("error", {"message": f"Avoidance error: {e}"})
                     break
 
+            if not app_state.search_active:
+                # Stopped during the obstacle check: no further move is sent.
+                break
             if skip_waypoint:
                 i += 1
                 continue
