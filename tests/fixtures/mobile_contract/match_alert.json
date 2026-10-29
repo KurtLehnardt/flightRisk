@@ -1,0 +1,55 @@
+{
+  "_meta": {
+    "description": "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the laptop (match_alert_response is not in the phone's allow-list).",
+    "file": "match_alert.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "MatchAlertLatch.pending_alert",
+      "flightrisk.dashboard.app._emit_edge_alert"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "edge_match": {
+      "direction": "server_to_client",
+      "event": "match_alert",
+      "notes": "A match from an edge. snapshot is a base64 JPEG crop; alert_id identifies the alert in every later event about it.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000001",
+        "alert_level": "possible_match",
+        "face_score": 0.0,
+        "gemma_confidence": null,
+        "gemma_match": null,
+        "reasoning": null,
+        "reid_score": 0.86,
+        "score": 0.86,
+        "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "time": "12:34:56",
+        "track_id": "8_7",
+        "type": "edge"
+      }
+    },
+    "reminder_on_connect": {
+      "direction": "server_to_client",
+      "event": "match_alert_reminder",
+      "notes": "Sent on connect (and periodically) while an alert waits for the operator: the same payload with renotify true and renotify_count.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000001",
+        "alert_level": "possible_match",
+        "face_score": 0.0,
+        "gemma_confidence": null,
+        "gemma_match": null,
+        "reasoning": null,
+        "reid_score": 0.86,
+        "renotify": true,
+        "renotify_count": 0,
+        "score": 0.86,
+        "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "time": "12:34:56",
+        "track_id": "8_7",
+        "type": "edge"
+      }
+    }
+  }
+}

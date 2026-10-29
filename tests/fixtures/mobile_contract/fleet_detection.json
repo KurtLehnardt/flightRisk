@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "description": "The 'fleet_detection' event: a new merged detection on the shared grid.",
+    "file": "fleet_detection.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "FleetCoordinator.on_detection",
+      "FleetDetection.to_dict",
+      "FleetSupervisor.handle_detections"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "new_detection": {
+      "direction": "server_to_client",
+      "event": "fleet_detection",
+      "notes": "thumbnail is a base64 JPEG (the most confident crop). rel_x_cm/rel_y_cm repeat x_cm/y_cm.",
+      "payload": {
+        "count": 1,
+        "drone_id": "drone-1",
+        "drone_ids": [
+          "drone-1"
+        ],
+        "id": 1,
+        "rel_x_cm": 120.0,
+        "rel_y_cm": 80.0,
+        "thumbnail": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "x_cm": 120.0,
+        "y_cm": 80.0
+      }
+    }
+  }
+}

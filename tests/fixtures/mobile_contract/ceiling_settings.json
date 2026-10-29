@@ -1,0 +1,322 @@
+{
+  "_meta": {
+    "description": "The 'ceiling_settings' event: the answer to get_ceiling_settings, and a broadcast on every change. 'file' is a path on the ground machine, for display only.",
+    "file": "ceiling_settings.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "CeilingBoard.payload",
+      "flightrisk.dashboard.app.on_get_ceiling_settings",
+      "flightrisk.fleet_protocol.make_ceiling_nack"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "edge_pending": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "The ground's settings changed (ceiling 180, margin 50, drone-2 has its own slot 120 cm); the new values were sent and each edge's answer is pending (edge.pending true, edge.in_sync false).",
+      "payload": {
+        "ceiling_cm": 180,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": true,
+              "refusal": null,
+              "slot_cm": 100.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": true,
+              "refusal": null,
+              "slot_cm": 130.0,
+              "supported": true
+            },
+            "own_slot_cm": 120,
+            "problem": null,
+            "slot_cm": 120
+          }
+        ],
+        "editable": true,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20
+        },
+        "load_error": null,
+        "locked_reason": null,
+        "margin_cm": 50,
+        "max_slot_cm": 130
+      }
+    },
+    "edge_refused": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "drone-2's edge refused the change (edge.refusal with reason and detail) and keeps its old values.",
+      "payload": {
+        "ceiling_cm": 180,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": true,
+              "refusal": null,
+              "slot_cm": 100.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": {
+                "detail": "the ceiling changes only on the ground",
+                "reason": "in_flight"
+              },
+              "slot_cm": 130.0,
+              "supported": true
+            },
+            "own_slot_cm": 120,
+            "problem": null,
+            "slot_cm": 120
+          }
+        ],
+        "editable": true,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20
+        },
+        "load_error": null,
+        "locked_reason": null,
+        "margin_cm": 50,
+        "max_slot_cm": 130
+      }
+    },
+    "locked_in_flight": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "A drone flies: editable false with locked_reason. A phone never edits these settings anyway.",
+      "payload": {
+        "ceiling_cm": 200,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": true,
+              "in_sync": true,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": 100.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": true,
+              "in_sync": true,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": 130.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 130
+          }
+        ],
+        "editable": false,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20
+        },
+        "load_error": null,
+        "locked_reason": "the ceiling and the altitude slots change only while every drone is on the ground and no start is scheduled (drone-1 reported flying)",
+        "margin_cm": 60,
+        "max_slot_cm": 140
+      }
+    },
+    "on_ground_in_sync": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "Defaults: ceiling 200 cm, margin 60 cm, effective max slot 140 cm. Both edges report the same values (edge.in_sync true). editable true because every drone is on the ground.",
+      "payload": {
+        "ceiling_cm": 200,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": true,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": 100.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": true,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": 130.0,
+              "supported": true
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 130
+          }
+        ],
+        "editable": true,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20
+        },
+        "load_error": null,
+        "locked_reason": null,
+        "margin_cm": 60,
+        "max_slot_cm": 140
+      }
+    },
+    "slot_above_limit": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "drone-2's own slot 160 cm is above the 140 cm limit: 'problem' says so, and Plan is refused. The edges have not reported (edge.supported false).",
+      "payload": {
+        "ceiling_cm": 200,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": null,
+              "flying": null,
+              "in_sync": false,
+              "margin_cm": null,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": null,
+              "supported": false
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": null,
+              "flying": null,
+              "in_sync": false,
+              "margin_cm": null,
+              "note": null,
+              "pending": false,
+              "refusal": null,
+              "slot_cm": null,
+              "supported": false
+            },
+            "own_slot_cm": 160,
+            "problem": "drone-2 slot 160 cm is above the ceiling limit 140 cm (ceiling 200 cm minus margin 60 cm)",
+            "slot_cm": 160
+          }
+        ],
+        "editable": true,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20
+        },
+        "load_error": null,
+        "locked_reason": null,
+        "margin_cm": 60,
+        "max_slot_cm": 140
+      }
+    },
+    "unavailable": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "A ground without the edge source: {available: false}. Hide the section.",
+      "payload": {
+        "available": false
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "description": "The 'stream_video_state' event (read only on a phone).",
+    "file": "stream_video_state.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app.on_set_stream_video"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "off": {
+      "direction": "server_to_client",
+      "event": "stream_video_state",
+      "notes": "The laptop turned video streaming off (the reply goes to the browser that changed it). Frames then carry no image.",
+      "payload": {
+        "enabled": false
+      }
+    }
+  }
+}

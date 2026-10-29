@@ -1,0 +1,53 @@
+{
+  "_meta": {
+    "description": "The 'manual_result' event: the edge's answer to a manual command (or its absence), broadcast.",
+    "file": "manual_result.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "ManualControl._result",
+      "ManualControl.check_timeouts",
+      "ManualControl.on_reply"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "land_acked": {
+      "direction": "server_to_client",
+      "event": "manual_result",
+      "notes": "The edge acknowledged the land.",
+      "payload": {
+        "action": "land",
+        "detail": null,
+        "drone_id": "drone-1",
+        "ok": true,
+        "reason": null
+      }
+    },
+    "land_no_reply": {
+      "direction": "server_to_client",
+      "event": "manual_result",
+      "notes": "No answer from the edge in time.",
+      "payload": {
+        "action": "land",
+        "detail": "no answer from drone-2 within 4 s",
+        "drone_id": "drone-2",
+        "ok": false,
+        "reason": "no_reply"
+      }
+    },
+    "resume_search_acked": {
+      "direction": "server_to_client",
+      "event": "manual_result",
+      "notes": "The edge resumed the search; the orphan countdown is cancelled.",
+      "payload": {
+        "action": "resume_search",
+        "control_mode": "autonomous",
+        "detail": null,
+        "drone_id": "drone-2",
+        "ok": true,
+        "reason": null
+      }
+    }
+  }
+}

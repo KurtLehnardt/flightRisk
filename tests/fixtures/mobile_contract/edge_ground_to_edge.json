@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "description": "Edge link, ground to edge: every message a phone acting as an edge may receive. Unknown types are ignored without closing the connection.",
+    "file": "edge_ground_to_edge.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "link": "raw WebSocket ws://HOST:9000 (not Socket.IO)",
+    "max_message_bytes": 1048576,
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "GroundTransport.send_stream_video",
+      "GroundTransport.send_target",
+      "flightrisk.fleet_protocol builders",
+      "flightrisk.fleet_protocol.validate_ground_to_edge"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "clock": {
+      "direction": "ground_to_edge",
+      "notes": "Clock offset for fleet starts. Ignore.",
+      "payload": {
+        "offset_s": 0.25,
+        "type": "clock"
+      }
+    },
+    "emergency_land_all": {
+      "direction": "ground_to_edge",
+      "notes": "Flight command; a phone edge has no drone and ignores it.",
+      "payload": {
+        "type": "emergency_land_all"
+      }
+    },
+    "ground_hello": {
+      "direction": "ground_to_edge",
+      "notes": "A v2 ground's first message. A phone edge (v1) ignores it and never answers.",
+      "payload": {
+        "epoch": 7,
+        "node_id": "ground-a",
+        "proto": 2,
+        "role": "leader",
+        "type": "hello"
+      }
+    },
+    "heartbeat_v1": {
+      "direction": "ground_to_edge",
+      "notes": "Ignore.",
+      "payload": {
+        "seq": 12,
+        "type": "heartbeat"
+      }
+    },
+    "heartbeat_v2": {
+      "direction": "ground_to_edge",
+      "notes": "Ignore.",
+      "payload": {
+        "epoch": 7,
+        "leader_id": "ground-a",
+        "seq": 12,
+        "type": "heartbeat"
+      }
+    },
+    "land": {
+      "direction": "ground_to_edge",
+      "notes": "Flight command; a phone edge has no drone and ignores it.",
+      "payload": {
+        "cmd_id": "cmd-land-0001",
+        "type": "land"
+      }
+    },
+    "ping": {
+      "direction": "ground_to_edge",
+      "notes": "Clock-sync ping. A phone edge flies no lanes and never answers with pong; ignore.",
+      "payload": {
+        "t1": 1000.0,
+        "type": "ping"
+      }
+    },
+    "set_target": {
+      "direction": "ground_to_edge",
+      "notes": "The target's ReID embedding (shortened here); face_embedding is null on an appearance-only ground. A phone keeps its own target: log and ignore.",
+      "payload": {
+        "face_embedding": null,
+        "reid_embedding": [
+          0.12,
+          -0.08,
+          0.33,
+          0.05
+        ],
+        "type": "set_target"
+      }
+    },
+    "stream_video": {
+      "direction": "ground_to_edge",
+      "notes": "Turn the full-frame thumbnail in 'detections' on (true) or off (false).",
+      "payload": {
+        "enabled": true,
+        "type": "stream_video"
+      }
+    }
+  }
+}

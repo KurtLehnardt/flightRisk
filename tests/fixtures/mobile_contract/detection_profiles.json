@@ -1,0 +1,412 @@
+{
+  "_meta": {
+    "description": "The 'detection_profiles' event: the answer to get_detection_profiles, and a broadcast on every change.",
+    "file": "detection_profiles.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "ProfileBoard.payload",
+      "flightrisk.dashboard.app.on_get_detection_profiles",
+      "flightrisk.fleet_protocol.make_profile_nack"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "fallback": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "The edge was asked for top_down but runs its fallback (fallback true, fallback_reason 'weights_missing', requested 'top_down').",
+      "payload": {
+        "controls_enabled": true,
+        "controls_note": null,
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": null,
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": true,
+            "fallback_reason": "weights_missing",
+            "flying": false,
+            "mismatch": false,
+            "note": null,
+            "override": null,
+            "pending": false,
+            "refusal": null,
+            "requested": "top_down",
+            "supported": true,
+            "switchable": true
+          }
+        },
+        "fleet_default": null,
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          }
+        ]
+      }
+    },
+    "no_board": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "A ground without the edge source: available false and no profiles. Hide the section.",
+      "payload": {
+        "available": false,
+        "drones": {},
+        "fleet_default": null,
+        "profiles": []
+      }
+    },
+    "pending": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "A switch to top_down was sent and waits for the edge's answer: pending true, mismatch true. Show 'Switching...'.",
+      "payload": {
+        "controls_enabled": true,
+        "controls_note": null,
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": "top_down",
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": false,
+            "mismatch": true,
+            "note": null,
+            "override": "top_down",
+            "pending": true,
+            "refusal": null,
+            "requested": "top_down",
+            "supported": true,
+            "switchable": true
+          }
+        },
+        "fleet_default": null,
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          }
+        ]
+      }
+    },
+    "refused": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "The edge refused the switch (refusal.reason 'in_flight', refusal.detail is operator text) and keeps its active profile; mismatch stays true.",
+      "payload": {
+        "controls_enabled": true,
+        "controls_note": null,
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": "top_down",
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": true,
+            "mismatch": true,
+            "note": null,
+            "override": "top_down",
+            "pending": false,
+            "refusal": {
+              "detail": "detection profiles change only on the ground",
+              "reason": "in_flight"
+            },
+            "requested": "top_down",
+            "supported": true,
+            "switchable": false
+          }
+        },
+        "fleet_default": null,
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          }
+        ]
+      }
+    },
+    "standby_controls_disabled": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "A standby ground: controls_enabled false with controls_note. Hide the selectors and show the note.",
+      "payload": {
+        "controls_enabled": false,
+        "controls_note": "This ground station is the standby. Edges take detection profile changes only from the leader ground; change them there.",
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": null,
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": false,
+            "mismatch": false,
+            "note": null,
+            "override": null,
+            "pending": false,
+            "refusal": null,
+            "requested": null,
+            "supported": true,
+            "switchable": true
+          }
+        },
+        "fleet_default": null,
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          }
+        ]
+      }
+    },
+    "unsupported": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "drone-2 runs an edge that never names a profile: supported false, active null. Show 'not supported'; offer no selector for it. The fleet default is 'default'.",
+      "payload": {
+        "controls_enabled": true,
+        "controls_note": null,
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": "default",
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": false,
+            "mismatch": false,
+            "note": null,
+            "override": null,
+            "pending": false,
+            "refusal": null,
+            "requested": null,
+            "supported": true,
+            "switchable": true
+          },
+          "drone-2": {
+            "active": null,
+            "desired": "default",
+            "detector_ok": null,
+            "drone_id": "drone-2",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": false,
+            "mismatch": false,
+            "note": null,
+            "override": null,
+            "pending": false,
+            "refusal": null,
+            "requested": null,
+            "supported": false,
+            "switchable": null
+          }
+        },
+        "fleet_default": "default",
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false
+          }
+        ]
+      }
+    }
+  }
+}

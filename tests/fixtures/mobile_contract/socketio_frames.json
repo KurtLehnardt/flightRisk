@@ -1,0 +1,157 @@
+{
+  "_meta": {
+    "description": "Engine.IO v4 / Socket.IO v5 text frames as the dashboard's libraries encode them. Phones open ws://HOST:PORT/socket.io/?EIO=4&transport=websocket directly (no long-polling) and send no Origin header.",
+    "file": "socketio_frames.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "library_versions": {
+      "flask-socketio": "5.6.1",
+      "python-engineio": "4.13.3",
+      "python-socketio": "5.16.3"
+    },
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "engineio.packet.Packet.encode",
+      "flightrisk.dashboard.app.socketio.server.eio (ping settings)",
+      "socketio.packet.Packet.encode"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "engineio_close": {
+      "direction": "client_to_server",
+      "engineio_type": "CLOSE",
+      "frame": "1",
+      "notes": "Close the Engine.IO session.",
+      "socketio_type": null
+    },
+    "engineio_open": {
+      "decoded": {
+        "maxPayload": 10485760,
+        "pingInterval": 25000,
+        "pingTimeout": 20000,
+        "sid": "fake-eio-sid-00000001",
+        "upgrades": []
+      },
+      "direction": "server_to_client",
+      "engineio_type": "OPEN",
+      "frame": "0{\"sid\":\"fake-eio-sid-00000001\",\"upgrades\":[],\"pingTimeout\":20000,\"pingInterval\":25000,\"maxPayload\":10485760}",
+      "notes": "First frame after the WebSocket upgrade of ws://HOST:5555/socket.io/?EIO=4&transport=websocket. pingInterval and pingTimeout are milliseconds; the sid differs on every connection.",
+      "socketio_type": null
+    },
+    "engineio_ping": {
+      "direction": "server_to_client",
+      "engineio_type": "PING",
+      "frame": "2",
+      "notes": "Engine.IO v4: the server pings every pingInterval ms. Answer with engineio_pong at once; treat no ping within pingInterval + pingTimeout as a dropped connection.",
+      "socketio_type": null
+    },
+    "engineio_pong": {
+      "direction": "client_to_server",
+      "engineio_type": "PONG",
+      "frame": "3",
+      "notes": "The answer to a ping.",
+      "socketio_type": null
+    },
+    "socketio_ack": {
+      "ack_id": 1,
+      "decoded": [],
+      "direction": "server_to_client",
+      "engineio_type": "MESSAGE",
+      "frame": "431[]",
+      "notes": "The acknowledgement for socketio_event_with_ack_id.",
+      "socketio_type": "ACK"
+    },
+    "socketio_connect_ack": {
+      "decoded": {
+        "sid": "fake-sio-sid-00000001"
+      },
+      "direction": "server_to_client",
+      "engineio_type": "MESSAGE",
+      "frame": "40{\"sid\":\"fake-sio-sid-00000001\"}",
+      "notes": "The server accepted the namespace connect; the 'status' event follows at once.",
+      "socketio_type": "CONNECT"
+    },
+    "socketio_connect_error": {
+      "decoded": {
+        "message": "Connection rejected by server"
+      },
+      "direction": "server_to_client",
+      "engineio_type": "MESSAGE",
+      "frame": "44{\"message\":\"Connection rejected by server\"}",
+      "notes": "The server refused the namespace connect (no key or a wrong key). Do not retry in a loop: report 'wrong key' and wait for the user.",
+      "socketio_type": "CONNECT_ERROR"
+    },
+    "socketio_connect_with_auth": {
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "40{\"api_key\":\"test-key\"}",
+      "notes": "The client's namespace connect with the auth object; the key here is the obviously fake 'test-key'. Send it right after engineio_open.",
+      "socketio_type": "CONNECT"
+    },
+    "socketio_connect_without_auth": {
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "40",
+      "notes": "A connect with no auth object. A ground with FLIGHTRISK_API_KEY set answers socketio_connect_error.",
+      "socketio_type": "CONNECT"
+    },
+    "socketio_disconnect": {
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "41",
+      "notes": "Leave the namespace before closing the WebSocket.",
+      "socketio_type": "DISCONNECT"
+    },
+    "socketio_event_client_to_server": {
+      "decoded": [
+        "get_fleet_status"
+      ],
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "42[\"get_fleet_status\"]",
+      "notes": "An event with no payload.",
+      "socketio_type": "EVENT"
+    },
+    "socketio_event_client_to_server_with_payload": {
+      "decoded": [
+        "drone_command",
+        {
+          "command": "land",
+          "drone_id": "drone-1"
+        }
+      ],
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "42[\"drone_command\",{\"command\":\"land\",\"drone_id\":\"drone-1\"}]",
+      "notes": "An event with one object payload.",
+      "socketio_type": "EVENT"
+    },
+    "socketio_event_server_to_client": {
+      "decoded": [
+        "land_all_ack",
+        {
+          "coordinator": 2,
+          "local": null,
+          "reached_any": true,
+          "transport": 2
+        }
+      ],
+      "direction": "server_to_client",
+      "engineio_type": "MESSAGE",
+      "frame": "42[\"land_all_ack\",{\"coordinator\":2,\"local\":null,\"reached_any\":true,\"transport\":2}]",
+      "notes": "Every server event is a two-element array: the event name and one payload object.",
+      "socketio_type": "EVENT"
+    },
+    "socketio_event_with_ack_id": {
+      "ack_id": 1,
+      "decoded": [
+        "get_fleet_status"
+      ],
+      "direction": "client_to_server",
+      "engineio_type": "MESSAGE",
+      "frame": "421[\"get_fleet_status\"]",
+      "notes": "An event that asks for an acknowledgement (id 1). The dashboard's handlers return nothing, so the ack carries an empty list; clients need not ask for acks.",
+      "socketio_type": "EVENT"
+    }
+  }
+}

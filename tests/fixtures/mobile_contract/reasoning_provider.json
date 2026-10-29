@@ -1,0 +1,86 @@
+{
+  "_meta": {
+    "description": "The 'reasoning_provider' event: which reasoning backend the GROUND uses. Display only on a phone.",
+    "file": "reasoning_provider.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app._reasoning_state",
+      "flightrisk.reasoning.provider_unavailable_reason"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "cloud_allowed": {
+      "direction": "server_to_client",
+      "event": "reasoning_provider",
+      "notes": "Cloud allowed and configured on the ground (the fake key is not part of the payload).",
+      "payload": {
+        "available": [
+          "claude",
+          "gemma",
+          "off"
+        ],
+        "cloud_allowed": true,
+        "label": "Gemma",
+        "model": "gemma4:latest",
+        "provider": "gemma",
+        "unavailable": {}
+      }
+    },
+    "cloud_allowed_no_key": {
+      "direction": "server_to_client",
+      "event": "reasoning_provider",
+      "notes": "Cloud allowed by the operator but no Claude key on the ground: claude stays unavailable.",
+      "payload": {
+        "available": [
+          "gemma",
+          "off"
+        ],
+        "cloud_allowed": true,
+        "label": "Gemma",
+        "model": "gemma4:latest",
+        "provider": "gemma",
+        "unavailable": {
+          "claude": "FLIGHTRISK_CLAUDE_API_KEY is not set."
+        }
+      }
+    },
+    "local_gemma_cloud_blocked": {
+      "direction": "server_to_client",
+      "event": "reasoning_provider",
+      "notes": "The shipped default: local Gemma, cloud not allowed (cloud_allowed false); claude is listed in 'unavailable' with the reason to show.",
+      "payload": {
+        "available": [
+          "gemma",
+          "off"
+        ],
+        "cloud_allowed": false,
+        "label": "Gemma",
+        "model": "gemma4:latest",
+        "provider": "gemma",
+        "unavailable": {
+          "claude": "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic; set FLIGHTRISK_ALLOW_CLOUD_LLM=1 to opt in."
+        }
+      }
+    },
+    "off": {
+      "direction": "server_to_client",
+      "event": "reasoning_provider",
+      "notes": "Reasoning off: provider 'off', label and model null.",
+      "payload": {
+        "available": [
+          "gemma",
+          "off"
+        ],
+        "cloud_allowed": false,
+        "label": null,
+        "model": null,
+        "provider": "off",
+        "unavailable": {
+          "claude": "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic; set FLIGHTRISK_ALLOW_CLOUD_LLM=1 to opt in."
+        }
+      }
+    }
+  }
+}

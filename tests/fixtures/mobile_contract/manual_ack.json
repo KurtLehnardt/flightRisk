@@ -1,0 +1,64 @@
+{
+  "_meta": {
+    "description": "The 'manual_ack' event: the immediate answer to drone_command (fleet mode) and manual_resume_search. ok false is also sent as an 'error' event.",
+    "file": "manual_ack.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "ManualControl.command",
+      "ManualControl.resume_search",
+      "flightrisk.dashboard.app._manual_reply"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "land_ok": {
+      "direction": "server_to_client",
+      "event": "manual_ack",
+      "notes": "drone_command {command: land} was queued for the drone (never gated).",
+      "payload": {
+        "action": "land",
+        "detail": null,
+        "drone_id": "drone-1",
+        "ok": true,
+        "reason": null
+      }
+    },
+    "land_unknown_drone": {
+      "direction": "server_to_client",
+      "event": "manual_ack",
+      "notes": "A drone id that is not in the fleet.",
+      "payload": {
+        "action": "land",
+        "detail": "'drone-9' is not in the fleet",
+        "drone_id": "drone-9",
+        "ok": false,
+        "reason": "invalid"
+      }
+    },
+    "resume_search_not_manual": {
+      "direction": "server_to_client",
+      "event": "manual_ack",
+      "notes": "manual_resume_search for a drone that is not paused is refused.",
+      "payload": {
+        "action": "resume_search",
+        "detail": "drone-1 is not under manual control",
+        "drone_id": "drone-1",
+        "ok": false,
+        "reason": "not_manual"
+      }
+    },
+    "resume_search_ok": {
+      "direction": "server_to_client",
+      "event": "manual_ack",
+      "notes": "manual_resume_search for a held drone nobody controls was accepted.",
+      "payload": {
+        "action": "resume_search",
+        "detail": null,
+        "drone_id": "drone-2",
+        "ok": true,
+        "reason": null
+      }
+    }
+  }
+}

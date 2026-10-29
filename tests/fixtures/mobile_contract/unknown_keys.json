@@ -1,0 +1,916 @@
+{
+  "_meta": {
+    "description": "Forward compatibility: real payloads with an unknown key added at every object level (never inside maps keyed by drone id or provider name). Decoders must ignore unknown keys everywhere.",
+    "file": "unknown_keys.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "map_keys": [
+      "drones",
+      "slots_cm",
+      "to",
+      "unavailable"
+    ],
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "scripts/export_mobile_contract_fixtures.py add_unknown_keys"
+    ],
+    "spec": "docs/mobile-contract.md",
+    "unknown_key": "x_future_field"
+  },
+  "cases": {
+    "ceiling_settings": {
+      "direction": "server_to_client",
+      "event": "ceiling_settings",
+      "notes": "ceiling_settings.json case 'edge_refused' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "ceiling_cm": 180,
+        "drones": [
+          {
+            "default_slot_cm": 100,
+            "drone_id": "drone-1",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": true,
+              "refusal": null,
+              "slot_cm": 100.0,
+              "supported": true,
+              "x_future_field": "ignore me"
+            },
+            "own_slot_cm": null,
+            "problem": null,
+            "slot_cm": 100,
+            "x_future_field": "ignore me"
+          },
+          {
+            "default_slot_cm": 130,
+            "drone_id": "drone-2",
+            "edge": {
+              "ceiling_cm": 200.0,
+              "flying": false,
+              "in_sync": false,
+              "margin_cm": 60.0,
+              "note": null,
+              "pending": false,
+              "refusal": {
+                "detail": "the ceiling changes only on the ground",
+                "reason": "in_flight",
+                "x_future_field": "ignore me"
+              },
+              "slot_cm": 130.0,
+              "supported": true,
+              "x_future_field": "ignore me"
+            },
+            "own_slot_cm": 120,
+            "problem": null,
+            "slot_cm": 120,
+            "x_future_field": "ignore me"
+          }
+        ],
+        "editable": true,
+        "file": "/home/operator/.flightrisk/ceiling.json",
+        "limits": {
+          "max_ceiling_cm": 1000,
+          "max_slot_cm": 500,
+          "min_ceiling_cm": 150,
+          "min_margin_cm": 30,
+          "min_slot_cm": 20,
+          "x_future_field": "ignore me"
+        },
+        "load_error": null,
+        "locked_reason": null,
+        "margin_cm": 50,
+        "max_slot_cm": 130,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "edge_refused",
+      "source_file": "ceiling_settings.json"
+    },
+    "detection_profiles": {
+      "direction": "server_to_client",
+      "event": "detection_profiles",
+      "notes": "detection_profiles.json case 'refused' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "controls_enabled": true,
+        "controls_note": null,
+        "drones": {
+          "drone-1": {
+            "active": "default",
+            "desired": "top_down",
+            "detector_ok": null,
+            "drone_id": "drone-1",
+            "fallback": false,
+            "fallback_reason": null,
+            "flying": true,
+            "mismatch": true,
+            "note": null,
+            "override": "top_down",
+            "pending": false,
+            "refusal": {
+              "detail": "detection profiles change only on the ground",
+              "reason": "in_flight",
+              "x_future_field": "ignore me"
+            },
+            "requested": "top_down",
+            "supported": true,
+            "switchable": false,
+            "x_future_field": "ignore me"
+          }
+        },
+        "fleet_default": null,
+        "profiles": [
+          {
+            "confidence": 0.4,
+            "description": "The edge detector as it was before profiles: yolo11n at confidence 0.4, tiled only when FLIGHTRISK_DETECTOR_TILED is on.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Startup default (yolo11n)",
+            "min_person_px": null,
+            "name": "default",
+            "reid_weight_scale": 1.0,
+            "tiled": null,
+            "view": "any",
+            "weights": "yolo11n.pt",
+            "weights_required": false,
+            "x_future_field": "ignore me"
+          },
+          {
+            "confidence": 0.5,
+            "description": "People seen from above: the HERIDAL fine-tuned YOLO11s on overlapping tiles.",
+            "face_weight_scale": 1.0,
+            "fallback": "level",
+            "label": "Top-down search (HERIDAL)",
+            "min_person_px": 32,
+            "name": "top_down",
+            "reid_weight_scale": 1.0,
+            "tiled": true,
+            "view": "nadir",
+            "weights": "models/heridal_yolo11s.pt",
+            "weights_required": true,
+            "x_future_field": "ignore me"
+          },
+          {
+            "confidence": 0.4,
+            "description": "More direct views of people and faces: the general yolo11n on the whole frame.",
+            "face_weight_scale": 1.0,
+            "fallback": null,
+            "label": "Level flight (faces)",
+            "min_person_px": null,
+            "name": "level",
+            "reid_weight_scale": 1.0,
+            "tiled": false,
+            "view": "oblique",
+            "weights": "yolo11n.pt",
+            "weights_required": false,
+            "x_future_field": "ignore me"
+          }
+        ],
+        "x_future_field": "ignore me"
+      },
+      "source_case": "refused",
+      "source_file": "detection_profiles.json"
+    },
+    "edge_set_target": {
+      "direction": "ground_to_edge",
+      "notes": "edge_ground_to_edge.json case 'set_target' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "face_embedding": null,
+        "reid_embedding": [
+          0.12,
+          -0.08,
+          0.33,
+          0.05
+        ],
+        "type": "set_target",
+        "x_future_field": "ignore me"
+      },
+      "source_case": "set_target",
+      "source_file": "edge_ground_to_edge.json"
+    },
+    "edge_stream_video": {
+      "direction": "ground_to_edge",
+      "notes": "edge_ground_to_edge.json case 'stream_video' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "enabled": true,
+        "type": "stream_video",
+        "x_future_field": "ignore me"
+      },
+      "source_case": "stream_video",
+      "source_file": "edge_ground_to_edge.json"
+    },
+    "error": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "error.json case 'manual_refusal' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "message": "drone-1: drone-1 is not under manual control",
+        "x_future_field": "ignore me"
+      },
+      "source_case": "manual_refusal",
+      "source_file": "error.json"
+    },
+    "fleet_detection": {
+      "direction": "server_to_client",
+      "event": "fleet_detection",
+      "notes": "fleet_detection.json case 'new_detection' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "count": 1,
+        "drone_id": "drone-1",
+        "drone_ids": [
+          "drone-1"
+        ],
+        "id": 1,
+        "rel_x_cm": 120.0,
+        "rel_y_cm": 80.0,
+        "thumbnail": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "x_cm": 120.0,
+        "x_future_field": "ignore me",
+        "y_cm": 80.0
+      },
+      "source_case": "new_detection",
+      "source_file": "fleet_detection.json"
+    },
+    "fleet_event": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "fleet_event.json case 'retask' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "awaiting": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "drone_id": "drone-1",
+            "end_x_cm": 325,
+            "end_y_cm": 400,
+            "index": 1,
+            "x_cm": 250,
+            "x_future_field": "ignore me",
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "drone_id": "drone-1",
+            "end_x_cm": 325,
+            "end_y_cm": 0,
+            "index": 2,
+            "x_cm": 325,
+            "x_future_field": "ignore me",
+            "y_cm": 400
+          }
+        ],
+        "detail": "no lanes accepted yet; 2 lanes awaiting drone-1",
+        "drone_id": "drone-2",
+        "event": "retask",
+        "lanes": [],
+        "to": {},
+        "x_future_field": "ignore me"
+      },
+      "source_case": "retask",
+      "source_file": "fleet_event.json"
+    },
+    "fleet_plan": {
+      "direction": "server_to_client",
+      "event": "fleet_plan",
+      "notes": "fleet_plan.json case 'map_plan_lost_zone_uncovered' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "details": {
+          "area": {
+            "h_cm": 400,
+            "w_cm": 400,
+            "x_cm": 0,
+            "x_future_field": "ignore me",
+            "y_cm": 0
+          },
+          "coverage": {
+            "cell_cm": 10,
+            "footprint_cm": 75,
+            "fraction": 0.395,
+            "model": "nominal (downward camera model)",
+            "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard.",
+            "x_future_field": "ignore me"
+          },
+          "drones": [
+            {
+              "alt_cm": 100,
+              "drawn": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "drone_id": "drone-1",
+              "edited": false,
+              "generated": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "lanes": [
+                {
+                  "direction": "forward",
+                  "distance_cm": 400,
+                  "x_future_field": "ignore me"
+                },
+                {
+                  "direction": "right",
+                  "distance_cm": 75,
+                  "x_future_field": "ignore me"
+                },
+                {
+                  "direction": "back",
+                  "distance_cm": 400,
+                  "x_future_field": "ignore me"
+                }
+              ],
+              "max_deviation_cm": 0.0,
+              "moves": 3,
+              "path": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "takeoff_cm": [
+                0,
+                0
+              ],
+              "x_future_field": "ignore me",
+              "zone": {
+                "h_cm": 400,
+                "w_cm": 150,
+                "x_cm": 0,
+                "x_future_field": "ignore me",
+                "y_cm": 0
+              }
+            },
+            {
+              "alt_cm": 130,
+              "drawn": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ],
+              "drone_id": "drone-2",
+              "edited": true,
+              "generated": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  400
+                ],
+                [
+                  325,
+                  400
+                ],
+                [
+                  325,
+                  0
+                ]
+              ],
+              "lanes": [
+                {
+                  "direction": "forward",
+                  "distance_cm": 200,
+                  "x_future_field": "ignore me"
+                }
+              ],
+              "max_deviation_cm": 0.0,
+              "moves": 1,
+              "path": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ],
+              "takeoff_cm": [
+                250,
+                0
+              ],
+              "x_future_field": "ignore me",
+              "zone": {
+                "h_cm": 400,
+                "w_cm": 150,
+                "x_cm": 250,
+                "x_future_field": "ignore me",
+                "y_cm": 0
+              }
+            }
+          ],
+          "gap_cm": 100,
+          "geofence_cm": 500.0,
+          "mode": "fleet",
+          "ok": true,
+          "pattern": "parallel_track",
+          "problems": [],
+          "snap_tolerance_cm": 40,
+          "spec": {
+            "area": {
+              "h_cm": 400,
+              "w_cm": 400,
+              "x_cm": 0,
+              "x_future_field": "ignore me",
+              "y_cm": 0
+            },
+            "paths": {
+              "drone-2": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ],
+              "x_future_field": "ignore me"
+            },
+            "pattern": "parallel_track",
+            "version": 1,
+            "x_future_field": "ignore me"
+          },
+          "strip_cm": 75,
+          "takeoff_layout": [
+            "drone-1 on its mark",
+            "drone-2 250 cm right of drone-1, same heading"
+          ],
+          "takeoffs": {
+            "drone-1": [
+              0,
+              0
+            ],
+            "drone-2": [
+              250,
+              0
+            ],
+            "x_future_field": "ignore me"
+          },
+          "uncovered": [
+            {
+              "h_cm": 160,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 290,
+              "x_cm": 110,
+              "x_future_field": "ignore me",
+              "y_cm": 240
+            },
+            {
+              "h_cm": 240,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 110,
+              "x_cm": 290,
+              "x_future_field": "ignore me",
+              "y_cm": 0
+            },
+            {
+              "h_cm": 240,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 100,
+              "x_cm": 110,
+              "x_future_field": "ignore me",
+              "y_cm": 0
+            }
+          ],
+          "x_future_field": "ignore me"
+        },
+        "gap_cm": 100,
+        "grid": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "x_future_field": "ignore me",
+          "y_cm": 0
+        },
+        "strip_cm": 75,
+        "uncovered": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "drone_id": "drone-1",
+            "end_x_cm": 75,
+            "end_y_cm": 400,
+            "index": 1,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 0,
+            "x_future_field": "ignore me",
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "drone_id": "drone-1",
+            "end_x_cm": 75,
+            "end_y_cm": 0,
+            "index": 2,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 75,
+            "x_future_field": "ignore me",
+            "y_cm": 400
+          },
+          {
+            "h_cm": 160,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 290,
+            "x_cm": 110,
+            "x_future_field": "ignore me",
+            "y_cm": 240
+          },
+          {
+            "h_cm": 240,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 110,
+            "x_cm": 290,
+            "x_future_field": "ignore me",
+            "y_cm": 0
+          },
+          {
+            "h_cm": 240,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 100,
+            "x_cm": 110,
+            "x_future_field": "ignore me",
+            "y_cm": 0
+          }
+        ],
+        "x_future_field": "ignore me",
+        "zones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "drone-1",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 400,
+                "x_future_field": "ignore me"
+              }
+            ],
+            "lost": true,
+            "takeoff_x_cm": 0,
+            "takeoff_y_cm": 0,
+            "w_cm": 150,
+            "x_cm": 0,
+            "x_future_field": "ignore me",
+            "y_cm": 0
+          },
+          {
+            "alt_cm": 130,
+            "drone_id": "drone-2",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 200,
+                "x_future_field": "ignore me"
+              }
+            ],
+            "lost": false,
+            "takeoff_x_cm": 250,
+            "takeoff_y_cm": 0,
+            "w_cm": 150,
+            "x_cm": 250,
+            "x_future_field": "ignore me",
+            "y_cm": 0
+          }
+        ]
+      },
+      "source_case": "map_plan_lost_zone_uncovered",
+      "source_file": "fleet_plan.json"
+    },
+    "fleet_status": {
+      "direction": "server_to_client",
+      "event": "fleet_status",
+      "notes": "fleet_status.json case 'one_held_orphan_countdown' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "drones": {
+          "drone-1": {
+            "acked": false,
+            "alt_cm": 100,
+            "battery": 87,
+            "connected": true,
+            "control_mode": "autonomous",
+            "drone_id": "drone-1",
+            "drone_link_detail": null,
+            "drone_link_ok": true,
+            "edge_control_mode": "autonomous",
+            "heading_deg": 0.0,
+            "height_cm": 100,
+            "is_flying": true,
+            "lane_index": null,
+            "lanes_total": null,
+            "link_age_s": 0.1,
+            "lost": false,
+            "manual_last": null,
+            "manual_supported": true,
+            "offset_ms": 250.0,
+            "orphan_land_in_s": null,
+            "rel_x_cm": 0.0,
+            "rel_y_cm": 0.0,
+            "rtt_ms": 0.0,
+            "skew_ms": null,
+            "synced": true,
+            "x_future_field": "ignore me"
+          },
+          "drone-2": {
+            "acked": false,
+            "alt_cm": 130,
+            "battery": 87,
+            "connected": true,
+            "control_mode": "held",
+            "drone_id": "drone-2",
+            "drone_link_detail": null,
+            "drone_link_ok": true,
+            "edge_control_mode": "held",
+            "heading_deg": 0.0,
+            "height_cm": 100,
+            "is_flying": true,
+            "lane_index": null,
+            "lanes_total": null,
+            "link_age_s": 0.1,
+            "lost": false,
+            "manual_last": null,
+            "manual_supported": true,
+            "offset_ms": 250.0,
+            "orphan_land_in_s": 120,
+            "rel_x_cm": 250.0,
+            "rel_y_cm": 0.0,
+            "rtt_ms": 0.0,
+            "skew_ms": null,
+            "synced": true,
+            "x_future_field": "ignore me"
+          }
+        },
+        "manual_controlled": null,
+        "net": "station",
+        "synced": true,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "one_held_orphan_countdown",
+      "source_file": "fleet_status.json"
+    },
+    "fleet_status_non_fleet": {
+      "direction": "server_to_client",
+      "event": "fleet_status",
+      "notes": "fleet_status.json case 'non_fleet_local_drone' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "count": 1,
+        "drones": {
+          "drone-1": {
+            "battery": 100.0,
+            "flight_time": 0.0,
+            "height": 0,
+            "is_connected": true,
+            "is_flying": false,
+            "temperature": 40.0,
+            "x_future_field": "ignore me"
+          }
+        },
+        "x_future_field": "ignore me"
+      },
+      "source_case": "non_fleet_local_drone",
+      "source_file": "fleet_status.json"
+    },
+    "frame": {
+      "direction": "server_to_client",
+      "event": "frame",
+      "notes": "frame.json case 'edge_video_with_match' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "boxes": [
+          {
+            "bbox_norm": [
+              0.4166666666666667,
+              0.4166666666666667,
+              0.4791666666666667,
+              0.5833333333333334
+            ],
+            "matched": true,
+            "score": 0.86,
+            "track_id": null,
+            "x_future_field": "ignore me"
+          },
+          {
+            "bbox_norm": [
+              0.10416666666666667,
+              0.16666666666666666,
+              0.15625,
+              0.3194444444444444
+            ],
+            "matched": false,
+            "score": 0.31,
+            "track_id": null,
+            "x_future_field": "ignore me"
+          }
+        ],
+        "drone_id": "drone-1",
+        "fps": 0.0,
+        "frame_height": 720,
+        "frame_width": 960,
+        "image": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "match": true,
+        "match_score": 0.86,
+        "persons": 2,
+        "recording": false,
+        "stream_video": true,
+        "telemetry": {
+          "x_future_field": "ignore me"
+        },
+        "x_future_field": "ignore me"
+      },
+      "source_case": "edge_video_with_match",
+      "source_file": "frame.json"
+    },
+    "land_all_ack": {
+      "direction": "server_to_client",
+      "event": "land_all_ack",
+      "notes": "land_all_ack.json case 'fleet_reached_all' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "coordinator": 2,
+        "local": null,
+        "reached_any": true,
+        "transport": 2,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "fleet_reached_all",
+      "source_file": "land_all_ack.json"
+    },
+    "manual_ack": {
+      "direction": "server_to_client",
+      "event": "manual_ack",
+      "notes": "manual_ack.json case 'land_ok' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "action": "land",
+        "detail": null,
+        "drone_id": "drone-1",
+        "ok": true,
+        "reason": null,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "land_ok",
+      "source_file": "manual_ack.json"
+    },
+    "manual_result": {
+      "direction": "server_to_client",
+      "event": "manual_result",
+      "notes": "manual_result.json case 'land_acked' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "action": "land",
+        "detail": null,
+        "drone_id": "drone-1",
+        "ok": true,
+        "reason": null,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "land_acked",
+      "source_file": "manual_result.json"
+    },
+    "manual_status": {
+      "direction": "server_to_client",
+      "event": "manual_status",
+      "notes": "manual_status.json case 'held_orphan_countdown' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "controlled": null,
+        "drones": {
+          "drone-1": {
+            "control_mode": "autonomous",
+            "edge_control_mode": "autonomous",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": null,
+            "x_future_field": "ignore me"
+          },
+          "drone-2": {
+            "control_mode": "held",
+            "edge_control_mode": "held",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": 120,
+            "x_future_field": "ignore me"
+          }
+        },
+        "x_future_field": "ignore me"
+      },
+      "source_case": "held_orphan_countdown",
+      "source_file": "manual_status.json"
+    },
+    "match_alert": {
+      "direction": "server_to_client",
+      "event": "match_alert",
+      "notes": "match_alert.json case 'edge_match' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000001",
+        "alert_level": "possible_match",
+        "face_score": 0.0,
+        "gemma_confidence": null,
+        "gemma_match": null,
+        "reasoning": null,
+        "reid_score": 0.86,
+        "score": 0.86,
+        "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "time": "12:34:56",
+        "track_id": "8_7",
+        "type": "edge",
+        "x_future_field": "ignore me"
+      },
+      "source_case": "edge_match",
+      "source_file": "match_alert.json"
+    },
+    "reasoning_provider": {
+      "direction": "server_to_client",
+      "event": "reasoning_provider",
+      "notes": "reasoning_provider.json case 'local_gemma_cloud_blocked' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "available": [
+          "gemma",
+          "off"
+        ],
+        "cloud_allowed": false,
+        "label": "Gemma",
+        "model": "gemma4:latest",
+        "provider": "gemma",
+        "unavailable": {
+          "claude": "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic; set FLIGHTRISK_ALLOW_CLOUD_LLM=1 to opt in."
+        },
+        "x_future_field": "ignore me"
+      },
+      "source_case": "local_gemma_cloud_blocked",
+      "source_file": "reasoning_provider.json"
+    },
+    "status": {
+      "direction": "server_to_client",
+      "event": "status",
+      "notes": "status.json case 'fleet_two_drones' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "appearance_only": true,
+        "connected": true,
+        "fleet": {
+          "drones": 2,
+          "net": "station",
+          "synced": false,
+          "x_future_field": "ignore me"
+        },
+        "source": "edge",
+        "tiled": false,
+        "x_future_field": "ignore me"
+      },
+      "source_case": "fleet_two_drones",
+      "source_file": "status.json"
+    }
+  }
+}
