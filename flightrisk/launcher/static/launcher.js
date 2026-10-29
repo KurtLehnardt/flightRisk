@@ -7,6 +7,9 @@ const $ = (sel) => document.querySelector(sel);
 let boot = null;
 let settings = null;
 let busy = false;
+let stopping = false;
+let stopWarning = "";
+let logPaths = {};
 let processes = [];
 let logOffsets = {};
 let validateTimer = null;
@@ -225,7 +228,9 @@ async function runValidate() {
     $("#plan").textContent = res.plan.map((p) => {
       const env = Object.entries(p.env).map(([k, v]) => k + "=" + v).join(" ");
       return "# " + p.name + "\n" + (env ? env + " \\\n  " : "") + p.command;
-    }).join("\n\n") + (res.needs_token ? "\n\n# FLIGHTRISK_EDGE_TOKEN is passed through the environment only." : "");
+    }).join("\n\n") + (res.needs_token ? "\n\n# FLIGHTRISK_EDGE_TOKEN is passed through the environment only." : "") +
+      (res.inherited_env.length ? "\n\n# Also inherited unchanged from the launcher's environment (names only):\n# " +
+        res.inherited_env.join(", ") : "");
     $("#fleet-line").textContent = settings.role === "ground"
       ? "Ground --fleet list: " + (res.fleet.join(",") || "(none)")
       : "Edges dial ws://" + settings.ground_host + ":" + settings.ground_port;
@@ -276,7 +281,8 @@ function renderProcesses() {
     tr.appendChild(el("td", { class: "small" }, detail));
     const td = el("td");
     const restart = el("button", { type: "button", class: "ghost" }, "Restart");
-    restart.disabled = p.status === "stopping" || p.status === "starting";
+    restart.disabled = stopping || !p.restartable || p.status === "stopping" || p.status === "starting";
+    if (!p.restartable) restart.title = "Not available for an edge on Windows yet: land it with LAND ALL, then Stop and Start.";
     restart.addEventListener("click", () => restartProcess(p.name));
     td.appendChild(restart);
     tr.appendChild(td);
@@ -298,7 +304,7 @@ function updateButtons() {
   $("#start").disabled = busy || hasErrors;
   $("#check").disabled = busy || hasErrors;
   $("#check-drones").disabled = busy || hasErrors;
-  $("#stop").disabled = !alive;
+  $("#stop").disabled = !alive || stopping;
   $("#open-dashboard").disabled = settings === null || settings.role !== "ground";
   $("#preset-delete").disabled = !boot || (boot.presets.find((p) => p.name === $("#preset").value) || {}).builtin !== false;
 }
@@ -310,6 +316,8 @@ async function poll() {
     $("#token").className = "badge " + (st.token.status === "set" ? "PASS" : "WARN");
     processes = st.processes;
     busy = st.busy;
+    stopping = st.stopping;
+    stopWarning = st.stop_warning;
     renderProcesses();
     $("#events").textContent = st.events.join("\n");
     updateButtons();
@@ -325,6 +333,14 @@ async function pollLog() {
   const offset = logOffsets[name] || 0;
   const res = await api("/api/logs?name=" + encodeURIComponent(name) + "&offset=" + offset);
   const log = $("#log");
+  if (logPaths[name] !== undefined && logPaths[name] !== res.log) {
+    // A restart began a new log file: read it from the start.
+    logPaths[name] = res.log;
+    logOffsets[name] = 0;
+    log.textContent = "";
+    return;
+  }
+  logPaths[name] = res.log;
   if (log.dataset.name !== name || res.offset < offset) {
     log.textContent = "";
     log.dataset.name = name;
@@ -369,9 +385,7 @@ async function start() {
 async function stop() {
   const answer = await ask(
     "Stop the processes the launcher started?",
-    "Drones in the air will land: each edge lands its drone as it shuts down, and a drone that loses its edge or ground " +
-    "link lands through the link-loss rule. The right way to land first is LAND ALL in the dashboard. " +
-    "Programs the launcher did not start are not touched.",
+    stopWarning + " Programs the launcher did not start are not touched.",
     [{ label: "Stop processes", value: "stop", cls: "danger" }, { label: "Cancel", value: "cancel" }],
   );
   if (!answer) return;
@@ -385,7 +399,8 @@ async function stop() {
 
 async function restartProcess(name) {
   const answer = await ask("Restart " + name + "?",
-    "It is stopped and started again with the same settings. If it is an edge and its drone is flying, the drone lands first.",
+    "It is stopped and started again with the same settings. An edge lands its drone as it stops; if it has to be " +
+    "terminated instead, it is not started again, because its drone may still be in the air.",
     [{ label: "Restart", value: "restart", cls: "primary" }, { label: "Cancel", value: "cancel" }]);
   if (!answer) return;
   try {
@@ -403,8 +418,8 @@ async function quit() {
       { label: "Cancel", value: "cancel" }]
     : [{ label: "Quit", value: "leave", cls: "primary" }, { label: "Cancel", value: "cancel" }];
   const text = alive
-    ? "Processes the launcher started are still running. Stopping them lands any drone in the air (use LAND ALL in the " +
-      "dashboard first). Left running, they keep flying and logging; stop them later with their process ids."
+    ? "Processes the launcher started are still running. If you stop them: " + stopWarning +
+      " Left running, they keep flying and logging; stop them later with their process ids."
     : "Close the launcher?";
   const answer = await ask("Quit the launcher", text, buttons);
   if (!answer) return;

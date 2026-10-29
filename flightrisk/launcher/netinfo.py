@@ -152,3 +152,26 @@ def list_adapters(run: Runner = _run, platform: str | None = None) -> list[Adapt
 def address_owners(adapters: list[Adapter], ip: str) -> list[Adapter]:
     """The adapters that hold *ip*."""
     return [a for a in adapters if a.ipv4 == ip]
+
+
+def adapters_for_host(adapters: list[Adapter], host: str) -> list[Adapter]:
+    """The non-loopback adapters with an IPv4 address in *host*'s /24, so any of them could reach it.
+
+    A Tello's own Wi-Fi is a /24 (192.168.10.0/24), and every Tello answers on
+    192.168.10.1, so when this returns more than one adapter, a socket bound to
+    all addresses may reach a different drone than the one meant.
+    """
+    try:
+        network = ipaddress.IPv4Network(f"{host.strip()}/24", strict=False)
+    except ValueError:
+        return []
+    found = []
+    for adapter in adapters:
+        if adapter.loopback:
+            continue
+        try:
+            if ipaddress.IPv4Address(adapter.ipv4) in network:
+                found.append(adapter)
+        except ValueError:
+            continue
+    return found

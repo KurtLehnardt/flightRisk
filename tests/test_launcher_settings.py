@@ -286,3 +286,59 @@ def test_launcher_file_env_override(tmp_path, monkeypatch):
 
     monkeypatch.setenv("FLIGHTRISK_LAUNCHER_FILE", str(tmp_path / "x.json"))
     assert default_launcher_file() == tmp_path / "x.json"
+
+
+# ---- review round 1 -----------------------------------------------------------------
+
+
+def test_one_tello_without_local_ip_needs_an_adapter_when_two_can_reach_it():
+    from flightrisk.launcher.netinfo import Adapter
+
+    two = [Adapter("lo0", "127.0.0.1", 1), Adapter("Wi-Fi", "192.168.10.2", 12), Adapter("Wi-Fi 2", "192.168.10.50", 23)]
+    one = [Adapter("lo0", "127.0.0.1", 1), Adapter("Wi-Fi", "192.168.10.2", 12), Adapter("Ethernet", "10.42.0.2", 5)]
+    single = builtin_presets()["Single drone"]
+    messages = _errors(single, adapters=two, is_windows=True)
+    assert any("choose the adapter" in m and "Wi-Fi 2 192.168.10.50" in m for m in messages)
+    assert _errors(single, adapters=one, is_windows=True) == []
+    picked = replace(single, drones=(replace(single.drones[0], local_ip="192.168.10.50"),))
+    assert _errors(picked, adapters=two, is_windows=True) == []
+    fake = replace(single, drones=(replace(single.drones[0], source="fake"),))
+    assert _errors(fake, adapters=two) == []
+    remote = LauncherSettings(network="cable", drones=(DroneSettings(run_here=False),))
+    assert _errors(remote, adapters=two) == []
+
+
+@pytest.mark.parametrize("drone_id", ["drone:1", "drone.1", "-drone", "drone 1", "a" * 65])
+def test_drone_ids_are_safe_file_names(drone_id):
+    assert "drones.0.drone_id" in _fields(LauncherSettings(drones=(DroneSettings(drone_id=drone_id, source="fake"),)))
+
+
+def test_drone_ids_with_hyphen_and_underscore_are_fine():
+    assert _errors(LauncherSettings(drones=(DroneSettings(drone_id="Drone_2-b", source="fake"),))) == []
+
+
+def test_geofence_has_a_maximum():
+    assert "geofence_cm" in _fields(LauncherSettings(geofence_cm=10 ** 12, drones=(DroneSettings(source="fake"),)))
+    assert "geofence_cm" not in _fields(LauncherSettings(geofence_cm=5000, drones=(DroneSettings(source="fake"),)))
+
+
+@pytest.mark.parametrize("value", ["a\x00b", "line\nbreak", "tab\tx", "del\x7f", "x" * 300])
+def test_text_fields_refuse_control_characters_and_huge_values(value):
+    with pytest.raises(SettingsError):
+        LauncherSettings.from_json({**LauncherSettings().to_json(), "otel_endpoint": value})
+
+
+def test_a_setting_containing_the_token_is_an_error():
+    token = "drone-tok-123"
+    settings = LauncherSettings(drones=(DroneSettings(drone_id=token, source="fake"),))
+    issues = errors(validate(settings, is_windows=False, profile_names=PROFILES, secret=token))
+    assert any(i.field == "settings" and token not in i.message for i in issues)
+    assert not any(i.field == "settings" for i in errors(validate(settings, is_windows=False, profile_names=PROFILES)))
+
+
+def test_cloud_reasoning_inherited_is_called_out():
+    settings = LauncherSettings(llm=True, drones=(DroneSettings(source="fake"),))
+    cloud = validate(settings, is_windows=False, profile_names=PROFILES, environ={"FLIGHTRISK_REASONING_PROVIDER": "claude"})
+    assert any("Claude cloud" in i.message for i in cloud)
+    local = validate(settings, is_windows=False, profile_names=PROFILES, environ={})
+    assert any("local Ollama" in i.message for i in local)

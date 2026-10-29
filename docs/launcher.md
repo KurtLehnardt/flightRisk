@@ -16,9 +16,13 @@ done from the dashboard as before.
 | macOS | `scripts/launcher.command` in Finder | `venv/bin/python -m flightrisk.launcher` |
 | Windows | `scripts\launcher.bat` in Explorer | `venv\Scripts\python.exe -m flightrisk.launcher` |
 
-The window opens in your browser at `http://127.0.0.1:5500/`. Use `--port 5501` for another port and
-`--no-browser` to skip opening the browser (then open the address yourself). The terminal or console
-window that the helper opens must stay open while the launcher runs; it shows nothing else.
+The window opens in your browser at `http://127.0.0.1:5500/?key=...`. The key is created at each
+launch; the page is served only with it, so keep that address to yourself. If you close the tab, open
+the address the launcher printed in its terminal again. Use `--port 5501` for another port and
+`--no-browser` to skip opening the browser (then open the printed address yourself). The terminal or
+console window that the helper opens must stay open while the launcher runs. On Windows the processes
+the launcher starts share that console window (it shows nothing of theirs: their output goes to log
+files), which is how Stop can ask them to land and stop.
 
 The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 `~/.flightrisk-fleet.env` (on Windows `%USERPROFILE%\.flightrisk-fleet.env`), for example a line
@@ -45,10 +49,10 @@ The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 |  drone-1 tello   other      192.168.10.1        |  edge-drone-1  running  pid 4250 [Restart] |
 |  drone-2 tello   other      192.168.10.1        |                                            |
 |  Ground --fleet list: drone-1,drone-2           | Log [ground v] [x] follow                  |
-| Shared options                                  |  ...live tail of logs/launcher/ground.log  |
+| Shared options                                  |  ...live tail of the ground's log          |
 |  ceiling 200  margin 60  geofence 450           |                                            |
 |  detector profile, video at start, language     | Events                                     |
-|  model, ports, observability export            |  12:01:02 ground: started (pid 4242)       |
+|  model, ports, observability export             |  12:01:02 ground: started (pid 4242)       |
 | Errors and warnings, Command lines (preview)    |                                            |
 +-------------------------------------------------+--------------------------------------------+
 ```
@@ -127,7 +131,7 @@ All checks are read-only; any FAIL blocks Start.
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |
 | Edge token | set, when the cable address is bound or a non-loopback ground is dialled; only "set" or "missing" is shown |
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
-| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given |
+| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning) |
 | Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below 30 % is a warning |
 
@@ -140,18 +144,31 @@ then own the drones' command ports.
 
 - **Start** runs the checks, then starts the ground and waits (up to 3 minutes) until both its
   dashboard port and its edge link port accept connections, then starts each edge. If the ground exits
-  or never listens, the edges are not started and the reason is shown. Each process writes its output to
-  `logs/launcher/<name>.log` (the previous run's log is kept as `<name>.previous.log`).
-- **Stop** asks for confirmation first. Stopping lands any drone in the air: on macOS and Linux each edge
-  is stopped the way Ctrl+C stops it, so it lands its own drone, and then the ground is stopped; on
-  Windows the ground is stopped first and the edges are left running for 10 s so that a flying drone
-  lands through the link-loss rule, and then they are terminated. Use LAND ALL in the dashboard to land
-  first. A process that has not exited after its grace period is terminated.
-- **Restart** stops one process and starts it again with the same settings.
+  or never listens, the edges are not started and the reason is shown.
+- **Logs.** Each launcher run writes to a folder of its own, `logs/launcher/<date>-<time>-<port>/`, one
+  `<name>.log` per process (a restart starts `<name>.restart-1.log` and so on), so two launchers never
+  share a file. The 20 newest run folders are kept, and at most 500 MB in all; older ones are removed
+  when a launcher starts.
+- **Stop** asks for confirmation first, and the dialog says what happens to drones in the air. Use LAND
+  ALL in the dashboard to land first. Stop asks each edge to shut down the way Ctrl+C does, so it lands
+  its own drone (macOS and Linux: SIGINT; Windows: Ctrl+Break, which the edge handles like Ctrl+C), then
+  stops the ground; an edge on another computer then lands its drone through the link-loss rule. A process
+  that has not exited after its grace period (15 s for an edge, 5 s for the ground) is terminated. Each
+  process is asked only once, even if Stop is pressed again, because a second Ctrl+C would interrupt a
+  landing; the Stop button stays disabled until the stop is done.
+- **Windows without a console.** If the launcher was started without a console window (not through
+  `scripts\launcher.bat` or a terminal), its processes can only be terminated. With a ground on this
+  computer it is stopped first, and the edges are given the link-loss time (their
+  `FLIGHTRISK_LINK_LOSS_LAND_S`, 3 s by default, plus 7 s) to land before they are terminated. **With
+  edges only, Stop does not land any drone**: a flying Tello hovers until its own timeout. Every stop
+  dialog says so; land with LAND ALL in the dashboard first.
+- **Restart** stops one process and starts it again with the same settings. It is refused while a stop or
+  another restart runs. An edge that had to be terminated is not started again, because its drone may
+  still be in the air. **On Windows, Restart of an edge is refused** until the Ctrl+Break stop has been
+  verified on hardware: land it with LAND ALL, then Stop and Start.
 - **Quit launcher** asks whether to stop the processes or leave them running. Left running, they keep
   flying and logging, and their process ids and log files are printed in the launcher's terminal.
-  Ctrl+C in that terminal asks the same question. Closing the browser tab does not stop anything:
-  open `http://127.0.0.1:5500/` again.
+  Ctrl+C in that terminal asks the same question. Closing the browser tab does not stop anything.
 
 The launcher never signals a process it did not start, for example a ground station started by hand.
 
@@ -166,9 +183,16 @@ The launcher never signals a process it did not start, for example a ground stat
 - Start is refused when two edges would use the same drone id or the same local IP, when two real
   Tellos on this computer lack their own adapter IP, when two adapters share an interface index, when
   two ports collide (including the launcher's own), or when a slot is above ceiling minus margin.
-- The window itself listens on 127.0.0.1 only. Every request must carry a random key that is created at
-  each launch and embedded in the page, and must name this server as its host, so other web pages in the
-  same browser cannot use it.
+- Start is also refused for a drone id other than letters, digits, `-` and `_`, a text field with control
+  characters, a geofence above 5000 cm, or any setting that contains the edge token.
+- The preview of the command lines also lists, by name only, the `FLIGHTRISK_*` and `OTEL_*` variables
+  the processes inherit from the launcher's environment, because they change behaviour too (for example
+  `FLIGHTRISK_REASONING_PROVIDER`; with the language model on and `claude` inherited, Setup warns that
+  data may go to the cloud).
+- The window itself listens on 127.0.0.1 only, and on Windows binds its port exclusively, so a second
+  launcher on the same port fails with "already running". The page is served only to an address that
+  carries the per-launch key (as Jupyter does), and every API request must carry the same key and name
+  this server as its host and origin, so other programs and other web pages cannot use it.
 
 ## Design decisions
 
@@ -181,9 +205,11 @@ The launcher never signals a process it did not start, for example a ground stat
   and the preflight checks (`flightrisk/launcher/settings.py`, `commands.py`, `processes.py`,
   `preflight.py`, `netinfo.py`) import nothing from the window and are unit-tested on their own. The
   server only translates HTTP into calls on them.
-- **No console window per process.** The children run with no console of their own (on Windows a click
-  in a console window can freeze the program in it) and write straight to their log files, so they keep
-  running if the launcher exits and the processes are left running.
+- **No console window per process.** No child opens a window of its own (on Windows a click in a console
+  window can freeze the program in it). On Windows the children share the launcher's console, where
+  QuickEdit is turned off, in their own process group, so Stop can send them Ctrl+Break; the edge
+  handles Ctrl+Break exactly like Ctrl+C. They write straight to their log files, so they keep running
+  if the launcher exits and the processes are left running.
 - **The dashboard stays the authority on the ceiling.** The launcher reads the dashboard's saved ceiling
   to fill in the presets and warns when its own values differ, but it never writes that file. The
   edges start with the launcher's values and the dashboard sends its own once they connect.
@@ -193,5 +219,7 @@ The launcher never signals a process it did not start, for example a ground stat
 ## Not verified
 
 Written and tested on macOS with fake drones only. Not yet run on Windows, against real Tellos, or with
-the two-adapter setup; the Windows adapter list (`Get-NetIPAddress`), the interface-index binding of the
-drone check and the stop behaviour on Windows are covered by unit tests with fakes only.
+the two-adapter setup. The Windows adapter list (`Get-NetIPAddress`), the interface-index binding of the
+drone check, the shared console with Ctrl+Break stop, the exclusive port bind and the edge's Ctrl+Break
+landing are covered by unit tests with fakes only. Until the Ctrl+Break stop is verified on Windows
+hardware, land with LAND ALL in the dashboard before pressing Stop there.

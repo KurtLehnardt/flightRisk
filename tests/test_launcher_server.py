@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -106,6 +107,8 @@ def launcher(tmp_path):
         preflight_env=_preflight_env(),
         python=sys.executable,
         on_quit=quits.append,
+        environ={"PATH": os.environ.get("PATH", ""), "FLIGHTRISK_LINK_LOSS_LAND_S": "5",
+                 "OTEL_SERVICE_NAME": "x", "FLIGHTRISK_GROUND_URLS": "ws://elsewhere:9000"},
     )
     server, session = make_server(app)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
@@ -132,7 +135,7 @@ REHEARSAL = builtin_presets()["Rehearsal with fake drones"].to_json()
 
 def test_page_script_and_style_are_served(launcher):
     client, _app, _ = launcher
-    status, page = client.request("GET", "/", session=False)
+    status, page = client.request("GET", f"/?key={client.session}", session=False)
     assert status == 200
     assert client.session in page and "__SESSION__" not in page
     assert '<script src="/launcher.js">' in page
@@ -144,7 +147,7 @@ def test_page_script_and_style_are_served(launcher):
 
 def test_foreign_host_origin_and_missing_session_are_refused(launcher):
     client, _, _ = launcher
-    assert client.request("GET", "/", session=False, host="evil.example:80")[0] == 403
+    assert client.request("GET", f"/?key={client.session}", session=False, host="evil.example:80")[0] == 403
     assert client.get("/api/state", session=False)[0] == 403
     assert client.get("/api/state", host=f"attacker.test:{client.port}")[0] == 403
     assert client.post("/api/stop", {"confirm": True}, origin="http://evil.example")[0] == 403
@@ -322,3 +325,138 @@ def test_launcher_runs_on_an_edge_only_install():
     result = subprocess.run([sys.executable, "-c", check], capture_output=True, text=True, timeout=120, check=False,
                             cwd=str(STATIC_DIR.parents[2]))
     assert result.returncode == 0 and result.stdout.strip() == "ok", result.stderr
+
+
+def test_page_needs_the_key_from_the_launchers_address(launcher):
+    client, _, _ = launcher
+    status, body = client.request("GET", "/", session=False)
+    assert status == 403 and client.session not in body and "key" in body
+    status, body = client.request("GET", "/?key=wrong-key", session=False)
+    assert status == 403 and client.session not in body
+    assert client.request("GET", "/?key=", session=False)[0] == 403
+    assert client.request("GET", f"/?key={client.session}", session=False)[0] == 200
+    # The API wants the same key in its header; a wrong one is refused.
+    old = client.session
+    client.session = "wrong-key"
+    try:
+        assert client.get("/api/state")[0] == 403
+    finally:
+        client.session = old
+
+
+@pytest.mark.parametrize("patch", [
+    {"otel_endpoint": "http://x/\u0000"},
+    {"ground_host": "10.42.0.1\nX-Evil: 1"},
+    {"drones": [{"drone_id": "drone-1\r\n", "source": "fake"}]},
+    {"drones": [{"drone_id": "a" * 300, "source": "fake"}]},
+    {"edge_port": {"$gt": 1}},
+    {"drones": "drone-1"},
+])
+def test_hostile_field_values_are_refused_before_anything_starts(launcher, patch):
+    client, _, _ = launcher
+    status, data = client.post("/api/start", {"settings": {**REHEARSAL, **patch}})
+    assert status == 400 and "error" in data
+    assert client.get("/api/state")[1]["processes"] == []
+
+
+@pytest.mark.parametrize("patch", [
+    {"drones": [{"drone_id": "drone:1", "source": "fake"}]},
+    {"drones": [{"drone_id": "drone.1", "source": "fake"}]},
+    {"geofence_cm": 10 ** 12},
+    {"drones": [{"drone_id": TOKEN.replace("_", "-"), "source": "fake"}]},
+])
+def test_hostile_but_well_typed_values_fail_validation(launcher, patch):
+    client, _, _ = launcher
+    status, data = client.post("/api/start", {"settings": {**REHEARSAL, **patch}})
+    assert status == 200 and data["started"] is False and data["issues"]
+    assert client.get("/api/state")[1]["processes"] == []
+
+
+def test_a_setting_that_contains_the_token_is_refused_and_never_echoed(launcher):
+    client, _, _ = launcher
+    hostile = {**REHEARSAL, "otel_endpoint": f"http://collector/{TOKEN}"}
+    _, data = client.post("/api/validate", {"settings": hostile})
+    assert any(i["field"] == "settings" for i in data["issues"])
+    assert TOKEN not in json.dumps(data)
+    _, data = client.post("/api/start", {"settings": hostile})
+    assert data["started"] is False and TOKEN not in json.dumps(data)
+
+
+def test_preview_lists_inherited_names_but_no_values(launcher):
+    client, _, _ = launcher
+    _, data = client.post("/api/validate", {"settings": REHEARSAL})
+    assert data["inherited_env"] == ["FLIGHTRISK_LINK_LOSS_LAND_S", "OTEL_SERVICE_NAME"]
+    assert "ws://elsewhere" not in json.dumps(data)
+
+
+def test_one_drone_without_an_adapter_is_refused_when_two_adapters_reach_it(launcher):
+    client, app, _ = launcher
+    app.preflight_env.adapters = lambda: [Adapter("Wi-Fi", "192.168.10.2", 12), Adapter("Wi-Fi 2", "192.168.10.50", 23)]
+    probed = []
+    app.preflight_env.tello_probe = lambda d: probed.append(d.drone_id) or TelloProbe(True, battery=90)
+    single = builtin_presets()["Single drone"].to_json()
+    _, data = client.post("/api/start", {"settings": single})
+    assert data["started"] is False
+    assert any("choose the adapter" in i["message"] for i in data["issues"])
+    assert probed == [], "no probe may go out from all addresses"
+    picked = {**single, "drones": [{**single["drones"][0], "local_ip": "192.168.10.50"}]}
+    _, data = client.post("/api/preflight", {"settings": picked, "probe_drones": True})
+    assert data["ok"] is True and probed == ["drone-1"]
+
+
+def test_stop_twice_and_restart_while_stopping(launcher):
+    client, app, _ = launcher
+    client.post("/api/start", {"settings": REHEARSAL})
+    assert _wait(lambda: [p["status"] for p in client.get("/api/state")[1]["processes"]] == ["running"] * 3)
+    assert client.post("/api/stop", {"confirm": True})[0] == 200
+    assert client.post("/api/stop", {"confirm": True})[0] == 200
+    app.wait_for_stops()
+    assert len(app._stop_threads) <= 2
+    assert {p["status"] for p in client.get("/api/state")[1]["processes"]} == {"stopped"}
+
+
+def test_state_reports_how_stop_treats_drones(launcher):
+    client, app, _ = launcher
+    state = client.get("/api/state")[1]
+    assert state["stop_lands_drones"] is True and "will land" in state["stop_warning"]
+    app.manager.graceful = False
+    state = client.get("/api/state")[1]
+    assert "does NOT land" in state["stop_warning"] and "LAND ALL" in state["stop_warning"]
+
+
+def test_second_launcher_on_the_same_port_is_refused():
+    def app():
+        return LauncherApp(port=0, store=PresetStore("/nonexistent/launcher.json"), token_loader=lambda: EdgeToken(None, None),
+                           manager=ProcessManager(Redactor()), preflight_env=_preflight_env())
+
+    first = app()
+    server, _ = make_server(first)
+    try:
+        second = app()
+        second.port = first.port
+        with pytest.raises(OSError):
+            make_server(second)
+    finally:
+        server.server_close()
+
+
+def test_windows_server_binds_exclusively():
+    from flightrisk.launcher.server import exclusive_bind_options, server_class
+
+    assert server_class(windows=True).allow_reuse_address is False
+    assert server_class(windows=False).allow_reuse_address is True
+
+    class Sock:
+        def __init__(self):
+            self.options = []
+
+        def setsockopt(self, *args):
+            self.options.append(args)
+
+    sock = Sock()
+    exclusive_bind_options(sock, windows=True)
+    assert sock.options and sock.options[0][2] == 1
+    assert sock.options[0][1] == getattr(__import__("socket"), "SO_EXCLUSIVEADDRUSE", -5)
+    sock = Sock()
+    exclusive_bind_options(sock, windows=False)
+    assert sock.options == []

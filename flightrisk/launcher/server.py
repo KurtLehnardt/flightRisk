@@ -14,6 +14,7 @@ HTTP to calls on it, so the app is testable without a socket.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import socket
 import sys
@@ -27,8 +28,21 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from flightrisk.launcher import preflight as pf
-from flightrisk.launcher.commands import EdgeToken, Redactor, build_plan, load_token
-from flightrisk.launcher.processes import ProcessError, ProcessManager
+from flightrisk.launcher.commands import (
+    CONTROLLED_ENV,
+    EdgeToken,
+    Redactor,
+    build_plan,
+    load_token,
+)
+from flightrisk.launcher.netinfo import Adapter
+from flightrisk.launcher.processes import (
+    LOG_ROOT,
+    ProcessError,
+    ProcessManager,
+    new_run_log_dir,
+    prune_log_runs,
+)
 from flightrisk.launcher.settings import (
     DEFAULT_PRESET,
     MAX_DRONES,
@@ -54,6 +68,19 @@ class ApiError(Exception):
         self.extra = extra
 
 
+def stop_warning(lands_drones: bool, ground_here: bool = False) -> str:
+    """What stopping does to drones in the air, for every stop dialog and prompt."""
+    if lands_drones:
+        return ("Drones in the air will land: each edge on this computer lands its drone as it shuts down, and an edge "
+                "on another computer lands its drone through the link-loss rule when the ground stops. "
+                "Land them first with LAND ALL in the dashboard.")
+    if ground_here:
+        return ("The ground stops first and the edges on this computer are given time to land their drones through "
+                "the link-loss rule before they are terminated. Land every drone with LAND ALL in the dashboard first.")
+    return ("Stop does NOT land the drones of edges on this computer: they are terminated, and a flying Tello "
+            "hovers until its own timeout. Land every drone with LAND ALL in the dashboard first.")
+
+
 class LauncherApp:
     """Launcher state and actions, independent of HTTP."""
 
@@ -67,13 +94,19 @@ class LauncherApp:
         preflight_env: pf.PreflightEnv | None = None,
         python: str = sys.executable,
         on_quit: Callable[[str], None] | None = None,
+        environ: dict[str, str] | None = None,
     ):
         self.port = port
+        self.environ = dict(os.environ if environ is None else environ)
         self._token_loader = token_loader
         self.redact = Redactor()
         self.token = self.reload_token()
         self.store = store or PresetStore(secret=lambda: self.token.reveal())
-        self.manager = manager or ProcessManager(self.redact)
+        if manager is None:
+            log_dir = new_run_log_dir(LOG_ROOT, port)
+            prune_log_runs(LOG_ROOT, current=log_dir)
+            manager = ProcessManager(self.redact, log_dir=log_dir)
+        self.manager = manager
         self.preflight_env = preflight_env or pf.PreflightEnv()
         self.python = python
         self.on_quit = on_quit
@@ -98,8 +131,22 @@ class LauncherApp:
         except SettingsError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc)) from None
 
-    def issues(self, settings: LauncherSettings) -> list[dict[str, str]]:
-        return [i.to_json() for i in validate(settings, is_windows=self.preflight_env.is_windows, reserved_ports=self.reserved_ports())]
+    def _validate(self, settings: LauncherSettings, *, fresh_adapters: bool = False) -> list:
+        adapters = [Adapter(a["name"], a["ipv4"], a["index"], a["up"]) for a in self.adapters(refresh=fresh_adapters)]
+        return validate(
+            settings, is_windows=self.preflight_env.is_windows, reserved_ports=self.reserved_ports(),
+            adapters=adapters, secret=self.token.reveal(), environ=self.environ,
+        )
+
+    def issues(self, settings: LauncherSettings, *, fresh_adapters: bool = False) -> list[dict[str, str]]:
+        return [i.to_json() for i in self._validate(settings, fresh_adapters=fresh_adapters)]
+
+    def inherited_env(self) -> list[str]:
+        """Names (never values) of FLIGHTRISK_* and OTEL_* variables the children inherit unchanged."""
+        return sorted(
+            k for k in self.environ
+            if k.startswith(("FLIGHTRISK_", "OTEL_")) and k not in CONTROLLED_ENV
+        )
 
     def profiles(self) -> list[dict[str, Any]]:
         rows = []
@@ -122,6 +169,10 @@ class LauncherApp:
             "processes": self.manager.snapshot(),
             "busy": self.manager.busy(),
             "events": [self.redact(e) for e in self.manager.events[-50:]],
+            "stopping": self.manager.stopping(),
+            "stop_lands_drones": self.manager.stop_lands_drones,
+            "stop_warning": stop_warning(self.manager.stop_lands_drones, self.manager.ground_here()),
+            "is_windows": self.preflight_env.is_windows,
         }
 
     def room_ceiling(self) -> tuple[int, int] | None:
@@ -159,9 +210,10 @@ class LauncherApp:
     def validate(self, body: dict[str, Any]) -> dict[str, Any]:
         settings = self.parse(body)
         token = self.reload_token()
-        plan = build_plan(settings, token, self.python)
+        plan = build_plan(settings, token, self.python, self.environ)
         return {
             "issues": self.issues(settings),
+            "inherited_env": self.inherited_env(),
             "fleet": list(settings.fleet_ids()) if settings.runs_ground else [],
             "needs_token": settings.needs_token(),
             "plan": [
@@ -172,8 +224,10 @@ class LauncherApp:
 
     def preflight(self, body: dict[str, Any]) -> dict[str, Any]:
         settings = self.parse(body)
-        issues = self.issues(settings)
-        if errors(validate(settings, is_windows=self.preflight_env.is_windows, reserved_ports=self.reserved_ports())):
+        self.reload_token()
+        found = self._validate(settings, fresh_adapters=True)
+        issues = [i.to_json() for i in found]
+        if errors(found):
             return {"issues": issues, "checks": [], "ok": False}
         if self.manager.busy() and bool(body.get("probe_drones")):
             # The edges hold the drones' command ports; a probe now would compete with them.
@@ -193,7 +247,8 @@ class LauncherApp:
         try:
             if self.manager.busy():
                 raise ApiError(HTTPStatus.CONFLICT, "processes are already running; stop them first")
-            found = validate(settings, is_windows=self.preflight_env.is_windows, reserved_ports=self.reserved_ports())
+            self.reload_token()
+            found = self._validate(settings, fresh_adapters=True)
             if errors(found):
                 return {"started": False, "issues": [i.to_json() for i in found], "checks": []}
             token = self.reload_token()
@@ -206,7 +261,7 @@ class LauncherApp:
             except (OSError, PresetError):
                 pass  # remembering the settings is a convenience; it must not stop a start
             try:
-                self.manager.start(build_plan(settings, token, self.python))
+                self.manager.start(build_plan(settings, token, self.python, self.environ))
             except ProcessError as exc:
                 raise ApiError(HTTPStatus.CONFLICT, str(exc)) from None
             return {"started": True, "issues": [i.to_json() for i in found], "checks": self.last_checks}
@@ -216,6 +271,8 @@ class LauncherApp:
     def stop(self, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("confirm") is not True:
             raise ApiError(HTTPStatus.BAD_REQUEST, "stopping needs confirmation")
+        if self.manager.stopping():
+            return {"stopping": True}  # already stopping; a second signal would interrupt a landing
         thread = threading.Thread(target=self.manager.stop_all, daemon=True, name="launcher-stop")
         self._stop_threads.append(thread)
         thread.start()
@@ -232,22 +289,18 @@ class LauncherApp:
             raise ApiError(HTTPStatus.BAD_REQUEST, "name the process to restart")
         if name not in self.manager.names():
             raise ApiError(HTTPStatus.NOT_FOUND, f"no process named {name!r} was started by this launcher")
-
-        def _run() -> None:
-            try:
-                self.manager.restart(name)
-            except ProcessError:
-                pass
-
-        threading.Thread(target=_run, daemon=True, name=f"launcher-restart-{name}").start()
+        try:
+            self.manager.restart(name, background=True)
+        except ProcessError as exc:
+            raise ApiError(HTTPStatus.CONFLICT, str(exc)) from None
         return {"restarting": name}
 
     def logs(self, name: str, offset: int) -> dict[str, Any]:
         try:
-            text, new_offset = self.manager.read_log(name, offset)
+            text, new_offset, path = self.manager.read_log(name, offset)
         except ProcessError as exc:
             raise ApiError(HTTPStatus.NOT_FOUND, str(exc)) from None
-        return {"name": name, "text": text, "offset": new_offset}
+        return {"name": name, "text": text, "offset": new_offset, "log": path}
 
     def save_preset(self, body: dict[str, Any]) -> dict[str, Any]:
         settings = self.parse(body)
@@ -287,6 +340,23 @@ _STATIC = {
 _CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
+def _redact_tree(value: Any, redact: Callable[[str], str]) -> Any:
+    """*value* with the token removed from every string in it, before it is encoded as JSON."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {redact(str(k)): _redact_tree(v, redact) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_tree(v, redact) for v in value]
+    return value
+
+
+_KEY_REQUIRED = (
+    b"This page needs the key from the launcher. Open the address that the launcher printed in its terminal "
+    b"(http://127.0.0.1:<port>/?key=...), or restart the launcher."
+)
+
+
 def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]:
     allowed_hosts = {f"127.0.0.1:{app.port}", f"localhost:{app.port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
@@ -311,7 +381,8 @@ def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]
             self.wfile.write(body)
 
         def _json(self, status: int, data: Any) -> None:
-            self._send(status, app.redact(json.dumps(data)).encode("utf-8"), "application/json")
+            # Redacted before encoding (JSON escaping could hide a token from a later text search), and after.
+            self._send(status, app.redact(json.dumps(_redact_tree(data, app.redact))).encode("utf-8"), "application/json")
 
         def _host_ok(self) -> bool:
             if self.headers.get("Host", "") not in allowed_hosts:
@@ -347,6 +418,11 @@ def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]
             if method == "GET" and path in ("/", "/index.html"):
                 if not self._host_ok():
                     return self._send(HTTPStatus.FORBIDDEN, b"forbidden", "text/plain")
+                # Like Jupyter: the page (and so the session key in it) is served only to whoever has the
+                # address the launcher opened, which carries the key; a Host header alone is not enough.
+                key = (parse_qs(url.query).get("key") or [""])[0]
+                if not secrets.compare_digest(key.encode("utf-8"), session.encode("utf-8")):
+                    return self._send(HTTPStatus.FORBIDDEN, _KEY_REQUIRED, "text/plain; charset=utf-8")
                 page = (STATIC_DIR / "launcher.html").read_text(encoding="utf-8").replace("__SESSION__", session)
                 return self._send(HTTPStatus.OK, page.encode("utf-8"), "text/html; charset=utf-8")
             if method == "GET" and path in _STATIC:
@@ -402,13 +478,37 @@ def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]
     return Handler
 
 
+def exclusive_bind_options(sock: Any, windows: bool) -> None:
+    """On Windows, make the bind exclusive, so a second launcher cannot share a port that is already listening."""
+    if windows:
+        sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+
+
+def server_class(windows: bool | None = None) -> type[ThreadingHTTPServer]:
+    """The HTTP server class: on Windows without address reuse (which there means sharing a live port)."""
+    if windows is None:
+        windows = sys.platform == "win32"
+
+    class LauncherHTTPServer(ThreadingHTTPServer):
+        allow_reuse_address = not windows
+        daemon_threads = True
+
+        def server_bind(self) -> None:
+            exclusive_bind_options(self.socket, windows)
+            super().server_bind()
+
+    return LauncherHTTPServer
+
+
 def make_server(app: LauncherApp, session: str | None = None, host: str = "127.0.0.1") -> tuple[ThreadingHTTPServer, str]:
-    """A server for *app* on 127.0.0.1:``app.port`` (port 0 picks a free one and updates ``app.port``)."""
+    """A server for *app* on 127.0.0.1:``app.port`` (port 0 picks a free one and updates ``app.port``).
+
+    The window's address is ``http://127.0.0.1:<port>/?key=<session>``.
+    """
     session = session or secrets.token_urlsafe(24)
     if host != "127.0.0.1":
         raise ValueError("the launcher only listens on 127.0.0.1")
-    server = ThreadingHTTPServer((host, app.port), BaseHTTPRequestHandler)
-    server.daemon_threads = True
+    server = server_class()((host, app.port), BaseHTTPRequestHandler)
     app.port = server.server_address[1]
     server.RequestHandlerClass = make_handler(app, session)
     return server, session

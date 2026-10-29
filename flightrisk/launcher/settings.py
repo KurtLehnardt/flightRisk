@@ -19,6 +19,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import sys
 import threading
 from collections.abc import Callable, Mapping
@@ -33,6 +34,7 @@ from flightrisk.drone.safety import (
     validate_ceiling,
 )
 from flightrisk.fleet_protocol import is_identifier
+from flightrisk.launcher.netinfo import Adapter, adapters_for_host
 
 ROLES = ("ground", "edges")
 NETWORKS = ("loopback", "cable")
@@ -55,6 +57,13 @@ MAX_PORT = 65535
 LAUNCHER_FILE_ENV = "FLIGHTRISK_LAUNCHER_FILE"
 _FILE_VERSION = 1
 MAX_PRESET_NAME = 60
+#: The largest geofence accepted, in cm (50 m); the indoor floor is about 4 m.
+MAX_GEOFENCE_CM = 5000
+MAX_TEXT_LEN = 256
+#: Drone ids name log files and processes, so they are stricter than the protocol's identifiers: no
+#: '.' or ':' (``edge-drone:1.log`` would be a hidden NTFS stream on Windows).
+_DRONE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 ERROR = "error"
 WARNING = "warning"
@@ -198,6 +207,10 @@ def _text(data: Mapping[str, Any], key: str, default: str) -> str:
         return ""
     if not isinstance(value, str):
         raise SettingsError(f"{key} must be text, got {type(value).__name__}")
+    if _CONTROL.search(value):
+        raise SettingsError(f"{key} must not contain control characters")
+    if len(value) > MAX_TEXT_LEN:
+        raise SettingsError(f"{key} is longer than {MAX_TEXT_LEN} characters")
     return value.strip()
 
 
@@ -291,11 +304,18 @@ def validate(
     is_windows: bool | None = None,
     reserved_ports: Mapping[int, str] | None = None,
     profile_names: tuple[str, ...] | None = None,
+    adapters: list[Adapter] | None = None,
+    secret: str | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> list[Issue]:
     """Every problem with *settings*. Issues of level ``error`` must block a start.
 
     ``reserved_ports`` maps ports already taken by the launcher itself (its own
     window) to a name. ``profile_names`` defaults to the detection profile registry.
+    ``adapters`` (this computer's adapters, when known) lets a real drone with no
+    local IP be refused when more than one adapter could reach it. ``secret`` is
+    the edge token: a setting that contains it is refused, so it can never reach a
+    command line. ``environ`` is the environment the children inherit.
     """
     if is_windows is None:
         is_windows = sys.platform == "win32"
@@ -306,6 +326,9 @@ def validate(
 
     def warn(field_name: str, message: str) -> None:
         issues.append(Issue(WARNING, field_name, message))
+
+    if secret and secret in json.dumps(settings.to_json()):
+        err("settings", "a setting contains the edge token; remove it (the token is passed to the processes for you)")
 
     if settings.role not in ROLES:
         err("role", f"role must be one of {', '.join(ROLES)}, got {settings.role!r}")
@@ -323,10 +346,12 @@ def validate(
     except ValueError as exc:
         ceiling_ok = False
         err("ceiling_cm", str(exc))
-    if settings.geofence_cm <= 0:
-        err("geofence_cm", f"geofence must be a positive number of cm, got {settings.geofence_cm}")
+    if not 0 < settings.geofence_cm <= MAX_GEOFENCE_CM:
+        err("geofence_cm", f"geofence must be within 1-{MAX_GEOFENCE_CM} cm, got {settings.geofence_cm}")
 
     _validate_drones(settings, is_windows, err, warn, ceiling_ok)
+    if adapters is not None:
+        _validate_shared_subnet(settings, adapters, err)
     _validate_network(settings, err, warn)
     _validate_ports(settings, reserved_ports or {}, err)
 
@@ -343,8 +368,40 @@ def validate(
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
     if settings.role == "ground" and settings.llm:
-        warn("llm", "the language model is on: the ground station connects to the local Ollama server at start")
+        env = os.environ if environ is None else environ
+        provider = (env.get("FLIGHTRISK_REASONING_PROVIDER") or "").strip().lower()
+        if provider == "claude":
+            warn("llm", "the language model is on and FLIGHTRISK_REASONING_PROVIDER=claude is inherited: the ground "
+                 "station may send match data to the Claude cloud service (if FLIGHTRISK_ALLOW_CLOUD_LLM allows it)")
+        else:
+            warn("llm", "the language model is on: the ground station connects to the local Ollama server at start")
     return issues
+
+
+def local_tellos_without_adapter(settings: LauncherSettings, adapters: list[Adapter]) -> list[tuple[int, DroneSettings, list[Adapter]]]:
+    """Real drones flown from here with no local IP while more than one adapter can reach their Tello host.
+
+    Such a drone's packets would go out whichever adapter the routing picks, so another drone could answer.
+    """
+    found = []
+    for i, drone in enumerate(settings.drones):
+        if drone.source != "tello" or drone.local_ip or not (settings.role == "edges" or drone.run_here):
+            continue
+        reach = adapters_for_host(adapters, drone.tello_host)
+        if len(reach) > 1:
+            found.append((i, drone, reach))
+    return found
+
+
+def choose_adapter_message(drone: DroneSettings, reach: list[Adapter]) -> str:
+    names = ", ".join(f"{a.name} {a.ipv4}" for a in reach)
+    return (f"{drone.drone_id}: choose the adapter; {len(reach)} adapters can reach {drone.tello_host} ({names}), so "
+            f"without a local IP another drone could answer")
+
+
+def _validate_shared_subnet(settings: LauncherSettings, adapters: list[Adapter], err: Callable) -> None:
+    for i, drone, reach in local_tellos_without_adapter(settings, adapters):
+        err(f"drones.{i}.local_ip", choose_adapter_message(drone, reach))
 
 
 def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable, warn: Callable, ceiling_ok: bool) -> None:
@@ -352,8 +409,8 @@ def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable
     for i, drone in enumerate(settings.drones):
         name = f"drones.{i}"
         label = drone.drone_id or f"drone {i + 1}"
-        if not is_identifier(drone.drone_id):
-            err(f"{name}.drone_id", f"drone {i + 1}: {drone.drone_id!r} is not a drone id (letters, digits, '.', '_', ':' "
+        if not is_identifier(drone.drone_id) or not _DRONE_ID.match(drone.drone_id):
+            err(f"{name}.drone_id", f"drone {i + 1}: {drone.drone_id!r} is not a drone id (1 to 64 letters, digits, '_' "
                 f"or '-', starting with a letter or digit, for example drone-1)")
         elif drone.drone_id in seen_ids:
             err(f"{name}.drone_id", f"drone id {drone.drone_id} is used twice (drones {seen_ids[drone.drone_id] + 1} and {i + 1})")

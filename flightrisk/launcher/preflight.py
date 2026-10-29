@@ -23,7 +23,12 @@ from typing import Any
 
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
-from flightrisk.launcher.settings import DroneSettings, LauncherSettings
+from flightrisk.launcher.settings import (
+    DroneSettings,
+    LauncherSettings,
+    choose_adapter_message,
+    local_tellos_without_adapter,
+)
 
 PASS = "PASS"
 WARN = "WARN"
@@ -181,7 +186,7 @@ def _port_free(host: str, port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         if sys.platform == "win32":
-            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", 0xFFFFFFFB), 1)
+            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
         sock.bind((host, port))
         return True
     except OSError:
@@ -355,6 +360,9 @@ def run_preflight(
     for drone in local_tellos:
         if drone.local_ip:
             checks.append(_local_ip_check(drone, adapters, env.is_windows))
+    ambiguous = {drone.drone_id for _, drone, _ in local_tellos_without_adapter(settings, adapters)}
+    for _, drone, reach in local_tellos_without_adapter(settings, adapters):
+        checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, choose_adapter_message(drone, reach)))
 
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
@@ -362,6 +370,10 @@ def run_preflight(
     # Each real drone, read-only.
     if probe_drones:
         for drone in local_tellos:
+            if drone.drone_id in ambiguous:
+                # A probe from all addresses could be answered by another drone; it is not sent.
+                checks.append(Check(f"Drone {drone.drone_id}", FAIL, "not checked: choose its adapter first"))
+                continue
             result = env.tello_probe(drone)
             if not result.ok:
                 checks.append(Check(f"Drone {drone.drone_id}", FAIL, result.detail))

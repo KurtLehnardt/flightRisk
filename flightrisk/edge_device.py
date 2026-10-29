@@ -439,11 +439,16 @@ def _wire_emergency_callback(transport: Any, flight: LaneExecutor) -> bool:
     return True
 
 
-def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger) -> Any:
+def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger, signals: Any = signal) -> Any:
     """Make Ctrl+C land the drone before the process exits.
 
-    Returns the previous handler, or None if handlers cannot be installed
-    (not on the main thread).
+    On Windows the same handler also takes SIGBREAK (Ctrl+Break), which is
+    how the launcher (``flightrisk.launcher``) asks an edge it started in its
+    own process group to stop. Platforms without SIGBREAK are unchanged.
+    ``signals`` is the ``signal`` module, replaceable in tests.
+
+    Returns the previous SIGINT handler, or None if handlers cannot be
+    installed (not on the main thread).
     """
     def _on_sigint(signum, frame):
         # A signal that arrives mid-write to stderr can make the log call
@@ -457,9 +462,22 @@ def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger) -> Any:
         raise KeyboardInterrupt
 
     try:
-        return signal.signal(signal.SIGINT, _on_sigint)
+        previous = signals.signal(signals.SIGINT, _on_sigint)
     except ValueError:
         return None
+    sigbreak = getattr(signals, "SIGBREAK", None)
+    if sigbreak is not None:
+        with contextlib.suppress(ValueError, OSError):
+            signals.signal(sigbreak, _on_sigint)
+    return previous
+
+
+def _restore_sigbreak(signals: Any = signal) -> None:
+    """Give SIGBREAK back its default action (Windows only; elsewhere there is no SIGBREAK)."""
+    sigbreak = getattr(signals, "SIGBREAK", None)
+    if sigbreak is not None:
+        with contextlib.suppress(ValueError, OSError):
+            signals.signal(sigbreak, signals.SIG_DFL)
 
 
 def _drain_control(
@@ -1100,6 +1118,7 @@ def _run_flight_edge(
                 signal.signal(signal.SIGINT, previous_sigint)
             except ValueError:
                 pass
+            _restore_sigbreak()
 
 
 def _init_edge_telemetry(log: StructuredLogger) -> bool:

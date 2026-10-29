@@ -239,3 +239,21 @@ def test_not_a_venv_warns():
     rows = _by_name(run_preflight(builtin_presets()["Rehearsal with fake drones"], EdgeToken(None, None),
                                   _env(in_venv=lambda: False)))
     assert rows["Virtual environment"].status == WARN
+
+
+
+def test_a_single_drone_without_an_adapter_fails_on_a_two_adapter_machine_and_is_not_probed():
+    probed = []
+    env = _env(
+        adapters=lambda: [Adapter("Wi-Fi", "192.168.10.2", 12), Adapter("Wi-Fi 2", "192.168.10.50", 23)],
+        tello_probe=lambda d: probed.append(d.drone_id) or TelloProbe(True, battery=90),
+        is_windows=True,
+    )
+    settings = LauncherSettings(role="edges", drones=(DroneSettings(drone_id="drone-2"),))
+    rows = _by_name(run_preflight(settings, EdgeToken(TOKEN, "x"), env))
+    assert rows["Adapter for drone-2"].status == FAIL and "choose the adapter" in rows["Adapter for drone-2"].detail
+    assert rows["Drone drone-2"].status == FAIL
+    assert probed == []
+    picked = LauncherSettings(role="edges", drones=(DroneSettings(drone_id="drone-2", local_ip="192.168.10.50", ifindex=23),))
+    rows = _by_name(run_preflight(picked, EdgeToken(TOKEN, "x"), env))
+    assert rows["Drone drone-2"].status == PASS and probed == ["drone-2"]

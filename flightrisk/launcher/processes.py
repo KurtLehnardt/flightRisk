@@ -1,24 +1,41 @@
 """Start, watch, restart and stop the child processes the launcher started, and only those.
 
-Each child runs with no console window of its own. Its output goes straight
-to ``logs/launcher/<name>.log``, so a child keeps running (and logging) if the
-launcher exits and leaves it running. The window reads the log back through
-``read_log``, which removes the edge token; when a child exits, its log file
-is scrubbed of the token as well.
+Each launcher run writes its logs to a folder of its own,
+``logs/launcher/<date>-<time>-<port>/<name>.log``, so two launchers (for example
+a rehearsal beside a live ground) never share a file. Old run folders are
+removed at start beyond ``KEEP_RUNS`` folders or ``MAX_LOG_BYTES`` in total.
+A child writes straight to its log file, so it keeps running (and logging) if
+the launcher exits and leaves it running. The window reads the log back
+through ``read_log``, which removes the edge token; when a child exits, its
+log file is scrubbed of the token as well.
 
 Start order: the ground first; the edges start only once the ground's
-dashboard and edge link ports accept connections. On macOS and Linux the
-edges stop first, then the ground. A stop asks each child to shut down the way Ctrl+C
-does (SIGINT; an edge then lands its own drone if it is flying) and
-terminates it only if it has not exited after a grace period. On Windows
-the children have no console to receive Ctrl+C and can only be terminated,
-so the ground is stopped first and the edges are given time to land their
-drones through the link-loss rule before they are terminated.
+dashboard and edge link ports accept connections.
+
+Stop: the edges first, then the ground. Each child is asked to shut down the
+way Ctrl+C does, so an edge lands its own drone if it is flying, and it is
+terminated only if it has not exited after a grace period:
+
+* macOS and Linux: SIGINT. Each child runs in its own session.
+* Windows: CTRL_BREAK_EVENT, which the edge handles like Ctrl+C. Each child
+  runs in its own process group sharing the launcher's console, with no
+  window of its own. Without a console (the launcher started without one)
+  this is impossible, the children run with no console at all and can only
+  be terminated; then, when a ground runs here, it is stopped first and the
+  edges are given the link-loss time to land their drones, and when only
+  edges run here, Stop does not land any drone and the window says so.
+
+Restarting an edge is refused on Windows until the Ctrl+Break stop is
+verified on hardware, and an edge that had to be terminated is never
+restarted, because its drone may still be in the air.
 """
 
 from __future__ import annotations
 
+import math
 import os
+import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -33,15 +50,19 @@ from typing import Any
 from flightrisk.launcher.commands import ProcessSpec, Redactor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_LOG_DIR = REPO_ROOT / "logs" / "launcher"
+LOG_ROOT = REPO_ROOT / "logs" / "launcher"
+#: At most this many run folders are kept in LOG_ROOT, and at most this many bytes in total.
+KEEP_RUNS = 20
+MAX_LOG_BYTES = 500 * 1024 * 1024
+_RUN_DIR = re.compile(r"^\d{8}-\d{6}-\d+$")
 READY_TIMEOUT_S = 180.0
 EDGE_STOP_GRACE_S = 15.0
 # The dashboard does not always exit on SIGINT, so it gets a short grace before SIGTERM.
 GROUND_STOP_GRACE_S = 5.0
 KILL_WAIT_S = 5.0
-#: Windows: after the ground stops, how long the edges keep running so a flying drone lands through the
-#: link-loss rule (FLIGHTRISK_LINK_LOSS_LAND_S, 3 s by default, plus the landing itself).
-LINK_LOSS_WAIT_S = 10.0
+#: The edge's default FLIGHTRISK_LINK_LOSS_LAND_S, and the time a landing takes after it.
+DEFAULT_LINK_LOSS_S = 3.0
+LANDING_ALLOWANCE_S = 7.0
 MAX_LOG_READ = 64 * 1024
 
 # Status values shown in the window.
@@ -52,6 +73,12 @@ STOPPING = "stopping"
 STOPPED = "stopped"
 EXITED = "exited"
 NOT_STARTED = "not started"
+ALIVE = (STARTING, RUNNING, STOPPING)
+
+WINDOWS_EDGE_RESTART_REFUSED = (
+    "restarting an edge is not available on Windows yet: stopping it may not land its drone. "
+    "Land it with LAND ALL in the dashboard, then Stop and Start again"
+)
 
 
 class ProcessError(RuntimeError):
@@ -66,13 +93,52 @@ def _tcp_open(host: str, port: int) -> bool:
         return False
 
 
-def _popen_kwargs() -> dict[str, Any]:
-    if sys.platform == "win32":
-        # No console window per child: a click in a console window freezes the program (QuickEdit).
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        return {"creationflags": flags}
-    # Own session: a Ctrl+C in the launcher's terminal does not reach the children; the launcher decides.
-    return {"start_new_session": True}
+def console_attached() -> bool:
+    """Windows: True when this process has a console its children can share (for Ctrl+Break)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+    except Exception:  # noqa: BLE001 - no console API means no console
+        return False
+
+
+def new_run_log_dir(root: Path, port: int, now: float | None = None) -> Path:
+    """The log folder of one launcher run: ``<root>/<YYYYmmdd-HHMMSS>-<port>`` (not created yet)."""
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+    return Path(root) / f"{stamp}-{port}"
+
+
+def _folder_size(path: Path) -> int:
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def prune_log_runs(root: Path, *, keep: int = KEEP_RUNS, max_bytes: int = MAX_LOG_BYTES, current: Path | None = None) -> list[Path]:
+    """Remove the oldest run folders beyond *keep* folders or *max_bytes* in total. Returns what was removed.
+
+    Only folders named like a run (``YYYYmmdd-HHMMSS-port``) are touched, never *current*.
+    """
+    root = Path(root)
+    try:
+        runs = sorted(p for p in root.iterdir() if p.is_dir() and _RUN_DIR.match(p.name) and p != current)
+    except OSError:
+        return []
+    sizes = {p: _folder_size(p) for p in runs}
+    removed = []
+    while runs and (len(runs) >= keep or sum(sizes[p] for p in runs) > max_bytes):
+        oldest = runs.pop(0)
+        shutil.rmtree(oldest, ignore_errors=True)
+        removed.append(oldest)
+    return removed
 
 
 @dataclass
@@ -87,23 +153,27 @@ class Managed:
     started_at: float | None = None
     message: str = ""
     stop_requested: bool = False
+    forced: bool = False
     scrubbed: bool = False
+    starts: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    restart_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 class ProcessManager:
     """The children of one launcher.
 
-    ``popen`` (``subprocess.Popen`` by default), ``port_open`` and ``sleep`` are
-    injectable for tests. Only processes created through this object are ever
-    signalled.
+    ``popen`` (``subprocess.Popen`` by default) and ``port_open`` are injectable
+    for tests, and so are ``windows`` and ``graceful`` (whether a stop can ask a
+    child to shut down rather than terminate it). Only processes created
+    through this object are ever signalled.
     """
 
     def __init__(
         self,
         redactor: Redactor,
         *,
-        log_dir: Path = DEFAULT_LOG_DIR,
+        log_dir: Path | None = None,
         cwd: Path = REPO_ROOT,
         popen: Callable[..., Any] = subprocess.Popen,
         port_open: Callable[[str, int], bool] = _tcp_open,
@@ -112,10 +182,11 @@ class ProcessManager:
         ground_grace_s: float = GROUND_STOP_GRACE_S,
         poll_s: float = 0.25,
         windows: bool | None = None,
-        link_loss_wait_s: float = LINK_LOSS_WAIT_S,
+        graceful: bool | None = None,
+        link_loss_wait_s: float | None = None,
     ):
         self.redact = redactor
-        self.log_dir = Path(log_dir)
+        self.log_dir = Path(log_dir) if log_dir is not None else new_run_log_dir(LOG_ROOT, os.getpid())
         self.cwd = Path(cwd)
         self._popen = popen
         self._port_open = port_open
@@ -124,8 +195,14 @@ class ProcessManager:
         self.ground_grace_s = ground_grace_s
         self.poll_s = poll_s
         self.windows = sys.platform == "win32" if windows is None else windows
-        self.link_loss_wait_s = link_loss_wait_s
+        if graceful is None:
+            graceful = console_attached() if self.windows else True
+        self.graceful = graceful
+        self._link_loss_wait_s = link_loss_wait_s
         self._lock = threading.RLock()
+        # One stop, restart or start at a time; a plain Lock so a worker thread may release it.
+        self._op_lock = threading.Lock()
+        self._stopping = threading.Event()
         self._order: list[str] = []
         self._procs: dict[str, Managed] = {}
         self._abort = threading.Event()
@@ -134,6 +211,16 @@ class ProcessManager:
 
     # ---- queries -------------------------------------------------------
 
+    @property
+    def stop_lands_drones(self) -> bool:
+        """True when Stop asks each edge to land its drone (False only on Windows without a console)."""
+        return self.graceful
+
+    def ground_here(self) -> bool:
+        """True when this launcher started a ground station."""
+        with self._lock:
+            return any(m.spec.kind == "ground" for m in self._procs.values())
+
     def names(self) -> list[str]:
         with self._lock:
             return list(self._order)
@@ -141,12 +228,19 @@ class ProcessManager:
     def any_alive(self) -> bool:
         self.refresh()
         with self._lock:
-            return any(m.status in (STARTING, RUNNING, STOPPING) for m in self._procs.values())
+            return any(m.status in ALIVE for m in self._procs.values())
 
     def busy(self) -> bool:
         """True while a start sequence or any child is active."""
         seq = self._sequence
         return (seq is not None and seq.is_alive()) or self.any_alive()
+
+    def stopping(self) -> bool:
+        """True while a stop of everything is in progress."""
+        return self._stopping.is_set()
+
+    def can_restart(self, managed: Managed) -> bool:
+        return not (self.windows and managed.spec.kind == "edge")
 
     def snapshot(self) -> list[dict[str, Any]]:
         self.refresh()
@@ -160,12 +254,13 @@ class ProcessManager:
                     "drone_id": m.spec.drone_id,
                     "status": m.status,
                     "returncode": m.returncode,
-                    "pid": getattr(m.popen, "pid", None) if m.status in (STARTING, RUNNING, STOPPING) else None,
+                    "pid": getattr(m.popen, "pid", None) if m.status in ALIVE else None,
                     "message": self.redact(m.message),
                     "log": str(m.log_path),
                     "command": self.redact(m.spec.command_line()),
                     "env": {k: self.redact(v) for k, v in m.spec.display_env.items()},
                     "started_at": m.started_at,
+                    "restartable": self.can_restart(m),
                 })
             return rows
 
@@ -174,7 +269,38 @@ class ProcessManager:
             self.events.append(f"{time.strftime('%H:%M:%S')} {self.redact(text)}")
             del self.events[:-200]
 
+    def link_loss_wait_s(self) -> float:
+        """How long edges keep running after the ground stops, so a flying drone lands through the link-loss rule.
+
+        The edges' own FLIGHTRISK_LINK_LOSS_LAND_S (inherited or default) plus the landing itself.
+        """
+        if self._link_loss_wait_s is not None:
+            return self._link_loss_wait_s
+        longest = DEFAULT_LINK_LOSS_S
+        with self._lock:
+            specs = [m.spec for m in self._procs.values() if m.spec.kind == "edge"]
+        for spec in specs:
+            try:
+                value = float(spec.env.get("FLIGHTRISK_LINK_LOSS_LAND_S") or DEFAULT_LINK_LOSS_S)
+            except ValueError:
+                value = DEFAULT_LINK_LOSS_S
+            if not math.isnan(value) and value > longest:
+                longest = min(value, 120.0)
+        return longest + LANDING_ALLOWANCE_S
+
     # ---- start -----------------------------------------------------------
+
+    def _popen_kwargs(self) -> dict[str, Any]:
+        if self.windows:
+            group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+            if self.graceful:
+                # Shares the launcher's console (QuickEdit is off there), so it can receive Ctrl+Break,
+                # and opens no window of its own.
+                return {"creationflags": group}
+            # No console at all: no window that a click could freeze.
+            return {"creationflags": group | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+        # Own session: a Ctrl+C in the launcher's terminal does not reach the children; the launcher decides.
+        return {"start_new_session": True}
 
     def start(self, plan: Sequence[ProcessSpec], *, wait: bool = False) -> None:
         """Start *plan* in order on a background thread. Refused while anything is running."""
@@ -183,14 +309,19 @@ class ProcessManager:
         names = [spec.name for spec in plan]
         if len(set(names)) != len(names):
             raise ProcessError(f"two processes would share a name: {', '.join(names)}")
-        with self._lock:
-            if self.busy():
-                raise ProcessError("processes are already running; stop them first")
-            self._abort.clear()
-            self._order = names
-            self._procs = {spec.name: Managed(spec, self.log_dir / f"{spec.name}.log") for spec in plan}
-            self._sequence = threading.Thread(target=self._run_sequence, args=(list(plan),), daemon=True, name="launcher-start")
-            self._sequence.start()
+        if not self._op_lock.acquire(blocking=False):
+            raise ProcessError("a stop or restart is in progress; wait for it to finish")
+        try:
+            with self._lock:
+                if self.busy():
+                    raise ProcessError("processes are already running; stop them first")
+                self._abort.clear()
+                self._order = names
+                self._procs = {spec.name: Managed(spec, self.log_dir / f"{spec.name}.log") for spec in plan}
+                self._sequence = threading.Thread(target=self._run_sequence, args=(list(plan),), daemon=True, name="launcher-start")
+                self._sequence.start()
+        finally:
+            self._op_lock.release()
         if wait:
             self._sequence.join()
 
@@ -217,10 +348,12 @@ class ProcessManager:
 
     def _spawn(self, managed: Managed) -> bool:
         spec = managed.spec
+        # A new file for every start, so nothing is renamed under a running process (Windows refuses that).
+        managed.starts += 1
+        suffix = "" if managed.starts == 1 else f".restart-{managed.starts - 1}"
+        managed.log_path = self.log_dir / f"{spec.name}{suffix}.log"
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            if managed.log_path.exists():
-                os.replace(managed.log_path, managed.log_path.with_suffix(".previous.log"))
             # Not a with block: the child gets its own copy of the handle, and this one is closed below.
             log = open(managed.log_path, "wb")  # noqa: SIM115
         except OSError as exc:
@@ -238,18 +371,21 @@ class ProcessManager:
             with managed.lock:
                 managed.status = STARTING
                 managed.stop_requested = False
+                managed.forced = False
                 managed.returncode = None
                 managed.scrubbed = False
                 managed.message = ""
                 managed.popen = self._popen(
                     list(spec.argv), cwd=str(self.cwd), env=dict(spec.env),
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **_popen_kwargs(),
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, **self._popen_kwargs(),
                 )
                 managed.started_at = time.time()
                 if not spec.ready_ports:
                     managed.status = RUNNING
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError: for example a NUL in an argument or environment value.
             with managed.lock:
+                managed.popen = None
                 managed.status, managed.message = EXITED, self.redact(f"could not start: {exc}")
             self._event(f"{spec.name}: could not start")
             return False
@@ -287,7 +423,7 @@ class ProcessManager:
             procs = list(self._procs.values())
         for m in procs:
             with m.lock:
-                if m.popen is None or m.status not in (STARTING, RUNNING, STOPPING):
+                if m.popen is None or m.status not in ALIVE:
                     continue
                 code = m.popen.poll()
                 if code is None:
@@ -313,43 +449,68 @@ class ProcessManager:
             except OSError:
                 pass
 
-    def read_log(self, name: str, offset: int = 0, limit: int = MAX_LOG_READ) -> tuple[str, int]:
-        """New log text of *name* from byte *offset*, whole lines only, with the token removed."""
+    def read_log(self, name: str, offset: int = 0, limit: int = MAX_LOG_READ) -> tuple[str, int, str]:
+        """New log text of *name* from byte *offset*: whole lines only, with the token removed.
+
+        Returns ``(text, new_offset, log_path)``; a new path means a restart began a new file.
+        When more than *limit* bytes are new, reading starts at the first whole line of the last
+        *limit* bytes, so a line (and a token in it) is never cut in half.
+        """
         with self._lock:
             managed = self._procs.get(name)
         if managed is None:
             raise ProcessError(f"no process named {name!r}")
+        path = managed.log_path
         try:
-            with open(managed.log_path, "rb") as handle:
+            with open(path, "rb") as handle:
                 size = handle.seek(0, os.SEEK_END)
                 if offset > size:
-                    offset = 0  # the file was replaced by a restart
+                    offset = 0
+                skip_partial = False
                 if size - offset > limit:
                     offset = size - limit
+                    skip_partial = offset > 0
                 handle.seek(offset)
                 data = handle.read(limit)
         except OSError:
-            return "", offset
+            return "", offset, str(path)
+        if skip_partial:
+            start = data.find(b"\n")
+            if start < 0:
+                return "", offset + len(data), str(path)
+            offset += start + 1
+            data = data[start + 1:]
         cut = data.rfind(b"\n")
         if cut < 0:
-            return "", offset
+            return "", offset, str(path)
         chunk = data[: cut + 1]
-        return self.redact(chunk.decode("utf-8", errors="replace")), offset + len(chunk)
+        return self.redact(chunk.decode("utf-8", errors="replace")), offset + len(chunk), str(path)
 
     # ---- stop and restart --------------------------------------------------
 
+    def _graceful_signal(self) -> int | None:
+        if not self.windows:
+            return signal.SIGINT
+        if self.graceful:
+            return getattr(signal, "CTRL_BREAK_EVENT", 1)
+        return None
+
     def _signal_stop(self, managed: Managed) -> None:
         with managed.lock:
-            managed.stop_requested = True
             if managed.popen is None or managed.popen.poll() is not None:
+                managed.stop_requested = True
                 return
+            if managed.stop_requested and managed.status == STOPPING:
+                return  # already asked once; a second Ctrl+C would interrupt its landing
+            managed.stop_requested = True
             managed.status = STOPPING
             popen = managed.popen
+        sig = self._graceful_signal()
         try:
-            if self.windows:
+            if sig is None:
                 popen.terminate()
             else:
-                popen.send_signal(signal.SIGINT)
+                popen.send_signal(sig)
         except (OSError, ValueError):
             pass
 
@@ -360,6 +521,7 @@ class ProcessManager:
         try:
             popen.wait(timeout=grace_s)
         except subprocess.TimeoutExpired:
+            managed.forced = True
             self._event(f"{managed.spec.name}: still running after {int(grace_s)} s; terminating it")
             try:
                 popen.terminate()
@@ -372,6 +534,9 @@ class ProcessManager:
                     pass
             except OSError:
                 pass
+        else:
+            if self._graceful_signal() is None:
+                managed.forced = True  # terminated outright
         self.refresh()
 
     def _stop_group(self, group: list[Managed], grace_s: float) -> None:
@@ -384,30 +549,39 @@ class ProcessManager:
             t.join()
 
     def stop_all(self) -> None:
-        """Stop every child this launcher started.
+        """Stop every child this launcher started (see the module docstring for the order).
 
-        macOS and Linux: the edges first (each lands its own drone on SIGINT),
-        then the ground. Windows, where a child can only be terminated: the
-        ground first, then a wait of ``link_loss_wait_s`` so that a flying
-        drone lands through its edge's link-loss rule, then the edges.
+        A second call while one runs waits for it and then finds nothing left to signal.
         """
         self._abort.set()
         seq = self._sequence
         if seq is not None and seq is not threading.current_thread():
             seq.join(timeout=self.ready_timeout_s + 5)
+        with self._op_lock:
+            self._stopping.set()
+            try:
+                self._stop_everything()
+            finally:
+                self._stopping.clear()
+
+    def _stop_everything(self) -> None:
         with self._lock:
             procs = [self._procs[n] for n in self._order]
         edges = [m for m in procs if m.spec.kind != "ground"]
         grounds = [m for m in procs if m.spec.kind == "ground"]
         live_edges = any(m.popen is not None and m.popen.poll() is None for m in edges)
-        if self.windows and grounds and live_edges:
+        if not self.graceful and grounds and live_edges:
+            # Children can only be terminated: stop the ground first so each edge's link-loss rule lands its drone.
+            wait_s = self.link_loss_wait_s()
             self._stop_group(grounds, self.ground_grace_s)
-            self._event(f"waiting up to {int(self.link_loss_wait_s)} s so flying drones land through the link-loss rule")
-            deadline = time.monotonic() + self.link_loss_wait_s
+            self._event(f"waiting up to {wait_s:.0f} s so flying drones land through the link-loss rule")
+            deadline = time.monotonic() + wait_s
             while time.monotonic() < deadline and any(m.popen is not None and m.popen.poll() is None for m in edges):
                 time.sleep(self.poll_s)
             self._stop_group(edges, self.edge_grace_s)
         else:
+            if not self.graceful and live_edges:
+                self._event("terminating the edges: this does not land their drones")
             self._stop_group(edges, self.edge_grace_s)
             self._stop_group(grounds, self.ground_grace_s)
         with self._lock:
@@ -415,28 +589,60 @@ class ProcessManager:
                 if m.status == PENDING:
                     m.status, m.message = NOT_STARTED, "start cancelled"
 
-    def stop_one(self, name: str) -> None:
+    def _managed(self, name: str) -> Managed:
         with self._lock:
             managed = self._procs.get(name)
         if managed is None:
             raise ProcessError(f"no process named {name!r} was started by this launcher")
-        self._stop_group([managed], self.ground_grace_s if managed.spec.kind == "ground" else self.edge_grace_s)
+        return managed
 
-    def restart(self, name: str) -> None:
-        """Stop *name* (if it runs) and start it again with the same command and environment."""
-        with self._lock:
-            managed = self._procs.get(name)
-            seq = self._sequence
-        if managed is None:
-            raise ProcessError(f"no process named {name!r} was started by this launcher")
+    def stop_one(self, name: str) -> None:
+        managed = self._managed(name)
+        with self._op_lock:
+            self._stop_group([managed], self._grace(managed))
+
+    def _grace(self, managed: Managed) -> float:
+        return self.ground_grace_s if managed.spec.kind == "ground" else self.edge_grace_s
+
+    def restart(self, name: str, *, background: bool = False) -> None:
+        """Stop *name* (if it runs) and start it again with the same command and environment.
+
+        The checks run at once and raise ``ProcessError``: an unknown name, a start sequence or a
+        stop still running, a restart of the same process already running, or an edge on Windows.
+        With *background* the stop and start then run on a thread.
+        """
+        managed = self._managed(name)
+        seq = self._sequence
         if seq is not None and seq.is_alive():
             raise ProcessError("the start sequence is still running; wait for it to finish")
-        self.stop_one(name)
-        if not self._spawn(managed):
-            return
-        if managed.spec.ready_ports:
-            threading.Thread(target=self._wait_ready, args=(managed,), daemon=True, name=f"launcher-ready-{name}").start()
+        if not self.can_restart(managed):
+            raise ProcessError(WINDOWS_EDGE_RESTART_REFUSED)
+        if not managed.restart_lock.acquire(blocking=False):
+            raise ProcessError(f"{name} is already restarting")
+        if not self._op_lock.acquire(blocking=False):
+            managed.restart_lock.release()
+            raise ProcessError("a stop or another restart is in progress; wait for it to finish")
+        if background:
+            threading.Thread(target=self._restart_locked, args=(managed,), daemon=True, name=f"launcher-restart-{name}").start()
+        else:
+            self._restart_locked(managed)
+
+    def _restart_locked(self, managed: Managed) -> None:
+        try:
+            self._stop_group([managed], self._grace(managed))
+            if managed.spec.kind == "edge" and managed.forced:
+                with managed.lock:
+                    managed.message = ("not restarted: it did not shut down by itself, so its drone may still be in the "
+                                       "air. Land it from the dashboard, then press Restart again")
+                self._event(f"{managed.spec.name}: not restarted (it had to be terminated)")
+                return
+            if self._spawn(managed) and managed.spec.ready_ports:
+                threading.Thread(target=self._wait_ready, args=(managed,), daemon=True,
+                                 name=f"launcher-ready-{managed.spec.name}").start()
+        finally:
+            self._op_lock.release()
+            managed.restart_lock.release()
 
     def leave_running(self) -> list[dict[str, Any]]:
-        """Forget nothing and signal nothing: the rows of the children that keep running after the launcher exits."""
-        return [row for row in self.snapshot() if row["status"] in (STARTING, RUNNING, STOPPING)]
+        """Signal nothing: the rows of the children that keep running after the launcher exits."""
+        return [row for row in self.snapshot() if row["status"] in ALIVE]
