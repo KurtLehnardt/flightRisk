@@ -14,8 +14,6 @@ packages:
     from: "2.29.1"
   FlightRiskGround:
     path: FlightRiskGround
-    excludes:
-      - Models/**
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -27,7 +25,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - FlightRisk
+      - path: FlightRisk
+        excludes:
+          - Models/**
     dependencies:
       - package: MLX
       - package: MLXSwiftExamples
