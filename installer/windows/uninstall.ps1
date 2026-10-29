@@ -38,6 +38,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) in the caller's
+# environment would point every git command at another repository.
+Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+
 $FlightRiskHome = $(if ($env:FLIGHTRISK_HOME) { $env:FLIGHTRISK_HOME } else { Join-Path $env:LOCALAPPDATA "FlightRisk" }).TrimEnd('\', '/')
 $AppDir = Join-Path $FlightRiskHome "app"
 $Marker = Join-Path (Join-Path $AppDir ".git") "flightrisk-installer"
@@ -58,6 +62,30 @@ function Test-UnsafeHome([string]$Dir) {
     return ($d -eq "" -or $d -eq "/" -or $d -match '^[A-Za-z]:$' -or ($shared -contains $d))
 }
 
+# The parent of process $Id, or 0 when the recorded parent id belongs to a
+# process created after it: Windows reuses the id of a parent that exited.
+function Get-LiveParent([hashtable]$Parent, [hashtable]$Created, [int]$Id) {
+    $up = [int]$Parent[$Id]
+    if ($up -and $Created.ContainsKey($Id) -and $Created.ContainsKey($up) -and $Created[$up] -gt $Created[$Id]) { return 0 }
+    return $up
+}
+
+# Process $Self, its parents and its children (a set of ids), from a parent map
+# and, where known, each process's creation time.
+function Get-OwnProcessTree([hashtable]$Parent, [hashtable]$Created, [int]$Self) {
+    $mine = @{}
+    $p = $Self
+    while ($p -and -not $mine.ContainsKey($p)) { $mine[$p] = $true; $p = Get-LiveParent $Parent $Created $p }
+    foreach ($candidate in @($Parent.Keys)) {
+        $p = [int]$candidate
+        for ($n = 0; $p -and $n -lt 100; $n++) {
+            if ($p -eq $Self) { $mine[[int]$candidate] = $true; break }
+            $p = Get-LiveParent $Parent $Created $p
+        }
+    }
+    return $mine
+}
+
 # Process ids of programs that run FlightRisk from the install folder $AppDir,
 # never this process, its parents or its children. On Windows: an executable
 # inside the folder (the virtual environment's python.exe) or the folder on the
@@ -68,11 +96,13 @@ function Get-FlightRiskPids([string]$AppDir) {
     $app = $AppDir.TrimEnd('\', '/')
     $onWindows = ($IsWindows -or $env:OS -eq "Windows_NT")
     $parent = @{}
+    $created = @{}
     $command = @{}
     $executable = @{}
     if ($onWindows) {
         foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
             $parent[[int]$p.ProcessId] = [int]$p.ParentProcessId
+            if ($p.CreationDate) { $created[[int]$p.ProcessId] = [datetime]$p.CreationDate }
             $command[[int]$p.ProcessId] = [string]$p.CommandLine
             $executable[[int]$p.ProcessId] = [string]$p.ExecutablePath
         }
@@ -87,7 +117,7 @@ function Get-FlightRiskPids([string]$AppDir) {
         if (Test-Path -LiteralPath $app) {
             $real = (Resolve-Path -LiteralPath $app).ProviderPath
             $current = 0
-            foreach ($line in @(& lsof -nP -w -a -u (& id -u) -d cwd,txt -Fpn 2>$null)) {
+            foreach ($line in @(& /usr/sbin/lsof -nP -b -w -a -u (& id -u) -d cwd,txt -Fpn 2>$null)) {
                 if ($line.StartsWith("p")) { $current = [int]$line.Substring(1) }
                 elseif ($line.StartsWith("n")) {
                     $path = $line.Substring(1)
@@ -98,16 +128,7 @@ function Get-FlightRiskPids([string]$AppDir) {
             }
         }
     }
-    $mine = @{}
-    $p = $PID
-    while ($p -and -not $mine.ContainsKey($p)) { $mine[$p] = $true; $p = $parent[$p] }
-    foreach ($candidate in @($parent.Keys)) {
-        $p = $candidate
-        for ($n = 0; $p -and $n -lt 100; $n++) {
-            if ($p -eq $PID) { $mine[$candidate] = $true; break }
-            $p = $parent[$p]
-        }
-    }
+    $mine = Get-OwnProcessTree $parent $created $PID
     $sep = if ($onWindows) { "\" } else { "/" }
     $found = foreach ($candidate in @($parent.Keys)) {
         if ($mine.ContainsKey($candidate)) { continue }
@@ -132,17 +153,24 @@ function Test-IsCheckout {
     return (Test-Path -LiteralPath (Join-Path $AppDir ".git")) -and (Test-Path -LiteralPath (Join-Path (Join-Path $AppDir "flightrisk") "__init__.py"))
 }
 
-# Whether an install or update holds its lock (the lock file is held open with no sharing).
-function Test-InstallRunning {
+# Take the install lock (the file install.ps1 holds open with no sharing) and
+# return its stream, or $null when an install or update holds it. Held for the
+# whole uninstall, so no install or update can start while it runs.
+function Enter-UninstallLock {
     $lockPath = "$StatusPath.lock"
-    if (-not (Test-Path -LiteralPath $lockPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $FlightRiskHome)) { return [System.IO.Stream]::Null }
     try {
-        $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-        $stream.Dispose()
-        return $false
+        return [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
     } catch [System.IO.IOException] {
-        return $true
+        return $null
     }
+}
+
+function Test-InstallRunning {
+    $stream = Enter-UninstallLock
+    if ($null -eq $stream) { return $true }
+    $stream.Dispose()
+    return $false
 }
 
 # Work in the folder that is not on GitHub. Files that an interrupted update of the
@@ -241,7 +269,8 @@ if ($isLink) {
 } elseif (-not (Test-Path -LiteralPath $Marker)) {
     Write-Refusal "not-made-by-installer" "$AppDir was not made by the FlightRisk installer, so it was not deleted. Delete it yourself if you are sure." 2
 }
-if ($installing) {
+$lockStream = Enter-UninstallLock
+if ($null -eq $lockStream) {
     Write-Refusal "install-running" "A FlightRisk install or update is running. Let it finish, then run this again." 3
 }
 if ($running.Count -gt 0) {
@@ -276,6 +305,13 @@ if (-not $alreadyGone -and -not $NoKeepData -and $keep.Count -gt 0) {
     }
 }
 
+# Again, right before anything is deleted: the question and the copy above can
+# take a long time, and a launcher may have been started meanwhile.
+$running = @(Get-FlightRiskPids $AppDir)
+if ($running.Count -gt 0) {
+    Write-Refusal "running" "FlightRisk was started while uninstalling (process $($running -join ', ')); nothing was deleted. Land the drones, stop everything in the launcher window and quit it, then run this again." 3
+}
+
 if (-not $alreadyGone) {
     # Moved aside first, so a delete that stops half-way (a file still open) never
     # leaves a broken install; the entries are removed only once the move worked,
@@ -295,12 +331,17 @@ $unregistered = $false
 if (Test-OurRegistration) { Remove-Item -Path $UninstallKey -Recurse -Force; $unregistered = $true }
 
 # Only the files the installer writes, by name; then the folder, if empty.
+$lockStream.Dispose()
 foreach ($name in @("install-status.json", "install-status.json.lock")) {
     Remove-Item -LiteralPath (Join-Path $FlightRiskHome $name) -Force -ErrorAction SilentlyContinue
 }
-foreach ($incoming in @(Get-ChildItem -LiteralPath $FlightRiskHome -Directory -Force -Filter ".app-incoming.*" -ErrorAction SilentlyContinue)) {
-    if (Test-Path -LiteralPath (Join-Path $incoming.FullName ".git")) { Remove-Item -LiteralPath $incoming.FullName -Recurse -Force }
+foreach ($pattern in @(".app-incoming.*", ".removing-*")) {
+    foreach ($leftover in @(Get-ChildItem -LiteralPath $FlightRiskHome -Directory -Force -Filter $pattern -ErrorAction SilentlyContinue)) {
+        if (Test-Path -LiteralPath (Join-Path $leftover.FullName ".git")) { Remove-Item -LiteralPath $leftover.FullName -Recurse -Force }
+    }
 }
+Get-ChildItem -LiteralPath $FlightRiskHome -File -Force -Filter "install-status.json.*.tmp" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 if ((Test-Path -LiteralPath $FlightRiskHome) -and -not (Get-ChildItem -LiteralPath $FlightRiskHome -Force | Select-Object -First 1)) {
     Remove-Item -LiteralPath $FlightRiskHome -Force
 }

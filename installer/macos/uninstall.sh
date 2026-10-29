@@ -37,11 +37,17 @@
 # is still removed.
 set -euo pipefail
 
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) in the caller's
+# environment would point the git commands below at another repository.
+while IFS= read -r variable; do unset "$variable"; done < <(compgen -e | grep '^GIT_' || true)
+
 FLIGHTRISK_HOME="${FLIGHTRISK_HOME:-$HOME/Library/Application Support/FlightRisk}"
 FLIGHTRISK_HOME="${FLIGHTRISK_HOME%/}"
 APP_DIR="$FLIGHTRISK_HOME/app"
 MARKER="$APP_DIR/.git/flightrisk-installer"
 LOCK_LINK="$FLIGHTRISK_HOME/install.lock"
+LOCK_HELD=0
+LSOF="${FLIGHTRISK_LSOF:-/usr/sbin/lsof}"
 APPLICATIONS_DIR="${FLIGHTRISK_APPLICATIONS_DIR:-$HOME/Applications}"
 SYSTEM_APPLICATIONS_DIR="${FLIGHTRISK_SYSTEM_APPLICATIONS_DIR:-/Applications}"
 LOG_DIR="${FLIGHTRISK_LOG_DIR:-$HOME/Library/Logs/FlightRisk}"
@@ -67,10 +73,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-json_string() {
-  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-}
-
 json_list() {
   local first=1 item
   printf '['
@@ -92,9 +94,26 @@ bool() { if "$@"; then printf true; else printf false; fi; }
 
 # --- shared with uninstall.sh: begin (a test checks that both copies match) ---
 
-# The start time of process $1 as ps prints it, or nothing when it does not run.
+# A JSON string literal for $1: backslashes, quotes and control characters escaped.
+json_string() {
+  printf '"'
+  printf '%s' "$1" | LC_ALL=C awk '
+    BEGIN { ORS = ""; first = 1 }
+    {
+      gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "\\r")
+      gsub(/[\001-\010\013\014\016-\037\177]/, "")
+      if (!first) printf "\\n"
+      printf "%s", $0
+      first = 0
+    }'
+  printf '"'
+}
+
+# The start time of process $1, or nothing when it does not run. Always in the
+# C locale: a lock written from a shell with one LANG must read the same from
+# a shell with another.
 process_start() {
-  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' || true
+  LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' || true
 }
 
 # Whether the install lock $1 is held by a running install. The lock is a
@@ -127,7 +146,7 @@ running_pids() {
     ps -axo pid=,ppid=,ucomm= 2>/dev/null | sed 's/^/T /' || true
     ps -axww -o pid=,args= 2>/dev/null | sed 's/^/A /' || true
     if [ -d "$app" ]; then
-      lsof -nP -w -a -u "$(id -u)" -d cwd,txt -Fpfn 2>/dev/null | sed 's/^/L /' || true
+      "$LSOF" -nP -b -w -a -u "$(id -u)" -d cwd,txt -Fpfn 2>/dev/null | sed 's/^/L /' || true
     fi
     printf 'R %s\n' "$(head -n 1 "$FLIGHTRISK_HOME/run/launcher.pid" 2>/dev/null || true)"
   } | awk -v app="$app" -v real="$real" '
@@ -164,6 +183,12 @@ running_pids() {
     }' | sort -n
 }
 
+# Whether lsof runs and can see working directories (it reports this script's
+# own). Without it a running FlightRisk could go unnoticed, so callers refuse.
+lsof_works() {
+  [ -x "$LSOF" ] && [ -n "$("$LSOF" -nP -b -w -a -p "$$" -d cwd -Fn 2>/dev/null)" ]
+}
+
 # "pid (name), pid (name)" for the process ids on standard input.
 describe_pids() {
   local pid list=""
@@ -179,6 +204,43 @@ unsafe_home() {
   local dir="${1%/}"
   [ -z "$dir" ] || [ "$dir" = "/" ] || [ "$dir" = "${HOME%/}" ] || [ "$dir" = "/Applications" ] ||
     [ "$dir" = "${HOME%/}/Library" ] || [ "$dir" = "${HOME%/}/Library/Application Support" ]
+}
+
+# Take the install lock: a symbolic link, because creating one either succeeds
+# or fails at once, and its target ("pid|start time") is set in the same step,
+# so a lock never exists without its owner. A lock whose owner is gone (a run
+# that was killed) is renamed aside before it is replaced, which only one of
+# several runs can do; a run that finds it renamed a live lock gives it back.
+acquire_lock() {
+  local me aside
+  mkdir -p -- "$FLIGHTRISK_HOME"
+  me="$$|$(process_start "$$")"
+  if ln -sn "$me" "$LOCK_LINK" 2>/dev/null; then
+    LOCK_HELD=1
+    return 0
+  fi
+  if lock_owner_alive "$LOCK_LINK"; then
+    return 1
+  fi
+  aside="$LOCK_LINK.stale.$$"
+  mv -- "$LOCK_LINK" "$aside" 2>/dev/null || return 1
+  if lock_owner_alive "$aside"; then
+    ln -sn "$(readlink "$aside")" "$LOCK_LINK" 2>/dev/null || true
+    rm -f -- "$aside"
+    return 1
+  fi
+  rm -f -- "$aside"
+  ln -sn "$me" "$LOCK_LINK" 2>/dev/null || return 1
+  LOCK_HELD=1
+}
+
+release_lock() {
+  if [ "$LOCK_HELD" = "1" ]; then
+    if [ "$(readlink "$LOCK_LINK" 2>/dev/null)" = "$$|$(process_start "$$")" ]; then
+      rm -f -- "$LOCK_LINK"
+    fi
+    LOCK_HELD=0
+  fi
 }
 
 # --- shared with uninstall.sh: end ---
@@ -258,11 +320,13 @@ BUNDLES=()
 while IFS= read -r line; do [ -n "$line" ] && BUNDLES+=("$line"); done < <(our_bundles)
 INSTALLING=false
 if lock_owner_alive "$LOCK_LINK"; then INSTALLING=true; fi
+CAN_CHECK=true
+if [ -d "$APP_DIR" ] && ! lsof_works; then CAN_CHECK=false; fi
 
 if [ "$CHECK" = "1" ]; then
-  printf '{"check":true,"installDir":%s,"exists":%s,"isLink":%s,"flightriskCheckout":%s,"installerMade":%s,"running":%s,"installing":%s,"unsaved":%s,"keep":%s,"apps":%s}\n' \
+  printf '{"check":true,"installDir":%s,"exists":%s,"isLink":%s,"flightriskCheckout":%s,"installerMade":%s,"running":%s,"canCheckRunning":%s,"installing":%s,"unsaved":%s,"keep":%s,"apps":%s}\n' \
     "$(json_string "$APP_DIR")" "$(bool test -d "$APP_DIR")" "$(bool test -L "$APP_DIR")" "$(bool is_checkout)" \
-    "$(bool test -f "$MARKER")" "$(json_numbers ${RUNNING+"${RUNNING[@]}"})" "$INSTALLING" \
+    "$(bool test -f "$MARKER")" "$(json_numbers ${RUNNING+"${RUNNING[@]}"})" "$CAN_CHECK" "$INSTALLING" \
     "$(json_list ${UNSAVED+"${UNSAVED[@]}"})" "$(json_list ${KEEP+"${KEEP[@]}"})" \
     "$(json_list ${BUNDLES+"${BUNDLES[@]}"})"
   exit 0
@@ -279,8 +343,14 @@ elif ! is_checkout; then
 elif [ ! -f "$MARKER" ]; then
   refuse "not-made-by-installer" "$APP_DIR was not made by the FlightRisk installer, so it was not deleted. Delete it yourself if you are sure." 2
 fi
-if [ "$INSTALLING" = "true" ]; then
+# The install lock is held for the whole uninstall, so no install or update can
+# start while it runs, and FlightRisk.app does not start the launcher meanwhile.
+if ! acquire_lock; then
   refuse "install-running" "A FlightRisk install or update is running (pid $(readlink "$LOCK_LINK" 2>/dev/null | cut -d'|' -f1)). Let it finish, then run this again." 3
+fi
+trap release_lock EXIT
+if [ "$CAN_CHECK" != "true" ]; then
+  refuse "cannot-check" "Could not check whether FlightRisk is running ($LSOF does not run), so nothing was deleted." 3
 fi
 if [ "${#RUNNING[@]}" -gt 0 ]; then
   refuse "running" "FlightRisk is running from $APP_DIR (process $(printf '%s\n' "${RUNNING[@]}" | describe_pids)). Land the drones, stop everything in the launcher window and quit it, then run this again." 3
@@ -321,6 +391,14 @@ if [ "$ALREADY_GONE" != "1" ] && [ "$KEEP_DATA" = "1" ] && [ "${#KEEP[@]}" -gt 0
   done
 fi
 
+# Again, right before anything is deleted: the question and the copy above can
+# take a long time, and a launcher may have been started from a terminal meanwhile.
+RUNNING=()
+while IFS= read -r line; do [ -n "$line" ] && RUNNING+=("$line"); done < <(running_pids)
+if [ "${#RUNNING[@]}" -gt 0 ]; then
+  refuse "running" "FlightRisk was started while uninstalling (process $(printf '%s\n' "${RUNNING[@]}" | describe_pids)); nothing was deleted. Land the drones, stop everything in the launcher window and quit it, then run this again." 3
+fi
+
 if [ "$ALREADY_GONE" != "1" ]; then
   # Moved aside first, so a delete that stops half-way never leaves a broken
   # install in the place the app looks for one.
@@ -344,10 +422,14 @@ done
 for name in "${RUN_FILES[@]}"; do rm -f -- "$FLIGHTRISK_HOME/run/$name"; done
 rmdir -- "$FLIGHTRISK_HOME/run" 2>/dev/null || true
 rm -f -- "$FLIGHTRISK_HOME/install-status.json"
-if [ -L "$LOCK_LINK" ]; then rm -f -- "$LOCK_LINK"; fi
-for incoming in "$FLIGHTRISK_HOME"/.app-incoming.*; do
-  if [ -d "$incoming/.git" ]; then rm -rf -- "$incoming"; fi
+# Leftovers of runs that were killed: status temporaries, renamed-aside lock
+# links, unfinished downloads and deletes. No install runs: we hold the lock.
+for leftover in "$FLIGHTRISK_HOME"/install-status.json.??????; do rm -f -- "$leftover"; done
+for leftover in "$LOCK_LINK".stale.*; do if [ -L "$leftover" ]; then rm -f -- "$leftover"; fi; done
+for leftover in "$FLIGHTRISK_HOME"/.app-incoming.* "$FLIGHTRISK_HOME"/.removing-*; do
+  if [ -d "$leftover/.git" ]; then rm -rf -- "$leftover"; fi
 done
+release_lock
 rmdir -- "$FLIGHTRISK_HOME" 2>/dev/null || true
 for name in "${LOG_FILES[@]}"; do rm -f -- "$LOG_DIR/$name"; done
 rmdir -- "$LOG_DIR" 2>/dev/null || true

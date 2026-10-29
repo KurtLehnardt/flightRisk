@@ -61,12 +61,17 @@
 set -euo pipefail
 set -o errtrace
 
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) in the caller's
+# environment would point every git command below at another repository.
+while IFS= read -r variable; do unset "$variable"; done < <(compgen -e | grep '^GIT_' || true)
+
 FLIGHTRISK_HOME="${FLIGHTRISK_HOME:-$HOME/Library/Application Support/FlightRisk}"
 FLIGHTRISK_HOME="${FLIGHTRISK_HOME%/}"
 APP_DIR="$FLIGHTRISK_HOME/app"
 VENV_DIR="$APP_DIR/venv"
 STATUS_PATH="${FLIGHTRISK_STATUS_FILE:-$FLIGHTRISK_HOME/install-status.json}"
 LOCK_LINK="$FLIGHTRISK_HOME/install.lock"
+LSOF="${FLIGHTRISK_LSOF:-/usr/sbin/lsof}"
 INCOMING_PREFIX="$FLIGHTRISK_HOME/.app-incoming."
 REPO_URL="${FLIGHTRISK_REPO_URL:-https://github.com/KurtLehnardt/flightRisk.git}"
 APPLICATIONS_DIR="${FLIGHTRISK_APPLICATIONS_DIR:-$HOME/Applications}"
@@ -99,21 +104,6 @@ log()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mok\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 
-# A JSON string literal for $1: backslashes, quotes and control characters escaped.
-json_string() {
-  printf '"'
-  printf '%s' "$1" | LC_ALL=C awk '
-    BEGIN { ORS = ""; first = 1 }
-    {
-      gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "\\r")
-      gsub(/[\001-\010\013\014\016-\037\177]/, "")
-      if (!first) printf "\\n"
-      printf "%s", $0
-      first = 0
-    }'
-  printf '"'
-}
-
 json_or_null() {
   if [ -n "$1" ]; then json_string "$1"; else printf 'null'; fi
 }
@@ -141,7 +131,9 @@ step() {
 }
 
 die() {
-  trap - ERR INT TERM HUP
+  trap - ERR
+  # A second Ctrl+C during the rollback must not stop it half-way.
+  trap '' INT TERM HUP
   # Keep going if the window is already gone and printing fails: the rollback must finish.
   set +e
   rollback
@@ -152,9 +144,26 @@ die() {
 
 # --- shared with uninstall.sh: begin (a test checks that both copies match) ---
 
-# The start time of process $1 as ps prints it, or nothing when it does not run.
+# A JSON string literal for $1: backslashes, quotes and control characters escaped.
+json_string() {
+  printf '"'
+  printf '%s' "$1" | LC_ALL=C awk '
+    BEGIN { ORS = ""; first = 1 }
+    {
+      gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "\\r")
+      gsub(/[\001-\010\013\014\016-\037\177]/, "")
+      if (!first) printf "\\n"
+      printf "%s", $0
+      first = 0
+    }'
+  printf '"'
+}
+
+# The start time of process $1, or nothing when it does not run. Always in the
+# C locale: a lock written from a shell with one LANG must read the same from
+# a shell with another.
 process_start() {
-  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' || true
+  LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' || true
 }
 
 # Whether the install lock $1 is held by a running install. The lock is a
@@ -187,7 +196,7 @@ running_pids() {
     ps -axo pid=,ppid=,ucomm= 2>/dev/null | sed 's/^/T /' || true
     ps -axww -o pid=,args= 2>/dev/null | sed 's/^/A /' || true
     if [ -d "$app" ]; then
-      lsof -nP -w -a -u "$(id -u)" -d cwd,txt -Fpfn 2>/dev/null | sed 's/^/L /' || true
+      "$LSOF" -nP -b -w -a -u "$(id -u)" -d cwd,txt -Fpfn 2>/dev/null | sed 's/^/L /' || true
     fi
     printf 'R %s\n' "$(head -n 1 "$FLIGHTRISK_HOME/run/launcher.pid" 2>/dev/null || true)"
   } | awk -v app="$app" -v real="$real" '
@@ -224,6 +233,12 @@ running_pids() {
     }' | sort -n
 }
 
+# Whether lsof runs and can see working directories (it reports this script's
+# own). Without it a running FlightRisk could go unnoticed, so callers refuse.
+lsof_works() {
+  [ -x "$LSOF" ] && [ -n "$("$LSOF" -nP -b -w -a -p "$$" -d cwd -Fn 2>/dev/null)" ]
+}
+
 # "pid (name), pid (name)" for the process ids on standard input.
 describe_pids() {
   local pid list=""
@@ -240,8 +255,6 @@ unsafe_home() {
   [ -z "$dir" ] || [ "$dir" = "/" ] || [ "$dir" = "${HOME%/}" ] || [ "$dir" = "/Applications" ] ||
     [ "$dir" = "${HOME%/}/Library" ] || [ "$dir" = "${HOME%/}/Library/Application Support" ]
 }
-
-# --- shared with uninstall.sh: end ---
 
 # Take the install lock: a symbolic link, because creating one either succeeds
 # or fails at once, and its target ("pid|start time") is set in the same step,
@@ -280,6 +293,8 @@ release_lock() {
   fi
 }
 
+# --- shared with uninstall.sh: end ---
+
 # Remove first-download folders left by an earlier run that was interrupted.
 # Called while holding the lock, so none of them belongs to a running install.
 remove_stale_incoming() {
@@ -290,6 +305,16 @@ remove_stale_incoming() {
       warn "removed $dir, left by an interrupted install"
     fi
   done
+  # A package copy or a half-replaced package folder of an update that was
+  # killed (the package stamp was removed first, so this run reinstalls), and
+  # lock links renamed aside by a run that was killed in between.
+  for dir in "$VENV_DIR.before-update" "$VENV_DIR.failed-update"; do
+    if [ -d "$dir" ]; then rm -rf -- "$dir"; fi
+  done
+  for dir in "$LOCK_LINK".stale.*; do
+    if [ -L "$dir" ]; then rm -f -- "$dir"; fi
+  done
+  return 0
 }
 
 # The newest release tag (vX.Y.Z only, so no pre-releases) among
@@ -311,7 +336,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # The major.minor version of the Python at $1, or nothing if it does not run.
 python_version() {
-  "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true
+  "$1" -I -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true
 }
 
 # The Python 3.13 interpreters to try, one per line, in order of preference.
@@ -385,9 +410,9 @@ install_homebrew() {
     die "The Homebrew installer did not match its expected checksum, so it was not run. Install Homebrew from https://brew.sh and run this again."
   fi
   if [ -t 0 ]; then
-    /bin/bash "$file"
+    /bin/bash "$file" || { rm -f -- "$file"; die "The Homebrew installer failed (see above)."; }
   else
-    NONINTERACTIVE=1 /bin/bash "$file"
+    NONINTERACTIVE=1 /bin/bash "$file" || { rm -f -- "$file"; die "The Homebrew installer failed (see above)."; }
   fi
   rm -f -- "$file"
   find_brew || die "Homebrew was installed but brew was not found. Open a new Terminal window and run this again."
@@ -446,6 +471,7 @@ select_ref() {
 
 refuse_if_running() {
   local who
+  lsof_works || die "Could not check whether FlightRisk is running ($LSOF does not run), so nothing was changed."
   who="$(running_pids | describe_pids)"
   if [ -n "$who" ]; then
     die "FlightRisk is running from $APP_DIR (process $who). Land the drones, stop everything in the launcher window and quit it, then run this again. The installer never stops FlightRisk itself, because an edge may be flying a drone."
@@ -485,10 +511,12 @@ fetch_ref() {
   fi
 }
 
-# Check out $2 in the clone at $1. --force, because after an interrupted
-# checkout the working tree may hold half-written files of our own.
+# Check out $2 in the clone at $1. Never with --force, and with
+# --no-overwrite-ignore, so a file of yours that a release starts to track
+# (weights in models/, say) stops the update instead of being replaced.
+# Half-written files of an interrupted update are reset before (see update_existing).
 checkout() {
-  git -C "$1" -c advice.detachedHead=false checkout --quiet --force --detach "$2"
+  git -C "$1" -c advice.detachedHead=false checkout --quiet --no-overwrite-ignore --detach "$2"
 }
 
 update_existing() {
@@ -501,6 +529,8 @@ update_existing() {
   if [ -n "$pending" ]; then
     # Files this installer half-wrote; reset them to the commit HEAD names.
     warn "an earlier update was interrupted; restoring a clean checkout first"
+    # git's own lock, left by the interrupted git; no other git runs here while we hold the install lock.
+    rm -f -- "$APP_DIR/.git/index.lock"
     git -C "$APP_DIR" reset --quiet --hard HEAD
     write_marker "$PREV_REF"
   elif [ -n "$(git -C "$APP_DIR" status --porcelain --untracked-files=no)" ]; then
@@ -520,7 +550,7 @@ update_existing() {
     PREV_HEAD="$head"
     MOVED=1
     write_marker "$PREV_REF" "$APP_DIR" "$want"
-    checkout "$APP_DIR" "$TARGET" || die "Could not switch $APP_DIR to $REF (git checkout failed)."
+    checkout "$APP_DIR" "$TARGET" || die "Could not switch $APP_DIR to $REF (git checkout failed). If git names a file of yours that $REF would replace, move it out of the folder and run this again."
     ok "moved to $REF"
   fi
   write_marker "$REF"
@@ -561,13 +591,19 @@ clone_or_update() {
 rollback() {
   if [ "$MOVED" = "1" ] && [ -n "$PREV_HEAD" ]; then
     MOVED=0
+    rm -f -- "$APP_DIR/.git/index.lock"
+    git -C "$APP_DIR" reset --quiet --hard HEAD 2>/dev/null || true
     if checkout "$APP_DIR" "$PREV_HEAD" 2>/dev/null; then
       write_marker "$PREV_REF" 2>/dev/null || true
       warn "put $APP_DIR back on the version it had before ($PREV_HEAD); run the installer again to retry"
     fi
     if [ -n "$VENV_SNAPSHOT" ] && [ -d "$VENV_SNAPSHOT" ]; then
-      rm -rf -- "$VENV_DIR"
-      mv -- "$VENV_SNAPSHOT" "$VENV_DIR" && warn "put the packages of that version back"
+      # Swap, so that one complete copy exists at every moment.
+      rm -rf -- "$VENV_DIR.failed-update"
+      if mv -- "$VENV_DIR" "$VENV_DIR.failed-update" && mv -- "$VENV_SNAPSHOT" "$VENV_DIR"; then
+        rm -rf -- "$VENV_DIR.failed-update"
+        warn "put the packages of that version back"
+      fi
     fi
   fi
   if [ -n "$VENV_SNAPSHOT" ] && [ -d "$VENV_SNAPSHOT" ]; then
@@ -622,9 +658,14 @@ install_dependencies() {
   # An update keeps a copy of the packages it is about to change (a clone on
   # APFS, so it costs no space until files differ), to put back if it fails.
   if [ "$MOVED" = "1" ] && [ -f "$stamp" ]; then
+    # cp -c falls back to a plain copy where cloning is not possible, so a
+    # failure here is a real one (a full disk): stop before anything changes.
+    rm -rf -- "$VENV_DIR.before-update"
+    if ! cp -cR -- "$VENV_DIR" "$VENV_DIR.before-update" 2>/dev/null; then
+      rm -rf -- "$VENV_DIR.before-update"
+      die "Could not keep a copy of the installed packages (is the disk full?), so the update was not made."
+    fi
     VENV_SNAPSHOT="$VENV_DIR.before-update"
-    rm -rf -- "$VENV_SNAPSHOT"
-    cp -cR -- "$VENV_DIR" "$VENV_SNAPSHOT" 2>/dev/null || cp -R -- "$VENV_DIR" "$VENV_SNAPSHOT"
   fi
   # The stamp goes first: packages that are half installed must not count as installed.
   rm -f -- "$stamp"
@@ -632,11 +673,11 @@ install_dependencies() {
   # --isolated: pip's configuration files and PIP_* variables (an extra index,
   # say) are ignored; the index is named explicitly.
   if [ "$req" = "$LOCK_FILE_MACOS" ]; then
-    (cd "$APP_DIR" && "$VENV_DIR/bin/python" -m pip --isolated install --require-virtualenv --no-input \
+    (cd "$APP_DIR" && "$VENV_DIR/bin/python" -I -m pip --isolated install --require-virtualenv --no-input \
       --index-url "$PIP_INDEX" --require-hashes --only-binary :all: -r "$req")
   else
     warn "no pinned package list for this Mac; installing requirements.txt (version floors only, no hashes)"
-    (cd "$APP_DIR" && "$VENV_DIR/bin/python" -m pip --isolated install --require-virtualenv --no-input \
+    (cd "$APP_DIR" && "$VENV_DIR/bin/python" -I -m pip --isolated install --require-virtualenv --no-input \
       --index-url "$PIP_INDEX" -r "$req")
   fi
   printf '%s\n' "$sum" > "$stamp"
@@ -761,6 +802,7 @@ main() {
   echo "  Update:    bash \"$APP_DIR/installer/macos/update.sh\""
   echo "  Uninstall: bash \"$APP_DIR/installer/macos/uninstall.sh\""
   if [ "${FLIGHTRISK_OPEN_WHEN_DONE:-}" = "1" ] && [ -n "$APP_BUNDLE" ]; then
+    release_lock  # the app does not start the launcher while the lock is held
     open "$APP_BUNDLE" || true
   fi
 }

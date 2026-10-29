@@ -347,7 +347,8 @@ def test_a_first_install_killed_mid_download_can_be_repaired(tmp_path):
 def test_an_update_killed_mid_checkout_is_finished_by_the_next_run(winbox: WinBox):
     git("commit", "-q", "--allow-empty", "-m", "third", cwd=winbox.repo)
     git("tag", "v0.3.0", cwd=winbox.repo)
-    winbox.shim_git("checkout", f'echo half-written >> "{winbox.app_dir / "requirements.txt"}"; kill -KILL $PPID; exit 1')
+    winbox.shim_git("checkout", f'echo half-written >> "{winbox.app_dir / "requirements.txt"}"; '
+                                f'touch "{winbox.app_dir / ".git" / "index.lock"}"; kill -KILL $PPID; exit 1')
     first = winbox.run(INSTALL, **winbox.shimmed_env())
     assert first.returncode != 0
     assert "pending=" in (winbox.app_dir / ".git" / "flightrisk-installer").read_text()
@@ -392,3 +393,70 @@ def test_inno_setup_script_is_per_user_and_points_at_real_files():
     assert "SetupIconFile=..\\assets\\FlightRisk.ico" in iss
     assert (ROOT / "installer" / "assets" / "FlightRisk.ico").is_file()
     assert "-ExecutionPolicy Bypass -File" in iss
+
+
+# ---------------------------------------------------------------------------
+# Review round 2
+# ---------------------------------------------------------------------------
+
+
+def test_own_process_tree_ignores_a_reused_parent_id():
+    # 10 is this process and 5 its parent. 30 claims parent 10 but was created before 10 existed:
+    # its real parent exited and Windows later gave the id 10 to this process.
+    snippet = """
+$parent = @{ 10 = 5; 5 = 1; 20 = 10; 30 = 10; 40 = 30 }
+$created = @{ 1 = [datetime]'2026-01-01'; 5 = [datetime]'2026-01-02'; 10 = [datetime]'2026-01-03';
+              20 = [datetime]'2026-01-04'; 30 = [datetime]'2026-01-02T12:00'; 40 = [datetime]'2026-01-05' }
+$mine = Get-OwnProcessTree $parent $created 10
+($mine.Keys | Sort-Object) -join ','
+"""
+    assert lib(snippet).stdout.strip() == "1,5,10,20"
+
+
+def test_an_update_never_overwrites_an_ignored_file_of_yours(winbox: WinBox):
+    weights = winbox.app_dir / "models" / "heridal_yolo11s.pt"
+    weights.parent.mkdir()
+    weights.write_bytes(b"your fine-tuned weights")
+    (winbox.repo / "models").mkdir()
+    (winbox.repo / "models" / "heridal_yolo11s.pt").write_bytes(b"release weights")
+    git("add", "-f", "models/heridal_yolo11s.pt", cwd=winbox.repo)
+    git("commit", "-qm", "track weights", cwd=winbox.repo)
+    git("tag", "v0.3.0", cwd=winbox.repo)
+    result = winbox.run(INSTALL)
+    assert result.returncode == 1
+    assert "move it out of the folder" in result.stdout
+    assert weights.read_bytes() == b"your fine-tuned weights"
+    assert winbox.head() == winbox.tag("v0.2.0")
+
+
+def test_git_environment_variables_cannot_redirect_the_install(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    git("init", "-q", cwd=other)
+    (other / "keep.txt").write_text("other repository")
+    git("add", "keep.txt", cwd=other)
+    git("commit", "-qm", "other", cwd=other)
+    before = git("rev-parse", "HEAD", cwd=other)
+    box = WinBox(tmp_path / "box")
+    result = box.run(INSTALL, GIT_DIR=str(other / ".git"), GIT_WORK_TREE=str(other))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.head() == box.tag("v0.2.0")
+    assert git("rev-parse", "HEAD", cwd=other) == before
+
+
+def test_uninstall_takes_the_install_lock(winbox: WinBox):
+    # While the uninstaller holds the lock (here: waiting at its question), an install cannot take it.
+    uninstall = winbox.app_dir / "installer" / "windows" / "uninstall.ps1"
+    proc = subprocess.Popen(["pwsh", "-NoProfile", "-File", str(uninstall)], env=winbox.env(),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        deadline = time.time() + 30
+        held = False
+        while time.time() < deadline and not held:
+            probe = lib("Enter-InstallLock", env={**winbox.env(), "FLIGHTRISK_INSTALL_LIB_ONLY": "1"})
+            held = probe.stdout.strip() == "False"
+            time.sleep(0.3)
+        assert held, "the uninstaller holds the install lock while it asks"
+    finally:
+        proc.communicate("no\n", timeout=60)
+    assert winbox.app_dir.exists()

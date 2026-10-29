@@ -104,7 +104,16 @@ that only sits in the folder does not count. On Windows it means a process whose
 install folder (the virtual environment's `python.exe`) or whose command line names it; Windows has no
 working-directory query, so a Python started from elsewhere with only a relative path is not seen there.
 A process listening on the launcher's port 5500 is not counted on its own, because a launcher started
-from a development checkout uses the same port.
+from a development checkout uses the same port. When `lsof` cannot run, the check cannot be made, and
+the scripts refuse instead of going on.
+
+**One at a time.** The install lock (`install.lock`, whose owner is checked by pid and start time, read in
+the C locale so that shells with different languages agree) is held by every install and update and by
+the uninstaller for its whole run. FlightRisk.app does not start the launcher while it is held, and the
+uninstaller checks for a running FlightRisk again right before it deletes anything. An update never
+replaces a file of yours that a new release starts to track (`git checkout --no-overwrite-ignore`, never
+`--force`); it stops and names the file instead. The scripts ignore `GIT_*` variables of the calling
+shell and run pip with `python -I`, so `PYTHONPATH` cannot replace it.
 
 **Interrupted runs.** Ctrl+C, a closed window or a killed process never leave an install that the next run
 cannot repair: the first download is made in `.app-incoming.<pid>` next to `app/` and moved into place only
@@ -148,6 +157,8 @@ The launcher's window address carries a per-launch key (not the edge token). Fli
 that address on a command line, where other accounts on the Mac could read it with `ps`: it writes a page
 that forwards to it, `run/open-launcher.html`, readable by you only, and opens that page. The address is
 also in `run/launcher.url` and `~/Library/Logs/FlightRisk/launcher.log`, both readable by you only.
+Without Chrome or Edge (or with `FLIGHTRISK_OPEN_IN=browser`) the page opens in Safari, because a plain
+`open` of an .html file may open it in an editor.
 Opening the page in a Chrome or Edge app window, and its forwarding to `http://127.0.0.1`, are not yet
 checked by hand.
 

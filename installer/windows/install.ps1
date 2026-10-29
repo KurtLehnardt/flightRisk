@@ -53,6 +53,10 @@
 
 $ErrorActionPreference = "Stop"
 
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) in the caller's
+# environment would point every git command at another repository.
+Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+
 $script:FlightRiskHome = if ($env:FLIGHTRISK_HOME) { $env:FLIGHTRISK_HOME } else { Join-Path $env:LOCALAPPDATA "FlightRisk" }
 $script:AppDir = Join-Path $script:FlightRiskHome "app"
 $script:VenvDir = Join-Path $script:AppDir "venv"
@@ -176,7 +180,7 @@ function Get-PythonVersion([string]$Exe) {
     # into a terminating error.
     $ErrorActionPreference = "Continue"
     try {
-        $out = & $Exe -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+        $out = & $Exe -I -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
         if ($LASTEXITCODE -eq 0 -and $out) { return ([string]$out).Trim() }
     } catch {
         return $null
@@ -282,6 +286,30 @@ function Test-UnsafeHome([string]$Dir) {
     return ($d -eq "" -or $d -eq "/" -or $d -match '^[A-Za-z]:$' -or ($shared -contains $d))
 }
 
+# The parent of process $Id, or 0 when the recorded parent id belongs to a
+# process created after it: Windows reuses the id of a parent that exited.
+function Get-LiveParent([hashtable]$Parent, [hashtable]$Created, [int]$Id) {
+    $up = [int]$Parent[$Id]
+    if ($up -and $Created.ContainsKey($Id) -and $Created.ContainsKey($up) -and $Created[$up] -gt $Created[$Id]) { return 0 }
+    return $up
+}
+
+# Process $Self, its parents and its children (a set of ids), from a parent map
+# and, where known, each process's creation time.
+function Get-OwnProcessTree([hashtable]$Parent, [hashtable]$Created, [int]$Self) {
+    $mine = @{}
+    $p = $Self
+    while ($p -and -not $mine.ContainsKey($p)) { $mine[$p] = $true; $p = Get-LiveParent $Parent $Created $p }
+    foreach ($candidate in @($Parent.Keys)) {
+        $p = [int]$candidate
+        for ($n = 0; $p -and $n -lt 100; $n++) {
+            if ($p -eq $Self) { $mine[[int]$candidate] = $true; break }
+            $p = Get-LiveParent $Parent $Created $p
+        }
+    }
+    return $mine
+}
+
 # Process ids of programs that run FlightRisk from the install folder $AppDir,
 # never this process, its parents or its children. On Windows: an executable
 # inside the folder (the virtual environment's python.exe) or the folder on the
@@ -292,11 +320,13 @@ function Get-FlightRiskPids([string]$AppDir) {
     $app = $AppDir.TrimEnd('\', '/')
     $onWindows = ($IsWindows -or $env:OS -eq "Windows_NT")
     $parent = @{}
+    $created = @{}
     $command = @{}
     $executable = @{}
     if ($onWindows) {
         foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
             $parent[[int]$p.ProcessId] = [int]$p.ParentProcessId
+            if ($p.CreationDate) { $created[[int]$p.ProcessId] = [datetime]$p.CreationDate }
             $command[[int]$p.ProcessId] = [string]$p.CommandLine
             $executable[[int]$p.ProcessId] = [string]$p.ExecutablePath
         }
@@ -311,7 +341,7 @@ function Get-FlightRiskPids([string]$AppDir) {
         if (Test-Path -LiteralPath $app) {
             $real = (Resolve-Path -LiteralPath $app).ProviderPath
             $current = 0
-            foreach ($line in @(& lsof -nP -w -a -u (& id -u) -d cwd,txt -Fpn 2>$null)) {
+            foreach ($line in @(& /usr/sbin/lsof -nP -b -w -a -u (& id -u) -d cwd,txt -Fpn 2>$null)) {
                 if ($line.StartsWith("p")) { $current = [int]$line.Substring(1) }
                 elseif ($line.StartsWith("n")) {
                     $path = $line.Substring(1)
@@ -322,16 +352,7 @@ function Get-FlightRiskPids([string]$AppDir) {
             }
         }
     }
-    $mine = @{}
-    $p = $PID
-    while ($p -and -not $mine.ContainsKey($p)) { $mine[$p] = $true; $p = $parent[$p] }
-    foreach ($candidate in @($parent.Keys)) {
-        $p = $candidate
-        for ($n = 0; $p -and $n -lt 100; $n++) {
-            if ($p -eq $PID) { $mine[$candidate] = $true; break }
-            $p = $parent[$p]
-        }
-    }
+    $mine = Get-OwnProcessTree $parent $created $PID
     $sep = if ($onWindows) { "\" } else { "/" }
     $found = foreach ($candidate in @($parent.Keys)) {
         if ($mine.ContainsKey($candidate)) { continue }
@@ -390,10 +411,12 @@ function Get-RefTarget([string]$Dir = $script:AppDir) {
     return "refs/tags/$($script:Ref)"
 }
 
-# --force, because after an interrupted checkout the tree may hold half-written files of ours.
+# Never with --force, and with --no-overwrite-ignore, so a file of yours that a
+# release starts to track (weights in models\, say) stops the update instead of
+# being replaced. An interrupted update's half-written files are reset before.
 function Invoke-Checkout([string]$Target, [string]$Dir = $script:AppDir) {
     $ErrorActionPreference = "Continue"  # see Get-PythonVersion
-    & git -C $Dir -c advice.detachedHead=false checkout --quiet --force --detach $Target
+    & git -C $Dir -c advice.detachedHead=false checkout --quiet --no-overwrite-ignore --detach $Target
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -416,7 +439,10 @@ function Update-Existing {
     $script:PrevRef = Get-MarkerRef
     if (Get-MarkerValue "pending") {
         Warn "an earlier update was interrupted; restoring a clean checkout first"
+        # git's own lock, left by the interrupted git; no other git runs here while we hold the install lock.
+        Remove-Item -LiteralPath (Join-Path (Join-Path $script:AppDir ".git") "index.lock") -Force -ErrorAction SilentlyContinue
         & git -C $script:AppDir reset --quiet --hard HEAD
+        if ($LASTEXITCODE -ne 0) { Die "Could not restore a clean checkout in $($script:AppDir) (git reset failed)." }
         Write-Marker $script:PrevRef
     } elseif (& git -C $script:AppDir status --porcelain --untracked-files=no) {
         Die "$($script:AppDir) has local changes, so it was not changed. Save or undo them first."
@@ -437,7 +463,7 @@ function Update-Existing {
         $script:PrevHead = $head
         $script:Moved = $true
         Write-Marker $script:PrevRef $script:AppDir $want
-        if (-not (Invoke-Checkout $target)) { Die "Could not switch $($script:AppDir) to $($script:Ref) (git checkout failed)." }
+        if (-not (Invoke-Checkout $target)) { Die "Could not switch $($script:AppDir) to $($script:Ref) (git checkout failed). If git names a file of yours that $($script:Ref) would replace, move it out of the folder and run this again." }
         Ok "moved to $($script:Ref)"
     }
     Write-Marker $script:Ref
@@ -481,6 +507,8 @@ function Update-OrClone {
 function Undo-Move {
     if ($script:Moved -and $script:PrevHead) {
         $script:Moved = $false
+        Remove-Item -LiteralPath (Join-Path (Join-Path $script:AppDir ".git") "index.lock") -Force -ErrorAction SilentlyContinue
+        & git -C $script:AppDir reset --quiet --hard HEAD 2>$null
         if (Invoke-Checkout $script:PrevHead) {
             try { Write-Marker $script:PrevRef } catch { Write-Verbose "marker not rewritten" }
             Warn "put $($script:AppDir) back on the version it had before; run the installer again to reinstall its packages"
@@ -539,7 +567,7 @@ function Install-Dependencies {
     Remove-Item -LiteralPath $stamp -Force -ErrorAction SilentlyContinue
     Log "Installing the Python packages from $req (several GB; this takes a while)..."
     # --isolated: pip's configuration files and PIP_* variables are ignored; the index is named explicitly.
-    $pipArgs = @("-m", "pip", "--isolated", "install", "--require-virtualenv", "--no-input", "--index-url", $script:PipIndex)
+    $pipArgs = @("-I", "-m", "pip", "--isolated", "install", "--require-virtualenv", "--no-input", "--index-url", $script:PipIndex)
     if ($req -eq $script:LockFileWindows) {
         $pipArgs += @("--require-hashes", "--only-binary", ":all:")
     } else {

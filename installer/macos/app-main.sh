@@ -26,6 +26,8 @@
 #   FLIGHTRISK_OPEN_IN          window (default), browser, or none
 #   FLIGHTRISK_APP_NONINTERACTIVE=1  show no dialogs (tests)
 set -u
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) is never wanted here.
+while IFS= read -r variable; do unset "$variable"; done < <(compgen -e | grep '^GIT_' || true)
 # This program's own files (the logs and the saved address) are private; the
 # launcher itself is started with the umask the app was opened with.
 ORIGINAL_UMASK="$(umask)"
@@ -43,11 +45,34 @@ URL_FILE="$RUN_DIR/launcher.url"
 PID_FILE="$RUN_DIR/launcher.pid"
 LAUNCHER_LOG="$LOG_DIR/launcher.log"
 START_TIMEOUT="${FLIGHTRISK_APP_START_TIMEOUT:-60}"
+LOCK_LINK="$FLIGHTRISK_HOME/install.lock"
 
 mkdir -p -- "$LOG_DIR" "$RUN_DIR" 2>/dev/null
 
 note() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_DIR/app.log" 2>/dev/null || true
+}
+
+# The same two functions as in install.sh (a test checks that they match).
+
+# The start time of process $1, or nothing when it does not run. Always in the
+# C locale: a lock written from a shell with one LANG must read the same from
+# a shell with another.
+process_start() {
+  LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//' || true
+}
+
+# Whether the install lock $1 is held by a running install. The lock is a
+# symbolic link whose target text is "pid|start time": the pid must run and
+# have started at that time (so a reused pid does not count).
+lock_owner_alive() {
+  local owner pid start
+  owner="$(readlink "$1" 2>/dev/null)" || return 1
+  pid="${owner%%|*}"
+  start="${owner#*|}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ "$(process_start "$pid")" = "$start" ]
 }
 
 interactive() {
@@ -124,13 +149,14 @@ open_url() {
       fi
     done
   fi
-  open "$page"
+  # Not plain `open "$page"`: that opens an .html file in whatever app handles
+  # .html files, often an editor. Safari ships with every Mac.
+  open -a Safari "$page"
 }
 
 offer_install() {
-  local script ref_file command_file lock_pid
-  lock_pid="$(readlink "$FLIGHTRISK_HOME/install.lock" 2>/dev/null | cut -d'|' -f1 || true)"
-  if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
+  local script ref_file command_file
+  if lock_owner_alive "$LOCK_LINK"; then
     alert "FlightRisk is being installed" "An install is already running in a Terminal window. FlightRisk opens when it is done."
     exit 0
   fi
@@ -206,7 +232,13 @@ The full output is in $LAUNCHER_LOG."
 if ! installed; then
   offer_install
 fi
-if launcher_alive && [ -s "$URL_FILE" ]; then
+if lock_owner_alive "$LOCK_LINK"; then
+  # An update replaces packages under a launcher that runs, and an uninstall
+  # removes them: neither may race a launcher this app starts.
+  alert "FlightRisk is being updated" "An install, update or uninstall of FlightRisk is running. Open FlightRisk again when it is done."
+  exit 0
+fi
+if launcher_alive && grep -q "^http://127\.0\.0\.1:$PORT/" "$URL_FILE" 2>/dev/null; then
   note "the launcher is already running; opening its window"
   open_url "$(head -n 1 "$URL_FILE")"
   exit 0
