@@ -165,6 +165,14 @@ def server(monkeypatch, tmp_path, clean_app_state):
     app_state.fleet = None
     app_state.profile_board = None
     app_state.ceiling_board = None
+    # A Flask-SocketIO test client created earlier in this process replaces the server's packet senders with
+    # in-memory mocks and turns async handlers off. Undo that for this test so packets reach the real socket.
+    sio_server = app_module.socketio.server
+    for name in ("_send_packet", "_send_eio_packet"):
+        if name in vars(sio_server):
+            monkeypatch.delattr(sio_server, name)
+    monkeypatch.setattr(sio_server, "async_handlers", True)
+    monkeypatch.setattr(sio_server.eio, "async_handlers", True)
     httpd = make_server("127.0.0.1", 0, app_module.app, threaded=True)
     thread = threading.Thread(target=httpd.serve_forever, name="mobile-contract-dashboard", daemon=True)
     thread.start()
