@@ -30,7 +30,8 @@ def _disable_quickedit() -> None:
 def _print_left_running(rows: list[dict]) -> None:
     if not rows:
         return
-    print("These processes keep running. Stop them from their own tools, or with the process id:")
+    print("These processes keep running, also after this window is closed. Stop them from their own tools, "
+          "or with the process id:")
     for row in rows:
         print(f"  {row['name']}: pid {row['pid']}, log {row['log']}")
 
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # The key in the address is what lets a browser open the window (it is not the edge token).
+    app.prepare_logs()
     url = f"http://127.0.0.1:{app.port}/?key={session}"
     print(f"FlightRisk launcher: {url}", flush=True)
     print("Keep this window open. Ctrl+C here, or Quit in the launcher window, closes the launcher.", flush=True)
@@ -83,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             if sys.stdin.isatty():
                 try:
                     answer = input(
-                        f"Stop the {len(rows)} process(es) the launcher started? {stop_warning(app.manager.stop_lands_drones, app.manager.ground_here())} [y/N] "
+                        f"Stop the {len(rows)} process(es) the launcher started? {stop_warning(app.manager.windows)} [y/N] "
                     ).strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     answer = ""

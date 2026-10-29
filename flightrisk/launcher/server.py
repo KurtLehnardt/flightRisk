@@ -40,6 +40,7 @@ from flightrisk.launcher.processes import (
     LOG_ROOT,
     ProcessError,
     ProcessManager,
+    claim_run_dir,
     new_run_log_dir,
     prune_log_runs,
 )
@@ -68,17 +69,15 @@ class ApiError(Exception):
         self.extra = extra
 
 
-def stop_warning(lands_drones: bool, ground_here: bool = False) -> str:
+def stop_warning(windows: bool) -> str:
     """What stopping does to drones in the air, for every stop dialog and prompt."""
-    if lands_drones:
-        return ("Drones in the air will land: each edge on this computer lands its drone as it shuts down, and an edge "
-                "on another computer lands its drone through the link-loss rule when the ground stops. "
-                "Land them first with LAND ALL in the dashboard.")
-    if ground_here:
-        return ("The ground stops first and the edges on this computer are given time to land their drones through "
-                "the link-loss rule before they are terminated. Land every drone with LAND ALL in the dashboard first.")
-    return ("Stop does NOT land the drones of edges on this computer: they are terminated, and a flying Tello "
-            "hovers until its own timeout. Land every drone with LAND ALL in the dashboard first.")
+    remote = "an edge on another computer lands its drone through the link-loss rule when the ground stops."
+    if windows:
+        return ("Each edge on this computer is asked to land with its own land key, given time to land, and then "
+                f"stopped; {remote} This Windows stop is not yet verified on hardware: land every drone with LAND ALL "
+                "in the dashboard first.")
+    return ("Drones in the air will land: each edge on this computer lands its drone as it shuts down, and "
+            f"{remote} Land them first with LAND ALL in the dashboard.")
 
 
 class LauncherApp:
@@ -103,9 +102,7 @@ class LauncherApp:
         self.token = self.reload_token()
         self.store = store or PresetStore(secret=lambda: self.token.reveal())
         if manager is None:
-            log_dir = new_run_log_dir(LOG_ROOT, port)
-            prune_log_runs(LOG_ROOT, current=log_dir)
-            manager = ProcessManager(self.redact, log_dir=log_dir)
+            manager = ProcessManager(self.redact, log_dir=new_run_log_dir(LOG_ROOT, port))
         self.manager = manager
         self.preflight_env = preflight_env or pf.PreflightEnv()
         self.python = python
@@ -116,6 +113,12 @@ class LauncherApp:
         self._stop_threads: list[threading.Thread] = []
 
     # ---- helpers ---------------------------------------------------------
+
+    def prepare_logs(self) -> list[Path]:
+        """Claim this run's log folder and prune old ones. Call only once the window's port is bound,
+        so a second launcher that fails with "already running" touches no logs."""
+        claim_run_dir(self.manager.log_dir)
+        return prune_log_runs(self.manager.log_dir.parent, current=self.manager.log_dir)
 
     def reload_token(self) -> EdgeToken:
         self.token = self._token_loader()
@@ -170,8 +173,7 @@ class LauncherApp:
             "busy": self.manager.busy(),
             "events": [self.redact(e) for e in self.manager.events[-50:]],
             "stopping": self.manager.stopping(),
-            "stop_lands_drones": self.manager.stop_lands_drones,
-            "stop_warning": stop_warning(self.manager.stop_lands_drones, self.manager.ground_here()),
+            "stop_warning": stop_warning(self.manager.windows),
             "is_windows": self.preflight_env.is_windows,
         }
 
@@ -392,7 +394,8 @@ def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]
 
         def _api_ok(self) -> bool:
             supplied = self.headers.get(SESSION_HEADER, "")
-            return self._host_ok() and secrets.compare_digest(supplied, session)
+            # Bytes: compare_digest raises TypeError for a str that is not ASCII.
+            return self._host_ok() and secrets.compare_digest(supplied.encode("utf-8", "surrogateescape"), session.encode("utf-8"))
 
         def _body(self) -> dict[str, Any]:
             try:

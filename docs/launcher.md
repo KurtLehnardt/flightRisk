@@ -20,9 +20,9 @@ The window opens in your browser at `http://127.0.0.1:5500/?key=...`. The key is
 launch; the page is served only with it, so keep that address to yourself. If you close the tab, open
 the address the launcher printed in its terminal again. Use `--port 5501` for another port and
 `--no-browser` to skip opening the browser (then open the printed address yourself). The terminal or
-console window that the helper opens must stay open while the launcher runs. On Windows the processes
-the launcher starts share that console window (it shows nothing of theirs: their output goes to log
-files), which is how Stop can ask them to land and stop.
+console window that the helper opens must stay open while the launcher runs. The processes the launcher
+starts are not attached to it: on Windows each runs with no console at all, so closing that window (or
+the launcher exiting) does not end them; their output goes to log files.
 
 The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 `~/.flightrisk-fleet.env` (on Windows `%USERPROFILE%\.flightrisk-fleet.env`), for example a line
@@ -147,28 +147,32 @@ then own the drones' command ports.
   or never listens, the edges are not started and the reason is shown.
 - **Logs.** Each launcher run writes to a folder of its own, `logs/launcher/<date>-<time>-<port>/`, one
   `<name>.log` per process (a restart starts `<name>.restart-1.log` and so on), so two launchers never
-  share a file. The 20 newest run folders are kept, and at most 500 MB in all; older ones are removed
-  when a launcher starts.
+  share a file. The folder records the launcher's process id. Once a launcher has its port, it removes
+  the oldest run folders beyond 20 folders or 500 MB in all, but never a folder whose launcher is still
+  running or that changed in the last 10 minutes.
 - **Stop** asks for confirmation first, and the dialog says what happens to drones in the air. Use LAND
-  ALL in the dashboard to land first. Stop asks each edge to shut down the way Ctrl+C does, so it lands
-  its own drone (macOS and Linux: SIGINT; Windows: Ctrl+Break, which the edge handles like Ctrl+C), then
-  stops the ground; an edge on another computer then lands its drone through the link-loss rule. A process
-  that has not exited after its grace period (15 s for an edge, 5 s for the ground) is terminated. Each
-  process is asked only once, even if Stop is pressed again, because a second Ctrl+C would interrupt a
-  landing; the Stop button stays disabled until the stop is done.
-- **Windows without a console.** If the launcher was started without a console window (not through
-  `scripts\launcher.bat` or a terminal), its processes can only be terminated. With a ground on this
-  computer it is stopped first, and the edges are given the link-loss time (their
-  `FLIGHTRISK_LINK_LOSS_LAND_S`, 3 s by default, plus 7 s) to land before they are terminated. **With
-  edges only, Stop does not land any drone**: a flying Tello hovers until its own timeout. Every stop
-  dialog says so; land with LAND ALL in the dashboard first.
+  ALL in the dashboard to land first. Stop stops the edges first, then the ground; an edge on another
+  computer then lands its drone through the link-loss rule. Each process is asked only once, even if Stop
+  is pressed again, because asking again would interrupt a landing; the Stop button stays disabled until
+  the stop is done.
+  - macOS and Linux: each edge gets SIGINT, which it handles like Ctrl+C: it lands its drone and exits.
+    A process still running after its grace period (15 s for an edge, 5 s for the ground) is terminated.
+  - Windows: each edge's input is a pipe from the launcher, and Stop types the edge's own local land key
+    into it (`l` and Enter, the key an operator can type in an edge's window). The edge logs that it took
+    the key and lands; the launcher gives the landing 10 s and then terminates the edge. An edge that does
+    not confirm the key within 5 s is terminated, and the event log says that its drone may still be in
+    the air. The ground has no land key and is terminated (it does not handle Ctrl+Break either), after
+    the edges. **This Windows stop is not yet verified on hardware: land with LAND ALL first.**
 - **Restart** stops one process and starts it again with the same settings. It is refused while a stop or
-  another restart runs. An edge that had to be terminated is not started again, because its drone may
-  still be in the air. **On Windows, Restart of an edge is refused** until the Ctrl+Break stop has been
-  verified on hardware: land it with LAND ALL, then Stop and Start.
+  another restart runs. An edge that had to be terminated without landing is not started again by that
+  Restart, because its drone may still be in the air (a Tello lands by itself about 15 s after its
+  commands stop); once the drone is down, Restart again, or Stop and Start. **On Windows, Restart of an
+  edge is refused** until the Windows stop has been verified on hardware: land it with LAND ALL, then Stop
+  and Start.
 - **Quit launcher** asks whether to stop the processes or leave them running. Left running, they keep
-  flying and logging, and their process ids and log files are printed in the launcher's terminal.
-  Ctrl+C in that terminal asks the same question. Closing the browser tab does not stop anything.
+  flying and logging, also when the launcher's terminal or console window is closed, and their process
+  ids and log files are printed there. Ctrl+C in that terminal asks the same question. Closing the
+  browser tab does not stop anything.
 
 The launcher never signals a process it did not start, for example a ground station started by hand.
 
@@ -205,10 +209,12 @@ The launcher never signals a process it did not start, for example a ground stat
   and the preflight checks (`flightrisk/launcher/settings.py`, `commands.py`, `processes.py`,
   `preflight.py`, `netinfo.py`) import nothing from the window and are unit-tested on their own. The
   server only translates HTTP into calls on them.
-- **No console window per process.** No child opens a window of its own (on Windows a click in a console
-  window can freeze the program in it). On Windows the children share the launcher's console, where
-  QuickEdit is turned off, in their own process group, so Stop can send them Ctrl+Break; the edge
-  handles Ctrl+Break exactly like Ctrl+C. They write straight to their log files, so they keep running
+- **No console for the processes.** No child opens a window of its own (on Windows a click in a console
+  window can freeze the program in it), and on Windows no child is attached to the launcher's console
+  either: Windows ends every process attached to a console when its window is closed, without giving
+  the edge time to land. So the Windows stop cannot use Ctrl+Break (which needs a shared console) and uses
+  the edge's own land key through its input pipe instead. The edge also handles Ctrl+Break like Ctrl+C,
+  for an operator's own console. The children write straight to their log files, so they keep running
   if the launcher exits and the processes are left running.
 - **The dashboard stays the authority on the ceiling.** The launcher reads the dashboard's saved ceiling
   to fill in the presets and warns when its own values differ, but it never writes that file. The
@@ -219,7 +225,9 @@ The launcher never signals a process it did not start, for example a ground stat
 ## Not verified
 
 Written and tested on macOS with fake drones only. Not yet run on Windows, against real Tellos, or with
-the two-adapter setup. The Windows adapter list (`Get-NetIPAddress`), the interface-index binding of the
-drone check, the shared console with Ctrl+Break stop, the exclusive port bind and the edge's Ctrl+Break
-landing are covered by unit tests with fakes only. Until the Ctrl+Break stop is verified on Windows
-hardware, land with LAND ALL in the dashboard before pressing Stop there.
+the two-adapter setup. That an edge takes its land key through a pipe, lands and keeps running when the
+pipe closes was checked on macOS with a fake drone. The Windows adapter list (`Get-NetIPAddress`), the
+interface-index binding of the drone check, the Windows stop paths (land key, then terminate), running
+without a console, the exclusive port bind and the edge's Ctrl+Break landing are covered by unit tests
+with fakes only. Until the Windows stop is verified on hardware, land with LAND ALL in the dashboard
+before pressing Stop there.

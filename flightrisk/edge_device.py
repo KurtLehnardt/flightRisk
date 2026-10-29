@@ -442,9 +442,9 @@ def _wire_emergency_callback(transport: Any, flight: LaneExecutor) -> bool:
 def _install_sigint_land(flight: LaneExecutor, log: StructuredLogger, signals: Any = signal) -> Any:
     """Make Ctrl+C land the drone before the process exits.
 
-    On Windows the same handler also takes SIGBREAK (Ctrl+Break), which is
-    how the launcher (``flightrisk.launcher``) asks an edge it started in its
-    own process group to stop. Platforms without SIGBREAK are unchanged.
+    On Windows the same handler also takes SIGBREAK (Ctrl+Break in the edge's
+    console), so that key lands the drone too instead of ending the process
+    at once. Platforms without SIGBREAK are unchanged.
     ``signals`` is the ``signal`` module, replaceable in tests.
 
     Returns the previous SIGINT handler, or None if handlers cannot be

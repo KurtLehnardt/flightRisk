@@ -257,3 +257,13 @@ def test_a_single_drone_without_an_adapter_fails_on_a_two_adapter_machine_and_is
     picked = LauncherSettings(role="edges", drones=(DroneSettings(drone_id="drone-2", local_ip="192.168.10.50", ifindex=23),))
     rows = _by_name(run_preflight(picked, EdgeToken(TOKEN, "x"), env))
     assert rows["Drone drone-2"].status == PASS and probed == ["drone-2"]
+
+
+
+def test_unreadable_adapter_list_fails_and_sends_no_probe():
+    probed = []
+    env = _env(adapters=list, tello_probe=lambda d: probed.append(d.drone_id) or TelloProbe(True, battery=90))
+    rows = _by_name(run_preflight(builtin_presets()["Single drone"], EdgeToken(None, None), env))
+    assert rows["Adapter for drone-1"].status == FAIL and "set the local IP" in rows["Adapter for drone-1"].detail
+    assert rows["Drone drone-1"].status == FAIL
+    assert probed == []

@@ -6,6 +6,7 @@ start no ground station, no edge and talk to no drone.
 
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
 import sys
@@ -25,7 +26,9 @@ from flightrisk.launcher.processes import (
     STOPPING,
     ProcessError,
     ProcessManager,
+    claim_run_dir,
     new_run_log_dir,
+    pid_alive,
     prune_log_runs,
 )
 
@@ -216,83 +219,127 @@ def test_snapshot_and_leave_running_show_no_token(manager):
 
 
 class _Recorder:
-    """A Popen factory for Windows tests on any platform: it records the Windows creation flags (which POSIX
-    Popen refuses), every signal and terminate, and turns Ctrl+Break into SIGINT for the stand-in child."""
+    """A Popen factory for Windows tests on any platform. It records the Windows creation flags (which POSIX
+    Popen refuses), the stdin choice, every signal and terminate; it never forwards a signal as Ctrl+Break."""
 
     def __init__(self):
         self.flags = []
+        self.stdins = []
         self.calls = []
         recorder = self
 
         class Child(subprocess.Popen):
             def send_signal(self, sig):
                 recorder.calls.append(("signal", self.args[-1], sig))
-                super().send_signal(signal.SIGINT)
+                super().send_signal(sig)
 
             def terminate(self):
                 recorder.calls.append(("terminate", self.args[-1], None))
-                super().send_signal(signal.SIGKILL)
+                if self.poll() is None:
+                    os.kill(self.pid, signal.SIGTERM)
 
         self.child = Child
 
     def __call__(self, argv, **kwargs):
         self.flags.append(kwargs.pop("creationflags", None))
+        self.stdins.append(kwargs.get("stdin"))
         return self.child(argv, **kwargs)
 
 
-def _windows(manager, graceful, **kwargs):
+#: Stands in for an edge's local land key reader (start_local_land_key): "l" logs the event the launcher waits for.
+EDGE_WITH_LAND_KEY = (
+    "import sys, time\n"
+    "print('edge up', flush=True)\n"
+    "for line in sys.stdin:\n"
+    "    if line.strip().lower() == 'l':\n"
+    "        print('{\"event\": \"edge_local_land_key\"}', flush=True)\n"
+    "        print('landing', flush=True)\n"
+    "print('stdin closed; still flying', flush=True)\n"
+    "time.sleep(60)\n"
+)
+EDGE_LANDS_AND_EXITS = (
+    "import sys\n"
+    "print('edge up', flush=True)\n"
+    "for line in sys.stdin:\n"
+    "    if line.strip() == 'l':\n"
+    "        print('edge_local_land_key', flush=True)\n"
+    "        sys.exit(0)\n"
+)
+EDGE_DEAF = "import time\nprint('edge up', flush=True)\ntime.sleep(60)\n"
+
+
+def _windows(manager, **kwargs):
     recorder = _Recorder()
-    m = manager(popen=recorder, port_open=lambda host, port: True, windows=True, graceful=graceful, **kwargs)
+    kwargs.setdefault("land_key_ack_s", 3.0)
+    kwargs.setdefault("land_settle_s", 0.5)
+    m = manager(popen=recorder, port_open=lambda host, port: True, windows=True, **kwargs)
     return m, recorder
 
 
-def test_windows_with_a_console_asks_edges_to_land_with_ctrl_break_first(manager):
-    m, rec = _windows(manager, graceful=True)
-    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1")], wait=True)
-    assert _wait(lambda: all(r["status"] == RUNNING for r in m.snapshot()))
-    # A new process group that shares the launcher's console, and no CREATE_NO_WINDOW.
-    assert rec.flags == [0x200, 0x200]
-    m.stop_all()
-    ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", 1)
-    assert rec.calls == [("signal", "edge-drone-1", ctrl_break), ("signal", "ground", ctrl_break)]
-    assert m.stop_lands_drones
+def _up(m, name):
+    return _wait(lambda: "\nedge up\n" in m.read_log(name, 0)[0])
 
 
-def test_windows_edges_only_without_a_console_says_stop_does_not_land(manager):
-    m, rec = _windows(manager, graceful=False)
-    m.start([_spec("edge-drone-1"), _spec("edge-drone-2")], wait=True)
+def test_windows_children_have_no_console_and_edges_get_a_land_key_pipe(manager):
+    m, rec = _windows(manager)
+    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1", code=EDGE_WITH_LAND_KEY)],
+            wait=True)
+    # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW: detached from the launcher's console, so closing it ends neither.
     assert rec.flags == [0x200 | 0x08000000] * 2
-    assert not m.stop_lands_drones
+    assert rec.stdins == [subprocess.DEVNULL, subprocess.PIPE]
+
+
+def test_windows_stop_types_the_land_key_waits_then_terminates(manager):
+    m, rec = _windows(manager)
+    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1", code=EDGE_WITH_LAND_KEY)],
+            wait=True)
+    assert _up(m, "edge-drone-1")
+    started = time.monotonic()
     m.stop_all()
-    assert sorted(c[:2] for c in rec.calls) == [("terminate", "edge-drone-1"), ("terminate", "edge-drone-2")]
-    assert any("does not land" in e for e in m.events)
+    text = m.read_log("edge-drone-1", 0)[0]
+    assert "landing" in text, "the edge must have received its land key"
+    assert time.monotonic() - started >= 0.5, "the landing gets its settle time before the edge is terminated"
+    assert [c[:2] for c in rec.calls] == [("terminate", "edge-drone-1"), ("terminate", "ground")]
+    assert not any(c[0] == "signal" for c in rec.calls), "no Ctrl+Break or other console signal on Windows"
+    assert any("took the land key" in e for e in m.events)
     assert {r["status"] for r in m.snapshot()} == {STOPPED}
 
 
-def test_windows_without_a_console_stops_the_ground_first_and_waits_for_link_loss(manager):
-    m, rec = _windows(manager, graceful=False, link_loss_wait_s=0.6)
-    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1")], wait=True)
-    assert _wait(lambda: all(r["status"] == RUNNING for r in m.snapshot()))
-    started = time.monotonic()
+def test_windows_edge_that_lands_and_exits_is_not_terminated(manager):
+    m, rec = _windows(manager)
+    m.start([_spec("edge-drone-1", code=EDGE_LANDS_AND_EXITS)], wait=True)
+    assert _up(m, "edge-drone-1")
     m.stop_all()
-    assert [c[:2] for c in rec.calls] == [("terminate", "ground"), ("terminate", "edge-drone-1")]
-    assert time.monotonic() - started >= 0.6
-    assert any("link-loss" in e for e in m.events)
+    assert rec.calls == []
+    row = _status(m, "edge-drone-1")
+    assert row["status"] == STOPPED and row["returncode"] == 0
 
 
-def test_link_loss_wait_follows_the_inherited_setting(manager):
-    m, _ = _windows(manager, graceful=False)
-    slow = replace(_spec("edge-drone-1"), env={**_spec("edge-drone-1").env, "FLIGHTRISK_LINK_LOSS_LAND_S": "15"})
-    m.start([slow], wait=True)
-    assert m.link_loss_wait_s() == 22.0
-    m2, _ = _windows(manager, graceful=False)
-    m2.start([_spec("edge-drone-2")], wait=True)
-    assert m2.link_loss_wait_s() == 10.0
+def test_windows_edge_that_ignores_the_land_key_is_terminated_and_flagged(manager):
+    m, rec = _windows(manager, land_key_ack_s=0.4)
+    m.start([_spec("edge-drone-1", code=EDGE_DEAF)], wait=True)
+    assert _up(m, "edge-drone-1")
+    m.stop_all()
+    assert [c[:2] for c in rec.calls] == [("terminate", "edge-drone-1")]
+    assert any("did not confirm the land key" in e for e in m.events)
+    assert m._procs["edge-drone-1"].forced
+
+
+def test_windows_edge_keeps_running_when_the_launcher_goes_away(manager):
+    m, rec = _windows(manager)
+    m.start([_spec("edge-drone-1", code=EDGE_WITH_LAND_KEY)], wait=True)
+    assert _up(m, "edge-drone-1")
+    # The launcher exiting closes its end of the pipe; the edge's key reader ends and the edge keeps flying.
+    m._procs["edge-drone-1"].popen.stdin.close()
+    assert _wait(lambda: "still flying" in m.read_log("edge-drone-1", 0)[0])
+    assert m._procs["edge-drone-1"].popen.poll() is None
+    assert rec.calls == []
 
 
 def test_windows_refuses_to_restart_an_edge_but_restarts_the_ground(manager):
-    m, rec = _windows(manager, graceful=True)
-    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1")], wait=True)
+    m, rec = _windows(manager)
+    m.start([_spec("ground", "ground", ready_ports=(("127.0.0.1", 5800),)), _spec("edge-drone-1", code=EDGE_WITH_LAND_KEY)],
+            wait=True)
     assert _wait(lambda: all(r["status"] == RUNNING for r in m.snapshot()))
     with pytest.raises(ProcessError, match="not available on Windows"):
         m.restart("edge-drone-1")
@@ -310,6 +357,10 @@ def test_an_edge_that_had_to_be_terminated_is_not_restarted(manager):
     m.restart("edge-drone-1")
     row = _status(m, "edge-drone-1")
     assert row["status"] == STOPPED and "not restarted" in row["message"]
+    assert "Stop and Start" in row["message"] and "dashboard" not in row["message"]
+    # The decision comes from this stop only: the edge is down now, so the next Restart starts it.
+    m.restart("edge-drone-1")
+    assert _wait(lambda: _status(m, "edge-drone-1")["status"] == RUNNING)
 
 
 def test_repeated_stop_signals_each_process_once(manager):
@@ -402,11 +453,59 @@ def test_old_run_folders_are_pruned(tmp_path):
         (run / "ground.log").write_text("x" * 10)
     (root / "keep-me").mkdir()
     current = root / "20261029-000099-5500"
-    removed = prune_log_runs(root, keep=20, current=current)
+    later = time.time() + 3600
+    removed = prune_log_runs(root, keep=20, current=current, alive=lambda pid: False, now=later)
     assert len(removed) == 6 and removed[0].name == "20261029-000000-5500"
     assert (root / "keep-me").exists()
-    big = prune_log_runs(root, keep=100, max_bytes=50)
+    big = prune_log_runs(root, keep=100, max_bytes=50, alive=lambda pid: False, now=later)
     assert len([p for p in root.iterdir() if p.name != "keep-me"]) == 5 and len(big) == 14
+
+
+def test_pruning_skips_folders_of_live_launchers_and_recent_ones(tmp_path):
+    root = tmp_path / "logs"
+    live = root / "20261029-000000-5500"
+    claim_run_dir(live, pid=4242)
+    (live / "ground.log").write_text("open log of a running launcher")
+    dead = root / "20261029-000001-5501"
+    claim_run_dir(dead, pid=4343)
+    hour_ago = time.time() - 3600
+    for folder in (live, dead):
+        for item in [*folder.iterdir(), folder]:
+            os.utime(item, (hour_ago, hour_ago))
+    recent = root / "20261029-000002-5502"
+    recent.mkdir()
+    removed = prune_log_runs(root, keep=1, alive=lambda pid: pid == 4242)
+    # The live launcher's folder and the folder that changed in the last ten minutes are kept.
+    assert removed == [dead]
+    assert live.exists() and recent.exists()
+    assert prune_log_runs(root, keep=1, alive=lambda pid: False) == [live]
+    assert recent.exists()
+
+
+def test_pid_alive_never_signals_and_knows_this_process():
+    assert pid_alive(os.getpid())
+    assert not pid_alive(0) and not pid_alive(-1)
+
+
+def test_stop_counts_as_stopping_while_it_waits_behind_a_restart(manager):
+    slow_exit = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGINT, lambda *a: (time.sleep(0.8), sys.exit(0)))\n"
+        "print('up', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    m = manager(port_open=lambda host, port: True)
+    m.start([_spec("ground", "ground", code=slow_exit, ready_ports=(("127.0.0.1", 5800),))], wait=True)
+    assert _wait(lambda: "\nup\n" in m.read_log("ground", 0)[0])
+    m.restart("ground", background=True)
+    assert _wait(lambda: m._op_lock.locked())
+    stopper = threading.Thread(target=m.stop_all)
+    stopper.start()
+    assert _wait(lambda: m.stopping(), timeout=0.5), "Stop must count as stopping while it waits its turn"
+    assert m._op_lock.locked()
+    stopper.join()
+    assert not m.stopping()
+    assert _status(m, "ground")["status"] == STOPPED
 
 
 def test_log_tail_never_cuts_a_line(manager, tmp_path):

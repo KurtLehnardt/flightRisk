@@ -399,9 +399,25 @@ def choose_adapter_message(drone: DroneSettings, reach: list[Adapter]) -> str:
             f"without a local IP another drone could answer")
 
 
+UNREADABLE_ADAPTERS = "could not list this computer's network adapters, so the adapter cannot be checked; set the local IP"
+
+
+def local_tellos_with_unknown_adapter(settings: LauncherSettings, adapters: list[Adapter]) -> list[tuple[int, DroneSettings]]:
+    """Real drones flown from here with no local IP while the adapter list is empty or unreadable.
+
+    The ambiguity check cannot run then, so it must fail closed rather than let a probe go out from all addresses.
+    """
+    if any(not a.loopback for a in adapters):
+        return []
+    return [(i, d) for i, d in enumerate(settings.drones)
+            if d.source == "tello" and not d.local_ip and (settings.role == "edges" or d.run_here)]
+
+
 def _validate_shared_subnet(settings: LauncherSettings, adapters: list[Adapter], err: Callable) -> None:
     for i, drone, reach in local_tellos_without_adapter(settings, adapters):
         err(f"drones.{i}.local_ip", choose_adapter_message(drone, reach))
+    for i, drone in local_tellos_with_unknown_adapter(settings, adapters):
+        err(f"drones.{i}.local_ip", f"{drone.drone_id}: {UNREADABLE_ADAPTERS}")
 
 
 def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable, warn: Callable, ceiling_ok: bool) -> None:

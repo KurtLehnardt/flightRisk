@@ -418,10 +418,55 @@ def test_stop_twice_and_restart_while_stopping(launcher):
 def test_state_reports_how_stop_treats_drones(launcher):
     client, app, _ = launcher
     state = client.get("/api/state")[1]
-    assert state["stop_lands_drones"] is True and "will land" in state["stop_warning"]
-    app.manager.graceful = False
+    assert "will land" in state["stop_warning"] and "LAND ALL" in state["stop_warning"]
+    app.manager.windows = True
     state = client.get("/api/state")[1]
-    assert "does NOT land" in state["stop_warning"] and "LAND ALL" in state["stop_warning"]
+    assert "land key" in state["stop_warning"] and "not yet verified on hardware" in state["stop_warning"]
+    assert "LAND ALL" in state["stop_warning"]
+
+
+def test_non_ascii_session_header_is_refused_not_an_error(launcher):
+    client, _, _ = launcher
+    conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    conn.putrequest("GET", "/api/state", skip_host=True)
+    conn.putheader("Host", f"127.0.0.1:{client.port}")
+    conn.putheader("X-Launcher-Session", "caf\u00e9".encode("latin-1"))
+    conn.endheaders()
+    assert conn.getresponse().status == 403
+    conn.close()
+
+
+def test_unreadable_adapter_list_refuses_a_drone_without_a_local_ip(launcher):
+    client, app, _ = launcher
+    app.preflight_env.adapters = list
+    probed = []
+    app.preflight_env.tello_probe = lambda d: probed.append(d.drone_id) or TelloProbe(True, battery=90)
+    single = builtin_presets()["Single drone"].to_json()
+    _, data = client.post("/api/start", {"settings": single})
+    assert data["started"] is False
+    assert any("could not list" in i["message"] and "set the local IP" in i["message"] for i in data["issues"])
+    assert probed == []
+    assert client.get("/api/state")[1]["processes"] == []
+
+
+def test_logs_are_claimed_and_pruned_only_after_the_port_is_bound(tmp_path):
+    root = tmp_path / "logs"
+    stale = root / "20200101-000000-5500"
+    stale.mkdir(parents=True)
+    old = 1_000_000_000
+    os.utime(stale, (old, old))
+    for k in range(25):
+        (root / f"20200101-0001{k:02d}-5500").mkdir()
+        os.utime(root / f"20200101-0001{k:02d}-5500", (old, old))
+    mine = root / "20261029-120000-5599"
+    manager = ProcessManager(Redactor(), log_dir=mine)
+    app = LauncherApp(port=0, store=PresetStore(tmp_path / "launcher.json"), token_loader=lambda: EdgeToken(None, None),
+                      manager=manager, preflight_env=_preflight_env())
+    # Creating the app (as a second double-click does before its bind fails) touches no logs.
+    assert stale.exists() and not mine.exists()
+    removed = app.prepare_logs()
+    assert stale in removed and mine.exists()
+    assert json.loads((mine / "launcher-owner.json").read_text())["pid"] == os.getpid()
 
 
 def test_second_launcher_on_the_same_port_is_refused():

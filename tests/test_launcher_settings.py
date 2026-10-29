@@ -342,3 +342,15 @@ def test_cloud_reasoning_inherited_is_called_out():
     assert any("Claude cloud" in i.message for i in cloud)
     local = validate(settings, is_windows=False, profile_names=PROFILES, environ={})
     assert any("local Ollama" in i.message for i in local)
+
+
+def test_unreadable_adapter_list_fails_closed_for_a_drone_without_a_local_ip():
+    from flightrisk.launcher.netinfo import Adapter
+
+    single = builtin_presets()["Single drone"]
+    for adapters in ([], [Adapter("lo0", "127.0.0.1", 1)]):
+        assert any("could not list" in m for m in _errors(single, adapters=adapters))
+    picked = replace(single, drones=(replace(single.drones[0], local_ip="192.168.10.2"),))
+    assert _errors(picked, adapters=[]) == []
+    fake = replace(single, drones=(replace(single.drones[0], source="fake"),))
+    assert _errors(fake, adapters=[]) == []

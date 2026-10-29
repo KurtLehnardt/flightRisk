@@ -24,9 +24,11 @@ from typing import Any
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
 from flightrisk.launcher.settings import (
+    UNREADABLE_ADAPTERS,
     DroneSettings,
     LauncherSettings,
     choose_adapter_message,
+    local_tellos_with_unknown_adapter,
     local_tellos_without_adapter,
 )
 
@@ -363,6 +365,10 @@ def run_preflight(
     ambiguous = {drone.drone_id for _, drone, _ in local_tellos_without_adapter(settings, adapters)}
     for _, drone, reach in local_tellos_without_adapter(settings, adapters):
         checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, choose_adapter_message(drone, reach)))
+    for _, drone in local_tellos_with_unknown_adapter(settings, adapters):
+        # Fail closed: with no adapter list, a probe from all addresses could reach another drone.
+        ambiguous.add(drone.drone_id)
+        checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, UNREADABLE_ADAPTERS))
 
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
