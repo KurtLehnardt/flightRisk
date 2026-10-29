@@ -23,7 +23,7 @@ Both paths:
 
 1. Placement and heading (do this before every flight). Mark the 4 m × 4 m area and a takeoff line along its near edge. Put drone-1 at the near-left corner. Put drone-2 250 cm to its right on the same line. Point both noses into the area along the 4 m depth (the +y direction the coordinator assumes). Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence, never in a flight path. The launchers set the edge geofence to 450 cm; override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 2. Floor: a clear 4 m × 4 m area with a ceiling of at least 2.5 m (ASSUMPTION; organizer question). The fleet plan's default area is 400 cm square (`FLIGHTRISK_FLEET_AREA_CM`), and the drones fly at altitude slots of 100 cm and 130 cm, below the default ceiling limit of 140 cm (set the room's ceiling in the dashboard; see `docs/ceiling-and-altitude.md`).
-3. Batteries: a fresh battery in each drone, and each at 30% or more. The edge refuses takeoff below 30% and lands below 15%. Read the level in the hardware check report and again on the fleet panel.
+3. Batteries: a fresh battery in each drone, and each at 30% or more. The edge refuses takeoff below 30% and lands below 15%. Read the level in the hardware check report and again on each drone's status card in the dashboard.
 4. The same token on both laptops: `export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"` on the Mac and `$env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"` on Windows.
 5. Run the hardware check for your path (below) and keep its report on screen until both drones pass.
 
@@ -113,7 +113,7 @@ Figures: recall 0.000, 0.142 and 0.602, precision 0.832, 32 px on 108 people (`d
 ### 0:35–2:35 · Show it working
 
 - 0:35 Say: "Show it working. Before kickoff, commit 798f21a, this repository had a single-drone pipeline and 676 tests. This week I added the benchmark, the fine-tune, a coverage planner and the fleet. Every new file is listed in docs/built-this-week.md."
-- 0:50 Do: switch to the dashboard. The fleet panel lists drone-1 (Mac) and drone-2 (Windows) with battery, clock offset and round-trip time. Open the Controls tab in the right sidebar and press **Plan search** in the Fleet group. Say: "The coordinator splits the floor into two zones, one per drone, at two altitude slots, 100 and 130 centimetres, so they share neither a zone nor an altitude."
+- 0:50 Do: switch to the dashboard. The drone status cards along the top show drone-1 (Mac) and drone-2 (Windows), each CONNECTED with its battery; clock offset and round-trip time are under "Link timing" in the sidebar's Advanced section. Open the Mission section in the right sidebar and press **Plan search**. Say: "The coordinator splits the floor into two zones, one per drone, at two altitude slots, 100 and 130 centimetres, so they share neither a zone nor an altitude."
 - 1:05 Do: press **Start search** and confirm the prompt for two drones. Say: "Each drone's clock is synced to the ground over the WebSocket, eight ping rounds each, and both get one scheduled start time two seconds out. The skew column shows how far apart they actually started."
 - 1:20 Do: let the lanes run. The presenter walks to a spot at least 1.5 m beyond the far edge of the area, outside the geofence and never in a flight path, where a drone camera can see them. Say: "Each laptop stands in for a computer on board. Detections from both drones go onto one map, tagged with the drone that saw them, and pins within 80 centimetres of each other merge."
 - 1:55 Do: at the Windows laptop, type `l` and Enter in the edge-2 terminal; drone-2 lands. Say: "Now I take drone-2 out of the search. The ground marks it lost and hands its unflown lanes to drone-1. Watch the map redraw." The `drone_lost` and `retask` banners appear.
@@ -199,7 +199,7 @@ Drop one rung per failure. Spend no more than 30 seconds fixing anything on stag
    venv/bin/python -m flightrisk.edge_device --source fake --drone-id drone-2 --alt-slot 130 --ws-url "$FLIGHTRISK_EDGE_WS"
    ```
 
-   Replace `drone-2` with the id the fleet panel showed for the missing drone. The fake drone flies in process with no hardware, so planning, sync, the scheduled start, the merged map and the re-task all still show. Tell the judges that drone-2 is now a software drone. The `export FLIGHTRISK_GROUND_LOCAL=1` line makes the fake edge use loopback on the AP path, since the ground station is on this Mac; station mode ignores it.
+   Replace `drone-2` with the id the drone status cards showed for the missing drone. The fake drone flies in process with no hardware, so planning, sync, the scheduled start, the merged map and the re-task all still show. Tell the judges that drone-2 is now a software drone. The `export FLIGHTRISK_GROUND_LOCAL=1` line makes the fake edge use loopback on the AP path, since the ground station is on this Mac; station mode ignores it.
 3. **Recorded video of the fleet flight.** Play `demo/fleet.mp4` (2:00 at most, recorded in rehearsal from the shot list below, kept on local disk and never committed) and give the core talk over it.
 4. **The N-drone fake-edge demo.** No drones and no network needed. Stop the live ground station and edge-1 with Ctrl-C first, because this launcher starts its own ground station on 127.0.0.1 ports 5555 and 9000:
 
@@ -229,7 +229,7 @@ If the Mac itself fails, present `docs/pitch.md` from any machine; the plots are
 | 1 | 10 | Title and thesis plot | Deck slide 2: the before and after recall plots, "a person a few dozen pixels tall" |
 | 2 | 15 | Benchmark before and after | Recall 0.000 to 0.142 to 0.602 at precision 0.832, 32 px solid |
 | 3 | 10 | Plan | Dashboard map after **Plan search**: two zones at 100 cm and 130 cm |
-| 4 | 20 | Fleet takeoff with skew readout | Phone shot of both drones lifting off, cut with the fleet panel's offset, RTT and skew columns |
+| 4 | 20 | Fleet takeoff with skew readout | Phone shot of both drones lifting off, cut with the offset, RTT and skew columns of the Link timing table (Advanced section) |
 | 5 | 20 | Merged map | Lanes progressing, detections from both drones on one map, each tagged with its drone id |
 | 6 | 20 | Re-task on loss | `l` and Enter on edge-2, drone-2 lands, `drone_lost` and `retask` banners, drone-1 picks up the lanes |
 | 7 | 10 | Four fake drones | `demo_fake_fleet.py --n 4 --drive` output: re-task 0.7 s after the kill |

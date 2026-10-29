@@ -1,32 +1,20 @@
-"""Every side-menu card is collapsible through one shared helper, and safety-critical controls never hide."""
+"""Every sidebar section is collapsible through one shared helper, and safety-critical controls never hide."""
 
 import re
 from html.parser import HTMLParser
 from pathlib import Path
 
-TEMPLATES = (
-    Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates"
-)
-INDEX = (TEMPLATES / "index.html").read_text()
-CEILING = (TEMPLATES / "ceiling_settings.html").read_text()
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+INDEX = (DASH / "templates" / "index.html").read_text()
+CEILING = (DASH / "templates" / "ceiling_settings.html").read_text()
 # The ceiling card lives in its own file that index.html includes; test the combined markup.
 PAGE = INDEX.replace('{% include "ceiling_settings.html" %}', CEILING)
+JS = (DASH / "static" / "ui" / "ui.js").read_text()
+CSS = (DASH / "static" / "ui" / "ui.css").read_text()
+HELPER = JS[JS.index("// ========== COLLAPSIBLE SECTIONS"):JS.index("// ========== SOUNDS")]
 
-CARDS = {
-    "target",
-    "ceiling",
-    "drone-fleet",
-    "detection-profile",
-    "flight-controls",
-    "ai-reasoning",
-    "autonomous-search",
-    "session-recording",
-    "edge-video",
-    "match-log",
-    "observability",
-    "manual-threshold",
-    "threshold-tuner",
-}
+# The six sidebar sections, in page order.
+CARDS = ["fleet", "mission", "ceiling", "video-detection", "session", "advanced"]
 
 
 class _Cards(HTMLParser):
@@ -39,9 +27,14 @@ class _Cards(HTMLParser):
         self.toggles = {}
         self.bodies = {}
         self.cards = {}
+        self.tags = {}
+        self.attrs = {}
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if a.get("id"):
+            self.tags[a["id"]] = tag
+            self.attrs[a["id"]] = a
         if tag in self.VOID:
             if a.get("id"):
                 self.in_body[a["id"]] = [c for t, c, b in self.stack if b]
@@ -78,7 +71,7 @@ def _parse():
 
 
 def test_every_card_is_registered():
-    assert set(_parse().cards) == CARDS
+    assert set(_parse().cards) == set(CARDS)
 
 
 def test_each_card_has_an_accessible_toggle_and_matching_body():
@@ -86,32 +79,32 @@ def test_each_card_has_an_accessible_toggle_and_matching_body():
     for card in CARDS:
         t = p.toggles[card]
         assert t.get("type") == "button", card
-        assert t.get("aria-expanded") == "true", card  # expanded by default
+        assert t.get("aria-expanded") == "true", card  # the markup starts expanded; the helper applies saved state
         controls = t.get("aria-controls")
         assert controls == f"card-{card}-body", card
         assert p.bodies[card].get("id") == controls, card
+    # Only Advanced starts collapsed on a first visit.
+    assert [c for c in CARDS if p.cards[c].get("data-default") == "collapsed"] == ["advanced"]
 
 
 def test_shared_helper_is_present_and_guards_storage():
-    assert ".panel-section[data-card]" in INDEX
-    assert ".card-collapsed > .card-body { display: none; }" in INDEX
-    script = INDEX[INDEX.index("Shared collapsible-card helper") :]
-    script = script[: script.index("</script>")]
-    assert script.count("window.localStorage") == 2
-    assert script.count("try {") == 2 and script.count("catch (e)") == 2
-    assert "aria-expanded" in script
+    assert ".panel-section[data-card]" in HELPER
+    assert ".card-collapsed > .card-body { display: none; }" in CSS
+    assert HELPER.count("window.localStorage") == 2
+    assert HELPER.count("try {") == 2 and HELPER.count("catch (e)") == 2
+    assert "aria-expanded" in HELPER
+    # A prefix of its own, so states saved by the earlier layout (flightrisk.card.*) do not carry over.
+    assert "'flightrisk.ui.card.'" in HELPER
 
 
 def test_helper_hides_with_css_not_dom_removal():
-    script = INDEX[INDEX.index("Shared collapsible-card helper") :]
-    script = script[: script.index("</script>")]
     for forbidden in ("removeChild", ".remove()", "innerHTML"):
-        assert forbidden not in script
+        assert forbidden not in HELPER
 
 
 def test_safety_critical_controls_stay_outside_collapsible_bodies():
     p = _parse()
-    for eid in ("land-all", "fleet-plan", "fleet-start", "fleet-drone-list"):
+    for eid in ("land-all", "drone-status", "manual-overlay", "manual-land"):
         assert eid in p.in_body, eid
         assert p.in_body[eid] == [], f"{eid} is inside a collapsible body"
 
@@ -120,13 +113,8 @@ def test_body_tracking_detects_collapsible_content():
     # Guards the safety test above against a parser that never reports anything as inside a body.
     p = _parse()
     assert p.in_body["ceiling-cm"] == ["ceiling"]
-    assert p.in_body["match-log"] == ["match-log"]
-
-
-def test_floating_fleet_status_panel_is_not_a_card():
-    # CONNECTED/DOWN/LOST is rendered into #fleet-panel-body; it must not sit inside any card body.
-    p = _parse()
-    assert p.in_body["fleet-panel-body"] == []
+    assert p.in_body["match-log"] == ["session"]
+    assert p.in_body["fleet-start"] == ["mission"]
 
 
 def test_live_ids_remain_in_dom():
@@ -149,21 +137,18 @@ def test_live_ids_remain_in_dom():
         assert eid in ids, eid
 
 
-def test_history_and_sessions_headers_are_keyboard_accessible():
-    for cid in ("target-history-container", "sessions-container"):
-        m = re.search(
-            rf'<div class="collapsible-header"([^>]*aria-controls="{cid}"[^>]*)>', INDEX
-        )
-        assert m, cid
-        assert (
-            'role="button"' in m.group(1)
-            and 'tabindex="0"' in m.group(1)
-            and 'aria-expanded="false"' in m.group(1)
-        )
+def test_history_and_sessions_disclosures_are_keyboard_accessible():
+    p = _parse()
+    for button, cid in (("target-history-toggle", "target-history-container"), ("sessions-toggle", "sessions-container")):
+        assert p.tags[button] == "button", button
+        a = p.attrs[button]
+        assert a.get("type") == "button" and a.get("aria-controls") == cid and a.get("aria-expanded") == "false"
+        assert "hidden" in p.attrs[cid], cid
+    assert "setAttribute('aria-expanded'" in JS[JS.index("function toggleDisclosure"):]
 
 
 def _rule(selector):
-    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", INDEX)
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", CSS)
     assert match, f"missing CSS rule for {selector}"
     return match.group(1)
 
@@ -174,9 +159,7 @@ def test_chevron_is_large_with_a_comfortable_hit_area():
     assert 20 <= size <= 24
     for prop in ("min-width", "min-height"):
         assert int(re.search(prop + r":\s*(\d+)px", chevron).group(1)) >= 40
-    assert (
-        int(re.search(r"min-height:\s*(\d+)px", _rule(".card-toggle")).group(1)) >= 40
-    )
+    assert int(re.search(r"min-height:\s*(\d+)px", _rule(".card-toggle")).group(1)) >= 40
 
 
 def test_chevron_keeps_rotation_and_respects_reduced_motion():
@@ -184,15 +167,13 @@ def test_chevron_keeps_rotation_and_respects_reduced_motion():
     assert "transition: transform" in _rule(".card-chevron")
     assert re.search(
         r"prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.card-chevron[^}]*transition:\s*none",
-        INDEX,
+        CSS,
     )
-    assert "focus-visible" in INDEX and "outline: 2px solid var(--cyan)" in INDEX
+    assert "outline: 2px solid var(--accent)" in _rule(".card-toggle:focus-visible")
 
 
-def test_ceiling_card_sits_directly_below_flight_controls():
-    flight = PAGE.index('data-card="flight-controls"')
-    ceiling = PAGE.index('data-card="ceiling"')
-    ai_reasoning = PAGE.index('data-card="ai-reasoning"')
-    assert flight < ceiling < ai_reasoning
-    # The fleet card (LAND ALL, fleet status) keeps its place ahead of flight controls.
-    assert PAGE.index('data-card="drone-fleet"') < flight
+def test_sections_are_in_their_page_order():
+    positions = [PAGE.index(f'data-card="{card}"') for card in CARDS]
+    assert positions == sorted(positions)
+    # The ceiling card follows the mission controls and precedes the video options.
+    assert PAGE.index('data-card="mission"') < PAGE.index('data-card="ceiling"') < PAGE.index('data-card="video-detection"')

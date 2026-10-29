@@ -26,7 +26,7 @@ Do this before every flight, in both paths. The coordinator assumes this layout,
 
 The launchers set the edge geofence to 450 cm. Override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 
-Set the ceiling before the first flight in a new room: measure from the surface the drones take off from and enter it under "Ceiling and altitude" in the dashboard's Controls tab. No altitude slot may be above the ceiling minus the safety margin (200 - 60 = 140 cm by default); Plan and Start are refused otherwise, and every edge enforces the same limit on its own. See [Ceiling height and altitude slots](ceiling-and-altitude.md).
+Set the ceiling before the first flight in a new room: measure from the surface the drones take off from and enter it in the "Ceiling and altitude" section of the dashboard sidebar. No altitude slot may be above the ceiling minus the safety margin (200 - 60 = 140 cm by default); Plan and Start are refused otherwise, and every edge enforces the same limit on its own. See [Ceiling height and altitude slots](ceiling-and-altitude.md).
 
 ### Every takeoff is a new start point
 

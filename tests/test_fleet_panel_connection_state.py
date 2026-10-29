@@ -1,7 +1,8 @@
-"""The fleet panel shows whether each drone's edge link is actually up.
+"""The dashboard shows whether each drone's edge link is actually up.
 
 After a link drops the coordinator keeps the drone's last telemetry, so the
-status payload carries an explicit ``connected`` flag and the page renders it.
+status payload carries an explicit ``connected`` flag and the page renders it
+on each drone's always-visible status card.
 """
 
 import re
@@ -12,7 +13,7 @@ from flightrisk.dashboard.app import app, socketio
 from flightrisk.dashboard.state import app_state
 from tests.test_fleet_dashboard import _supervisor, _telemetry
 
-INDEX = (Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates" / "index.html").read_text()
+JS = (Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "static" / "ui" / "ui.js").read_text()
 
 
 def test_status_payload_marks_dropped_link_disconnected_and_live_link_connected():
@@ -42,18 +43,19 @@ def test_status_payload_treats_unknown_link_as_disconnected():
     assert drones and all(d["connected"] is False for d in drones.values())
 
 
-def test_side_list_does_not_depend_on_a_count_key():
-    assert "data.count" not in INDEX
-    assert "droneIds.length > 1" in INDEX
+def test_drone_list_does_not_depend_on_a_count_key():
+    assert "data.count" not in JS
 
 
-def test_fleet_panel_has_a_status_column_rendered_with_text_content():
-    assert "<th>Status</th>" in INDEX
+def test_status_cards_show_connection_state_rendered_with_text_content():
     for label in ("CONNECTED", "DOWN", "LOST"):
-        assert f"text: '{label}'" in INDEX
-    body = INDEX[INDEX.index("function renderFleetPanel"):INDEX.index("socket.on('fleet_status', (data) => {\n            const list")]
-    assert "innerHTML = ''" in body
-    assert not re.search(r"innerHTML\s*\+?=\s*[^'\s]", body)
+        assert f"text: '{label}'" in JS
+    body = JS[JS.index("function renderDroneStatus"):JS.index("function renderTimingTable")]
+    assert "connState(d)" in body and "el('span', 'dc-state', state.text)" in body
+    assert "clear(box);" in body
+    assert not re.search(r"innerHTML|insertAdjacentHTML", body)
+    # A dropped link marks the card stale, because its values are the last ones received.
+    assert "card.classList.add('stale')" in body
 
 
 def test_manual_command_in_fleet_mode_explains_how_to_take_control():

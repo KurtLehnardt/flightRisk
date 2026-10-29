@@ -1,6 +1,6 @@
-/* FlightRisk UI v2 (docs/ui-v2-design.md).
+/* FlightRisk dashboard styles (docs/ui-design.md), used by templates/index.html.
    One accent colour, one red element (LAND ALL), light and dark themes from prefers-color-scheme,
-   one type scale. This file is used by index_v2.html only; index.html keeps its own inline styles. */
+   one type scale. The included ceiling card (ceiling_settings.html) uses the same tokens. */
 
 /* ---------- Tokens ---------- */
 :root {
@@ -33,19 +33,6 @@
     --radius: 8px;
     --radius-sm: 6px;
     --gap: 16px;
-
-    /* Aliases for the shared ceiling card (ceiling_settings.html), which uses the current UI's token names. */
-    --bg-card: var(--surface-2);
-    --border: var(--line);
-    --text-primary: var(--text);
-    --text-secondary: var(--text-2);
-    --text-muted: var(--muted);
-    --radius-btn: var(--radius-sm);
-    --font-mono: var(--mono);
-    --red: var(--bad);
-    --green: var(--ok);
-    --amber: var(--warn);
-    --cyan: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {

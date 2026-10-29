@@ -1,8 +1,7 @@
-// FlightRisk UI v2 (docs/ui-v2-design.md).
+// FlightRisk dashboard behaviour (docs/ui-design.md), loaded by templates/index.html.
 //
-// The same Socket.IO events and REST calls as the current UI (templates/index.html), with the same names and
-// payloads; only the layout differs. Every dynamic value is written with textContent or DOM nodes, never parsed
-// as HTML. `socket` is a global so the shared ceiling card (ceiling_settings.html) can use it.
+// Every dynamic value is written with textContent or DOM nodes, never parsed as HTML. `socket` is a global so
+// the included ceiling card (ceiling_settings.html) can use it.
 
 const socket = io();
 
@@ -22,8 +21,10 @@ const socket = io();
     // ========== COLLAPSIBLE SECTIONS ==========
     // Each section is .panel-section[data-card] with a .card-toggle button and a .card-body. State is saved per
     // card id in localStorage; storage failures are ignored. data-default="collapsed" starts a card closed.
+    // The prefix differs from the earlier layout's (flightrisk.card.), so a state that layout saved for a card
+    // with the same id (such as the ceiling card) does not carry over.
     (function () {
-        const PREFIX = 'flightrisk.v2.card.';
+        const PREFIX = 'flightrisk.ui.card.';
         function load(id, fallback) {
             try {
                 const v = window.localStorage.getItem(PREFIX + id);
@@ -755,7 +756,7 @@ const socket = io();
     on('overlay-reject-btn', 'click', () => {
         if (!respondToAlert('dismiss')) return;
         setOverlayStatus('Dismissing...');
-        // Raise the threshold slightly to reduce re-alerts for similar people, as the current UI does.
+        // Raise the threshold slightly to reduce re-alerts for similar people.
         const newVal = Math.min(90, parseInt($('threshold-slider').value, 10) + 3);
         $('threshold-slider').value = newVal;
         updateThreshold(newVal);
@@ -845,7 +846,7 @@ const socket = io();
         btn.addEventListener('click', () => sendCmd(btn.dataset.direct));
     });
     // Lands only the selected drone (or the primary). In fleet mode the server lands that fleet drone without
-    // taking control of it, exactly as the current UI's "Land this drone" does.
+    // taking control of it.
     on('land-selected', 'click', () => sendCmd('land'));
 
     let keyboardControlEnabled = false;
@@ -1424,7 +1425,7 @@ const socket = io();
     // text input, textarea or contenteditable) it needs Ctrl or Cmd as well, so typing a capital L never lands the
     // fleet. Alt is never part of the hotkey (AltGr arrives as Ctrl+Alt on Windows). Auto-repeat is ignored. It
     // matches the physical L key (e.code) and the key that types L, and listens in the capture phase so no other
-    // handler can stop it first. This is the same rule as the current UI.
+    // handler can stop it first.
     function isEditableTarget(t) {
         if (!t || !t.tagName) return false;
         if (t.isContentEditable) return true;

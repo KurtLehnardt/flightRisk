@@ -6,7 +6,7 @@ drones. These tests cover the server tagging each frame with its drone id and
 the template/JS contract that keeps one tile per drone.
 
 Hermetic: the scoring path is a plain ``GroundStation`` and emits are captured
-with a recorder; the template is checked as text.
+with a recorder; the template, script and stylesheet are checked as text.
 """
 
 import re
@@ -17,10 +17,10 @@ from flightrisk.dashboard.state import app_state
 from flightrisk.edge import Detection, DetectionMessage
 from flightrisk.ground import GroundStation
 
-TEMPLATE = (
-    Path(__file__).resolve().parent.parent
-    / "flightrisk" / "dashboard" / "templates" / "index.html"
-)
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+TEMPLATE = DASH / "templates" / "index.html"
+SCRIPT = DASH / "static" / "ui" / "ui.js"
+STYLES = DASH / "static" / "ui" / "ui.css"
 
 
 class FakeSocketIO:
@@ -93,10 +93,14 @@ class TestTemplateTileContract:
     def _html():
         return TEMPLATE.read_text(encoding="utf-8")
 
+    @staticmethod
+    def _js():
+        return SCRIPT.read_text(encoding="utf-8")
+
     def test_tile_container_and_grid_layout(self):
-        html = self._html()
-        assert 'id="video-tiles"' in html
-        assert "grid-template-columns: repeat(auto-fit" in html
+        assert 'id="video-tiles"' in self._html()
+        assert re.search(r"#video-tiles\s*\{[^}]*grid-template-columns: repeat\(auto-fit",
+                         STYLES.read_text(encoding="utf-8"))
 
     def test_legacy_ids_still_present(self):
         html = self._html()
@@ -106,21 +110,23 @@ class TestTemplateTileContract:
             assert f'id="{dom_id}"' in html
 
     def test_frame_handler_picks_tile_by_drone_id(self):
-        html = self._html()
+        html = self._js()
         assert "getTile(data.drone_id)" in html
         # No single shared box/image state left to be overwritten by the other drone.
         assert "latestBoxes" not in html
         assert "latestHasImage" not in html
 
     def test_each_tile_has_label_and_no_video_placeholder(self):
-        html = self._html()
-        assert html.count("tile-label") >= 3  # css, static tile, created tile
-        assert html.count("tile-nodata") >= 3
-        assert "NO VIDEO" in html
-        assert re.search(r"TILE_STALE_MS\s*=\s*3000", html)
+        html, js = self._html(), self._js()
+        # The static first tile and every created tile carry a label and a "No video" placeholder.
+        assert '<div class="tile-label"></div>' in html
+        assert '<div class="tile-nodata">No video</div>' in html
+        assert "el('div', 'tile-label')" in js
+        assert "el('div', 'tile-nodata', 'No video')" in js
+        assert re.search(r"TILE_STALE_MS\s*=\s*3000", js)
 
     def test_boxes_drawn_on_own_tile_canvas(self):
-        html = self._html()
+        html = self._js()
         assert "function renderDetectionOverlay(t)" in html
         assert "t.canvas.getContext('2d')" in html
         assert "drawDetectionBoxes(ctx, t.boxes, rect)" in html
@@ -128,6 +134,6 @@ class TestTemplateTileContract:
         assert "t.feed.naturalWidth" in html
 
     def test_video_toggle_still_fleet_wide(self):
-        html = self._html()
+        html = self._js()
         assert "socket.emit('set_stream_video'" in html
         assert "syncVideoToggle(data.stream_video)" in html

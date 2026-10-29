@@ -1,18 +1,19 @@
-<!-- Ceiling height and altitude slots (docs/ceiling-and-altitude.md). Included by index.html.
-     The server validates every value; the checks here only explain a value before it is sent. -->
+<!-- Ceiling height and altitude slots (docs/ceiling-and-altitude.md). Included by index.html, whose
+     stylesheet (static/ui/ui.css) defines the colour tokens used here. The server validates every value;
+     the checks here only explain a value before it is sent. -->
 <style>
     .ceiling-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; font-size: 12px; }
-    .ceiling-grid label { color: var(--text-muted); white-space: nowrap; }
-    .ceiling-grid input { width: 100%; box-sizing: border-box; padding: 5px 7px; background: var(--bg-card);
-        border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius-btn); font-family: var(--font-mono); }
-    .ceiling-grid input.ceiling-bad { border-color: var(--red); }
-    .ceiling-max { margin: 8px 0 6px; font-size: 12px; color: var(--text-secondary); }
-    .ceiling-max strong { color: var(--text-primary); font-family: var(--font-mono); }
+    .ceiling-grid label { color: var(--muted); white-space: nowrap; }
+    .ceiling-grid input { width: 100%; box-sizing: border-box; padding: 5px 7px; background: var(--surface-2);
+        border: 1px solid var(--line); color: var(--text); border-radius: var(--radius-sm); font-family: var(--mono); }
+    .ceiling-grid input.ceiling-bad { border-color: var(--bad); }
+    .ceiling-max { margin: 8px 0 6px; font-size: 12px; color: var(--text-2); }
+    .ceiling-max strong { color: var(--text); font-family: var(--mono); }
     .ceiling-msg { font-size: 11px; margin-top: 6px; white-space: pre-line; }
-    .ceiling-msg.error { color: var(--red); }
-    .ceiling-msg.ok { color: var(--green, #22c55e); }
-    .ceiling-edge { grid-column: 1 / -1; font-size: 10px; color: var(--text-muted); margin-top: -3px; }
-    .ceiling-edge.warn { color: var(--amber); }
+    .ceiling-msg.error { color: var(--bad); }
+    .ceiling-msg.ok { color: var(--ok); }
+    .ceiling-edge { grid-column: 1 / -1; font-size: 10px; color: var(--muted); margin-top: -3px; }
+    .ceiling-edge.warn { color: var(--warn); }
 </style>
 <div class="panel-section" data-card="ceiling" id="ceiling-section">
     <div class="panel-title">

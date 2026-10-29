@@ -5,7 +5,6 @@ import os
 
 from flightrisk.dashboard.app import (
     DEFAULT_DASHBOARD_HOST,
-    UI_V2_PORT_ENV,
     SourceConfig,
     check_dashboard_bind,
     resolve_dashboard_host,
@@ -167,26 +166,7 @@ def main():
              "this machine only). Any other address exposes Start and LAND ALL to that network "
              "and requires FLIGHTRISK_API_KEY.",
     )
-    parser.add_argument(
-        "--ui-v2-port", type=int, default=None, metavar="PORT",
-        help="Also serve the redesigned UI v2 on this port, from the same process and "
-             "with the same live data, so both UIs can be compared side by side "
-             "(env FLIGHTRISK_UI_V2_PORT; default: off). It binds the same host as --port.",
-    )
     args = parser.parse_args()
-
-    if args.ui_v2_port is None:
-        raw_v2 = os.environ.get(UI_V2_PORT_ENV, "").strip()
-        if raw_v2:
-            try:
-                args.ui_v2_port = int(raw_v2)
-            except ValueError:
-                parser.error(f"{UI_V2_PORT_ENV}={raw_v2!r} is not a port number")
-    if args.ui_v2_port is not None:
-        if not 1 <= args.ui_v2_port <= 65535:
-            parser.error(f"--ui-v2-port {args.ui_v2_port} is not a port number (1-65535)")
-        if args.ui_v2_port == args.port:
-            parser.error(f"--ui-v2-port must differ from the dashboard port {args.port}")
 
     host = resolve_dashboard_host(args.host)
     try:
@@ -270,10 +250,7 @@ def main():
         reasoning_provider="off" if args.no_llm else args.reasoning,
         drone_options=_parse_drone_opts(args.drone_opt, parser),
     )
-    if args.ui_v2_port is None:
-        run_dashboard(source_config, target_path=args.target, port=args.port, host=host)
-    else:
-        run_dashboard(source_config, target_path=args.target, port=args.port, host=host, ui_v2_port=args.ui_v2_port)
+    run_dashboard(source_config, target_path=args.target, port=args.port, host=host)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,9 @@ from flightrisk.drone.tello import FakeTelloController
 from flightrisk.observability import StructuredLogger
 
 DIRS = {"forward": (0, 1), "back": (0, -1), "right": (1, 0), "left": (-1, 0)}
-INDEX_HTML = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates" / "index.html"
+DASHBOARD = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+INDEX_HTML = DASHBOARD / "templates" / "index.html"
+UI_JS = DASHBOARD / "static" / "ui" / "ui.js"
 
 # The fleet t20 flew: four zones side by side across a 1200 x 400 cm area,
 # 75 cm lanes, and the edges' default 500 cm geofence. Zones start at x = 0,
@@ -347,11 +349,12 @@ def test_unassignable_lanes_emit_retask_failed(executor_fleet):
     uncovered = coord.current_plan()["uncovered"]
     assert [(u["drone_id"], u["index"]) for u in uncovered] == [("drone-4", i) for i in unreachable]
 
-    # The fleet panel shows them.
+    # The dashboard shows them above the search map.
     html = INDEX_HTML.read_text(encoding="utf-8")
+    js = UI_JS.read_text(encoding="utf-8")
     assert 'id="fleet-uncovered"' in html
-    assert re.search(r"kind === 'retask_failed'", html)
-    assert "plan.uncovered" in html
+    assert re.search(r"kind === 'retask_failed'", js)
+    assert "plan.uncovered" in js
 
 
 def test_lanes_with_no_drone_left_emit_retask_failed():
