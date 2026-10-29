@@ -12,6 +12,8 @@ packages:
   MLXSwiftExamples:
     url: https://github.com/ml-explore/mlx-swift-examples
     from: "2.29.1"
+  FlightRiskGround:
+    path: FlightRiskGround
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -24,12 +26,16 @@ targets:
     platform: iOS
     sources:
       - FlightRisk
+      - path: FlightRiskGround
+        excludes:
+          - Models/**
     dependencies:
       - package: MLX
       - package: MLXSwiftExamples
         product: MLXLLM
       - package: MLXSwiftExamples
         product: MLXLMCommon
+      - package: FlightRiskGround
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
