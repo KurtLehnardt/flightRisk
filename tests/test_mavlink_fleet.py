@@ -312,6 +312,25 @@ def test_takeoff_watchdog(make_drone):
         drone.takeoff()
 
 
+def test_a_refused_takeoff_is_retried_until_accepted(make_drone):
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.refuse_takeoffs = 2
+    drone, vehicle = make_drone(vehicle)
+    assert ready(drone)
+    assert command_result(drone.takeoff(), "takeoff").ok
+    assert [c for c in vehicle.commands if c[0] == "takeoff"] == [("takeoff", 5.0)] * 3
+    assert vehicle.commands.count(("arm",)) == 1
+
+
+def test_a_takeoff_refused_until_the_deadline_raises(make_drone):
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.refuse_takeoffs = 100
+    drone, vehicle = make_drone(vehicle, takeoff_timeout_s=3.0)
+    assert ready(drone)
+    with pytest.raises(RuntimeError, match="GUIDED not ready"):
+        drone.takeoff()
+
+
 def test_takeoff_honours_abort(make_drone):
     drone, vehicle = make_drone()
     assert ready(drone)
@@ -464,3 +483,27 @@ def test_snapshot_reports_sensed_flight_and_si_units(make_drone):
     assert snap.height_m.value == pytest.approx(5.0, abs=0.7)
     assert snap.battery_pct.unit == "%"
     assert snap.latitude_deg.value == pytest.approx(vehicle.home_lat, abs=1e-4)
+
+
+def test_each_link_runs_its_own_mavsdk_server(monkeypatch):
+    """Two links in one process must not share MAVSDK's default gRPC port (SITL showed cross-talk)."""
+    ports = []
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    cls = install(monkeypatch, vehicle)
+
+    class Recording(cls):
+        def __init__(self, mavsdk_server_address=None, port=50051, **kw):
+            ports.append(port)
+            super().__init__(mavsdk_server_address, port, **kw)
+
+    import flightrisk.drone.mavsdk_link as link_mod
+
+    monkeypatch.setattr(link_mod, "System", Recording)
+    links = [MavsdkAutopilotLink("tcpout://127.0.0.1:1") for _ in range(2)]
+    try:
+        for link in links:
+            link.connect()
+    finally:
+        for link in links:
+            link.disconnect()
+    assert len(ports) == 2 and ports[0] != ports[1] and 50051 not in ports

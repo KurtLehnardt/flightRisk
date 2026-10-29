@@ -8,8 +8,8 @@ Read the "Verification status" section before flying anything. Nothing on this p
 
 | Stack | Vehicle | Route into FlightRisk | Status |
 |---|---|---|---|
-| ArduPilot ArduCopter | Multirotor (Holybro S500 V2 class) | MAVLink through MAVSDK, `--drone mavlink` on the companion computer | Phase 1, built. Unit tests and an in-process fleet against a simulated MAVSDK; SITL status in "Verification status". Never flown on hardware. |
-| PX4 | Multirotor | Same (`--drone mavlink`) | Phase 1, built. Same verification as ArduCopter, plus PX4-specific mode handling in unit tests. No PX4 SITL run. Never flown on hardware. |
+| ArduPilot ArduCopter | Multirotor (Holybro S500 V2 class) | MAVLink through MAVSDK, `--drone mavlink` on the companion computer | Phase 1, built. Unit tests against a simulated MAVSDK, and ArduCopter 4.6.3 SITL: one and two drones flew field plans, link loss returned to launch. Never flown on hardware. |
+| PX4 | Multirotor | Same (`--drone mavlink`) | Phase 1, built. Unit tests only, including PX4-specific mode handling; no PX4 SITL run. Never flown on hardware. |
 | ArduPilot ArduPlane, PX4 fixed-wing, VTOL in plane mode | Fixed-wing | MAVLink, but a plane cannot hover, stop at the end of a move or take off in place | Not supported. Needs a mission-upload backend (lanes as a MAVLink mission with loiters and a landing sequence). A VTOL in multicopter mode should behave like a multirotor; untested. |
 | ArduPilot Rover, PX4 rover, boats | Ground or water | MAVLink `goto_location` with the altitude ignored | Not supported in phase 1: the envelope, slots and ceiling assume flight. Possible later with a "surface" envelope profile. |
 | Bitcraze Crazyflie | Nano quad, indoor | `cflib` (MotionCommander or the high-level commander with a Flow, Loco or Lighthouse deck) | Not implemented. Good fit for the `room` profile (centimetre moves, like the Tello). A backend wraps `cflib`; see "Add your drone in 5 steps" in `docs/drone-interface.md`. |
@@ -122,8 +122,8 @@ Defaults are conservative: 3 m/s cruise (at most 15), 5 m takeoff height, 15 m s
 Stated plainly:
 
 - **Unit and integration tests against a simulated MAVSDK** (`tests/support/fake_mavsdk.py`): a kinematic model behind MAVSDK's Python API runs the real `MavsdkAutopilotLink`, `MavlinkFleetDrone`, `LaneExecutor`, ground transport and `FleetCoordinator`. They check the edge's logic: frame math, preflight refusals, failsafe mapping, external control, watchdogs, a two-drone field plan end to end, and the `--drone mavlink` edge over a real WebSocket ground link. They do not check how real PX4 or ArduPilot firmware behaves.
-- **SITL**: see `docs/sitl-demo.md`, "Fleet edge in SITL", for exactly what ran and what it proved.
-- **Not verified**: any real autopilot, flight controller or companion computer; any real flight; any real radio, mesh or MAVLink router; real GPS noise and wind; camera mounting and the Raspberry Pi camera's footprint at altitude; Apple Silicon emulation limits on SITL timing.
+- **ArduCopter 4.6.3 SITL** (native build, `docs/sitl-demo.md`, "Fleet edge in SITL"): one drone flew a field plan from the real coordinator and landed on LAND ALL; two drones in two SITL instances flew their zones at 10 m and 15 m; a silent ground link made the edge return the drone to launch, and it landed 2 cm from its takeoff point; the real edge process (`--drone mavlink`, YOLO detector, WebSocket link) flew a plan from `scripts/field_fleet_ground.py`. SITL also found five problems the simulated tests could not, all fixed (listed there). No PX4 SITL was run. Pilot takeover, the autopilot's own failsafes and a geofence breach were not exercised in SITL.
+- **Not verified**: any real autopilot, flight controller or companion computer; any real flight; any real radio, mesh or MAVLink router; real GPS noise and wind; camera mounting and the Raspberry Pi camera's footprint at altitude; SITL ran natively on Apple Silicon (no emulation), so emulation timing was not a factor; SITL physics and sensors are idealised.
 
 ## Starting a MAVLink edge
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import socket
 import threading
 import time
 from typing import Any
@@ -50,6 +51,13 @@ _TELEMETRY_RATE_HZ = 10.0
 _PROBE_PARAMS = ((ARDUPILOT, "FENCE_ENABLE"), (PX4, "GF_ACTION"))
 
 
+def _free_local_port() -> int:
+    """A TCP port on 127.0.0.1 that is free right now (for the embedded mavsdk_server's gRPC)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 class MavsdkAutopilotLink:
     """Blocking ``AutopilotLink`` over MAVSDK-Python (see the module docstring)."""
 
@@ -61,7 +69,7 @@ class MavsdkAutopilotLink:
         connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
         command_timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S,
         mavsdk_server_address: str | None = None,
-        mavsdk_server_port: int = 50051,
+        mavsdk_server_port: int | None = None,
     ):
         if autopilot is not None and autopilot not in AUTOPILOTS:
             raise ValueError(f"autopilot must be one of {AUTOPILOTS} or None, got {autopilot!r}")
@@ -70,11 +78,18 @@ class MavsdkAutopilotLink:
         self._connect_timeout_s = float(connect_timeout_s)
         self._command_timeout_s = float(command_timeout_s)
         self._server_address = mavsdk_server_address
-        self._server_port = int(mavsdk_server_port)
+        # None: a free local port for this link's own embedded mavsdk_server.
+        # MAVSDK's fixed default (50051) makes two links in one process, or
+        # two edges on one computer, share one server and so one vehicle
+        # (seen in SITL: one drone's land reached the other drone).
+        self._server_port = None if mavsdk_server_port is None else int(mavsdk_server_port)
         self._bridge = AsyncBridge(name="mavsdk-link", cmd_timeout=self._command_timeout_s)
         self._system: Any = None
         self._tasks: list[asyncio.Task] = []
         self._lock = threading.Lock()
+        # MAVSDK's parameter client mixes up replies when two requests
+        # overlap (seen against ArduPilot SITL), so parameter calls are serial.
+        self._param_lock = threading.Lock()
         self._values: dict[str, Any] = {}
         self._last_message_s: float | None = None
         self._connected = False
@@ -116,9 +131,10 @@ class MavsdkAutopilotLink:
         self._bridge.stop_loop()
 
     async def _connect_async(self) -> None:
-        kwargs: dict[str, Any] = {}
+        port = self._server_port if self._server_port is not None else _free_local_port()
+        kwargs: dict[str, Any] = {"port": port}
         if self._server_address is not None:
-            kwargs = {"mavsdk_server_address": self._server_address, "port": self._server_port}
+            kwargs["mavsdk_server_address"] = self._server_address
         system = System(**kwargs)
         await system.connect(system_address=self.address)
 
@@ -274,6 +290,10 @@ class MavsdkAutopilotLink:
 
     def get_param(self, name: str) -> float | None:
         """A parameter's value (integer or float), or None when it does not exist or cannot be read."""
+        with self._param_lock:
+            return self._get_param_locked(name)
+
+    def _get_param_locked(self, name: str) -> float | None:
         for getter in ("get_param_int", "get_param_float"):
             try:
                 value = self._call(lambda s, g=getter: getattr(s.param, g)(name))
@@ -286,6 +306,10 @@ class MavsdkAutopilotLink:
 
     def set_param(self, name: str, value: float) -> None:
         """Set an integer or float parameter (used by SITL setup; the edge never changes parameters)."""
+        with self._param_lock:
+            self._set_param_locked(name, value)
+
+    def _set_param_locked(self, name: str, value: float) -> None:
         if float(value).is_integer():
             try:
                 self._call(lambda s: s.param.set_param_int(name, int(value)))

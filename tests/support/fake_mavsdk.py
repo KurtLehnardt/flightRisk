@@ -136,6 +136,7 @@ class SimVehicle:
         self.reports_in_air = reports_in_air
         self.commands: list[tuple] = []
         self.armable = True
+        self.refuse_takeoffs = 0
 
     # --- geometry -------------------------------------------------------
 
@@ -196,6 +197,10 @@ class SimVehicle:
     def takeoff(self) -> None:
         with self.lock:
             self._record("takeoff", self.takeoff_alt)
+            if self.refuse_takeoffs > 0:
+                # ArduCopter in SITL refuses takeoffs for a while ("GUIDED not ready").
+                self.refuse_takeoffs -= 1
+                raise SimActionError("COMMAND_DENIED: GUIDED not ready")
             if not self.armed:
                 raise SimActionError("COMMAND_DENIED: not armed")
             self.mode = FlightMode.TAKEOFF if self.autopilot == "px4" else FlightMode.OFFBOARD

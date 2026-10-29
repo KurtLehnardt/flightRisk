@@ -278,7 +278,7 @@ def preflight_problems(
     Fails closed: a value that was never reported counts as not ready. The
     checks are the link (fresh telemetry), a known autopilot type, a 3D GPS
     fix with at least *min_satellites*, the autopilot's own global-position
-    and home-position health flags, a home position, a battery reading, the
+    and home-position health flags, a battery reading, the
     autopilot's own arming checks (``armable``), and *param_problems* (the
     failsafe checks, read separately because parameter reads are slow).
     """
@@ -298,7 +298,9 @@ def preflight_problems(
         problems.append(f"{sats} GPS satellites, need {min_satellites}")
     if state.global_position_ok is not True:
         problems.append("autopilot reports no global position estimate")
-    if state.home_position_ok is not True or not state.has_home:
+    # ArduPilot SITL reports the home-position health flag but MAVSDK's home
+    # stream can stay silent (verified in SITL), so the flag is what counts.
+    if state.home_position_ok is not True:
         problems.append("home position not set")
     if not state.has_position:
         problems.append("no position reported")

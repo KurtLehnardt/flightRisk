@@ -156,6 +156,7 @@ _LANDING_MODES = frozenset({"LAND", "RETURN_TO_LAUNCH"})
 _VERTICAL = {"up": 1.0, "down": -1.0}
 _HORIZONTAL = {"forward": (0.0, 1.0), "back": (0.0, -1.0), "right": (1.0, 0.0), "left": (-1.0, 0.0)}
 _POLL_S = 0.1
+_TAKEOFF_RETRY_S = 2.0
 _HEADING_TOLERANCE_DEG = 10.0
 _DETAIL_MAX = 200
 
@@ -557,26 +558,62 @@ class MavlinkFleetDrone:
             self._requested_landing = None
             self._interrupt.clear()
         logger.info("[%s] takeoff to %.1f m (frame heading %.0f deg)", self.name, alt_m, heading)
-        try:
-            self.link.set_speed(self.options.speed_mps)
-        except Exception as exc:  # noqa: BLE001 - the autopilot's own cruise speed applies
-            logger.warning("[%s] set_speed failed, autopilot default speed applies: %r", self.name, exc)
-        self.link.arm()
-        if abort is not None and abort.is_set():
-            # A landing arrived while arming: do not lift. The land path
-            # handles a vehicle on the ground as already landed.
-            return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "aborted after arming")
-        self.link.takeoff(alt_m)
+        speed_set = self._try_set_speed(quiet=True)
         deadline = self._clock() + self.options.takeoff_timeout_s
+        refused = self._arm_and_take_off(alt_m, abort, deadline)
+        if refused is not None:
+            return refused
         while True:
             st = self._autopilot_state()
             if self._interrupted(abort):
                 return CommandResult("takeoff")  # it did take off; the landing takes over
             if self._flying(st) and _number(st.rel_alt_m) and st.rel_alt_m >= alt_m - self.options.arrival_alt_m:
+                if not speed_set:
+                    # ArduCopter SITL refuses the speed change on the ground.
+                    self._try_set_speed(quiet=False)
                 return CommandResult("takeoff")
             if self._clock() >= deadline:
                 raise TimeoutError(f"takeoff did not reach {alt_m:g} m within {self.options.takeoff_timeout_s:g} s")
             self._interrupt.wait(_POLL_S)
+
+    def _arm_and_take_off(
+        self, alt_m: float, abort: threading.Event | None, deadline: float
+    ) -> CommandResult | None:
+        """Arm and send the takeoff, retrying a refusal until *deadline*. None once accepted.
+
+        ArduCopter refuses a takeoff for a while after its preflight checks
+        pass ("GUIDED not ready" in SITL, about 20 s); the refusal sends the
+        drone nowhere, so it is retried every ``_TAKEOFF_RETRY_S`` until the
+        deadline, then raised. A landing or abort stops the retries
+        (``NOT_EXECUTED``): nothing is lifted.
+        """
+        while True:
+            if self._interrupted(abort):
+                return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "aborted before takeoff")
+            try:
+                if not self.link.state().armed:
+                    self.link.arm()
+                if self._interrupted(abort):
+                    # A landing arrived while arming: do not lift. The land
+                    # path treats a vehicle on the ground as landed.
+                    return CommandResult("takeoff", CommandOutcome.NOT_EXECUTED, "aborted after arming")
+                self.link.takeoff(alt_m)
+                return None
+            except Exception as exc:
+                if self._clock() + _TAKEOFF_RETRY_S >= deadline:
+                    raise
+                logger.warning("[%s] takeoff refused, retrying: %r", self.name, exc)
+                self._interrupt.wait(_TAKEOFF_RETRY_S)
+
+    def _try_set_speed(self, *, quiet: bool) -> bool:
+        """Ask the autopilot for ``speed_mps``; best effort (its own cruise speed applies otherwise)."""
+        try:
+            self.link.set_speed(self.options.speed_mps)
+            return True
+        except Exception as exc:  # noqa: BLE001 - logged; never a reason to refuse a flight
+            log = logger.debug if quiet else logger.warning
+            log("[%s] set_speed refused, autopilot cruise speed applies: %r", self.name, exc)
+            return False
 
     def _interrupted(self, abort: threading.Event | None = None) -> bool:
         return self._interrupt.is_set() or (abort is not None and abort.is_set())

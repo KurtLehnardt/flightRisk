@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import threading
 import time
 
 import pytest
@@ -99,6 +100,20 @@ class SitlEdge:
         self.executor = LaneExecutor(self.drone, self.envelope, drone_id, send=self._reply,
                                      logger=StructuredLogger(component=f"sitl-{drone_id}"))
         self.executor.start()
+        # A real ground sends a heartbeat every second; clearing this event
+        # stops them, as a lost ground link would.
+        self.ground_alive = threading.Event()
+        self.ground_alive.set()
+        self._closed = threading.Event()
+        self._heartbeats = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeats.start()
+
+    def _heartbeat_loop(self) -> None:
+        seq = 0
+        while not self._closed.wait(1.0):
+            if self.ground_alive.is_set():
+                seq += 1
+                self.send({"type": "heartbeat", "seq": seq})
 
     def _reply(self, msg: dict) -> None:
         self._fp.validate_message(msg)
@@ -115,6 +130,7 @@ class SitlEdge:
             self.executor.handle_message(msg, recv_t=self.executor.now())
 
     def close(self) -> None:
+        self._closed.set()
         try:
             self.executor.shutdown(timeout=60.0)
             wait_for(lambda: not self.drone.state.is_flying, 120.0, 1.0)
@@ -183,11 +199,8 @@ def test_ground_link_loss_returns_to_launch_in_sitl():
     try:
         edge.send({"type": "takeoff"})
 
-        def climbed_with_ground_alive():
-            edge.executor.note_ground_message()  # the ground is alive until the climb is done
-            return edge.drone.state.is_flying and not edge.executor.is_busy
-
-        assert wait_for(climbed_with_ground_alive, 180.0, 0.5)
+        assert wait_for(lambda: edge.drone.state.is_flying and not edge.executor.is_busy, 180.0, 0.5)
+        edge.ground_alive.clear()  # the ground link goes silent
         # The ground goes silent: after 3 s the edge asks the autopilot to return.
         mode = wait_for(lambda: edge.drone.state.flight_mode == "RETURN_TO_LAUNCH" and "RETURN_TO_LAUNCH",
                         60.0, 0.5)
