@@ -55,10 +55,20 @@ def test_builtin_presets_cover_the_layouts_being_tested():
     assert DEFAULT_PRESET in presets
 
 
+TWO_REAL_TELLOS_HERE = ("Layout A (edges on this computer)", "Layout B (everything here)")
+
+
 @pytest.mark.parametrize("name", list(builtin_presets()))
 @pytest.mark.parametrize("is_windows", [True, False])
 def test_builtin_presets_are_valid(name, is_windows):
-    assert _errors(builtin_presets()[name], is_windows=is_windows) == []
+    preset = builtin_presets()[name]
+    if name in TWO_REAL_TELLOS_HERE:
+        # Valid except for the one thing no preset can know: which adapter each drone uses. The window asks.
+        assert _fields(preset, is_windows=is_windows) == {"drones.0.local_ip", "drones.1.local_ip"}
+        assert _errors(replace(preset, drones=tuple(
+            replace(d, local_ip=f"192.168.10.{k + 2}") for k, d in enumerate(preset.drones))), is_windows=is_windows) == []
+    else:
+        assert _errors(preset, is_windows=is_windows) == []
 
 
 def test_two_real_tellos_here_need_adapter_ips():

@@ -307,6 +307,94 @@ def test_quit_waits_for_a_stop_already_asked_for(launcher):
     assert {p["status"] for p in client.get("/api/state")[1]["processes"]} == {"stopped"}
 
 
+def _ceiling_app(app, tmp_path):
+    app.ceiling_path = tmp_path / "dash" / "ceiling.json"
+    return app.ceiling_path
+
+
+def test_start_writes_the_ceiling_file_and_keeps_other_keys(launcher, tmp_path):
+    client, app, _ = launcher
+    path = _ceiling_app(app, tmp_path)
+    path.parent.mkdir()
+    path.write_text(json.dumps({"version": 1, "ceiling_cm": 200, "margin_cm": 60, "slots_cm": {"drone-1": 90}, "room": "lab"}))
+    settings = {**REHEARSAL, "ceiling_cm": 240, "margin_cm": 50}
+    _, preview = client.post("/api/validate", {"settings": settings})
+    assert preview["ceiling_file"]["path"] == str(path) and preview["ceiling_file"]["differs"]
+    assert not any(path.parent.glob(".*tmp")) and json.loads(path.read_text())["ceiling_cm"] == 200, "validate never writes"
+    _, data = client.post("/api/start", {"settings": settings})
+    assert data["started"] is True and data["ceiling_file"]["differs"]
+    assert json.loads(path.read_text()) == {
+        "version": 1, "ceiling_cm": 240, "margin_cm": 50, "slots_cm": {"drone-1": 100, "drone-2": 130}, "room": "lab"}
+    ground = next(p for p in client.get("/api/state")[1]["processes"] if p["name"] == "ground")
+    assert ground["status"] in ("starting", "running")
+    plan = client.post("/api/validate", {"settings": settings})[1]["plan"]
+    edge = next(p for p in plan if p["name"] == "edge-drone-1")
+    assert edge["env"]["FLIGHTRISK_CEILING_CM"] == "240" and edge["env"]["FLIGHTRISK_CEILING_MARGIN_CM"] == "50"
+
+
+def test_a_slot_above_the_limit_is_refused_and_no_file_is_written(launcher, tmp_path):
+    client, app, _ = launcher
+    path = _ceiling_app(app, tmp_path)
+    high = {**REHEARSAL, "drones": [{**REHEARSAL["drones"][0], "alt_slot_cm": 160}, REHEARSAL["drones"][1]]}
+    _, data = client.post("/api/start", {"settings": high})
+    assert data["started"] is False and any(i["field"] == "drones.0.alt_slot_cm" for i in data["issues"])
+    assert not path.exists()
+
+
+def test_edges_only_start_does_not_write_the_ceiling_file(launcher, tmp_path):
+    client, app, _ = launcher
+    path = _ceiling_app(app, tmp_path)
+    edges = {**REHEARSAL, "role": "edges", "ground_host": "127.0.0.1", "ground_port": 9800}
+    _, preview = client.post("/api/validate", {"settings": edges})
+    assert preview["ceiling_file"]["will_write"] is False
+    _, data = client.post("/api/start", {"settings": edges})
+    assert data["started"] is True and data["ceiling_file"] is None
+    assert not path.exists()
+
+
+def test_a_second_start_while_running_does_not_touch_the_ceiling_file(launcher, tmp_path):
+    client, app, _ = launcher
+    path = _ceiling_app(app, tmp_path)
+    assert client.post("/api/start", {"settings": REHEARSAL})[1]["started"] is True
+    before = path.read_text()
+    status, _ = client.post("/api/start", {"settings": {**REHEARSAL, "ceiling_cm": 300}})
+    assert status == 409 and path.read_text() == before
+
+
+def test_an_unwritable_ceiling_file_stops_the_start(launcher, tmp_path):
+    client, app, _ = launcher
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a folder")
+    app.ceiling_path = blocker / "ceiling.json"
+    _, data = client.post("/api/start", {"settings": REHEARSAL})
+    assert data["started"] is False and any("ceiling file was not written" in i["message"] for i in data["issues"])
+    assert client.get("/api/state")[1]["processes"] == []
+
+
+def test_adapter_proposals_and_the_remembered_choice(launcher, tmp_path):
+    client, app, _ = launcher
+    _ceiling_app(app, tmp_path)
+    single = builtin_presets()["Single drone"].to_json()
+    _, data = client.post("/api/adapter-proposals", {"settings": single})
+    [proposal] = data["proposals"]
+    assert proposal["reason"] == "auto-detected" and proposal["selected"]["name"] == "en0"
+    # Two adapters in the Tello network: nothing is pre-selected until it was confirmed once, by name.
+    app.preflight_env.adapters = lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("Wi-Fi", "192.168.10.4", 12),
+                                          Adapter("Wi-Fi 2", "192.168.10.9", 23)]
+    [proposal] = client.post("/api/adapter-proposals", {"settings": single})[1]["proposals"]
+    assert proposal["selected"] is None and len(proposal["candidates"]) == 2
+    picked = {**single, "drones": [{**single["drones"][0], "local_ip": "192.168.10.9"}]}
+    assert client.post("/api/start", {"settings": picked})[1]["started"] is True
+    saved = json.loads(app.store.path.read_text())
+    assert saved["adapter_choices"] == {"drone-1": {"adapter": "Wi-Fi 2"}}
+    assert TOKEN not in app.store.path.read_text()
+    # The adapter now has another DHCP address; it is offered by name.
+    app.preflight_env.adapters = lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("Wi-Fi", "192.168.10.4", 12),
+                                          Adapter("Wi-Fi 2", "192.168.10.77", 23)]
+    [proposal] = client.post("/api/adapter-proposals", {"settings": single})[1]["proposals"]
+    assert proposal["reason"] == "remembered" and proposal["selected"]["ipv4"] == "192.168.10.77"
+
+
 def test_launcher_runs_on_an_edge_only_install():
     """An edge laptop has only requirements-edge.txt: the launcher must not need Flask or the vision stack."""
     check = (
@@ -318,6 +406,9 @@ def test_launcher_runs_on_an_edge_only_install():
         "            raise ImportError(name + ' is blocked for this test')\n"
         "sys.meta_path.insert(0, Blocker())\n"
         "import flightrisk.launcher.__main__, flightrisk.launcher.server\n"
+        "from flightrisk.launcher.ceilingfile import plan_ceiling_write\n"
+        "from flightrisk.launcher.settings import builtin_presets\n"
+        "assert plan_ceiling_write(builtin_presets()['Single drone'], __import__('pathlib').Path('/nonexistent/c.json')).will_write\n"
         "from flightrisk.launcher.preflight import _weights\n"
         "assert {row['name'] for row in _weights()} >= {'default', 'top_down', 'level'}\n"
         "print('ok')\n"

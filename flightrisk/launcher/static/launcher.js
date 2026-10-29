@@ -14,6 +14,7 @@ let processes = [];
 let logOffsets = {};
 let validateTimer = null;
 let lastIssues = [];
+let adapterNotes = {};
 
 async function api(path, body) {
   const opts = { headers: { "X-Launcher-Session": SESSION } };
@@ -75,12 +76,41 @@ function adapterLabel(a) {
   return a.ipv4 + " " + a.name + (a.index !== null && a.index !== undefined ? " (index " + a.index + ")" : "");
 }
 
+// The adapters with an address in the Tello host's /24, in the same stable order the launcher uses
+// (name, then address). With none, every non-loopback adapter is offered so a choice is still possible.
+function adapterChoices(host) {
+  const net = String(host || "").split(".").slice(0, 3).join(".");
+  const real = boot.adapters.filter((a) => !a.loopback);
+  const inNet = real.filter((a) => a.ipv4.split(".").slice(0, 3).join(".") === net);
+  const list = inNet.length ? inNet : real;
+  return list.slice().sort((a, b) => (a.name + "|" + a.ipv4 < b.name + "|" + b.ipv4 ? -1 : 1));
+}
+
 function renderAdapters() {
-  const list = $("#adapter-ips");
-  list.replaceChildren();
-  for (const a of boot.adapters) {
-    if (a.loopback) continue;
-    list.appendChild(el("option", { value: a.ipv4, label: adapterLabel(a) }));
+  if (settings) renderDrones();
+}
+
+// Ask the launcher which adapter each real drone could use, and pre-select only what is safe: one drone
+// with one candidate (auto-detected) or the adapter confirmed last time (remembered). Everything else
+// stays empty and the window keeps asking to choose the adapter.
+async function applyAdapterProposals() {
+  try {
+    const res = await api("/api/adapter-proposals", { settings });
+    boot.adapters = res.adapters;
+    adapterNotes = {};
+    for (const p of res.proposals) {
+      const d = settings.drones[p.index];
+      if (!d) continue;
+      if (p.selected) {
+        d.local_ip = p.selected.ipv4;
+        d.ifindex = boot.platform.is_windows && p.selected.index !== null ? p.selected.index : null;
+      }
+      adapterNotes[d.drone_id] = p.note;
+    }
+    render();
+    changed(false);
+  } catch (e) {
+    message("Could not detect the adapters: " + e.message, "error");
   }
 }
 
@@ -160,17 +190,26 @@ function renderDrones() {
     host.disabled = !(tello && here);
     host.addEventListener("input", () => { d.tello_host = host.value.trim(); changed(false); });
 
-    const ip = cell(el("input", { value: d.local_ip || "", list: "adapter-ips", placeholder: "any adapter", class: "w-ip",
-      "data-path": "drones." + i + ".local_ip" }));
+    const ipCell = el("td");
+    const ip = el("select", { class: "w-ip", "data-path": "drones." + i + ".local_ip" });
+    const choices = adapterChoices(d.tello_host);
+    ip.appendChild(el("option", { value: "" }, tello && here ? "choose the adapter" : "-"));
+    for (const a of choices) ip.appendChild(el("option", { value: a.ipv4 }, adapterLabel(a)));
+    if (d.local_ip && !choices.some((a) => a.ipv4 === d.local_ip)) {
+      ip.appendChild(el("option", { value: d.local_ip }, d.local_ip + " (no adapter has it now)"));
+    }
+    ip.value = d.local_ip || "";
     ip.disabled = !(tello && here);
     ip.addEventListener("change", () => {
-      d.local_ip = ip.value.trim();
+      d.local_ip = ip.value;
+      delete adapterNotes[d.drone_id];
       const match = boot.adapters.find((a) => a.ipv4 === d.local_ip);
-      if (match && boot.platform.is_windows && match.index !== null && (d.ifindex === null || d.ifindex === undefined)) {
-        d.ifindex = match.index;
-      }
+      d.ifindex = match && boot.platform.is_windows && match.index !== null ? match.index : null;
       changed(true);
     });
+    ipCell.appendChild(ip);
+    if (tello && here && adapterNotes[d.drone_id]) ipCell.appendChild(el("div", { class: "muted small" }, adapterNotes[d.drone_id]));
+    tr.appendChild(ipCell);
 
     const idx = cell(el("input", { type: "number", min: 1, value: d.ifindex === null || d.ifindex === undefined ? "" : d.ifindex,
       placeholder: boot.platform.is_windows ? "optional" : "Windows only", "data-path": "drones." + i + ".ifindex" }));
@@ -231,6 +270,7 @@ async function runValidate() {
     }).join("\n\n") + (res.needs_token ? "\n\n# FLIGHTRISK_EDGE_TOKEN is passed through the environment only." : "") +
       (res.inherited_env.length ? "\n\n# Also inherited unchanged from the launcher's environment (names only):\n# " +
         res.inherited_env.join(", ") : "");
+    renderCeilingFile(res.ceiling_file);
     $("#fleet-line").textContent = settings.role === "ground"
       ? "Ground --fleet list: " + (res.fleet.join(",") || "(none)")
       : "Edges dial ws://" + settings.ground_host + ":" + settings.ground_port;
@@ -241,6 +281,21 @@ async function runValidate() {
     lastIssues = [{ level: "error", field: "", message: e.message }];
     updateButtons();
   }
+}
+
+function renderCeilingFile(c) {
+  const box = $("#ceiling-file");
+  box.replaceChildren();
+  if (!c) return;
+  if (!c.will_write) {
+    box.appendChild(el("div", { class: "muted" }, c.note));
+    return;
+  }
+  const slots = Object.entries(c.values.slots_cm).map(([id, cm]) => id + " " + cm + " cm").join(", ");
+  box.appendChild(el("div", {}, "Start writes " + c.path + ": ceiling " + c.values.ceiling_cm + " cm, margin " +
+    c.values.margin_cm + " cm, slots " + (slots || "none") + "."));
+  box.appendChild(el("div", { class: c.differs ? "warn-text" : "muted" },
+    c.differs ? "Differs from what is saved now: " + c.changes.join("; ") + "." : "Same as what is saved now."));
 }
 
 // ---- run panel ---------------------------------------------------------------------
@@ -372,9 +427,16 @@ async function start() {
     renderChecks(res.checks);
     if (res.started) {
       logOffsets = {};
-      message("Starting: the ground first, then the edges once it listens.", "running");
+      let text = "Starting: the ground first, then the edges once it listens.";
+      if (res.ceiling_file) {
+        text += res.ceiling_file.differs
+          ? " Ceiling file " + res.ceiling_file.path + " written; it differed: " + res.ceiling_file.changes.join("; ") + "."
+          : " Ceiling file " + res.ceiling_file.path + " written (unchanged values).";
+      }
+      message(text, "running");
     } else {
-      message("Not started: fix the failed checks or errors first.", "FAIL");
+      const err = (res.issues || []).filter((i) => i.level === "error").map((i) => i.message);
+      message("Not started: " + (err.length ? err.join(" ") : "fix the failed checks or errors first."), "FAIL");
     }
   } catch (e) {
     message(e.message, "error");
@@ -444,7 +506,9 @@ function loadPreset() {
   const p = boot.presets.find((x) => x.name === $("#preset").value);
   if (!p) return;
   settings = JSON.parse(JSON.stringify(p.settings));
+  adapterNotes = {};
   changed(true);
+  applyAdapterProposals();
 }
 
 async function savePreset() {
@@ -510,6 +574,7 @@ function wire() {
     try {
       boot.adapters = (await api("/api/adapters")).adapters;
       renderAdapters();
+      await applyAdapterProposals();
       message("Adapters: " + (boot.adapters.filter((a) => !a.loopback).map(adapterLabel).join(", ") || "none"), "muted");
     } catch (e) { message(e.message, "error"); }
   });

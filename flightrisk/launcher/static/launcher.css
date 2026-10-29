@@ -41,7 +41,7 @@ table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { font-weight: 600; color: var(--muted); font-size: 12px; }
 #drones input { width: 100%; min-width: 5em; }
-#drones input.w-ip { min-width: 9.5em; }
+#drones input.w-ip, #drones select.w-ip { min-width: 9.5em; }
 #drones input.w-id { min-width: 6.5em; }
 #drones input[type="number"] { min-width: 5em; }
 table.compact td { font-size: 13px; }

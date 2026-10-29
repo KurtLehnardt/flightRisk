@@ -45,14 +45,20 @@ The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 |  (o) loopback plus cable address (layout A)     |  PASS Drone drone-1  battery 87%, 60~62C   |
 |      cable address [10.42.0.1]                  |                                            |
 | Drones  number [2 v]  [Refresh adapters]        | Processes                                  |
-|  id      source  edge runs  Tello host  local IP|  ground        running  pid 4242 [Restart] |
-|  drone-1 tello   other      192.168.10.1        |  edge-drone-1  running  pid 4250 [Restart] |
-|  drone-2 tello   other      192.168.10.1        |                                            |
+|  id      source  edge runs  Tello host  adapter |  ground        running  pid 4242 [Restart] |
+|  drone-1 tello   other      192.168.10.1 [choose|  edge-drone-1  running  pid 4250 [Restart] |
+|  drone-2 tello   other      192.168.10.1  v]    |                                            |
+|   (a dropdown of the adapters in the Tello      |                                            |
+|   network; "auto-detected" or "remembered"      |                                            |
+|   under it when one was pre-selected)           |                                            |
 |  Ground --fleet list: drone-1,drone-2           | Log [ground v] [x] follow                  |
 | Shared options                                  |  ...live tail of the ground's log          |
 |  ceiling 200  margin 60  geofence 450           |                                            |
 |  detector profile, video at start, language     | Events                                     |
 |  model, ports, observability export             |  12:01:02 ground: started (pid 4242)       |
+|  Start writes ~/.flightrisk/ceiling.json: ceil- |                                            |
+|  ing 200, margin 60, slots; "Differs from what  |                                            |
+|  is saved now: ..." when they change            |                                            |
 | Errors and warnings, Command lines (preview)    |                                            |
 +-------------------------------------------------+--------------------------------------------+
 ```
@@ -92,18 +98,58 @@ ceiling and margin saved in the dashboard (`~/.flightrisk/ceiling.json`) when th
 | Preset | Runs here | Drones | Ports (dashboard, edge link) | Notes |
 | --- | --- | --- | --- | --- |
 | Layout A (ground here) | ground, loopback plus 10.42.0.1 | drone-1, drone-2: tello, edges on the other computer, slots 100 and 130 cm | 5555, 9000 | needs the token |
-| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 via 192.168.10.2 at 50 cm, drone-2 via 192.168.10.50 at 80 cm | | the IPs and slots of `scripts/demo_edge_pair.ps1`; add each adapter's interface index on Windows |
-| Layout B (everything here) | ground, loopback | drone-1 via 192.168.10.2, drone-2 via 192.168.10.50, slots 100 and 130 cm | 5555, 9000 | |
+| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 at 50 cm, drone-2 at 80 cm (the slots of `scripts/demo_edge_pair.ps1`), adapters chosen in the window | | no adapter address or interface index is stored in the preset; see "Adapters" below |
+| Layout B (everything here) | ground, loopback | drone-1 and drone-2: tello, slots 100 and 130 cm, adapters chosen in the window | 5555, 9000 | same |
 | Single drone | ground, loopback | drone-1, tello, slot 100 cm | 5555, 9000 | |
-| Rehearsal with fake drones | ground, loopback | drone-1, drone-2: fake, slots 100 and 130 cm, geofence 500 cm | 5800, 9800 | other ports, so it can run beside a live ground station |
+| Rehearsal with fake drones | ground, loopback | drone-1, drone-2: fake, slots 100 and 130 cm, geofence 500 cm | 5800, 9800 | other ports, so it can run beside a live ground station; needs no adapter |
+
+### Adapters
+
+No preset, default or source file holds an adapter address or interface index. Loading a preset makes the
+launcher list this computer's adapters and, for each real drone flown from this computer, offer the
+adapters that have an IPv4 address in the drone's Tello host network (the /24 of the Tello host, for example
+192.168.10.0/24), sorted by name and then address. The "Local IP (adapter)" column is a dropdown of these.
+
+- **One real drone and exactly one candidate adapter:** it is pre-selected and the window says it was
+  auto-detected.
+- **More than one candidate, or more than one real drone:** nothing is pre-selected. Start stays refused
+  with "choose the adapter" until you pick each drone's adapter, and no two drones may share one.
+- **Remembered choice:** when a Start goes ahead, the launcher remembers the adapter chosen for each drone id,
+  by adapter name, in `~/.flightrisk/launcher.json` under `adapter_choices`, apart from the presets. The next
+  time, that adapter is pre-selected for that drone (marked "remembered") if an adapter of that name still has an
+  address in the Tello network, even when DHCP gave it another address. Only the adapter name is stored,
+  never an address, an interface index or the edge token.
+- **No candidate:** the window says to join the drone's Wi-Fi and press Refresh adapters.
+- On Windows, choosing an adapter also fills in its interface index.
+
+Check what was proposed before pressing Start: an auto-detected or remembered adapter is a guess, not a
+confirmation that it is joined to the right drone.
+
+## The ceiling file
+
+The dashboard's plan decides each drone's altitude slot on a dashboard flight, from the ceiling file
+(`~/.flightrisk/ceiling.json`, or `FLIGHTRISK_CEILING_FILE`; see `docs/ceiling-and-altitude.md`). So when
+you press **Start** with the ground station on this computer, the launcher first writes that file with the
+ceiling, the margin and each drone's altitude slot from the window, then starts the ground and the edges.
+
+- The window shows, under Shared options, the file path, the values Start will write, and a warning line
+  when they differ from what is saved now (for example `drone-1 slot 100 cm becomes 110 cm`).
+- The file is written only on Start, never while typing, and never while a ground or edge started by this
+  launcher is running (the dashboard refuses ceiling changes in flight). The "Edges only" mode never writes it,
+  because the dashboard on the ground computer owns the file there.
+- It uses the dashboard's own module for the format (version 1 with `ceiling_cm`, `margin_cm`, `slots_cm`),
+  the limits (ceiling 150 to 1000 cm, margin at least 30 cm, each slot at most ceiling minus margin) and the
+  atomic write (temporary file, fsync, rename). A slot above the limit is refused and nothing starts. Other
+  keys already in the file are kept. A file that cannot be read is replaced, and the window says so.
+- The edges also get the same values through `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILING_MARGIN_CM`.
 
 ## Options
 
 | Option | What it sets |
 | --- | --- |
 | Drone id, source, altitude slot | the edge's `--drone-id`, `--source tello` or `fake`, `--alt-slot` |
-| Tello host, local IP, interface index | `--tello-host`, `--tello-local-ip`, `--tello-ifindex` (real drones only; the index is Windows only). The local IP field offers this computer's adapters with their IPv4 addresses and indexes. |
-| Ceiling and margin | the edges' `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILING_MARGIN_CM`; every slot must be at most ceiling minus margin |
+| Tello host, local IP, interface index | `--tello-host`, `--tello-local-ip`, `--tello-ifindex` (real drones only; the index is Windows only). The local IP field is a dropdown of this computer's adapters in the Tello host's network, with their IPv4 addresses and indexes (see "Adapters"). |
+| Ceiling and margin | the edges' `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILING_MARGIN_CM`, and the dashboard's ceiling file (see "The ceiling file"); every slot must be at most ceiling minus margin |
 | Geofence | the edges' `FLIGHTRISK_GEOFENCE_CM` (450 cm by default, as in the demo scripts) |
 | Detector profile | the edges' `--detection-profile`: `default` (yolo11n on the whole frame), `level`, or `top_down` (offered only when `models/heridal_yolo11s.pt` exists) |
 | Video on at start | `--stream-video` on the ground and the edges |
@@ -132,7 +178,7 @@ All checks are read-only; any FAIL blocks Start.
 | Edge token | set, when the cable address is bound or a non-loopback ground is dialled; only "set" or "missing" is shown |
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
 | Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
-| Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning) |
+| Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
 | Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below 30 % is a warning |
 
 The drone check sends only `command` (the SDK handshake), `battery?` and `temp?`, from one UDP socket
@@ -184,6 +230,7 @@ The launcher never signals a process it did not start, for example a ground stat
   line, never sent to the window, never saved in a preset, and removed from everything the window
   shows, including the log tail. When a process exits, its log file is scrubbed of the token too.
 - The dashboard binds 127.0.0.1. The edge link binds 127.0.0.1, plus the cable address in layout A only.
+- Start is refused when the ceiling file cannot be written (nothing is started then).
 - Start is refused when two edges would use the same drone id or the same local IP, when two real
   Tellos on this computer lack their own adapter IP, when two adapters share an interface index, when
   two ports collide (including the launcher's own), or when a slot is above ceiling minus margin.
@@ -216,9 +263,10 @@ The launcher never signals a process it did not start, for example a ground stat
   the edge's own land key through its input pipe instead. The edge also handles Ctrl+Break like Ctrl+C,
   for an operator's own console. The children write straight to their log files, so they keep running
   if the launcher exits and the processes are left running.
-- **The dashboard stays the authority on the ceiling.** The launcher reads the dashboard's saved ceiling
-  to fill in the presets and warns when its own values differ, but it never writes that file. The
-  edges start with the launcher's values and the dashboard sends its own once they connect.
+- **One ceiling for the launcher, the edges and the dashboard.** The launcher reads the dashboard's saved
+  ceiling to fill in the presets, and writes it back on Start (see "The ceiling file"), so a dashboard
+  flight uses the same slots the edges were started with. It never changes the file while its own
+  processes run, and never in the edges-only mode.
 - **Exactly the selected drones in `--fleet`.** A configured drone that never connects would otherwise
   still be given a zone.
 

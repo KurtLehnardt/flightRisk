@@ -440,12 +440,12 @@ def _ceiling_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
         return Check("Ceiling", WARN, f"could not read the dashboard's ceiling settings: {exc}")
     if error:
         return Check("Ceiling", WARN,
-                     f"{error}; the dashboard refuses Plan and Start until valid settings are saved in its Controls tab")
+                     f"{error}; the dashboard refuses Plan and Start until valid settings are saved, and Start writes them from the launcher")
     if (ceiling, margin) != (settings.ceiling_cm, settings.margin_cm):
         return Check(
             "Ceiling", WARN,
             f"the dashboard's saved ceiling is {ceiling} cm with a {margin} cm margin ({Path(path).name}), the launcher's "
-            f"is {settings.ceiling_cm} cm with {settings.margin_cm} cm. Edges start with the launcher's values and the "
-            f"dashboard then sends its own; change the dashboard's in its Controls tab",
+            f"is {settings.ceiling_cm} cm with {settings.margin_cm} cm. Start writes the launcher's values and the "
+            f"drones' slots to that file before the ground station starts",
         )
     return Check("Ceiling", PASS, f"{ceiling} cm, margin {margin} cm, slots up to {ceiling - margin} cm")
