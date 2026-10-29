@@ -94,7 +94,12 @@ sys.modules["mavsdk.manual_control"] = _mavsdk_manual_control
 
 # Now we can import the module under test
 from flightrisk.drone.mavlink import MavlinkController, HAS_MAVSDK, _extract_ip  # noqa: E402
-from flightrisk.drone.controller import DroneController, DroneState, GpsDroneController  # noqa: E402
+from flightrisk.drone.controller import (  # noqa: E402
+    CommandOutcome,
+    DroneController,
+    DroneState,
+    GpsDroneController,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -423,12 +428,14 @@ class TestMoveDirections:
         finally:
             _teardown_controller(ctrl)
 
-    def test_move_unknown_direction_raises(self):
+    def test_move_unknown_direction_is_rejected(self):
+        """An invalid argument is a REJECTED result, not an exception (docs/drone-interface.md, rule 3)."""
         system = _FakeSystem()
         ctrl = _make_controller(system)
         try:
-            with pytest.raises(ValueError, match="Unknown direction"):
-                ctrl.move("diagonal", 100)
+            result = ctrl.move("diagonal", 100)
+            assert result.outcome is CommandOutcome.REJECTED and "diagonal" in result.detail
+            system.offboard.start.assert_not_called()
         finally:
             _teardown_controller(ctrl)
 

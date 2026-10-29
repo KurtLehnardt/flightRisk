@@ -76,6 +76,25 @@ Run it with::
 socket to one Wi-Fi adapter's IP, so one computer can run two edges, one per
 adapter and drone (docs/two-tellos-one-pc.md). Without it nothing changes.
 
+Which drone and where the frames come from are separate choices:
+``--drone`` picks the drone the edge flies (``tello``, ``fake`` or
+``mavlink``) and ``--source`` where frames come from (``camera``, ``file``,
+``url``, or the drone's own video for ``tello`` and ``fake``). Without
+``--drone`` everything works as before: ``--source tello`` and ``--source
+fake`` fly, ``camera`` and ``file`` do not. ``--drone mavlink`` runs on a
+Pixhawk-class drone's companion computer: it flies a PX4 or ArduPilot
+autopilot over MAVLink (``--mavlink-address`` or
+``FLIGHTRISK_MAVLINK_ADDRESS``) through
+``flightrisk.drone.mavlink_fleet.MavlinkFleetDrone``, reads frames from the
+companion computer's camera, a file or a stream URL, and uses the outdoor
+safety envelope (metre-scale slot, ceiling and geofence, ``--alt-slot-m``,
+``--ceiling-m``, ``--ceiling-margin-m``, ``--geofence-m``). See
+docs/open-drone-support.md::
+
+    python -m flightrisk.edge_device --drone mavlink --source camera \
+        --mavlink-address serial:///dev/ttyAMA0:921600 --drone-id drone-1 \
+        --alt-slot-m 15 --frame-heading-deg 0 --ws-url ws://ground:9000
+
 The core loop (``run_edge_device``) is dependency-injected -- the frame
 source, transport, and runner are all passed in -- so it can be unit-tested
 without a real camera, network, or vision model. The heavy real-object
@@ -103,6 +122,10 @@ from flightrisk.drone.lane_executor import (
 from flightrisk.drone.safety import (
     CEILING_CM_ENV,
     CEILING_MARGIN_CM_ENV,
+    DEFAULT_LINK_LOSS_LAND_S,
+    DEFAULT_MIN_TAKEOFF_BATTERY,
+    LINK_LOSS_LAND_S_ENV,
+    MIN_TAKEOFF_BATTERY_ENV,
     SafetyEnvelope,
 )
 from flightrisk.edge import EdgeRunner
@@ -124,6 +147,7 @@ __all__ = [
     "run_edge_device",
     "CV2FrameSource",
     "DroneFrameSource",
+    "ResilientCaptureSource",
     "start_local_land_key",
     "main",
 ]
@@ -141,6 +165,33 @@ _TELLO_LOCAL_IP_ENV_VAR = "FLIGHTRISK_TELLO_LOCAL_IP"
 _TELLO_IFINDEX_ENV_VAR = "FLIGHTRISK_TELLO_IFINDEX"
 # Sources that fly a drone (and therefore run the lane executor).
 _FLIGHT_SOURCES = ("tello", "fake")
+# Drones an edge can fly (``--drone``). Without ``--drone``, ``--source tello``
+# and ``--source fake`` pick the drone as they always did.
+_DRONES = ("tello", "fake", "mavlink")
+# Frame sources an autopilot drone can use: the companion computer's camera,
+# a video file (looped) or a stream URL (RTSP, HTTP; anything OpenCV opens).
+_CAPTURE_SOURCES = ("camera", "file", "url")
+_MAVLINK_ADDRESS_ENV_VAR = "FLIGHTRISK_MAVLINK_ADDRESS"
+# MAVSDK 2 and later listen with ``udpin://``; 14540 is the usual port a
+# companion computer's MAVLink router forwards to.
+_DEFAULT_MAVLINK_ADDRESS = "udpin://0.0.0.0:14540"
+# Outdoor envelope settings in metres (``--drone mavlink``). Separate from the
+# indoor FLIGHTRISK_*_CM variables so a room setting never applies outdoors.
+_FIELD_ENV = {
+    "alt_slot_m": "FLIGHTRISK_FIELD_ALT_SLOT_M",
+    "geofence_m": "FLIGHTRISK_FIELD_GEOFENCE_M",
+    "ceiling_m": "FLIGHTRISK_FIELD_CEILING_M",
+    "ceiling_margin_m": "FLIGHTRISK_FIELD_CEILING_MARGIN_M",
+}
+_FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
+
+
+class _Default(str):
+    """A ``--source`` default that can be told apart from the same value given on the command line."""
+
+
+class _DefaultSlot(float):
+    """An ``--alt-slot`` default that can be told apart from the same value given on the command line."""
 # Simulated speed of the fake drone, so lane progress is visible on the map.
 _FAKE_SPEED_CM_S = 100.0
 # How long the control thread waits in each ``recv`` call.
@@ -228,6 +279,63 @@ class DroneFrameSource:
 
     def release(self) -> None:
         pass
+
+
+class ResilientCaptureSource:
+    """Frames from an OpenCV capture that is reopened whenever it fails, for a flying edge.
+
+    A flying edge must not end its loop (and land) because the camera
+    hiccupped or a video file ended: a failed read releases the capture and
+    opens it again after ``retry_s`` (a file therefore loops). Iteration
+    stops only when ``stop_event`` is set. ``open_capture`` returns a new
+    ``cv2.VideoCapture``-like object.
+    """
+
+    def __init__(
+        self,
+        open_capture: Callable[[], Any],
+        stop_event: threading.Event | None = None,
+        min_interval_s: float = 1 / 30,
+        retry_s: float = 1.0,
+    ):
+        self._open = open_capture
+        self._stop = stop_event if stop_event is not None else threading.Event()
+        self._min_interval_s = min_interval_s
+        self._retry_s = retry_s
+        self._cap: Any = None
+        self._next_at = 0.0
+
+    def __iter__(self) -> "ResilientCaptureSource":
+        return self
+
+    def __next__(self):
+        while not self._stop.is_set():
+            wait = self._next_at - time.monotonic()
+            if wait > 0 and self._stop.wait(wait):
+                break
+            self._next_at = time.monotonic() + self._min_interval_s
+            if self._cap is None:
+                try:
+                    self._cap = self._open()
+                except Exception:  # noqa: BLE001 - retried below
+                    self._cap = None
+            ok, frame = (False, None)
+            if self._cap is not None:
+                try:
+                    ok, frame = self._cap.read()
+                except Exception:  # noqa: BLE001 - treated as a failed read
+                    ok, frame = False, None
+            if ok and frame is not None:
+                return frame
+            self.release()
+            self._stop.wait(self._retry_s)
+        raise StopIteration
+
+    def release(self) -> None:
+        cap, self._cap = self._cap, None
+        if cap is not None:
+            with contextlib.suppress(Exception):
+                cap.release()
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +751,12 @@ def _build_source(args: argparse.Namespace, parser: argparse.ArgumentParser, log
     import cv2  # lazy: keep module import light for tests
 
     if args.source == "camera":
-        log.info("edge_source_camera", index=0)
-        return CV2FrameSource(cv2.VideoCapture(0))
+        index = getattr(args, "camera_index", 0)
+        log.info("edge_source_camera", index=index)
+        return CV2FrameSource(cv2.VideoCapture(index))
+    if args.source == "url":
+        log.info("edge_source_url")
+        return CV2FrameSource(cv2.VideoCapture(args.video_url))
 
     # args.source == "file"
     if not os.path.exists(args.video):
@@ -674,7 +786,47 @@ def _resolve_appearance_only(args: argparse.Namespace, environ: Any = None) -> b
         raise ValueError(
             f"{_APPEARANCE_ONLY_ENV_VAR}={raw!r} is not a boolean (use 1/0, true/false, yes/no, on/off)"
         )
-    return args.source in _FLIGHT_SOURCES
+    return _drone_kind(args) is not None
+
+
+def _drone_kind(args: argparse.Namespace) -> str | None:
+    """The drone this edge flies (``tello``, ``fake`` or ``mavlink``), or None for a camera or file edge.
+
+    ``--drone`` when given; otherwise ``--source tello`` and ``--source
+    fake`` fly as they always did.
+    """
+    drone = getattr(args, "drone", None)
+    if drone:
+        return str(drone)
+    source = getattr(args, "source", None)
+    return source if source in _FLIGHT_SOURCES else None
+
+
+def _autopilot_pose_provider(envelope: SafetyEnvelope, holder: dict[str, Any]) -> Callable[[], dict[str, float]]:
+    """Pose for detection messages from the autopilot's own position (``--drone mavlink``).
+
+    The measured position in the plan frame and the GPS position when the
+    drone reports them; the envelope's commanded pose before the first
+    takeoff or while the autopilot's telemetry is stale.
+    """
+    fallback = _envelope_pose_provider(envelope)
+
+    def _pose() -> dict[str, float]:
+        drone = holder.get("drone")
+        pose = drone.measured_pose() if drone is not None else None
+        if pose is None:
+            return fallback()
+        fields = {
+            "rel_x_cm": round(pose.x_cm, 1),
+            "rel_y_cm": round(pose.y_cm, 1),
+            "heading_deg": round(pose.heading_deg, 1),
+        }
+        position = drone.geo_position()
+        if position is not None:
+            fields.update(lat=position[0], lon=position[1])
+        return fields
+
+    return _pose
 
 
 def _envelope_pose_provider(envelope: SafetyEnvelope) -> Callable[[], dict[str, float]]:
@@ -753,7 +905,7 @@ def _build_runner(
     # heavy and unnecessary for importing this module or unit-testing the loop.
     from flightrisk.edge_profiles import ProfileSwitcher
 
-    flying = args.source in _FLIGHT_SOURCES
+    flying = _drone_kind(args) is not None
     # The switcher's replies carry the runner's drone id: None on a camera or
     # file edge, which then logs refusals without replying. A flying source
     # refuses every switch until the lane executor's flight check is bound.
@@ -845,11 +997,56 @@ def _parse_alt_slot(raw: str) -> float:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FlightRisk edge-device program")
     parser.add_argument(
-        "--source", choices=("camera", "file", "tello", "fake"), default="camera",
-        help="Frame source: the drone's onboard camera (index 0), a video file, "
-             "a Tello drone (flies), or an in-process fake Tello (flies, no hardware)",
+        "--source", choices=("camera", "file", "url", "tello", "fake"), default=_Default("camera"),
+        help="Frame source: the drone's onboard camera (--camera-index, default 0), a video file, "
+             "a stream URL (--video-url), a Tello drone (flies), or an in-process fake Tello (flies, no "
+             "hardware). With --drone mavlink only camera, file or url apply (default camera)",
     )
     parser.add_argument("--video", type=str, help="Video file path (when --source=file)")
+    parser.add_argument("--video-url", type=str, default=None,
+                        help="Stream URL OpenCV can open, such as rtsp://... (when --source=url)")
+    parser.add_argument("--camera-index", type=int, default=0, help="Camera index (when --source=camera; default 0)")
+    parser.add_argument(
+        "--drone", choices=_DRONES, default=None,
+        help="The drone this edge flies: tello, fake (simulated Tello) or mavlink (a PX4 or ArduPilot "
+             "autopilot; run the edge on the drone's companion computer). Default: --source tello or fake "
+             "picks the drone as before; camera, file and url fly nothing",
+    )
+    mav = parser.add_argument_group("MAVLink drone (--drone mavlink)", "See docs/open-drone-support.md")
+    mav.add_argument(
+        "--mavlink-address", type=str, default=None,
+        help="MAVSDK connection URL of the autopilot, for example serial:///dev/ttyAMA0:921600, "
+             "udpin://0.0.0.0:14540 or tcpout://127.0.0.1:5760 (default: $" + _MAVLINK_ADDRESS_ENV_VAR
+             + ", else " + _DEFAULT_MAVLINK_ADDRESS + ")",
+    )
+    mav.add_argument("--autopilot", choices=("auto", "px4", "ardupilot"), default="auto",
+                     help="Autopilot firmware (default auto: detected from its parameters)")
+    mav.add_argument("--alt-slot-m", type=float, default=None,
+                     help="Altitude slot in metres above the takeoff point (default $" + _FIELD_ENV["alt_slot_m"]
+                     + ", else 15)")
+    mav.add_argument("--ceiling-m", type=float, default=None,
+                     help="Ceiling in metres above the takeoff point (default $" + _FIELD_ENV["ceiling_m"]
+                     + ", else 30; at most 120)")
+    mav.add_argument("--ceiling-margin-m", type=float, default=None,
+                     help="Clearance kept below the ceiling in metres (default $" + _FIELD_ENV["ceiling_margin_m"]
+                     + ", else 5; at least 3)")
+    mav.add_argument("--geofence-m", type=float, default=None,
+                     help="Geofence half-width in metres around the takeoff point (default $"
+                     + _FIELD_ENV["geofence_m"] + ", else 30)")
+    mav.add_argument("--failsafe-action", choices=("rtl", "land"), default=None,
+                     help="What link loss, low battery and a geofence breach do: rtl (the autopilot's return to "
+                     "launch) or land in place (default $" + _FAILSAFE_ACTION_ENV_VAR + ", else rtl)")
+    mav.add_argument("--frame-heading-deg", type=float, default=None,
+                     help="Compass bearing of the plan's forward axis (0 is north). Give every drone of a fleet "
+                     "the same value. Default: the drone's heading at takeoff")
+    mav.add_argument("--speed-mps", type=float, default=3.0, help="Cruise speed in m/s (default 3, at most 15)")
+    mav.add_argument("--takeoff-alt-m", type=float, default=5.0,
+                     help="Takeoff height in metres before the climb to the slot (default 5)")
+    mav.add_argument(
+        "--allow-unverified-failsafes", action="store_true",
+        help="UNSAFE, for simulation only: take off without checking the autopilot's geofence, battery and "
+             "RC-loss failsafe parameters",
+    )
     parser.add_argument(
         "--ws-url", type=str,
         default=os.environ.get("FLIGHTRISK_EDGE_WS", _DEFAULT_WS_URL),
@@ -889,7 +1086,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Drone id used in fleet messages (default: drone-1)",
     )
     parser.add_argument(
-        "--alt-slot", type=_parse_alt_slot, default=100.0,
+        "--alt-slot", type=_parse_alt_slot, default=_DefaultSlot(100.0),
         help="Altitude slot in cm (default 100); values below 10 are metres, so 1.6 means 1.6 m. It must not "
              "be above the ceiling limit, FLIGHTRISK_CEILING_CM minus FLIGHTRISK_CEILING_MARGIN_CM "
              "(200 - 60 = 140 cm by default), or the edge refuses to start",
@@ -923,7 +1120,8 @@ def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | 
     A flying source with ``--ground-urls`` gets an ``EdgeUplink`` to every
     listed ground; otherwise the single ``--ws-url`` transport, unchanged.
     """
-    urls = parse_ground_urls(getattr(args, "ground_urls", "")) if args.source in _FLIGHT_SOURCES else ()
+    flying = _drone_kind(args) is not None
+    urls = parse_ground_urls(getattr(args, "ground_urls", "")) if flying else ()
     if urls:
         return EdgeUplink(
             urls,
@@ -935,15 +1133,61 @@ def _build_transport(args: argparse.Namespace, runner: EdgeRunner, token: str | 
             legacy=env_flag(ENV_FLEET_LEGACY),
             inflight_handover=env_flag(ENV_INFLIGHT_HANDOVER),
         )
-    if args.source in _FLIGHT_SOURCES:
+    if flying:
         return EdgeTransportSync(
             ws_url=args.ws_url, runner=runner, token=token, max_delay=_FLEET_RECONNECT_MAX_DELAY_S,
         )
     return EdgeTransportSync(ws_url=args.ws_url, runner=runner, token=token)
 
 
+def _mavlink_address(args: argparse.Namespace, environ: Any = None) -> str:
+    """``--mavlink-address``, else ``FLIGHTRISK_MAVLINK_ADDRESS``, else ``udpin://0.0.0.0:14540``."""
+    env = os.environ if environ is None else environ
+    explicit = getattr(args, "mavlink_address", None)
+    if explicit:
+        return str(explicit)
+    return (env.get(_MAVLINK_ADDRESS_ENV_VAR) or "").strip() or _DEFAULT_MAVLINK_ADDRESS
+
+
+def _failsafe_action(args: argparse.Namespace, environ: Any = None) -> str:
+    """``--failsafe-action``, else ``FLIGHTRISK_FAILSAFE_ACTION``, else ``rtl``. Raises ``ValueError``."""
+    env = os.environ if environ is None else environ
+    explicit = getattr(args, "failsafe_action", None)
+    if explicit:
+        return str(explicit)
+    raw = (env.get(_FAILSAFE_ACTION_ENV_VAR) or "").strip().lower()
+    if raw and raw not in ("rtl", "land"):
+        raise ValueError(f"{_FAILSAFE_ACTION_ENV_VAR}={raw!r} must be rtl or land")
+    return raw or "rtl"
+
+
+def _build_mavlink_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
+    """The ``--drone mavlink`` controller: a ``MavlinkFleetDrone`` over a MAVSDK link."""
+    from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone, MavlinkFleetOptions
+    from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
+
+    address = _mavlink_address(args)
+    autopilot = None if getattr(args, "autopilot", "auto") == "auto" else args.autopilot
+    options = MavlinkFleetOptions(
+        takeoff_alt_m=args.takeoff_alt_m,
+        speed_mps=args.speed_mps,
+        frame_heading_deg=args.frame_heading_deg,
+        failsafe_action=_failsafe_action(args),
+        require_failsafes=not args.allow_unverified_failsafes,
+    )
+    if args.allow_unverified_failsafes:
+        log.warning("edge_mavlink_failsafes_unverified", drone_id=args.drone_id,
+                    detail="autopilot failsafe parameters are NOT checked; simulation only")
+    log.info("edge_source_mavlink", drone_id=args.drone_id, mavlink_address=address, autopilot=autopilot or "auto",
+             failsafe_action=options.failsafe_action, frame_heading_deg=options.frame_heading_deg,
+             speed_mps=options.speed_mps)
+    return MavlinkFleetDrone(args.drone_id, MavsdkAutopilotLink(address, autopilot=autopilot), options)
+
+
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
     """Construct the drone controller for a flying source."""
+    if _drone_kind(args) == "mavlink":
+        return _build_mavlink_drone(args, log)
     if args.source == "fake":
         from flightrisk.drone.tello import FakeTelloController
 
@@ -1019,6 +1263,53 @@ def _check_tello_binding(args: argparse.Namespace) -> None:
         raise SystemExit(f"edge_device: {exc} Refusing to start.") from exc
 
 
+def _field_value_m(args: argparse.Namespace, name: str, env: Any) -> float | None:
+    """A metre setting of the outdoor envelope: the flag, else its environment variable, else None."""
+    value = getattr(args, name, None)
+    if value is not None:
+        return float(value)
+    raw = (env.get(_FIELD_ENV[name]) or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{_FIELD_ENV[name]} must be a number of metres, got {raw!r}") from exc
+
+
+def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
+    """The outdoor envelope of a ``--drone mavlink`` edge (``FIELD_LIMITS``). Raises ``SystemExit``.
+
+    Metres from the ``--*-m`` flags or the ``FLIGHTRISK_FIELD_*_M`` variables;
+    the battery and link-loss settings come from the same variables as the
+    indoor edge. Anything invalid refuses the start with the reason.
+    """
+    env = os.environ if environ is None else environ
+
+    def _cm(name: str) -> float | None:
+        value = _field_value_m(args, name, env)
+        return None if value is None else round(value * 100.0, 1)
+
+    def _read(name: str, default: float) -> float:
+        raw = (env.get(name) or "").strip()
+        return float(raw) if raw else default
+
+    try:
+        return SafetyEnvelope.for_field(
+            alt_slot_cm=_cm("alt_slot_m"),
+            geofence_cm=_cm("geofence_m"),
+            ceiling_cm=_cm("ceiling_m"),
+            ceiling_margin_cm=_cm("ceiling_margin_m"),
+            min_takeoff_battery=_read(MIN_TAKEOFF_BATTERY_ENV, DEFAULT_MIN_TAKEOFF_BATTERY),
+            link_loss_land_s=_read(LINK_LOSS_LAND_S_ENV, DEFAULT_LINK_LOSS_LAND_S),
+        )
+    except ValueError as exc:
+        raise SystemExit(
+            f"edge_device: {exc}. Refusing to start: check --alt-slot-m, --ceiling-m, --ceiling-margin-m and "
+            "--geofence-m (or the FLIGHTRISK_FIELD_*_M variables; docs/open-drone-support.md)."
+        ) from exc
+
+
 def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
     """The flying edge's safety envelope from ``--alt-slot`` and the environment.
 
@@ -1028,6 +1319,8 @@ def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEn
     200 - 60 = 140 cm by default): the edge refuses to start rather than
     clamp the slot.
     """
+    if _drone_kind(args) == "mavlink":
+        return _field_envelope(args, environ)
     try:
         return SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot, environ=environ)
     except ValueError as exc:
@@ -1049,8 +1342,19 @@ def _run_flight_edge(
     """
     if envelope is None:
         envelope = _startup_envelope(args)
-    runner = _build_runner(args, log, pose_provider=_envelope_pose_provider(envelope))
+    kind = _drone_kind(args)
+    holder: dict[str, Any] = {}
+    if kind == "mavlink":
+        pose_provider = _autopilot_pose_provider(envelope, holder)
+    else:
+        pose_provider = _envelope_pose_provider(envelope)
+    runner = _build_runner(args, log, pose_provider=pose_provider)
     drone = _build_drone(args, log)
+    holder["drone"] = drone
+    bind_slot = getattr(drone, "bind_slot_source", None)
+    if callable(bind_slot):
+        # The return-altitude check compares against the live slot.
+        bind_slot(lambda: envelope.alt_slot_cm)
 
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
@@ -1074,8 +1378,13 @@ def _run_flight_edge(
         _wire_emergency_callback(transport, flight)
         start_local_land_key(flight, sys.stdin, log)
         previous_sigint = _install_sigint_land(flight, log)
+        extra = {}
+        if kind == "mavlink":
+            extra = {"drone": kind, "envelope_profile": envelope.limits.name,
+                     "mavlink_address": getattr(drone, "host", None)}
         log.info(
             "edge_connect",
+            **extra,
             ws_url=args.ws_url if not isinstance(transport, EdgeUplink) else None,
             ground_urls=len(transport.urls) if isinstance(transport, EdgeUplink) else None,
             authenticated=token is not None,
@@ -1091,8 +1400,7 @@ def _run_flight_edge(
         )
         transport.connect()
         run_edge_device(
-            # The fake drone only yields blank frames, so a low rate saves CPU.
-            DroneFrameSource(drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30),
+            _flight_frame_source(args, drone, stop_event, log),
             transport,
             runner,
             logger=log,
@@ -1121,6 +1429,77 @@ def _run_flight_edge(
             _restore_sigbreak()
 
 
+def _flight_frame_source(args: argparse.Namespace, drone: Any, stop_event: threading.Event, log: StructuredLogger):
+    """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL."""
+    if _drone_kind(args) != "mavlink":
+        # The fake drone only yields blank frames, so a low rate saves CPU.
+        return DroneFrameSource(drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30)
+
+    def _open():
+        import cv2  # lazy: keep module import light for tests
+
+        if args.source == "camera":
+            return cv2.VideoCapture(args.camera_index)
+        if args.source == "url":
+            return cv2.VideoCapture(args.video_url)
+        return cv2.VideoCapture(args.video)
+
+    log.info("edge_frames_capture", source=args.source, camera_index=args.camera_index if args.source == "camera"
+             else None)
+    return ResilientCaptureSource(_open, stop_event)
+
+
+def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Settle ``--drone`` and ``--source`` together; ``parser.error`` on a combination that cannot work.
+
+    Without ``--drone`` nothing changes. ``--drone tello`` and ``--drone
+    fake`` take their frames from the drone (``--source`` defaults to the
+    same name and may not be another). ``--drone mavlink`` needs
+    ``--source`` camera, file or url (default camera) and the outdoor
+    settings in metres; the indoor ``--alt-slot`` (centimetres) and the Tello
+    options do not apply to it.
+    """
+    drone = args.drone
+    explicit_source = not isinstance(args.source, _Default)
+    mavlink_only = [flag for flag, value in (
+        ("--mavlink-address", args.mavlink_address), ("--alt-slot-m", args.alt_slot_m),
+        ("--ceiling-m", args.ceiling_m), ("--ceiling-margin-m", args.ceiling_margin_m),
+        ("--geofence-m", args.geofence_m), ("--failsafe-action", args.failsafe_action),
+        ("--frame-heading-deg", args.frame_heading_deg),
+    ) if value is not None]
+    if args.allow_unverified_failsafes:
+        mavlink_only.append("--allow-unverified-failsafes")
+    if args.autopilot != "auto":
+        mavlink_only.append("--autopilot")
+    if drone != "mavlink" and mavlink_only:
+        parser.error(f"{', '.join(mavlink_only)} only apply to --drone mavlink")
+    if drone is None:
+        args.source = str(args.source)
+        return
+    if drone in ("tello", "fake"):
+        if explicit_source and args.source != drone:
+            parser.error(f"--drone {drone} takes its frames from the drone; use --source {drone} or leave it out")
+        args.source = drone
+        return
+    # --drone mavlink
+    if explicit_source and args.source not in _CAPTURE_SOURCES:
+        parser.error("--drone mavlink takes frames from --source camera, file or url")
+    args.source = str(args.source)
+    if not isinstance(args.alt_slot, _DefaultSlot):
+        parser.error("--alt-slot is in centimetres for the indoor Tello; use --alt-slot-m with --drone mavlink")
+    if args.tello_host is not None or args.tello_local_ip is not None or args.tello_ifindex is not None:
+        parser.error("--tello-host, --tello-local-ip and --tello-ifindex do not apply to --drone mavlink")
+    try:
+        from flightrisk.drone.mavlink_fleet import MavlinkFleetOptions
+
+        MavlinkFleetOptions(
+            takeoff_alt_m=args.takeoff_alt_m, speed_mps=args.speed_mps, frame_heading_deg=args.frame_heading_deg,
+            failsafe_action=_failsafe_action(args),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
     """Export this edge's logs and spans over OTLP, like the dashboard does.
 
@@ -1145,9 +1524,12 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point for ``python -m flightrisk.edge_device``."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _resolve_drone_and_source(args, parser)
 
     if args.source == "file" and not args.video:
         parser.error("--video is required when --source=file")
+    if args.source == "url" and not args.video_url:
+        parser.error("--video-url is required when --source=url")
     try:
         ground_urls = parse_ground_urls(args.ground_urls)
     except ValueError as exc:
@@ -1155,7 +1537,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.node_id is not None and not fp.is_identifier(args.node_id):
         parser.error(f"--node-id must be an identifier such as mac or win-1, got {args.node_id!r}")
     env_node_id = os.environ.get(ENV_NODE_ID, "").strip()
-    uses_uplink = bool(ground_urls) and args.source in _FLIGHT_SOURCES
+    uses_uplink = bool(ground_urls) and _drone_kind(args) is not None
     if uses_uplink and args.node_id is None and env_node_id and not fp.is_identifier(env_node_id):
         parser.error(f"{ENV_NODE_ID} must be an identifier such as mac or win-1, got {env_node_id!r}")
     try:
@@ -1171,7 +1553,7 @@ def main(argv: list[str] | None = None) -> None:
     log = StructuredLogger(component="edge-device")
     _init_edge_telemetry(log)
 
-    if args.source in _FLIGHT_SOURCES:
+    if _drone_kind(args) is not None:
         # Checked before anything connects, so a slot above the ceiling
         # limit stops the edge at once with the reason.
         envelope = _startup_envelope(args)

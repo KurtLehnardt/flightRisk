@@ -762,7 +762,7 @@ class LaneExecutor(
                 return True
             self._log.warning("edge_land", drone_id=self.drone_id, reason=reason)
             try:
-                result = command_result(self.drone.land(), "land")
+                result = command_result(self._drone_land(reason), "land")
                 if not result.ok:
                     # A land that was not executed is a failed land: the monitor
                     # retries it while the drone still reports flying.
@@ -779,6 +779,37 @@ class LaneExecutor(
             if owner:
                 with self._lock:
                     self._land_inflight = False
+
+    def _drone_land(self, reason: str) -> Any:
+        """Call the controller's landing for *reason*.
+
+        A controller with ``land_for_reason`` (an autopilot backend, see
+        ``flightrisk.drone.mavlink_fleet``) gets the reason, so it can map a
+        link-loss or low-battery landing to its own return-to-launch; every
+        other controller (the Tello) gets ``land()`` exactly as before.
+        """
+        land_for = getattr(self.drone, "land_for_reason", None)
+        if callable(land_for):
+            return land_for(reason)
+        return self.drone.land()
+
+    def _reported_pose(self) -> Any:
+        """The pose telemetry reports: the controller's measured pose when it has one, else the envelope's.
+
+        A drone with ``measured_pose()`` (an autopilot that knows its own
+        position) reports where it is; the Tello reports its dead-reckoned
+        pose. Geofence checks of planned moves always use the envelope's
+        commanded pose. Never raises.
+        """
+        probe = getattr(self.drone, "measured_pose", None)
+        if callable(probe):
+            try:
+                pose = probe()
+            except Exception:  # noqa: BLE001 - fall back to the dead-reckoned pose
+                pose = None
+            if pose is not None:
+                return pose
+        return self.envelope.pose_snapshot()
 
     def _emit(self, msg: dict[str, Any]) -> None:
         """Send a message to the ground. Transport errors are logged, never raised."""

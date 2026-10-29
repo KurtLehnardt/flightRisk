@@ -13,6 +13,10 @@
   drone is idle after its lanes; the hover timeout is checked again under
   the executor lock as the landing is recorded, so a hold acknowledged
   first always stops it);
+* for a drone that reports its own position (``measured_pose()``, an
+  autopilot), lands it with reason ``geofence_breach`` when that position
+  is outside the geofence plus the drone's ``fence_breach_margin_cm``; the
+  autopilot backend maps that reason to its return to launch;
 * notices a landing the executor did not ask for (the Tello's own auto-land
   or a crash), and then invalidates the plan and clears any hold, as for
   every other landing;
@@ -35,7 +39,10 @@ reports its link (``link_status()``, the Tello), telemetry on every version
 also carries ``drone_link_ok``, ``drone_link_age_s`` and
 ``drone_link_detail``: while the link is down, ``battery`` and
 ``height_cm`` are the controller's last cached values, and the flag tells
-the ground so.
+the ground so. A controller with ``measured_pose()`` reports that pose in
+``rel_x_cm``/``rel_y_cm``/``heading_deg`` (the Tello reports its
+dead-reckoned pose), and one with ``geo_position()`` adds the optional
+``lat`` and ``lon``.
 """
 from __future__ import annotations
 
@@ -89,6 +96,17 @@ class MonitorMixin:
                         alt_slot_cm=self.envelope.alt_slot_cm,
                     )
                     self.land_now("ceiling_exceeded")
+                elif (breach := self._measured_fence_breach()) is not None:
+                    # An autopilot that reports its own position is outside
+                    # the geofence (wind, a bad estimate): bring it back.
+                    self._log.error(
+                        "edge_geofence_breach",
+                        drone_id=self.drone_id,
+                        x_cm=round(breach[0], 1),
+                        y_cm=round(breach[1], 1),
+                        geofence_cm=self.envelope.geofence_cm,
+                    )
+                    self.land_now("geofence_breach")
                 elif self.envelope.link_lost():
                     self._log.error(
                         "edge_link_lost",
@@ -142,6 +160,26 @@ class MonitorMixin:
         self._flying_lanes = False
         self._hover_since = None
         return True
+
+    def _measured_fence_breach(self) -> tuple[float, float] | None:
+        """The measured position when it is outside the geofence plus the drone's margin, else None.
+
+        Only a controller with ``measured_pose()`` (an autopilot that knows
+        its own position) is checked; the Tello's position is dead-reckoned
+        from the moves the envelope already allowed. The margin is the
+        controller's ``fence_breach_margin_cm`` (GPS noise allowance).
+        """
+        probe = getattr(self.drone, "measured_pose", None)
+        if not callable(probe):
+            return None
+        pose = probe()
+        if pose is None:
+            return None
+        margin = float(getattr(self.drone, "fence_breach_margin_cm", 0.0) or 0.0)
+        limit = self.envelope.geofence_cm + margin
+        if abs(pose.x_cm) <= limit and abs(pose.y_cm) <= limit:
+            return None
+        return pose.x_cm, pose.y_cm
 
     def _hover_timeout_due_locked(self, flying: bool, now: float) -> bool:
         """True once the end-of-lanes hover has lasted ``hover_timeout_s``. Caller holds ``_lock``.
@@ -228,7 +266,7 @@ class MonitorMixin:
 
     def telemetry(self) -> dict[str, Any]:
         """Build a ``telemetry`` message (design section 3; v2 fields in v2 mode)."""
-        pose = self.envelope.pose_snapshot()
+        pose = self._reported_pose()
         flying = self._is_flying()
         with self._lock:
             takeoff_at = self._takeoff_at_local_s
@@ -260,6 +298,12 @@ class MonitorMixin:
         msg["control_mode"] = control_mode
         if v2:
             msg.update(epoch=self.epoch_seen, plan_id=self.plan_id, state=state, plan_valid=plan_valid)
+        geo = getattr(self.drone, "geo_position", None)
+        if callable(geo):
+            # Optional: an autopilot with GPS also reports where it is.
+            position = geo()
+            if position is not None:
+                msg.update(lat=position[0], lon=position[1])
         link = self._drone_link()
         if link is not None:
             msg.update(

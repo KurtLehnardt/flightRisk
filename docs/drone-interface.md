@@ -7,6 +7,52 @@ drone means writing one module and adding one registry entry. Nothing in
 (`tests/test_architecture.py`) fails if the dashboard ever imports a concrete
 backend module directly.
 
+## Add your drone in 5 steps
+
+The short version, for any drone whose software you can talk to from Python
+(an open-source autopilot, a Crazyflie, an iNav or Paparazzi aircraft, a
+ROS 2 drone). Which stacks are planned and how each would plug in is in
+`docs/open-drone-support.md`. PX4 and ArduPilot multirotors need no new
+backend: run the edge with `--drone mavlink` (same page).
+
+1. **Copy the template.** `flightrisk/drone/template_backend.py` is a
+   complete, in-memory controller that already follows every rule below and
+   passes the conformance suite. Copy it to `flightrisk/drone/<yourdrone>.py`
+   and rename the class. It is a template: it is not registered and flies
+   nothing.
+2. **Replace the `REPLACE` blocks with your SDK.** Keep the semantics:
+   commands return a `CommandResult`, an invalid argument or an unsupported
+   command is `REJECTED` (never `NotImplementedError`), `land()` is never
+   dropped and succeeds on the ground, and a sensor you do not have is
+   `None`, never 0.
+3. **Declare what you really support.** Put only the capabilities you
+   implement in `capabilities.features`, and set `capabilities.flight_scale`
+   to `"room"` (small indoor drone, centimetre moves) or `"field"` (GPS
+   drone, metre-scale moves, slots, ceiling and geofence). To fly in a fleet,
+   also give the edge what it reads (see "What the edge needs from a backend" in
+   `docs/open-drone-support.md`): `read_battery()`, `read_height_cm()`,
+   `takeoff(abort=...)`, and if you can, `link_status()`,
+   `land_for_reason()` and `measured_pose()`.
+4. **Register it** with one `register()` call in
+   `flightrisk/drone/backends.py` (see "Steps" below), and, for the edge,
+   one branch in `edge_device._build_drone`.
+5. **Prove it.** Add a `Subject` for it to `SUBJECTS` in
+   `tests/test_drone_conformance.py`, with a fake of your SDK as low as you
+   can go (the MAVLink subjects fake MAVSDK's asyncio API with a simulated
+   autopilot, `tests/support/fake_mavsdk.py`), add a harness to `HARNESSES`
+   in `tests/test_drone_contract.py`, and run both:
+
+   ```bash
+   python -m pytest tests/test_drone_conformance.py tests/test_drone_contract.py tests/test_architecture.py
+   ```
+
+The conformance checks (`tests/drone_conformance.py`) are reusable on any
+controller: connect and disconnect (twice), the telemetry snapshot's types
+and units, honest capabilities (no undeclared method that pretends to work,
+no `NotImplementedError` anywhere in the module), command results with the
+right names, `land()` idempotent and never dropped (also while a move is in
+progress), and stick values never passed outside -100..100.
+
 ## The pieces
 
 | Piece | File | What it is |
@@ -19,6 +65,9 @@ backend module directly.
 | Built-in entries | `flightrisk/drone/backends.py` | The only module that names concrete backends (`tello`, `mavlink`, `sim`) |
 | Safety policy | `flightrisk/dashboard/safety.py` | Battery thresholds and the return-to-home rule, applied to any backend |
 | Reference backend | `flightrisk/drone/fake.py` | A complete, deterministic simulated drone to copy from |
+| Template backend | `flightrisk/drone/template_backend.py` | A minimal skeleton to copy for a new drone (not registered) |
+| Conformance suite | `tests/drone_conformance.py` | Reusable checks every controller must pass |
+| Fleet-edge autopilot drone | `flightrisk/drone/mavlink_fleet.py`, `flightrisk/drone/mavsdk_link.py` | PX4 and ArduPilot in a fleet (`--drone mavlink`), see `docs/open-drone-support.md` |
 
 ## Rules every backend follows
 

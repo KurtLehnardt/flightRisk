@@ -39,6 +39,14 @@ with the environment variables ``FLIGHTRISK_GEOFENCE_CM``,
 ``FLIGHTRISK_CEILING_CM`` and ``FLIGHTRISK_CEILING_MARGIN_CM`` through
 ``SafetyEnvelope.from_env``.
 
+Scale: every distance is in centimetres on every drone, but the ranges that
+are allowed come from an ``EnvelopeLimits`` profile. ``ROOM_LIMITS`` is the
+indoor Tello profile and the default everywhere, so the module constants
+below keep their meaning. ``FIELD_LIMITS`` is the outdoor profile for
+GPS-guided open-source autopilots (PX4, ArduPilot), with metre-scale moves,
+slots, ceilings and geofences; ``limits_for`` picks the profile a drone's
+``DroneCapabilities.flight_scale`` asks for (``docs/open-drone-support.md``).
+
 Frame convention: ``x_cm`` is to the right of the takeoff heading, ``y_cm`` is
 ahead along it, and ``heading_deg`` is measured clockwise from it.
 """
@@ -62,11 +70,14 @@ __all__ = [
     "DEFAULT_LAND_BATTERY",
     "DEFAULT_LINK_LOSS_LAND_S",
     "DEFAULT_MIN_TAKEOFF_BATTERY",
+    "EnvelopeLimits",
+    "FIELD_LIMITS",
     "format_cm",
     "GEOFENCE_CM_ENV",
     "HORIZONTAL_DIRECTIONS",
     "is_finite_number",
     "LINK_LOSS_LAND_S_ENV",
+    "limits_for",
     "LinkWatchdog",
     "MAX_ALT_SLOT_CM",
     "MAX_CEILING_CM",
@@ -77,6 +88,7 @@ __all__ = [
     "MIN_MOVE_CM",
     "MIN_TAKEOFF_BATTERY_ENV",
     "RelativePose",
+    "ROOM_LIMITS",
     "SafetyEnvelope",
     "slot_above_ceiling",
     "validate_ceiling",
@@ -123,6 +135,81 @@ MIN_CEILING_MARGIN_CM = 30
 
 HORIZONTAL_DIRECTIONS = ("forward", "back", "left", "right")
 
+
+@dataclass(frozen=True)
+class EnvelopeLimits:
+    """The ranges a ``SafetyEnvelope`` allows, in centimetres, and its defaults.
+
+    One profile per flight scale. Values are centimetres so that the fleet
+    protocol, the lane plans and the telemetry keep one unit whatever the
+    drone; only the allowed ranges change.
+    """
+
+    name: str
+    #: Shortest and longest single move the drone flies exactly.
+    min_move_cm: float
+    max_move_cm: float
+    #: Altitude slot range (height above the takeoff point).
+    min_alt_slot_cm: float
+    max_alt_slot_cm: float
+    #: Ceiling range and the smallest clearance kept below the ceiling.
+    min_ceiling_cm: float
+    max_ceiling_cm: float
+    min_ceiling_margin_cm: float
+    #: Largest geofence half-width accepted.
+    max_geofence_cm: float
+    #: Defaults used when nothing is configured.
+    default_geofence_cm: float
+    default_alt_slot_cm: float
+    default_ceiling_cm: float
+    default_ceiling_margin_cm: float
+
+
+#: Indoor profile (the Tello): the limits this module always had.
+ROOM_LIMITS = EnvelopeLimits(
+    name="room",
+    min_move_cm=MIN_MOVE_CM,
+    max_move_cm=MAX_MOVE_CM,
+    min_alt_slot_cm=MIN_ALT_SLOT_CM,
+    max_alt_slot_cm=MAX_ALT_SLOT_CM,
+    min_ceiling_cm=MIN_CEILING_CM,
+    max_ceiling_cm=MAX_CEILING_CM,
+    min_ceiling_margin_cm=MIN_CEILING_MARGIN_CM,
+    max_geofence_cm=float("inf"),
+    default_geofence_cm=DEFAULT_GEOFENCE_CM,
+    default_alt_slot_cm=DEFAULT_ALT_SLOT_CM,
+    default_ceiling_cm=DEFAULT_CEILING_CM,
+    default_ceiling_margin_cm=DEFAULT_CEILING_MARGIN_CM,
+)
+
+#: Outdoor profile for GPS-guided open-source autopilots (PX4, ArduPilot).
+#: Conservative defaults: a 30 m ceiling with a 5 m margin (25 m highest
+#: slot), a 15 m slot, a 30 m geofence half-width (a 60 m by 60 m box around
+#: the takeoff point), and nothing above 120 m. A Pixhawk-class aircraft is
+#: far more dangerous than a Tello; widen these only on purpose.
+FIELD_LIMITS = EnvelopeLimits(
+    name="field",
+    min_move_cm=MIN_MOVE_CM,
+    max_move_cm=5000,
+    min_alt_slot_cm=500,
+    max_alt_slot_cm=12000,
+    min_ceiling_cm=1000,
+    max_ceiling_cm=12000,
+    min_ceiling_margin_cm=300,
+    max_geofence_cm=50000,
+    default_geofence_cm=3000,
+    default_alt_slot_cm=1500,
+    default_ceiling_cm=3000,
+    default_ceiling_margin_cm=500,
+)
+
+_LIMITS_BY_SCALE = {ROOM_LIMITS.name: ROOM_LIMITS, FIELD_LIMITS.name: FIELD_LIMITS}
+
+
+def limits_for(flight_scale: object) -> EnvelopeLimits:
+    """The envelope profile for a ``DroneCapabilities.flight_scale`` value; ``room`` when unknown."""
+    return _LIMITS_BY_SCALE.get(flight_scale, ROOM_LIMITS) if isinstance(flight_scale, str) else ROOM_LIMITS
+
 # Unit vectors (right, ahead) for each horizontal direction relative to the
 # drone's current heading.
 _DIRECTION_VECTORS: dict[str, tuple[float, float]] = {
@@ -149,22 +236,30 @@ def format_cm(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
 
 
-def validate_ceiling(ceiling_cm: object, margin_cm: object) -> tuple[float, float]:
+def validate_ceiling(
+    ceiling_cm: object, margin_cm: object, limits: EnvelopeLimits | None = None
+) -> tuple[float, float]:
     """Check a ceiling and its safety margin; return them as floats.
 
     The ceiling must be within ``MIN_CEILING_CM``-``MAX_CEILING_CM``, the
     margin at least ``MIN_CEILING_MARGIN_CM``, and the effective maximum slot
     (ceiling minus margin) at least the lowest altitude slot. Raises
-    ``ValueError`` with an operator-facing message otherwise.
+    ``ValueError`` with an operator-facing message otherwise. *limits*
+    replaces those ranges (``ROOM_LIMITS`` when omitted).
     """
-    if not is_finite_number(ceiling_cm) or not MIN_CEILING_CM <= ceiling_cm <= MAX_CEILING_CM:
-        raise ValueError(f"ceiling height must be within {MIN_CEILING_CM}-{MAX_CEILING_CM} cm, got {ceiling_cm!r}")
-    if not is_finite_number(margin_cm) or margin_cm < MIN_CEILING_MARGIN_CM:
-        raise ValueError(f"ceiling margin must be at least {MIN_CEILING_MARGIN_CM} cm, got {margin_cm!r}")
-    if ceiling_cm - margin_cm < MIN_ALT_SLOT_CM:
+    lim = ROOM_LIMITS if limits is None else limits
+    lo, hi = lim.min_ceiling_cm, lim.max_ceiling_cm
+    if not is_finite_number(ceiling_cm) or not lo <= ceiling_cm <= hi:
+        raise ValueError(f"ceiling height must be within {format_cm(lo)}-{format_cm(hi)} cm, got {ceiling_cm!r}")
+    if not is_finite_number(margin_cm) or margin_cm < lim.min_ceiling_margin_cm:
+        raise ValueError(
+            f"ceiling margin must be at least {format_cm(lim.min_ceiling_margin_cm)} cm, got {margin_cm!r}"
+        )
+    if ceiling_cm - margin_cm < lim.min_alt_slot_cm:
         raise ValueError(
             f"ceiling {format_cm(ceiling_cm)} cm minus margin {format_cm(margin_cm)} cm leaves "
-            f"{format_cm(ceiling_cm - margin_cm)} cm, below the lowest altitude slot {MIN_ALT_SLOT_CM} cm"
+            f"{format_cm(ceiling_cm - margin_cm)} cm, below the lowest altitude slot "
+            f"{format_cm(lim.min_alt_slot_cm)} cm"
         )
     return float(ceiling_cm), float(margin_cm)
 
@@ -256,9 +351,16 @@ class SafetyEnvelope:
         clock: Callable[[], float] = time.monotonic,
         ceiling_cm: float = DEFAULT_CEILING_CM,
         ceiling_margin_cm: float = DEFAULT_CEILING_MARGIN_CM,
+        limits: EnvelopeLimits | None = None,
     ):
+        #: The ranges this envelope allows (``ROOM_LIMITS`` unless given).
+        self.limits = ROOM_LIMITS if limits is None else limits
         if not is_finite_number(geofence_cm) or geofence_cm <= 0:
             raise ValueError(f"geofence_cm must be a positive number, got {geofence_cm!r}")
+        if geofence_cm > self.limits.max_geofence_cm:
+            raise ValueError(
+                f"geofence_cm must be at most {format_cm(self.limits.max_geofence_cm)} cm, got {geofence_cm!r}"
+            )
         if not is_finite_number(min_takeoff_battery) or not 0 <= min_takeoff_battery <= 100:
             raise ValueError(f"min_takeoff_battery must be within 0-100, got {min_takeoff_battery!r}")
         if not is_finite_number(land_battery) or not 0 <= land_battery <= 100:
@@ -269,7 +371,7 @@ class SafetyEnvelope:
         self.min_takeoff_battery = float(min_takeoff_battery)
         self.land_battery = float(land_battery)
         self._lock = threading.Lock()
-        self.ceiling_cm, self.ceiling_margin_cm = validate_ceiling(ceiling_cm, ceiling_margin_cm)
+        self.ceiling_cm, self.ceiling_margin_cm = validate_ceiling(ceiling_cm, ceiling_margin_cm, self.limits)
         self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
@@ -282,7 +384,13 @@ class SafetyEnvelope:
         environ: Mapping[str, str] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> "SafetyEnvelope":
-        """Build an envelope with the design defaults and environment overrides."""
+        """Build an envelope with the design defaults and environment overrides.
+
+        This is the indoor (``ROOM_LIMITS``) envelope of the Tello edge.
+        Outdoor drones use ``for_field`` instead, which never reads these
+        centimetre variables, so a room setting cannot leak into an outdoor
+        aircraft's limits.
+        """
         env = os.environ if environ is None else environ
 
         def _read(name: str, default: float) -> float:
@@ -305,13 +413,43 @@ class SafetyEnvelope:
             ceiling_margin_cm=_read(CEILING_MARGIN_CM_ENV, DEFAULT_CEILING_MARGIN_CM),
         )
 
+    @classmethod
+    def for_field(
+        cls,
+        *,
+        alt_slot_cm: float | None = None,
+        geofence_cm: float | None = None,
+        ceiling_cm: float | None = None,
+        ceiling_margin_cm: float | None = None,
+        min_takeoff_battery: float = DEFAULT_MIN_TAKEOFF_BATTERY,
+        land_battery: float = DEFAULT_LAND_BATTERY,
+        link_loss_land_s: float = DEFAULT_LINK_LOSS_LAND_S,
+        limits: EnvelopeLimits | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> "SafetyEnvelope":
+        """An outdoor envelope (``FIELD_LIMITS`` unless given); every value not given is the profile default."""
+        lim = FIELD_LIMITS if limits is None else limits
+        return cls(
+            geofence_cm=lim.default_geofence_cm if geofence_cm is None else geofence_cm,
+            alt_slot_cm=lim.default_alt_slot_cm if alt_slot_cm is None else alt_slot_cm,
+            min_takeoff_battery=min_takeoff_battery,
+            land_battery=land_battery,
+            link_loss_land_s=link_loss_land_s,
+            clock=clock,
+            ceiling_cm=lim.default_ceiling_cm if ceiling_cm is None else ceiling_cm,
+            ceiling_margin_cm=lim.default_ceiling_margin_cm if ceiling_margin_cm is None else ceiling_margin_cm,
+            limits=lim,
+        )
+
     # --- Altitude slot ---
 
     @staticmethod
-    def validate_alt_slot(alt_slot_cm: float) -> float:
-        if not is_finite_number(alt_slot_cm) or not MIN_ALT_SLOT_CM <= alt_slot_cm <= MAX_ALT_SLOT_CM:
+    def validate_alt_slot(alt_slot_cm: float, limits: EnvelopeLimits | None = None) -> float:
+        lim = ROOM_LIMITS if limits is None else limits
+        lo, hi = lim.min_alt_slot_cm, lim.max_alt_slot_cm
+        if not is_finite_number(alt_slot_cm) or not lo <= alt_slot_cm <= hi:
             raise ValueError(
-                f"altitude slot must be within {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm, got {alt_slot_cm!r}"
+                f"altitude slot must be within {format_cm(lo)}-{format_cm(hi)} cm, got {alt_slot_cm!r}"
             )
         return float(alt_slot_cm)
 
@@ -326,7 +464,7 @@ class SafetyEnvelope:
         Raises ``ValueError`` for a slot outside the slot range and
         ``CeilingError`` (a ``ValueError``) for one above the ceiling limit.
         """
-        slot = self.validate_alt_slot(alt_slot_cm)
+        slot = self.validate_alt_slot(alt_slot_cm, self.limits)
         reason = slot_above_ceiling(slot, self.ceiling_cm, self.ceiling_margin_cm)
         if reason is not None:
             raise CeilingError(f"altitude {reason}")
@@ -348,8 +486,8 @@ class SafetyEnvelope:
         and the slot against the new limit); on any error nothing changes.
         Call this only while the drone is on the ground: the executor does.
         """
-        ceiling, margin = validate_ceiling(ceiling_cm, margin_cm)
-        slot = self.validate_alt_slot(alt_slot_cm)
+        ceiling, margin = validate_ceiling(ceiling_cm, margin_cm, self.limits)
+        slot = self.validate_alt_slot(alt_slot_cm, self.limits)
         reason = slot_above_ceiling(slot, ceiling, margin)
         if reason is not None:
             raise CeilingError(f"altitude {reason}")
@@ -395,10 +533,10 @@ class SafetyEnvelope:
         if reason is not None:
             raise CeilingError(f"altitude {reason}")
         delta = int(round(self.alt_slot_cm - height_cm))
-        if abs(delta) < MIN_MOVE_CM:
+        if abs(delta) < self.limits.min_move_cm:
             return None
         direction = "up" if delta > 0 else "down"
-        return direction, min(abs(delta), MAX_MOVE_CM)
+        return direction, int(min(abs(delta), self.limits.max_move_cm))
 
     # --- Geofence ---
 
@@ -411,7 +549,7 @@ class SafetyEnvelope:
         """
         if direction not in HORIZONTAL_DIRECTIONS:
             return False
-        if not is_finite_number(distance_cm) or not MIN_MOVE_CM <= distance_cm <= MAX_MOVE_CM:
+        if not is_finite_number(distance_cm) or not self.limits.min_move_cm <= distance_cm <= self.limits.max_move_cm:
             return False
         with self._lock:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)

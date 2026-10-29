@@ -2439,7 +2439,9 @@ class FakeTelloController:
         self._record("hover")
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> None:
-        self._record("rc", lr, fb, ud, yaw)
+        # Clamped to -100..100 like djitellopy's send_rc_control, so the fake
+        # records what a real Tello would be sent.
+        self._record("rc", *(max(-100, min(100, int(v))) for v in (lr, fb, ud, yaw)))
 
     def read_battery(self) -> int | None:
         return self.state.battery

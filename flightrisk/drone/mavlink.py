@@ -23,6 +23,7 @@ from flightrisk.config import get_config
 from flightrisk.drone.controller import (
     BASIC_FLIGHT,
     Capability,
+    CommandOutcome,
     CommandResult,
     DroneCapabilities,
     DroneState,
@@ -63,6 +64,7 @@ _RTSP_RECONNECT_DELAY = 5.0  # seconds before RTSP reconnect attempt
 _HEARTBEAT_TIMEOUT = 5.0  # seconds without telemetry -> disconnected
 _GPS_ARRIVAL_RADIUS = 2.0  # meters – how close is "arrived"
 _GIMBAL_ID = 0  # MAVSDK gimbal id of the primary gimbal
+_MOVE_DIRECTIONS = ("forward", "back", "left", "right", "up", "down")
 _REPLAY_PREFIX = "dir://"  # rtsp_url scheme that selects aerial frame replay
 _REPLAY_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
@@ -108,6 +110,7 @@ class MavlinkController:
             max_altitude_m=120,
             supports_missions=True,
             features=BASIC_FLIGHT | {Capability.GOTO_GPS},
+            flight_scale="field",
         )
 
         host_ip = _extract_ip(host)
@@ -621,6 +624,9 @@ class MavlinkController:
         return CommandResult("land")
 
     def move(self, direction: str, distance_cm: int) -> CommandResult:
+        if str(direction).lower() not in _MOVE_DIRECTIONS:
+            # An invalid argument is refused, not raised (docs/drone-interface.md).
+            return CommandResult("move", CommandOutcome.REJECTED, f"unknown direction {direction!r}")
         with self._cmd_lock:
             duration = (distance_cm / 100.0) / _MOVE_SPEED
             self._run(self._move_async(direction, distance_cm, duration), timeout=duration + 10)
