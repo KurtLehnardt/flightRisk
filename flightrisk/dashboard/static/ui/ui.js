@@ -1368,7 +1368,12 @@ const socket = io();
         } else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
         else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
-        else if (kind === 'start_refused') {
+        else if (kind === 'plan_refused') {
+            showFleetBanner('PLAN REFUSED');
+            showFleetError('Plan refused: ' + (ev.detail || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        } else if (kind === 'start_refused') {
             showFleetBanner(String(kind));
             showFleetError('Start refused: ' + (ev.detail || 'unknown'));
             fleetStartInFlight = false;
