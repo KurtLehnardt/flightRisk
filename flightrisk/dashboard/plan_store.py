@@ -163,12 +163,18 @@ def load_plan(name: Any, *, base: Path | None = None) -> dict:
         if path.stat().st_size > MAX_PLAN_BYTES:
             raise PlanStoreError(f"the saved plan {name!r} is too large")
         raw = json.loads(path.read_text(encoding="utf-8"))
+    except RecursionError:
+        # A deeply nested file: refuse it like any other unreadable plan.
+        raise PlanStoreError(f"the saved plan {name!r} cannot be read") from None
     except (OSError, ValueError) as exc:
         if isinstance(exc, PlanStoreError):
             raise
         raise PlanStoreError(f"the saved plan {name!r} cannot be read") from None
     if not isinstance(raw, Mapping):
         raise PlanStoreError(f"the saved plan {name!r} is not a plan")
+    version = raw.get("version", 1)
+    if isinstance(version, bool) or version != 1:
+        raise PlanStoreError(f"the saved plan {name!r} has an unsupported version")
     doc = _document(name, raw.get("plan"), raw.get("anchor"), raw.get("view"))
     saved_at = raw.get("saved_at")
     if isinstance(saved_at, str) and len(saved_at) <= 32:

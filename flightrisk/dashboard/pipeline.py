@@ -562,7 +562,7 @@ def _frame_loop(socketio):
                 snapshot = read_telemetry(drone)
                 obs_events.telemetry_snapshot(snapshot)
                 telemetry = legacy_telemetry_payload(snapshot)
-                gps = gps_payload(snapshot)
+                gps = gps_payload(snapshot, fix_ok=getattr(getattr(drone, "state", None), "gps_fix_ok", None))
                 _apply_battery_policy(socketio, drone, snapshot, telemetry["battery"], log)
 
                 if fleet and fleet.count > 1:

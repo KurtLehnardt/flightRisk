@@ -52,7 +52,8 @@
             note: null,
             cacheText: '',
             lines: {},
-            adoptedKey: null,       // the server plan last shown (fleet_plan.details.spec)
+            dirty: false,           // edited since the plan shown last matched the server's
+            locked: null,           // why editing is not allowed now (drones fly), or null
         };
         let previewTimer = null, cacheTimer = null;
 
@@ -64,6 +65,15 @@
             Object.keys(S.paths).forEach((id) => { paths[id] = copyPath(S.paths[id]); });
             return { version: 1, pattern: S.pattern, area: Object.assign({}, S.area), strip_cm: S.strip, paths: paths };
         }
+        // A canonical key of a plan spec, to compare the plan shown here with the plan the server holds.
+        function specKey(s) {
+            if (!s || !s.area) return null;
+            const paths = Object.keys(s.paths || {}).sort().map((id) => [id, s.paths[id]]);
+            return JSON.stringify([s.pattern, [s.area.x_cm, s.area.y_cm, s.area.w_cm, s.area.h_cm],
+                typeof s.strip_cm === 'number' ? s.strip_cm : null, paths]);
+        }
+        // Tooltips get a DOM node, so their text is never parsed as HTML.
+        function tip(text) { return el('span', null, text); }
         function previewDrone(id) {
             return ((S.preview && S.preview.drones) || []).find((d) => d.drone_id === id) || null;
         }
@@ -90,7 +100,17 @@
         }
         // Every change to what would fly goes through here: the previous plan is invalidated (ui.js) and the
         // server checks the new one.
+        // True (and the operator told why) when the plan may not change now; every edit checks it first.
+        function blocked() {
+            if (!S.locked) return false;
+            toast('The plan cannot be changed now: ' + S.locked);
+            render();
+            renderInputs();
+            return true;
+        }
         function edited() {
+            if (blocked()) return;
+            S.dirty = true;
             if (typeof opts.onEdited === 'function') opts.onEdited();
             schedulePreview();
             render();
@@ -151,6 +171,7 @@
             });
         }
         function insertVertex(id, latlng) {
+            if (blocked()) return;
             const path = copyPath(drawn(id) || []);
             if (path.length < 2) return;
             const p = unproject(latlng);
@@ -165,14 +186,16 @@
             edited();
         }
         function deleteVertex(id, index) {
+            if (blocked()) return;
             const path = copyPath(drawn(id) || []);
+            if (index === 0) { toast(id + ' takes off from its mark; the first vertex cannot be removed'); return; }
             if (path.length <= 2) { toast('A path keeps at least two vertices'); return; }
             path.splice(index, 1);
             S.paths[id] = path;
             S.vertex = null;
             edited();
         }
-        function editable(id) { return !S.selected || S.selected === id; }
+        function editable(id) { return !S.locked && (!S.selected || S.selected === id); }
 
         function renderDrone(id, group, handles) {
             const color = droneColor(id);
@@ -198,20 +221,23 @@
             S.lines[id] = { drawn: drawnLine, flown: pathLine };
             [drawnLine, pathLine].forEach((line) => {
                 if (!line) return;
-                line.on('click', (e) => { L.DomEvent.stop(e); if (editable(id)) insertVertex(id, e.latlng); });
-                line.bindTooltip(id + (S.paths[id] ? ' (edited)' : '') + ': click to add a vertex', { sticky: true });
+                line.on('click', (e) => { L.DomEvent.stopPropagation(e); if (editable(id)) insertVertex(id, e.latlng); });
+                line.bindTooltip(tip(id + (S.paths[id] ? ' (edited)' : '') + (S.locked ? '' : ': click to add a vertex')), { sticky: true });
             });
             if (!dim) addArrows(group, trace, color);
+            // The takeoff mark: where the drone stands. Editing never moves it (docs/fleet-setup.md).
             const start = project(vertices[0][0], vertices[0][1]);
-            L.circleMarker(start, { radius: 9, color: color, weight: 3, fillOpacity: 0.15, interactive: false }).addTo(group);
+            L.circleMarker(start, { radius: 9, color: color, weight: 3, fillOpacity: 0.15 })
+                .bindTooltip(tip(id + ' takeoff mark (fixed): place the drone here, nose along the forward axis'))
+                .addTo(group);
             if (!editable(id)) return;
             const bad = badVertices(id);
             vertices.forEach((v, index) => {
+                if (index === 0) return;
                 const selected = S.vertex && S.vertex.id === id && S.vertex.index === index;
-                const cls = 'plan-vertex' + (index === 0 ? ' start' : '') + (bad[index] ? ' bad' : '') + (selected ? ' selected' : '');
+                const cls = 'plan-vertex' + (bad[index] ? ' bad' : '') + (selected ? ' selected' : '');
                 const marker = L.marker(project(v[0], v[1]), {
-                    icon: icon(cls, index === 0 ? 'S' : '', undefined, color), draggable: true, keyboard: false,
-                    title: id + (index === 0 ? ' takeoff spot (moves its geofence)' : ' vertex ' + index),
+                    icon: icon(cls, '', undefined, color), draggable: true, keyboard: false, title: id + ' vertex ' + index,
                 }).addTo(handles);
                 marker.on('click', (e) => { L.DomEvent.stop(e); S.vertex = { id: id, index: index }; render(); renderInputs(); });
                 marker.on('dblclick contextmenu', (e) => { L.DomEvent.stop(e); deleteVertex(id, index); });
@@ -232,6 +258,7 @@
             const a = S.area;
             L.polygon(rectLatLngs(a.x_cm, a.y_cm, a.w_cm, a.h_cm),
                 { color: '#64748b', weight: 1.5, fillOpacity: 0.04, interactive: false, className: 'plan-area' }).addTo(group);
+            if (S.locked) return;
             const centre = L.marker(project(a.x_cm + a.w_cm / 2, a.y_cm + a.h_cm / 2),
                 { icon: icon('plan-handle move', '✥'), draggable: true, title: 'Drag to move the search area' }).addTo(handles);
             centre.on('dragend', (e) => {
@@ -254,7 +281,7 @@
             ((S.preview && S.preview.problems) || []).forEach((p) => {
                 if (typeof p.x_cm !== 'number' || typeof p.y_cm !== 'number') return;
                 L.circleMarker(project(p.x_cm, p.y_cm), { radius: 11, color: '#dc2626', weight: 3, fill: false, className: 'plan-problem' })
-                    .bindTooltip(p.text).addTo(group);
+                    .bindTooltip(tip(p.text)).addTo(group);
             });
             ((S.preview && S.preview.uncovered) || []).forEach((u) => {
                 if (u.kind !== 'area') return;
@@ -463,9 +490,14 @@
                 setValue('plan-center-lat', ''); setValue('plan-center-lon', '');
                 corners.textContent = 'Set the anchor to see and type the area in latitude and longitude.';
             }
-            $('plan-center-lat').disabled = $('plan-center-lon').disabled = !S.anchor;
-            $('plan-anchor-gps').disabled = !S.gps;
-            $('plan-delete-vertex').disabled = !S.vertex;
+            $('plan-center-lat').disabled = $('plan-center-lon').disabled = !S.anchor || !!S.locked;
+            ['plan-area-x', 'plan-area-y', 'plan-area-w', 'plan-area-h', 'search-pattern', 'plan-revert', 'plan-load']
+                .forEach((id) => { const n = $(id); if (n) n.disabled = !!S.locked; });
+            const gpsButton = $('plan-anchor-gps');
+            gpsButton.disabled = !(S.gps && S.gps.ok);
+            gpsButton.title = S.gps ? (S.gps.ok ? 'Copy the position and heading the GPS drone reports'
+                : 'GPS position not usable: ' + S.gps.reason) : 'No drone reports a GPS position';
+            $('plan-delete-vertex').disabled = !S.vertex || !!S.locked;
             const sel = $('plan-drone');
             const ids = droneIds();
             if (sel.options.length !== ids.length + 1) {
@@ -483,22 +515,37 @@
             if (!p) { box.className = 'msg'; return; }
             const problems = p.problems || [];
             box.className = 'msg ' + (problems.length ? 'msg-error' : '');
+            const single = S.config && S.config.mode === 'single';
+            if (S.locked) box.appendChild(el('div', 'plan-check-head', 'Read-only while ' + S.locked + ': the map shows the plan being flown.'));
             if (problems.length) {
                 box.appendChild(el('div', 'plan-check-head', 'Plan not flyable: ' + problems.length + ' problem' + (problems.length === 1 ? '' : 's')));
                 problems.forEach((x) => box.appendChild(el('div', null, x.text)));
+            } else if (single) {
+                box.appendChild(el('div', 'plan-check-head', 'Checks passed: geofence around the point where the drone hovers '
+                    + 'when Start pattern is pressed (not its takeoff point), and moves.'));
             } else {
-                box.appendChild(el('div', 'plan-check-head', 'Checks passed: geofence, separation, moves and messages.'));
+                box.appendChild(el('div', 'plan-check-head', 'Checks passed: geofence around each takeoff mark, separation between '
+                    + 'drones, moves and messages.'));
             }
+            const layout = p.takeoff_layout || [];
+            if (layout.length > 1) box.appendChild(el('div', null, 'Takeoff marks: ' + layout.join('; ') + '.'));
             const edited = Object.keys(S.paths);
             if (edited.length) box.appendChild(el('div', null, 'Edited paths: ' + edited.join(', ') + ' (they keep their shape when the pattern or area changes).'));
             if (p.coverage && typeof p.coverage.fraction === 'number') {
-                const areas = (p.uncovered || []).filter((u) => u.kind === 'area').length;
-                box.appendChild(el('div', null, 'Coverage ' + Math.round(p.coverage.fraction * 100) + '% of the area'
-                    + (areas ? ', ' + areas + ' unseen area' + (areas === 1 ? '' : 's') + ' shaded red' : '')
-                    + ' (' + p.coverage.model + ').'));
+                // Reported only: possible gaps never block Plan or Start.
+                const gap = 1 - p.coverage.fraction;
+                if (gap > 0) {
+                    const pct = Math.round(gap * 100);
+                    box.appendChild(el('div', null, 'Areas the nominal camera model may not cover (about '
+                        + (pct < 1 ? 'less than 1' : pct) + '% of the area) are shaded on the map.'));
+                } else {
+                    box.appendChild(el('div', null, 'The nominal camera model covers the whole area.'));
+                }
+                if (p.coverage.note) box.appendChild(el('div', 'hint', p.coverage.note));
             }
         }
         function areaInput() {
+            if (blocked()) return;
             const vals = ['plan-area-x', 'plan-area-y', 'plan-area-w', 'plan-area-h'].map((id) => num($(id).value));
             if (vals.some((v) => v === null) || !S.area) { renderInputs(); return; }
             S.area = { x_cm: Math.round(vals[0]), y_cm: Math.round(vals[1]), w_cm: Math.max(G.MIN_MOVE_CM, Math.round(vals[2])), h_cm: Math.max(G.MIN_MOVE_CM, Math.round(vals[3])) };
@@ -512,6 +559,7 @@
         }
         ['plan-anchor-lat', 'plan-anchor-lon', 'plan-anchor-heading'].forEach((id) => { const n = $(id); if (n) n.addEventListener('change', anchorInput); });
         function centreInput() {
+            if (blocked()) return;
             const lat = num($('plan-center-lat').value), lon = num($('plan-center-lon').value);
             if (lat === null || lon === null || !S.anchor || !S.area) return;
             const c = G.latLonToFrame(S.anchor, lat, lon);
@@ -520,9 +568,14 @@
             edited();
         }
         ['plan-center-lat', 'plan-center-lon'].forEach((id) => { const n = $(id); if (n) n.addEventListener('change', centreInput); });
-        $('search-pattern').addEventListener('change', (e) => { S.pattern = e.target.value; edited(); });
+        $('search-pattern').addEventListener('change', (e) => {
+            if (blocked()) { e.target.value = S.pattern; return; }
+            S.pattern = e.target.value;
+            edited();
+        });
         $('plan-drone').addEventListener('change', (e) => { S.selected = e.target.value; S.vertex = null; render(); renderInputs(); });
         $('plan-revert').addEventListener('click', () => {
+            if (blocked()) return;
             const ids = S.selected ? [S.selected] : Object.keys(S.paths);
             if (!ids.some((id) => S.paths[id])) { toast('No edited path to revert'); return; }
             ids.forEach((id) => { delete S.paths[id]; });
@@ -536,7 +589,7 @@
             $('plan-anchor-pick').classList.toggle('active', S.picking);
             if (S.picking) toast('Click the takeoff point on the map');
         });
-        $('plan-anchor-gps').addEventListener('click', () => { if (S.gps) setAnchor(S.gps); });
+        $('plan-anchor-gps').addEventListener('click', () => { if (S.gps && S.gps.ok) setAnchor(S.gps); });
 
         // ---- Saved plans --------------------------------------------------------------------------------------
         $('plan-save').addEventListener('click', () => {
@@ -548,6 +601,7 @@
             socket.emit('save_plan', { name: name, plan: s, anchor: S.anchor, view: view });
         });
         $('plan-load').addEventListener('click', () => {
+            if (S.locked) { toast('A plan cannot be loaded now: ' + S.locked); return; }
             const name = $('plan-load-list').value;
             if (name) socket.emit('load_plan', { name: name });
         });
@@ -560,6 +614,7 @@
         });
         socket.on('plan_loaded', (doc) => {
             if (!doc || !doc.ok) { toast('Plan not loaded: ' + ((doc && doc.message) || 'error')); return; }
+            if (S.locked) { toast('A plan cannot be loaded now: ' + S.locked); return; }
             adopt(doc.plan);
             if (doc.anchor) setAnchor(doc.anchor);
             const view = doc.view || {};
@@ -616,24 +671,41 @@
             spec: spec,
             singleSpec: () => (S.config && S.config.mode === 'single' ? spec() : null),
             fleetSpec: () => (S.config && S.config.mode === 'fleet' ? spec() : null),
-            // A plan from the server (fleet_plan.details): show it as the current plan.
+            // A plan from the server (fleet_plan.details). Returns true when the map shows exactly that plan, so
+            // Start may fly it. Local edits are never overwritten silently: when the map was edited since it last
+            // matched the server and differs from the server's plan, the edits are kept and false is returned
+            // (ui.js keeps Start disabled and reports the edit). Without edits the server's plan is shown.
             onFleetPlan: (plan) => {
-                if (!plan || !plan.details || !plan.details.spec) return false;
-                // The same plan is sent again when the page reconnects; keep any edits made since it arrived.
-                const key = JSON.stringify(plan.details.spec);
-                if (key === S.adoptedKey) return true;
-                S.adoptedKey = key;
-                adopt(plan.details.spec);
-                S.preview = plan.details;
+                if (!plan || !plan.details || !plan.details.spec) return !ready();
+                const serverKey = specKey(plan.details.spec);
+                if (serverKey === specKey(spec()) || !S.dirty || !ready() || S.locked) {
+                    adopt(plan.details.spec);
+                    S.preview = plan.details;
+                    S.dirty = false;
+                    render();
+                    renderInputs();
+                    return true;
+                }
+                return false;
+            },
+            // Why editing is not allowed now (drones fly or a pattern runs), or null to allow it again.
+            setLocked: (reason) => {
+                const next = reason || null;
+                if (next === S.locked) return;
+                S.locked = next;
+                S.vertex = null;
                 render();
                 renderInputs();
-                return true;
             },
+            specKey: specKey,
             toLatLng: (x, y) => (S.anchor ? G.frameToLatLon(S.anchor, x, y) : null),
-            setDroneGps: (lat, lon, heading) => {
-                if (typeof lat !== 'number' || typeof lon !== 'number') return;
-                S.gps = { lat: lat, lon: lon, heading_deg: typeof heading === 'number' ? heading : 0 };
-                $('plan-anchor-gps').disabled = false;
+            // The frame event's gps field: {lat, lon, heading_deg, ok, reason}. A position is offered as the
+            // anchor only when the server found it usable (a fix, plausible, recent).
+            setDroneGps: (gps) => {
+                if (!gps || typeof gps.lat !== 'number' || typeof gps.lon !== 'number') return;
+                S.gps = { lat: gps.lat, lon: gps.lon, heading_deg: typeof gps.heading_deg === 'number' ? gps.heading_deg : 0,
+                    ok: gps.ok === true, reason: gps.reason || 'unknown' };
+                renderInputs();
             },
             request: () => socket.emit('get_map_config'),
         };

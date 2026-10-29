@@ -156,7 +156,8 @@ def test_uncovered_areas_reflect_the_edited_paths():
     covered = 1 - sum(e["w_cm"] * e["h_cm"] for e in short.uncovered) / (300 * 400)
     assert covered == pytest.approx(short.coverage, abs=0.01)
     payload = short.payload()
-    assert payload["coverage"]["model"].startswith("square footprint")
+    assert payload["coverage"]["model"] == "nominal (downward camera model)"
+    assert "gimbal" in payload["coverage"]["note"] and "intentional" in payload["coverage"]["note"]
     assert payload["uncovered"] == short.uncovered
 
 
@@ -170,8 +171,11 @@ def test_payload_shape():
     assert payload["spec"]["pattern"] == "parallel_track"
 
 
+MARKS = {"drone-1": (30, -50), "drone-2": (250, 0)}
+
+
 def test_zone_assignments_carry_the_takeoff_point_and_lanes():
-    built = _build(_spec(paths={"drone-1": [[30, -50], [30, 300], [100, 300]]}))
+    built = _build(_spec(paths={"drone-1": [[30, -50], [30, 300], [100, 300]]}), takeoffs=MARKS)
     assert built.ok, built.problem_text()
     zone = built.zone_assignments()[0]
     assert (zone.takeoff_x_cm, zone.takeoff_y_cm) == (30, -50)
@@ -198,7 +202,7 @@ class _Link:
 def test_plan_zones_sends_the_lanes_and_places_telemetry_at_the_takeoff_point():
     links = {d: _Link() for d in IDS}
     coordinator = FleetCoordinator(links, area_cm=400, strip_cm=75)
-    built = _build(_spec(paths={"drone-1": [[30, -50], [30, 300], [100, 300]]}))
+    built = _build(_spec(paths={"drone-1": [[30, -50], [30, 300], [100, 300]]}), takeoffs=MARKS)
     plan = coordinator.plan_zones(built.zone_assignments(), grid_cm=(0, 0, 400, 400), gap_cm=100, strip_cm=75,
                                   uncovered_areas=built.uncovered, details=built.payload())
     sent = links["drone-1"].sent[-1]
@@ -262,13 +266,13 @@ def test_editing_after_plan_invalidates_start_until_plan_again():
         supervisor.handle_control(fp.make_ack_assign_lanes(drone_id, 90, len(supervisor.coordinator.lanes(drone_id))))
     assert supervisor.mark_plan_edited() is True
     assert [e for e in sio.named("fleet_event") if e["event"] == "plan_invalidated"]
-    result = supervisor.start()
+    result = supervisor.start(spec=_spec())
     assert not result.ok and "edited on the map after Plan" in result.refusals["fleet"]
     assert "start_at" not in transport.sent_types("drone-1")
     supervisor.plan(spec=_spec())
     for drone_id in supervisor.links:
         supervisor.handle_control(fp.make_ack_assign_lanes(drone_id, 90, len(supervisor.coordinator.lanes(drone_id))))
-    assert supervisor.start().ok
+    assert supervisor.start(spec=_spec()).ok
 
 
 def test_mark_plan_edited_never_touches_a_started_mission_or_no_plan():
@@ -277,7 +281,7 @@ def test_mark_plan_edited_never_touches_a_started_mission_or_no_plan():
     supervisor.plan(spec=_spec())
     for drone_id in supervisor.links:
         supervisor.handle_control(fp.make_ack_assign_lanes(drone_id, 90, len(supervisor.coordinator.lanes(drone_id))))
-    assert supervisor.start().ok
+    assert supervisor.start(spec=_spec()).ok
     assert supervisor.mark_plan_edited() is False
 
 
@@ -294,3 +298,34 @@ def test_map_defaults_follow_the_supervisor():
     assert defaults == {
         "mode": "fleet", "drone_ids": IDS, "area": AREA, "strip_cm": 75, "gap_cm": 100, "geofence_cm": 450.0,
     }
+
+
+# ---------------------------------------------------------------- re-task separation (review N4)
+
+
+def test_retask_offers_keep_the_gap_and_report_lanes_no_drone_can_take():
+    from tests.test_coordinator import FakeClock as CoordClock
+    from tests.test_coordinator import FakeEdge
+
+    clock = CoordClock()
+    edges = {f"drone-{i}": FakeEdge(f"drone-{i}", clock, 0.0) for i in (1, 2, 3)}
+    events = []
+    coordinator = FleetCoordinator(
+        edges, area_cm=(800, 400), strip_cm=75, clock=clock,
+        on_event=lambda name, payload: events.append((name, payload)),
+        # drone-2 is held for manual control: it receives nothing, but it may still fly.
+        retask_excluded=lambda drone_id: drone_id == "drone-2",
+    )
+    coordinator.sync()
+    plan = coordinator.plan()
+    assert coordinator.start().ok
+    edges["drone-1"].telemetry(lane_index=1)
+    appended = coordinator.on_drone_lost("drone-1")
+    # Only drone-3 could take drone-1's lanes, and it would cross drone-2's zone.
+    assert appended == {}
+    assert coordinator.lanes("drone-3") == list(plan.zone_for("drone-3").lanes)
+    failed = [payload for name, payload in events if name == "fleet_event" and payload.get("event") == "retask_failed"]
+    assert failed and "drone-3 would come within" in failed[-1]["detail"]
+    assert "below the 100 cm gap" in failed[-1]["detail"]
+    current = coordinator.current_plan()
+    assert any(entry.get("drone_id") == "drone-1" and "gap" in entry["reason"] for entry in current["uncovered"])

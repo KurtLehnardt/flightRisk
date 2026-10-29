@@ -30,7 +30,8 @@ def test_plan_and_start_buttons_emit_events():
     assert "on('fleet-start', 'click', startFleet);" in JS
     # Plan sends the plan shown on the map, or nothing extra when the map editor is not loaded.
     assert "socket.emit('plan_fleet', plan ? { plan: plan } : {})" in _function_body("planFleet")
-    assert "socket.emit('start_fleet')" in _function_body("startFleet")
+    # Start sends the plan the map shows; the server compares it with the plan the drones hold.
+    assert "socket.emit('start_fleet', shown ? { plan: shown } : {})" in _function_body("startFleet")
     assert 'id="fleet-error"' in INDEX
     errors = JS[JS.index("socket.on('error'"):]
     assert "showFleetError(" in errors[: errors.index("});")]
@@ -39,7 +40,7 @@ def test_plan_and_start_buttons_emit_events():
 def test_start_requires_confirm_and_plan():
     assert re.search(r'<button[^>]*id="fleet-start"[^>]*\bdisabled\b', INDEX)
     body = _function_body("startFleet")
-    assert body.index("fleetPlanReceived") < body.index("window.confirm") < body.index("socket.emit('start_fleet')")
+    assert body.index("fleetPlanReceived") < body.index("window.confirm") < body.index("socket.emit('start_fleet'")
     assert "fleetStartInFlight = true" in body
     assert "socket.on('fleet_plan'" in JS[JS.index("let fleetPlanReceived"):]
     assert "fleetPlanReceived = true" in JS

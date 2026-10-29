@@ -64,7 +64,43 @@ MAX_STRIP_CM = 1_000
 MAX_COORD_CM = 2 * MAX_AREA_SIDE_CM
 """Largest absolute plan-frame coordinate accepted for a vertex or an area corner."""
 
-COVERAGE_MODEL = "square footprint of strip_cm centred under the drone"
+COVERAGE_MODEL = "nominal (downward camera model)"
+"""How the coverage figure is labelled wherever it is shown (see ``coverage_note``)."""
+
+CAMERA_FOOTPRINT_ENV = "FLIGHTRISK_CAMERA_FOOTPRINT_CM"
+"""Width in cm of the nominal square ground footprint used for coverage; strip_cm when unset."""
+
+MAX_FOOTPRINT_CM = 5_000
+
+
+def camera_footprint_cm(environ: Mapping[str, str] | None = None) -> int | None:
+    """The configured nominal footprint width (``FLIGHTRISK_CAMERA_FOOTPRINT_CM``), or None for strip_cm.
+
+    Raises ``ValueError`` for a value that is not a whole number of
+    centimetres within 20-5000.
+    """
+    import os
+
+    env = os.environ if environ is None else environ
+    raw = (env.get(CAMERA_FOOTPRINT_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{CAMERA_FOOTPRINT_ENV} must be a number of centimetres, got {raw!r}") from None
+    if not math.isfinite(value) or value != int(value) or not MIN_MOVE_CM <= value <= MAX_FOOTPRINT_CM:
+        raise ValueError(f"{CAMERA_FOOTPRINT_ENV} must be a whole number within {MIN_MOVE_CM}-{MAX_FOOTPRINT_CM} cm")
+    return int(value)
+
+
+def coverage_note(footprint_cm: int) -> str:
+    """The plain words shown with the coverage figure: what it assumes and what changes it."""
+    return (
+        f"Nominal figure: a {footprint_cm} cm square seen straight below each drone ({CAMERA_FOOTPRINT_ENV}). "
+        "The real field of view may be wider, and a gimbal camera changes it. "
+        "Gaps can be intentional, for example trees or a water hazard."
+    )
 
 
 class PlanSpecError(ValueError):
@@ -97,8 +133,9 @@ class PlanSpec:
         unknown = set(data) - {"version", "pattern", "area", "strip_cm", "paths"}
         if unknown:
             raise PlanSpecError(f"unknown plan fields: {', '.join(sorted(map(str, unknown)))}")
-        if data.get("version", SPEC_VERSION) != SPEC_VERSION:
-            raise PlanSpecError(f"unsupported plan version {data.get('version')!r}")
+        version = data.get("version", SPEC_VERSION)
+        if isinstance(version, bool) or version != SPEC_VERSION:
+            raise PlanSpecError(f"unsupported plan version {version!r}")
         pattern = data.get("pattern", "parallel_track")
         if pattern not in pp.PATTERNS:
             raise PlanSpecError(f"pattern must be one of {', '.join(pp.PATTERNS)}, got {pattern!r}")
@@ -221,6 +258,23 @@ class BuiltPlan:
     coverage: float | None = None
     coverage_cell_cm: int | None = None
     uncovered: list[dict] = field(default_factory=list)
+    footprint_cm: int | None = None
+    takeoffs: dict[str, pp.Point] = field(default_factory=dict)
+
+    def takeoff_layout(self) -> list[str]:
+        """Where to put each drone, relative to the first one, in words for the operator."""
+        if not self.takeoffs:
+            return []
+        ids = list(self.takeoffs)
+        x0, y0 = self.takeoffs[ids[0]]
+        lines = [f"{ids[0]} on its mark"]
+        for drone_id in ids[1:]:
+            dx, dy = self.takeoffs[drone_id][0] - x0, self.takeoffs[drone_id][1] - y0
+            side = f"{abs(dx)} cm {'right' if dx >= 0 else 'left'}"
+            ahead = f"{abs(dy)} cm {'ahead of' if dy >= 0 else 'behind'}"
+            lines.append(f"{drone_id} {side} of {ids[0]} and {ahead} it, same heading" if dy else
+                         f"{drone_id} {side} of {ids[0]}, same heading")
+        return lines
 
     @property
     def ok(self) -> bool:
@@ -246,9 +300,13 @@ class BuiltPlan:
             "coverage": None if self.coverage is None else {
                 "fraction": round(self.coverage, 4),
                 "model": COVERAGE_MODEL,
+                "footprint_cm": self.footprint_cm,
+                "note": coverage_note(self.footprint_cm or self.strip_cm),
                 "cell_cm": self.coverage_cell_cm,
             },
             "uncovered": list(self.uncovered),
+            "takeoffs": {drone_id: list(point) for drone_id, point in self.takeoffs.items()},
+            "takeoff_layout": self.takeoff_layout(),
         }
 
     def zone_assignments(self) -> list[ZoneAssignment]:
@@ -322,8 +380,19 @@ def build_plan(
     geofence_cm: float | None,
     alt_slot_of: Callable[[str, int], int] | None = None,
     mode: str = "fleet",
+    takeoffs: Mapping[str, Sequence[int]] | None = None,
+    footprint_cm: int | None = None,
 ) -> BuiltPlan:
     """Build and check a plan for ``drone_ids`` (see the module docstring).
+
+    ``takeoffs`` are the drones' physical takeoff marks in the plan frame
+    (the configured layout). Every path starts at its drone's mark: a
+    generated path flies from the mark to its zone first, an edited path
+    that starts anywhere else is refused, and every check (geofence,
+    separation) uses the marks, so the plan never assumes a drone stands
+    somewhere it does not. Without ``takeoffs`` each drone takes off at its
+    zone's near-left corner. ``footprint_cm`` is the nominal camera
+    footprint width for coverage (``strip_cm`` when None).
 
     ``strip_cm`` is used when the spec names none. ``alt_slot_of(drone_id,
     index)`` gives each drone's altitude slot (100 cm when omitted).
@@ -335,6 +404,7 @@ def build_plan(
     ids = [str(d) for d in drone_ids]
     problems: list[Problem] = []
     built = BuiltPlan(spec, mode, [], problems, strip, int(gap_cm), geofence_cm)
+    built.footprint_cm = int(footprint_cm) if footprint_cm is not None else strip
     if not ids:
         problems.append(Problem("spec", "no drone to plan for"))
         return built
@@ -352,10 +422,24 @@ def build_plan(
         except Exception as exc:  # noqa: BLE001 - the ceiling board's refusal is shown as a problem
             problems.append(Problem("altitude", f"{drone_id}: {exc}", drone_id=drone_id))
             alt = 100
-        generated = tuple(pp.pattern_vertices(spec.pattern, zone, strip))
+        pattern = pp.pattern_vertices(spec.pattern, zone, strip)
+        mark = tuple(int(v) for v in takeoffs[drone_id]) if takeoffs and drone_id in takeoffs else pattern[0]
+        built.takeoffs[drone_id] = mark
+        if mark != pattern[0]:
+            # Fly from the drone's mark to the pattern: forward first, then sideways.
+            pattern = pp.simplify([mark, (mark[0], pattern[0][1]), *pattern])
+        generated = tuple(pattern)
         drawn = spec.paths.get(drone_id, generated)
         drone = DronePath(drone_id, zone, alt, generated, tuple(drawn), drawn != generated)
         built.drones.append(drone)
+        if tuple(drone.drawn[0]) != mark:
+            problems.append(Problem(
+                "takeoff",
+                f"{drone_id}: the path must start at its takeoff mark ({mark[0]}, {mark[1]}) cm, where the drone "
+                f"stands; it starts at ({drone.drawn[0][0]}, {drone.drawn[0][1]}) cm",
+                drone_id=drone_id, vertex=0, point=drone.drawn[0],
+            ))
+            continue
         try:
             drone.converted = pp.path_to_lanes(drone.drawn, fence_cm=geofence_cm)
         except ValueError as exc:
@@ -390,10 +474,10 @@ def build_plan(
         problems.append(Problem("check", text))
 
     if converted:
-        fraction, rects, cell = pp.coverage(spec.area, [d.converted.trace for d in converted], strip)
+        fraction, rects, cell = pp.coverage(spec.area, [d.converted.trace for d in converted], built.footprint_cm)
         built.coverage = fraction
         built.coverage_cell_cm = cell
         built.uncovered = [
-            dict(rect, kind="area", reason=f"not seen by any drone camera ({COVERAGE_MODEL})") for rect in rects
+            dict(rect, kind="area", reason=f"may not be covered by the {COVERAGE_MODEL}") for rect in rects
         ]
     return built

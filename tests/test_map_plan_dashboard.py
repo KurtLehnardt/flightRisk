@@ -266,7 +266,7 @@ def test_map_cache_status_over_the_socket(clean_app_state, tmp_path, monkeypatch
         client.disconnect()
     # The tile is served by the dashboard's own app, with the cache headers.
     resp = app.test_client().get(f"/tiles/usgs-imagery/16/{x}/{y}")
-    assert resp.status_code == 200 and resp.headers["Cache-Control"] == "public, max-age=86400"
+    assert resp.status_code == 200 and resp.headers["Cache-Control"] == "private, max-age=86400"
     assert resp.mimetype == "image/jpeg"
     resp.close()
     assert app.test_client().get("/tiles/usgs-imagery/16/0/..%2f..%2fetc").status_code == 404
@@ -274,10 +274,30 @@ def test_map_cache_status_over_the_socket(clean_app_state, tmp_path, monkeypatch
 
 def test_gps_drones_report_their_position_to_the_map_and_tellos_do_not():
     from flightrisk.drone.controller import DroneState
-    from flightrisk.drone.snapshot import gps_payload, legacy_telemetry_payload, snapshot_from_state
+    from flightrisk.drone.snapshot import (
+        gps_payload,
+        legacy_telemetry_payload,
+        snapshot_from_state,
+    )
 
     gps = snapshot_from_state(DroneState(is_flying=True, latitude=40.6894, longitude=-111.731, heading=42), drone_id="m1")
-    assert gps_payload(gps) == {"lat": 40.6894, "lon": -111.731, "heading_deg": 42.0}
+    assert gps_payload(gps) == {"lat": 40.6894, "lon": -111.731, "heading_deg": 42.0, "ok": True, "reason": None}
     # The legacy telemetry shape is unchanged.
     assert not {"latitude", "longitude", "heading", "lat", "lon"} & set(legacy_telemetry_payload(gps))
     assert gps_payload(snapshot_from_state(DroneState(is_flying=True), drone_id="t1")) is None
+
+
+def test_a_bad_gps_position_is_never_offered_as_the_anchor():
+    import time as _time
+
+    from flightrisk.drone.controller import DroneState
+    from flightrisk.drone.snapshot import gps_payload, snapshot_from_state
+
+    good = snapshot_from_state(DroneState(latitude=40.6894, longitude=-111.731), drone_id="m1")
+    assert gps_payload(good, fix_ok=False)["reason"] == "no 3D GPS fix"
+    assert gps_payload(good, fix_ok=False)["ok"] is False
+    zero = snapshot_from_state(DroneState(latitude=0.0, longitude=0.0), drone_id="m1")
+    assert "0, 0" in gps_payload(zero)["reason"]
+    stale = gps_payload(good, now=_time.time() + 60)
+    assert stale["ok"] is False and "old" in stale["reason"]
+    assert gps_payload(good, fix_ok=True)["ok"] is True

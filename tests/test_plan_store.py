@@ -104,3 +104,23 @@ def test_a_saved_plan_holds_no_extra_fields(tmp_path):
     plan_store.save_plan("p", dict(SPEC), ANCHOR, VIEW, base=tmp_path)
     doc = json.loads((tmp_path / "p.json").read_text())
     assert set(doc) == {"name", "version", "plan", "anchor", "view", "saved_at"}
+
+
+def test_a_deeply_nested_file_is_refused_and_does_not_break_the_list(tmp_path):
+    plan_store.save_plan("good", SPEC, base=tmp_path)
+    (tmp_path / "deep.json").write_text("[" * 100_000 + "]" * 100_000)
+    with pytest.raises(PlanStoreError, match="cannot be read"):
+        plan_store.load_plan("deep", base=tmp_path)
+    assert [p["name"] for p in plan_store.list_plans(base=tmp_path)] == ["good"]
+
+
+@pytest.mark.parametrize("version", [True, "1", 2])
+def test_a_wrong_version_is_refused(tmp_path, version):
+    plan_store.save_plan("p", SPEC, base=tmp_path)
+    doc = json.loads((tmp_path / "p.json").read_text())
+    doc["version"] = version
+    (tmp_path / "p.json").write_text(json.dumps(doc))
+    with pytest.raises(PlanStoreError, match="version"):
+        plan_store.load_plan("p", base=tmp_path)
+    with pytest.raises(PlanStoreError, match="version"):
+        plan_store.save_plan("q", dict(SPEC, version=version), base=tmp_path)

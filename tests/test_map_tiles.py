@@ -69,6 +69,12 @@ class FakeTileServer(ThreadingHTTPServer):
         return f"http://127.0.0.1:{self.server_address[1]}/t/{{z}}/{{y}}/{{x}}.png"
 
 
+@pytest.fixture(autouse=True)
+def _loopback_is_a_usgs_mirror(monkeypatch):
+    """The local fake tile server stands in for basemap.nationalmap.gov in these tests."""
+    monkeypatch.setattr(mt, "BUILT_IN_TEMPLATE_HOSTS", mt.BUILT_IN_TEMPLATE_HOSTS + ("127.0.0.1",))
+
+
 @pytest.fixture
 def server():
     srv = FakeTileServer()
@@ -468,7 +474,7 @@ def test_cli_downloads_from_local_server(server, tmp_path, capsys):
         [
             "--provider", "usgs-topo", "--bbox", ",".join(str(v) for v in small_bbox(15, 1, 2)),
             "--min-zoom", "15", "--max-zoom", "15", "--out", str(tmp_path),
-            "--url-template", server.template, "--rate", "1000",
+            "--url-template", server.template, "--rate", "10",
         ]
     )
     assert code == 0
@@ -532,7 +538,7 @@ def test_cached_tile_is_served_with_headers(client, tmp_path):
     assert resp.status_code == 200
     assert resp.data == PNG
     assert resp.mimetype == "image/png"
-    assert resp.headers["Cache-Control"] == "public, max-age=86400"
+    assert resp.headers["Cache-Control"] == "private, max-age=86400"
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert "Access-Control-Allow-Origin" not in resp.headers
 
@@ -715,3 +721,57 @@ def test_download_recovers_from_corrupt_manifest(server, tmp_path):
     run(server, small_bbox(), 15, 15, tmp_path)
     assert len(json.loads(manifest.read_text())["areas"]) == 1
 
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: template hosts, custom ids, tile and rate limits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("host", ["a.tile.openstreetmap.fr", "tiles.example.com", "basemap.nationalmap.gov.evil.com"])
+def test_a_template_on_another_host_is_never_stored_as_usgs(tmp_path, monkeypatch, host):
+    monkeypatch.setattr(mt, "BUILT_IN_TEMPLATE_HOSTS", ("basemap.nationalmap.gov",))
+    with pytest.raises(ValueError, match="--custom-id"):
+        mt.download_area("usgs-imagery", small_bbox(), 15, 15, out_dir=tmp_path,
+                         url_template=f"https://{host}/{{z}}/{{x}}/{{y}}.png", opener=_no_network())
+    assert not (tmp_path / "usgs-imagery").exists()
+
+
+def test_the_usgs_host_is_accepted_as_a_template(tmp_path, monkeypatch):
+    monkeypatch.setattr(mt, "BUILT_IN_TEMPLATE_HOSTS", ("basemap.nationalmap.gov",))
+    template, _ = mt._resolve_template(
+        mt.PROVIDERS["usgs-topo"], "https://basemap.nationalmap.gov/arcgis/x/{z}/{y}/{x}", None)
+    assert template.startswith("https://basemap.nationalmap.gov/")
+
+
+def test_custom_template_tiles_go_under_their_own_id(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(mt, "BUILT_IN_TEMPLATE_HOSTS", ("basemap.nationalmap.gov",))
+    ft = FakeTime()
+    report = mt.download_area("usgs-imagery", small_bbox(), 15, 15, out_dir=tmp_path, url_template=server.template,
+                              custom_id="lab", sleep=ft.sleep, clock=ft.clock, log=[].append)
+    assert report.downloaded == 1
+    assert not (tmp_path / "usgs-imagery").exists()
+    manifest = json.loads((tmp_path / "custom-lab" / "manifest.json").read_text())
+    assert manifest["provider"] == "custom-lab" and "USGS" not in manifest["attribution"]
+    # The dashboard serves registered providers only.
+    assert mt.find_tile("custom-lab", 15, 0, 0, base=tmp_path) is None
+
+
+@pytest.mark.parametrize("custom_id", ["usgs-imagery!", "UPPER", "", "x" * 40])
+def test_bad_custom_ids_are_refused(tmp_path, custom_id):
+    with pytest.raises(ValueError, match="custom-id"):
+        mt.download_area("usgs-imagery", small_bbox(), 15, 15, out_dir=tmp_path,
+                         url_template="http://127.0.0.1:1/{z}/{x}/{y}", custom_id=custom_id, opener=_no_network())
+
+
+def test_a_high_max_tiles_needs_allow_large(tmp_path):
+    with pytest.raises(ValueError, match="tile limit above 2000 needs --allow-large"):
+        mt.download_area("usgs-imagery", small_bbox(), 15, 15, out_dir=tmp_path, max_tiles=20_000,
+                         opener=_no_network())
+
+
+@pytest.mark.parametrize("rate", [0, -1, float("nan"), float("inf"), 11, True])
+def test_unreasonable_rates_are_refused(tmp_path, rate):
+    with pytest.raises(ValueError, match="request rate"):
+        mt.download_area("usgs-imagery", small_bbox(), 15, 15, out_dir=tmp_path, rate_per_s=rate,
+                         opener=_no_network())

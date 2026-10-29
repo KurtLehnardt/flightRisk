@@ -360,7 +360,7 @@ def test_start_keeps_its_confirmation_and_plan_gate():
     start = JS[JS.index("function startFleet()"):]
     start = start[: start.index("\n    }\n")]
     assert "if (!fleetPlanReceived || fleetStartInFlight) return;" in start
-    assert start.index("window.confirm(") < start.index("socket.emit('start_fleet')")
+    assert start.index("window.confirm(") < start.index("socket.emit('start_fleet'")
     assert re.search(r'id="fleet-start"[^>]*\bdisabled\b', PAGE)
 
 

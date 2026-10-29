@@ -4,7 +4,7 @@
 Run this on a computer with internet access before going to the field::
 
     venv/bin/python scripts/cache_map_tiles.py --provider usgs-imagery \\
-        --center 40.6894,-111.7310 --radius-m 300 --min-zoom 14 --max-zoom 18
+        --center 40.6894,-111.7310 --radius-m 300 --min-zoom 14 --max-zoom 16
 
 The tiles are stored under ``~/.flightrisk/tiles`` (or ``FLIGHTRISK_TILES_DIR``,
 or ``--out``). Use ``--dry-run`` to see how many tiles a job needs without any
@@ -55,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Print the tile count and directory; make no request.")
     parser.add_argument("--url-template", help="Tile URL of a self-hosted or licensed server, with {z} {x} {y}.")
     parser.add_argument("--key-env", help="Environment variable that holds the key for {key} in --url-template.")
+    parser.add_argument("--custom-id", help="Store tiles of a --url-template on another host under custom-<id> "
+                                            "(never as a built-in provider). The dashboard does not show them.")
     return parser
 
 
@@ -93,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_large=args.allow_large,
             url_template=args.url_template,
             key_env=args.key_env,
+            custom_id=args.custom_id,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

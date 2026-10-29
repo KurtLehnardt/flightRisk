@@ -65,15 +65,23 @@ def test_every_edit_goes_through_the_server_check_and_invalidates_the_plan():
     edited = re.search(r"function edited\(\) \{.*?\n        \}", MAP_JS, re.DOTALL).group(0)
     assert "opts.onEdited()" in edited and "schedulePreview()" in edited
     assert "socket.emit('preview_plan', { plan: s })" in MAP_JS
-    body = re.search(r"function mapPlanEdited\(\) \{.*?\n    \}", UI_JS, re.DOTALL).group(0)
+    assert "invalidateFleetPlan(" in re.search(r"function mapPlanEdited\(\) \{.*?\n    \}", UI_JS, re.DOTALL).group(0)
+    body = re.search(r"function invalidateFleetPlan\(message\) \{.*?\n    \}", UI_JS, re.DOTALL).group(0)
     assert "fleetPlanReceived = false" in body and "updateFleetStartButton()" in body
+    # Reported on every edit, also while a Plan is pending (review B1): no early return.
+    assert "return" not in body
     assert "socket.emit('fleet_plan_edited')" in body
     assert "onEdited: mapPlanEdited" in UI_JS
 
 
 def test_start_keeps_its_plan_gate_and_confirmation():
     body = re.search(r"function startFleet\(\) \{.*?\n    \}", UI_JS, re.DOTALL).group(0)
-    assert body.index("fleetPlanReceived") < body.index("window.confirm") < body.index("socket.emit('start_fleet')")
+    assert body.index("fleetPlanReceived") < body.index("window.confirm") < body.index("socket.emit('start_fleet'")
+    # Start sends the plan the map shows, and the confirmation says where each drone stands.
+    assert "socket.emit('start_fleet', shown ? { plan: shown } : {})" in body
+    assert "takeoffInstructions()" in body
+    # Possible coverage gaps are reported, never put in the Start dialog.
+    assert "coverage" not in body.lower()
     # A server-side invalidation also disables Start.
     assert "kind === 'plan_invalidated'" in UI_JS
 
@@ -97,7 +105,7 @@ def test_the_map_says_where_positions_are_dead_reckoned():
 def test_problems_and_uncovered_areas_are_shown():
     assert "plan-problem" in MAP_JS and "plan-uncovered" in MAP_JS
     assert "p.vertex" in MAP_JS
-    assert "kind === 'area'" in UI_JS
+    assert "u.kind !== 'area'" in MAP_JS and "u.kind !== 'area'" in UI_JS
 
 
 def test_single_drone_start_sends_the_map_plan_only_without_a_fleet():
@@ -111,3 +119,29 @@ def test_the_tile_route_stays_behind_the_api_key_gate(monkeypatch, path):
     resp = app_module.app.test_client().get(path)
     assert resp.status_code == 401
     assert "Access-Control-Allow-Origin" not in resp.headers
+
+
+def test_tooltips_are_text_nodes_never_html():
+    # Review N7: Leaflet parses a string tooltip as HTML.
+    calls = re.findall(r"bindTooltip\(([^,)]*)", MAP_JS)
+    assert calls and all(c.startswith("tip(") for c in calls), calls
+    assert "function tip(text) { return el('span', null, text); }" in MAP_JS
+
+
+def test_the_takeoff_mark_has_no_handle_and_cannot_be_deleted():
+    # Review B2: the drones stay on their marks, so the first vertex never moves.
+    assert "if (index === 0) return;" in MAP_JS
+    assert "the first vertex cannot be removed" in MAP_JS
+    assert "takeoff spot (moves its geofence)" not in MAP_JS
+
+
+def test_the_editor_is_read_only_while_flying():
+    # Review N1.
+    assert "function blocked()" in MAP_JS and MAP_JS.count("if (blocked()) return;") >= 6
+    assert "mapPlan.setLocked(flying ? 'drones are flying'" in UI_JS
+    assert "mapPlan.setLocked('the search pattern runs')" in UI_JS
+
+
+def test_the_single_drone_check_names_the_hover_point():
+    # Review N2.
+    assert "geofence around the point where the drone hovers" in MAP_JS

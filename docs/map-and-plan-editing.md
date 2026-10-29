@@ -35,11 +35,15 @@ the fleet coordinator already uses (`flightrisk/drone/coordinator.py`) and the
 frame each edge dead-reckons in (`flightrisk/drone/safety.py`): a lane plan only
 contains `forward`, `back`, `left` and `right` moves, and nothing rotates.
 
-- In the fleet, every drone takes off at the first vertex of its path. For a
-  generated plan that is the near-left corner of its zone, as before. The
-  coordinator now records that takeoff point explicitly in the zone
-  (`takeoff_x_cm`, `takeoff_y_cm`), which the fleet protocol already allows,
-  and adds it to the drone's reported relative position.
+- In the fleet, every drone takes off from its *takeoff mark*, the first
+  vertex of its path. The marks are fixed by the configured layout
+  (`--fleet-area-cm` and the fleet size): the near-left corner of each drone's
+  zone of the configured area, so drone-2 stands 250 cm to the right of
+  drone-1 with the default 400 cm area and two drones
+  (`docs/fleet-setup.md`). Map edits never move a mark (section 3.3). The
+  coordinator records the mark in the zone (`takeoff_x_cm`, `takeoff_y_cm`),
+  which the fleet protocol already allows, and adds it to the drone's reported
+  relative position.
 - In the single-drone flow (`start_search` on a drone connected directly to
   the dashboard), the origin is where the drone hovers when Start pattern is
   pressed.
@@ -57,7 +61,10 @@ The operator sets the anchor in the Search plan card in one of three ways:
 1. Type the latitude, longitude and heading.
 2. Press **Pick anchor on map** and click the takeoff point on the map.
 3. For a drone that reports GPS (a MAVLink drone), press **Use drone GPS**, which
-   copies the drone's reported latitude, longitude and heading.
+   copies the drone's reported latitude, longitude and heading. The button is
+   enabled only for a usable position: a 3D fix (when the drone reports its fix
+   type), a position within range and not the 0, 0 a receiver reports before
+   its first fix, and a reading at most 5 s old. Otherwise its tooltip says why.
 
 The dashboard converts centimetres to latitude and longitude with the same
 flat-earth formula as `flightrisk/drone/geo.py` (accurate to well under a
@@ -90,7 +97,10 @@ The pattern list is the one the single-drone selector already offered:
 parallel track (lawnmower), expanding square, track line, sector and spiral.
 For the fleet, the search area is split into side-by-side zones separated by
 the zone gap (`gap_cm`, 100 cm by default), exactly as the coordinator splits
-it today, and each zone gets the pattern fitted to its rectangle:
+it today, and each zone gets the pattern fitted to its rectangle. When a zone
+does not start at its drone's takeoff mark (the area was moved or resized),
+the generated path first flies from the mark to the zone, forward first and
+then sideways:
 
 - **Parallel track** is the coordinator's existing pattern: strips `strip_cm`
   apart from the zone's near-left corner. An unedited parallel-track plan has
@@ -111,17 +121,26 @@ The area is the whole search rectangle (`x_cm`, `y_cm`, `w_cm`, `h_cm`). The
 operator can drag its centre handle to move it, drag its far corner handle to
 resize it, or type the four numbers. In the lat/lon view, the area's centre
 latitude and longitude can be typed as well, and the corner positions are
-shown. Changing the area or the pattern regenerates every drone's path that
-the operator has not edited. A drone whose path was edited keeps it, and the
+shown. Moving or resizing the area moves the zones, never the takeoff marks.
+Changing the area or the pattern regenerates every drone's path that the
+operator has not edited. A drone whose path was edited keeps it, and the
 card says so; **Revert path** applies the current pattern to it again.
 
 ### 3.3 Editing a path
 
-Each drone's path is drawn in its colour with a start marker, direction
-arrows, and a handle on every vertex.
+Each drone's path is drawn in its colour with its takeoff mark, direction
+arrows, and a handle on every vertex after the first.
 
-- Drag a vertex to move it. Dragging the first vertex moves that drone's
-  takeoff spot, which is also the centre of its geofence.
+- The first vertex is the takeoff mark, where the drone physically stands. It
+  has no handle and cannot be deleted: the drones stay on their marks, so a
+  plan that started a drone anywhere else would check its geofence and its
+  separation against a position the drone is not at. A spec whose path does
+  not start at the drone's mark (for example an old saved plan) is refused
+  until **Revert path** is pressed. Fixed marks were chosen over letting the
+  operator move them with an acknowledgement: with movable marks, one wrong
+  click would let every check run against a position nobody put the drone on.
+  To use other marks, start the ground with another `--fleet-area-cm`.
+- Drag any other vertex to move it.
 - Click a segment to add a vertex there.
 - Double-click a vertex (or right-click it) to delete it. A path keeps at
   least two vertices.
@@ -177,42 +196,84 @@ Every plan built from the map, generated or edited, goes through all of these
 on the dashboard server before anything is sent to a drone. A plan with any
 problem is refused and nothing is sent.
 
-1. **Geofence.** Every point of the snapped path, including the extra point of
+1. **Takeoff marks.** Every path must start at its drone's takeoff mark
+   (section 3.3). A plan that starts a drone anywhere else is refused.
+2. **Geofence.** Every point of the snapped path, including the extra point of
    an overshoot pair, must be inside the square of half-width `geofence_cm`
-   around that drone's takeoff point. The value is `FLIGHTRISK_GEOFENCE_CM`, the
+   around that drone's takeoff mark. The value is `FLIGHTRISK_GEOFENCE_CM`, the
    value the edges enforce (450 cm when started from the launcher). A path that
    leaves the fence is refused, and the vertex that ends the offending segment
    is highlighted on the map. Each edge still checks the fence again itself.
-2. **Ceiling and altitude slots.** Each drone keeps the altitude slot from the
+3. **Ceiling and altitude slots.** Each drone keeps the altitude slot from the
    ceiling settings (`docs/ceiling-and-altitude.md`). Plan is refused when a
    slot is above the ceiling limit and Start when the slots no longer match, as
    before. Lanes never change altitude.
-3. **The fleet plan check.** `fleet_plan_check.check_plan` runs on the plan:
+4. **The fleet plan check.** `fleet_plan_check.check_plan` runs on the plan:
    every lane is a 20-500 cm horizontal move, a drone has at most the
    protocol's lane cap, every `assign_lanes` message is valid and fits the
    protocol's size cap, and every altitude slot is in range. Its region-based
    gap rule is replaced by the path-based separation check below, and its
-   camera coverage gate is not applied (coverage is reported instead, see 5.5).
-4. **Drone-to-drone separation (new).** For a plan with two or more drones, the
-   snapped paths of every pair of drones, takeoff points included, must stay at
-   least `gap_cm` apart horizontally (100 cm by default) at every point,
-   whatever the timing. Altitude slots are only about 30 cm apart, so they are
-   never relied on alone. A violation is refused with both drone ids and the
-   place where the paths come closest.
-5. **Coverage, reported honestly.** The plan's `uncovered` list gains one entry
-   (`kind: "area"`) per rectangle of the search area that no drone's camera
-   sees, and `coverage` gives the covered fraction. The camera is modelled as a
-   square of side `strip_cm` centred under the drone, the same assumption that
-   spaces the generated lawnmower lanes `strip_cm` apart. It is measured on a
-   grid of cells of at least 10 cm. Coverage is shown, never a reason to
-   refuse, because the real forward camera footprint depends on altitude and
-   the operator decides whether a gap is acceptable.
+   camera coverage gate is not applied (coverage is reported instead, see 5.6).
+5. **Drone-to-drone separation (new).** For a plan with two or more drones, the
+   snapped paths of every pair of drones, starting at their physical takeoff
+   marks, must stay at least `gap_cm` apart horizontally (100 cm by default) at
+   every point, whatever the timing. Altitude slots are only about 30 cm apart,
+   so they are never relied on alone. A violation is refused with both drone
+   ids and the place where the paths come closest. The same rule now applies
+   to re-tasking: when a drone is lost, its lanes are offered only to a drone
+   whose whole new path stays `gap_cm` from every other drone that is not lost
+   (also one held for manual control); lanes no drone can take that way are
+   reported as uncovered with the reason. The rule is timing-independent, so
+   it is conservative: it also compares lanes a drone has already flown.
+6. **Coverage, reported only.** The plan's `uncovered` list gains one entry
+   (`kind: "area"`) per rectangle of the search area that the *nominal camera
+   model* may not cover, and `coverage` gives the nominal covered fraction. The
+   model is a square seen straight below the drone (a downward camera). Its
+   width is the setting `FLIGHTRISK_CAMERA_FOOTPRINT_CM` (whole centimetres,
+   20-5000); without it, the lane spacing `strip_cm` is used, the same
+   assumption that spaces the generated lawnmower lanes. The real field of
+   view of the Tello's forward camera may be wider, and a gimbal camera
+   changes it, so set the width once it is measured; no code change is needed.
+   The area is measured on cells of at least 10 cm. The map shades the
+   possible gaps and the plan card states the nominal figure in neutral words
+   ("Areas the nominal camera model may not cover (about 18% of the area)"),
+   because gaps can be intentional, for example trees or a water hazard.
+   Coverage never refuses or blocks Plan or Start, and the Start confirmation
+   does not mention it.
 
 Plan and Start keep their rules. Start needs a valid plan, a confirmation, and
-every planned drone connected and acknowledged. A plan edited after Plan was
-pressed is invalidated: the dashboard disables Start at once, tells the server
-(`fleet_plan_edited`), and the server refuses Start until Plan is pressed again.
-LAND ALL, manual takeover and the landing paths are unchanged.
+every planned drone connected and acknowledged. The Start confirmation lists
+where each drone must stand ("drone-2 250 cm right of drone-1, same heading").
+
+Start flies only the plan the map shows:
+
+- Every edit is reported to the server (`fleet_plan_edited`) at once, also
+  while a Plan is still being made. The server counts the edits; a Plan that an
+  edit overtook does not clear the "edited" state, so Start stays refused until
+  Plan is pressed again.
+- Start sends the plan the browser shows; the server refuses Start unless it
+  is exactly the plan the drones were sent.
+- When a plan arrives from the server, the map shows it only if the map was
+  not edited since it last matched the server. Otherwise the edits stay on the
+  map, Start stays disabled and the edit is reported again, so a re-sent plan
+  (a late Plan answer, or another window planning) can never hide an edit.
+
+While drones fly or a start is scheduled (fleet), or while a pattern runs
+(single drone), the editor is read-only and shows the plan being flown, and the
+server refuses to load a saved plan. LAND ALL, manual takeover and the landing
+paths are unchanged.
+
+### 5.1 The single-drone flow
+
+In the single-drone flow (`start_search` with a plan), the path starts where
+the drone hovers when Start pattern is pressed, and the geofence check is
+around that hover point, not around the drone's takeoff point, which this flow
+does not know. The plan card says so. The obstacle check still runs before
+every move, but a map plan never side-steps, skips a waypoint or turns: any of
+those would shift every later lane away from the checked plan. At an obstacle
+the pattern stops, the drone hovers, and the operator is told to fly by hand or
+plan again. The legacy patterns (Start pattern without the map) avoid
+obstacles as before.
 
 ## 6. Map imagery
 
@@ -236,14 +297,17 @@ The terms were checked on 2026-10-29.
 - **USGS The National Map** (`basemap.nationalmap.gov`). USGS data is in the
   U.S. public domain and USGS asks for credit as "U.S. Geological Survey"
   (https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits).
-  No bulk-download prohibition is published, so a small offline cache is
-  acceptable. The imagery is NAIP orthophotography at 0.6 to 1 m, which covers
+  That page and the service descriptions at
+  https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer
+  publish no rule against downloading tiles. Our inference, not a statement by
+  USGS, is that a small, rate-limited offline cache of public-domain tiles is
+  acceptable; the cache tool keeps the load small for that reason. The imagery is NAIP orthophotography at 0.6 to 1 m, which covers
   Utah well. It covers the United States only. The tile URL order is
   `{z}/{y}/{x}`.
 - **OpenStreetMap standard tiles** (`tile.openstreetmap.org`). The tile usage
   policy (https://operations.osmfoundation.org/policies/tiles/) allows normal
-  interactive viewing with the attribution "© OpenStreetMap contributors" and a
-  valid Referer, but forbids bulk downloading, defined as fetching tiles ahead
+  interactive viewing with the attribution "© OpenStreetMap contributors",
+  linked to https://www.openstreetmap.org/copyright, and a valid Referer, but forbids bulk downloading, defined as fetching tiles ahead
   of viewing them, and names "download for offline use" as an example. The
   street map is therefore online only, and the cache tool refuses it.
 - **Esri World Imagery** was not included. Its item page says the layer is
@@ -305,19 +369,24 @@ The tool is deliberately small and polite:
 
 - It refuses providers whose terms forbid caching (OpenStreetMap, Esri,
   OpenTopoMap) even when given as a URL template.
-- It refuses more than 2,000 tiles, an area more than 4 km wide or deep (a
+- `--url-template` for a built-in provider must be on
+  `basemap.nationalmap.gov`. A template on any other host needs
+  `--custom-id NAME`; its tiles are stored under `custom-NAME` with that host
+  as their attribution, never as USGS, and the dashboard does not show them.
+- It refuses more than 2,000 tiles (also a `--max-tiles` above 2,000), an area more than 4 km wide or deep (a
   2 km radius) or a zoom above 19 unless `--allow-large` is given, and never
   allows more than 20,000 tiles or a zoom above 20. It also refuses to follow a
   redirect to a provider whose terms forbid caching.
 - It downloads one tile at a time, at most 2 per second by default
-  (`--rate`), with a descriptive User-Agent, and backs off on HTTP 429 and 5xx
+  (`--rate`, which must be above 0 and at most 10), with a descriptive User-Agent, and backs off on HTTP 429 and 5xx
   answers (honouring `Retry-After`).
 - It accepts only image responses of at most 2 MB.
 
 On the field computer, start the dashboard as usual. The lat/lon view shows,
 for the visible layer and view, how much of it is cached ("Offline: 100% of
 this view cached"). The dashboard serves cached tiles at `/tiles/...` with
-`Cache-Control: public, max-age=86400`, validates the provider name against
+`Cache-Control: private, max-age=86400` (private, because the route may sit
+behind the API key), validates the provider name against
 its list and the tile numbers as integers in range, and resolves every path
 inside the tile directory, so no other file can be read. The route is behind
 the same API-key gate as every other route.
@@ -330,7 +399,9 @@ the same API-key gate as every other route.
 (mode, centre, zoom and layer). Names are limited to letters, digits, spaces,
 dots, dashes and underscores. A saved plan holds no secret and no drone
 address. **Load** restores it; Plan must still be pressed, and every check runs
-again on the loaded plan.
+again on the loaded plan. Loading is refused while drones fly or a pattern
+runs. A file that is not a valid plan (for example a wrong version or a deeply
+nested document) is refused and left out of the list.
 
 ## 8. Socket events
 
@@ -338,7 +409,8 @@ again on the loaded plan.
 | --- | --- | --- |
 | `get_map_config` / `map_config` | browser to server / reply | mode (fleet or single), drone ids, defaults, geofence, gap, providers and cache status |
 | `preview_plan` / `plan_preview` | browser to server / reply | build and check a spec without sending anything |
-| `fleet_plan_edited` | browser to server | invalidates the current plan; Start is refused until Plan |
+| `fleet_plan_edited` | browser to server | reports an edit (always, also while Plan runs); Start is refused until Plan |
+| `start_fleet` | browser to server | with a `plan` spec (the plan shown): start only if it is the plan the drones hold |
 | `plan_fleet` | browser to server | with a `plan` spec: check it and send its lanes; without one: as before |
 | `start_search` | browser to server | with a `plan` spec: fly the checked lanes; without one: as before |
 | `map_cache_status` | browser to server / reply | how much of a view is cached for a layer |
@@ -352,8 +424,12 @@ again on the loaded plan.
   accurate as the operator's placement and heading.
 - Sector and spiral patterns are flown as staircases, so they take more moves
   than the drawn path suggests.
-- Coverage uses a square camera model of `strip_cm`; it is not the forward
-  camera model of `fleet_plan_check`.
+- Coverage is nominal: a square downward footprint of
+  `FLIGHTRISK_CAMERA_FOOTPRINT_CM` (or `strip_cm`), not the forward camera
+  model of `fleet_plan_check`. It is reported only.
+- The takeoff marks come from the configured layout (`--fleet-area-cm` and the
+  fleet size). A layout other than side-by-side marks on one takeoff line
+  needs a code change.
 - USGS imagery covers the United States only. Outside it, the satellite and
   topo layers stay blank and only the online street map works.
 - When `FLIGHTRISK_API_KEY` is set, the browser's tile requests carry no

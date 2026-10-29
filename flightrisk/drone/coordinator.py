@@ -60,6 +60,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -286,6 +287,9 @@ class _Chunk:
     deferred: dict[str, str] = field(default_factory=dict)
     reason: str | None = None
     reported: str | None = None
+    # Drones the run could not go to because their new path would come
+    # closer than the zone gap to another drone's path: rid -> why.
+    too_close: dict[str, str] = field(default_factory=dict)
 
     @property
     def start(self) -> tuple[int, int]:
@@ -1410,6 +1414,11 @@ class FleetCoordinator:
                     end = _path_point(self._origin(self._drones[rid]), lanes)
                     added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
                     if self._path_inside_fence(rid, lanes + added):
+                        crowded = self._too_close(rid, lanes + added, planned)
+                        if crowded is not None:
+                            chunk.too_close[rid] = crowded
+                            continue
+                        chunk.too_close.pop(rid, None)
                         if rid in chunk.deferred:
                             waiting = True  # refused for now: wait, do not fail
                         else:
@@ -1460,10 +1469,39 @@ class FleetCoordinator:
         refused = [rid for rid in receivers if rid in chunk.refusals]
         if refused:
             parts.append("refused by " + ", ".join(f"{rid} ({chunk.refusals[rid]})" for rid in refused))
-        outside = [rid for rid in receivers if rid not in chunk.refusals]
+        crowded = [rid for rid in receivers if rid not in chunk.refusals and rid in chunk.too_close]
+        if crowded:
+            parts.append("; ".join(f"{rid} would {chunk.too_close[rid]}" for rid in crowded))
+        outside = [rid for rid in receivers if rid not in chunk.refusals and rid not in chunk.too_close]
         if outside:
             parts.append("outside the geofence of " + ", ".join(outside))
         return "; ".join(parts)
+
+    def _too_close(self, rid: str, lanes: list[dict], planned: dict[str, list[dict]]) -> str | None:
+        """Why giving *rid* the path *lanes* would break the zone gap, or None.
+
+        The whole path *rid* would have, flown from its takeoff point, is
+        compared with the whole planned path of every other drone that is not
+        lost (also a drone held for manual control, which may still fly). The
+        comparison ignores timing, like the plan's own separation check, so a
+        re-task never brings two drones closer than the gap at any point.
+        """
+        gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
+        if gap <= 0:
+            return None
+        mine = [self._origin(self._drones[rid])]
+        for lane in lanes:
+            mine.append(_path_point(mine[-1], [lane]))
+        for other_id, other in self._drones.items():
+            if other_id == rid or other.lost or other.zone is None:
+                continue
+            theirs = [self._origin(other)]
+            for lane in planned.get(other_id, other.lanes):
+                theirs.append(_path_point(theirs[-1], [lane]))
+            distance, _, _ = closest_approach(mine, theirs)
+            if distance < gap:
+                return f"come within {distance:.0f} cm of {other_id}, below the {gap} cm gap"
+        return None
 
     def _fail_locked(self, chunk: _Chunk, reason: str) -> None:
         chunk.status = "failed"

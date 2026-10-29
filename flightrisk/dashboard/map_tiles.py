@@ -106,7 +106,7 @@ PROVIDERS: dict[str, TileProvider] = {
             name="Street map (OpenStreetMap)",
             kind="map",
             url_template="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            attribution="© OpenStreetMap contributors",
+            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
             max_zoom=19,
             cacheable=False,
         ),
@@ -379,7 +379,8 @@ def serve_tile(provider: str, z: int, x: int, y: int):
         mimetype=_MIMETYPES.get(path.suffix.lstrip("."), "application/octet-stream"),
         conditional=True,
     )
-    response.headers["Cache-Control"] = "public, max-age=86400"
+    # private: the route may sit behind the API key, so no shared cache keeps it.
+    response.headers["Cache-Control"] = "private, max-age=86400"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
@@ -499,8 +500,24 @@ def _area_size_m(bbox: tuple[float, float, float, float]) -> tuple[float, float]
     return abs(width), abs(height)
 
 
-def _resolve_template(provider: TileProvider, url_template: str | None, key_env: str | None) -> tuple[str, str | None]:
-    """The template to download from and the API key that was substituted into it, if any."""
+#: Hosts a ``--url-template`` may name while the tiles are stored and
+#: attributed as one of the built-in providers. Tiles from any other server
+#: must be stored under their own ``--custom-id``.
+BUILT_IN_TEMPLATE_HOSTS: tuple[str, ...] = ("basemap.nationalmap.gov",)
+_CUSTOM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+MAX_RATE_PER_S = 10.0
+
+
+def _resolve_template(
+    provider: TileProvider, url_template: str | None, key_env: str | None, custom: bool = False
+) -> tuple[str, str | None]:
+    """The template to download from and the API key that was substituted into it, if any.
+
+    A template for a built-in provider must be on ``BUILT_IN_TEMPLATE_HOSTS``,
+    so tiles from another server are never stored or attributed as that
+    provider's; *custom* (a ``--custom-id`` job) allows any host that is not
+    denied.
+    """
     template = url_template if url_template is not None else provider.url_template
     parts = urllib.parse.urlsplit(template)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -509,6 +526,11 @@ def _resolve_template(provider: TileProvider, url_template: str | None, key_env:
         raise ValueError(
             f"Refused: {parts.hostname} belongs to a provider whose terms do not allow "
             "downloading tiles for offline use (OpenStreetMap, Esri/ArcGIS or OpenTopoMap)."
+        )
+    if url_template is not None and not custom and parts.hostname.lower() not in BUILT_IN_TEMPLATE_HOSTS:
+        raise ValueError(
+            f"Refused: tiles from {parts.hostname} cannot be stored as {provider.name}. "
+            "Name the server with --custom-id; its tiles are then stored under that id."
         )
     for token in ("{z}", "{x}", "{y}"):
         if token not in template:
@@ -598,6 +620,7 @@ def download_area(
     allow_large: bool = False,
     url_template: str | None = None,
     key_env: str | None = None,
+    custom_id: str | None = None,
     opener: Any = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -637,7 +660,18 @@ def download_area(
             f"Refused: {spec.name} does not allow downloading tiles for offline use. "
             "It can be shown online only."
         )
-    template, key = _resolve_template(spec, url_template, key_env)
+    if custom_id is not None:
+        # Tiles of another server go under their own id, never a built-in one.
+        if url_template is None:
+            raise ValueError("--custom-id needs --url-template.")
+        if not isinstance(custom_id, str) or not _CUSTOM_ID_RE.match(custom_id):
+            raise ValueError("--custom-id must be 1 to 32 lowercase letters, digits or dashes.")
+        host = urllib.parse.urlsplit(url_template).hostname or "custom server"
+        spec = TileProvider(
+            id=f"custom-{custom_id}", name=f"Custom tiles ({host})", kind="map", url_template=url_template,
+            attribution=f"Tiles: {host} (custom server; check its terms)", max_zoom=MAX_ZOOM_HARD, cacheable=True,
+        )
+    template, key = _resolve_template(spec, url_template, key_env, custom=custom_id is not None)
     box = _validate_bbox(bbox)
     if not (0 <= min_zoom <= max_zoom):
         raise ValueError("The minimum zoom must be between 0 and the maximum zoom.")
@@ -653,8 +687,15 @@ def download_area(
             f"Refused: the area is {width_m / 1000:.1f} km by {height_m / 1000:.1f} km, "
             f"larger than {MAX_SIDE_M / 1000:.0f} km across. Use a smaller area or --allow-large."
         )
-    if rate_per_s <= 0:
-        raise ValueError("The request rate must be greater than zero.")
+    if (
+        isinstance(rate_per_s, bool) or not isinstance(rate_per_s, (int, float)) or not math.isfinite(rate_per_s)
+        or not 0 < rate_per_s <= MAX_RATE_PER_S
+    ):
+        raise ValueError(f"The request rate must be above 0 and at most {MAX_RATE_PER_S:g} per second.")
+    if isinstance(max_tiles, bool) or not isinstance(max_tiles, int) or max_tiles < 1:
+        raise ValueError("The tile limit must be a whole number of at least 1.")
+    if max_tiles > DEFAULT_MAX_TILES and not allow_large:
+        raise ValueError(f"Refused: a tile limit above {DEFAULT_MAX_TILES} needs --allow-large.")
     total = count_tiles(box, min_zoom, max_zoom)
     if total > HARD_MAX_TILES:
         raise ValueError(f"Refused: {total} tiles is above the limit of {HARD_MAX_TILES}, even with --allow-large.")
