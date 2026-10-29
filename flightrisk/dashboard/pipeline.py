@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 from flightrisk.drone.controller import DroneController, command_result
-from flightrisk.drone.snapshot import TelemetrySnapshot, legacy_telemetry_payload, read_telemetry
+from flightrisk.drone.snapshot import TelemetrySnapshot, gps_payload, legacy_telemetry_payload, read_telemetry
 
 from flightrisk.dashboard.state import (
     app_state,
@@ -557,10 +557,12 @@ def _frame_loop(socketio):
                 app_state.recorder.write_frame(annotated)
 
             telemetry = {}
+            gps = None
             if drone:
                 snapshot = read_telemetry(drone)
                 obs_events.telemetry_snapshot(snapshot)
                 telemetry = legacy_telemetry_payload(snapshot)
+                gps = gps_payload(snapshot)
                 _apply_battery_policy(socketio, drone, snapshot, telemetry["battery"], log)
 
                 if fleet and fleet.count > 1:
@@ -582,6 +584,8 @@ def _frame_loop(socketio):
                     "match": match_idx is not None,
                     "match_score": round(match_score, 3),
                     "telemetry": telemetry,
+                    # Only a GPS drone sends its position (the map's anchor and marker).
+                    **({"gps": gps} if gps else {}),
                     "recording": app_state.recorder.is_recording if app_state.recorder else False,
                 })
             stats.frame_done(len(detections), source=str(app_state.source or "unknown"))

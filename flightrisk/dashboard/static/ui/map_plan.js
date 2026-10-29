@@ -52,6 +52,7 @@
             note: null,
             cacheText: '',
             lines: {},
+            adoptedKey: null,       // the server plan last shown (fleet_plan.details.spec)
         };
         let previewTimer = null, cacheTimer = null;
 
@@ -618,6 +619,10 @@
             // A plan from the server (fleet_plan.details): show it as the current plan.
             onFleetPlan: (plan) => {
                 if (!plan || !plan.details || !plan.details.spec) return false;
+                // The same plan is sent again when the page reconnects; keep any edits made since it arrived.
+                const key = JSON.stringify(plan.details.spec);
+                if (key === S.adoptedKey) return true;
+                S.adoptedKey = key;
                 adopt(plan.details.spec);
                 S.preview = plan.details;
                 render();

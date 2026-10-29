@@ -274,10 +274,10 @@ def test_map_cache_status_over_the_socket(clean_app_state, tmp_path, monkeypatch
 
 def test_gps_drones_report_their_position_to_the_map_and_tellos_do_not():
     from flightrisk.drone.controller import DroneState
-    from flightrisk.drone.snapshot import legacy_telemetry_payload, snapshot_from_state
+    from flightrisk.drone.snapshot import gps_payload, legacy_telemetry_payload, snapshot_from_state
 
-    gps = DroneState(is_flying=True, latitude=40.6894, longitude=-111.731, heading=42)
-    payload = legacy_telemetry_payload(snapshot_from_state(gps, drone_id="m1"))
-    assert (payload["latitude"], payload["longitude"], payload["heading"]) == (40.6894, -111.731, 42)
-    tello = legacy_telemetry_payload(snapshot_from_state(DroneState(is_flying=True), drone_id="t1"))
-    assert not {"latitude", "longitude", "heading"} & set(tello)
+    gps = snapshot_from_state(DroneState(is_flying=True, latitude=40.6894, longitude=-111.731, heading=42), drone_id="m1")
+    assert gps_payload(gps) == {"lat": 40.6894, "lon": -111.731, "heading_deg": 42.0}
+    # The legacy telemetry shape is unchanged.
+    assert not {"latitude", "longitude", "heading", "lat", "lon"} & set(legacy_telemetry_payload(gps))
+    assert gps_payload(snapshot_from_state(DroneState(is_flying=True), drone_id="t1")) is None

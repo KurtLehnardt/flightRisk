@@ -257,15 +257,22 @@ def legacy_telemetry_payload(snapshot: TelemetrySnapshot, include_connected: boo
     }
     if include_connected:
         payload["is_connected"] = snapshot.connected
-    # A drone with GPS (MAVLink) also reports where it is, so the map can draw
-    # it at its real position and offer it as the plan's anchor. Absent
-    # readings are left out rather than sent as 0.
-    if snapshot.latitude_deg is not None and snapshot.longitude_deg is not None:
-        payload["latitude"] = snapshot.latitude_deg.value
-        payload["longitude"] = snapshot.longitude_deg.value
-        if snapshot.heading_deg is not None:
-            payload["heading"] = snapshot.heading_deg.value
     return payload
+
+
+def gps_payload(snapshot: TelemetrySnapshot) -> dict[str, float] | None:
+    """``{"lat", "lon", "heading_deg"}`` of a drone that reports GPS (MAVLink), else None.
+
+    The dashboard map draws such a drone at its reported position and offers
+    it as the plan's anchor (docs/map-and-plan-editing.md). The legacy
+    telemetry payload keeps its fixed shape; this is sent beside it.
+    """
+    if snapshot.latitude_deg is None or snapshot.longitude_deg is None:
+        return None
+    out = {"lat": float(snapshot.latitude_deg.value), "lon": float(snapshot.longitude_deg.value)}
+    if snapshot.heading_deg is not None:
+        out["heading_deg"] = float(snapshot.heading_deg.value)
+    return out
 
 
 __all__ = [
@@ -280,6 +287,7 @@ __all__ = [
     "SECOND",
     "Reading",
     "TelemetrySnapshot",
+    "gps_payload",
     "legacy_telemetry_payload",
     "read_telemetry",
     "reading",

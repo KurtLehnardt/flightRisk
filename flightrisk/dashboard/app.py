@@ -675,6 +675,8 @@ class FleetSupervisor:
 
     # No ceiling board unless one is given (also for a supervisor built without __init__).
     _ceiling: CeilingBoard | None = None
+    # No map plan has been edited after Plan (also for a supervisor built without __init__).
+    _plan_stale: bool = False
     # Manual takeover; None only for a supervisor built without __init__.
     manual: ManualControl | None = None
 

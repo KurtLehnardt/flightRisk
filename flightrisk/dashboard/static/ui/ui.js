@@ -435,10 +435,11 @@ const socket = io();
                 Object.assign(droneInfo[id], { battery: data.telemetry.battery, height: data.telemetry.height, temperature: data.telemetry.temperature });
             } else if (!id) {
                 primaryTelemetry = { battery: data.telemetry.battery, height: data.telemetry.height || 0, temperature: data.telemetry.temperature };
-                if (mapPlan) mapPlan.setDroneGps(data.telemetry.latitude, data.telemetry.longitude, data.telemetry.heading);
             }
             renderDroneStatus();
         }
+        // A GPS drone (MAVLink) reports its position: the map can use it as the plan's anchor.
+        if (mapPlan && data.gps) mapPlan.setDroneGps(data.gps.lat, data.gps.lon, data.gps.heading_deg);
     });
 
     let confidenceHide = null;
