@@ -757,6 +757,38 @@ class FleetSupervisor:
     def _plan_slot(self, drone_id: str, index: int) -> int:
         return self._plan_slots[drone_id]
 
+    def _unready_drones(self, drone_ids) -> dict[str, str]:
+        """Why each of *drone_ids* cannot take part in a plan or a start right now.
+
+        A drone is not ready when it has no live link to the ground, or when
+        it is connected but has sent nothing for ``loss_timeout_s``. When the
+        transport cannot report its links, no drone is called ready.
+        """
+        try:
+            links = self._transport.fleet_status()
+        except Exception:
+            log.warning("fleet link status unavailable", exc_info=True)
+            links = {}
+        unready = {}
+        for drone_id in drone_ids:
+            link = links.get(drone_id)
+            if not link or not link.get("connected"):
+                unready[drone_id] = "not connected"
+                continue
+            age = link.get("link_age_s")
+            if age is not None and age > self._loss_timeout_s:
+                unready[drone_id] = f"connected but silent for {age:.0f} s"
+        return unready
+
+    @staticmethod
+    def _not_ready_detail(unready: dict[str, str]) -> str:
+        who = "; ".join(f"{drone_id}: {why}" for drone_id, why in sorted(unready.items()))
+        return (
+            f"{who}. A plan covering the whole area needs every configured drone. Connect the listed drones, "
+            "or restart the ground with a fleet list containing only the drones that are connected "
+            "(the launcher does this automatically)."
+        )
+
     def flight_activity(self) -> str | None:
         """Why the drones are not all on the ground, or None.
 
@@ -915,7 +947,20 @@ class FleetSupervisor:
                 except CeilingRefusal as exc:
                     self._emit("fleet_event", {"event": "plan_refused", "detail": str(exc)})
                     raise
+            # Nothing is sent to a drone that is not ready, and no zone is ever
+            # given to one: a plan for a subset would show full coverage while
+            # part of the area is flown by nobody.
+            unready = self._unready_drones(self.coordinator.drone_ids)
+            if unready:
+                self._refuse_plan(self._not_ready_detail(unready))
             self.coordinator.sync()
+            unready = {
+                drone_id: "clock not synced"
+                for drone_id in self.coordinator.drone_ids
+                if not self.coordinator.clock_sync(drone_id).synced
+            }
+            if unready:
+                self._refuse_plan(self._not_ready_detail(unready))
             plan = self.coordinator.plan()
             with self._lock:
                 self._flown.clear()
@@ -926,6 +971,11 @@ class FleetSupervisor:
         self.emit_plan()
         self.emit_status()
         return plan
+
+    def _refuse_plan(self, detail: str) -> None:
+        log.warning("Fleet plan refused: %s", detail)
+        self._emit("fleet_event", {"event": "plan_refused", "detail": detail})
+        raise RuntimeError(f"Plan refused: {detail}")
 
     def start(self, lead_s: float = 2.0):
         """Re-sync every clock, then schedule one common start.
@@ -938,6 +988,18 @@ class FleetSupervisor:
             refusals = {
                 drone_id: "under manual control; press Resume search first" for drone_id in self._paused_drones()
             }
+            if not refusals and not self.coordinator.started:
+                planned = self.coordinator.current_plan()
+                if planned is not None:
+                    # A drone that dropped its link after the plan is named here,
+                    # before any clock sync or start_at is attempted for it.
+                    refusals = {
+                        drone_id: f"{why}; connect it and plan again, or restart the ground with a fleet list "
+                        "containing only the connected drones"
+                        for drone_id, why in self._unready_drones(
+                            z["drone_id"] for z in planned.get("zones", [])
+                        ).items()
+                    }
             if not refusals and self._ceiling is not None and not self.coordinator.started:
                 refusals = self._ceiling.check_start(self.coordinator.current_plan())
             if refusals:
