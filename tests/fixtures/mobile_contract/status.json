@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "description": "The 'status' event the server sends on every Socket.IO connect.",
+    "file": "status.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "FleetSupervisor.summary",
+      "flightrisk.dashboard.app._privacy_and_fleet_status",
+      "flightrisk.dashboard.app.on_connect"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "fleet_two_drones": {
+      "direction": "server_to_client",
+      "event": "status",
+      "notes": "Sent once on every connect. fleet.drones is a COUNT here (not a map); fleet.drones > 0 means fleet mode. appearance_only true means the ground never uses face embeddings.",
+      "payload": {
+        "appearance_only": true,
+        "connected": true,
+        "fleet": {
+          "drones": 2,
+          "net": "station",
+          "synced": false
+        },
+        "source": "edge",
+        "tiled": false
+      }
+    },
+    "no_fleet_sim_source": {
+      "direction": "server_to_client",
+      "event": "status",
+      "notes": "A ground without a fleet (simulated, camera or a single local drone): fleet.drones is 0.",
+      "payload": {
+        "appearance_only": false,
+        "connected": true,
+        "fleet": {
+          "drones": 0,
+          "net": "station",
+          "synced": false
+        },
+        "source": "sim",
+        "tiled": false
+      }
+    }
+  }
+}

@@ -1,0 +1,193 @@
+{
+  "_meta": {
+    "description": "The Socket.IO events a phone may emit (allowed true, with an example payload) and the ones it must never emit (allowed false). Every listed event has a handler on the dashboard; the table itself is the contract and has no builder.",
+    "file": "client_emits.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app.socketio handlers",
+      "scripts/export_mobile_contract_fixtures.py ALLOWED_CLIENT_EMITS and FORBIDDEN_CLIENT_EMITS"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "drone_command": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "drone_command",
+      "notes": "command is always \"land\"; offered for every drone in every state",
+      "payload": {
+        "command": "land",
+        "drone_id": "drone-1"
+      }
+    },
+    "forbidden_deregister_drone": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "deregister_drone",
+      "notes": "drone registration; laptop only",
+      "payload": null
+    },
+    "forbidden_manual_command": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "manual_command",
+      "notes": "moves, rotations and takeoff by hand; laptop only (Land goes through drone_command)",
+      "payload": null
+    },
+    "forbidden_manual_take_control": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "manual_take_control",
+      "notes": "a phone link roams and sleeps; the controller-gone path would become the normal path",
+      "payload": null
+    },
+    "forbidden_plan_fleet": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "plan_fleet",
+      "notes": "the laptop is the mission console; Start must carry the plan the browser shows",
+      "payload": null
+    },
+    "forbidden_register_drone": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "register_drone",
+      "notes": "drone registration; laptop only",
+      "payload": null
+    },
+    "forbidden_remove_all_drones": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "remove_all_drones",
+      "notes": "drone registration; laptop only",
+      "payload": null
+    },
+    "forbidden_restart_dashboard": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "restart_dashboard",
+      "notes": "restarts the ground's pipeline; laptop only",
+      "payload": null
+    },
+    "forbidden_set_ceiling_settings": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "set_ceiling_settings",
+      "notes": "the ceiling and altitude slots are edited on the laptop only",
+      "payload": null
+    },
+    "forbidden_set_reasoning_provider": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "set_reasoning_provider",
+      "notes": "the reasoning backend is chosen on the laptop only",
+      "payload": null
+    },
+    "forbidden_set_stream_video": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "set_stream_video",
+      "notes": "video streaming changes every edge's bandwidth; laptop only",
+      "payload": null
+    },
+    "forbidden_set_target": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "set_target",
+      "notes": "target photos and embeddings are managed on the laptop",
+      "payload": null
+    },
+    "forbidden_start_fleet": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "start_fleet",
+      "notes": "starting a mission makes drones take off; laptop only",
+      "payload": null
+    },
+    "forbidden_start_search": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "start_search",
+      "notes": "starts a local search pattern that moves a drone; laptop only",
+      "payload": null
+    },
+    "forbidden_stop_search": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "stop_search",
+      "notes": "mission control; laptop only",
+      "payload": null
+    },
+    "get_ceiling_settings": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "get_ceiling_settings",
+      "notes": "on every connect and on refresh",
+      "payload": null
+    },
+    "get_detection_profiles": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "get_detection_profiles",
+      "notes": "on every connect and on refresh",
+      "payload": null
+    },
+    "get_fleet_status": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "get_fleet_status",
+      "notes": "on every connect and on refresh",
+      "payload": null
+    },
+    "get_manual_status": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "get_manual_status",
+      "notes": "on every connect and on refresh",
+      "payload": null
+    },
+    "get_reasoning_provider": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "get_reasoning_provider",
+      "notes": "on every connect and on refresh",
+      "payload": null
+    },
+    "land_all": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "land_all",
+      "notes": "always offered while connected; never disabled by any drone state",
+      "payload": null
+    },
+    "manual_resume_search": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "manual_resume_search",
+      "notes": "only for a drone whose control_mode is \"held\" while fleet_status.manual_controlled is null",
+      "payload": {
+        "drone_id": "drone-2"
+      }
+    },
+    "set_detection_profile": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "set_detection_profile",
+      "notes": "only when detection_profiles.controls_enabled is true; an empty profile follows the fleet default",
+      "payload": {
+        "drone_id": "drone-1",
+        "profile": "top_down"
+      }
+    },
+    "set_fleet_detection_profile": {
+      "allowed": true,
+      "direction": "client_to_server",
+      "event": "set_fleet_detection_profile",
+      "notes": "only when detection_profiles.controls_enabled is true; an empty profile clears the default",
+      "payload": {
+        "profile": "top_down"
+      }
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "_meta": {
+    "description": "Reason and mode vocabularies from the fleet protocol constants. Ground-side manual results add 'not_delivered', 'no_reply', 'no_telemetry' and 'invalid' (flightrisk/dashboard/manual_control.py).",
+    "file": "nack_reasons.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.fleet_protocol.ceiling",
+      "flightrisk.fleet_protocol.constants",
+      "flightrisk.fleet_protocol.manual"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "assign_lanes_v1": {
+      "direction": "reference",
+      "notes": "NACK_REASONS: why an edge refused assign_lanes on a v1 link. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "altitude",
+        "battery",
+        "geofence",
+        "invalid",
+        "other_drone"
+      ]
+    },
+    "control_modes": {
+      "direction": "reference",
+      "notes": "CONTROL_MODES: fleet_status drones[].control_mode and edge_control_mode values. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "autonomous",
+        "held",
+        "manual"
+      ]
+    },
+    "edge_states": {
+      "direction": "reference",
+      "notes": "EDGE_STATES: the v2 telemetry state field. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "flying_lanes",
+        "holding",
+        "hovering",
+        "idle",
+        "landing",
+        "taking_off"
+      ]
+    },
+    "fenced_command_v2": {
+      "direction": "reference",
+      "notes": "NACK_REASONS_V2: any refused fenced command on a v2 link. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "altitude",
+        "battery",
+        "busy",
+        "drone_unreachable",
+        "geofence",
+        "invalid",
+        "landing",
+        "no_valid_plan",
+        "not_authority",
+        "not_flying",
+        "other_drone",
+        "plan_mismatch",
+        "stale_epoch",
+        "stale_plan"
+      ]
+    },
+    "hold_reasons": {
+      "direction": "reference",
+      "notes": "HOLD_REASONS: the reason of a v2 hold. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "alert",
+        "handover",
+        "operator"
+      ]
+    },
+    "manual_command": {
+      "direction": "reference",
+      "notes": "MANUAL_NACK_REASONS: manual_result.reason when the edge refused. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "altitude",
+        "battery",
+        "busy",
+        "ceiling",
+        "drone_unreachable",
+        "floor",
+        "geofence",
+        "invalid",
+        "landing",
+        "no_valid_plan",
+        "not_authority",
+        "not_flying",
+        "not_manual",
+        "other_drone",
+        "plan_mismatch",
+        "slot_band",
+        "stale_epoch",
+        "stale_plan",
+        "unsupported"
+      ]
+    },
+    "profile_fallback": {
+      "direction": "reference",
+      "notes": "PROFILE_FALLBACK_REASONS: detection_profiles drones[].fallback_reason. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "weights_missing"
+      ]
+    },
+    "set_ceiling": {
+      "direction": "reference",
+      "notes": "CEILING_NACK_REASONS: ceiling_settings drones[].edge.refusal.reason. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "above_ceiling",
+        "in_flight",
+        "invalid",
+        "not_authority",
+        "stale_epoch"
+      ]
+    },
+    "set_detection_profile": {
+      "direction": "reference",
+      "notes": "PROFILE_NACK_REASONS: detection_profiles drones[].refusal.reason. Treat any other value as text to show, never as an error.",
+      "payload": [
+        "busy",
+        "in_flight",
+        "invalid",
+        "load_failed",
+        "unavailable",
+        "unknown_profile"
+      ]
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "_meta": {
+    "description": "The 'error' event: {message}. Show it as a toast; never treat it as a disconnect.",
+    "file": "error.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app._land_all",
+      "flightrisk.dashboard.app._manual_reply",
+      "flightrisk.dashboard.app.on_drone_command",
+      "flightrisk.dashboard.app.on_manual_resume_search",
+      "flightrisk.dashboard.app.on_set_detection_profile"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "land_all_reached_no_drone": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "Broadcast with the land_all_ack above when LAND ALL reached no drone.",
+      "payload": {
+        "message": "LAND ALL reached no drone. Land every drone with its local control now."
+      }
+    },
+    "manual_needs_fleet_mode": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "manual_resume_search on a ground without a fleet.",
+      "payload": {
+        "message": "Manual takeover needs fleet mode (--source edge --fleet ...)"
+      }
+    },
+    "manual_refusal": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "Every refused manual_ack is also sent as an error toast: '<drone_id>: <detail or reason>'.",
+      "payload": {
+        "message": "drone-1: drone-1 is not under manual control"
+      }
+    },
+    "no_drones_connected": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "drone_command on a ground with no fleet and no local drone.",
+      "payload": {
+        "message": "No drones connected"
+      }
+    },
+    "profiles_need_edge_source": {
+      "direction": "server_to_client",
+      "event": "error",
+      "notes": "set_detection_profile on a ground without the edge source.",
+      "payload": {
+        "message": "Detection profiles need the edge source (--source edge)."
+      }
+    }
+  }
+}

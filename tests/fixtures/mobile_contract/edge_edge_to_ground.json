@@ -1,0 +1,286 @@
+{
+  "_meta": {
+    "description": "Edge link, edge to ground: the 'detections' samples a phone edge sends, and the fleet-edge replies for reference (a phone never sends those).",
+    "file": "edge_edge_to_ground.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "link": "raw WebSocket ws://HOST:9000 (not Socket.IO)",
+    "max_message_bytes": 1048576,
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "EdgeRunner.to_dict",
+      "flightrisk.fleet_protocol builders",
+      "flightrisk.fleet_protocol.validate_edge_to_ground"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "ack_assign_lanes": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "battery": 90,
+        "drone_id": "drone-1",
+        "for": "assign_lanes",
+        "lanes_total": 8,
+        "type": "ack"
+      }
+    },
+    "ceiling_ack": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "alt_slot_cm": 100,
+        "ceiling_cm": 200,
+        "ceiling_margin_cm": 60,
+        "cmd_id": "cmd-ceiling-0001",
+        "drone_id": "drone-1",
+        "for": "set_ceiling",
+        "result": "ok",
+        "type": "ack"
+      }
+    },
+    "ceiling_nack": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "alt_slot_cm": 100,
+        "ceiling_cm": 200,
+        "ceiling_margin_cm": 60,
+        "cmd_id": "cmd-ceiling-0002",
+        "detail": "the ceiling changes only on the ground",
+        "drone_id": "drone-1",
+        "for": "set_ceiling",
+        "reason": "in_flight",
+        "type": "nack"
+      }
+    },
+    "detections_appearance_only": {
+      "direction": "edge_to_ground",
+      "notes": "What a phone edge sends: the legacy 'detections' message, no drone_id, no face_embedding (appearance-only), no detection_profile, at most 1 MiB (LEGACY_MAX_BYTES) as compact JSON. Embeddings are shortened here; real lengths depend on the model.",
+      "payload": {
+        "detections": [
+          {
+            "bbox": [
+              512,
+              200,
+              640,
+              560
+            ],
+            "confidence": 0.74,
+            "crop": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+            "reid_embedding": [
+              0.11,
+              -0.04,
+              0.27,
+              0.09
+            ]
+          }
+        ],
+        "frame_height": 720,
+        "frame_id": 17,
+        "frame_width": 1280,
+        "thumbnail": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "timestamp": 1761735600.25,
+        "type": "detections"
+      }
+    },
+    "detections_no_video": {
+      "direction": "edge_to_ground",
+      "notes": "After stream_video false: thumbnail is null; crops and embeddings still go.",
+      "payload": {
+        "detections": [
+          {
+            "bbox": [
+              512,
+              200,
+              640,
+              560
+            ],
+            "confidence": 0.74,
+            "crop": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+            "reid_embedding": [
+              0.11,
+              -0.04,
+              0.27,
+              0.09
+            ]
+          }
+        ],
+        "frame_height": 720,
+        "frame_id": 17,
+        "frame_width": 1280,
+        "thumbnail": null,
+        "timestamp": 1761735600.25,
+        "type": "detections"
+      }
+    },
+    "detections_with_face": {
+      "direction": "edge_to_ground",
+      "notes": "Only when the user turned face matching on: each detection also carries face_embedding.",
+      "payload": {
+        "detections": [
+          {
+            "bbox": [
+              512,
+              200,
+              640,
+              560
+            ],
+            "confidence": 0.74,
+            "crop": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+            "face_embedding": [
+              0.02,
+              0.15,
+              -0.21,
+              0.08
+            ],
+            "reid_embedding": [
+              0.11,
+              -0.04,
+              0.27,
+              0.09
+            ]
+          }
+        ],
+        "frame_height": 720,
+        "frame_id": 17,
+        "frame_width": 1280,
+        "thumbnail": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "timestamp": 1761735600.25,
+        "type": "detections"
+      }
+    },
+    "manual_ack": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "cmd_id": "cmd-manual-0001",
+        "control_mode": "manual",
+        "drone_id": "drone-2",
+        "for": "manual_hold",
+        "result": "ok",
+        "type": "ack"
+      }
+    },
+    "manual_nack": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "cmd_id": "cmd-manual-0002",
+        "detail": "the move would climb above the ceiling limit",
+        "drone_id": "drone-2",
+        "for": "manual_move",
+        "reason": "ceiling",
+        "type": "nack"
+      }
+    },
+    "nack_assign_lanes_geofence": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only. A phone edge never nacks.",
+      "payload": {
+        "drone_id": "drone-1",
+        "for": "assign_lanes",
+        "geofence_cm": 450.0,
+        "lanes_total": 8,
+        "reason": "geofence",
+        "type": "nack",
+        "x_cm": 470.0,
+        "y_cm": 20.0
+      }
+    },
+    "nack_v2_drone_unreachable": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "cmd_id": "cmd-takeoff-0001",
+        "detail": "Tello unreachable (no state for 12 s)",
+        "drone_id": "drone-2",
+        "for": "takeoff",
+        "reason": "drone_unreachable",
+        "type": "nack"
+      }
+    },
+    "pong": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only. A phone edge never answers a ping.",
+      "payload": {
+        "t1": 1000.0,
+        "t2": 1000.25,
+        "t3": 1000.26,
+        "type": "pong"
+      }
+    },
+    "profile_ack_fallback": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "cmd_id": "cmd-profile-0001",
+        "drone_id": "drone-1",
+        "fallback": true,
+        "fallback_reason": "weights_missing",
+        "for": "set_detection_profile",
+        "profile": "default",
+        "requested": "top_down",
+        "result": "ok",
+        "type": "ack"
+      }
+    },
+    "profile_nack_in_flight": {
+      "direction": "edge_to_ground",
+      "notes": "Fleet edges only.",
+      "payload": {
+        "cmd_id": "cmd-profile-0002",
+        "detail": "detection profiles change only on the ground",
+        "drone_id": "drone-1",
+        "for": "set_detection_profile",
+        "profile": "default",
+        "reason": "in_flight",
+        "requested": "top_down",
+        "type": "nack"
+      }
+    },
+    "telemetry_v1": {
+      "direction": "edge_to_ground",
+      "notes": "A fleet edge's state report. A phone edge never sends telemetry.",
+      "payload": {
+        "battery": 82,
+        "drone_id": "drone-1",
+        "heading_deg": 0.0,
+        "height_cm": 100,
+        "is_flying": true,
+        "lane_index": 2,
+        "lanes_total": 8,
+        "link_age_s": 0.1,
+        "rel_x_cm": 35.5,
+        "rel_y_cm": 120.0,
+        "takeoff_at_local_s": null,
+        "type": "telemetry"
+      }
+    },
+    "telemetry_v2_drone_link_down": {
+      "direction": "edge_to_ground",
+      "notes": "A v2 edge whose drone link is down. A phone edge never sends telemetry.",
+      "payload": {
+        "battery": 71,
+        "drone_id": "drone-2",
+        "drone_link_age_s": 12.4,
+        "drone_link_detail": "Tello unreachable (no state for 12 s)",
+        "drone_link_ok": false,
+        "epoch": 7,
+        "heading_deg": 0.0,
+        "height_cm": 130,
+        "is_flying": true,
+        "lane_index": 3,
+        "lanes_total": 9,
+        "link_age_s": 0.12,
+        "plan_id": "p-1",
+        "plan_valid": true,
+        "rel_x_cm": 40.0,
+        "rel_y_cm": 220.5,
+        "state": "flying_lanes",
+        "takeoff_at_local_s": 1000.0,
+        "type": "telemetry"
+      }
+    }
+  }
+}

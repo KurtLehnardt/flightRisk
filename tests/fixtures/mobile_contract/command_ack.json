@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "description": "The 'command_ack' event: the answer to drone_command on a ground without a fleet.",
+    "file": "command_ack.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app.on_drone_command"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "land": {
+      "direction": "server_to_client",
+      "event": "command_ack",
+      "notes": "The answer to drone_command {command: land} on a ground WITHOUT a fleet (in fleet mode the answer is manual_ack).",
+      "payload": {
+        "command": "land"
+      }
+    }
+  }
+}

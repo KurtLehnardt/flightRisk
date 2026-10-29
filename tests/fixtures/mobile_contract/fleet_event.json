@@ -1,0 +1,179 @@
+{
+  "_meta": {
+    "description": "The 'fleet_event' event, one case per kind. Read the kind from 'event'; show 'detail' when present. Unknown kinds must be shown by name, never dropped.",
+    "file": "fleet_event.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "FleetCoordinator._on_nack",
+      "FleetCoordinator.land_all",
+      "FleetCoordinator.on_drone_lost",
+      "FleetSupervisor.mark_plan_edited",
+      "FleetSupervisor.plan",
+      "FleetSupervisor.start",
+      "flightrisk.dashboard.app._warn_pending_profile_switch"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "drone_lost": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "A drone dropped out of the mission. This event carries drone_id and NO detail.",
+      "payload": {
+        "drone_id": "drone-2",
+        "event": "drone_lost"
+      }
+    },
+    "land_all": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "LAND ALL went out to every link.",
+      "payload": {
+        "detail": "sent to all",
+        "event": "land_all"
+      }
+    },
+    "land_all_failed": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "LAND ALL could not be sent to some links; detail names them.",
+      "payload": {
+        "detail": "failed: drone-2",
+        "event": "land_all"
+      }
+    },
+    "plan_invalidated": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "The plan was edited on the map after Plan; Start is refused until Plan again.",
+      "payload": {
+        "detail": "the plan was edited on the map after Plan; press Plan search again",
+        "event": "plan_invalidated"
+      }
+    },
+    "plan_refused_manual_control": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "Plan refused while a drone is under manual control.",
+      "payload": {
+        "detail": "drone-2 under manual control; press Resume search first",
+        "event": "plan_refused"
+      }
+    },
+    "plan_refused_unconnected": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "Plan refused because a configured drone is not connected (PR #141).",
+      "payload": {
+        "detail": "drone-2: not connected. A plan covering the whole area needs every configured drone. Connect the listed drones, or restart the ground with a fleet list containing only the drones that are connected (the launcher does this automatically).",
+        "event": "plan_refused"
+      }
+    },
+    "profile_switch_pending": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "Start was pressed while a detection profile switch is still pending (a warning, not a refusal).",
+      "payload": {
+        "detail": "detection profile switch still pending for drone-2; once flying, the edge refuses it and keeps its current profile",
+        "drone_ids": [
+          "drone-2"
+        ],
+        "event": "profile_switch_pending"
+      }
+    },
+    "retask": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "The lost drone's lanes were offered to the others. 'to' maps drone id to the number of accepted lanes; 'awaiting' lists offered lanes with no answer yet.",
+      "payload": {
+        "awaiting": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "drone_id": "drone-1",
+            "end_x_cm": 325,
+            "end_y_cm": 400,
+            "index": 1,
+            "x_cm": 250,
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "drone_id": "drone-1",
+            "end_x_cm": 325,
+            "end_y_cm": 0,
+            "index": 2,
+            "x_cm": 325,
+            "y_cm": 400
+          }
+        ],
+        "detail": "no lanes accepted yet; 2 lanes awaiting drone-1",
+        "drone_id": "drone-2",
+        "event": "retask",
+        "lanes": [],
+        "to": {}
+      }
+    },
+    "retask_failed": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "Lanes nobody can take: every entry has a reason; they also appear in fleet_plan.uncovered.",
+      "payload": {
+        "detail": "2 lanes of drone-1 uncovered: refused by drone-2 (geofence)",
+        "drone_id": "drone-1",
+        "event": "retask_failed",
+        "lanes": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "end_x_cm": 75,
+            "end_y_cm": 400,
+            "index": 1,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 0,
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "end_x_cm": 75,
+            "end_y_cm": 0,
+            "index": 2,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 75,
+            "y_cm": 400
+          }
+        ]
+      }
+    },
+    "start": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "The common start was scheduled.",
+      "payload": {
+        "detail": "start_at in 2 s",
+        "event": "start"
+      }
+    },
+    "start_refused": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "Start refused; detail names every drone and why.",
+      "payload": {
+        "detail": "drone-1: no assign_lanes ack; drone-2: no assign_lanes ack",
+        "event": "start_refused"
+      }
+    },
+    "start_refused_drone_unreachable": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "A v2 edge refused to take off because it cannot reach its drone.",
+      "payload": {
+        "detail": "drone-2: Tello unreachable (no state for 12 s)",
+        "event": "start_refused"
+      }
+    }
+  }
+}

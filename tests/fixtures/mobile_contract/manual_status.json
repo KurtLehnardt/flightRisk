@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "description": "The 'manual_status' event: the answer to get_manual_status, and a broadcast on every manual change.",
+    "file": "manual_status.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "ManualControl.drone_status",
+      "ManualControl.status"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "held_orphan_countdown": {
+      "direction": "server_to_client",
+      "event": "manual_status",
+      "notes": "Nobody controls a drone; drone-2 is held and lands in orphan_land_in_s seconds.",
+      "payload": {
+        "controlled": null,
+        "drones": {
+          "drone-1": {
+            "control_mode": "autonomous",
+            "edge_control_mode": "autonomous",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": null
+          },
+          "drone-2": {
+            "control_mode": "held",
+            "edge_control_mode": "held",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": 120
+          }
+        }
+      }
+    },
+    "manual_controlled": {
+      "direction": "server_to_client",
+      "event": "manual_status",
+      "notes": "The laptop controls drone-2.",
+      "payload": {
+        "controlled": "drone-2",
+        "drones": {
+          "drone-1": {
+            "control_mode": "autonomous",
+            "edge_control_mode": "autonomous",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": null
+          },
+          "drone-2": {
+            "control_mode": "manual",
+            "edge_control_mode": "manual",
+            "manual_last": null,
+            "manual_supported": true,
+            "orphan_land_in_s": null
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,412 @@
+{
+  "_meta": {
+    "description": "The 'fleet_plan' event: zones, lanes and uncovered entries on the shared grid (cm, plan frame).",
+    "file": "fleet_plan.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "FleetCoordinator.current_plan",
+      "FleetPlan.to_dict",
+      "flightrisk.drone.plan_edit.build_plan"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "map_plan_lost_zone_uncovered": {
+      "direction": "server_to_client",
+      "event": "fleet_plan",
+      "notes": "A plan made on the map with an edited short path for drone-2. drone-1 was lost (its zone has lost true) and drone-2 refused its lanes. 'uncovered' mixes two kinds of entry: re-tasked lanes nobody took (no 'kind' key; index, direction, distance_cm, x_cm, y_cm, end_x_cm, end_y_cm, drone_id, reason) and coverage gaps of the plan itself (kind 'area'; x_cm, y_cm, w_cm, h_cm, reason). 'details' is the map editor's own view and may be ignored.",
+      "payload": {
+        "details": {
+          "area": {
+            "h_cm": 400,
+            "w_cm": 400,
+            "x_cm": 0,
+            "y_cm": 0
+          },
+          "coverage": {
+            "cell_cm": 10,
+            "footprint_cm": 75,
+            "fraction": 0.395,
+            "model": "nominal (downward camera model)",
+            "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard."
+          },
+          "drones": [
+            {
+              "alt_cm": 100,
+              "drawn": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "drone_id": "drone-1",
+              "edited": false,
+              "generated": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "lanes": [
+                {
+                  "direction": "forward",
+                  "distance_cm": 400
+                },
+                {
+                  "direction": "right",
+                  "distance_cm": 75
+                },
+                {
+                  "direction": "back",
+                  "distance_cm": 400
+                }
+              ],
+              "max_deviation_cm": 0.0,
+              "moves": 3,
+              "path": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  400
+                ],
+                [
+                  75,
+                  400
+                ],
+                [
+                  75,
+                  0
+                ]
+              ],
+              "takeoff_cm": [
+                0,
+                0
+              ],
+              "zone": {
+                "h_cm": 400,
+                "w_cm": 150,
+                "x_cm": 0,
+                "y_cm": 0
+              }
+            },
+            {
+              "alt_cm": 130,
+              "drawn": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ],
+              "drone_id": "drone-2",
+              "edited": true,
+              "generated": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  400
+                ],
+                [
+                  325,
+                  400
+                ],
+                [
+                  325,
+                  0
+                ]
+              ],
+              "lanes": [
+                {
+                  "direction": "forward",
+                  "distance_cm": 200
+                }
+              ],
+              "max_deviation_cm": 0.0,
+              "moves": 1,
+              "path": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ],
+              "takeoff_cm": [
+                250,
+                0
+              ],
+              "zone": {
+                "h_cm": 400,
+                "w_cm": 150,
+                "x_cm": 250,
+                "y_cm": 0
+              }
+            }
+          ],
+          "gap_cm": 100,
+          "geofence_cm": 500.0,
+          "mode": "fleet",
+          "ok": true,
+          "pattern": "parallel_track",
+          "problems": [],
+          "snap_tolerance_cm": 40,
+          "spec": {
+            "area": {
+              "h_cm": 400,
+              "w_cm": 400,
+              "x_cm": 0,
+              "y_cm": 0
+            },
+            "paths": {
+              "drone-2": [
+                [
+                  250,
+                  0
+                ],
+                [
+                  250,
+                  200
+                ]
+              ]
+            },
+            "pattern": "parallel_track",
+            "version": 1
+          },
+          "strip_cm": 75,
+          "takeoff_layout": [
+            "drone-1 on its mark",
+            "drone-2 250 cm right of drone-1, same heading"
+          ],
+          "takeoffs": {
+            "drone-1": [
+              0,
+              0
+            ],
+            "drone-2": [
+              250,
+              0
+            ]
+          },
+          "uncovered": [
+            {
+              "h_cm": 160,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 290,
+              "x_cm": 110,
+              "y_cm": 240
+            },
+            {
+              "h_cm": 240,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 110,
+              "x_cm": 290,
+              "y_cm": 0
+            },
+            {
+              "h_cm": 240,
+              "kind": "area",
+              "reason": "may not be covered by the nominal (downward camera model)",
+              "w_cm": 100,
+              "x_cm": 110,
+              "y_cm": 0
+            }
+          ]
+        },
+        "gap_cm": 100,
+        "grid": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        },
+        "strip_cm": 75,
+        "uncovered": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "drone_id": "drone-1",
+            "end_x_cm": 75,
+            "end_y_cm": 400,
+            "index": 1,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 0,
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "drone_id": "drone-1",
+            "end_x_cm": 75,
+            "end_y_cm": 0,
+            "index": 2,
+            "reason": "refused by drone-2 (geofence)",
+            "x_cm": 75,
+            "y_cm": 400
+          },
+          {
+            "h_cm": 160,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 290,
+            "x_cm": 110,
+            "y_cm": 240
+          },
+          {
+            "h_cm": 240,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 110,
+            "x_cm": 290,
+            "y_cm": 0
+          },
+          {
+            "h_cm": 240,
+            "kind": "area",
+            "reason": "may not be covered by the nominal (downward camera model)",
+            "w_cm": 100,
+            "x_cm": 110,
+            "y_cm": 0
+          }
+        ],
+        "zones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "drone-1",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 400
+              }
+            ],
+            "lost": true,
+            "takeoff_x_cm": 0,
+            "takeoff_y_cm": 0,
+            "w_cm": 150,
+            "x_cm": 0,
+            "y_cm": 0
+          },
+          {
+            "alt_cm": 130,
+            "drone_id": "drone-2",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 200
+              }
+            ],
+            "lost": false,
+            "takeoff_x_cm": 250,
+            "takeoff_y_cm": 0,
+            "w_cm": 150,
+            "x_cm": 250,
+            "y_cm": 0
+          }
+        ]
+      }
+    },
+    "two_drones": {
+      "direction": "server_to_client",
+      "event": "fleet_plan",
+      "notes": "A plan made with Plan search (no map edit): two zones side by side, no uncovered entries.",
+      "payload": {
+        "gap_cm": 100,
+        "grid": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        },
+        "strip_cm": 75,
+        "uncovered": [],
+        "zones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "drone-1",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 400
+              },
+              {
+                "direction": "right",
+                "distance_cm": 75
+              },
+              {
+                "direction": "back",
+                "distance_cm": 400
+              }
+            ],
+            "lost": false,
+            "w_cm": 150,
+            "x_cm": 0,
+            "y_cm": 0
+          },
+          {
+            "alt_cm": 130,
+            "drone_id": "drone-2",
+            "h_cm": 400,
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 400
+              },
+              {
+                "direction": "right",
+                "distance_cm": 75
+              },
+              {
+                "direction": "back",
+                "distance_cm": 400
+              }
+            ],
+            "lost": false,
+            "w_cm": 150,
+            "x_cm": 250,
+            "y_cm": 0
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "description": "The 'land_all_ack' event: the answer to land_all, with how many drones each path reached.",
+    "file": "land_all_ack.json",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.app._land_all",
+      "flightrisk.dashboard.app.on_land_all"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "fleet_reached_all": {
+      "direction": "server_to_client",
+      "event": "land_all_ack",
+      "notes": "Each path's count of drones reached (null: path not configured or failed). Show the counts.",
+      "payload": {
+        "coordinator": 2,
+        "local": null,
+        "reached_any": true,
+        "transport": 2
+      }
+    },
+    "local_fleet": {
+      "direction": "server_to_client",
+      "event": "land_all_ack",
+      "notes": "A ground with a locally connected drone and no edge fleet.",
+      "payload": {
+        "coordinator": null,
+        "local": 1,
+        "reached_any": true,
+        "transport": null
+      }
+    },
+    "reached_no_drone": {
+      "direction": "server_to_client",
+      "event": "land_all_ack",
+      "notes": "No path reached any drone (reached_any false). Show this as a FAILURE: 'LAND ALL reached no drone'.",
+      "payload": {
+        "coordinator": null,
+        "local": null,
+        "reached_any": false,
+        "transport": null
+      }
+    }
+  }
+}
