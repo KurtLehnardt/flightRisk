@@ -530,9 +530,10 @@ def errors(issues: list[Issue]) -> list[Issue]:
 # ---------------------------------------------------------------------------
 
 
-def _two(source: str, *, run_here: bool, slots: tuple[int, int] = DEFAULT_SLOTS_CM, local_ips: tuple[str, str] = ("", "")) -> tuple[DroneSettings, ...]:
+def _two(source: str, *, run_here: bool, slots: tuple[int, int] = DEFAULT_SLOTS_CM) -> tuple[DroneSettings, ...]:
+    """Two drones. No preset holds an adapter address or interface index: loading a preset detects the adapters."""
     return tuple(
-        DroneSettings(drone_id=f"drone-{k + 1}", source=source, alt_slot_cm=slots[k], run_here=run_here, local_ip=local_ips[k])
+        DroneSettings(drone_id=f"drone-{k + 1}", source=source, alt_slot_cm=slots[k], run_here=run_here)
         for k in range(2)
     )
 
@@ -545,14 +546,12 @@ def builtin_presets() -> dict[str, LauncherSettings]:
         ),
         "Layout A (edges on this computer)": LauncherSettings(
             role="edges", ground_host=DEFAULT_CABLE_ADDRESS, ground_port=DEFAULT_EDGE_PORT,
-            # The same slots as scripts/demo_edge_pair.ps1; on Windows also fill in each adapter's interface index.
-            # The adapter IPs of the two-adapter runbook (docs/two-tellos-one-pc.md); check yours with Refresh adapters.
-            drones=_two("tello", run_here=True, slots=(50, 80), local_ips=("192.168.10.2", "192.168.10.50")),
+            # The same slots as scripts/demo_edge_pair.ps1. The adapter of each drone is chosen in the window.
+            drones=_two("tello", run_here=True, slots=(50, 80)),
         ),
         "Layout B (everything here)": LauncherSettings(
-            # Two real Tellos from one computer need one Wi-Fi adapter each; these are the runbook's IPs.
-            role="ground", network="loopback",
-            drones=_two("tello", run_here=True, local_ips=("192.168.10.2", "192.168.10.50")),
+            # Two real Tellos from one computer need one Wi-Fi adapter each, chosen in the window.
+            role="ground", network="loopback", drones=_two("tello", run_here=True),
         ),
         "Single drone": LauncherSettings(
             role="ground", network="loopback", drones=(DroneSettings(drone_id="drone-1", source="tello"),),
@@ -582,7 +581,10 @@ class PresetError(ValueError):
 class PresetStore:
     """Saved presets and the last used settings, as JSON in the user's home directory.
 
-    The file holds ``{"version": 1, "presets": {name: settings}, "last": settings}``.
+    The file holds ``{"version": 1, "presets": {name: settings}, "last": settings,
+    "adapter_choices": {drone id: {"adapter": adapter name}}}``. The adapter choices are kept apart from
+    the presets: they remember which adapter the operator confirmed for a drone, by adapter name (an
+    address from DHCP changes), and never hold an address, an interface index or the token.
     An entry that is not valid is skipped and reported in ``load_problems``.
     ``secret`` is a callable returning the edge token (or None); a save whose
     JSON would contain it is refused, so a preset can never hold the token.
@@ -599,20 +601,21 @@ class PresetStore:
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return {"version": _FILE_VERSION, "presets": {}, "last": None}
+            return {"version": _FILE_VERSION, "presets": {}, "last": None, "adapter_choices": {}}
         except OSError as exc:
             self.load_problems.append(f"cannot read {self.path}: {exc}")
-            return {"version": _FILE_VERSION, "presets": {}, "last": None}
+            return {"version": _FILE_VERSION, "presets": {}, "last": None, "adapter_choices": {}}
         try:
             data = json.loads(text)
         except ValueError as exc:
             self.load_problems.append(f"{self.path} is not valid JSON ({exc}); it will be replaced on the next save")
-            return {"version": _FILE_VERSION, "presets": {}, "last": None}
+            return {"version": _FILE_VERSION, "presets": {}, "last": None, "adapter_choices": {}}
         if not isinstance(data, dict) or data.get("version") != _FILE_VERSION:
             self.load_problems.append(f"{self.path} is not a version {_FILE_VERSION} launcher file; it will be replaced on the next save")
-            return {"version": _FILE_VERSION, "presets": {}, "last": None}
+            return {"version": _FILE_VERSION, "presets": {}, "last": None, "adapter_choices": {}}
         presets = data.get("presets") if isinstance(data.get("presets"), dict) else {}
-        return {"version": _FILE_VERSION, "presets": presets, "last": data.get("last")}
+        choices = data.get("adapter_choices") if isinstance(data.get("adapter_choices"), dict) else {}
+        return {"version": _FILE_VERSION, "presets": presets, "last": data.get("last"), "adapter_choices": choices}
 
     def presets(self) -> dict[str, LauncherSettings]:
         """Built-in presets first, then the saved ones that are valid."""
@@ -663,6 +666,27 @@ class PresetStore:
         with self._lock:
             raw = self._read()
             raw["last"] = settings.to_json()
+            self._write(raw)
+
+    def adapter_choices(self) -> dict[str, str]:
+        """Drone id to the name of the adapter the operator confirmed for it last time."""
+        with self._lock:
+            raw = self._read()
+        result = {}
+        for drone_id, entry in raw["adapter_choices"].items():
+            name = entry.get("adapter") if isinstance(entry, dict) else None
+            if isinstance(drone_id, str) and isinstance(name, str) and name and len(name) <= MAX_TEXT_LEN and not _CONTROL.search(name):
+                result[drone_id] = name
+        return result
+
+    def remember_adapters(self, mapping: Mapping[str, str]) -> None:
+        """Remember *mapping* (drone id to adapter name), replacing what was remembered for those drone ids."""
+        if not mapping:
+            return
+        with self._lock:
+            raw = self._read()
+            for drone_id, name in mapping.items():
+                raw["adapter_choices"][drone_id] = {"adapter": name}
             self._write(raw)
 
     def _write(self, raw: dict[str, Any]) -> None:

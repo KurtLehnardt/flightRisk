@@ -28,6 +28,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from flightrisk.launcher import preflight as pf
+from flightrisk.launcher.adaptermap import confirmed_mapping, propose_adapters
+from flightrisk.launcher.ceilingfile import (
+    CeilingWriteError,
+    plan_ceiling_write,
+    write_ceiling,
+)
 from flightrisk.launcher.commands import (
     CONTROLLED_ENV,
     EdgeToken,
@@ -46,7 +52,9 @@ from flightrisk.launcher.processes import (
 )
 from flightrisk.launcher.settings import (
     DEFAULT_PRESET,
+    ERROR,
     MAX_DRONES,
+    Issue,
     LauncherSettings,
     PresetError,
     PresetStore,
@@ -94,8 +102,11 @@ class LauncherApp:
         python: str = sys.executable,
         on_quit: Callable[[str], None] | None = None,
         environ: dict[str, str] | None = None,
+        ceiling_path: Path | None = None,
     ):
         self.port = port
+        #: The dashboard's ceiling file; None means FLIGHTRISK_CEILING_FILE in the environment, else the default.
+        self.ceiling_path = ceiling_path
         self.environ = dict(os.environ if environ is None else environ)
         self._token_loader = token_loader
         self.redact = Redactor()
@@ -158,6 +169,16 @@ class LauncherApp:
             rows.append({"name": row["name"], "label": row["label"], "available": available, "weights": row["weights"]})
         return rows
 
+    def ceiling_plan(self, settings: LauncherSettings):
+        return plan_ceiling_write(settings, self.ceiling_path, self.environ)
+
+    def adapter_proposals(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Per real drone flown from here: the adapters in its Tello host's network and, when safe, a pre-selection."""
+        settings = self.parse(body)
+        adapters = [Adapter(a["name"], a["ipv4"], a["index"], a["up"]) for a in self.adapters(refresh=True)]
+        proposals = propose_adapters(settings, adapters, self.store.adapter_choices())
+        return {"proposals": [p.to_json() for p in proposals], "adapters": self.adapters()}
+
     def adapters(self, refresh: bool = False) -> list[dict[str, Any]]:
         if refresh or self._adapters_cache is None:
             self._adapters_cache = [a.to_json() for a in self.preflight_env.adapters()]
@@ -216,6 +237,7 @@ class LauncherApp:
         return {
             "issues": self.issues(settings),
             "inherited_env": self.inherited_env(),
+            "ceiling_file": self.ceiling_plan(settings).to_json(),
             "fleet": list(settings.fleet_ids()) if settings.runs_ground else [],
             "needs_token": settings.needs_token(),
             "plan": [
@@ -258,6 +280,17 @@ class LauncherApp:
             self.last_checks = [self._redact_check(c.to_json()) for c in checks]
             if any(c.status == pf.FAIL for c in checks):
                 return {"started": False, "issues": [i.to_json() for i in found], "checks": self.last_checks}
+            written = None
+            if settings.runs_ground:
+                # The dashboard's plan decides the altitude slots on a dashboard flight, so it must read the
+                # slots the edges are started with. Only here, on Start, and never while processes run.
+                try:
+                    written = write_ceiling(settings, self.ceiling_path, processes_running=self.manager.busy(),
+                                            environ=self.environ)
+                except (CeilingWriteError, OSError) as exc:
+                    problem = Issue(ERROR, "ceiling_cm", f"the ceiling file was not written, so nothing was started: {exc}")
+                    return {"started": False, "issues": [i.to_json() for i in found] + [problem.to_json()],
+                            "checks": self.last_checks}
             try:
                 self.store.save_last(settings)
             except (OSError, PresetError):
@@ -266,9 +299,19 @@ class LauncherApp:
                 self.manager.start(build_plan(settings, token, self.python, self.environ))
             except ProcessError as exc:
                 raise ApiError(HTTPStatus.CONFLICT, str(exc)) from None
-            return {"started": True, "issues": [i.to_json() for i in found], "checks": self.last_checks}
+            self._remember_adapters(settings)
+            return {"started": True, "issues": [i.to_json() for i in found], "checks": self.last_checks,
+                    "ceiling_file": written.to_json() if written is not None else None}
         finally:
             self._start_lock.release()
+
+    def _remember_adapters(self, settings: LauncherSettings) -> None:
+        """Remember the adapter confirmed for each real drone, by adapter name. A convenience; never stops a start."""
+        try:
+            adapters = [Adapter(a["name"], a["ipv4"], a["index"], a["up"]) for a in self.adapters()]
+            self.store.remember_adapters(confirmed_mapping(settings, adapters))
+        except (OSError, PresetError):
+            pass
 
     def stop(self, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("confirm") is not True:
@@ -457,6 +500,7 @@ def make_handler(app: LauncherApp, session: str) -> type[BaseHTTPRequestHandler]
                     routes = {
                         "/api/validate": app.validate,
                         "/api/preflight": app.preflight,
+                        "/api/adapter-proposals": app.adapter_proposals,
                         "/api/start": app.start,
                         "/api/stop": app.stop,
                         "/api/restart": app.restart,
