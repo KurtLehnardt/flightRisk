@@ -19,6 +19,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# A GIT_DIR or GIT_WORK_TREE (or any other GIT_* setting) in the caller's
+# environment would point every git command at another repository.
+Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+
 $FlightRiskHome = if ($env:FLIGHTRISK_HOME) { $env:FLIGHTRISK_HOME } else { Join-Path $env:LOCALAPPDATA "FlightRisk" }
 $AppDir = Join-Path $FlightRiskHome "app"
 $Marker = Join-Path (Join-Path $AppDir ".git") "flightrisk-installer"
