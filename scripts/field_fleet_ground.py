@@ -30,10 +30,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from flightrisk import fleet_protocol as fp
-from flightrisk.drone.coordinator import FleetCoordinator
-from flightrisk.drone.fleet_scale import field_scale
-from flightrisk.transport import GroundTransportSync
+from flightrisk import fleet_protocol as fp  # noqa: E402
+from flightrisk.drone.coordinator import FleetCoordinator  # noqa: E402
+from flightrisk.drone.fleet_scale import field_scale  # noqa: E402
+from flightrisk.transport import GroundTransportSync  # noqa: E402
 
 _SEND_TIMEOUT_S = 5.0
 _PING_TIMEOUT_S = 2.0
