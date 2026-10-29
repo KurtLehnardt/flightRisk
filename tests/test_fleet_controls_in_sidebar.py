@@ -62,3 +62,12 @@ def test_land_actions_are_labelled_apart():
     assert re.search(r'id="land-all"[^>]*>LAND ALL <kbd>', INDEX)
     assert re.search(r'id="land-selected"[^>]*>Land drone<', INDEX)
     assert len(re.findall(r"sendCmd\('land'\)", JS)) == 1
+
+
+def test_plan_refused_event_shows_a_readable_message_and_the_detail():
+    # An unknown fleet_event shows its raw name in the banner; plan_refused must say why the plan was refused.
+    handler = JS[JS.index("socket.on('fleet_event'"):JS.index("// ========== PLAN AND START")]
+    assert "kind === 'plan_refused'" in handler
+    branch = handler[handler.index("kind === 'plan_refused'"):handler.index("kind === 'start_refused'")]
+    assert "showFleetBanner('PLAN REFUSED')" in branch
+    assert "showFleetError('Plan refused: ' + (ev.detail" in branch

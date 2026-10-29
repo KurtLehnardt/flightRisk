@@ -1414,8 +1414,12 @@ const socket = io();
             showFleetBanner('PLAN EDITED: press Plan search again');
             fleetPlanReceived = false;
             updateFleetStartButton();
-        }
-        else if (kind === 'start_refused') {
+        } else if (kind === 'plan_refused') {
+            showFleetBanner('PLAN REFUSED');
+            showFleetError('Plan refused: ' + (ev.detail || 'unknown'));
+            fleetStartInFlight = false;
+            updateFleetStartButton();
+        } else if (kind === 'start_refused') {
             showFleetBanner(String(kind));
             showFleetError('Start refused: ' + (ev.detail || 'unknown'));
             fleetStartInFlight = false;
