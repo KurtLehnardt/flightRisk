@@ -22,6 +22,24 @@ DJI Tello (720p WiFi) → MacBook / iPhone / Android → AI Pipeline → Alert
 
 ## Quick Start
 
+### Install as an app (macOS and Windows)
+
+To run FlightRisk without a development checkout, install it per user from the newest release. It opens the
+launcher window from `FlightRisk.app` (Mac) or the Start menu (Windows). Details, the Gatekeeper and
+SmartScreen steps, update and uninstall are in [docs/installer.md](docs/installer.md).
+
+```bash
+# macOS (Apple Silicon, macOS 14 or newer)
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/macos/install.sh)"
+```
+
+```powershell
+# Windows (the edge laptop), in PowerShell
+irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
+```
+
+The steps below set up a development checkout instead.
+
 ### Linux (Ubuntu/Debian)
 ```bash
 git clone https://github.com/KurtLehnardt/flightRisk.git
@@ -185,6 +203,8 @@ $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 
 `DRONE_ID` 1 and 2 become the fleet ids `drone-1` and `drone-2`, which are the ids the ground station expects (`FLIGHTRISK_FLEET_DRONES`, default `drone-1,drone-2`). Each launcher refuses to start without `FLIGHTRISK_EDGE_TOKEN`. Open the dashboard at `http://127.0.0.1:5555` on the Mac. [docs/demo-script.md](docs/demo-script.md) is the minute-by-minute run sheet, including the fallbacks. Without hardware, `python scripts/demo_fake_fleet.py --n 4 --drive` runs the same ground station against fake edges.
 
+To start the same setups from a window instead of these commands (pick the layout and the number of drones, run the preflight checks, then Start), run `scripts/launcher.command` on the Mac or `scripts\launcher.bat` on Windows; see [docs/launcher.md](docs/launcher.md).
+
 ### Offline
 
 The demo needs no internet connection. The detector and appearance matcher run on the laptops, `--no-llm` starts no reasoning model, and station mode needs a local router but not an uplink. Install the packages and model files once while online, before the event.
@@ -213,6 +233,8 @@ The fine-tuned aerial person detector (`models/heridal_yolo11s.pt`) is not in gi
 - [docs/privacy-design.md](docs/privacy-design.md): privacy design
 - [docs/fleet-setup.md](docs/fleet-setup.md): two-drone network setup
 - [docs/ui-design.md](docs/ui-design.md): the dashboard layout and its safety rules (the earlier layout is kept on the `legacy-ui` branch)
+- [docs/launcher.md](docs/launcher.md): the launcher window that starts the ground station, dashboard and edges
+- [docs/installer.md](docs/installer.md): the per-user installers, FlightRisk.app, the disk image and the Windows Setup
 - [docs/altitude-benchmark.md](docs/altitude-benchmark.md): altitude benchmark and fine-tuning
 - [docs/licensing.md](docs/licensing.md): licensing
 

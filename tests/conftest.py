@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -47,8 +47,9 @@ def clean_app_state():
     """
     import copy
     import dataclasses
+
     from flightrisk.dashboard import app as app_module
-    from flightrisk.dashboard.state import app_state, AppState
+    from flightrisk.dashboard.state import AppState, app_state
 
     # Snapshot the current AppState fields (shallow copy is fine for
     # the scalar / None fields that tests typically touch).
@@ -371,3 +372,13 @@ from tests.support.fixtures import (  # noqa: F401
     netsim,
     two_node_fleet,
 )
+
+
+@pytest.fixture(autouse=True)
+def _launcher_never_touches_the_real_flightrisk_files(request, tmp_path, monkeypatch):
+    """The launcher writes the ceiling file on Start: a launcher test must never reach the real ~/.flightrisk."""
+    if request.module.__name__.rsplit(".", 1)[-1].startswith("test_launcher"):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+        monkeypatch.setenv("FLIGHTRISK_CEILING_FILE", str(tmp_path / "home-ceiling.json"))
+        monkeypatch.setenv("FLIGHTRISK_LAUNCHER_FILE", str(tmp_path / "home-launcher.json"))
