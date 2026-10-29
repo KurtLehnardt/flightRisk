@@ -179,7 +179,7 @@ class _Item:
 
 
 class _FakeMavSystem:
-    def __init__(self):
+    def __init__(self, **_kwargs):
         self.connect = AsyncMock()
         self.action = MagicMock()
         for name in ("arm", "takeoff", "land", "goto_location"):
@@ -196,7 +196,7 @@ class _FakeMavSystem:
             _Item(latitude_deg=37.0, longitude_deg=-122.0, absolute_altitude_m=50.0)
         )
         self.telemetry.heading = lambda: _agen(_Item(heading_deg=90.0))
-        self.telemetry.battery = lambda: _agen(_Item(remaining_percent=0.87))
+        self.telemetry.battery = lambda: _agen(_Item(remaining_percent=87.0))  # MAVSDK 2+: 0 to 100
         self.telemetry.flight_mode = lambda: _agen(_Item(mode="HOLD"))
         self.telemetry.gps_info = lambda: _agen(_Item(fix_type=fix))
 

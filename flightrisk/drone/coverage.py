@@ -323,6 +323,18 @@ def required_range_m(area_m2: float) -> float:
     return math.sqrt(area_m2) * math.sqrt(2) / 2
 
 
+def nadir_swath_m(camera: CameraModel, alt_m: float) -> float:
+    """Ground width a straight-down (nadir) camera sees across its horizontal field of view at *alt_m*.
+
+    The same footprint ``plan_coverage`` uses: ``2 * alt * tan(HFOV / 2)``.
+    """
+    if camera.is_ground:
+        raise ValueError(f"{camera.name} is a ground team and has no camera footprint")
+    if not (math.isfinite(alt_m) and alt_m > 0):
+        raise ValueError(f"alt_m must be a positive number, got {alt_m!r}")
+    return 2 * alt_m * math.tan(math.radians(camera.hfov_deg) / 2)
+
+
 def plan_coverage(
     camera: CameraModel,
     min_person_px: float,

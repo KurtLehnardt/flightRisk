@@ -41,6 +41,7 @@ from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
     MIN_MOVE_CM,
+    ROOM_LIMITS,
     CeilingError,
     RelativePose,
     is_finite_number,
@@ -74,17 +75,23 @@ NEW_PLAN = "new"
 SAME_PLAN = "same"
 
 
-def split_lane_moves(distance_cm: float) -> list[int]:
-    """Split one lane into Tello-sized moves of 20-500 cm each, as evenly as possible."""
+def split_lane_moves(
+    distance_cm: float, min_move_cm: float = MIN_MOVE_CM, max_move_cm: float = MAX_MOVE_CM
+) -> list[int]:
+    """Split one lane into Tello-sized moves of 20-500 cm each, as evenly as possible.
+
+    *min_move_cm* and *max_move_cm* replace the Tello range for a drone with
+    another envelope profile (``SafetyEnvelope.limits``).
+    """
     total = round(distance_cm)
-    if total < MIN_MOVE_CM:
-        raise ValueError(f"lane distance {distance_cm!r} cm is below the {MIN_MOVE_CM} cm minimum move")
-    count = max(1, math.ceil(total / MAX_MOVE_CM))
+    if total < min_move_cm:
+        raise ValueError(f"lane distance {distance_cm!r} cm is below the {min_move_cm:g} cm minimum move")
+    count = max(1, math.ceil(total / max_move_cm))
     base, extra = divmod(total, count)
     return [base + (1 if i < extra else 0) for i in range(count)]
 
 
-def parse_lanes(raw: Any) -> list[tuple[str, int]]:
+def parse_lanes(raw: Any, min_move_cm: float = MIN_MOVE_CM) -> list[tuple[str, int]]:
     """Validate an ``assign_lanes`` lane list and return ``(direction, distance_cm)`` pairs.
 
     Raises ``ValueError`` describing the first problem found. Only
@@ -101,7 +108,7 @@ def parse_lanes(raw: Any) -> list[tuple[str, int]]:
         distance = lane.get("distance_cm")
         if direction not in HORIZONTAL_DIRECTIONS:
             raise ValueError(f"lane {index} has unsupported direction {direction!r}")
-        if not is_finite_number(distance) or round(distance) < MIN_MOVE_CM:
+        if not is_finite_number(distance) or round(distance) < min_move_cm:
             raise ValueError(f"lane {index} has invalid distance_cm {distance!r}")
         lanes.append((direction, round(distance)))
     return lanes
@@ -282,8 +289,9 @@ class LanePlanMixin:
         target = msg.get("drone_id")
         if target is not None and str(target) != self.drone_id:
             return self._refuse_lanes(msg, "other_drone", lanes_received, target=target)
+        limits = getattr(self.envelope, "limits", ROOM_LIMITS)
         try:
-            lanes = parse_lanes(raw_lanes)
+            lanes = parse_lanes(raw_lanes, limits.min_move_cm)
             identity = plan_identity(msg, v2=self._is_v2(msg))
             on_complete, hover_timeout_s = parse_on_complete(msg)
         except ValueError as exc:
@@ -307,6 +315,12 @@ class LanePlanMixin:
                 return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
             except ValueError as exc:
                 return self._refuse_lanes(msg, "altitude", lanes_received, error=str(exc))
+            # A controller that knows more limits for its slot (an autopilot's
+            # own return altitude) is asked too, on the ground and in the air.
+            check_slot = getattr(self.drone, "check_slot", None)
+            slot_problem = check_slot(alt_cm) if callable(check_slot) else None
+            if slot_problem:
+                return self._refuse_lanes(msg, "altitude", lanes_received, error=str(slot_problem))
         battery = self._read_battery()
         if not is_finite_number(battery):
             return self._refuse_lanes(msg, "battery", lanes_received, battery=battery)
@@ -314,7 +328,7 @@ class LanePlanMixin:
         moves = [
             (lane_index, chunk_index, direction, distance)
             for lane_index, (direction, lane_cm) in enumerate(lanes)
-            for chunk_index, distance in enumerate(split_lane_moves(lane_cm))
+            for chunk_index, distance in enumerate(split_lane_moves(lane_cm, limits.min_move_cm, limits.max_move_cm))
         ]
         content = (tuple(lanes), alt_cm, on_complete, hover_timeout_s)
 

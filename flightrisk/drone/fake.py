@@ -279,7 +279,9 @@ class FakeDrone:
         return self._command("rotate", (degrees,), lambda: self._do_rotate(degrees))
 
     def rc_control(self, lr: int, fb: int, ud: int, yaw: int) -> CommandResult:
-        return self._command("rc_control", (lr, fb, ud, yaw), None)
+        # Stick values are clamped to -100..100, as the Tello client does.
+        sticks = tuple(max(-100, min(100, int(v))) for v in (lr, fb, ud, yaw))
+        return self._command("rc_control", sticks, None)
 
     # --- Navigation ---
 

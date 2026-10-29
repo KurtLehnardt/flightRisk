@@ -103,6 +103,11 @@ class DroneCapabilities:
     #: Optional roles this backend implements. Callers ask
     #: ``supports(Capability.X)`` rather than probing for methods.
     features: frozenset[Capability] = BASIC_FLIGHT
+    #: Which safety-envelope profile the fleet edge applies to this drone
+    #: (``flightrisk.drone.safety.limits_for``): ``"room"`` (indoor,
+    #: centimetre moves, the Tello) or ``"field"`` (outdoor, GPS, metre-scale
+    #: moves, slots, ceiling and geofence).
+    flight_scale: str = "room"
 
     def supports(self, capability: Capability) -> bool:
         return capability in self.features
@@ -209,7 +214,19 @@ def command_result(value: Any, command: str) -> CommandResult:
 
 #: Why a drone link is unhealthy (``DroneLinkStatus.reason``). A bounded set
 #: of codes, safe as a metric label; the human text is in ``detail``.
-DRONE_LINK_REASONS = frozenset({"not_connected", "no_state", "state_stale", "command_failed", "unreadable"})
+DRONE_LINK_REASONS = frozenset({
+    "not_connected",
+    "no_state",
+    "state_stale",
+    "command_failed",
+    "unreadable",
+    # An autopilot backend reports its preflight checks (GPS fix, home
+    # position, required failsafes) as a link that is not ready for takeoff.
+    "preflight",
+    # The vehicle is under someone else's control (an RC pilot switched the
+    # flight mode, or the autopilot's own failsafe took over).
+    "external_control",
+})
 
 
 @dataclass(frozen=True)
