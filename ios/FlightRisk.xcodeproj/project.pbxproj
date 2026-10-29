@@ -15,6 +15,7 @@
 		1199DE250FB94739372DDEC1 /* HUDOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */; };
 		1884829E3DF19EF87111C55C /* GemmaModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 528EE687C8CE5B766B01FBF9 /* GemmaModelManager.swift */; };
 		1EBEC24EB0A006D8F434E585 /* DroneManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D524D2A77288771B4CBFB8F5 /* DroneManager.swift */; };
+		1EC4C07C3821A5F880AF1953 /* GroundProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 1B44DC7618235D364413EAA1 /* GroundProtocol */; };
 		2271A01C249E8FDB8488283B /* OSNetReIDMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */; };
 		2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52439BABA6B78915E990592B /* SensitivityPreset.swift */; };
 		28F69D71B8044264122D9BB4 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 2BC2DD3B880CCB5E5A65D306 /* MLXLLM */; };
@@ -24,6 +25,7 @@
 		3C1E0E65DC0C93311D75AACE /* AlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8591AC23892D277F0A94595D /* AlertManager.swift */; };
 		3C9D7FD4AB84BFEFDA645FFC /* TelloStatusBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CD82790795E7BEE644F03EF /* TelloStatusBadgeView.swift */; };
 		4268CF24E9C5B65DB663F293 /* MatchAlertCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */; };
+		4F4EB30EC0EE96F58F284375 /* SocketIOMini in Frameworks */ = {isa = PBXBuildFile; productRef = D8DC38056B611E2DDF929198 /* SocketIOMini */; };
 		509EA4DAD8A0D8DB112428E2 /* LocalGemmaLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E57C5C08DCED1065C9DC84 /* LocalGemmaLlmBackend.swift */; };
 		57D2434AAC2BC55FDA4B1A0B /* NoOpLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */; };
 		59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */; };
@@ -103,6 +105,7 @@
 		317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudClaudeLlmBackend.swift; sourceTree = "<group>"; };
 		338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSNetReIDMatcher.swift; sourceTree = "<group>"; };
 		35792841BED0D09966745935 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		37A07D66689A481E4C07F063 /* FlightRiskGround */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FlightRiskGround; path = FlightRiskGround; sourceTree = SOURCE_ROOT; };
 		38053A9FBEF419992A818002 /* TargetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetStore.swift; sourceTree = "<group>"; };
 		38F7ABC1390587ECC7E40C8B /* TelloState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelloState.swift; sourceTree = "<group>"; };
 		3C180AFC046B192A58F1EDA8 /* FlightControlsOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightControlsOverlayView.swift; sourceTree = "<group>"; };
@@ -169,6 +172,8 @@
 				7770863F21ADB6FF49C25A20 /* MLX in Frameworks */,
 				28F69D71B8044264122D9BB4 /* MLXLLM in Frameworks */,
 				8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */,
+				1EC4C07C3821A5F880AF1953 /* GroundProtocol in Frameworks */,
+				4F4EB30EC0EE96F58F284375 /* SocketIOMini in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -191,6 +196,14 @@
 				703EF934C8A58C9E09EF38A7 /* ContentView.swift */,
 			);
 			path = Navigation;
+			sourceTree = "<group>";
+		};
+		08C8A1FA3C2F7BB3DFAB1FAB /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				37A07D66689A481E4C07F063 /* FlightRiskGround */,
+			);
+			name = Packages;
 			sourceTree = "<group>";
 		};
 		131D972A15050BF78DFB92A6 /* Settings */ = {
@@ -404,6 +417,7 @@
 			children = (
 				BDDD43E843468FCD7F14A5CE /* FlightRisk */,
 				3658B56FE3DD369AB70330AE /* FlightRiskTests */,
+				08C8A1FA3C2F7BB3DFAB1FAB /* Packages */,
 				D63EB7FAD1009AC95314462C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -463,6 +477,8 @@
 				44B591CBF45FFA639742AD36 /* MLX */,
 				2BC2DD3B880CCB5E5A65D306 /* MLXLLM */,
 				2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */,
+				1B44DC7618235D364413EAA1 /* GroundProtocol */,
+				D8DC38056B611E2DDF929198 /* SocketIOMini */,
 			);
 			productName = FlightRisk;
 			productReference = DB1B56CF1671883797BA7506 /* FlightRisk.app */;
@@ -498,6 +514,7 @@
 			packageReferences = (
 				E3012945CFD9ED9174E1E4DE /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				192A258C3AEC26CCFB1F387C /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				3FD22B596BA9A350CE64257D /* XCLocalSwiftPackageReference "FlightRiskGround" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D63EB7FAD1009AC95314462C /* Products */;
@@ -820,6 +837,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		3FD22B596BA9A350CE64257D /* XCLocalSwiftPackageReference "FlightRiskGround" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = FlightRiskGround;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		192A258C3AEC26CCFB1F387C /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -840,6 +864,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1B44DC7618235D364413EAA1 /* GroundProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = GroundProtocol;
+		};
 		2BC2DD3B880CCB5E5A65D306 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 192A258C3AEC26CCFB1F387C /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
@@ -854,6 +882,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E3012945CFD9ED9174E1E4DE /* XCRemoteSwiftPackageReference "mlx-swift" */;
 			productName = MLX;
+		};
+		D8DC38056B611E2DDF929198 /* SocketIOMini */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SocketIOMini;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
