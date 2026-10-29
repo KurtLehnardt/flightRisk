@@ -476,6 +476,10 @@ class FleetCoordinator:
             passes the drones held for manual control
             (``docs/manual-takeover.md``), whose lanes would otherwise wait
             for the operator.
+        retask_separation: Offer re-tasked lanes only to a drone whose new
+            path stays the zone gap away from every other drone's path (the
+            default). False switches that check off; only tests of the offer
+            and refusal mechanics use it.
     """
 
     def __init__(
@@ -494,6 +498,7 @@ class FleetCoordinator:
         retask_wait_s: float = RETASK_WAIT_S,
         alt_slot_of: Callable[[str, int], int] | None = None,
         retask_excluded: Callable[[str], bool] | None = None,
+        retask_separation: bool = True,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -530,6 +535,7 @@ class FleetCoordinator:
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
         self._retask_wait_s = float(retask_wait_s)
         self._retask_excluded = retask_excluded
+        self._retask_separation = bool(retask_separation)
 
         self._lock = threading.RLock()
         self._drones: dict[str, _DroneState] = {drone_id: _DroneState() for drone_id in self._links}
@@ -1487,7 +1493,7 @@ class FleetCoordinator:
         re-task never brings two drones closer than the gap at any point.
         """
         gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
-        if gap <= 0:
+        if gap <= 0 or not self._retask_separation:
             return None
         mine = [self._origin(self._drones[rid])]
         for lane in lanes:

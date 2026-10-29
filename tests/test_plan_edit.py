@@ -297,6 +297,7 @@ def test_map_defaults_follow_the_supervisor():
     defaults = supervisor.map_defaults()
     assert defaults == {
         "mode": "fleet", "drone_ids": IDS, "area": AREA, "strip_cm": 75, "gap_cm": 100, "geofence_cm": 450.0,
+        "takeoffs": {"drone-1": [0, 0], "drone-2": [250, 0]}, "camera_footprint_cm": 75,
     }
 
 
