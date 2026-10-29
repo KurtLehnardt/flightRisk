@@ -18,10 +18,17 @@
 #      folder was not made by this installer.
 #   3. Creates the virtual environment app\venv and installs the pinned edge
 #      packages of installer\locks\windows-x64-edge.txt (PyTorch, Ultralytics,
-#      OpenCV, djitellopy; this laptop runs edges only).
-#   4. Downloads the yolo11n detector weights.
+#      OpenCV, djitellopy; this laptop runs edges only): wheels only, each
+#      checked against its SHA-256 in the lock, from PyPI only (pip's own
+#      settings and PIP_* variables are ignored).
+#   4. Downloads the yolo11n detector weights and checks their SHA-256.
 #   5. Adds a FlightRisk entry to the Start menu (it opens the launcher window) and
 #      to Settings > Apps > Installed apps (for uninstalling).
+#
+# An interrupted run can always be repaired by running this again: a first
+# download is made in a separate folder and only moved into place when it is
+# complete, and an update marks itself as pending in the install's marker, so a
+# later run finishes it.
 #
 # It never asks for, stores or prints the edge token; the launcher reads it from
 # FLIGHTRISK_EDGE_TOKEN or %USERPROFILE%\.flightrisk-fleet.env. The steps that need
@@ -39,6 +46,7 @@
 #   FLIGHTRISK_PYTHON            a Python 3.13 to build the virtual environment with
 #   FLIGHTRISK_STATUS_FILE       where the status JSON goes
 #   FLIGHTRISK_REPO_URL          the repository to install from
+#   FLIGHTRISK_PIP_INDEX_URL     the package index; default https://pypi.org/simple
 #   FLIGHTRISK_ALLOW_DOWNGRADE=1 allow moving an install to an older release
 #   FLIGHTRISK_INSTALL_SKIP_DEPS=1  install no packages and download no weights
 #   FLIGHTRISK_NO_SHORTCUTS=1    add no Start menu entry and no Installed apps entry
@@ -53,12 +61,18 @@ $script:RepoUrl = if ($env:FLIGHTRISK_REPO_URL) { $env:FLIGHTRISK_REPO_URL } els
 $script:MarkerName = "flightrisk-installer"
 $script:PythonWanted = "3.13"
 $script:LockFileWindows = "installer\locks\windows-x64-edge.txt"
+$script:PipIndex = if ($env:FLIGHTRISK_PIP_INDEX_URL) { $env:FLIGHTRISK_PIP_INDEX_URL } else { "https://pypi.org/simple" }
+# installer/macos/install.sh pins the same file; a test keeps the two in step.
+$script:WeightsUrl = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
+$script:WeightsSha256 = "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
 $script:UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FlightRisk"
 $script:Step = "start"
 $script:Ref = $null
 $script:PrevHead = $null
 $script:Moved = $false
-$script:CreatedAppDir = $false
+$script:PrevRef = $null
+$script:IncomingDir = $null
+$script:Completed = $false
 $script:LockStream = $null
 $script:PythonExe = $null
 $script:Died = $false
@@ -257,61 +271,176 @@ function Select-Ref {
     }
 }
 
-# Process ids of programs running from this install's virtual environment
-# (the launcher, an edge), never this one.
-function Get-RunningPids {
-    $ErrorActionPreference = "Continue"  # see Get-PythonVersion
-    $venv = $script:VenvDir.TrimEnd('\', '/')
-    if ($IsWindows -or $env:OS -eq "Windows_NT") {
-        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$venv\", [System.StringComparison]::OrdinalIgnoreCase) }
-        return @($procs | ForEach-Object { [int]$_.ProcessId })
-    }
-    $found = @()
-    foreach ($line in (& ps -axww -o "pid=,args=" 2>$null)) {
-        if ($line -match '^\s*(\d+)\s+(.*)$' -and [int]$Matches[1] -ne $PID -and $Matches[2].StartsWith("$venv/")) { $found += [int]$Matches[1] }
-    }
-    return $found
+# --- shared with uninstall.ps1: begin (a test checks that both copies match) ---
+
+# Whether the folder $Dir would put the install in a shared place.
+function Test-UnsafeHome([string]$Dir) {
+    $d = $Dir.TrimEnd('\', '/')
+    $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    $shared = @("", $userHome, $env:LOCALAPPDATA, $env:APPDATA, $env:SystemDrive, $env:SystemRoot) |
+        Where-Object { $null -ne $_ } | ForEach-Object { $_.TrimEnd('\', '/') }
+    return ($d -eq "" -or $d -eq "/" -or $d -match '^[A-Za-z]:$' -or ($shared -contains $d))
 }
 
+# Process ids of programs that run FlightRisk from the install folder $AppDir,
+# never this process, its parents or its children. On Windows: an executable
+# inside the folder (the virtual environment's python.exe) or the folder on the
+# command line. Elsewhere (the tests run on macOS): the folder on the command
+# line, or a working directory or loaded file inside it.
+function Get-FlightRiskPids([string]$AppDir) {
+    $ErrorActionPreference = "Continue"
+    $app = $AppDir.TrimEnd('\', '/')
+    $onWindows = ($IsWindows -or $env:OS -eq "Windows_NT")
+    $parent = @{}
+    $command = @{}
+    $executable = @{}
+    if ($onWindows) {
+        foreach ($p in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+            $parent[[int]$p.ProcessId] = [int]$p.ParentProcessId
+            $command[[int]$p.ProcessId] = [string]$p.CommandLine
+            $executable[[int]$p.ProcessId] = [string]$p.ExecutablePath
+        }
+    } else {
+        foreach ($line in @(& ps -axo "pid=,ppid=" 2>$null)) {
+            if ($line -match '^\s*(\d+)\s+(\d+)') { $parent[[int]$Matches[1]] = [int]$Matches[2] }
+        }
+        foreach ($line in @(& ps -axww -o "pid=,args=" 2>$null)) {
+            if ($line -match '^\s*(\d+)\s+(.*)$') { $command[[int]$Matches[1]] = $Matches[2] }
+        }
+        $cwdOrFile = @{}
+        if (Test-Path -LiteralPath $app) {
+            $real = (Resolve-Path -LiteralPath $app).ProviderPath
+            $current = 0
+            foreach ($line in @(& lsof -nP -w -a -u (& id -u) -d cwd,txt -Fpn 2>$null)) {
+                if ($line.StartsWith("p")) { $current = [int]$line.Substring(1) }
+                elseif ($line.StartsWith("n")) {
+                    $path = $line.Substring(1)
+                    foreach ($root in @($app, $real)) {
+                        if ($path -eq $root -or $path.StartsWith("$root/")) { $cwdOrFile[$current] = $true }
+                    }
+                }
+            }
+        }
+    }
+    $mine = @{}
+    $p = $PID
+    while ($p -and -not $mine.ContainsKey($p)) { $mine[$p] = $true; $p = $parent[$p] }
+    foreach ($candidate in @($parent.Keys)) {
+        $p = $candidate
+        for ($n = 0; $p -and $n -lt 100; $n++) {
+            if ($p -eq $PID) { $mine[$candidate] = $true; break }
+            $p = $parent[$p]
+        }
+    }
+    $sep = if ($onWindows) { "\" } else { "/" }
+    $found = foreach ($candidate in @($parent.Keys)) {
+        if ($mine.ContainsKey($candidate)) { continue }
+        $cmd = [string]$command[$candidate]
+        $exe = [string]$executable[$candidate]
+        $hit = ($cmd.IndexOf("$app$sep", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+            ($exe -and $exe.StartsWith("$app$sep", [System.StringComparison]::OrdinalIgnoreCase)) -or
+            ((-not $onWindows) -and $cwdOrFile -and $cwdOrFile.ContainsKey($candidate))
+        if ($hit) { $candidate }
+    }
+    return @($found | Sort-Object)
+}
+
+# --- shared with uninstall.ps1: end ---
+
 function Assert-NotRunning {
-    $pids = @(Get-RunningPids)
+    $pids = @(Get-FlightRiskPids $script:AppDir)
     if ($pids.Count -gt 0) {
         Die "FlightRisk is running from $($script:AppDir) (process $($pids -join ', ')). Land the drones, stop everything in the launcher window and quit it, then run this again. The installer never stops FlightRisk itself, because an edge may be flying a drone."
     }
 }
 
-function Write-Marker {
-    $marker = Join-Path (Join-Path $script:AppDir ".git") $script:MarkerName
-    $text = "installer=installer/windows/install.ps1`nref=$($script:Ref)`ndate=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))`n"
-    [System.IO.File]::WriteAllText($marker, $text, (New-Object System.Text.UTF8Encoding $false))
+function Get-MarkerPath([string]$Dir = $script:AppDir) {
+    return (Join-Path (Join-Path $Dir ".git") $script:MarkerName)
 }
 
-function Get-MarkerRef {
-    $marker = Join-Path (Join-Path $script:AppDir ".git") $script:MarkerName
-    foreach ($line in (Get-Content -LiteralPath $marker -ErrorAction SilentlyContinue)) {
-        if ($line -match '^ref=(.+)$') { return $Matches[1] }
+# Write the marker for release $Ref in the checkout $Dir. With $Pending, it also
+# records an update to that commit that has started but not finished.
+function Write-Marker([string]$Ref, [string]$Dir = $script:AppDir, [string]$Pending = "") {
+    $text = "installer=installer/windows/install.ps1`nref=$Ref`ndate=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))`n"
+    if ($Pending) { $text += "pending=$Pending`n" }
+    $marker = Get-MarkerPath $Dir
+    [System.IO.File]::WriteAllText("$marker.tmp", $text, (New-Object System.Text.UTF8Encoding $false))
+    Move-Item -LiteralPath "$marker.tmp" -Destination $marker -Force
+}
+
+function Get-MarkerValue([string]$Name) {
+    foreach ($line in (Get-Content -LiteralPath (Get-MarkerPath) -ErrorAction SilentlyContinue)) {
+        if ($line -match "^$Name=(.+)$") { return $Matches[1] }
     }
     return $null
 }
 
-# Fetch the release into the clone; returns the git object to check out.
-function Get-RefTarget {
+function Get-MarkerRef { return (Get-MarkerValue "ref") }
+
+# Fetch the release into the clone $Dir; returns the git object to check out.
+function Get-RefTarget([string]$Dir = $script:AppDir) {
     $ErrorActionPreference = "Continue"  # see Get-PythonVersion
     if ($script:Ref -eq "main") {
-        & git -C $script:AppDir fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
+        & git -C $Dir fetch --quiet --force origin "+refs/heads/main:refs/remotes/origin/main"
         if ($LASTEXITCODE -ne 0) { Die "Could not download the newest FlightRisk (git fetch failed)." }
         return "refs/remotes/origin/main"
     }
-    & git -C $script:AppDir fetch --quiet --force origin "+refs/tags/$($script:Ref):refs/tags/$($script:Ref)"
+    & git -C $Dir fetch --quiet --force origin "+refs/tags/$($script:Ref):refs/tags/$($script:Ref)"
     if ($LASTEXITCODE -ne 0) { Die "Could not download FlightRisk $($script:Ref) (git fetch failed). Is it a published release?" }
     return "refs/tags/$($script:Ref)"
 }
 
-function Invoke-Checkout([string]$Target) {
+# --force, because after an interrupted checkout the tree may hold half-written files of ours.
+function Invoke-Checkout([string]$Target, [string]$Dir = $script:AppDir) {
     $ErrorActionPreference = "Continue"  # see Get-PythonVersion
-    & git -C $script:AppDir -c advice.detachedHead=false checkout --quiet --detach $Target
+    & git -C $Dir -c advice.detachedHead=false checkout --quiet --force --detach $Target
     return ($LASTEXITCODE -eq 0)
+}
+
+# Remove first-download folders left by an interrupted run (called while holding the lock).
+function Remove-StaleIncoming {
+    foreach ($dir in @(Get-ChildItem -LiteralPath $script:FlightRiskHome -Directory -Force -Filter ".app-incoming.*" -ErrorAction SilentlyContinue)) {
+        if ($dir.FullName -ne $script:IncomingDir) {
+            Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            Warn "removed $($dir.FullName), left by an interrupted install"
+        }
+    }
+}
+
+function Update-Existing {
+    $ErrorActionPreference = "Continue"  # see Get-PythonVersion
+    if (-not (Test-Path -LiteralPath (Get-MarkerPath))) {
+        Die "$($script:AppDir) was not made by this installer (your own checkout?), so it was not changed."
+    }
+    Assert-NotRunning
+    $script:PrevRef = Get-MarkerRef
+    if (Get-MarkerValue "pending") {
+        Warn "an earlier update was interrupted; restoring a clean checkout first"
+        & git -C $script:AppDir reset --quiet --hard HEAD
+        Write-Marker $script:PrevRef
+    } elseif (& git -C $script:AppDir status --porcelain --untracked-files=no) {
+        Die "$($script:AppDir) has local changes, so it was not changed. Save or undo them first."
+    }
+    Invoke-Git -C $script:AppDir remote set-url origin $script:RepoUrl
+    $target = Get-RefTarget
+    $head = (& git -C $script:AppDir rev-parse HEAD).Trim()
+    $want = (& git -C $script:AppDir rev-parse "$target^{commit}").Trim()
+    if ($head -eq $want) {
+        Ok "already at $($script:Ref)"
+    } else {
+        & git -C $script:AppDir merge-base --is-ancestor $want $head
+        if ($LASTEXITCODE -eq 0 -and $env:FLIGHTRISK_ALLOW_DOWNGRADE -ne "1") {
+            Warn "not moving to $($script:Ref): the installed version is newer (set FLIGHTRISK_ALLOW_DOWNGRADE=1 to go back)"
+            $script:Ref = $script:PrevRef
+            return
+        }
+        $script:PrevHead = $head
+        $script:Moved = $true
+        Write-Marker $script:PrevRef $script:AppDir $want
+        if (-not (Invoke-Checkout $target)) { Die "Could not switch $($script:AppDir) to $($script:Ref) (git checkout failed)." }
+        Ok "moved to $($script:Ref)"
+    }
+    Write-Marker $script:Ref
 }
 
 function Update-OrClone {
@@ -321,59 +450,45 @@ function Update-OrClone {
         Die "$($script:AppDir) is a link to another folder. Remove the link and run this again."
     }
     if (Test-Path -LiteralPath (Join-Path $script:AppDir ".git")) {
-        if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $script:AppDir ".git") $script:MarkerName))) {
-            Die "$($script:AppDir) was not made by this installer (your own checkout?), so it was not changed."
-        }
-        Assert-NotRunning
-        $changes = & git -C $script:AppDir status --porcelain --untracked-files=no
-        if ($changes) { Die "$($script:AppDir) has local changes, so it was not changed. Save or undo them first." }
-        Invoke-Git -C $script:AppDir remote set-url origin $script:RepoUrl
-        $target = Get-RefTarget
-        $head = (& git -C $script:AppDir rev-parse HEAD).Trim()
-        $want = (& git -C $script:AppDir rev-parse "$target^{commit}").Trim()
-        if ($head -eq $want) {
-            Ok "already at $($script:Ref)"
-        } else {
-            & git -C $script:AppDir merge-base --is-ancestor $want $head
-            $isOlder = ($LASTEXITCODE -eq 0)
-            if ($isOlder -and $env:FLIGHTRISK_ALLOW_DOWNGRADE -ne "1") {
-                Warn "not moving to $($script:Ref): the installed version is newer (set FLIGHTRISK_ALLOW_DOWNGRADE=1 to go back)"
-                $script:Ref = Get-MarkerRef
-                return
-            }
-            $script:PrevHead = $head
-            $script:Moved = $true
-            if (-not (Invoke-Checkout $target)) { Die "Could not switch $($script:AppDir) to $($script:Ref) (git checkout failed)." }
-            Ok "moved to $($script:Ref)"
-        }
-        Write-Marker
+        Update-Existing
         return
     }
     if ((Test-Path -LiteralPath $script:AppDir) -and (Get-ChildItem -LiteralPath $script:AppDir -Force | Select-Object -First 1)) {
         Die "$($script:AppDir) exists but is not a FlightRisk install made by this installer, so it was not changed."
     }
+    # The first download goes to a folder of its own and is moved into place only
+    # when it is complete, so an interrupted run never leaves a half-made install.
     Log "Downloading FlightRisk $($script:Ref) into $($script:AppDir) ..."
     New-Item -ItemType Directory -Force -Path $script:FlightRiskHome | Out-Null
-    $script:CreatedAppDir = $true
-    & git clone --quiet --no-checkout $script:RepoUrl $script:AppDir
+    $script:IncomingDir = Join-Path $script:FlightRiskHome ".app-incoming.$PID"
+    Remove-Item -LiteralPath $script:IncomingDir -Recurse -Force -ErrorAction SilentlyContinue
+    & git clone --quiet --no-checkout $script:RepoUrl $script:IncomingDir
     if ($LASTEXITCODE -ne 0) { Die "git clone of $($script:RepoUrl) failed. Check the network connection and run this again." }
-    $target = Get-RefTarget
-    if (-not (Invoke-Checkout $target)) { Die "Could not check out FlightRisk $($script:Ref). Is it a published release?" }
-    Write-Marker
-    $script:CreatedAppDir = $false
+    $target = Get-RefTarget $script:IncomingDir
+    if (-not (Invoke-Checkout $target $script:IncomingDir)) { Die "Could not check out FlightRisk $($script:Ref). Is it a published release?" }
+    Write-Marker $script:Ref $script:IncomingDir
+    if (Test-Path -LiteralPath $script:AppDir) { Remove-Item -LiteralPath $script:AppDir -Force }
+    Move-Item -LiteralPath $script:IncomingDir -Destination $script:AppDir
+    $script:IncomingDir = $null
     Ok "downloaded $($script:Ref)"
 }
 
-# After a failure: put an install that this run moved back where it was, and
-# remove a folder this run created but could not finish.
+# After a failure or an interruption: put an install that this run moved back
+# on the release it had, and remove a first download that did not finish. The
+# packages are not copied back (a copy of several GB is slow on Windows); the
+# package stamp was removed before pip ran, so the next run reinstalls the
+# packages of whichever release is checked out.
 function Undo-Move {
     if ($script:Moved -and $script:PrevHead) {
         $script:Moved = $false
-        if (Invoke-Checkout $script:PrevHead) { Warn "put $($script:AppDir) back on the version it had before; run the installer again to retry" }
+        if (Invoke-Checkout $script:PrevHead) {
+            try { Write-Marker $script:PrevRef } catch { Write-Verbose "marker not rewritten" }
+            Warn "put $($script:AppDir) back on the version it had before; run the installer again to reinstall its packages"
+        }
     }
-    if ($script:CreatedAppDir) {
-        $script:CreatedAppDir = $false
-        Remove-Item -LiteralPath $script:AppDir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($script:IncomingDir) {
+        Remove-Item -LiteralPath $script:IncomingDir -Recurse -Force -ErrorAction SilentlyContinue
+        $script:IncomingDir = $null
     }
 }
 
@@ -413,7 +528,6 @@ function Install-Dependencies {
         return
     }
     $req = Get-RequirementsFile
-    if ($req -eq "requirements-edge.txt") { Warn "no pinned package list for this computer; installing requirements-edge.txt (version floors only)" }
     $venvPython = Get-VenvPython
     $stamp = Join-Path $script:VenvDir ".flightrisk-deps"
     $sum = "$req $((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $script:AppDir $req)).Hash.ToLowerInvariant())"
@@ -421,12 +535,19 @@ function Install-Dependencies {
         Ok "packages already installed from $req"
         return
     }
+    # The stamp goes first: packages that are half installed must not count as installed.
+    Remove-Item -LiteralPath $stamp -Force -ErrorAction SilentlyContinue
     Log "Installing the Python packages from $req (several GB; this takes a while)..."
-    & $venvPython -m pip install --quiet --upgrade pip
-    if ($LASTEXITCODE -ne 0) { Die "Upgrading pip failed (exit code $LASTEXITCODE)." }
+    # --isolated: pip's configuration files and PIP_* variables are ignored; the index is named explicitly.
+    $pipArgs = @("-m", "pip", "--isolated", "install", "--require-virtualenv", "--no-input", "--index-url", $script:PipIndex)
+    if ($req -eq $script:LockFileWindows) {
+        $pipArgs += @("--require-hashes", "--only-binary", ":all:")
+    } else {
+        Warn "no pinned package list for this computer; installing requirements-edge.txt (version floors only, no hashes)"
+    }
     Push-Location $script:AppDir
     try {
-        & $venvPython -m pip install --require-virtualenv -r $req
+        & $venvPython @pipArgs -r $req
         if ($LASTEXITCODE -ne 0) { Die "Installing the packages from $req failed (exit code $LASTEXITCODE)." }
     } finally {
         Pop-Location
@@ -435,18 +556,29 @@ function Install-Dependencies {
     Ok "packages installed"
 }
 
+function Get-Sha256([string]$Path) {
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+}
+
+# The yolo11n weights are a pickle, so they are checked before anything loads them.
 function Get-Weights {
-    $ErrorActionPreference = "Continue"  # see Get-PythonVersion
     if ($env:FLIGHTRISK_INSTALL_SKIP_DEPS -eq "1") { return }
-    if (Test-Path -LiteralPath (Join-Path $script:AppDir "yolo11n.pt")) { Ok "yolo11n.pt found"; return }
-    Push-Location $script:AppDir
+    $target = Join-Path $script:AppDir "yolo11n.pt"
+    if ((Test-Path -LiteralPath $target) -and (Get-Sha256 $target) -eq $script:WeightsSha256) { Ok "yolo11n.pt found"; return }
+    $file = "$target.download.$PID"
     try {
-        & (Get-VenvPython) -c "from ultralytics import YOLO; YOLO('yolo11n.pt')" | Out-Null
-        if ($LASTEXITCODE -eq 0) { Ok "yolo11n.pt downloaded" }
-        else { Warn "could not download yolo11n.pt now; Ultralytics downloads it the first time an edge starts" }
-    } finally {
-        Pop-Location
+        Invoke-WebRequest -Uri $script:WeightsUrl -OutFile $file -UseBasicParsing
+    } catch {
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        Warn "could not download yolo11n.pt now; run the installer again before flying (Ultralytics would otherwise download it unchecked)"
+        return
     }
+    if ((Get-Sha256 $file) -ne $script:WeightsSha256) {
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        Die "The downloaded yolo11n.pt did not match its expected checksum, so it was not installed."
+    }
+    Move-Item -LiteralPath $file -Destination $target -Force
+    Ok "yolo11n.pt downloaded and checked"
 }
 
 function Get-StartMenuShortcut {
@@ -486,14 +618,25 @@ function Register-App {
     Ok "added FlightRisk to Settings > Apps > Installed apps"
 }
 
+# Stop before anything was changed (no status written, nothing to undo): exit
+# from a script file, throw under "irm ... | iex" so the window stays open.
+function Stop-Early([string]$Message) {
+    Write-Host "  [x] $Message" -ForegroundColor Red
+    if ($PSCommandPath) { exit 1 }
+    throw "FlightRisk install stopped: $Message"
+}
+
 function Invoke-Install {
+    if (Test-UnsafeHome $script:FlightRiskHome) {
+        Stop-Early "FLIGHTRISK_HOME=$($script:FlightRiskHome) is a shared folder; choose a folder of its own."
+    }
     New-Item -ItemType Directory -Force -Path $script:FlightRiskHome | Out-Null
     if (-not (Enter-InstallLock)) {
-        Write-Host "  [x] Another FlightRisk install is running. Wait for it to finish." -ForegroundColor Red
-        exit 1
+        Stop-Early "Another FlightRisk install is running. Wait for it to finish."
     }
     try {
         Write-Status "running" ""
+        Remove-StaleIncoming
         Log "FlightRisk -- Windows install into $($script:FlightRiskHome)"
 
         Set-Step "prerequisites" "Checking git and Python $($script:PythonWanted)"
@@ -518,6 +661,7 @@ function Invoke-Install {
         Register-App
 
         $script:Moved = $false
+        $script:Completed = $true
         $script:Step = "done"
         Write-Status "done" ""
         Log "Done. FlightRisk $($script:Ref) is installed in $($script:AppDir)."
@@ -530,6 +674,11 @@ function Invoke-Install {
         if ($script:Died) { throw }
         Die "Failed: $($_.Exception.Message)"
     } finally {
+        # Ctrl+C stops the script without reaching catch; undo what is half done here.
+        if (-not $script:Completed -and -not $script:Died) {
+            Undo-Move
+            Write-Status "error" "Interrupted; nothing half-done was left behind. Run the installer again to finish."
+        }
         Exit-InstallLock
     }
 }

@@ -40,7 +40,12 @@ $script:AppDir = $AppDir
 
 $ErrorActionPreference = "Continue"
 $repoUrl = if ($env:FLIGHTRISK_REPO_URL) { $env:FLIGHTRISK_REPO_URL } else { (& git -C $AppDir remote get-url origin).Trim() }
-$latest = Select-LatestTag @(& git ls-remote --tags --refs $repoUrl)
+$tagLines = @(& git ls-remote --tags --refs $repoUrl 2>$null)
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "update.ps1: could not reach $repoUrl to look for releases; nothing was changed." -ForegroundColor Red
+    exit 1
+}
+$latest = Select-LatestTag $tagLines
 $installed = Get-MarkerRef
 
 if ($Check) {

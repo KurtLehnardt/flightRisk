@@ -28,12 +28,16 @@ def _requirement_names(path: Path) -> set[str]:
 
 
 def _pins(path: Path) -> dict[str, str]:
+    """name -> version for every requirement in a lock; each must be pinned with == and carry hashes."""
     pins = {}
-    for line in path.read_text().splitlines():
-        if not line or line.startswith("#"):
+    text = path.read_text().replace("\\\n", " ")
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
             continue
-        name, _, version = line.partition("==")
-        assert version, f"{path.name}: {line!r} is not pinned with =="
+        spec, *hashes = line.split("--hash=")
+        name, _, version = spec.strip().partition("==")
+        assert version, f"{path.name}: {spec!r} is not pinned with =="
+        assert hashes and all(h.strip().startswith("sha256:") for h in hashes), f"{path.name}: {name} has no sha256"
         pins[name.lower().replace("_", "-")] = version
     return pins
 

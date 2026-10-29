@@ -139,12 +139,27 @@ class WinBox:
             "HOME": str(self.home), "PATH": os.environ["PATH"], "LANG": "en_US.UTF-8",
             "FLIGHTRISK_HOME": str(self.flightrisk_home), "FLIGHTRISK_REPO_URL": str(self.repo),
             "FLIGHTRISK_INSTALL_SKIP_DEPS": "1", "FLIGHTRISK_NO_SHORTCUTS": "1", "FLIGHTRISK_PYTHON": BASE_PYTHON,
+            # An index nothing listens on: no test may ever download packages from PyPI.
+            "FLIGHTRISK_PIP_INDEX_URL": "http://127.0.0.1:9/simple",
         }
         env.update(extra)
         return env
 
     def run(self, script: Path, *args: str, **extra: str) -> subprocess.CompletedProcess:
         return run_script(script, *args, env=self.env(**extra))
+
+    def shim_git(self, on: str, action: str) -> None:
+        """Put a git in front of the real one that, for the subcommand *on*, first runs *action* (bash)."""
+        shims = self.home / "shims"
+        shims.mkdir(exist_ok=True)
+        real = shutil.which("git", path="/usr/bin:/bin")
+        (shims / "git").write_text(
+            f'#!/bin/bash\nREAL_GIT="{real}"\nfor arg in "$@"; do\n  if [ "$arg" = "{on}" ]; then\n'
+            f'    {action}\n  fi\ndone\nexec "$REAL_GIT" "$@"\n')
+        (shims / "git").chmod(0o755)
+
+    def shimmed_env(self) -> dict[str, str]:
+        return {"PATH": f"{self.home / 'shims'}:{os.environ['PATH']}"}
 
     def head(self) -> str:
         return git("rev-parse", "HEAD", cwd=self.app_dir)
@@ -250,21 +265,123 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
     assert data["removed"] is True
     assert not winbox.app_dir.exists()
     assert not winbox.flightrisk_home.exists()
-    assert (Path(data["keptData"]) / "logs" / "edge.log").read_text() == "line"
+    kept = Path(data["keptData"])
+    assert kept.parent == winbox.flightrisk_home.parent / "FlightRisk data", "not Documents, which OneDrive may sync"
+    assert (kept / "logs" / "edge.log").read_text() == "line"
     assert token_file.read_text() == "export FLIGHTRISK_EDGE_TOKEN=not-a-real-token\n"
     assert "not-a-real-token" not in removed.stdout + removed.stderr
 
 
-def test_uninstall_refuses_while_flightrisk_runs(winbox: WinBox):
-    proc = subprocess.Popen([str(winbox.app_dir / "venv" / "bin" / "python"), "-c", "import time; time.sleep(60)"])
+@pytest.mark.parametrize("how", ["venv-python", "renamed-in-folder"])
+def test_uninstall_and_update_refuse_while_flightrisk_runs(winbox: WinBox, how):
+    if how == "venv-python":
+        proc = subprocess.Popen([str(winbox.app_dir / "venv" / "bin" / "python"), "-c", "import time; time.sleep(60)"])
+    else:
+        # A Python whose command line does not name the install, started in the install folder.
+        proc = subprocess.Popen(["/bin/bash", "-c", "exec -a /x/Python.app/Contents/MacOS/Python sleep 60"],
+                                cwd=winbox.app_dir)
+    time.sleep(0.5)
     try:
         result = winbox.run(winbox.app_dir / "installer" / "windows" / "uninstall.ps1", "-Yes", "-Force")
-        assert result.returncode == 3
+        assert result.returncode == 3, result.stdout + result.stderr
         assert '"reason":"running"' in result.stdout
+        git("commit", "-q", "--allow-empty", "-m", "third", cwd=winbox.repo)
+        git("tag", "v0.3.0", cwd=winbox.repo)
+        update = winbox.run(INSTALL)
+        assert update.returncode == 1
+        assert "FlightRisk is running" in update.stdout
+        assert winbox.head() == winbox.tag("v0.2.0")
         assert proc.poll() is None
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_shared_functions_are_the_same_in_install_and_uninstall():
+    def block(path: Path) -> str:
+        text = path.read_text()
+        return text[text.index("# --- shared with uninstall.ps1: begin"):text.index("# --- shared with uninstall.ps1: end")]
+
+    assert block(INSTALL) == block(WINDOWS / "uninstall.ps1")
+
+
+def test_uninstall_refuses_while_an_install_runs(winbox: WinBox):
+    ready = winbox.home / "held"
+    env = {**winbox.env(), "FLIGHTRISK_INSTALL_LIB_ONLY": "1"}
+    hold = (f". '{INSTALL}'; if (Enter-InstallLock) {{ New-Item -ItemType File '{ready}' | Out-Null; "
+            "Start-Sleep -Seconds 30 }")
+    holder = subprocess.Popen(["pwsh", "-NoProfile", "-NonInteractive", "-Command", hold], env=env)
+    try:
+        deadline = time.time() + 30
+        while not ready.exists() and time.time() < deadline:
+            time.sleep(0.2)
+        result = winbox.run(winbox.app_dir / "installer" / "windows" / "uninstall.ps1", "-Yes", "-Force")
+        assert result.returncode == 3
+        assert '"reason":"install-running"' in result.stdout
+        assert winbox.app_dir.exists()
+        # Under "irm ... | iex" a busy lock must not close the PowerShell window: it throws instead of exiting.
+        script = f"try {{ Invoke-Expression (Get-Content -Raw '{INSTALL}') }} catch {{ 'caught' }}; 'window still open'"
+        busy = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script], env=winbox.env(),
+                              capture_output=True, text=True, timeout=60, check=False)
+        assert "Another FlightRisk install is running" in busy.stdout
+        assert "window still open" in busy.stdout
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_a_first_install_killed_mid_download_can_be_repaired(tmp_path):
+    box = WinBox(tmp_path)
+    box.shim_git("clone", '"$REAL_GIT" "$@"; kill -KILL $PPID; exit 1')
+    first = box.run(INSTALL, **box.shimmed_env())
+    assert first.returncode != 0
+    assert not box.app_dir.exists(), "no half-made install where the Start menu entry looks for one"
+    assert list(box.flightrisk_home.glob(".app-incoming.*"))
+    again = box.run(INSTALL)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "left by an interrupted install" in again.stdout
+    assert not list(box.flightrisk_home.glob(".app-incoming.*"))
+    assert box.head() == box.tag("v0.2.0")
+
+
+def test_an_update_killed_mid_checkout_is_finished_by_the_next_run(winbox: WinBox):
+    git("commit", "-q", "--allow-empty", "-m", "third", cwd=winbox.repo)
+    git("tag", "v0.3.0", cwd=winbox.repo)
+    winbox.shim_git("checkout", f'echo half-written >> "{winbox.app_dir / "requirements.txt"}"; kill -KILL $PPID; exit 1')
+    first = winbox.run(INSTALL, **winbox.shimmed_env())
+    assert first.returncode != 0
+    assert "pending=" in (winbox.app_dir / ".git" / "flightrisk-installer").read_text()
+    again = winbox.run(INSTALL)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "an earlier update was interrupted" in again.stdout
+    assert winbox.head() == winbox.tag("v0.3.0")
+    assert git("status", "--porcelain", "--untracked-files=no", cwd=winbox.app_dir) == ""
+
+
+def test_update_stops_when_the_releases_cannot_be_read(winbox: WinBox):
+    update = winbox.app_dir / "installer" / "windows" / "update.ps1"
+    result = winbox.run(update, FLIGHTRISK_REPO_URL=str(winbox.home / "no-such-repo"))
+    assert result.returncode == 1
+    assert "could not reach" in result.stdout
+    assert winbox.head() == winbox.tag("v0.2.0")
+
+
+def test_shared_folders_are_refused(winbox: WinBox):
+    install = winbox.run(INSTALL, FLIGHTRISK_HOME=str(winbox.home))
+    assert install.returncode == 1 and "is a shared folder" in install.stdout
+    assert not (winbox.home / "app").exists()
+    uninstall = winbox.run(winbox.app_dir / "installer" / "windows" / "uninstall.ps1", "-Yes",
+                           FLIGHTRISK_HOME=str(winbox.home))
+    assert uninstall.returncode == 2 and '"reason":"unsafe-folder"' in uninstall.stdout
+
+
+def test_a_failed_package_install_leaves_no_stamp(winbox: WinBox):
+    stamp = winbox.app_dir / "venv" / ".flightrisk-deps"
+    stamp.write_text("requirements-edge.txt old\n")
+    # pip ignores PIP_* settings here (--isolated); the dead index makes it fail at once.
+    result = winbox.run(INSTALL, FLIGHTRISK_INSTALL_SKIP_DEPS="", PIP_INDEX_URL="https://pypi.org/simple")
+    assert result.returncode == 1
+    assert not stamp.exists(), "half-installed packages must not count as installed"
 
 
 def test_inno_setup_script_is_per_user_and_points_at_real_files():

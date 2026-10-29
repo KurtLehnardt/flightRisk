@@ -46,7 +46,11 @@ unset FLIGHTRISK_INSTALL_LIB_ONLY
 UPDATE_REPO_URL="${FLIGHTRISK_REPO_URL:-$(git -C "$APP_DIR" remote get-url origin)}"
 
 installed_ref="$(sed -n 's/^ref=//p' "$MARKER" | head -n 1)"
-latest="$(git ls-remote --tags --refs "$UPDATE_REPO_URL" | pick_latest_tag)"
+if ! tags="$(git ls-remote --tags --refs "$UPDATE_REPO_URL" 2>/dev/null)"; then
+  echo "update.sh: could not reach $UPDATE_REPO_URL to look for releases; nothing was changed." >&2
+  exit 1
+fi
+latest="$(printf '%s\n' "$tags" | pick_latest_tag)"
 
 if [ "$CHECK" = "1" ]; then
   available=false

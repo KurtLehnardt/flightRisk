@@ -91,25 +91,45 @@ launcher_alive() {
   ps -ww -o args= -p "$pid" 2>/dev/null | grep -q -- "-m flightrisk.launcher"
 }
 
-# Open $1 in its own window (Chrome or Edge app mode), a browser tab, or not at all.
+# A private page that forwards to the launcher window's address $1, so the
+# address, which carries the window's key, never appears on a command line
+# (other accounts on this Mac can read command lines with ps). It is written
+# with umask 077, so only this user can read it.
+redirect_page() {
+  local page="$RUN_DIR/open-launcher.html"
+  cat > "$page" <<HTML
+<!doctype html>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="refresh" content="0;url=$1">
+<title>FlightRisk</title>
+<script>location.replace("$1");</script>
+<p><a href="$1">Open the FlightRisk launcher</a></p>
+HTML
+  printf '%s\n' "$page"
+}
+
+# Open the launcher window $1 in its own window (Chrome or Edge app mode), a
+# browser tab, or not at all; always through the private redirect page.
 open_url() {
-  local url="$1" browser
-  case "$OPEN_IN" in
-    none) note "window address ready (FLIGHTRISK_OPEN_IN=none)"; return 0 ;;
-    browser) open "$url"; return $? ;;
-  esac
-  for browser in "/Applications/Google Chrome.app" "$HOME/Applications/Google Chrome.app" \
-                 "/Applications/Microsoft Edge.app" "$HOME/Applications/Microsoft Edge.app"; do
-    if [ -d "$browser" ]; then
-      open -na "$browser" --args "--app=$url" && return 0
-    fi
-  done
-  open "$url"
+  local page file_url browser
+  [ "$OPEN_IN" = "none" ] && { note "window address ready (FLIGHTRISK_OPEN_IN=none)"; return 0; }
+  page="$(redirect_page "$1")"
+  file_url="file://$(printf '%s' "$page" | sed 's/%/%25/g; s/ /%20/g')"
+  if [ "$OPEN_IN" = "window" ]; then
+    for browser in "/Applications/Google Chrome.app" "$HOME/Applications/Google Chrome.app" \
+                   "/Applications/Microsoft Edge.app" "$HOME/Applications/Microsoft Edge.app"; do
+      if [ -d "$browser" ]; then
+        open -na "$browser" --args "--app=$file_url" && return 0
+      fi
+    done
+  fi
+  open "$page"
 }
 
 offer_install() {
   local script ref_file command_file lock_pid
-  lock_pid="$(cat -- "$FLIGHTRISK_HOME/install.lock.d/pid" 2>/dev/null || true)"
+  lock_pid="$(readlink "$FLIGHTRISK_HOME/install.lock" 2>/dev/null | cut -d'|' -f1 || true)"
   if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
     alert "FlightRisk is being installed" "An install is already running in a Terminal window. FlightRisk opens when it is done."
     exit 0

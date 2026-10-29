@@ -67,10 +67,11 @@ as described in [fleet-setup.md](fleet-setup.md).
 | Packages | `installer/locks/macos-arm64.txt` (full app) | `installer\locks\windows-x64-edge.txt` (edge role) |
 | Detector weights | `app/yolo11n.pt` | `app\yolo11n.pt` |
 | Marker | `app/.git/flightrisk-installer` | `app\.git\flightrisk-installer` |
-| Progress | `install-status.json` and the lock `install.lock.d/` | `install-status.json` and `install-status.json.lock` |
+| Progress | `install-status.json` and the lock `install.lock` (a symbolic link to "pid\|start time") | `install-status.json` and `install-status.json.lock` (held open) |
 | App | `~/Applications/FlightRisk.app` | Start menu `FlightRisk` (opens `scripts\launcher.bat`) |
 | Uninstall entry | `installer/macos/uninstall.sh` | Settings > Apps > Installed apps > FlightRisk |
 | Logs of the app | `~/Library/Logs/FlightRisk/` | the launcher's console window |
+| Data kept at uninstall | `~/Library/Application Support/FlightRisk data/<date>/` | `%LOCALAPPDATA%\FlightRisk data\<date>\` |
 
 `~/.flightrisk` (presets, the saved ceiling) and `~/.flightrisk-fleet.env` are never written or removed by
 the installer, the updater or the uninstaller. The fine-tuned HERIDAL weights
@@ -88,18 +89,67 @@ detector profile.
 An update is the installer run again for the new release. It refuses a folder the installer did not make
 (no marker), local changes, and a running FlightRisk; it never moves an install backwards
 (`FLIGHTRISK_ALLOW_DOWNGRADE=1` overrides); and when installing the new packages fails, it checks the
-previous release out again. The installer, updater and uninstaller **never stop FlightRisk themselves**,
-because an edge may be flying a drone: they name the running processes and ask you to land, stop and
-quit from the launcher window first.
+previous release out again. On macOS it also puts the previous packages back (it keeps an APFS clone of
+the virtual environment while it updates); on Windows the package stamp is removed before pip runs, so the
+next run reinstalls the packages of the release that is checked out.
 
-The uninstaller removes the install folder, the app (only when its bundle id is FlightRisk's), the Start
-menu and Installed apps entries (only when they point into this install) and the logs. It keeps a copy of
-what FlightRisk wrote into the install folder (`logs/`, `captures/`, `recordings/`, `models/`,
-`flightrisk_sessions.db`, `target_reference.*`) in `Documents/FlightRisk data <date>/` unless
-`--no-keep-data` (`-NoKeepData`) is given; captures can show people, so delete that copy when you no
-longer need it. It refuses, deleting nothing: a link (exit 2), a folder with no marker even with
-`--force` (exit 2), a running FlightRisk (exit 3), and work that is not on GitHub without `--force`
-(exit 4). `--check` (`-Check`) prints what it would do as one JSON line.
+**FlightRisk is never stopped by these scripts**, because an edge may be flying a drone: they name the
+running processes and ask you to land, stop and quit from the launcher window first. "Running" means, on
+macOS, any process of yours whose working directory or a loaded file is inside the install folder, whose
+command line names the install folder, or the launcher that FlightRisk.app recorded. The working
+directory matters because a Homebrew or python.org Python re-runs itself as
+`.../Python.app/Contents/MacOS/Python`, so its command line does not name the virtual environment; the
+app, `scripts/launcher.command` and the launcher's own children all start in the install folder. A shell
+that only sits in the folder does not count. On Windows it means a process whose executable is inside the
+install folder (the virtual environment's `python.exe`) or whose command line names it; Windows has no
+working-directory query, so a Python started from elsewhere with only a relative path is not seen there.
+A process listening on the launcher's port 5500 is not counted on its own, because a launcher started
+from a development checkout uses the same port.
+
+**Interrupted runs.** Ctrl+C, a closed window or a killed process never leave an install that the next run
+cannot repair: the first download is made in `.app-incoming.<pid>` next to `app/` and moved into place only
+when complete (the next run removes a leftover), and an update first records `pending=<commit>` in the
+marker, so the next run resets the half-written files and finishes it (the uninstaller does not count
+those files as your work). Ctrl+C, a closed Terminal window (HUP) and `kill` (TERM) also undo the
+half-done step at once.
+
+The uninstaller removes the install folder, FlightRisk.app in `~/Applications` and in `/Applications`
+(only when its bundle id is FlightRisk's; one in `/Applications` that it may not delete is named so you can
+drag it to the Trash), the Start menu and Installed apps entries (only when they point into this install,
+and only after the folder is gone, so a failed removal keeps its uninstall entry), and the files the
+installer and the app wrote next to it, each by name; folders go only when they are then empty. It keeps
+a copy of what FlightRisk wrote into the install folder (`logs/`, `captures/`, `recordings/`, `models/`,
+`flightrisk_sessions.db`, `target_reference.*`) in the "Data kept at uninstall" folder above, which stays
+on the computer (not in Documents, which iCloud or OneDrive may sync), unless `--no-keep-data`
+(`-NoKeepData`) is given; captures can show people, so delete that copy when you no longer need it. It
+refuses, deleting nothing: a `FLIGHTRISK_HOME` or log folder that is a shared folder such as your home
+folder (exit 2), a link (exit 2), a folder with no marker even with `--force` (exit 2), a running
+FlightRisk or a running install (exit 3), and work that is not on GitHub without `--force` (exit 4).
+`--check` (`-Check`) prints what it would do as one JSON line.
+
+## Supply chain
+
+- Packages come from `installer/locks/`, where every package is pinned with `==` and carries the SHA-256
+  of each of its files. pip runs with `--require-hashes --only-binary :all:` (nothing is built from source
+  at install time), `--isolated` (pip's configuration files and `PIP_*` variables, such as an extra index,
+  are ignored) and an explicit `--index-url https://pypi.org/simple`. pip itself is the one that ships with
+  Python 3.13; it is not upgraded from the network. A computer that falls back to `requirements.txt`
+  (not Apple Silicon with macOS 14, or not 64-bit Windows) installs without hashes, and says so.
+- The Homebrew installer is downloaded from a fixed commit to a file, and the file's SHA-256 is checked
+  before it runs.
+- `yolo11n.pt` (a pickle, so loading it runs code) is downloaded from the Ultralytics v8.3.0 release and
+  checked against its SHA-256 before it is put in place; a mismatch stops the install. If the download
+  fails, the installer warns, and running it again before flying downloads and checks the weights;
+  otherwise Ultralytics would download them unchecked when an edge starts.
+
+## The launcher window's key
+
+The launcher's window address carries a per-launch key (not the edge token). FlightRisk.app never puts
+that address on a command line, where other accounts on the Mac could read it with `ps`: it writes a page
+that forwards to it, `run/open-launcher.html`, readable by you only, and opens that page. The address is
+also in `run/launcher.url` and `~/Library/Logs/FlightRisk/launcher.log`, both readable by you only.
+Opening the page in a Chrome or Edge app window, and its forwarding to `http://127.0.0.1`, are not yet
+checked by hand.
 
 ## Releases and builds
 
@@ -177,15 +227,19 @@ that wants to watch, and the launcher window is the GUI from then on.
 
 ## Not verified
 
-- Homebrew, git or Python 3.13 installed from scratch on a fresh Mac (tests replace Homebrew with a fake;
-  the pinned Homebrew installer is the one Granted verified).
-- The real package install from the lock files (several GB); tests use `FLIGHTRISK_INSTALL_SKIP_DEPS=1`.
+- Homebrew, git or Python 3.13 installed from scratch on a fresh Mac. Tests replace Homebrew, curl and sudo
+  with fakes. The pinned Homebrew installer's file was downloaded and its SHA-256 matches the pin.
+- A full install on a fresh Mac. The macOS lock itself was installed once from PyPI with the installer's
+  pip options (`--isolated --require-hashes --only-binary :all:`) into a temporary virtual environment on
+  an Apple Silicon Mac, and pip accepted every hash; the Windows lock was not installed anywhere.
 - Opening FlightRisk.app from Finder, the install dialog and the Terminal bootstrap from the .dmg, and the
-  Chrome or Edge app window (tests run the app's program directly with `FLIGHTRISK_OPEN_IN=none`).
+  Chrome or Edge app window opened through the forwarding page (tests run the app's program directly,
+  with `open` replaced by a fake).
 - Clicking **Open Anyway**: a quarantined copy of the built app was confirmed to be rejected by Gatekeeper
   (`spctl` reports "rejected"), as the steps above expect.
-- Everything on Windows: winget, the Start menu entry, the Installed apps entry, `Get-CimInstance` process
-  detection, Windows PowerShell 5.1, and the Inno Setup build. The PowerShell scripts were run under
-  PowerShell 7 on macOS (install, update and uninstall into a temporary folder) and checked with
+- Everything on Windows: winget, the Start menu entry, the Installed apps entry, the `Get-CimInstance`
+  process check (executable path and command line), Windows PowerShell 5.1, Ctrl+C handling, and the Inno
+  Setup build. The PowerShell scripts were run under PowerShell 7 on macOS (install, update, uninstall,
+  interrupted runs and the running-process refusal into a temporary folder) and checked with
   PSScriptAnalyzer.
 - Apple Developer ID signing, notarization and Windows code signing.

@@ -9,6 +9,7 @@ is quit at the end of each test.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import plistlib
@@ -35,6 +36,10 @@ BASE_PYTHON = getattr(sys, "_base_executable", sys.executable)
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the macOS installer runs on macOS only")
 
+#: An index nothing listens on: no test may ever download packages from PyPI.
+DEAD_INDEX = "http://127.0.0.1:9/simple"
+
+
 class Box:
     """A temporary HOME with fake Homebrew, and the paths the installer uses inside it."""
 
@@ -50,6 +55,10 @@ class Box:
         self.venv = self.app_dir / "venv"
         self.applications = self.home / "Applications"
         self.bundle = self.applications / "FlightRisk.app"
+        # Stands in for /Applications, which the tests never touch.
+        self.system_applications = root / "SystemApplications"
+        self.system_applications.mkdir()
+        self.log_dir = self.home / "Library" / "Logs" / "FlightRisk"
         self.status = self.flightrisk_home / "install-status.json"
         self.brew_log = self.home / "brew-calls.log"
         brew = self.shims / "brew"
@@ -66,6 +75,9 @@ class Box:
             "FLIGHTRISK_INSTALL_SKIP_DEPS": "1",
             "FLIGHTRISK_PYTHON": BASE_PYTHON,
             "FLIGHTRISK_BREW_CANDIDATES": "",
+            "FLIGHTRISK_PIP_INDEX_URL": DEAD_INDEX,
+            "FLIGHTRISK_SYSTEM_APPLICATIONS_DIR": str(self.system_applications),
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
         env.update(extra)
         return env
@@ -275,39 +287,171 @@ ensure_brew || echo "ensure failed"
     assert result.stdout.splitlines() == ["no brew", "would install homebrew", "ensure failed"]
 
 
+def _start_of(pid: int) -> str:
+    return subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                          check=False).stdout.strip()
+
+
+def _write_owner(lock: Path, pid: int, start: str) -> None:
+    """The install lock: a symbolic link whose target is "pid|start time"."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    if lock.is_symlink():
+        lock.unlink()
+    lock.symlink_to(f"{pid}|{start}")
+
+
 def test_install_lock_refuses_a_live_holder_and_takes_over_a_stale_one(tmp_path):
     env = {**os.environ, "FLIGHTRISK_HOME": str(tmp_path)}
+    lock = tmp_path / "install.lock"
     holder = subprocess.Popen(["sleep", "30"])
     try:
-        lock = tmp_path / "install.lock.d"
-        lock.mkdir()
-        (lock / "pid").write_text(f"{holder.pid}\n")
+        _write_owner(lock, holder.pid, _start_of(holder.pid))
         assert lib("acquire_lock && echo got || echo busy", env=env).stdout.strip() == "busy"
+        # The same pid with another start time is a reused pid, not the install that took the lock.
+        _write_owner(lock, holder.pid, "Thu Jan  1 00:00:00 2015")
+        assert lib("acquire_lock && echo got || echo busy", env=env).stdout.strip() == "got"
     finally:
         holder.kill()
         holder.wait()
-    result = lib('acquire_lock && echo got && cat "$LOCK_DIR/pid" && echo "$$" && release_lock && ls "$LOCK_DIR"', env=env)
+    _write_owner(lock, 999999, "Thu Jan  1 00:00:00 2015")
+    result = lib('acquire_lock && echo got && readlink "$LOCK_LINK" | cut -d"|" -f1 && echo "$$" && release_lock',
+                 env=env)
     lines = result.stdout.split()
     assert lines[0] == "got" and lines[1] == lines[2]
-    assert not (tmp_path / "install.lock.d").exists()
+    assert not lock.is_symlink()
 
 
-def test_running_pids_finds_programs_started_from_the_venv(tmp_path):
-    venv_bin = tmp_path / "Application Support" / "FlightRisk" / "app" / "venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    fake = venv_bin / "python"
-    fake.symlink_to(shutil.which("sleep"))
-    other = subprocess.Popen(["sleep", "30"])
-    proc = subprocess.Popen([str(fake), "30"])
+def test_only_one_of_two_runs_takes_over_a_stale_lock(tmp_path):
+    env = {**os.environ, "FLIGHTRISK_HOME": str(tmp_path)}
+    snippet = "if acquire_lock; then echo got; sleep 2; release_lock; else echo busy; fi"
+    script = f'FLIGHTRISK_INSTALL_LIB_ONLY=1\nsource "{INSTALL}"\nset +e\n{snippet}\n'
+    for _ in range(5):
+        _write_owner(tmp_path / "install.lock", 999999, "Thu Jan  1 00:00:00 2015")
+        runs = [subprocess.Popen(["/bin/bash", "-c", script], env=env, stdout=subprocess.PIPE, text=True)
+                for _ in range(2)]
+        outputs = sorted(r.communicate(timeout=30)[0].strip() for r in runs)
+        assert outputs == ["busy", "got"], outputs
+        assert not list(tmp_path.glob("install.lock.stale.*"))
+
+
+def test_shared_functions_are_the_same_in_install_and_uninstall():
+    def block(path: Path) -> str:
+        text = path.read_text()
+        return text[text.index("# --- shared with uninstall.sh: begin"):text.index("# --- shared with uninstall.sh: end")]
+
+    assert block(INSTALL) == block(MACOS / "uninstall.sh")
+
+
+def _curl_shim(shims: Path, served: Path) -> None:
+    """A curl that copies *served* to the file named with -o."""
+    (shims / "curl").write_text(
+        '#!/bin/bash\nout=""\nwhile [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done\n'
+        f'cp "{served}" "$out"\n')
+    (shims / "curl").chmod(0o755)
+
+
+def _homebrew_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]:
+    """Fake curl and sudo, and the paths of the served installer, the fake brew and the "it ran" flag."""
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    served = tmp_path / "served.sh"
+    _curl_shim(shims, served)
+    (shims / "sudo").write_text("#!/bin/sh\nexit 0\n")
+    (shims / "sudo").chmod(0o755)
+    brew = tmp_path / "homebrew" / "bin" / "brew"
+    ran = tmp_path / "installer-ran"
+    env = {**os.environ, "PATH": f"{shims}:/usr/bin:/bin", "FLIGHTRISK_HOME": str(tmp_path / "fr"),
+           "FLIGHTRISK_BREW_CANDIDATES": str(brew), "TMPDIR": str(tmp_path)}
+    return env, served, brew, ran
+
+
+def test_homebrew_installer_is_checked_as_a_file_and_run(tmp_path):
+    env, served, brew, ran = _homebrew_env(tmp_path)
+    content = (f'#!/bin/bash\nmkdir -p "{brew.parent}"\nprintf "#!/bin/sh\\nexit 0\\n" > "{brew}"\n'
+               f'chmod +x "{brew}"\ntouch "{ran}"\n')
+    served.write_text(content)
+    assert content.endswith("\n"), "the real installer ends with a newline, which $(curl ...) would drop"
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    result = lib(f"HOMEBREW_INSTALL_SHA256={digest}; install_homebrew && echo installed", env=env)
+    assert "installed" in result.stdout, result.stdout + result.stderr
+    assert ran.exists()
+    assert not list(tmp_path.glob("flightrisk-homebrew.*")), "the downloaded installer is removed"
+
+
+def test_homebrew_installer_with_the_wrong_checksum_is_never_run(tmp_path):
+    env, served, _brew, ran = _homebrew_env(tmp_path)
+    served.write_text(f'#!/bin/bash\ntouch "{ran}"\n')
+    result = lib("install_homebrew; echo unreachable", env=env)
+    assert result.returncode == 1
+    assert "did not match its expected checksum" in result.stderr
+    assert "unreachable" not in result.stdout
+    assert not ran.exists()
+    assert not list(tmp_path.glob("flightrisk-homebrew.*"))
+
+
+def test_weights_are_checked_before_they_are_installed(tmp_path):
+    app = tmp_path / "fr" / "app"
+    app.mkdir(parents=True)
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    served = tmp_path / "weights.bin"
+    _curl_shim(shims, served)
+    env = {**os.environ, "PATH": f"{shims}:/usr/bin:/bin", "FLIGHTRISK_HOME": str(tmp_path / "fr")}
+    env.pop("FLIGHTRISK_INSTALL_SKIP_DEPS", None)
+    served.write_bytes(b"not the weights")
+    bad = lib("download_weights; echo unreachable", env=env)
+    assert bad.returncode == 1 and "did not match its expected checksum" in bad.stderr
+    assert not (app / "yolo11n.pt").exists() and not list(app.glob("yolo11n.pt.download.*"))
+    served.write_bytes(b"pretend weights")
+    digest = hashlib.sha256(b"pretend weights").hexdigest()
+    good = lib(f"WEIGHTS_SHA256={digest}; download_weights", env=env)
+    assert good.returncode == 0, good.stderr
+    assert (app / "yolo11n.pt").read_bytes() == b"pretend weights"
+
+
+def test_both_installers_pin_the_same_weights():
+    windows = (ROOT / "installer" / "windows" / "install.ps1").read_text()
+    for name in ("WEIGHTS_SHA256", "WEIGHTS_URL"):
+        value = INSTALL.read_text().split(f'{name}="', 1)[1].split('"', 1)[0]
+        assert f'"{value}"' in windows, name
+
+
+def _spawn(argv: list[str], cwd: Path, stdin=None) -> subprocess.Popen:
+    proc = subprocess.Popen(argv, cwd=cwd, stdin=stdin)
+    time.sleep(0.5)
+    return proc
+
+
+def test_running_pids_finds_flightrisk_whatever_its_command_line(tmp_path):
+    home = tmp_path / "Application Support" / "FlightRisk"
+    app = home / "app"
+    (app / "venv" / "lib").mkdir(parents=True)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    loaded = app / "venv" / "lib" / "_json.so"
+    shutil.copy2(next(Path(sys.base_prefix).glob("lib/python3.13/lib-dynload/_json*.so")), loaded)
+    procs = {
+        # A Homebrew or python.org Python: its command line names Python.app, its cwd is the install.
+        "renamed": _spawn(["/bin/bash", "-c", "exec -a /x/Python.app/Contents/MacOS/Python sleep 30"], app),
+        # Started from somewhere else, but with a library of the install loaded.
+        "loaded": _spawn([BASE_PYTHON, "-c", f"import ctypes, time; ctypes.CDLL({str(loaded)!r}); time.sleep(30)"],
+                         other),
+        # The install folder on the command line.
+        "argv": _spawn(["/bin/bash", "-c", f"exec -a '{app}/venv/bin/python' sleep 30"], other),
+        # Not FlightRisk: a shell that sits in the folder, and an unrelated process.
+        "shell": _spawn(["/bin/bash", "-c", "read -r -t 30 line"], app, stdin=subprocess.PIPE),
+        "unrelated": _spawn(["sleep", "30"], other),
+    }
     try:
-        env = {**os.environ, "FLIGHTRISK_HOME": str(tmp_path / "Application Support" / "FlightRisk")}
-        pids = lib("running_pids", env=env).stdout.split()
-        assert str(proc.pid) in pids
-        assert str(other.pid) not in pids
+        pids = lib("running_pids", env={**os.environ, "FLIGHTRISK_HOME": str(home)}).stdout.split()
+        for name in ("renamed", "loaded", "argv"):
+            assert str(procs[name].pid) in pids, name
+        for name in ("shell", "unrelated"):
+            assert str(procs[name].pid) not in pids, name
     finally:
-        for p in (proc, other):
-            p.kill()
-            p.wait()
+        for proc in procs.values():
+            proc.kill()
+            proc.wait()
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +469,7 @@ def test_install_creates_checkout_marker_venv_app_and_status(installed: Box):
     assert version == "(3, 13)"
     status = box.status_json()
     assert status["state"] == "done" and status["step"] == "done" and status["ref"] == "v0.2.0"
-    assert not (box.flightrisk_home / "install.lock.d").exists()
+    assert not (box.flightrisk_home / "install.lock").is_symlink()
     assert box.brew_calls() == [], "git and Python were found, so Homebrew is never called"
     assert box.bundle.is_dir()
 
@@ -452,13 +596,115 @@ def test_installs_main_when_no_release_exists(tmp_path):
 def test_failed_package_install_puts_the_previous_release_back(installed: Box):
     _git("tag", "v0.3.0", cwd=installed.repo)
     # Packages are installed for real here, from an index that cannot be reached, so pip fails fast.
-    result = installed.install(FLIGHTRISK_INSTALL_SKIP_DEPS="", PIP_INDEX_URL="http://127.0.0.1:9/simple",
-                               PIP_RETRIES="0", PIP_TIMEOUT="1", PIP_DISABLE_PIP_VERSION_CHECK="1",
-                               PIP_NO_INPUT="1", timeout=300)
+    stamp = installed.venv / ".flightrisk-deps"
+    stamp.write_text("installer/locks/macos-arm64.txt old-lock-hash\n")
+    (installed.venv / "old-packages").write_text("from the release before")
+    # pip ignores PIP_* settings here (--isolated); the dead index makes it fail at once.
+    result = installed.install(FLIGHTRISK_INSTALL_SKIP_DEPS="", PIP_INDEX_URL="https://pypi.org/simple", timeout=300)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "put" in result.stdout and "back on the version it had before" in result.stdout
     assert installed.head() == installed.tag_commit("v0.2.0")
     assert installed.status_json()["state"] == "error"
+    assert "put the packages of that version back" in result.stdout
+    assert (installed.venv / "old-packages").exists()
+    assert stamp.read_text() == "installer/locks/macos-arm64.txt old-lock-hash\n"
+    assert not (installed.app_dir / "venv.before-update").exists()
+    assert "ref=v0.2.0" in (installed.app_dir / ".git" / "flightrisk-installer").read_text()
+
+
+def test_failed_first_package_install_leaves_no_stamp(box: Box):
+    result = box.install(FLIGHTRISK_INSTALL_SKIP_DEPS="", timeout=300)
+    assert result.returncode == 1
+    assert box.venv.is_dir()
+    assert not (box.venv / ".flightrisk-deps").exists(), "half-installed packages must not count as installed"
+
+
+def _git_shim(box: Box, on: str, action: str) -> None:
+    """A git in front of the real one that, for the subcommand *on*, first runs *action* (bash)."""
+    real = shutil.which("git", path="/usr/bin:/bin")
+    (box.shims / "git").write_text(f'''#!/bin/bash
+REAL_GIT="{real}"
+for arg in "$@"; do
+  if [ "$arg" = "{on}" ]; then
+    {action}
+  fi
+done
+exec "$REAL_GIT" "$@"
+''')
+    (box.shims / "git").chmod(0o755)
+
+
+def _forget_lock(box: Box) -> None:
+    """The lock a killed install leaves behind (SIGKILL runs no trap): its owner is gone."""
+    _write_owner(box.flightrisk_home / "install.lock", 999999, "Thu Jan  1 00:00:00 2015")
+
+
+def test_a_first_install_killed_mid_download_can_be_repaired_and_uninstalled(box: Box):
+    # The clone finishes, then the installer is killed as a closed window or kill -9 would.
+    _git_shim(box, "clone", '"$REAL_GIT" "$@"; kill -KILL $PPID; exit 1')
+    result = box.install()
+    assert result.returncode != 0
+    assert not box.app_dir.exists(), "no half-made install where the app looks for one"
+    assert list(box.flightrisk_home.glob(".app-incoming.*"))
+    (box.shims / "git").unlink()
+    _forget_lock(box)
+    again = box.install()
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "left by an interrupted install" in again.stdout
+    assert not list(box.flightrisk_home.glob(".app-incoming.*"))
+    assert box.head() == box.tag_commit("v0.2.0")
+    gone = box.run(box.app_dir / "installer" / "macos" / "uninstall.sh", "--yes")
+    assert gone.returncode == 0, gone.stderr
+
+
+def test_an_interrupted_first_install_cleans_up_after_itself(box: Box):
+    _git_shim(box, "clone", "kill -TERM $PPID; sleep 1")
+    result = box.install()
+    assert result.returncode == 1
+    assert "Interrupted" in result.stderr
+    assert box.status_json()["state"] == "error"
+    assert not box.app_dir.exists()
+    assert not list(box.flightrisk_home.glob(".app-incoming.*"))
+    assert not (box.flightrisk_home / "install.lock").is_symlink()
+
+
+def test_an_interrupted_uninstall_leftover_does_not_block_uninstall(box: Box):
+    _git_shim(box, "clone", '"$REAL_GIT" "$@"; kill -KILL $PPID; exit 1')
+    box.install()
+    (box.shims / "git").unlink()
+    _forget_lock(box)
+    result = box.run(MACOS / "uninstall.sh", "--yes")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["alreadyGone"] is True
+    assert not list(box.flightrisk_home.glob(".app-incoming.*"))
+
+
+def test_an_update_killed_mid_checkout_is_finished_by_the_next_run(installed: Box):
+    _git("commit", "-q", "--allow-empty", "-m", "third", cwd=installed.repo)
+    _git("tag", "v0.3.0", cwd=installed.repo)
+    # The checkout dies after writing part of the tree (one tracked file changed).
+    _git_shim(installed, "checkout",
+              f'echo half-written >> "{installed.app_dir / "requirements.txt"}"; kill -KILL $PPID; exit 1')
+    result = installed.install()
+    assert result.returncode != 0
+    assert "pending=" in (installed.app_dir / ".git" / "flightrisk-installer").read_text()
+    (installed.shims / "git").unlink()
+    _forget_lock(installed)
+    check = json.loads(installed.run(MACOS / "uninstall.sh", "--check").stdout)
+    assert check["unsaved"] == [], "files the installer half-wrote are not the user's work"
+    again = installed.install()
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "an earlier update was interrupted" in again.stdout
+    assert installed.head() == installed.tag_commit("v0.3.0")
+    assert _git("status", "--porcelain", "--untracked-files=no", cwd=installed.app_dir) == ""
+    assert "pending=" not in (installed.app_dir / ".git" / "flightrisk-installer").read_text()
+
+
+def test_install_refuses_a_shared_home(box: Box):
+    result = box.install(FLIGHTRISK_HOME=str(box.home))
+    assert result.returncode == 1
+    assert "is a shared folder" in result.stderr
+    assert not (box.home / "app").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +727,14 @@ def test_update_check_and_update(installed: Box):
     assert result.returncode == 0, result.stdout + result.stderr
     assert installed.head() == installed.tag_commit("v0.3.0")
     assert "ref=v0.3.0" in (installed.app_dir / ".git" / "flightrisk-installer").read_text()
+
+
+def test_update_stops_when_the_releases_cannot_be_read(installed: Box):
+    update = installed.app_dir / "installer" / "macos" / "update.sh"
+    result = installed.run(update, FLIGHTRISK_REPO_URL=str(installed.root / "no-such-repo"))
+    assert result.returncode == 1
+    assert "could not reach" in result.stderr
+    assert installed.head() == installed.tag_commit("v0.2.0")
 
 
 def test_update_refuses_an_install_it_did_not_make(box: Box):
@@ -516,8 +770,10 @@ def test_uninstall_check_changes_nothing(installed: Box):
     result = installed.run(MACOS / "uninstall.sh", "--check")
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
-    assert data["exists"] and data["flightriskCheckout"] and data["installerMade"] and data["appIsOurs"]
+    assert data["exists"] and data["flightriskCheckout"] and data["installerMade"]
+    assert data["apps"] == [str(installed.bundle)]
     assert data["isLink"] is False and data["running"] == [] and data["unsaved"] == []
+    assert data["installing"] is False
     assert data["keep"] == ["logs"]
     assert installed.app_dir.exists() and installed.bundle.exists()
 
@@ -528,18 +784,22 @@ def test_uninstall_removes_the_install_and_keeps_user_data(installed: Box):
     (installed.app_dir / "logs" / "launcher" / "ground.log").write_text("log line")
     (installed.app_dir / "captures").mkdir()
     (installed.app_dir / "captures" / "frame.jpg").write_bytes(b"\xff\xd8")
-    log_dir = installed.home / "Library" / "Logs" / "FlightRisk"
+    log_dir = installed.log_dir
     log_dir.mkdir(parents=True)
+    (log_dir / "launcher.log").write_text("x")
     result = _uninstall(installed, "--yes")
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(result.stdout)
-    assert data["removed"] is True and data["appRemoved"] is True and data["alreadyGone"] is False
+    assert data["removed"] is True and data["alreadyGone"] is False
+    assert data["appsRemoved"] == [str(installed.bundle)] and data["appsLeft"] == []
     assert not installed.app_dir.exists()
     assert not installed.bundle.exists()
     assert not installed.flightrisk_home.exists()
     assert not log_dir.exists()
     kept = Path(data["keptData"])
-    assert kept.parent == installed.home / "Documents"
+    assert kept.parent == installed.home / "Library" / "Application Support" / "FlightRisk data"
+    assert kept.parent.stat().st_mode & 0o077 == 0
+    assert not (installed.home / "Documents").exists(), "captures are not put where iCloud may sync them"
     assert (kept / "logs" / "launcher" / "ground.log").read_text() == "log line"
     assert (kept / "captures" / "frame.jpg").exists()
     for path, text in user_files.items():
@@ -552,7 +812,7 @@ def test_uninstall_without_keeping_data(installed: Box):
     result = _uninstall(installed, "--yes", "--no-keep-data")
     assert result.returncode == 0
     assert json.loads(result.stdout)["keptData"] is None
-    assert not (installed.home / "Documents").exists()
+    assert not (installed.home / "Library" / "Application Support" / "FlightRisk data").exists()
 
 
 def test_uninstall_refuses_a_checkout_without_marker(installed: Box):
@@ -587,32 +847,113 @@ def test_uninstall_refuses_unsaved_work_unless_forced(installed: Box):
     assert not installed.app_dir.exists()
 
 
-def test_uninstall_refuses_while_flightrisk_runs(installed: Box):
-    proc = subprocess.Popen([str(installed.venv / "bin" / "python"), "-c", "import time; time.sleep(60)"])
+def _rename_python(box: Box) -> None:
+    """Make the venv python behave like a Homebrew or python.org one: it re-runs itself as Python.app."""
+    python = box.venv / "bin" / "python"
+    real = python.resolve()
+    python.unlink()
+    fake_app = box.root / "Cellar" / "python@3.13" / "Frameworks" / "Python.app" / "Contents" / "MacOS" / "Python"
+    python.write_text(f'#!/bin/bash\nexec -a "{fake_app}" "{real}" "$@"\n')
+    python.chmod(0o755)
+
+
+@pytest.fixture(params=["pyenv", "homebrew"])
+def running_flightrisk(request, installed: Box):
+    """A FlightRisk-like process started the way scripts/launcher.command starts one (cwd = the install).
+
+    "homebrew" makes the venv python re-run itself as .../Python.app/Contents/MacOS/Python, as the
+    Homebrew and python.org builds do, so the command line no longer names the virtual environment.
+    """
+    if request.param == "homebrew":
+        _rename_python(installed)
+    proc = _spawn([str(installed.venv / "bin" / "python"), "-c", "import time; time.sleep(60)"], installed.app_dir)
+    args = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(proc.pid)], capture_output=True, text=True,
+                          check=False).stdout
+    if request.param == "homebrew":
+        assert "Python.app" in args and str(installed.venv) not in args
+    yield installed, proc
+    proc.kill()
+    proc.wait()
+
+
+def test_uninstall_refuses_while_flightrisk_runs(running_flightrisk):
+    installed, proc = running_flightrisk
+    check = json.loads(installed.run(MACOS / "uninstall.sh", "--check").stdout)
+    assert check["running"] == [proc.pid]
+    result = _uninstall(installed, "--yes", "--force")
+    assert result.returncode == 3
+    assert json.loads(result.stdout)["reason"] == "running"
+    assert str(proc.pid) in result.stderr
+    assert installed.app_dir.exists()
+    assert proc.poll() is None, "the uninstaller never stops a FlightRisk process"
+
+
+def test_install_refuses_an_update_while_flightrisk_runs(running_flightrisk):
+    installed, proc = running_flightrisk
+    _git("tag", "v0.3.0", cwd=installed.repo)
+    result = installed.install()
+    assert result.returncode == 1
+    assert "FlightRisk is running" in result.stderr
+    assert installed.head() == installed.tag_commit("v0.2.0")
+    assert proc.poll() is None
+
+
+def test_uninstall_refuses_while_an_install_runs(installed: Box):
+    holder = subprocess.Popen(["sleep", "30"])
     try:
+        _write_owner(installed.flightrisk_home / "install.lock", holder.pid, _start_of(holder.pid))
         result = _uninstall(installed, "--yes", "--force")
         assert result.returncode == 3
-        assert json.loads(result.stdout)["reason"] == "running"
-        assert str(proc.pid) in result.stderr
+        assert json.loads(result.stdout)["reason"] == "install-running"
         assert installed.app_dir.exists()
-        assert proc.poll() is None, "the uninstaller never stops a FlightRisk process"
+        assert (installed.flightrisk_home / "install.lock").is_symlink()
     finally:
-        proc.kill()
-        proc.wait()
+        holder.kill()
+        holder.wait()
 
 
-def test_install_refuses_an_update_while_flightrisk_runs(installed: Box):
-    _git("tag", "v0.3.0", cwd=installed.repo)
-    proc = subprocess.Popen([str(installed.venv / "bin" / "python"), "-c", "import time; time.sleep(60)"])
-    try:
-        result = installed.install()
-        assert result.returncode == 1
-        assert "FlightRisk is running" in result.stderr
-        assert installed.head() == installed.tag_commit("v0.2.0")
-        assert proc.poll() is None
-    finally:
-        proc.kill()
-        proc.wait()
+@pytest.mark.parametrize("variable", ["FLIGHTRISK_HOME", "FLIGHTRISK_LOG_DIR"])
+def test_uninstall_refuses_shared_folders(installed: Box, variable):
+    (installed.home / "run").mkdir()
+    (installed.home / "run" / "launcher.pid").write_text("1")
+    value = str(installed.home) if variable == "FLIGHTRISK_HOME" else str(installed.home / "Library" / "Logs")
+    result = installed.run(installed.app_dir / "installer" / "macos" / "uninstall.sh", "--yes", **{variable: value})
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["reason"] == "unsafe-folder"
+    assert (installed.home / "run" / "launcher.pid").exists()
+    assert installed.app_dir.exists()
+
+
+def test_uninstall_removes_only_the_files_it_knows(installed: Box):
+    run = installed.flightrisk_home / "run"
+    run.mkdir()
+    (run / "launcher.url").write_text("x")
+    (run / "notes.txt").write_text("mine")
+    installed.log_dir.mkdir(parents=True)
+    (installed.log_dir / "app.log").write_text("x")
+    (installed.log_dir / "other.log").write_text("mine")
+    result = _uninstall(installed, "--yes")
+    assert result.returncode == 0, result.stderr
+    assert not (run / "launcher.url").exists() and (run / "notes.txt").read_text() == "mine"
+    assert not (installed.log_dir / "app.log").exists() and (installed.log_dir / "other.log").read_text() == "mine"
+
+
+def test_uninstall_also_removes_flightrisk_from_the_system_applications_folder(installed: Box, tmp_path):
+    subprocess.run(["/bin/bash", str(MACOS / "make-app.sh"), "build", "--out", str(installed.system_applications)],
+                   check=True, capture_output=True)
+    other = tmp_path / "other-apps"
+    (other / "FlightRisk.app" / "Contents").mkdir(parents=True)
+    (other / "FlightRisk.app" / "Contents" / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleIdentifier": "com.example.other"}))
+    check = json.loads(installed.run(MACOS / "uninstall.sh", "--check").stdout)
+    assert str(installed.system_applications / "FlightRisk.app") in check["apps"]
+    result = _uninstall(installed, "--yes")
+    assert result.returncode == 0
+    assert not (installed.system_applications / "FlightRisk.app").exists()
+    # A foreign app of the same name in the system folder is never touched.
+    foreign = installed.run(MACOS / "uninstall.sh", "--check", FLIGHTRISK_SYSTEM_APPLICATIONS_DIR=str(other))
+    assert json.loads(foreign.stdout)["apps"] == []
+    assert (other / "FlightRisk.app" / "Contents" / "Info.plist").exists()
 
 
 def test_uninstall_after_the_folder_was_deleted_by_hand(installed: Box):
@@ -622,7 +963,7 @@ def test_uninstall_after_the_folder_was_deleted_by_hand(installed: Box):
     result = installed.run(uninstall_copy, "--yes")
     assert result.returncode == 0
     data = json.loads(result.stdout)
-    assert data["alreadyGone"] is True and data["appRemoved"] is True
+    assert data["alreadyGone"] is True and data["appsRemoved"] == [str(installed.bundle)]
     assert not installed.bundle.exists()
 
 
@@ -722,6 +1063,28 @@ def test_app_starts_the_launcher_once_and_reopens_its_window(runnable: Box):
 
     assert call("/api/quit", {"action": "leave"}) == {"quitting": "leave"}
     assert _wait_gone(pid)
+
+
+@pytest.mark.parametrize("open_in", ["browser", "window"])
+def test_app_never_puts_the_window_key_on_a_command_line(runnable: Box, open_in):
+    box = runnable
+    opened = box.root / "open-calls.log"
+    (box.shims / "open").write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{opened}"\n')
+    (box.shims / "open").chmod(0o755)
+    env = {**_app_env(box, free_port()), "FLIGHTRISK_OPEN_IN": open_in, "PATH": f"{box.shims}:/usr/bin:/bin:/usr/sbin:/sbin"}
+    result = subprocess.run([str(box.bundle / "Contents" / "MacOS" / "FlightRisk")], env=env, capture_output=True,
+                            text=True, timeout=90, check=False)
+    assert result.returncode == 0, result.stderr
+    run_dir = box.flightrisk_home / "run"
+    url = (run_dir / "launcher.url").read_text().strip()
+    calls = opened.read_text()
+    assert "key=" not in calls, "other accounts can read command lines with ps"
+    assert "open-launcher.html" in calls
+    page = run_dir / "open-launcher.html"
+    assert url in page.read_text()
+    assert page.stat().st_mode & 0o077 == 0
+    _launcher_api(url)("/api/quit", {"action": "leave"})
+    assert _wait_gone(int((run_dir / "launcher.pid").read_text()))
 
 
 def test_app_reports_a_launcher_that_cannot_start(runnable: Box):
