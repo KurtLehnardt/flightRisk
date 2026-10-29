@@ -1987,7 +1987,7 @@ class GroundTransport(GroundV2Mixin):
         return max(self._start_acks.values()) - min(self._start_acks.values())
 
     def fleet_status(self) -> dict[str, dict[str, Any]]:
-        """Per-drone link, clock and start state for the dashboard fleet panel."""
+        """Per-drone link, clock and start state for the dashboard's drone status cards and link timing table."""
         now = self._clock()
         skews = fp.start_skews_s(self._start_acks)
         drone_ids = set(self._drone_sockets) | set(self._clock_estimates) | set(self._telemetry)

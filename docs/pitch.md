@@ -41,7 +41,7 @@ Open-source aerial search software for Utah's volunteer search and rescue teams,
 - Built this week, with every new and changed path listed in `docs/built-this-week.md` (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/built-this-week.md):
   - the altitude benchmark, tiled inference and the HERIDAL fine-tune, taking recall from 0.000 to 0.142 to 0.602 (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/altitude-benchmark.md);
   - the coverage planner, with each platform's altitude and range limits;
-  - the fleet: coordinator, clock sync, lane executor, safety envelope, LAND ALL, the dashboard's fleet panel and merged map, and two network paths for two laptops (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/fleet-setup.md);
+  - the fleet: coordinator, clock sync, lane executor, safety envelope, LAND ALL, the dashboard's per-drone status cards and merged map, and two network paths for two laptops (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/fleet-setup.md);
   - an N-drone launcher: four fake drones against one ground station; killing one re-tasked its lanes to the other three 0.7 s later (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/fleet-scaling.md).
 - Live in this slot: two Tello EDUs fly a coordinated split search. Plan shows two zones at two altitude slots, Start lifts both drones at one scheduled time, detections from both land on one map, and landing one drone hands its unflown lanes to the other.
 - Honest status: the automated tests and the four-drone run use fake drones. The two-Tello flight is the live demo, with a recorded video and the fake fleet as fallbacks (https://github.com/KurtLehnardt/flightRisk/blob/main/docs/demo-script.md).

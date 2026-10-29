@@ -1,7 +1,8 @@
 """Template contract for the manual takeover overlay (docs/manual-takeover.md).
 
-Checked as text and with an HTML parser: the overlay sits on the video panel
-outside every collapsible card body, has every control the brief asks for,
+Checked as text and with an HTML parser: the overlay sits in the main area
+under the video tiles, outside every collapsible card body and outside the
+sidebar, has every control the brief asks for,
 tile clicks select a drone without releasing it on a second click, the keys
 skip editable fields and Shift+L, and LAND ALL stays the single global
 control.
@@ -12,9 +13,11 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 
-INDEX = (Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates" / "index.html").read_text()
-SCRIPT = INDEX[INDEX.index("// ========== MANUAL TAKEOVER"):]
-SCRIPT = SCRIPT[: SCRIPT.index("</script>")]
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+INDEX = (DASH / "templates" / "index.html").read_text()
+JS = (DASH / "static" / "ui" / "ui.js").read_text()
+CSS = (DASH / "static" / "ui" / "ui.css").read_text()
+SCRIPT = JS[JS.index("// ========== MANUAL TAKEOVER"):JS.index("// ========== INIT")]
 
 
 class _Tree(HTMLParser):
@@ -59,15 +62,14 @@ def _tree():
     return t
 
 
-def test_overlay_is_on_the_video_panel_under_the_tiles_and_outside_collapsible_bodies():
+def test_overlay_is_in_the_main_area_under_the_tiles_and_outside_collapsible_bodies():
     t = _tree()
     assert "manual-overlay" in t.ancestors
     assert t.in_card_body["manual-overlay"] is False
-    assert "tab-controls" not in t.ancestors["manual-overlay"]
     assert INDEX.index('id="video-tiles"') < INDEX.index('id="manual-overlay"')
-    panel = INDEX.index('<div class="video-panel">')
-    sidebar = INDEX.index('<aside class="sidebar">')
-    assert panel < INDEX.index('id="manual-overlay"') < sidebar
+    main = INDEX.index('<main class="main">')
+    sidebar = INDEX.index('<aside class="sidebar"')
+    assert main < INDEX.index('id="manual-overlay"') < INDEX.index("</main>") < sidebar
     for eid in ("manual-land", "manual-resume", "manual-takeoff"):
         assert t.in_card_body[eid] is False, eid
 
@@ -87,10 +89,10 @@ def test_overlay_has_every_control_labelled_with_the_drone_and_a_manual_badge():
 
 
 def test_tile_click_selects_a_drone_and_the_same_tile_does_not_release():
-    assert "getElementById('video-tiles').addEventListener('click'" in SCRIPT
+    assert "videoTilesEl.addEventListener('click'" in SCRIPT
     assert "socket.emit('manual_take_control'" in SCRIPT
     take = SCRIPT[SCRIPT.index("function manualTakeControl"):]
-    take = take[: take.index("\n        }\n")]
+    take = take[: take.index("\n    }\n")]
     # The active tile returns before anything is sent; it never emits a release.
     assert "if (droneId === manualDroneId) return;" in take
     assert take.index("droneId === manualDroneId") < take.index("socket.emit")
@@ -99,17 +101,17 @@ def test_tile_click_selects_a_drone_and_the_same_tile_does_not_release():
 
 def test_resume_search_is_the_only_release_from_the_overlay():
     assert SCRIPT.count("socket.emit('manual_resume_search'") == 1
-    assert "getElementById('manual-resume').addEventListener('click', manualResumeSearch)" in SCRIPT
+    assert "$('manual-resume').addEventListener('click', manualResumeSearch)" in SCRIPT
 
 
 def test_selected_tile_is_highlighted():
-    assert ".video-tile.manual-selected" in INDEX
+    assert ".video-tile.manual-selected" in CSS
     assert "classList.toggle('manual-selected', selected)" in SCRIPT
 
 
 def test_controls_are_disabled_with_a_reason_when_the_drone_link_is_down_but_land_never_is():
     assert "d.drone_link_ok === false" in SCRIPT and "Drone link down" in SCRIPT
-    assert "getElementById('manual-land').disabled = false" in SCRIPT
+    assert "$('manual-land').disabled = false" in SCRIPT
     assert "manual-reason" in SCRIPT
 
 
@@ -119,17 +121,20 @@ def test_keys_only_while_under_control_never_in_fields_and_never_shift_l():
     assert "if (!manualDroneId" in keys
     assert "isEditableTarget(t)" in keys and "'SELECT'" in keys
     assert "if (e.shiftKey) return;" in keys  # Shift+L stays LAND ALL
-    # The sidebar keyboard handler stands aside while the overlay flies a drone (no double send).
-    assert "if (typeof manualDroneId !== 'undefined' && manualDroneId) return;" in INDEX
+    # The direct-control keyboard handler stands aside while the overlay flies a drone (no double send).
+    direct = JS[JS.index("// ========== DIRECT FLIGHT CONTROL"):JS.index("// ========== DRONE CONNECTIONS")]
+    assert "if (manualDroneId) return;" in direct
 
 
-def test_land_all_and_fleet_status_stay_global():
+def test_land_all_and_drone_status_stay_global():
     assert len(re.findall(r'id="land-all"', INDEX)) == 1
     t = _tree()
-    assert t.in_card_body["land-all"] is False and t.in_card_body["fleet-panel-body"] is False
-    # The overlay sits below the floating fleet status panel (z-index 900), never over it.
-    assert re.search(r"#manual-overlay \{[^}]*z-index: 850", INDEX)
-    assert "manual-overlay" not in t.ancestors["fleet-section"]
+    assert t.in_card_body["land-all"] is False and t.in_card_body["drone-status"] is False
+    # The overlay never covers the drone status cards: they come first in the main area, and the overlay is
+    # laid out in the page flow rather than floated over other content.
+    assert INDEX.index('id="drone-status"') < INDEX.index('id="manual-overlay"')
+    overlay = re.search(r"#manual-overlay \{([^}]*)\}", CSS).group(1)
+    assert "position: absolute" not in overlay and "position: fixed" not in overlay
 
 
 def test_tiles_show_the_orphan_landing_countdown_after_a_reload():
@@ -137,7 +142,9 @@ def test_tiles_show_the_orphan_landing_countdown_after_a_reload():
     # reloaded dashboard shows it again on that drone's tile.
     assert "d.orphan_land_in_s" in SCRIPT
     assert "'HELD: auto-landing in ' + landIn + ' s, no controller'" in SCRIPT
-    assert "socket.on('connect', () => socket.emit('get_manual_status'))" in SCRIPT
+    connect = JS[JS.index("socket.on('connect', () => {"):]
+    connect = connect[: connect.index("});")]
+    assert "socket.emit('get_manual_status');" in connect
 
 
 def test_slot_band_refusals_disable_that_step():

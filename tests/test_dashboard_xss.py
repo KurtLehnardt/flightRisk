@@ -6,26 +6,26 @@ detection-derived value, must never reach ``innerHTML`` unescaped.
 
 Two layers of checks:
 
-* A static check over every inline ``<script>`` in ``index.html``: in each
-  statement that builds HTML (an ``innerHTML``-style sink, a string literal
-  containing a tag, or an assignment to a ``*Html`` variable), every dynamic
-  value must be wrapped in ``escapeHtml(...)`` / ``Number(...)``, be a ternary
-  condition, or be a trusted local (``*Html`` fragments, which are themselves
-  checked where they are built, plus a short explicit allowlist).
-* Behavioural checks that run the template's own ``escapeHtml`` and
-  ``sessionMatchHtml`` under Node (skipped when Node is not installed) and
-  show that ``<img src=x onerror=alert(1)>`` comes out inert.
+* A static check over the dashboard script (``static/ui/ui.js``) and every
+  inline ``<script>`` in ``index.html`` and the included
+  ``ceiling_settings.html``: in each statement that builds HTML (an
+  ``innerHTML``-style sink, a string literal containing a tag, or an
+  assignment to a ``*Html`` variable), every dynamic value must be wrapped in
+  ``escapeHtml(...)`` / ``Number(...)``, be a ternary condition, or be a
+  trusted local (``*Html`` fragments, which are themselves checked where they
+  are built, plus a short explicit allowlist).
+* The dashboard script goes further: it writes every dynamic value with
+  ``textContent`` or DOM nodes, so it has no HTML-building statement at all.
 """
 
-import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
-TEMPLATE = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates" / "index.html"
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+SCRIPT = DASH / "static" / "ui" / "ui.js"
+TEMPLATES = (DASH / "templates" / "index.html", DASH / "templates" / "ceiling_settings.html")
 PAYLOAD = "<img src=x onerror=alert(1)>"
 
 # Locals whose value is built only from fixed string literals (or, for
@@ -153,17 +153,28 @@ def _violations(js: str) -> list[str]:
 # Static checks
 # ---------------------------------------------------------------------------
 
+def _page_scripts() -> list[str]:
+    scripts = [SCRIPT.read_text(encoding="utf-8")]
+    for template in TEMPLATES:
+        scripts += _inline_scripts(template.read_text(encoding="utf-8"))
+    return scripts
+
+
 class TestStaticSinkCheck:
-    def test_template_has_no_unescaped_html_sinks(self):
-        html = TEMPLATE.read_text(encoding="utf-8")
-        violations = [v for js in _inline_scripts(html) for v in _violations(js)]
+    def test_page_has_no_unescaped_html_sinks(self):
+        violations = [v for js in _page_scripts() for v in _violations(js)]
         assert not violations, "Unescaped values reach HTML sinks:\n" + "\n".join(violations)
 
-    def test_template_actually_has_sinks_to_check(self):
-        # Guards against the scanner silently matching nothing.
-        js = "\n".join(_inline_scripts(TEMPLATE.read_text(encoding="utf-8")))
-        html_statements = [s for s in _segments(js) if _is_html_statement(*s)]
-        assert len(html_statements) >= 15
+    def test_scanner_reads_the_page_scripts(self):
+        # Guards against the scanner silently reading nothing: the dashboard script and the ceiling card's
+        # inline script are both split into statements.
+        scripts = _page_scripts()
+        assert len(scripts) >= 2
+        assert all(len(_segments(js)) >= 20 for js in scripts)
+
+    def test_dashboard_script_builds_no_html_at_all(self):
+        html_statements = [s for s in _segments(SCRIPT.read_text(encoding="utf-8")) if _is_html_statement(*s)]
+        assert html_statements == []
 
     @pytest.mark.parametrize("snippet", [
         # The original PR #88 sinks.
@@ -189,70 +200,12 @@ class TestStaticSinkCheck:
         assert not _violations(snippet)
 
 
-# ---------------------------------------------------------------------------
-# Behavioural checks (Node)
-# ---------------------------------------------------------------------------
-
-def _extract_function(js: str, name: str) -> str:
-    start = js.index(f"function {name}(")
-    depth, j = 0, js.index("{", start)
-    while True:
-        depth += {"{": 1, "}": -1}.get(js[j], 0)
-        j += 1
-        if depth == 0:
-            return js[start:j]
-
-
-def _run_node(source: str) -> str:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not installed")
-    proc = subprocess.run([node, "-e", source], capture_output=True, text=True, timeout=30, check=False)
-    assert proc.returncode == 0, proc.stderr
-    return proc.stdout
-
-
-@pytest.fixture(scope="module")
-def helpers_js() -> str:
-    js = "\n".join(_inline_scripts(TEMPLATE.read_text(encoding="utf-8")))
-    consts = re.search(r"const HTML_ESCAPES = .*?;\n\s*const HTML_ESCAPE_RE = .*?;\n", js, flags=re.DOTALL)
-    assert consts, "escapeHtml lookup tables not found"
-    return consts.group(0) + _extract_function(js, "escapeHtml") + "\n" + _extract_function(js, "sessionMatchHtml")
-
-
-class TestRenderedOutputIsInert:
-    def test_escape_html_neutralises_payload_and_quotes(self, helpers_js):
-        out = json.loads(_run_node(
-            helpers_js
-            + f"console.log(JSON.stringify([escapeHtml({json.dumps(PAYLOAD)}),"
-            + " escapeHtml('\" onerror=\"x'), escapeHtml(null), escapeHtml(0.5)]));"
-        ))
-        assert out == [
-            "&lt;img src=x onerror=alert(1)&gt;",
-            "&quot; onerror=&quot;x",
-            "",
-            "0.5",
-        ]
-
-    def test_past_session_match_row_renders_payload_inert(self, helpers_js):
-        row = {
-            "match_type": PAYLOAD,
-            "gemma_confidence": PAYLOAD,
-            "reasoning": PAYLOAD,
-            "combined_score": 0.42,
-        }
-        out = _run_node(helpers_js + f"process.stdout.write(sessionMatchHtml({json.dumps(row)}));")
-        assert "<img" not in out
-        assert out.count("&lt;img src=x onerror=alert(1)&gt;") == 3
-        assert "Score: 0.420" in out
-
-
 class TestServerSideReasoningPayload:
     def test_reasoning_text_reaches_client_verbatim(self):
-        """The parser keeps the LLM's text as-is; escaping is the renderer's job.
+        """The parser keeps the LLM's text as-is; safe rendering is the page's job.
 
-        This pins down why the client-side escaping above is required: the
-        payload survives parsing unchanged.
+        This pins down why the checks above are required: the payload survives
+        parsing unchanged, so the page must write it as text, never as HTML.
         """
         from flightrisk.reasoning.agent import FlightRiskAgent
 

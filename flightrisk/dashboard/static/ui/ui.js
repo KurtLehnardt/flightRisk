@@ -1,8 +1,7 @@
-// FlightRisk UI v2 (docs/ui-v2-design.md).
+// FlightRisk dashboard behaviour (docs/ui-design.md), loaded by templates/index.html.
 //
-// The same Socket.IO events and REST calls as the current UI (templates/index.html), with the same names and
-// payloads; only the layout differs. Every dynamic value is written with textContent or DOM nodes, never parsed
-// as HTML. `socket` is a global so the shared ceiling card (ceiling_settings.html) can use it.
+// Every dynamic value is written with textContent or DOM nodes, never parsed as HTML. `socket` is a global so
+// the included ceiling card (ceiling_settings.html) can use it.
 
 const socket = io();
 
@@ -22,8 +21,10 @@ const socket = io();
     // ========== COLLAPSIBLE SECTIONS ==========
     // Each section is .panel-section[data-card] with a .card-toggle button and a .card-body. State is saved per
     // card id in localStorage; storage failures are ignored. data-default="collapsed" starts a card closed.
+    // The prefix differs from the earlier layout's (flightrisk.card.), so a state that layout saved for a card
+    // with the same id (such as the ceiling card) does not carry over.
     (function () {
-        const PREFIX = 'flightrisk.v2.card.';
+        const PREFIX = 'flightrisk.ui.card.';
         function load(id, fallback) {
             try {
                 const v = window.localStorage.getItem(PREFIX + id);
@@ -173,7 +174,7 @@ const socket = io();
             meta.appendChild(metaItem('Battery', bat === null || Number.isNaN(bat) ? '--' : fmt(bat) + '%', batteryClass(bat)));
             const alt = d.height_cm !== undefined ? d.height_cm : d.height;
             meta.appendChild(metaItem('Alt', alt === undefined || alt === null ? '--' : fmt(alt) + ' cm'));
-            if (d.lane_index !== undefined && d.lanes_total !== undefined) meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
+            if (typeof d.lane_index === 'number' && typeof d.lanes_total === 'number') meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
             if (d.temperature) meta.appendChild(metaItem('Temp', d.temperature + ' C'));
             card.appendChild(meta);
             const mode = modeText(id, d);
@@ -257,6 +258,12 @@ const socket = io();
     const videoTilesEl = $('video-tiles');
     const videoPlaceholder = $('video-placeholder');
     const videoTiles = new Map();
+    const tileResizeObserver = typeof ResizeObserver === 'function'
+        ? new ResizeObserver((entries) => entries.forEach((entry) => {
+            const t = Array.from(videoTiles.values()).find((x) => x.el === entry.target) || (entry.target === defaultTile.el ? defaultTile : null);
+            if (t) renderDetectionOverlay(t);
+        }))
+        : null;
     const defaultTile = makeTile($('video-tile-default'));
     let defaultTileOwner = null;
     let defaultTileAnon = false;
@@ -275,7 +282,15 @@ const socket = io();
             lastShownAt: 0,
         };
         t.feed.addEventListener('load', () => renderDetectionOverlay(t));
+        // The tile resizes with the window and with the number of tiles; redraw its boxes at the new size.
+        if (tileResizeObserver) tileResizeObserver.observe(node);
         return t;
+    }
+
+    // data-count tells the stylesheet how many tiles share the main area (see #video-tiles in ui.css).
+    function updateTileLayout() {
+        const n = videoTilesEl.querySelectorAll('.video-tile').length;
+        videoTilesEl.dataset.count = n >= 5 ? 'many' : String(n);
     }
 
     function createTile(droneId) {
@@ -308,6 +323,7 @@ const socket = io();
             videoTiles.set(key, t);
             // Tiles appear in drone id order, whichever drone sent the first frame.
             Array.from(videoTiles.keys()).sort().forEach((id, i) => { videoTiles.get(id).el.style.order = String(i); });
+            updateTileLayout();
             renderManual();
         }
         return t;
@@ -755,7 +771,7 @@ const socket = io();
     on('overlay-reject-btn', 'click', () => {
         if (!respondToAlert('dismiss')) return;
         setOverlayStatus('Dismissing...');
-        // Raise the threshold slightly to reduce re-alerts for similar people, as the current UI does.
+        // Raise the threshold slightly to reduce re-alerts for similar people.
         const newVal = Math.min(90, parseInt($('threshold-slider').value, 10) + 3);
         $('threshold-slider').value = newVal;
         updateThreshold(newVal);
@@ -845,7 +861,7 @@ const socket = io();
         btn.addEventListener('click', () => sendCmd(btn.dataset.direct));
     });
     // Lands only the selected drone (or the primary). In fleet mode the server lands that fleet drone without
-    // taking control of it, exactly as the current UI's "Land this drone" does.
+    // taking control of it.
     on('land-selected', 'click', () => sendCmd('land'));
 
     let keyboardControlEnabled = false;
@@ -1424,7 +1440,7 @@ const socket = io();
     // text input, textarea or contenteditable) it needs Ctrl or Cmd as well, so typing a capital L never lands the
     // fleet. Alt is never part of the hotkey (AltGr arrives as Ctrl+Alt on Windows). Auto-repeat is ignored. It
     // matches the physical L key (e.code) and the key that types L, and listens in the capture phase so no other
-    // handler can stop it first. This is the same rule as the current UI.
+    // handler can stop it first.
     function isEditableTarget(t) {
         if (!t || !t.tagName) return false;
         if (t.isContentEditable) return true;

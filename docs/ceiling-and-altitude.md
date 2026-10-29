@@ -9,7 +9,7 @@ that now bounds every slot, on the dashboard and on every edge.
 
 | Setting | Default | Range | Where |
 | --- | --- | --- | --- |
-| Ceiling height | 200 cm | 150 to 1000 cm | Dashboard, Controls tab, "Ceiling and altitude" |
+| Ceiling height | 200 cm | 150 to 1000 cm | Dashboard sidebar, "Ceiling and altitude" section |
 | Safety margin | 60 cm | at least 30 cm | same |
 | Altitude slot per drone | 100 cm and 130 cm for zones in turn | 20 to 500 cm, and at most ceiling minus margin | same; on an edge, `ALT_CM` / `--alt-slot` |
 
@@ -36,7 +36,7 @@ it is lower, lower it before flying.
 
 ## Changing the settings
 
-Open the dashboard's Controls tab. The "Ceiling and altitude" panel has a ceiling height field, a
+Open the "Ceiling and altitude" section of the dashboard sidebar. It has a ceiling height field, a
 margin field and one altitude slot field per drone. It shows the effective maximum, marks a value
 that would be refused and says why, for example `drone-2 slot 160 cm is above the ceiling limit
 140 cm (ceiling 200 cm minus margin 60 cm)`. Leave a slot empty to use the default for that

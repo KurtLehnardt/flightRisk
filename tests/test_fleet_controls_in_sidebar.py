@@ -1,13 +1,15 @@
-"""The fleet controls live in the right sidebar Controls tab, not in the fleet display panel."""
+"""The fleet commands live in the sidebar, LAND ALL in the top bar, and the fleet display in the main area."""
 import re
 from html.parser import HTMLParser
 from pathlib import Path
 
-INDEX = (Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard" / "templates" / "index.html").read_text()
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+INDEX = (DASH / "templates" / "index.html").read_text()
+JS = (DASH / "static" / "ui" / "ui.js").read_text()
 
 
 class _Ancestry(HTMLParser):
-    """Record, for each element id, the ids of its ancestors."""
+    """Record, for each element id, the ids and tags of its ancestors."""
 
     VOID = frozenset({"input", "br", "img", "meta", "link", "hr"})
 
@@ -22,7 +24,7 @@ class _Ancestry(HTMLParser):
         eid = dict(attrs).get("id")
         if eid:
             self.ancestors[eid] = [a for a in self.stack if a]
-        self.stack.append(eid)
+        self.stack.append(eid or tag)
 
     def handle_endtag(self, tag):
         if tag not in self.VOID and self.stack:
@@ -35,26 +37,28 @@ def _ancestry():
     return p.ancestors
 
 
-def test_fleet_buttons_are_in_controls_tab_not_fleet_section():
+def test_fleet_buttons_are_in_the_sidebar_and_land_all_in_the_top_bar():
     anc = _ancestry()
-    for eid in ("fleet-plan", "fleet-start", "land-all"):
-        assert "tab-controls" in anc[eid], eid
-        assert "fleet-section" not in anc[eid], eid
+    for eid in ("fleet-plan", "fleet-start"):
+        assert "aside" in anc[eid] and "main" not in anc[eid], eid
+    assert "header" in anc["land-all"]
+    assert "aside" not in anc["land-all"] and "main" not in anc["land-all"]
 
 
-def test_fleet_display_stays_in_fleet_section():
+def test_fleet_display_stays_in_the_main_area():
     anc = _ancestry()
-    for eid in ("fleet-banner", "fleet-panel", "search-map"):
-        assert "fleet-section" in anc[eid], eid
+    for eid in ("fleet-banner", "fleet-uncovered", "search-map", "drone-status"):
+        assert "main" in anc[eid] and "aside" not in anc[eid], eid
 
 
 def test_single_land_all_wired_once():
     assert len(re.findall(r'id="land-all"', INDEX)) == 1
-    assert len(re.findall(r'onclick="landAll\(\)"', INDEX)) == 1
-    assert INDEX.count("function landAll(") == 1
+    assert JS.count("on('land-all', 'click', landAll)") == 1
+    assert JS.count("function landAll(") == 1
+    assert "onclick=" not in INDEX
 
 
 def test_land_actions_are_labelled_apart():
-    assert ">LAND ALL drones<" in INDEX
-    assert ">Land this drone<" in INDEX
-    assert len(re.findall(r"sendCmd\('land'\)", INDEX)) == 1
+    assert re.search(r'id="land-all"[^>]*>LAND ALL <kbd>', INDEX)
+    assert re.search(r'id="land-selected"[^>]*>Land drone<', INDEX)
+    assert len(re.findall(r"sendCmd\('land'\)", JS)) == 1

@@ -6,7 +6,7 @@ drones. These tests cover the server tagging each frame with its drone id and
 the template/JS contract that keeps one tile per drone.
 
 Hermetic: the scoring path is a plain ``GroundStation`` and emits are captured
-with a recorder; the template is checked as text.
+with a recorder; the template, script and stylesheet are checked as text.
 """
 
 import re
@@ -17,10 +17,10 @@ from flightrisk.dashboard.state import app_state
 from flightrisk.edge import Detection, DetectionMessage
 from flightrisk.ground import GroundStation
 
-TEMPLATE = (
-    Path(__file__).resolve().parent.parent
-    / "flightrisk" / "dashboard" / "templates" / "index.html"
-)
+DASH = Path(__file__).resolve().parent.parent / "flightrisk" / "dashboard"
+TEMPLATE = DASH / "templates" / "index.html"
+SCRIPT = DASH / "static" / "ui" / "ui.js"
+STYLES = DASH / "static" / "ui" / "ui.css"
 
 
 class FakeSocketIO:
@@ -93,10 +93,58 @@ class TestTemplateTileContract:
     def _html():
         return TEMPLATE.read_text(encoding="utf-8")
 
+    @staticmethod
+    def _js():
+        return SCRIPT.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _css():
+        return STYLES.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _rule(css, selector):
+        match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+        assert match, f"missing CSS rule for {selector}"
+        return match.group(1)
+
     def test_tile_container_and_grid_layout(self):
-        html = self._html()
-        assert 'id="video-tiles"' in html
-        assert "grid-template-columns: repeat(auto-fit" in html
+        assert re.search(r'id="video-tiles" data-count="1"', self._html())
+        grid = self._rule(self._css(), "#video-tiles")
+        assert "display: grid" in grid
+        assert "grid-template-columns: repeat(var(--tile-cols), minmax(0, 1fr))" in grid
+
+    def test_tiles_take_their_proportional_share_of_the_main_area(self):
+        css = self._css()
+        # One drone: one column filling the width. Two: side by side. Three or four: a two-by-two grid.
+        assert "--tile-cols: 1;" in self._rule(css, "#video-tiles")
+        assert "--tile-cols: 2;" in self._rule(css, '#video-tiles[data-count="2"]')
+        assert "--tile-cols: 2;" in self._rule(css, '#video-tiles[data-count="3"], #video-tiles[data-count="4"]')
+        assert "--tile-cols: 3;" in self._rule(css, '#video-tiles[data-count="many"]')
+        # Narrow screens stack the tiles in one column.
+        assert re.search(r"@media \(max-width: 640px\) \{\s*#video-tiles\[data-count\] \{ --tile-cols: 1; \}", css)
+        # The script keeps data-count equal to the number of tiles.
+        js = self._js()
+        assert "videoTilesEl.dataset.count = n >= 5 ? 'many' : String(n);" in js
+        assert js.count("updateTileLayout();") == 1
+
+    def test_tile_size_scales_with_the_viewport_not_fixed_pixels(self):
+        css = self._css()
+        tile = self._rule(css, ".video-tile")
+        assert "width: 100%" in tile and "aspect-ratio: 4 / 3" in tile
+        # The height cap is a share of the viewport height, and the width follows it so the picture stays 4:3.
+        assert "max-width: calc(var(--tile-max-h) * 4 / 3)" in tile
+        assert "vh" in self._rule(css, "#video-tiles")
+        assert not re.search(r"(?<![-\w])(width|height):\s*\d+px", tile)
+        # The picture fills its tile, letterboxed, so the overlay's contain rule matches what is drawn.
+        feed = self._rule(css, ".tile-feed")
+        assert "width: 100%" in feed and "height: 100%" in feed and "object-fit: contain" in feed
+
+    def test_overlay_follows_each_tile_as_it_resizes(self):
+        js = self._js()
+        assert "new ResizeObserver(" in js and "tileResizeObserver.observe(node)" in js
+        assert "window.addEventListener('resize', () => renderDetectionOverlay());" in js
+        resize = js[js.index("function resizeOverlayCanvas(t)"):js.index("function getVideoRect(t)")]
+        assert "t.el.clientWidth" in resize and "t.el.clientHeight" in resize
 
     def test_legacy_ids_still_present(self):
         html = self._html()
@@ -106,21 +154,23 @@ class TestTemplateTileContract:
             assert f'id="{dom_id}"' in html
 
     def test_frame_handler_picks_tile_by_drone_id(self):
-        html = self._html()
+        html = self._js()
         assert "getTile(data.drone_id)" in html
         # No single shared box/image state left to be overwritten by the other drone.
         assert "latestBoxes" not in html
         assert "latestHasImage" not in html
 
     def test_each_tile_has_label_and_no_video_placeholder(self):
-        html = self._html()
-        assert html.count("tile-label") >= 3  # css, static tile, created tile
-        assert html.count("tile-nodata") >= 3
-        assert "NO VIDEO" in html
-        assert re.search(r"TILE_STALE_MS\s*=\s*3000", html)
+        html, js = self._html(), self._js()
+        # The static first tile and every created tile carry a label and a "No video" placeholder.
+        assert '<div class="tile-label"></div>' in html
+        assert '<div class="tile-nodata">No video</div>' in html
+        assert "el('div', 'tile-label')" in js
+        assert "el('div', 'tile-nodata', 'No video')" in js
+        assert re.search(r"TILE_STALE_MS\s*=\s*3000", js)
 
     def test_boxes_drawn_on_own_tile_canvas(self):
-        html = self._html()
+        html = self._js()
         assert "function renderDetectionOverlay(t)" in html
         assert "t.canvas.getContext('2d')" in html
         assert "drawDetectionBoxes(ctx, t.boxes, rect)" in html
@@ -128,6 +178,6 @@ class TestTemplateTileContract:
         assert "t.feed.naturalWidth" in html
 
     def test_video_toggle_still_fleet_wide(self):
-        html = self._html()
+        html = self._js()
         assert "socket.emit('set_stream_video'" in html
         assert "syncVideoToggle(data.stream_video)" in html

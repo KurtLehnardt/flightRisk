@@ -87,8 +87,9 @@ failure to load `default` itself stops the edge, as before.
 
 ## Switching from the dashboard
 
-The **Detection Profile** section of the Controls tab (edge source only)
-has a fleet default selector and one row per drone with its active profile.
+The **Detection profile** field in the Mission section of the dashboard
+sidebar (edge source only) has a fleet default selector and one row per
+drone with its active profile.
 
 - **Per drone.** Choosing a profile sends `set_detection_profile` to that
   drone. Choosing "Fleet default" drops the drone's own choice and applies

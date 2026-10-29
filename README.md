@@ -109,7 +109,7 @@ export FLIGHTRISK_CLAUDE_API_KEY="sk-ant-..."
 python -m flightrisk --dashboard --reasoning claude
 ```
 
-You can also switch while it runs from the **AI Reasoning** selector in the dashboard sidebar. Claude
+You can also switch while it runs from the **AI reasoning** selector in the dashboard sidebar's "Video and detection" section. Claude
 is shown as unavailable, with the reason, until cloud use is allowed and a key is set; the dashboard
 cannot opt itself in. If a switch fails (for example, Ollama is not running), the previous backend
 stays active and the reason is shown.
@@ -232,6 +232,7 @@ The fine-tuned aerial person detector (`models/heridal_yolo11s.pt`) is not in gi
 - [docs/roadmap-budget.md](docs/roadmap-budget.md): roadmap and budget
 - [docs/privacy-design.md](docs/privacy-design.md): privacy design
 - [docs/fleet-setup.md](docs/fleet-setup.md): two-drone network setup
+- [docs/ui-design.md](docs/ui-design.md): the dashboard layout and its safety rules (the earlier layout is kept on the `legacy-ui` branch)
 - [docs/launcher.md](docs/launcher.md): the launcher window that starts the ground station, dashboard and edges
 - [docs/installer.md](docs/installer.md): the per-user installers, FlightRisk.app, the disk image and the Windows Setup
 - [docs/altitude-benchmark.md](docs/altitude-benchmark.md): altitude benchmark and fine-tuning

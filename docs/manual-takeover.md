@@ -2,18 +2,18 @@
 
 The fleet dashboard lets the operator take one drone out of its search and fly it by hand, then send it back to its search. Every drone that is not under manual control keeps flying its search pattern. This page describes what the operator sees, the rules the edge enforces, the fleet messages, and what has not been verified on hardware.
 
-The code is `flightrisk/fleet_protocol/manual.py` (messages), `flightrisk/drone/lane_manual.py` (the edge), `flightrisk/dashboard/manual_control.py` (the ground) and the overlay in `flightrisk/dashboard/templates/index.html`. The tests are `tests/test_manual_protocol.py`, `tests/test_manual_edge.py`, `tests/test_manual_ground.py` and `tests/test_dashboard_manual_overlay.py`.
+The code is `flightrisk/fleet_protocol/manual.py` (messages), `flightrisk/drone/lane_manual.py` (the edge), `flightrisk/dashboard/manual_control.py` (the ground) and the manual control panel in `flightrisk/dashboard/templates/index.html` and `flightrisk/dashboard/static/ui/ui.js`. The tests are `tests/test_manual_protocol.py`, `tests/test_manual_edge.py`, `tests/test_manual_ground.py` and `tests/test_dashboard_manual_overlay.py`.
 
 ## Operator view
 
-- **Select a drone.** Click a drone's video tile. That drone's search pauses and it hovers where it is. The tile gets an amber outline and a MANUAL badge, and the flight controls appear over the video panel, below the tiles, labelled with the drone id and a MANUAL badge.
+- **Select a drone.** Click a drone's video tile. That drone's search pauses and it hovers where it is. The tile gets a blue outline and a MANUAL badge, and the flight controls appear in a panel below the video tiles, labelled with the drone id and a MANUAL badge. The drone's status card says MANUAL as well.
 - **Click the same tile again.** Nothing happens. Control is not released.
 - **Click another tile.** The new drone is taken over and the previously controlled drone resumes its search. Only one drone is under manual control at a time.
 - **Controls.** Takeoff, Land, Forward, Back, Left, Right, Up, Down, Rotate left, Rotate right and Resume search. Every move is one bounded step (30 cm or 30 degrees from the dashboard). The keys W, S, A, D (move), X, Z (up, down), Q, E (rotate), T (takeoff) and L (land) work only while a drone is under manual control and the focus is not in a text field or a list.
 - **Resume search.** Ends manual control. The drone flies back to where its search paused and continues it. It is the only way to release a drone, apart from selecting another tile.
-- **Refusals.** When the edge refuses a step (geofence, ceiling, floor, drone link) the reason is shown in the overlay and in a toast, and the refused step's button stays disabled until a step succeeds. While the drone link is down or the edge is disconnected every motion button is disabled and the overlay says why. Land is never disabled.
-- **LAND ALL.** The LAND ALL button and Shift+L are unchanged and always land every drone, in manual mode too. The floating fleet status panel stays above the overlay.
-- **After a reload.** `fleet_status` carries each drone's `control_mode` (`autonomous`, `manual` or `held`) and, for a held drone whose controller went away, the seconds left before it is landed (`orphan_land_in_s`). A reloaded dashboard therefore shows which drone is under manual control or held, and the held drone's tile shows "HELD: auto-landing in 87 s, no controller".
+- **Refusals.** When the edge refuses a step (geofence, ceiling, floor, drone link) the reason is shown in the panel and in a toast, and the refused step's button stays disabled until a step succeeds. While the drone link is down or the edge is disconnected every motion button is disabled and the panel says why. Land is never disabled.
+- **LAND ALL.** The LAND ALL button in the top bar and Shift+L always land every drone, in manual mode too. The drone status cards stay visible above the video, so the manual panel never covers them.
+- **After a reload.** `fleet_status` carries each drone's `control_mode` (`autonomous`, `manual` or `held`) and, for a held drone whose controller went away, the seconds left before it is landed (`orphan_land_in_s`). A reloaded dashboard therefore shows which drone is under manual control or held, and the held drone's tile and status card show "HELD: auto-landing in 87 s, no controller".
 
 ## Rules on the edge
 
@@ -67,7 +67,7 @@ The ground link is separate. Heartbeats keep feeding the edge's link-loss watchd
 - **Re-tasking.** The lanes of a lost drone are never offered to a drone that is held or under manual control: they would wait for the operator. When no other drone can take them they are reported uncovered, with the reason "held for manual control".
 - **Loss detection.** A held drone is never declared lost for being on the ground with lanes left or for not having taken off after the start, so its lanes are not re-tasked and it is not sent a `land`. A held drone whose connection is gone or silent is still lost, as before. After Resume search, a drone that was landed by hand with lanes left is declared lost as usual, so another drone covers its lanes.
 - Commands are sent by one worker thread in order and their answers arrive asynchronously, so a slow link never holds up a browser event (LAND ALL included). A command with no answer is reported as failed after a few seconds. LAND ALL drops every manual command that has not been sent yet.
-- Drone-command events from the sidebar Flight Controls go to the controlled drone in fleet mode, instead of the previous "not available in fleet mode" error.
+- Drone-command events go to the controlled drone in fleet mode, instead of the previous "not available in fleet mode" error.
 
 ## Fleet messages
 
