@@ -220,6 +220,8 @@ class MavlinkController:
 
     async def _subscribe_gps_info(self, system: System) -> None:
         async for gps_info in system.telemetry.gps_info():
+            # The map offers the position as its anchor only with a 3D fix.
+            self.state.gps_fix_ok = gps_info.fix_type.value >= 3
             if gps_info.fix_type.value < 3:
                 logger.warning(
                     "[%s] Poor GPS fix: %s", self.name, gps_info.fix_type

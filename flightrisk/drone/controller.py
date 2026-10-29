@@ -61,6 +61,7 @@ class DroneState:
     heading: int | None = None  # degrees 0-359
     ground_speed: float | None = None  # m/s
     flight_mode: str | None = None
+    gps_fix_ok: bool | None = None  # a 3D fix or better; None when the backend does not report it
 
 
 class Capability(str, Enum):

@@ -237,6 +237,7 @@ const socket = io();
             renderManual();
         }
         list.forEach(([id, d]) => { if (id && d) { lastStatus[id] = d; moveDrone(id, d); } });
+        updateMapLock();
         renderDroneStatus();
         renderTimingTable();
     });
@@ -438,6 +439,8 @@ const socket = io();
             }
             renderDroneStatus();
         }
+        // A GPS drone (MAVLink) reports its position: the map can use it as the plan's anchor.
+        if (mapPlan && data.gps) mapPlan.setDroneGps(data.gps);
     });
 
     let confidenceHide = null;
@@ -939,11 +942,14 @@ const socket = io();
 
     // ========== SINGLE-DRONE PATTERN SEARCH ==========
     on('start-search', 'click', () => {
-        socket.emit('start_search', { pattern: $('search-pattern').value });
+        // Without a fleet, the map's plan is the single drone's: its path is checked and flown as shown.
+        const plan = mapPlan ? mapPlan.singleSpec() : null;
+        socket.emit('start_search', plan ? { pattern: $('search-pattern').value, plan: plan } : { pattern: $('search-pattern').value });
         $('search-bar').hidden = false;
     });
     on('stop-search', 'click', () => {
         socket.emit('stop_search');
+        if (mapPlan && !fleetMode) mapPlan.setLocked(null);
         $('search-bar').hidden = true;
         $('search-status').textContent = '';
     });
@@ -952,8 +958,11 @@ const socket = io();
         $('search-bar-fill').style.width = Math.round((data.waypoint / total) * 100) + '%';
         $('search-status').textContent = 'Waypoint ' + data.waypoint + '/' + data.total + ': ' + data.action;
         $('search-bar').hidden = false;
+        // The map shows the pattern being flown; it cannot be edited until the pattern ends.
+        if (mapPlan && !fleetMode) mapPlan.setLocked('the search pattern runs');
     });
     socket.on('search_complete', () => {
+        if (mapPlan && !fleetMode) mapPlan.setLocked(null);
         $('search-status').textContent = 'Search complete.';
         $('search-bar-fill').style.width = '100%';
         setTimeout(() => { $('search-bar').hidden = true; }, 2000);
@@ -1043,6 +1052,7 @@ const socket = io();
     socket.on('error', (data) => {
         showToast('Error: ' + ((data && data.message) || 'unknown'));
         showFleetError('Fleet error: ' + ((data && data.message) || 'unknown'));
+        fleetPlanPending = false;
         fleetStartInFlight = false;
         updateFleetStartButton();
     });
@@ -1166,30 +1176,51 @@ const socket = io();
     let lastPlan = null;
     const lastStatus = {}, lastPins = [];
 
+    // The map plan is read-only while drones fly or a start is scheduled (the map shows the plan being flown).
+    let mapStartLockUntil = 0;
+    function updateMapLock() {
+        if (!mapPlan || !fleetMode) return;
+        const flying = Object.keys(lastStatus).some((id) => (lastStatus[id] || {}).is_flying === true);
+        mapPlan.setLocked(flying ? 'drones are flying' : (Date.now() < mapStartLockUntil ? 'a start is scheduled' : null));
+    }
     function droneColor(id) {
         const m = String(id).match(/(\d+)\s*$/);
         return DRONE_COLORS[(m ? parseInt(m[1], 10) - 1 : 0) % DRONE_COLORS.length];
     }
+    // The search plan editor (static/ui/map_plan.js, docs/map-and-plan-editing.md). It draws the plan into
+    // whichever map is shown, and every edit calls mapPlanEdited, which invalidates a plan already sent.
+    const mapPlan = (window.FRMapPlan && typeof L !== 'undefined') ? window.FRMapPlan.create({
+        socket: socket, $: $, el: el, clear: clear, droneColor: droneColor, toast: showToast, blankTile: OFFLINE_TILE,
+        onEdited: mapPlanEdited, setMapMode: setMapMode,
+    }) : null;
     function initFleetMaps() {
         if (typeof L === 'undefined') return;
-        gridMap = L.map($('search-map'), { crs: L.CRS.Simple, minZoom: -4, maxZoom: 7, attributionControl: false });
+        gridMap = L.map($('search-map'), { crs: L.CRS.Simple, minZoom: -4, maxZoom: 7, zoomSnap: 0.25, attributionControl: false });
         Object.keys(droneMarkers).forEach((k) => delete droneMarkers[k]);
         gridMap.setView([0, 0], 0);
         gridLayer.zones = L.layerGroup().addTo(gridMap);
         gridLayer.pins = L.layerGroup().addTo(gridMap);
         gridLayer.drones = L.layerGroup().addTo(gridMap);
         fitGrid({ x_cm: 0, y_cm: 0, w_cm: 400, h_cm: 400 });
+        if (mapPlan) mapPlan.attach(gridMap, 'grid');
     }
     function ensureGeoMap() {
         if (geoMap || typeof L === 'undefined') return;
-        geoMap = L.map($('search-map'), { attributionControl: false }).setView([40.76, -111.89], 15);
-        // Tiles are served locally; a missing tile falls back to a blank image so the page works offline.
-        L.tileLayer('/static/tiles/{z}/{x}/{y}.png', { maxZoom: 19, errorTileUrl: OFFLINE_TILE }).addTo(geoMap);
+        Object.keys(droneMarkers).forEach((k) => delete droneMarkers[k]);
+        // A Tello search area is a few metres wide, so the map zooms past the imagery's own detail (zoom 23 is
+        // about 1.4 cm per pixel); the imagery is then enlarged.
+        geoMap = L.map($('search-map'), { attributionControl: true, maxZoom: 23, zoomSnap: 0.5 }).setView([40.76, -111.89], 15);
+        geoMap.attributionControl.setPrefix('Leaflet');
         geoLayer.lanes = L.layerGroup().addTo(geoMap);
         geoLayer.pins = L.layerGroup().addTo(geoMap);
         geoLayer.drones = L.layerGroup().addTo(geoMap);
+        // The editor adds the imagery layers (online, or from the offline cache) and the layer switch. Without it
+        // the map stays blank: a missing tile is drawn as a blank image, so the page works offline.
+        if (mapPlan) mapPlan.attach(geoMap, 'latlon');
+        else L.tileLayer('/tiles/usgs-imagery/{z}/{x}/{y}', { maxZoom: 23, maxNativeZoom: 16, errorTileUrl: OFFLINE_TILE }).addTo(geoMap);
     }
     function setMapMode(mode) {
+        if (mode === mapMode && (mode === 'grid' ? gridMap : geoMap)) return;
         mapMode = mode;
         [['map-mode-grid', 'grid'], ['map-mode-latlon', 'latlon']].forEach(([id, m]) => {
             $(id).classList.toggle('active', mode === m);
@@ -1205,9 +1236,9 @@ const socket = io();
             if (geoMap) { geoMap.remove(); geoMap = null; }
             initFleetMaps();
             if (lastPlan) handleFleetPlan(lastPlan);
-            lastPins.forEach(addPin);
-            Object.keys(lastStatus).forEach((id) => moveDrone(id, lastStatus[id]));
         }
+        lastPins.forEach(addPin);
+        Object.keys(lastStatus).forEach((id) => moveDrone(id, lastStatus[id]));
     }
     on('map-mode-grid', 'click', () => setMapMode('grid'));
     on('map-mode-latlon', 'click', () => setMapMode('latlon'));
@@ -1237,6 +1268,8 @@ const socket = io();
         lastPlan = plan;
         if (!gridMap) return;
         gridLayer.zones.clearLayers();
+        // A plan made on the map is drawn by the editor, in both views.
+        if (plan.details && mapPlan) return;
         const zones = plan.zones || [];
         zones.forEach((z) => {
             const color = droneColor(z.drone_id || '');
@@ -1258,28 +1291,41 @@ const socket = io();
             fitGrid({ x_cm: x0, y_cm: y0, w_cm: Math.max.apply(null, xs) - x0, h_cm: Math.max.apply(null, ys) - y0 });
         }
     }
+    // Where to draw a drone: on the grid from its dead-reckoned position; on the lat/lon map at its GPS position
+    // when it reports one, else from its dead-reckoned position through the plan's anchor (approximate).
+    function dronePosition(d) {
+        const rel = typeof d.rel_x_cm === 'number' && typeof d.rel_y_cm === 'number';
+        if (mapMode === 'grid') return rel && gridMap ? { pos: gridPoint(d.rel_x_cm, d.rel_y_cm), how: '' } : null;
+        if (!geoMap) return null;
+        if (typeof d.latitude === 'number' && typeof d.longitude === 'number') return { pos: [d.latitude, d.longitude], how: ' (GPS)' };
+        const ll = rel && mapPlan ? mapPlan.toLatLng(d.rel_x_cm, d.rel_y_cm) : null;
+        return ll ? { pos: ll, how: ' (approx.)' } : null;
+    }
     function moveDrone(id, d) {
-        if (typeof d.rel_x_cm !== 'number' || typeof d.rel_y_cm !== 'number' || !gridMap) return;
-        const pos = gridPoint(d.rel_x_cm, d.rel_y_cm);
+        const at = dronePosition(d);
+        if (!at) return;
+        const layer = mapMode === 'grid' ? gridLayer.drones : geoLayer.drones;
         if (!droneMarkers[id]) {
-            droneMarkers[id] = L.circleMarker(pos, { radius: 8, color: droneColor(id), fillOpacity: 0.9 })
-                .bindTooltip(String(id), { permanent: true, direction: 'top' }).addTo(gridLayer.drones);
+            droneMarkers[id] = L.circleMarker(at.pos, { radius: 8, color: droneColor(id), fillOpacity: 0.9 })
+                .bindTooltip(String(id) + at.how, { permanent: true, direction: 'top' }).addTo(layer);
         } else {
-            droneMarkers[id].setLatLng(pos);
+            droneMarkers[id].setLatLng(at.pos);
         }
     }
     function thumbSrc(t) { return t ? (String(t).startsWith('data:') ? t : 'data:image/jpeg;base64,' + t) : null; }
     function addPin(p) {
-        let pos, layer;
-        if (typeof p.rel_x_cm === 'number' && typeof p.rel_y_cm === 'number') {
-            if (!gridMap || mapMode !== 'grid') return;
-            pos = gridPoint(p.rel_x_cm, p.rel_y_cm); layer = gridLayer.pins;
-        } else if (typeof p.lat === 'number' && typeof p.lon === 'number') {
-            if (!geoMap || mapMode !== 'latlon') return;
-            pos = [p.lat, p.lon]; layer = geoLayer.pins;
-        } else {
-            return;
+        // A detection with GPS goes on the lat/lon map at that position; a dead-reckoned one goes on the grid,
+        // or on the lat/lon map through the plan's anchor.
+        let pos = null, layer = null;
+        if (mapMode === 'latlon' && geoMap) {
+            if (typeof p.lat === 'number' && typeof p.lon === 'number') pos = [p.lat, p.lon];
+            else if (typeof p.rel_x_cm === 'number' && typeof p.rel_y_cm === 'number' && mapPlan) pos = mapPlan.toLatLng(p.rel_x_cm, p.rel_y_cm);
+            layer = geoLayer.pins;
+        } else if (mapMode === 'grid' && gridMap && typeof p.rel_x_cm === 'number' && typeof p.rel_y_cm === 'number') {
+            pos = gridPoint(p.rel_x_cm, p.rel_y_cm);
+            layer = gridLayer.pins;
         }
+        if (!pos || !layer) return;
         const pin = L.circleMarker(pos, { radius: 6, color: droneColor(p.drone_id || ''), fillColor: '#EF4444', fillOpacity: 0.9 });
         const box = el('div');
         box.appendChild(el('div', null, 'Detection from ' + (p.drone_id || 'unknown')));
@@ -1334,6 +1380,8 @@ const socket = io();
             else uncoveredLanes[key] = Object.assign({}, l, { lost_id: lostId, status: status });
         });
     }
+    // Lanes of a lost drone that no drone took. Possible coverage gaps of the plan itself (uncovered entries of
+    // kind "area") are not listed here: the plan editor reports them neutrally on the map and in the plan card.
     function renderUncovered() {
         const box = $('fleet-uncovered');
         const keys = Object.keys(uncoveredLanes);
@@ -1368,7 +1416,16 @@ const socket = io();
         } else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
         else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
-        else if (kind === 'plan_refused') {
+        else if (kind === 'plan_invalidated') {
+            showFleetBanner('PLAN EDITED: press Plan search again');
+            fleetPlanReceived = false;
+            updateFleetStartButton();
+        } else if (kind === 'start') {
+            showFleetBanner(String(kind));
+            mapStartLockUntil = Date.now() + 20000;
+            updateMapLock();
+        } else if (kind === 'plan_refused') {
+            fleetPlanPending = false;
             showFleetBanner('PLAN REFUSED');
             showFleetError('Plan refused: ' + (ev.detail || 'unknown'));
             fleetStartInFlight = false;
@@ -1384,6 +1441,7 @@ const socket = io();
     // ========== PLAN AND START ==========
     // Start makes real drones take off, so it needs a received plan and a confirmation.
     let fleetPlanReceived = false;
+    let fleetPlanPending = false;  // Plan pressed, no answer yet
     let fleetStartInFlight = false;
     let fleetPlanDroneCount = 0;
     function showFleetError(text) {
@@ -1397,7 +1455,28 @@ const socket = io();
         fleetPlanReceived = false;
         fleetStartInFlight = false;
         updateFleetStartButton();
-        socket.emit('plan_fleet');
+        // The plan shown on the map (pattern, area and edited paths); the server checks it before sending it.
+        const plan = mapPlan ? mapPlan.fleetSpec() : null;
+        fleetPlanPending = true;
+        socket.emit('plan_fleet', plan ? { plan: plan } : {});
+    }
+    // Any edit on the map after Plan invalidates that plan: Start is disabled here and refused by the server
+    // until Plan is pressed again.
+    // It is reported even while a Plan is pending, so the server never treats a plan that an edit overtook as
+    // current (docs/map-and-plan-editing.md, section 5).
+    function mapPlanEdited() {
+        invalidateFleetPlan('The plan was edited: press Plan search again before Start.');
+    }
+    function invalidateFleetPlan(message) {
+        if (fleetPlanReceived || fleetPlanPending) showFleetError(message);
+        fleetPlanReceived = false;
+        updateFleetStartButton();
+        socket.emit('fleet_plan_edited');
+    }
+    // Where each drone must stand, from the last plan (relative to the first drone), for the Start confirmation.
+    function takeoffInstructions() {
+        const layout = (lastPlan && lastPlan.details && lastPlan.details.takeoff_layout) || [];
+        return layout.length > 1 ? 'Place the drones on their marks: ' + layout.join('; ') + '.\n\n' : '';
     }
     function startFleet() {
         if (!fleetPlanReceived || fleetStartInFlight) return;
@@ -1410,27 +1489,36 @@ const socket = io();
             ? 'WARNING: a detection profile switch is still pending for ' + pendingProfiles.join(', ')
                 + '. Once flying, the edge refuses it and keeps its current profile.\n\n'
             : '';
-        if (!window.confirm(profileWarning + who + ' will take off. Each drone flies its lanes and keeps its geofence '
+        if (!window.confirm(profileWarning + takeoffInstructions() + who + ' will take off. Each drone flies its lanes and keeps its geofence '
             + 'around the spot it takes off from, so every drone must be on its marked start spot, '
             + 'nose into the area. Start the search?')) return;
         showFleetError('');
         fleetStartInFlight = true;
         updateFleetStartButton();
-        socket.emit('start_fleet');
+        // The server starts only if this is the plan the drones were sent.
+        const shown = mapPlan ? mapPlan.fleetSpec() : null;
+        socket.emit('start_fleet', shown ? { plan: shown } : {});
     }
     on('fleet-plan', 'click', planFleet);
     on('fleet-start', 'click', startFleet);
     socket.on('fleet_plan', (plan) => {
         handleFleetPlan(plan || {});
+        // Start is allowed only while the map shows exactly the plan the server holds.
+        const inSync = mapPlan ? mapPlan.onFleetPlan(plan || {}) : true;
         uncoveredLanes = {};
-        ((plan && plan.uncovered) || []).forEach((u) => { if (u) markLanes(u.drone_id, [u], 'uncovered'); });
+        ((plan && plan.uncovered) || []).forEach((u) => { if (u && u.kind !== 'area') markLanes(u.drone_id, [u], 'uncovered'); });
         renderUncovered();
         const ids = {};
         ((plan && plan.zones) || []).forEach((z) => { if (z && z.drone_id) ids[z.drone_id] = true; });
         fleetPlanDroneCount = Object.keys(ids).length || Object.keys(lastStatus).length;
-        fleetPlanReceived = true;
+        fleetPlanPending = false;
         fleetStartInFlight = false;
+        fleetPlanReceived = inSync;
         updateFleetStartButton();
+        if (!inSync) {
+            fleetPlanReceived = true;  // so the message below is shown
+            invalidateFleetPlan('The map was edited and differs from the plan the drones were sent: press Plan search again.');
+        }
     });
 
     // ========== LAND ALL ==========
@@ -1609,6 +1697,7 @@ const socket = io();
 
     // ========== INIT ==========
     initFleetMaps();
+    if (mapPlan) mapPlan.request();
     if ('Notification' in window && Notification.permission === 'default') {
         try { Notification.requestPermission(); } catch (e) {}
     }

@@ -576,31 +576,36 @@ def test_generic_for_n_equals_4():
     lost = plan.zone_for("drone-3")
     edges["drone-3"].telemetry(lane_index=1)
     appended = coord.on_drone_lost("drone-3")
-    assert set(appended) == {"drone-1", "drone-2", "drone-4"}
 
     # drone-3 has 5 lanes and had flown 1. Its 4 unflown lanes are split into
-    # contiguous chunks of 2, 1 and 1, one per remaining drone. Each chunk is
-    # appended after that drone's own lanes and a transit that ends exactly
-    # where the chunk started on drone-3's path.
+    # contiguous chunks of 2, 1 and 1, one per remaining drone. A chunk goes
+    # only to a drone whose whole new path stays at least the zone gap away
+    # from every other drone's path (docs/map-and-plan-editing.md, section 5):
+    # drone-1 would cross drone-2's zone to reach them, and drone-4 would come
+    # too close to drone-2 once drone-2 holds the first chunk, so drone-2, the
+    # neighbour, takes them all. Each chunk is appended after a transit that
+    # ends exactly where the chunk started on drone-3's path.
     unflown = list(lost.lanes)[1:]
     assert len(unflown) == 4
+    assert set(appended) == {"drone-2"}
     lost_path = walk((lost.x_cm, lost.y_cm), list(lost.lanes))
-    chunks = {}
-    for drone_id, added in appended.items():
-        zone = plan.zone_for(drone_id)
-        lanes = coord.lanes(drone_id)
-        assert lanes[:len(zone.lanes)] == list(zone.lanes)
-        assert lanes[len(zone.lanes):] == added
-        path = walk((zone.x_cm, zone.y_cm), lanes)
-        matches = [
-            (first, size) for first, size in ((0, 2), (2, 1), (3, 1))
-            if added[-size:] == unflown[first:first + size]
-            and path[-size - 1:] == lost_path[1 + first:1 + first + size + 1]
-        ]
-        assert len(matches) == 1, (drone_id, added)
-        chunks[matches[0]] = drone_id
-        assert edges[drone_id].of_type("assign_lanes")[-1]["lanes"] == lanes
-    assert set(chunks) == {(0, 2), (2, 1), (3, 1)}
+    zone = plan.zone_for("drone-2")
+    lanes = coord.lanes("drone-2")
+    assert lanes[:len(zone.lanes)] == list(zone.lanes)
+    assert lanes[len(zone.lanes):] == appended["drone-2"]
+    assert edges["drone-2"].of_type("assign_lanes")[-1]["lanes"] == lanes
+    path = walk((zone.x_cm, zone.y_cm), lanes)
+    assert path[-1] == lost_path[-1]
+    assert lanes[-1:] == unflown[-1:]
+    for drone_id in ("drone-1", "drone-4"):
+        assert coord.lanes(drone_id) == list(plan.zone_for(drone_id).lanes)
+    # No two remaining drones' paths come closer than the 100 cm gap.
+    from flightrisk.drone.plan_paths import closest_approach
+
+    remaining = ("drone-1", "drone-2", "drone-4")
+    paths = {d: walk((plan.zone_for(d).x_cm, 0), coord.lanes(d)) for d in remaining}
+    for a, b in ((x, y) for i, x in enumerate(remaining) for y in remaining[i + 1:]):
+        assert closest_approach(paths[a], paths[b])[0] >= 100, (a, b)
 
     land = coord.land_all()
     assert set(land) == set(edges) and all(v is None for v in land.values())

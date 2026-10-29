@@ -134,8 +134,12 @@ def executor_fleet():
         edges = {f"drone-{i + 1}": ExecutorEdge(f"drone-{i + 1}", edge_fence_cm) for i in range(n)}
         created.extend(edges.values())
         events = []
+        # These tests cover the offer and nack mechanics with the t20 geometry, in which
+        # survivors cross other zones; the re-task separation rule is tested in
+        # tests/test_plan_edit.py and tests/test_coordinator.py.
         coord = FleetCoordinator(edges, area_cm=area, strip_cm=strip, geofence_cm=geofence_cm,
-                                 on_event=lambda name, payload: events.append((name, payload)))
+                                 on_event=lambda name, payload: events.append((name, payload)),
+                                 retask_separation=False)
         return coord, edges, events
 
     yield _make
@@ -150,7 +154,8 @@ def fleet_events(events, kind):
 def make_fleet(edges, area=(1200, 400), strip=T20_STRIP, geofence_cm=None):
     events = []
     coord = FleetCoordinator(edges, area_cm=area, strip_cm=strip, geofence_cm=geofence_cm, retask_wait_s=0.05,
-                             on_event=lambda name, payload: events.append((name, payload)))
+                             on_event=lambda name, payload: events.append((name, payload)),
+                             retask_separation=False)  # offer mechanics only, see above
     return coord, events
 
 

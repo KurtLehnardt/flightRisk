@@ -260,6 +260,44 @@ def legacy_telemetry_payload(snapshot: TelemetrySnapshot, include_connected: boo
     return payload
 
 
+GPS_MAX_AGE_S = 5.0
+"""A GPS position older than this is not offered as the map's anchor."""
+
+
+def gps_payload(
+    snapshot: TelemetrySnapshot, *, fix_ok: bool | None = None, now: float | None = None
+) -> dict[str, Any] | None:
+    """The GPS position of a drone that reports one (MAVLink), else None.
+
+    Returns ``{"lat", "lon", "heading_deg", "ok", "reason"}``. The dashboard
+    map offers the position as the plan's anchor only when ``ok`` is true:
+    the drone has a 3D fix (*fix_ok*, when the backend knows it), the
+    position is plausible (within range and not the 0, 0 a receiver reports
+    before its first fix) and it was measured in the last ``GPS_MAX_AGE_S``
+    seconds. Otherwise ``reason`` says why (docs/map-and-plan-editing.md).
+    The legacy telemetry payload keeps its fixed shape; this is sent beside it.
+    """
+    lat_r, lon_r = snapshot.latitude_deg, snapshot.longitude_deg
+    if lat_r is None or lon_r is None:
+        return None
+    lat, lon = float(lat_r.value), float(lon_r.value)
+    out: dict[str, Any] = {"lat": lat, "lon": lon, "ok": False, "reason": None}
+    if snapshot.heading_deg is not None:
+        out["heading_deg"] = float(snapshot.heading_deg.value)
+    age = max(lat_r.age_s(now), lon_r.age_s(now))
+    if fix_ok is False:
+        out["reason"] = "no 3D GPS fix"
+    elif not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+        out["reason"] = "the reported position is out of range"
+    elif abs(lat) < 1e-6 and abs(lon) < 1e-6:
+        out["reason"] = "the reported position is 0, 0 (no fix yet)"
+    elif age > GPS_MAX_AGE_S:
+        out["reason"] = f"the position is {age:.0f} s old"
+    else:
+        out["ok"] = True
+    return out
+
+
 __all__ = [
     "CELSIUS",
     "DEGREE",
@@ -272,6 +310,7 @@ __all__ = [
     "SECOND",
     "Reading",
     "TelemetrySnapshot",
+    "gps_payload",
     "legacy_telemetry_payload",
     "read_telemetry",
     "reading",
