@@ -47,8 +47,9 @@
 
             <section class="video" aria-label="Video">
                 <!-- One tile per drone. The first tile is reused for the first drone (or a source that sends no
-                     drone id); more are created on demand. Click a tile to take manual control (fleet mode). -->
-                <div id="video-tiles" hidden>
+                     drone id); more are created on demand. The tiles share the main area's width (ui.css,
+                     #video-tiles). Click a tile to take manual control (fleet mode). -->
+                <div id="video-tiles" data-count="1" hidden>
                     <div class="video-tile" id="video-tile-default">
                         <img id="video-feed" class="tile-feed" alt="Drone video">
                         <canvas id="detection-overlay" class="tile-overlay"></canvas>

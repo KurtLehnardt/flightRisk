@@ -174,7 +174,7 @@ const socket = io();
             meta.appendChild(metaItem('Battery', bat === null || Number.isNaN(bat) ? '--' : fmt(bat) + '%', batteryClass(bat)));
             const alt = d.height_cm !== undefined ? d.height_cm : d.height;
             meta.appendChild(metaItem('Alt', alt === undefined || alt === null ? '--' : fmt(alt) + ' cm'));
-            if (d.lane_index !== undefined && d.lanes_total !== undefined) meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
+            if (typeof d.lane_index === 'number' && typeof d.lanes_total === 'number') meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
             if (d.temperature) meta.appendChild(metaItem('Temp', d.temperature + ' C'));
             card.appendChild(meta);
             const mode = modeText(id, d);
@@ -258,6 +258,12 @@ const socket = io();
     const videoTilesEl = $('video-tiles');
     const videoPlaceholder = $('video-placeholder');
     const videoTiles = new Map();
+    const tileResizeObserver = typeof ResizeObserver === 'function'
+        ? new ResizeObserver((entries) => entries.forEach((entry) => {
+            const t = Array.from(videoTiles.values()).find((x) => x.el === entry.target) || (entry.target === defaultTile.el ? defaultTile : null);
+            if (t) renderDetectionOverlay(t);
+        }))
+        : null;
     const defaultTile = makeTile($('video-tile-default'));
     let defaultTileOwner = null;
     let defaultTileAnon = false;
@@ -276,7 +282,15 @@ const socket = io();
             lastShownAt: 0,
         };
         t.feed.addEventListener('load', () => renderDetectionOverlay(t));
+        // The tile resizes with the window and with the number of tiles; redraw its boxes at the new size.
+        if (tileResizeObserver) tileResizeObserver.observe(node);
         return t;
+    }
+
+    // data-count tells the stylesheet how many tiles share the main area (see #video-tiles in ui.css).
+    function updateTileLayout() {
+        const n = videoTilesEl.querySelectorAll('.video-tile').length;
+        videoTilesEl.dataset.count = n >= 5 ? 'many' : String(n);
     }
 
     function createTile(droneId) {
@@ -309,6 +323,7 @@ const socket = io();
             videoTiles.set(key, t);
             // Tiles appear in drone id order, whichever drone sent the first frame.
             Array.from(videoTiles.keys()).sort().forEach((id, i) => { videoTiles.get(id).el.style.order = String(i); });
+            updateTileLayout();
             renderManual();
         }
         return t;
