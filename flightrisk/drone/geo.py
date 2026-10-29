@@ -120,6 +120,70 @@ def lawnmower_gps(
     return out
 
 
+@dataclass(frozen=True)
+class PlanAnchor:
+    """Where the plan frame's origin is on the Earth, and which way its forward axis points.
+
+    The plan frame is the centimetre grid of the fleet coordinator and of the
+    edge's dead reckoning: ``x`` grows to the right of the takeoff heading and
+    ``y`` grows forward along it. ``heading_deg`` is the compass bearing of
+    that forward (``+y``) axis. A Tello has no GPS, so the operator sets the
+    anchor; nothing safety related ever depends on it.
+    """
+
+    lat: float
+    lon: float
+    heading_deg: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name, value in (("lat", self.lat), ("lon", self.lon), ("heading_deg", self.heading_deg)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"anchor {name} must be a finite number, got {value!r}")
+        if not -85.0 <= self.lat <= 85.0:
+            raise ValueError(f"anchor latitude must be within -85 to 85 degrees, got {self.lat!r}")
+        if not -180.0 <= self.lon <= 180.0:
+            raise ValueError(f"anchor longitude must be within -180 to 180 degrees, got {self.lon!r}")
+        object.__setattr__(self, "heading_deg", float(self.heading_deg) % 360.0)
+
+    def to_dict(self) -> dict:
+        return {"lat": self.lat, "lon": self.lon, "heading_deg": self.heading_deg}
+
+    @classmethod
+    def from_dict(cls, data: object) -> PlanAnchor:
+        """Build an anchor from ``{"lat", "lon", "heading_deg"}``; raises ``ValueError`` for anything else."""
+        if not isinstance(data, dict):
+            # ValueError like every other bad anchor, so callers handle one exception type.
+            raise ValueError("the anchor must be an object with lat, lon and heading_deg")  # noqa: TRY004
+        unknown = set(data) - {"lat", "lon", "heading_deg"}
+        if unknown:
+            raise ValueError(f"unknown anchor fields: {', '.join(sorted(map(str, unknown)))}")
+        return cls(data.get("lat"), data.get("lon"), data.get("heading_deg", 0.0))
+
+
+def frame_to_latlon(anchor: PlanAnchor, x_cm: float, y_cm: float) -> tuple[float, float]:
+    """Latitude and longitude of the plan-frame point ``(x_cm, y_cm)``.
+
+    The forward axis points along ``anchor.heading_deg`` and the right axis
+    90 degrees clockwise from it. The flat-earth offset of ``offset_latlon``
+    is used, so the result is accurate to well under a metre over a few
+    kilometres.
+    """
+    h = math.radians(anchor.heading_deg)
+    east_m = (x_cm * math.cos(h) + y_cm * math.sin(h)) / 100.0
+    north_m = (y_cm * math.cos(h) - x_cm * math.sin(h)) / 100.0
+    return offset_latlon(anchor.lat, anchor.lon, north_m, east_m)
+
+
+def latlon_to_frame(anchor: PlanAnchor, lat: float, lon: float) -> tuple[float, float]:
+    """The plan-frame point ``(x_cm, y_cm)`` at ``lat``/``lon``; the exact inverse of ``frame_to_latlon``."""
+    north_m = math.radians(lat - anchor.lat) * EARTH_RADIUS_M
+    east_m = math.radians(lon - anchor.lon) * EARTH_RADIUS_M * math.cos(math.radians(anchor.lat))
+    h = math.radians(anchor.heading_deg)
+    x_m = east_m * math.cos(h) - north_m * math.sin(h)
+    y_m = east_m * math.sin(h) + north_m * math.cos(h)
+    return x_m * 100.0, y_m * 100.0
+
+
 def pattern_to_gps(
     pattern: PatternType,
     origin_lat: float,

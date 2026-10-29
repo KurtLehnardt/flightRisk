@@ -174,6 +174,55 @@
                         <div id="target-history-container" hidden><div id="target-history-list" class="list"></div></div>
                     </div>
 
+                    <!-- Search plan (docs/map-and-plan-editing.md): pattern, area, anchor and path editing on the map. -->
+                    <div class="field" id="plan-editor">
+                        <label for="search-pattern">Search pattern</label>
+                        <select id="search-pattern">
+                            <option value="parallel_track">Parallel track, lawnmower</option>
+                            <option value="expanding_square">Expanding square, from the area centre</option>
+                            <option value="track_line">Track line, along the centre line</option>
+                            <option value="sector">Sector, pie slices (flown as staircases)</option>
+                            <option value="spiral">Spiral, outward from the centre (flown as staircases)</option>
+                        </select>
+                        <span class="field-label">Search area (cm from the takeoff reference)</span>
+                        <div class="plan-grid" role="group" aria-label="Search area in centimetres">
+                            <label>X<input type="number" id="plan-area-x" step="10" inputmode="numeric"></label>
+                            <label>Y<input type="number" id="plan-area-y" step="10" inputmode="numeric"></label>
+                            <label>Width<input type="number" id="plan-area-w" step="10" min="20" inputmode="numeric"></label>
+                            <label>Depth<input type="number" id="plan-area-h" step="10" min="20" inputmode="numeric"></label>
+                        </div>
+                        <span class="field-label">Anchor: takeoff reference on the map</span>
+                        <div class="plan-grid plan-grid-3" role="group" aria-label="Anchor latitude, longitude and heading">
+                            <label>Lat<input type="number" id="plan-anchor-lat" step="0.000001" inputmode="decimal"></label>
+                            <label>Lon<input type="number" id="plan-anchor-lon" step="0.000001" inputmode="decimal"></label>
+                            <label>Heading<input type="number" id="plan-anchor-heading" step="1" min="0" max="359.9" inputmode="decimal"></label>
+                        </div>
+                        <div class="row">
+                            <button type="button" id="plan-anchor-pick" class="btn btn-quiet" title="Then click the takeoff point on the Lat/Lon map">Pick anchor on map</button>
+                            <button type="button" id="plan-anchor-gps" class="btn btn-quiet" disabled title="Copy the position and heading a GPS drone reports">Use drone GPS</button>
+                        </div>
+                        <div class="plan-grid plan-grid-2" role="group" aria-label="Search area centre latitude and longitude">
+                            <label>Centre lat<input type="number" id="plan-center-lat" step="0.000001" inputmode="decimal" disabled></label>
+                            <label>Centre lon<input type="number" id="plan-center-lon" step="0.000001" inputmode="decimal" disabled></label>
+                        </div>
+                        <div id="plan-corners" class="hint"></div>
+                        <div class="row wrap">
+                            <select id="plan-drone" aria-label="Drone whose path is edited"><option value="">All drones</option></select>
+                            <button type="button" id="plan-revert" class="btn btn-quiet" title="Restore the generated pattern">Revert path</button>
+                            <button type="button" id="plan-delete-vertex" class="btn btn-quiet" disabled>Delete vertex</button>
+                        </div>
+                        <div class="hint">Drag a vertex to move it, click a path to add one, double-click or right-click a vertex to delete it. The solid line is what will fly.</div>
+                        <div id="plan-check" class="msg" aria-live="polite"></div>
+                        <div class="row">
+                            <input type="text" id="plan-name" maxlength="64" placeholder="Plan name" aria-label="Plan name">
+                            <button type="button" id="plan-save" class="btn btn-quiet">Save plan</button>
+                        </div>
+                        <div class="row">
+                            <select id="plan-load-list" aria-label="Saved plans"><option value="">Saved plans</option></select>
+                            <button type="button" id="plan-load" class="btn btn-quiet">Load</button>
+                        </div>
+                    </div>
+
                     <div class="field">
                         <span class="field-label">Fleet search</span>
                         <div class="row">
@@ -184,14 +233,7 @@
                     </div>
 
                     <div class="field">
-                        <label for="search-pattern">Single-drone pattern</label>
-                        <select id="search-pattern">
-                            <option value="expanding_square">Expanding square, from last known point</option>
-                            <option value="sector">Sector, pie slices</option>
-                            <option value="parallel_track">Parallel track, lawnmower</option>
-                            <option value="track_line">Track line, follow path</option>
-                            <option value="spiral">Spiral, outward from center</option>
-                        </select>
+                        <span class="field-label">Single drone: fly the plan from where it hovers</span>
                         <div class="row">
                             <button type="button" id="start-search" class="btn">Start pattern</button>
                             <button type="button" id="stop-search" class="btn btn-quiet">Stop pattern</button>
@@ -345,6 +387,8 @@
 
     <script src="/static/socket.io.min.js"></script>
     <script src="/static/leaflet/leaflet.js"></script>
+    <script src="/static/ui/plan_geom.js"></script>
+    <script src="/static/ui/map_plan.js"></script>
     <script src="/static/ui/ui.js"></script>
 </body>
 </html>

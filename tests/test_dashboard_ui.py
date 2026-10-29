@@ -37,6 +37,8 @@ CEILING = (DASH / "templates" / "ceiling_settings.html").read_text()
 PAGE_RAW = (DASH / "templates" / "index.html").read_text()
 PAGE = PAGE_RAW.replace(INCLUDE, CEILING)
 JS = (DASH / "static" / "ui" / "ui.js").read_text()
+# The search plan editor (docs/map-and-plan-editing.md) is part of the page's contract too.
+MAP_JS = (DASH / "static" / "ui" / "map_plan.js").read_text()
 CSS = (DASH / "static" / "ui" / "ui.css").read_text()
 
 # The Socket.IO events the page emits and listens to and the REST calls it makes, outside the ceiling card.
@@ -49,6 +51,9 @@ EMITTED = {
     "revert_target", "set_description", "set_detection_profile", "set_fleet_detection_profile",
     "set_primary_drone", "set_reasoning_provider", "set_sensitivity_preset", "set_stream_video", "set_threshold",
     "start_fleet", "start_recording", "start_search", "stop_recording", "stop_search",
+    # The search plan editor (docs/map-and-plan-editing.md).
+    "fleet_plan_edited", "get_map_config", "list_plans", "load_plan", "map_cache_status", "preview_plan",
+    "save_plan",
 }
 LISTENED = {
     "battery_critical", "battery_warning", "confidence_progress", "connect", "description_set",
@@ -58,6 +63,8 @@ LISTENED = {
     "metrics_update", "obstacle_detected", "reasoning_provider", "recording_started", "recording_stopped",
     "recovery_status", "search_complete", "search_paused", "search_plan", "search_progress", "status",
     "stream_video_state", "target_photo", "target_set", "threshold_updated",
+    # The search plan editor.
+    "map_cache_status", "map_config", "plan_list", "plan_loaded", "plan_preview", "plan_saved",
 }
 FETCHED = {
     "/api/clear-target", "/api/feedback-stats", "/api/matches", "/api/sessions", "/api/target-history",
@@ -95,7 +102,25 @@ CAPABILITIES = {
     "describe target": "target-description",
     "set description": "set-description",
     "target history and revert": "target-history-toggle",
-    "single-drone pattern": "search-pattern",
+    "search pattern (fleet and single drone)": "search-pattern",
+    "search area x": "plan-area-x",
+    "search area y": "plan-area-y",
+    "search area width": "plan-area-w",
+    "search area depth": "plan-area-h",
+    "anchor latitude": "plan-anchor-lat",
+    "anchor longitude": "plan-anchor-lon",
+    "anchor heading": "plan-anchor-heading",
+    "pick the anchor on the map": "plan-anchor-pick",
+    "anchor from drone GPS": "plan-anchor-gps",
+    "search area centre latitude": "plan-center-lat",
+    "search area centre longitude": "plan-center-lon",
+    "drone whose path is edited": "plan-drone",
+    "revert a path to the pattern": "plan-revert",
+    "delete the selected vertex": "plan-delete-vertex",
+    "saved plan name": "plan-name",
+    "save plan": "plan-save",
+    "saved plans": "plan-load-list",
+    "load plan": "plan-load",
     "start pattern search": "start-search",
     "stop pattern search": "stop-search",
     "fleet detection profile": "profile-fleet-default",
@@ -155,7 +180,7 @@ STATUS_IDS = (
     "obs-matches-face", "obs-matches-desc", "obs-face-rate", "obs-reasoning", "obs-reasoning-lat",
     "match-overlay", "match-overlay-card", "overlay-title", "overlay-subtitle", "overlay-snapshot",
     "overlay-score", "overlay-reasoning", "overlay-status", "toast", "ceiling-section", "ceiling-body",
-    "ceiling-unavailable", "ceiling-max", "ceiling-msg",
+    "ceiling-unavailable", "ceiling-max", "ceiling-msg", "plan-editor", "plan-check", "plan-corners",
 )
 
 
@@ -242,7 +267,7 @@ def test_status_ids_are_present():
 
 
 def test_page_uses_exactly_the_pinned_socket_events_and_rest_calls():
-    code = PAGE_RAW + JS
+    code = PAGE_RAW + JS + MAP_JS
     assert _emitted(code) == EMITTED
     assert _listened(code) == LISTENED
     assert _fetched(code) == FETCHED

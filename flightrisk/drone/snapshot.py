@@ -257,6 +257,14 @@ def legacy_telemetry_payload(snapshot: TelemetrySnapshot, include_connected: boo
     }
     if include_connected:
         payload["is_connected"] = snapshot.connected
+    # A drone with GPS (MAVLink) also reports where it is, so the map can draw
+    # it at its real position and offer it as the plan's anchor. Absent
+    # readings are left out rather than sent as 0.
+    if snapshot.latitude_deg is not None and snapshot.longitude_deg is not None:
+        payload["latitude"] = snapshot.latitude_deg.value
+        payload["longitude"] = snapshot.longitude_deg.value
+        if snapshot.heading_deg is not None:
+            payload["heading"] = snapshot.heading_deg.value
     return payload
 
 

@@ -28,7 +28,8 @@ def test_plan_and_start_buttons_emit_events():
     assert re.search(r'<button[^>]*id="fleet-start"', INDEX)
     assert "on('fleet-plan', 'click', planFleet);" in JS
     assert "on('fleet-start', 'click', startFleet);" in JS
-    assert "socket.emit('plan_fleet')" in _function_body("planFleet")
+    # Plan sends the plan shown on the map, or nothing extra when the map editor is not loaded.
+    assert "socket.emit('plan_fleet', plan ? { plan: plan } : {})" in _function_body("planFleet")
     assert "socket.emit('start_fleet')" in _function_body("startFleet")
     assert 'id="fleet-error"' in INDEX
     errors = JS[JS.index("socket.on('error'"):]

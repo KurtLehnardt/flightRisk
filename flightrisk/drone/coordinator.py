@@ -131,9 +131,25 @@ class ZoneAssignment:
     h_cm: int
     alt_cm: int
     lanes: tuple[dict, ...]
+    # Where the drone takes off on the shared grid, when that is not the
+    # zone's near-left corner (a plan edited on the map). The drone's lanes
+    # and reported position are relative to this point. The zone carries it
+    # as ``takeoff_x_cm``/``takeoff_y_cm``, which the fleet protocol allows.
+    takeoff_x_cm: int | None = None
+    takeoff_y_cm: int | None = None
+
+    @property
+    def origin(self) -> tuple[int, int]:
+        """The takeoff point on the shared grid: the explicit one, else the zone corner."""
+        if self.takeoff_x_cm is not None and self.takeoff_y_cm is not None:
+            return self.takeoff_x_cm, self.takeoff_y_cm
+        return self.x_cm, self.y_cm
 
     def zone_dict(self) -> dict:
-        return {"x_cm": self.x_cm, "y_cm": self.y_cm, "w_cm": self.w_cm, "h_cm": self.h_cm}
+        zone = {"x_cm": self.x_cm, "y_cm": self.y_cm, "w_cm": self.w_cm, "h_cm": self.h_cm}
+        if self.takeoff_x_cm is not None and self.takeoff_y_cm is not None:
+            zone["takeoff_x_cm"], zone["takeoff_y_cm"] = self.takeoff_x_cm, self.takeoff_y_cm
+        return zone
 
     def to_dict(self) -> dict:
         return {
@@ -153,6 +169,14 @@ class FleetPlan:
     depth_cm: int
     gap_cm: int
     strip_cm: int
+    # A plan made on the map (``plan_zones``): the search area's near-left
+    # corner on the shared grid, the rectangles of the area no camera sees
+    # (``uncovered`` entries of ``kind: "area"``) and the map's own details
+    # (pattern, drawn and generated paths, coverage), shown by the browser.
+    grid_x_cm: int = 0
+    grid_y_cm: int = 0
+    uncovered_areas: tuple[dict, ...] = ()
+    details: Mapping[str, Any] | None = None
 
     def zone_for(self, drone_id: str) -> ZoneAssignment | None:
         for zone in self.zones:
@@ -162,12 +186,15 @@ class FleetPlan:
 
     def to_dict(self) -> dict:
         """Shape of the dashboard ``fleet_plan`` event."""
-        return {
+        out = {
             "zones": [zone.to_dict() for zone in self.zones],
-            "grid": {"x_cm": 0, "y_cm": 0, "w_cm": self.width_cm, "h_cm": self.depth_cm},
+            "grid": {"x_cm": self.grid_x_cm, "y_cm": self.grid_y_cm, "w_cm": self.width_cm, "h_cm": self.depth_cm},
             "gap_cm": self.gap_cm,
             "strip_cm": self.strip_cm,
         }
+        if self.details is not None:
+            out["details"] = dict(self.details)
+        return out
 
 
 @dataclass(frozen=True)
@@ -560,7 +587,7 @@ class FleetCoordinator:
                 for chunk in retask.chunks
                 if chunk.status == "failed"
                 for entry in chunk.lane_entries()
-            ]
+            ] + [dict(area) for area in self._plan.uncovered_areas]
             return out
 
     def detections(self) -> list[FleetDetection]:
@@ -641,16 +668,7 @@ class FleetCoordinator:
         drone's telemetry from the last ``TELEMETRY_FRESH_S`` seconds says it
         is flying, because replacing a flying drone's lanes is unsafe.
         """
-        with self._lock:
-            now = self._clock()
-            flying = [
-                drone_id for drone_id, state in self._drones.items()
-                if state.telemetry_at is not None
-                and now - state.telemetry_at <= TELEMETRY_FRESH_S
-                and (state.telemetry or {}).get("is_flying") is True
-            ]
-        if flying:
-            raise RuntimeError(f"cannot plan while drones are flying: {', '.join(flying)}")
+        self._refuse_plan_while_flying()
         drone_ids = list(self._links)
         n = len(drone_ids)
         zone_w = (self._width_cm - self._zone_gap_cm * (n - 1)) // n
@@ -685,7 +703,65 @@ class FleetCoordinator:
             gap_cm=self._zone_gap_cm,
             strip_cm=self._strip_cm,
         )
+        return self._install_plan(plan)
 
+    def plan_zones(
+        self,
+        zones: tuple[ZoneAssignment, ...] | list[ZoneAssignment],
+        *,
+        grid_cm: tuple[int, int, int, int],
+        gap_cm: int,
+        strip_cm: int,
+        uncovered_areas: tuple[dict, ...] | list[dict] = (),
+        details: Mapping[str, Any] | None = None,
+    ) -> FleetPlan:
+        """Install zones made elsewhere (a plan built on the map) and send their ``assign_lanes``.
+
+        The caller has already checked the zones (``flightrisk.drone.plan_edit``).
+        There must be exactly one zone per link. ``grid_cm`` is the search
+        area ``(x, y, w, h)`` on the shared grid. Otherwise this behaves like
+        ``plan()``: it is refused while a drone flies, starts a new mission
+        and sends each drone its lanes.
+        """
+        self._refuse_plan_while_flying()
+        zones = tuple(zones)
+        ids = [zone.drone_id for zone in zones]
+        if sorted(ids) != sorted(self._links) or len(set(ids)) != len(ids):
+            raise ValueError(f"the zones must cover exactly the fleet's drones {sorted(self._links)}, got {ids}")
+        x, y, w, h = (int(v) for v in grid_cm)
+        plan = FleetPlan(
+            zones=zones,
+            width_cm=w,
+            depth_cm=h,
+            gap_cm=int(gap_cm),
+            strip_cm=int(strip_cm),
+            grid_x_cm=x,
+            grid_y_cm=y,
+            uncovered_areas=tuple(dict(area) for area in uncovered_areas),
+            details=details,
+        )
+        return self._install_plan(plan)
+
+    def zone_alt_cm(self, drone_id: str, index: int) -> int:
+        """The altitude slot ``plan()`` would give *drone_id* as zone *index*."""
+        return self._zone_alt_cm(drone_id, index)
+
+    def _refuse_plan_while_flying(self) -> None:
+        """Raise ``RuntimeError`` while fresh telemetry says a drone flies."""
+        with self._lock:
+            now = self._clock()
+            flying = [
+                drone_id for drone_id, state in self._drones.items()
+                if state.telemetry_at is not None
+                and now - state.telemetry_at <= TELEMETRY_FRESH_S
+                and (state.telemetry or {}).get("is_flying") is True
+            ]
+        if flying:
+            raise RuntimeError(f"cannot plan while drones are flying: {', '.join(flying)}")
+
+    def _install_plan(self, plan: FleetPlan) -> FleetPlan:
+        """Make *plan* the mission and send every drone its ``assign_lanes``."""
+        zones = plan.zones
         messages = {}
         with self._lock:
             self._plan = plan
@@ -740,7 +816,7 @@ class FleetCoordinator:
     def _origin(state: _DroneState) -> tuple[int, int]:
         if state.zone is None:
             return 0, 0
-        return state.zone.x_cm, state.zone.y_cm
+        return state.zone.origin
 
     # ------------------------------------------------------------------
     # Clock sync

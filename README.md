@@ -209,6 +209,8 @@ To start the same setups from a window instead of these commands (pick the layou
 
 The demo needs no internet connection. The detector and appearance matcher run on the laptops, `--no-llm` starts no reasoning model, and station mode needs a local router but not an uplink. Install the packages and model files once while online, before the event.
 
+The map's satellite and topographic imagery comes from the internet unless it was cached beforehand. While still online, cache the field site with `venv/bin/python scripts/cache_map_tiles.py --provider usgs-imagery --center LAT,LON --radius-m 300 --min-zoom 14 --max-zoom 16` (and again with `--provider usgs-topo`); the dashboard then serves those tiles offline. The plan editor, the anchor and the cache tool are described in [docs/map-and-plan-editing.md](docs/map-and-plan-editing.md).
+
 ### Privacy defaults
 
 - The demo matches on appearance only (`FLIGHTRISK_APPEARANCE_ONLY=1`), on the ground station and on the edge: faces are not resolvable at search altitude, the face model is never loaded, and no face embeddings are computed or sent. For flight sources (`tello`, `fake`) the edge is appearance-only by default; face matching on the edge needs `--with-face` or `FLIGHTRISK_APPEARANCE_ONLY=0`.
@@ -234,6 +236,7 @@ The fine-tuned aerial person detector (`models/heridal_yolo11s.pt`) is not in gi
 - [docs/fleet-setup.md](docs/fleet-setup.md): two-drone network setup
 - [docs/ui-design.md](docs/ui-design.md): the dashboard layout and its safety rules (the earlier layout is kept on the `legacy-ui` branch)
 - [docs/launcher.md](docs/launcher.md): the launcher window that starts the ground station, dashboard and edges
+- [docs/map-and-plan-editing.md](docs/map-and-plan-editing.md): editing the search plan on the map, map imagery and the offline tile cache
 - [docs/installer.md](docs/installer.md): the per-user installers, FlightRisk.app, the disk image and the Windows Setup
 - [docs/altitude-benchmark.md](docs/altitude-benchmark.md): altitude benchmark and fine-tuning
 - [docs/licensing.md](docs/licensing.md): licensing
