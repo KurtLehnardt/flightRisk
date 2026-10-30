@@ -1362,13 +1362,37 @@ const socket = io();
 
     // ========== FLEET EVENTS, UNCOVERED LANES ==========
     let bannerTimer = null;
-    function showFleetBanner(text) {
+    function showFleetBanner(text, holdMs) {
         const b = $('fleet-banner');
         b.textContent = text;
         b.hidden = false;
         clearTimeout(bannerTimer);
-        bannerTimer = setTimeout(() => { b.hidden = true; }, 8000);
+        bannerTimer = setTimeout(() => { b.hidden = true; }, holdMs || 8000);
     }
+    // LAND ALL feedback. These helpers only choose text; they never change what LAND ALL sends. A failed LAND ALL
+    // must never read as success, so it stays on screen much longer than a normal banner.
+    // BEGIN land-all-feedback
+    const LAND_ALL_FAILED_TEXT = 'LAND ALL FAILED: no drone was reached. Land each drone by hand '
+        + '(per-drone Land, or the drone\'s own controls).';
+    const LAND_ALL_FAILURE_HOLD_MS = 60000;
+    // The ack is {coordinator, transport, local, reached_any}: a count per path, null for a path that is not
+    // configured or did not finish, 0 for a path that reached no drone. Returns null when nothing needs saying.
+    function landAllAckFeedback(ack) {
+        if (!ack || typeof ack !== 'object') return null;
+        if (ack.reached_any !== true) return { failed: true, text: LAND_ALL_FAILED_TEXT };
+        const none = ['coordinator', 'transport', 'local'].filter((k) => ack[k] === 0);
+        if (!none.length) return null;
+        const got = ['coordinator', 'transport', 'local'].filter((k) => typeof ack[k] === 'number' && ack[k] > 0)
+            .map((k) => k + ' ' + ack[k]);
+        return { failed: false, text: 'LAND ALL reached only some drones. Reached: ' + got.join(', ')
+            + '. Reached none: ' + none.join(', ') + '. Land the rest by hand.' };
+    }
+    function landAllEventFeedback(ev) {
+        const detail = String((ev && ev.detail) || '');
+        if (/^failed/i.test(detail)) return { failed: true, text: LAND_ALL_FAILED_TEXT + ' ' + detail };
+        return null;
+    }
+    // END land-all-feedback
     // Re-tasked lanes that no drone has accepted stay listed until a retask event reports them accepted or a new
     // plan replaces the mission, so a gap in the search is never silent.
     let uncoveredLanes = {};
@@ -1414,7 +1438,11 @@ const socket = io();
             renderUncovered();
             showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
         } else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
-        else if (kind === 'land_all') showFleetBanner('LAND ALL sent');
+        else if (kind === 'land_all') {
+            const fb = landAllEventFeedback(ev);
+            if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+            else showFleetBanner('LAND ALL sent');
+        }
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
         else if (kind === 'plan_invalidated') {
             showFleetBanner('PLAN EDITED: press Plan search again');
@@ -1527,6 +1555,10 @@ const socket = io();
         showFleetBanner('LAND ALL sent');
     }
     on('land-all', 'click', landAll);
+    socket.on('land_all_ack', (ack) => {
+        const fb = landAllAckFeedback(ack);
+        if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+    });
 
     // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight control is off and
     // whichever section is collapsed. Outside editable fields Shift+L alone is enough. Inside an editable field (a
