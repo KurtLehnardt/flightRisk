@@ -49,32 +49,48 @@ sealed class ClientCommand(
         override fun payload(): JsonObject? = null
     }
 
-    /** Land one drone: `drone_command {command: "land", drone_id}`. Never gated by the drone's state. */
-    data class LandDrone(val droneId: String) : ClientCommand("drone_command") {
-        init {
-            require(droneId.isNotBlank()) { "drone id must not be blank" }
-        }
-
+    /**
+     * Land one drone: `drone_command {command: "land", drone_id}`. Never gated
+     * by the drone's state. Build it with [ClientCommand.landDrone], which
+     * refuses an empty or blank id (the server would otherwise land the drone
+     * under manual control instead).
+     */
+    class LandDrone private constructor(val droneId: String) : ClientCommand("drone_command") {
         override fun payload(): JsonObject = buildJsonObject {
             put("command", "land")
             put("drone_id", droneId)
+        }
+
+        override fun equals(other: Any?): Boolean = other is LandDrone && other.droneId == droneId
+        override fun hashCode(): Int = droneId.hashCode()
+        override fun toString(): String = "LandDrone(droneId=$droneId)"
+
+        internal companion object {
+            fun of(droneId: String): LandDrone? = if (droneId.isBlank()) null else LandDrone(droneId)
         }
     }
 
     /**
      * Set one drone's detection profile. An empty [profile] makes the drone
      * follow the fleet default. Offer it only while `controls_enabled` is
-     * true and the drone's `supported` is true.
+     * true and the drone's `supported` is true. Build it with
+     * [ClientCommand.setDetectionProfile].
      */
-    data class SetDetectionProfile(val droneId: String, val profile: String) :
+    class SetDetectionProfile private constructor(val droneId: String, val profile: String) :
         ClientCommand("set_detection_profile") {
-        init {
-            require(droneId.isNotBlank()) { "drone id must not be blank" }
-        }
-
         override fun payload(): JsonObject = buildJsonObject {
             put("drone_id", droneId)
             put("profile", profile)
+        }
+
+        override fun equals(other: Any?): Boolean =
+            other is SetDetectionProfile && other.droneId == droneId && other.profile == profile
+        override fun hashCode(): Int = 31 * droneId.hashCode() + profile.hashCode()
+        override fun toString(): String = "SetDetectionProfile(droneId=$droneId, profile=$profile)"
+
+        internal companion object {
+            fun of(droneId: String, profile: String): SetDetectionProfile? =
+                if (droneId.isBlank()) null else SetDetectionProfile(droneId, profile)
         }
     }
 
@@ -87,16 +103,20 @@ sealed class ClientCommand(
 
     /**
      * Resume the search of a held drone nobody controls. Offer it only when
-     * the drone's `control_mode` is `"held"` and `fleet_status.manual_controlled`
-     * is null (see [canResumeSearch]).
+     * [canResumeSearch] is true. Build it with [ClientCommand.resumeHeldDrone],
+     * which refuses an empty or blank id.
      */
-    data class ManualResumeSearch(val droneId: String) : ClientCommand("manual_resume_search") {
-        init {
-            require(droneId.isNotBlank()) { "drone id must not be blank" }
-        }
-
+    class ManualResumeSearch private constructor(val droneId: String) : ClientCommand("manual_resume_search") {
         override fun payload(): JsonObject = buildJsonObject {
             put("drone_id", droneId)
+        }
+
+        override fun equals(other: Any?): Boolean = other is ManualResumeSearch && other.droneId == droneId
+        override fun hashCode(): Int = droneId.hashCode()
+        override fun toString(): String = "ManualResumeSearch(droneId=$droneId)"
+
+        internal companion object {
+            fun of(droneId: String): ManualResumeSearch? = if (droneId.isBlank()) null else ManualResumeSearch(droneId)
         }
     }
 
@@ -116,14 +136,29 @@ sealed class ClientCommand(
         val STATE_REQUESTS: List<ClientCommand>
             get() = listOf(GetFleetStatus, GetDetectionProfiles, GetCeilingSettings, GetReasoningProvider, GetManualStatus)
 
+        /**
+         * Land the drone [droneId], or null when the id is empty or blank.
+         * A null result means "do not send"; it never throws, so a Land tap
+         * cannot crash the app.
+         */
+        fun landDrone(droneId: String): LandDrone? = LandDrone.of(droneId)
+
+        /** Resume the search of the held drone [droneId], or null when the id is empty or blank. */
+        fun resumeHeldDrone(droneId: String): ManualResumeSearch? = ManualResumeSearch.of(droneId)
+
+        /** Set [droneId]'s detection profile, or null when the id is empty or blank. An empty [profile] is allowed. */
+        fun setDetectionProfile(droneId: String, profile: String): SetDetectionProfile? =
+            SetDetectionProfile.of(droneId, profile)
+
         /** True when [event] is in the allow-list; a networking layer can assert this before emitting. */
         fun isAllowed(event: String): Boolean = event in ALLOWED_EVENTS
 
         /**
          * Whether Resume search may be offered for [drone]: its `control_mode`
-         * is `"held"` and nobody controls a drone manually.
+         * is `"held"` and nobody controls a drone manually (`manual_controlled`
+         * null or empty, as the dashboard reads it).
          */
         fun canResumeSearch(drone: ControlFields, manualControlled: String?): Boolean =
-            drone.controlMode == ControlMode.Held && manualControlled == null
+            drone.controlMode == ControlMode.Held && manualControlled.isNullOrEmpty()
     }
 }

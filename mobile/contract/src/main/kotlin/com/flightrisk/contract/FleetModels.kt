@@ -138,17 +138,20 @@ data class FleetDrone(
     override val orphanLandInS: Double?,
 ) : ControlFields {
     /**
-     * This entry with a `manual_status` entry merged over it, as the dashboard
-     * does with `Object.assign` when `manual_status` arrives: the manual
-     * entry's fields replace this drone's.
+     * This entry with the keys a `manual_status` entry carries laid over it,
+     * as the dashboard's `Object.assign` does. Only [DroneStateReducer] calls
+     * it, so that events are applied in arrival order (newest wins).
      */
-    fun mergedWith(manual: ManualDroneStatus): FleetDrone = copy(
-        controlMode = manual.controlMode,
-        edgeControlMode = manual.edgeControlMode,
-        manualSupported = manual.manualSupported,
-        manualLast = manual.manualLast,
-        orphanLandInS = manual.orphanLandInS,
-    )
+    internal fun overlaidWith(manual: ManualDroneStatus): FleetDrone {
+        val keys = manual.carriedKeys
+        return copy(
+            controlMode = if (ManualDroneStatus.KEY_CONTROL_MODE in keys) manual.controlMode else controlMode,
+            edgeControlMode = if (ManualDroneStatus.KEY_EDGE_CONTROL_MODE in keys) manual.edgeControlMode else edgeControlMode,
+            manualSupported = if (ManualDroneStatus.KEY_MANUAL_SUPPORTED in keys) manual.manualSupported else manualSupported,
+            manualLast = if (ManualDroneStatus.KEY_MANUAL_LAST in keys) manual.manualLast else manualLast,
+            orphanLandInS = if (ManualDroneStatus.KEY_ORPHAN_LAND_IN_S in keys) manual.orphanLandInS else orphanLandInS,
+        )
+    }
 
     companion object {
         fun fromJson(id: String, o: JsonObject): FleetDrone = FleetDrone(

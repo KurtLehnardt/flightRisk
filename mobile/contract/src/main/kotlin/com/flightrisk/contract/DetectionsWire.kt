@@ -67,17 +67,25 @@ object DetectionsWire {
         /**
          * The message fits. [json] is compact JSON of [bytes] UTF-8 bytes;
          * [droppedCrops] crops and, when [droppedThumbnail], the thumbnail
-         * were removed to fit.
+         * were removed to fit. [droppedDetections] detections were left out
+         * because their box or confidence was not a finite number, and
+         * [droppedEmbeddings] embeddings were sent as null because they held
+         * a value that is not finite (JSON cannot carry NaN or infinity).
          */
         data class Ok(
             val json: String,
             val bytes: Int,
             val droppedCrops: Int,
             val droppedThumbnail: Boolean,
+            val droppedDetections: Int = 0,
+            val droppedEmbeddings: Int = 0,
         ) : EncodeResult
 
         /** The message is over [MAX_BYTES] even without crops and thumbnail; do not send it. */
         data class TooLarge(val bytes: Int) : EncodeResult
+
+        /** The message itself cannot be sent (for example a timestamp that is not finite); [problem] says why. */
+        data class Invalid(val problem: String) : EncodeResult
     }
 
     /**
@@ -89,12 +97,54 @@ object DetectionsWire {
      * - `drone_id`, `detection_profile` and `face_model` are never written.
      * - Above [maxBytes], crops are dropped first (largest first), then the
      *   thumbnail; if it still does not fit, the result is [EncodeResult.TooLarge].
+     * - A detection whose box or confidence is not finite is left out, and an
+     *   embedding holding a value that is not finite is sent as null. A
+     *   timestamp that is not finite gives [EncodeResult.Invalid].
+     *
+     * It never throws.
      */
     fun encode(
         message: DetectionsMessage,
         faceMatchingEnabled: Boolean = false,
         streamVideo: Boolean = true,
         maxBytes: Int = MAX_BYTES,
+    ): EncodeResult {
+        if (!message.timestamp.isFinite()) return EncodeResult.Invalid("timestamp is not a finite number")
+        val sanitized = sanitize(message)
+        return encodeFinite(sanitized.message, faceMatchingEnabled, streamVideo, maxBytes)
+            .let { r ->
+                if (r is EncodeResult.Ok) {
+                    r.copy(droppedDetections = sanitized.droppedDetections, droppedEmbeddings = sanitized.droppedEmbeddings)
+                } else {
+                    r
+                }
+            }
+    }
+
+    private class Sanitized(val message: DetectionsMessage, val droppedDetections: Int, val droppedEmbeddings: Int)
+
+    private fun sanitize(message: DetectionsMessage): Sanitized {
+        var droppedDetections = 0
+        var droppedEmbeddings = 0
+        val kept = message.detections.mapNotNull { d ->
+            if (!d.confidence.isFinite() || d.bbox.any { !it.isFinite() }) {
+                droppedDetections++
+                return@mapNotNull null
+            }
+            val reid = d.reidEmbedding?.takeIf { e -> e.all { it.isFinite() } }
+            val face = d.faceEmbedding?.takeIf { e -> e.all { it.isFinite() } }
+            if (reid == null && d.reidEmbedding != null) droppedEmbeddings++
+            if (face == null && d.faceEmbedding != null) droppedEmbeddings++
+            if (reid === d.reidEmbedding && face === d.faceEmbedding) d else d.copy(reidEmbedding = reid, faceEmbedding = face)
+        }
+        return Sanitized(message.copy(detections = kept), droppedDetections, droppedEmbeddings)
+    }
+
+    private fun encodeFinite(
+        message: DetectionsMessage,
+        faceMatchingEnabled: Boolean,
+        streamVideo: Boolean,
+        maxBytes: Int,
     ): EncodeResult {
         var thumbnail = if (streamVideo) message.thumbnail else null
         val crops = message.detections.map { it.crop }.toMutableList()
@@ -126,17 +176,6 @@ object DetectionsWire {
         else EncodeResult.TooLarge(size)
     }
 
-    /** The message as a JSON object, before any size cap. */
-    fun toJsonObject(
-        message: DetectionsMessage,
-        faceMatchingEnabled: Boolean = false,
-        streamVideo: Boolean = true,
-    ): JsonObject = toJson(
-        message,
-        if (streamVideo) message.thumbnail else null,
-        message.detections.map { it.crop },
-        faceMatchingEnabled,
-    )
 
     private fun toJson(
         message: DetectionsMessage,
@@ -211,9 +250,13 @@ object DetectionsWire {
         values.forEach { add(wireNumber(it)) }
     }
 
-    /** Whole values are written without a fraction (`512`, not `512.0`), as Python writes ints. */
+    /**
+     * Whole values are written without a fraction (`512`, not `512.0`), as
+     * Python writes ints. Callers pass finite values only ([sanitize]); a
+     * value that is not finite is written as null rather than throwing.
+     */
     private fun wireNumber(value: Double): JsonElement {
-        require(value.isFinite()) { "JSON cannot carry $value" }
+        if (!value.isFinite()) return JsonNull
         return if (value == Math.floor(value) && Math.abs(value) < 9.007199254740991E15) {
             JsonPrimitive(value.toLong())
         } else {

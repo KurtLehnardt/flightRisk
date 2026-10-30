@@ -126,6 +126,41 @@ class DetectionsWireTest {
     }
 
     @Test
+    fun nonFiniteValuesNeverThrow() {
+        val good = det("A".repeat(10))
+        val m = DetectionsMessage(
+            timestamp = 1.0, frameId = 1, frameWidth = 640, frameHeight = 480, thumbnail = null,
+            detections = listOf(
+                good,
+                good.copy(confidence = Double.NaN),
+                good.copy(bbox = listOf(1.0, Double.POSITIVE_INFINITY, 3.0, 4.0)),
+                good.copy(reidEmbedding = listOf(0.1, Double.NaN), faceEmbedding = listOf(Double.NEGATIVE_INFINITY)),
+            ),
+        )
+        val r = ok(DetectionsWire.encode(m, faceMatchingEnabled = true))
+        assertEquals(2, r.droppedDetections)
+        assertEquals(2, r.droppedEmbeddings)
+        val dets = parse(r.json)["detections"] as JsonArray
+        assertEquals(2, dets.size)
+        assertEquals(JsonNull, dets[1].jsonObject["reid_embedding"])
+        assertEquals(JsonNull, dets[1].jsonObject["face_embedding"])
+        assertFalse(r.json.contains("NaN"))
+        assertFalse(r.json.contains("Infinity"))
+
+        val badTime = DetectionsWire.encode(m.copy(timestamp = Double.NaN))
+        assertTrue(badTime is DetectionsWire.EncodeResult.Invalid)
+    }
+
+    @Test
+    fun slashesInImagesAreNotEscaped() {
+        val m = DetectionsMessage(1.0, 1, 640, 480, "ab/cd+==", listOf(det("x/y")))
+        val json = ok(DetectionsWire.encode(m)).json
+        assertTrue(json.contains("\"thumbnail\":\"ab/cd+==\""))
+        assertTrue(json.contains("\"crop\":\"x/y\""))
+        assertFalse(json.contains("\\/"))
+    }
+
+    @Test
     fun base64MatchesPython() {
         val crop = (fixture("detections_appearance_only")["detections"] as JsonArray)[0].jsonObject["crop"].stringValue()!!
         val bytes = Base64.getDecoder().decode(crop)

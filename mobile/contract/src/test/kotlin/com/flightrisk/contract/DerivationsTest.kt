@@ -139,11 +139,11 @@ class DerivationsTest {
     }
 
     @Test
-    fun manualStatusMergesOverFleetStatus() {
+    fun manualStatusIsMergedOnlyThroughTheReducer() {
         val s = fleet("all_connected")
         val manual = Fixtures.eventAs<ManualStatus>("manual_status.json", "held_orphan_countdown")
-        val mode = ControlModeDisplay.of(s.drones.getValue("drone-2"), manual.drones["drone-2"], manual.controlled)
-        assertEquals("HELD: auto-landing in 120 s, no controller", mode.text)
+        val board = DroneStateReducer.reduceAll(DroneStateReducer.INITIAL, listOf(s, manual))
+        assertEquals("HELD: auto-landing in 120 s, no controller", board.controlMode("drone-2")!!.text)
         // A ManualDroneStatus can be displayed on its own too.
         assertEquals(
             "HELD: auto-landing in 120 s, no controller",
@@ -152,11 +152,28 @@ class DerivationsTest {
     }
 
     @Test
+    fun fractionalCountdownPrintsAsTheDashboardDoes() {
+        val d = droneWith("all_connected", "drone-1", "orphan_land_in_s" to 29.6, "control_mode" to "held")
+        assertEquals("HELD: auto-landing in 29.6 s, no controller", ControlModeDisplay.of(d, null).text)
+    }
+
+    @Test
+    fun legacyDronesShowOnlyFlyingOrOnTheGround() {
+        val legacy = Fixtures.eventAs<FleetStatus.Legacy>("fleet_status.json", "non_fleet_local_drone")
+        assertEquals("On the ground", ControlModeDisplay.of(legacy.drones.getValue("drone-1")).text)
+        val flying = LegacyDrone("x", null, null, null, null, isFlying = true, isConnected = true)
+        assertEquals("Flying", ControlModeDisplay.of(flying).text)
+        assertEquals("", ControlModeDisplay.of(flying.copy(isFlying = null)).text)
+    }
+
+    @Test
     fun resumeSearchOnlyForAHeldDroneNobodyControls() {
         val held = drone("one_held_orphan_countdown", "drone-2")
         assertTrue(ClientCommand.canResumeSearch(held, null))
         assertFalse(ClientCommand.canResumeSearch(held, "drone-1"))
         assertFalse(ClientCommand.canResumeSearch(drone("one_held_orphan_countdown", "drone-1"), null))
+        // The dashboard reads an empty manual_controlled as nobody.
+        assertTrue(ClientCommand.canResumeSearch(held, ""))
     }
 
     @Test

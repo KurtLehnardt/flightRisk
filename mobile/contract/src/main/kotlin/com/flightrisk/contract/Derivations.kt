@@ -89,6 +89,10 @@ sealed interface ControlModeDisplay {
          * The display for [drone] (with id [droneId]) when [manualControlled]
          * is the drone the laptop controls (`fleet_status.manual_controlled` or
          * `manual_status.controlled`), or null.
+         *
+         * To combine `fleet_status` and `manual_status`, do not merge entries
+         * here: feed both events through [DroneStateReducer] in arrival order
+         * and use [DroneRecord.controlMode] or [DroneBoard.controlMode].
          */
         fun of(droneId: String?, drone: ControlFields, manualControlled: String?): ControlModeDisplay {
             val landIn = drone.orphanLandInS
@@ -104,10 +108,10 @@ sealed interface ControlModeDisplay {
             of(drone.id, drone, manualControlled)
 
         /**
-         * The display for a fleet drone with its `manual_status` entry merged
-         * over it, as the dashboard merges the two events.
+         * The display for a drone of a ground without a fleet: it has no
+         * control fields, so only rule 5 applies ("Flying", "On the ground",
+         * or nothing), as the dashboard and the iOS app show it.
          */
-        fun of(drone: FleetDrone, manual: ManualDroneStatus?, manualControlled: String?): ControlModeDisplay =
-            of(drone.id, if (manual != null) drone.mergedWith(manual) else drone, manualControlled)
+        fun of(drone: LegacyDrone): ControlModeDisplay = Autonomous(drone.isFlying)
     }
 }

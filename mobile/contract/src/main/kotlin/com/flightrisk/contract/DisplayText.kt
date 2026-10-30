@@ -11,14 +11,30 @@ object DisplayText {
     /** Shown for a value that was not reported. Never show zero for it. */
     const val DASH = "--"
 
-    /** `land_all_ack` with `reached_any == false` (the ground also broadcasts it as `error`). */
+    /**
+     * The ground's own `error` message when LAND ALL reached no drone. The
+     * phone shows [LAND_ALL_FAILED_NO_DRONE] for the ack; this constant lets a
+     * caller recognise the matching `error` toast.
+     */
     const val LAND_ALL_REACHED_NO_DRONE = "LAND ALL reached no drone. Land every drone with its local control now."
 
-    /** The dashboard's banner after LAND ALL is emitted, and for a `land_all` fleet event. */
+    /** The instruction that ends every LAND ALL failure text (the same on iOS and Android). */
+    const val LAND_BY_HAND = "Land each drone by hand (per-drone Land, or the drone's own controls)."
+
+    /** `land_all_ack` with `reached_any` not `true` (false, absent or not a boolean). */
+    const val LAND_ALL_FAILED_NO_DRONE = "LAND ALL FAILED: no drone was reached. $LAND_BY_HAND"
+
+    /** A successful `land_all_ack` that reports no per-path counts. */
+    const val LAND_ALL_REACHED_THE_DRONES = "LAND ALL reached the drones"
+
+    /** The dashboard's banner after LAND ALL is emitted, and for a successful `land_all` fleet event. */
     const val LAND_ALL_SENT = "LAND ALL sent"
 
+    /** Shown from the LAND ALL tap until `land_all_ack` arrives. */
+    const val LAND_ALL_SENDING = "LAND ALL sending\u2026"
+
     /** Shown while LAND ALL waits for its ack for more than [LAND_ALL_NO_REPLY_AFTER_MS]. */
-    const val LAND_ALL_NO_REPLY_YET = "LAND ALL: no reply yet"
+    const val LAND_ALL_NO_REPLY_YET = "LAND ALL: no reply from the ground yet. Check the connection."
 
     /** After this long without `land_all_ack`, show [LAND_ALL_NO_REPLY_YET] (docs/mobile-contract.md, rule 7). */
     const val LAND_ALL_NO_REPLY_AFTER_MS = 5_000L
@@ -67,7 +83,7 @@ object DisplayText {
                 "RETASK FAILED: " + (detail ?: event.droneId?.takeIf { it.isNotEmpty() } ?: "")
             is FleetEvent.Retask -> "RETASK:" + who(event.droneId) + (detail?.let { " $it" } ?: "")
             is FleetEvent.DroneLost -> "DRONE LOST:" + who(event.droneId)
-            is FleetEvent.LandAll -> LAND_ALL_SENT
+            is FleetEvent.LandAll -> if (event.failed) landAllFailed(event.detail ?: "") else LAND_ALL_SENT
             is FleetEvent.ProfileSwitchPending -> "WARNING: " + (detail ?: "detection profile switch pending")
             is FleetEvent.PlanInvalidated -> "PLAN EDITED: press Plan search again"
             is FleetEvent.Start -> event.kind
@@ -76,6 +92,16 @@ object DisplayText {
             is FleetEvent.Unknown -> event.kind.takeIf { it.isNotEmpty() }
         }
     }
+
+    /**
+     * The banner for a failed LAND ALL fleet event (`detail` starting with
+     * "failed", sent when the ground could not reach a link):
+     * "LAND ALL FAILED: <detail>. Land each drone by hand (...)".
+     */
+    fun landAllFailed(detail: String): String = "LAND ALL FAILED: $detail. $LAND_BY_HAND"
+
+    /** True for fleet events that report a failure the operator must act on (a failed LAND ALL). */
+    fun isFailure(event: FleetEvent): Boolean = event is FleetEvent.LandAll && event.failed
 
     /** True for the fleet events styled as refusals (`plan_refused`, `start_refused`). */
     fun isRefusal(event: FleetEvent): Boolean = event is FleetEvent.PlanRefused || event is FleetEvent.StartRefused
@@ -95,17 +121,19 @@ object DisplayText {
     }
 
     /**
-     * The result of LAND ALL: [LAND_ALL_REACHED_NO_DRONE] when no path
-     * reached a drone, otherwise the counts per path that exists, for example
-     * "LAND ALL reached: coordinator 2, transport 2".
+     * The result of LAND ALL: [LAND_ALL_FAILED_NO_DRONE] when `reached_any`
+     * is not `true`, otherwise the counts per path that exists, for example
+     * "LAND ALL reached: coordinator 2, transport 2", or
+     * [LAND_ALL_REACHED_THE_DRONES] when the ack reports no counts.
      */
     fun landAllResult(ack: LandAllAck): String {
-        if (ack.failed) return LAND_ALL_REACHED_NO_DRONE
+        if (ack.failed) return LAND_ALL_FAILED_NO_DRONE
         val parts = listOfNotNull(
             ack.coordinator?.let { "coordinator $it" },
             ack.transport?.let { "transport $it" },
             ack.local?.let { "local $it" },
         )
+        if (parts.isEmpty()) return LAND_ALL_REACHED_THE_DRONES
         return "LAND ALL reached: " + parts.joinToString(", ")
     }
 

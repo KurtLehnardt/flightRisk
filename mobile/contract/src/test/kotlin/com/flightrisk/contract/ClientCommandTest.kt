@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,10 +26,10 @@ class ClientCommandTest {
         ClientCommand.GetReasoningProvider,
         ClientCommand.GetManualStatus,
         ClientCommand.LandAll,
-        ClientCommand.LandDrone("drone-1"),
-        ClientCommand.SetDetectionProfile("drone-1", "top_down"),
+        ClientCommand.landDrone("drone-1")!!,
+        ClientCommand.setDetectionProfile("drone-1", "top_down")!!,
         ClientCommand.SetFleetDetectionProfile("top_down"),
-        ClientCommand.ManualResumeSearch("drone-2"),
+        ClientCommand.resumeHeldDrone("drone-2")!!,
     )
 
     private fun eventOf(c: ClientCommand): String = when (c) {
@@ -93,21 +94,33 @@ class ClientCommandTest {
     }
 
     @Test
-    fun emptyProfileIsAllowedAndBlankDroneIdsAreRejected() {
-        assertEquals("""{"drone_id":"drone-1","profile":""}""", ClientCommand.SetDetectionProfile("drone-1", "").payloadJson())
+    fun emptyProfileIsAllowedAndBlankDroneIdsAreRefusedWithoutThrowing() {
+        assertEquals("""{"drone_id":"drone-1","profile":""}""", ClientCommand.setDetectionProfile("drone-1", "")!!.payloadJson())
         assertEquals("""{"profile":""}""", ClientCommand.SetFleetDetectionProfile("").payloadJson())
-        for (build in listOf<() -> Unit>(
-            { ClientCommand.LandDrone(" ") },
-            { ClientCommand.SetDetectionProfile("", "top_down") },
-            { ClientCommand.ManualResumeSearch("") },
-        )) {
-            try {
-                build()
-                bad("a blank drone id was accepted")
-            } catch (expected: IllegalArgumentException) {
-                // expected
-            }
+        for (id in listOf("", " ", "\t\n")) {
+            assertNull("landDrone('$id')", ClientCommand.landDrone(id))
+            assertNull("resumeHeldDrone('$id')", ClientCommand.resumeHeldDrone(id))
+            assertNull("setDetectionProfile('$id')", ClientCommand.setDetectionProfile(id, "top_down"))
         }
+        assertEquals(ClientCommand.landDrone("drone-1"), ClientCommand.landDrone("drone-1"))
+        assertEquals("drone-1", ClientCommand.landDrone("drone-1")!!.droneId)
+    }
+
+    @Test
+    fun droneCommandConstructorsAreNotPublic() {
+        for (cls in listOf(ClientCommand.LandDrone::class.java, ClientCommand.ManualResumeSearch::class.java, ClientCommand.SetDetectionProfile::class.java)) {
+            // Kotlin adds a synthetic accessor for the companion's factory; source code cannot call it.
+            assertTrue(cls.name, cls.constructors.none { !it.isSynthetic })
+        }
+    }
+
+    @Test
+    fun slashesAreNotEscaped() {
+        assertEquals("""{"profile":"fast/x"}""", ClientCommand.SetFleetDetectionProfile("fast/x").payloadJson())
+        assertEquals(
+            """42["drone_command",{"command":"land","drone_id":"bay/1"}]""",
+            SocketIoFrames.event(ClientCommand.landDrone("bay/1")!!),
+        )
     }
 
     @Test

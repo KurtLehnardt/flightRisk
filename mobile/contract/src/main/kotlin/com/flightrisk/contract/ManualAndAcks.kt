@@ -17,7 +17,14 @@ data class ManualStatus(
     }
 }
 
-/** One drone of `manual_status`. It does not carry `is_flying`. */
+/**
+ * One drone of `manual_status`. It does not carry `is_flying`.
+ *
+ * [carriedKeys] lists which of the five manual keys the entry actually
+ * carried (a null value counts as carried, an absent key does not), so that
+ * [DroneStateReducer] replaces only those keys on the drone's record, as the
+ * dashboard's `Object.assign` does.
+ */
 data class ManualDroneStatus(
     val id: String,
     override val controlMode: ControlMode?,
@@ -25,17 +32,30 @@ data class ManualDroneStatus(
     val manualSupported: Boolean?,
     val manualLast: ManualLast?,
     override val orphanLandInS: Double?,
+    val carriedKeys: Set<String> = ALL_KEYS,
 ) : ControlFields {
     override val isFlying: Boolean? get() = null
 
     companion object {
+        const val KEY_CONTROL_MODE = "control_mode"
+        const val KEY_EDGE_CONTROL_MODE = "edge_control_mode"
+        const val KEY_MANUAL_SUPPORTED = "manual_supported"
+        const val KEY_MANUAL_LAST = "manual_last"
+        const val KEY_ORPHAN_LAND_IN_S = "orphan_land_in_s"
+
+        /** The keys a `manual_status` drone entry carries today (`manual_control.py`, `drone_status`). */
+        val ALL_KEYS: Set<String> = setOf(
+            KEY_CONTROL_MODE, KEY_EDGE_CONTROL_MODE, KEY_MANUAL_SUPPORTED, KEY_MANUAL_LAST, KEY_ORPHAN_LAND_IN_S,
+        )
+
         fun fromJson(id: String, o: JsonObject): ManualDroneStatus = ManualDroneStatus(
             id = id,
-            controlMode = o.str("control_mode")?.let(ControlMode::of),
-            edgeControlMode = o.str("edge_control_mode")?.let(ControlMode::of),
-            manualSupported = o.bool("manual_supported"),
-            manualLast = o.obj("manual_last")?.let(ManualLast::fromJson),
-            orphanLandInS = o.num("orphan_land_in_s"),
+            controlMode = o.str(KEY_CONTROL_MODE)?.let(ControlMode::of),
+            edgeControlMode = o.str(KEY_EDGE_CONTROL_MODE)?.let(ControlMode::of),
+            manualSupported = o.bool(KEY_MANUAL_SUPPORTED),
+            manualLast = o.obj(KEY_MANUAL_LAST)?.let(ManualLast::fromJson),
+            orphanLandInS = o.num(KEY_ORPHAN_LAND_IN_S),
+            carriedKeys = ALL_KEYS.filterTo(sortedSetOf()) { o.containsKey(it) },
         )
     }
 }

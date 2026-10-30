@@ -44,7 +44,7 @@ class SocketIoFramesTest {
         )
         assertEquals(
             cases.getValue("socketio_event_client_to_server_with_payload")["frame"].stringValue(),
-            SocketIoFrames.event(ClientCommand.LandDrone("drone-1")),
+            SocketIoFrames.event(ClientCommand.landDrone("drone-1")!!),
         )
         assertEquals(
             cases.getValue("socketio_event_with_ack_id")["frame"].stringValue(),

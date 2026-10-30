@@ -23,6 +23,9 @@ sealed interface FleetEvent : ServerEvent {
     /** LAND ALL was sent. `detail` is "sent to all" or "failed: <ids>". */
     data class LandAll(override val detail: String?) : FleetEvent {
         override val kind: String get() = LAND_ALL
+
+        /** True when the ground could not reach a link: `detail` starts with "failed". */
+        val failed: Boolean get() = detail?.startsWith("failed") == true
     }
 
     data class PlanInvalidated(override val detail: String?) : FleetEvent {

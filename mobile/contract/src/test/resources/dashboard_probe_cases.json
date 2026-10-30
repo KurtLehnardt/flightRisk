@@ -1,0 +1,410 @@
+{
+ "_meta": {
+  "description": "Dashboard probe cases from the PR #148 review. Each case is one drone 'd1': a fleet_status entry, the fleet_status manual_controlled value, and an optional manual_status payload, applied in 'order'. The expected values are what the dashboard's own connState and modeText (flightrisk/dashboard/static/ui/ui.js) print for the same events, recorded by running ui.js under Node. A phone shows 'MANUAL' where the dashboard shows 'MANUAL: under your control'."
+ },
+ "cases": [
+  {
+   "name": "empty",
+   "fleet_entry": {},
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "conn_true",
+   "fleet_entry": {
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "conn_false",
+   "fleet_entry": {
+    "connected": false
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "DOWN",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "lost_and_conn",
+   "fleet_entry": {
+    "lost": true,
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "LOST",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "lost_str",
+   "fleet_entry": {
+    "lost": "true",
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "conn_str_false",
+   "fleet_entry": {
+    "connected": "false"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "conn_num_1",
+   "fleet_entry": {
+    "connected": 1
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "conn_nulls",
+   "fleet_entry": {
+    "connected": null,
+    "lost": null
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "stale_link_age",
+   "fleet_entry": {
+    "connected": true,
+    "link_age_s": 999
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "orphan_0",
+   "fleet_entry": {
+    "orphan_land_in_s": 0,
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: auto-landing in 0 s, no controller"
+  },
+  {
+   "name": "orphan_neg",
+   "fleet_entry": {
+    "orphan_land_in_s": -5,
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: auto-landing in -5 s, no controller"
+  },
+  {
+   "name": "orphan_frac",
+   "fleet_entry": {
+    "orphan_land_in_s": 29.6,
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: auto-landing in 29.6 s, no controller"
+  },
+  {
+   "name": "orphan_str",
+   "fleet_entry": {
+    "orphan_land_in_s": "30",
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "orphan_bool",
+   "fleet_entry": {
+    "orphan_land_in_s": true,
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "orphan_null_held",
+   "fleet_entry": {
+    "orphan_land_in_s": null,
+    "control_mode": "held"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "edge_held_only",
+   "fleet_entry": {
+    "edge_control_mode": "held",
+    "is_flying": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "manual_mode",
+   "fleet_entry": {
+    "control_mode": "manual"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "MANUAL"
+  },
+  {
+   "name": "controlled_self",
+   "fleet_entry": {
+    "control_mode": "manual"
+   },
+   "manual_controlled": "d1",
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "MANUAL: under your control"
+  },
+  {
+   "name": "orphan_beats_ctrl",
+   "fleet_entry": {
+    "orphan_land_in_s": 120,
+    "control_mode": "manual"
+   },
+   "manual_controlled": "d1",
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: auto-landing in 120 s, no controller"
+  },
+  {
+   "name": "flying_str",
+   "fleet_entry": {
+    "is_flying": "true"
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "flying_true",
+   "fleet_entry": {
+    "is_flying": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "Flying"
+  },
+  {
+   "name": "mode_upper",
+   "fleet_entry": {
+    "control_mode": "HELD",
+    "is_flying": false
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "On the ground"
+  },
+  {
+   "name": "mc_empty_held",
+   "fleet_entry": {
+    "control_mode": "held"
+   },
+   "manual_controlled": "",
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "mc_number",
+   "fleet_entry": {
+    "control_mode": "autonomous",
+    "is_flying": true
+   },
+   "manual_controlled": 7,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "Flying"
+  },
+  {
+   "name": "merge_held",
+   "fleet_entry": {
+    "control_mode": "autonomous",
+    "is_flying": true
+   },
+   "manual_controlled": null,
+   "manual_status": {
+    "controlled": null,
+    "drones": {
+     "d1": {
+      "control_mode": "held",
+      "edge_control_mode": "held",
+      "manual_last": null,
+      "manual_supported": true,
+      "orphan_land_in_s": 90
+     }
+    }
+   },
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: auto-landing in 90 s, no controller"
+  },
+  {
+   "name": "merge_partial",
+   "fleet_entry": {
+    "control_mode": "held",
+    "is_flying": true
+   },
+   "manual_controlled": null,
+   "manual_status": {
+    "controlled": null,
+    "drones": {
+     "d1": {}
+    }
+   },
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "merge_ctrl_override",
+   "fleet_entry": {
+    "control_mode": "autonomous",
+    "is_flying": true
+   },
+   "manual_controlled": null,
+   "manual_status": {
+    "controlled": "d1",
+    "drones": {
+     "d1": {
+      "control_mode": "manual",
+      "edge_control_mode": "manual",
+      "manual_last": null,
+      "manual_supported": true,
+      "orphan_land_in_s": null
+     }
+    }
+   },
+   "order": "manual_after_fleet",
+   "dashboard_conn": "--",
+   "dashboard_mode_text": "MANUAL: under your control"
+  },
+  {
+   "name": "battery_str",
+   "fleet_entry": {
+    "battery": "87",
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": null,
+   "order": "manual_after_fleet",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": ""
+  },
+  {
+   "name": "ORDER_fleet_newer",
+   "fleet_entry": {
+    "control_mode": "held",
+    "edge_control_mode": "held",
+    "is_flying": true,
+    "orphan_land_in_s": null,
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": {
+    "controlled": null,
+    "drones": {
+     "d1": {
+      "control_mode": "autonomous",
+      "edge_control_mode": "autonomous",
+      "manual_last": null,
+      "manual_supported": true,
+      "orphan_land_in_s": null
+     }
+    }
+   },
+   "order": "fleet_after_manual",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": "HELD: hovering, search paused"
+  },
+  {
+   "name": "ORDER_countdown",
+   "fleet_entry": {
+    "control_mode": "held",
+    "edge_control_mode": "held",
+    "is_flying": true,
+    "orphan_land_in_s": 37,
+    "connected": true
+   },
+   "manual_controlled": null,
+   "manual_status": {
+    "controlled": null,
+    "drones": {
+     "d1": {
+      "control_mode": "held",
+      "edge_control_mode": "held",
+      "manual_last": null,
+      "manual_supported": true,
+      "orphan_land_in_s": 120
+     }
+    }
+   },
+   "order": "fleet_after_manual",
+   "dashboard_conn": "CONNECTED",
+   "dashboard_mode_text": "HELD: auto-landing in 37 s, no controller"
+  }
+ ]
+}
