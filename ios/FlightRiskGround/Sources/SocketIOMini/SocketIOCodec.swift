@@ -158,6 +158,8 @@ public struct SocketIOCodec: Sendable {
     public var maxEventArguments: Int
 
     /// Default frame cap: 8 MiB, below the dashboard's own `maxPayload` of 10 MiB.
+    /// The codec refuses larger frames it is given; `NWGroundTransport` enforces
+    /// the same cap while receiving, so a larger message is never buffered whole.
     public static let defaultMaxFrameBytes = 8 * 1024 * 1024
     /// Default nesting limit; the deepest dashboard payload nests about eight levels.
     public static let defaultMaxNestingDepth = 64
@@ -425,6 +427,10 @@ public struct SocketIOCodec: Sendable {
         if let payload {
             let trimmed = Self.trimmed(payload)
             try checkSize(trimmed.count)
+            // JSONSerialization also accepts UTF-16 and UTF-32; the wire is UTF-8 text.
+            guard !trimmed.contains(0), String(data: trimmed, encoding: .utf8) != nil else {
+                throw SocketIOCodecError.malformedJSON("the payload is not UTF-8 JSON text")
+            }
             try JSONScanner.checkStructure(Array(trimmed)[...], maxDepth: maxNestingDepth - 1)
             do {
                 _ = try JSONSerialization.jsonObject(with: trimmed, options: [.fragmentsAllowed])
@@ -468,6 +474,11 @@ public struct SocketIOCodec: Sendable {
     }
 
     private func jsonObject(_ bytes: ArraySlice<UInt8>) throws -> Any {
+        // A raw NUL is never valid in JSON text, and it would make JSONSerialization
+        // guess UTF-16 or UTF-32 instead of UTF-8.
+        if bytes.contains(0) {
+            throw SocketIOCodecError.malformedJSON("raw NUL byte")
+        }
         try JSONScanner.checkStructure(bytes, maxDepth: maxNestingDepth)
         do {
             return try JSONSerialization.jsonObject(with: Data(bytes), options: [.fragmentsAllowed])

@@ -64,6 +64,29 @@ final class LiveInteropTests: XCTestCase {
         XCTAssertFalse(logs.lines.contains { $0.contains(key) })
     }
 
+    /// Also opt-in with FLIGHTRISK_LIVE_TEST_LONG=1: stays connected for 60 s,
+    /// longer than the server's pingInterval + pingTimeout (45 s), so the
+    /// Engine.IO pongs are proven to reach the real server.
+    func testTheLinkSurvivesServerPingCycles() async throws {
+        guard ProcessInfo.processInfo.environment["FLIGHTRISK_LIVE_TEST_LONG"] == "1" else {
+            throw XCTSkip("Set FLIGHTRISK_LIVE_TEST_LONG=1 for the 60-second ping test.")
+        }
+        let logs = LogRecorder()
+        let client = makeClient(key: key, logs: logs)
+        let recorder = EventRecorder(client.events)
+        await client.connect()
+        try await eventually("connected", timeout: 10) { await client.state.isConnected }
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        let state = await client.state
+        XCTAssertTrue(state.isConnected, "\(state)")
+        XCTAssertEqual(recorder.reconnects.count, 1, "the link dropped and reconnected")
+        let result = try await client.emit("get_fleet_status")
+        XCTAssertEqual(result, .sent)
+        try await eventually("fleet_status", timeout: 5) { recorder.serverEvents.contains { $0.name == "fleet_status" } }
+        print("LIVE still connected after 60 s: \(state)")
+        await client.shutdown()
+    }
+
     func testAWrongKeyIsRefusedAsAKeyProblem() async throws {
         let logs = LogRecorder()
         let client = makeClient(key: "wrong-" + key, logs: logs)

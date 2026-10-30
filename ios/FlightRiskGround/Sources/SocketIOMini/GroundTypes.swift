@@ -111,9 +111,12 @@ public struct GroundEndpoint: Sendable, Equatable, CustomStringConvertible {
         guard !host.isEmpty, host.utf8.count <= 253 else { return false }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:")
         guard host.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return false }
-        // Colons only appear in IPv6 literals, which have at least two of them.
-        let colons = host.filter { $0 == ":" }.count
-        return colons == 0 || colons >= 2
+        // A host with a colon must be a well-formed IPv6 literal.
+        if host.contains(":") {
+            var address = in6_addr()
+            return inet_pton(AF_INET6, host, &address) == 1
+        }
+        return true
     }
 }
 
@@ -135,13 +138,23 @@ public struct GroundBackoff: Sendable, Equatable {
     }
 
     /// The delay before reconnect attempt `attempt` (1-based); `random` is in 0..<1.
+    /// The longest delay `delay(forAttempt:random:)` ever returns, whatever the settings.
+    public static let longestDelaySeconds: Double = 3600
+
     public func delay(forAttempt attempt: Int, random: Double) -> Duration {
         let exponent = min(max(attempt - 1, 0), 30)
-        let base = Self.seconds(initialDelay) * pow(2, Double(exponent))
-        let capped = min(base, Self.seconds(maximumDelay))
-        let unit = min(max(random, 0), 1)
-        let jittered = capped * (1 - jitterFraction * unit)
+        let initial = Self.clamped(Self.seconds(initialDelay))
+        let maximum = Self.clamped(Self.seconds(maximumDelay))
+        let capped = min(initial * pow(2, Double(exponent)), maximum)
+        let unit = random.isFinite ? min(max(random, 0), 1) : 0
+        let fraction = jitterFraction.isFinite ? min(max(jitterFraction, 0), 1) : 0
+        let jittered = capped * (1 - fraction * unit)
         return .milliseconds(Int64((max(jittered, 0) * 1000).rounded()))
+    }
+
+    private static func clamped(_ seconds: Double) -> Double {
+        guard seconds.isFinite else { return seconds > 0 ? longestDelaySeconds : 0 }
+        return min(max(seconds, 0), longestDelaySeconds)
     }
 
     static func seconds(_ duration: Duration) -> Double {
@@ -167,6 +180,9 @@ public enum GroundDropReason: Sendable, Equatable, CustomStringConvertible {
     case serverDisconnected
     /// The server sent something the protocol does not allow at that point.
     case protocolError(String)
+    /// The server sent a frame larger than the cap; the link was closed before
+    /// the frame was buffered whole.
+    case frameTooLarge(limit: Int)
 
     public var description: String {
         switch self {
@@ -176,6 +192,7 @@ public enum GroundDropReason: Sendable, Equatable, CustomStringConvertible {
         case .serverClosed: return "the ground station closed the connection"
         case .serverDisconnected: return "the ground station ended the session"
         case let .protocolError(detail): return "protocol error: \(detail)"
+        case let .frameTooLarge(limit): return "the ground station sent a frame larger than \(limit) bytes"
         }
     }
 }
@@ -282,6 +299,10 @@ public enum GroundEvent: Sendable, Equatable {
     case reconnected(GroundSessionInfo)
     /// A server event.
     case server(GroundServerEvent)
+    /// The consumer fell behind and the bound of `events` dropped `count`
+    /// elements (state changes and events) here. Re-read `GroundClient.state`
+    /// and request the full state again.
+    case eventsDropped(count: Int)
 }
 
 // MARK: - Emitting
@@ -330,7 +351,9 @@ public enum GroundEmitError: Error, Sendable, Equatable, CustomStringConvertible
 
 /// Decides which events the app may emit.
 ///
-/// `land_all` is always allowed, whatever the policy says: no policy can take
+/// A policy can only narrow the contract's allow-list, never widen it: an event
+/// is allowed when it is one of `contractEvents` and the app's rule accepts it.
+/// `land_all` is always allowed, whatever the rule says: no policy can take
 /// LAND ALL away from the operator.
 public struct GroundEmitPolicy: Sendable {
     private let predicate: @Sendable (String) -> Bool
@@ -353,21 +376,22 @@ public struct GroundEmitPolicy: Sendable {
     public static let landAll = "land_all"
 
     /// The default: exactly the contract's allow-list.
-    public static let contract = GroundEmitPolicy { contractEvents.contains($0) }
+    public static let contract = GroundEmitPolicy(narrowing: { _ in true })
 
-    /// A custom policy. The app supplies the decision; `land_all` stays allowed.
-    public init(_ predicate: @escaping @Sendable (String) -> Bool) {
-        self.predicate = predicate
+    /// A policy that narrows the contract's allow-list by `rule`. Events outside
+    /// `contractEvents` stay forbidden whatever `rule` returns; `land_all` stays allowed.
+    public init(narrowing rule: @escaping @Sendable (String) -> Bool) {
+        self.predicate = { Self.contractEvents.contains($0) && rule($0) }
     }
 
     /// This policy narrowed by another rule: an event must pass both.
     public func restricted(by rule: @escaping @Sendable (String) -> Bool) -> GroundEmitPolicy {
         let current = predicate
-        return GroundEmitPolicy { current($0) && rule($0) }
+        return GroundEmitPolicy(narrowing: { current($0) && rule($0) })
     }
 
     public func allows(_ event: String) -> Bool {
-        event == Self.landAll || predicate(event)
+        event == Self.landAll || (Self.contractEvents.contains(event) && predicate(event))
     }
 }
 

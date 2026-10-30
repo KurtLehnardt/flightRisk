@@ -2,9 +2,17 @@ import Foundation
 
 /// A Socket.IO client for one FlightRisk dashboard, as `docs/mobile-contract.md` describes.
 ///
-/// - `connect()` starts a connection loop that runs until `shutdown()`.
+/// - `connect()` starts a connection loop that runs until `shutdown()`. The
+///   loop keeps the client alive: dropping the last reference without calling
+///   `shutdown()` leaves the WebSocket open and the loop running, so always
+///   call `shutdown()` when the client is no longer needed.
 /// - Every state change, every established session and every server event
-///   arrives on `events`, in order. Iterate it from one place only.
+///   except video frames arrives on `events`, in order; `frame` events (the
+///   `lossyEventNames`) arrive on `frames`. Iterate each from one place only.
+/// - Both streams are bounded (see `Configuration`). `events` never drops
+///   silently: when it is full it drops incoming elements and later delivers
+///   `.eventsDropped(count:)` at the gap, after which the app must re-read
+///   `state` and request the full state again. `frames` keeps the newest frames.
 /// - After every connect and every reconnect the client yields
 ///   `.reconnected`; the app must then emit `stateRequestEvents` and treat all
 ///   older state as stale. The client itself sends nothing but the handshake,
@@ -33,6 +41,18 @@ public actor GroundClient {
         /// Upper bound for the server's pingInterval + pingTimeout, so a hostile
         /// open packet cannot switch dead-link detection off.
         public var maxPingWindow: Duration
+        /// Server events delivered on `frames` instead of `events`.
+        public var lossyEventNames: Set<String>
+        /// The most elements, and payload bytes, `events` buffers for a slow consumer.
+        public var eventBufferLimit: Int
+        public var eventBufferBytes: Int
+        /// The most frames, and payload bytes, `frames` buffers (oldest dropped first).
+        public var frameBufferLimit: Int
+        public var frameBufferBytes: Int
+        /// The most events, and payload bytes, held between the namespace connect
+        /// and its acknowledgement.
+        public var pendingEventLimit: Int
+        public var pendingEventBytes: Int
 
         public init(
             endpoint: GroundEndpoint,
@@ -41,7 +61,14 @@ public actor GroundClient {
             handshakeTimeout: Duration = .seconds(10),
             authFailureRetryDelay: Duration? = nil,
             maxFrameBytes: Int = SocketIOCodec.defaultMaxFrameBytes,
-            maxPingWindow: Duration = .seconds(120)
+            maxPingWindow: Duration = .seconds(120),
+            lossyEventNames: Set<String> = ["frame"],
+            eventBufferLimit: Int = 1024,
+            eventBufferBytes: Int = 16 * 1024 * 1024,
+            frameBufferLimit: Int = 8,
+            frameBufferBytes: Int = 16 * 1024 * 1024,
+            pendingEventLimit: Int = 64,
+            pendingEventBytes: Int = 1024 * 1024
         ) {
             self.endpoint = endpoint
             self.apiKey = apiKey
@@ -50,6 +77,13 @@ public actor GroundClient {
             self.authFailureRetryDelay = authFailureRetryDelay
             self.maxFrameBytes = maxFrameBytes
             self.maxPingWindow = maxPingWindow
+            self.lossyEventNames = lossyEventNames
+            self.eventBufferLimit = eventBufferLimit
+            self.eventBufferBytes = eventBufferBytes
+            self.frameBufferLimit = frameBufferLimit
+            self.frameBufferBytes = frameBufferBytes
+            self.pendingEventLimit = pendingEventLimit
+            self.pendingEventBytes = pendingEventBytes
         }
     }
 
@@ -62,8 +96,12 @@ public actor GroundClient {
         "get_manual_status",
     ]
 
-    /// Everything the client reports, in order. Finishes after `shutdown()`.
-    public nonisolated let events: AsyncStream<GroundEvent>
+    /// Everything the client reports except video frames, in order. Finishes after `shutdown()`.
+    public nonisolated let events: GroundEventStream<GroundEvent>
+
+    /// `frame` events (and any other `lossyEventNames`), newest kept when the
+    /// consumer falls behind. Finishes after `shutdown()`.
+    public nonisolated let frames: GroundEventStream<GroundServerEvent>
 
     /// The current connection state.
     public private(set) var state: GroundConnectionState = .idle
@@ -84,20 +122,25 @@ public actor GroundClient {
         var pingInterval: Duration = .zero
         var pingTimeout: Duration = .zero
         var pingWindow: Duration?
+        var connectedAt: Duration?
         var hadConnected = false
         var dropReason: GroundDropReason?
         /// Events that arrived between the namespace connect and its acknowledgement.
         var pendingEvents: [GroundServerEvent] = []
+        var pendingBytes = 0
     }
 
     private enum SessionOutcome {
         case stopped
         case rejected(String?)
-        case dropped(GroundDropReason, hadConnected: Bool)
+        /// `stable` is true when the session stayed connected for at least one
+        /// ping interval; only then does the backoff start again from the beginning.
+        case dropped(GroundDropReason, stable: Bool)
     }
 
     private var configuration: Configuration
-    private let continuation: AsyncStream<GroundEvent>.Continuation
+    private let eventBuffer: GroundEventBuffer<GroundEvent>
+    private let frameBuffer: GroundEventBuffer<GroundServerEvent>
     private let transportFactory: GroundTransportFactory
     private let emitPolicy: GroundEmitPolicy
     private let clock: any GroundClock
@@ -116,12 +159,10 @@ public actor GroundClient {
     private var stopping = false
 
     static let maxServerMessageLength = 200
-    /// The most events kept from before the connect acknowledgement.
-    static let maxPendingEvents = 64
 
     public init(
         configuration: Configuration,
-        transportFactory: @escaping GroundTransportFactory = URLSessionGroundTransport.factory,
+        transportFactory: @escaping GroundTransportFactory = NWGroundTransport.factory,
         emitPolicy: GroundEmitPolicy = .contract,
         clock: any GroundClock = SystemGroundClock(),
         random: @escaping @Sendable () -> Double = { Double.random(in: 0..<1) },
@@ -137,7 +178,18 @@ public actor GroundClient {
         self.logSink = logSink
         self.codec = SocketIOCodec(maxFrameBytes: configuration.maxFrameBytes)
         self.knownKeys = [configuration.apiKey]
-        (events, continuation) = AsyncStream.makeStream(of: GroundEvent.self, bufferingPolicy: .unbounded)
+        eventBuffer = GroundEventBuffer(
+            maxCount: configuration.eventBufferLimit,
+            maxBytes: configuration.eventBufferBytes,
+            overflow: .dropIncoming(marker: { GroundEvent.eventsDropped(count: $0) })
+        )
+        frameBuffer = GroundEventBuffer(
+            maxCount: configuration.frameBufferLimit,
+            maxBytes: configuration.frameBufferBytes,
+            overflow: .dropOldest
+        )
+        events = eventBuffer.stream
+        frames = frameBuffer.stream
     }
 
     // MARK: - Public API
@@ -248,7 +300,8 @@ public actor GroundClient {
         await runTask?.value
         runTask = nil
         publish(.stopped)
-        continuation.finish()
+        eventBuffer.finish()
+        frameBuffer.finish()
     }
 
     // MARK: - Connection loop
@@ -267,8 +320,10 @@ public actor GroundClient {
                 let retry = configuration.authFailureRetryDelay
                 publish(.failed(.authenticationRejected(serverMessage: message, retryIn: retry)))
                 await pause(retry)
-            case let .dropped(reason, hadConnected):
-                if hadConnected { failures = 0 }
+            case let .dropped(reason, stable):
+                // A link that drops right after connecting (a flapping server)
+                // keeps backing off; only a link that stayed up resets the backoff.
+                if stable { failures = 0 }
                 failures += 1
                 let delay = configuration.backoff.delay(forAttempt: failures, random: random())
                 publish(.reconnecting(attempt: failures, retryIn: delay, reason: reason))
@@ -324,14 +379,25 @@ public actor GroundClient {
             }
         } catch {
             if stopping { return .stopped }
-            let reason = session?.dropReason ?? .transportError(redact(Self.describe(error)))
+            let reason: GroundDropReason
+            if let watchdogReason = session?.dropReason {
+                reason = watchdogReason
+            } else if case let .messageTooLarge(limit) = error as? GroundTransportError {
+                reason = .frameTooLarge(limit: limit)
+            } else {
+                reason = .transportError(redact(Self.describe(error)))
+            }
             return dropped(reason)
         }
     }
 
     private func dropped(_ reason: GroundDropReason) -> SessionOutcome {
         log(.warning, "connection lost: \(reason)")
-        return .dropped(reason, hadConnected: session?.hadConnected ?? false)
+        var stable = false
+        if let current = session, let connectedAt = current.connectedAt {
+            stable = clock.now - connectedAt >= max(current.pingInterval, .seconds(1))
+        }
+        return .dropped(reason, stable: stable)
     }
 
     // MARK: - Frames
@@ -347,6 +413,9 @@ public actor GroundClient {
             do {
                 packet = try codec.decode(text)
             } catch {
+                if case let .frameTooLarge(_, limit) = error as? SocketIOCodecError {
+                    return dropped(.frameTooLarge(limit: limit))
+                }
                 let detail = redact(String(describing: error))
                 if phase == .awaitingOpen {
                     return dropped(.protocolError(detail))
@@ -411,19 +480,23 @@ public actor GroundClient {
             )
             session?.phase = .connected
             session?.hadConnected = true
+            session?.connectedAt = clock.now
             session?.pendingEvents = []
+            session?.pendingBytes = 0
             startWatchdog(sessionID: current.id)
             publish(.connected(info))
-            continuation.yield(.reconnected(info))
+            eventBuffer.push(.reconnected(info), bytes: 0)
             // python-socketio runs the connect handler before it acknowledges the
             // connect, so `status` arrives before `40{"sid":...}`. Deliver such
             // events now, after the session is announced, in their original order.
             for event in current.pendingEvents {
-                continuation.yield(.server(event))
+                deliver(event)
             }
             return nil
         case .connectError:
-            let message = codec.connectErrorMessage(packet).map { redact(String($0.prefix(Self.maxServerMessageLength))) }
+            // Redact first, then truncate: truncating first could cut the key in
+            // half and leave its first characters unredacted.
+            let message = codec.connectErrorMessage(packet).map { String(redact($0).prefix(Self.maxServerMessageLength)) }
             log(.error, "the ground station refused the key")
             return .rejected(message)
         case .disconnect:
@@ -437,12 +510,16 @@ public actor GroundClient {
                     payload: decoded.arguments.first,
                     extraArguments: Array(decoded.arguments.dropFirst())
                 )
+                let size = Self.payloadBytes(event)
                 if phase == .connected {
                     log(.debug, "received \(event.name)")
-                    continuation.yield(.server(event))
-                } else if (session?.pendingEvents.count ?? 0) < Self.maxPendingEvents {
+                    deliver(event)
+                } else if let current = session,
+                          current.pendingEvents.count < configuration.pendingEventLimit,
+                          current.pendingBytes + size <= configuration.pendingEventBytes {
                     log(.debug, "received \(event.name) before the connect acknowledgement; holding it")
                     session?.pendingEvents.append(event)
+                    session?.pendingBytes += size
                 } else {
                     log(.warning, "dropped \(event.name): too many events before the connect acknowledgement")
                 }
@@ -505,9 +582,21 @@ public actor GroundClient {
 
     // MARK: - Helpers
 
+    private func deliver(_ event: GroundServerEvent) {
+        if configuration.lossyEventNames.contains(event.name) {
+            frameBuffer.push(event, bytes: Self.payloadBytes(event))
+        } else if !eventBuffer.push(.server(event), bytes: Self.payloadBytes(event)) {
+            log(.warning, "dropped \(event.name): the event buffer is full")
+        }
+    }
+
+    private static func payloadBytes(_ event: GroundServerEvent) -> Int {
+        (event.payload?.count ?? 0) + event.extraArguments.reduce(0) { $0 + $1.count } + event.name.utf8.count
+    }
+
     private func publish(_ newState: GroundConnectionState) {
         state = newState
-        continuation.yield(.stateChanged(newState))
+        eventBuffer.push(.stateChanged(newState), bytes: 0)
         log(.info, "state: \(newState)")
     }
 
@@ -525,6 +614,9 @@ public actor GroundClient {
         }
         if let codecError = error as? SocketIOCodecError {
             return codecError.description
+        }
+        if let transportError = error as? GroundTransportError {
+            return transportError.description
         }
         let nsError = error as NSError
         return "\(nsError.domain) \(nsError.code)"

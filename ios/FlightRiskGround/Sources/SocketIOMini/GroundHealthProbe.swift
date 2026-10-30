@@ -8,8 +8,11 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
     case wrongKey(version: String?)
     /// The ground could not be reached.
     case unreachable(String)
-    /// The ground answered with an unexpected HTTP status.
+    /// The ground answered with an unexpected HTTP status (a redirect included:
+    /// redirects are never followed).
     case unexpectedStatus(Int)
+    /// The ground answered 200 but not with the JSON a FlightRisk dashboard sends.
+    case invalidResponse(String)
 
     public var description: String {
         switch self {
@@ -17,6 +20,7 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
         case let .wrongKey(version): return "reachable, wrong key" + (version.map { ", version \($0)" } ?? "")
         case let .unreachable(detail): return "unreachable: \(detail)"
         case let .unexpectedStatus(status): return "unexpected HTTP status \(status)"
+        case let .invalidResponse(detail): return "not a FlightRisk dashboard response: \(detail)"
         }
     }
 }
@@ -24,7 +28,9 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
 /// Checks that a ground answers and accepts the key, without opening a socket:
 /// `GET /api/health` (public; returns `version`) and `GET /api/status` (needs
 /// the key; 401 means a wrong key). The key goes only in the
-/// `Authorization: Bearer` header, never in the URL.
+/// `Authorization: Bearer` header, never in the URL. Redirects are not
+/// followed, and "key accepted" needs `/api/status` to answer 200 with the
+/// dashboard's own JSON object (`running` and `source`).
 public struct GroundHealthProbe: Sendable {
     public let endpoint: GroundEndpoint
     private let apiKey: GroundAPIKey
@@ -51,12 +57,21 @@ public struct GroundHealthProbe: Sendable {
             guard health.status == 200 else {
                 return .unexpectedStatus(health.status)
             }
-            if let object = try? JSONSerialization.jsonObject(with: health.body) as? [String: Any] {
-                version = object["version"] as? String
+            guard let object = try? JSONSerialization.jsonObject(with: health.body) as? [String: Any],
+                  object["status"] is String
+            else {
+                return .invalidResponse("/api/health did not return a status object")
             }
+            version = object["version"] as? String
             let status = try await http.get(base.appendingPathComponent("api/status"), headers: headers, timeout: timeout)
             switch status.status {
-            case 200: return .ok(version: version)
+            case 200:
+                guard let object = try? JSONSerialization.jsonObject(with: status.body) as? [String: Any],
+                      object["running"] is Bool, object["source"] != nil
+                else {
+                    return .invalidResponse("/api/status did not return the dashboard status object")
+                }
+                return .ok(version: version)
             case 401, 403: return .wrongKey(version: version)
             default: return .unexpectedStatus(status.status)
             }
@@ -70,6 +85,9 @@ public struct GroundHealthProbe: Sendable {
             // The code alone: URLError's userInfo carries the failing URL, which is
             // harmless here but kept out of the text on principle.
             return "URLError \(urlError.code.rawValue)"
+        }
+        if case let .bodyTooLarge(limit) = error as? GroundHTTPError {
+            return "response body larger than \(limit) bytes"
         }
         return String(describing: type(of: error))
     }

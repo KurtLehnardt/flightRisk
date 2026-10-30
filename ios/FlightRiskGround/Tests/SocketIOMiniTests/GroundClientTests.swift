@@ -47,21 +47,30 @@ final class GroundClientTests: XCTestCase {
 
     func testUnknownKeyPayloadsReachTheAppUnchanged() async throws {
         let harness = try Harness()
+        let frames = FrameRecorder(harness.client.frames)
         await harness.client.connect()
         let transport = try await harness.handshake(0)
-        let cases = try Fixtures.cases("unknown_keys.json").filter { $0.value["direction"] as? String == "server_to_client" }
-        for (_, fixture) in cases.sorted(by: { $0.key < $1.key }) {
+        let cases = try Fixtures.cases("unknown_keys.json")
+            .filter { $0.value["direction"] as? String == "server_to_client" }
+            .sorted(by: { $0.key < $1.key })
+        for (_, fixture) in cases {
             let array = try JSONSerialization.data(withJSONObject: [fixture["event"]!, fixture["payload"]!])
             transport.push("42" + String(decoding: array, as: UTF8.self))
         }
-        try await eventually("all unknown-key events") { harness.recorder.serverEvents.count == cases.count }
-        for (event, (_, fixture)) in zip(harness.recorder.serverEvents, cases.sorted(by: { $0.key < $1.key })) {
+        let isFrame: ((String, [String: Any])) -> Bool = { $0.1["event"] as? String == "frame" }
+        let reliable = cases.filter { !isFrame($0) }
+        let lossy = cases.filter(isFrame)
+        XCTAssertEqual(lossy.count, 1)
+        try await eventually("all unknown-key events") {
+            harness.recorder.serverEvents.count == reliable.count && frames.frames.count == lossy.count
+        }
+        for (event, (_, fixture)) in zip(harness.recorder.serverEvents + frames.frames, reliable + lossy) {
             XCTAssertEqual(event.name, fixture["event"] as? String)
             let payload = try JSONSerialization.jsonObject(with: try XCTUnwrap(event.payload))
             XCTAssertEqual(payload as? NSObject, fixture["payload"] as? NSObject)
         }
-        let observed = await harness.client.state.isConnected
-        XCTAssertTrue(observed)
+        let connected = await harness.client.state.isConnected
+        XCTAssertTrue(connected)
         await harness.client.shutdown()
     }
 
@@ -141,9 +150,9 @@ final class GroundClientTests: XCTestCase {
             second.push(#"42["status",{}]"#)
         }
         second.push(#"40{"sid":"s"}"#)
-        try await eventually("capped events") { harness.recorder.serverEvents.count == GroundClient.maxPendingEvents }
+        try await eventually("capped events") { harness.recorder.serverEvents.count == 64 }
         await settle()
-        XCTAssertEqual(harness.recorder.serverEvents.count, GroundClient.maxPendingEvents)
+        XCTAssertEqual(harness.recorder.serverEvents.count, 64)
         await harness.client.shutdown()
     }
 
@@ -313,6 +322,7 @@ final class GroundClientTests: XCTestCase {
         let harness = try Harness()
         await harness.client.connect()
         let first = try await harness.handshake(0, sid: "a")
+        harness.clock.advance(by: .seconds(25))
         first.serverDrop()
         try await eventually("reconnecting after drop") {
             if case let .reconnecting(1, d, .transportError) = await harness.client.state { return d == .seconds(1) }
@@ -329,12 +339,15 @@ final class GroundClientTests: XCTestCase {
         // The client itself requests nothing: the app does, after .reconnected.
         XCTAssertFalse(second.sent.contains { $0.hasPrefix("42") })
 
+        second.push("2")
+        harness.clock.advance(by: .seconds(25))
         second.push("41")
         try await eventually("server disconnect") {
             await harness.client.state == .reconnecting(attempt: 1, retryIn: .seconds(1), reason: .serverDisconnected)
         }
         harness.clock.advance(by: .seconds(1))
         let third = try await harness.handshake(2)
+        harness.clock.advance(by: .seconds(25))
         third.push("1")
         try await eventually("server close") {
             await harness.client.state == .reconnecting(attempt: 1, retryIn: .seconds(1), reason: .serverClosed)
@@ -521,8 +534,8 @@ final class GroundClientTests: XCTestCase {
         let landAll = try await harness.client.emit("land_all")
         XCTAssertEqual(landAll, .sent)
         XCTAssertEqual(transport.sent.last, #"42["land_all"]"#)
-        XCTAssertTrue(GroundEmitPolicy { _ in false }.allows("land_all"))
-        XCTAssertFalse(GroundEmitPolicy { _ in false }.allows("get_fleet_status"))
+        XCTAssertTrue(GroundEmitPolicy(narrowing: { _ in false }).allows("land_all"))
+        XCTAssertFalse(GroundEmitPolicy(narrowing: { _ in false }).allows("get_fleet_status"))
         await harness.client.shutdown()
     }
 
@@ -640,7 +653,7 @@ final class GroundClientTests: XCTestCase {
     func testHealthProbeReportsVersionAndKeyStatus() async throws {
         let http = FakeHTTP()
         http.responses["/api/health"] = (200, Data(#"{"status":"ok","version":"1.4.0","x_future_field":1}"#.utf8))
-        http.responses["/api/status"] = (200, Data("{}".utf8))
+        http.responses["/api/status"] = (200, Data(#"{"running":true,"source":"sim","x_future_field":1}"#.utf8))
         let harness = try Harness(http: http)
         let ok = await harness.client.healthProbe()
         XCTAssertEqual(ok, .ok(version: "1.4.0"))

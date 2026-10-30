@@ -123,6 +123,12 @@ final class FakeTransport: GroundTransport, @unchecked Sendable {
     private var isClosed = false
     private var closeError: Error = FakeTransportError(reason: "closed")
     var connectError: Error?
+    private var sendError: Error?
+
+    /// Makes every later `send` fail, as a dead socket would.
+    func failSends() {
+        lock.withLock { sendError = FakeTransportError(reason: "send failed") }
+    }
 
     init(url: URL, maxFrameBytes: Int) {
         self.url = url
@@ -139,6 +145,7 @@ final class FakeTransport: GroundTransport, @unchecked Sendable {
     func send(_ text: String) async throws {
         try lock.withLock {
             if isClosed { throw FakeTransportError(reason: "send after close") }
+            if let sendError { throw sendError }
             sentFrames.append(text)
         }
     }
@@ -240,7 +247,7 @@ final class EventRecorder: @unchecked Sendable {
     private var recorded: [GroundEvent] = []
     private var task: Task<Void, Never>?
 
-    init(_ stream: AsyncStream<GroundEvent>) {
+    init(_ stream: GroundEventStream<GroundEvent>) {
         task = Task { [weak self] in
             for await event in stream {
                 self?.append(event)
@@ -265,6 +272,26 @@ final class EventRecorder: @unchecked Sendable {
     var reconnects: [GroundSessionInfo] {
         events.compactMap { if case let .reconnected(info) = $0 { return info } else { return nil } }
     }
+}
+
+final class FrameRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [GroundServerEvent] = []
+    private var task: Task<Void, Never>?
+
+    init(_ stream: GroundEventStream<GroundServerEvent>) {
+        task = Task { [weak self] in
+            for await frame in stream {
+                self?.append(frame)
+            }
+        }
+    }
+
+    private func append(_ frame: GroundServerEvent) {
+        lock.withLock { recorded.append(frame) }
+    }
+
+    var frames: [GroundServerEvent] { lock.withLock { recorded } }
 }
 
 final class LogRecorder: @unchecked Sendable {
@@ -317,7 +344,7 @@ struct Harness {
     let client: GroundClient
     let network: FakeNetwork
     let clock: ManualClock
-    let recorder: EventRecorder
+    let recorder: EventRecorder!
     let logs: LogRecorder
 
     init(
@@ -326,17 +353,20 @@ struct Harness {
         authFailureRetryDelay: Duration? = nil,
         emitPolicy: GroundEmitPolicy = .contract,
         random: @escaping @Sendable () -> Double = { 0 },
-        http: any GroundHTTPClient = FakeHTTP()
+        http: any GroundHTTPClient = FakeHTTP(),
+        recordEvents: Bool = true,
+        adjust: (inout GroundClient.Configuration) -> Void = { _ in }
     ) throws {
         network = FakeNetwork()
         clock = ManualClock()
         logs = LogRecorder()
-        let configuration = GroundClient.Configuration(
+        var configuration = GroundClient.Configuration(
             endpoint: try GroundEndpoint(host: "127.0.0.1", port: 6100),
             apiKey: GroundAPIKey(key),
             backoff: backoff,
             authFailureRetryDelay: authFailureRetryDelay
         )
+        adjust(&configuration)
         client = GroundClient(
             configuration: configuration,
             transportFactory: network.factory,
@@ -346,7 +376,7 @@ struct Harness {
             http: http,
             logSink: logs.sink
         )
-        recorder = EventRecorder(client.events)
+        recorder = recordEvents ? EventRecorder(client.events) : nil
     }
 
     func transport(_ index: Int, file: StaticString = #filePath, line: UInt = #line) async throws -> FakeTransport {
