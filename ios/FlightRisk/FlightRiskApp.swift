@@ -52,8 +52,6 @@ struct FlightRiskApp: App {
                 viewModel: viewModel,
                 cameraSession: frameSource.session,
                 config: config,
-                droneState: nil,
-                frameSourceMode: .camera,
                 gemmaModelManager: gemmaModelManager,
                 pipeline: pipeline,
                 llmSelector: llmSelector
