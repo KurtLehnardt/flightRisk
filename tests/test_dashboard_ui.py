@@ -58,7 +58,7 @@ EMITTED = {
 LISTENED = {
     "battery_critical", "battery_warning", "confidence_progress", "connect", "description_set",
     "detection_profiles", "disconnect", "drone_registered", "error", "face_report", "fleet_detection",
-    "fleet_event", "fleet_plan", "fleet_status", "fleet_telemetry", "frame", "manual_ack", "manual_result",
+    "fleet_event", "land_all_ack", "fleet_plan", "fleet_status", "fleet_telemetry", "frame", "manual_ack", "manual_result",
     "manual_status", "match_alert", "match_alert_reminder", "match_alert_resolved", "match_alert_response_ack",
     "metrics_update", "obstacle_detected", "reasoning_provider", "recording_started", "recording_stopped",
     "recovery_status", "search_complete", "search_paused", "search_plan", "search_progress", "status",
