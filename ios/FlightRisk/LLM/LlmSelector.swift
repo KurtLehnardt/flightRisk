@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import OSLog
+import UIKit
 
 /// Chooses the active ``LlmBackend`` from the user's reasoning settings and
 /// monitors connectivity via `NWPathMonitor`.
@@ -15,7 +16,10 @@ import OSLog
 /// - Claude is usable only while the user's explicit cloud opt-in is on AND a
 ///   Claude API key is saved in the Keychain. A saved key alone never turns
 ///   cloud reasoning on. The key is handed to ``CloudClaudeLlmBackend`` only
-///   while both hold, and is cleared from it as soon as either stops holding.
+///   while both hold. The backend reads them itself at call time through a
+///   ``CloudGate`` (which also requires Cloud Claude to be the selected
+///   provider), so turning cloud off or removing the key stops sending at
+///   once, without waiting for a refresh, and cancels requests in flight.
 /// - When the selected provider cannot be used, the selector falls back to
 ///   the on-device backend, or to ``NoOpLlmBackend`` when that is not ready,
 ///   and records a notice in ``status`` so the user is told. A cloud backend
@@ -36,6 +40,9 @@ actor LlmSelector {
 
     private let settings: ReasoningSettings
     private let keyStore: ReasoningKeyStore
+    /// The gate installed on every registered ``CloudClaudeLlmBackend``.
+    nonisolated let cloudGate: CloudGate
+    private var unlockObserver: Task<Void, Never>?
 
     /// The resolved reasoning state after the last ``refresh()``.
     private(set) var status: ReasoningStatus = .initial
@@ -59,9 +66,10 @@ actor LlmSelector {
         settings: ReasoningSettings = ReasoningSettings(),
         keyStore: ReasoningKeyStore = KeychainReasoningKeyStore()
     ) {
-        settings.migrateLegacyValues()
+        settings.migrateLegacyValues(keyStore: keyStore)
         self.settings = settings
         self.keyStore = keyStore
+        self.cloudGate = settings.cloudGate(keyStore: keyStore)
         cachedActive = noOp
     }
 
@@ -80,6 +88,10 @@ actor LlmSelector {
     /// Register a backend. The fallback walks backends in registration
     /// order, so register the on-device backend first.
     func registerBackend(_ backend: LlmBackend) {
+        if let claude = backend as? CloudClaudeLlmBackend {
+            claude.setGate(cloudGate)
+            claude.setOnline(hasInternet)
+        }
         backends.append(backend)
         logger.debug("Registered backend: \(backend.name, privacy: .public)")
         refresh()
@@ -99,8 +111,16 @@ actor LlmSelector {
     }
 
     /// The backend that should answer reasoning requests right now.
+    ///
+    /// If the cached backend is the cloud backend, the gate is re-checked
+    /// first, so a request picked up after the user turned cloud off (but
+    /// before the background refresh ran) never gets the cloud backend.
     func getActiveBackend() -> LlmBackend {
-        cachedActive
+        if ReasoningProvider(backendName: cachedActive.name)?.isCloud == true,
+           !hasInternet || cloudGate() == nil {
+            refresh()
+        }
+        return cachedActive
     }
 
     /// Re-read the settings and the Keychain, re-evaluate availability and
@@ -110,24 +130,26 @@ actor LlmSelector {
         let localBackend = backends.first { ReasoningProvider(backendName: $0.name) == .localGemma }
         let cloudBackend = backends.first { ReasoningProvider(backendName: $0.name)?.isCloud == true }
 
-        // Cloud gate: read the key only while the user has opted in, and hand
-        // it to the Claude backend only then. Otherwise clear it.
+        // Cloud availability, from the opt-in, the Keychain and connectivity.
+        // The key itself never leaves this function; the backend reads it
+        // through the gate at call time.
         let optIn = settings.cloudOptIn
-        let key = optIn ? keyStore.claudeApiKey() : nil
+        let lookup: ClaudeKeyLookup = optIn ? keyStore.lookupClaudeApiKey() : .missing
         if let claude = cloudBackend as? CloudClaudeLlmBackend {
-            claude.apiKey = key ?? ""
-            let online = hasInternet
-            claude.connectivityCheck = { online }
+            claude.setOnline(hasInternet)
+            claude.cancelIfGateClosed()
         }
 
         var unavailable: [ReasoningProvider: String] = [:]
         if !optIn {
             unavailable[.cloudClaude] = ReasoningReason.cloudBlocked
-        } else if key == nil {
+        } else if lookup == .unreadable {
+            unavailable[.cloudClaude] = ReasoningReason.claudeKeyUnreadable
+        } else if lookup.key == nil {
             unavailable[.cloudClaude] = ReasoningReason.claudeKeyMissing
         } else if cloudBackend == nil {
             unavailable[.cloudClaude] = ReasoningReason.claudeNotRegistered
-        } else if !hasInternet || cloudBackend?.isAvailable != true {
+        } else if !hasInternet {
             unavailable[.cloudClaude] = ReasoningReason.offline
         }
 
@@ -193,6 +215,9 @@ actor LlmSelector {
     /// Async version of ``refresh()`` that first updates each backend's
     /// cached availability from its actor-isolated state, then re-evaluates.
     func refreshAsync() async {
+        // Apply settings changes (such as an opt-out) at once, before
+        // waiting on the Gemma model manager.
+        refresh()
         for backend in backends {
             if let gemma = backend as? LocalGemmaLlmBackend {
                 await gemma.refreshAvailability()
@@ -218,6 +243,17 @@ actor LlmSelector {
         }
 
         pathMonitor.start(queue: monitorQueue)
+
+        // A key stored "when unlocked" can't be read while the phone is
+        // locked; check again once it is unlocked.
+        unlockObserver = Task { [weak self] in
+            let unlocks = NotificationCenter.default.notifications(
+                named: UIApplication.protectedDataDidBecomeAvailableNotification
+            )
+            for await _ in unlocks {
+                await self?.refreshAsync()
+            }
+        }
         logger.debug("Connectivity monitoring started")
     }
 
@@ -225,6 +261,8 @@ actor LlmSelector {
     func stopMonitoring() {
         guard monitoring else { return }
         pathMonitor.cancel()
+        unlockObserver?.cancel()
+        unlockObserver = nil
         monitoring = false
         logger.debug("Connectivity monitoring stopped")
     }

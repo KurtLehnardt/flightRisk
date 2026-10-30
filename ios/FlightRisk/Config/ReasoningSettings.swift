@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Security
 
 // MARK: - Provider
 
@@ -68,6 +69,8 @@ enum ReasoningReason {
 
     static let cloudBlocked = cloudBlockedPrefix + " turn on \"Allow cloud reasoning\" to opt in."
     static let claudeKeyMissing = "No Claude API key is saved on this device."
+    static let claudeKeyUnreadable =
+        "The saved Claude API key can't be read right now (the phone may be locked). It will be checked again when the phone is unlocked."
     static let offline = "No internet connection."
     static let claudeNotRegistered = "The Claude backend is not loaded."
     static let gemmaNotReady = "The on-device Gemma model is not downloaded and loaded yet."
@@ -94,6 +97,12 @@ struct ReasoningSettings {
     static let suiteName = "flightrisk_config"
     static let providerKey = "flightrisk_reasoning_provider"
     static let cloudOptInKey = "flightrisk_allow_cloud_llm"
+    static let legacyKeysRemovedKey = "flightrisk_reasoning_legacy_keys_removed"
+
+    /// Posted synchronously whenever a change may have closed the cloud
+    /// gate (opt-out, selecting a non-cloud provider, removing the key).
+    /// ``CloudClaudeLlmBackend`` observes it and cancels requests in flight.
+    static let cloudGateMayHaveClosed = Notification.Name("FlightRiskCloudGateMayHaveClosed")
 
     let defaults: UserDefaults
 
@@ -103,7 +112,9 @@ struct ReasoningSettings {
 
     /// True only when the user explicitly confirmed the cloud consent step.
     var cloudOptIn: Bool {
-        defaults.bool(forKey: Self.cloudOptInKey)
+        // Only a stored Bool counts; a stray string such as "true" or "YES"
+        // does not opt the user in.
+        (defaults.object(forKey: Self.cloudOptInKey) as? Bool) == true
     }
 
     /// The provider the user explicitly chose, or nil when nothing valid is
@@ -135,6 +146,9 @@ struct ReasoningSettings {
     func select(_ provider: ReasoningProvider) -> Bool {
         if provider.isCloud && !cloudOptIn { return false }
         defaults.set(provider.rawValue, forKey: Self.providerKey)
+        if !provider.isCloud {
+            Self.postGateMayHaveClosed()
+        }
         return true
     }
 
@@ -150,6 +164,76 @@ struct ReasoningSettings {
            ReasoningProvider(storedValue: raw)?.isCloud == true {
             defaults.removeObject(forKey: Self.providerKey)
         }
+        if !enabled {
+            Self.postGateMayHaveClosed()
+        }
+    }
+
+    /// Delete the saved Claude key, then tell the cloud backend so it
+    /// cancels any request in flight.
+    func removeClaudeKey(from keyStore: ReasoningKeyStore) {
+        keyStore.deleteClaudeApiKey()
+        Self.postGateMayHaveClosed()
+    }
+
+    static func postGateMayHaveClosed() {
+        NotificationCenter.default.post(name: cloudGateMayHaveClosed, object: nil)
+    }
+
+    /// The cloud gate for ``CloudClaudeLlmBackend``: it returns the Claude
+    /// key only while the opt-in is on, Cloud Claude is the selected
+    /// provider and a key can be read. It reads all three at call time.
+    func cloudGate(keyStore: ReasoningKeyStore) -> CloudGate {
+        let settings = self
+        return {
+            guard settings.cloudOptIn, settings.storedProvider == .cloudClaude else { return nil }
+            return keyStore.claudeApiKey()
+        }
+    }
+
+    /// Trim a pasted key. Returns nil when nothing is left.
+    static func normalizedKey(_ input: String) -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: Consent decisions
+
+    /// What the Settings screen should do after a user action.
+    enum ConsentDecision: Equatable {
+        /// The change was applied and saved.
+        case applied
+        /// Show the consent dialog. On confirmation, call
+        /// ``confirmCloudConsent(selectCloud:)`` with this value.
+        case askForConsent(selectCloud: Bool)
+    }
+
+    /// The user picked `provider` in the picker. Picking Cloud Claude before
+    /// opting in asks for consent instead of selecting it.
+    func requestProvider(_ provider: ReasoningProvider) -> ConsentDecision {
+        if provider.isCloud && !cloudOptIn {
+            return .askForConsent(selectCloud: true)
+        }
+        select(provider)
+        return .applied
+    }
+
+    /// The user flipped the "Allow cloud reasoning" toggle. Turning it on
+    /// asks for consent; turning it off applies at once.
+    func requestCloudOptIn(_ enabled: Bool) -> ConsentDecision {
+        if enabled {
+            return cloudOptIn ? .applied : .askForConsent(selectCloud: false)
+        }
+        setCloudOptIn(false)
+        return .applied
+    }
+
+    /// The user confirmed the consent dialog.
+    func confirmCloudConsent(selectCloud: Bool) {
+        setCloudOptIn(true)
+        if selectCloud {
+            select(.cloudClaude)
+        }
     }
 
     /// Clean up values written by earlier builds.
@@ -157,7 +241,13 @@ struct ReasoningSettings {
     /// Removes a stored provider that is unknown (the removed Gemini and
     /// OpenAI entries) or that is a cloud provider without the opt-in flag.
     /// It never sets the opt-in flag and never selects a cloud provider.
-    func migrateLegacyValues() {
+    func migrateLegacyValues(keyStore: ReasoningKeyStore? = nil) {
+        // Earlier builds offered Gemini and OpenAI with no backend behind
+        // them. Delete any keys saved for them, once.
+        if let keyStore, !defaults.bool(forKey: Self.legacyKeysRemovedKey) {
+            keyStore.deleteLegacyProviderKeys()
+            defaults.set(true, forKey: Self.legacyKeysRemovedKey)
+        }
         guard let raw = defaults.string(forKey: Self.providerKey) else { return }
         guard let provider = ReasoningProvider(storedValue: raw) else {
             defaults.removeObject(forKey: Self.providerKey)
@@ -173,23 +263,93 @@ struct ReasoningSettings {
 
 // MARK: - Key store
 
-/// Read access to the Claude API key.
-///
-/// The key itself is only handed to ``CloudClaudeLlmBackend`` by
-/// ``LlmSelector`` while the cloud opt-in is on. Implementations must never
-/// log the key.
-protocol ReasoningKeyStore: Sendable {
-    func claudeApiKey() -> String?
+/// Returns the Claude API key only while cloud use is allowed right now.
+typealias CloudGate = @Sendable () -> String?
+
+/// The result of reading the Claude key, without exposing it in
+/// descriptions.
+enum ClaudeKeyLookup: Equatable, Sendable, CustomStringConvertible {
+    case found(String)
+    case missing
+    /// The Keychain could not be read (for example while the phone is locked).
+    case unreadable
+
+    var key: String? {
+        if case .found(let key) = self { return key }
+        return nil
+    }
+
+    var description: String {
+        switch self {
+        case .found: return "found"
+        case .missing: return "missing"
+        case .unreadable: return "unreadable"
+        }
+    }
 }
 
-/// The production key store, backed by ``KeychainHelper``.
+/// Access to the Claude API key.
+///
+/// The key itself is only handed to ``CloudClaudeLlmBackend`` through the
+/// cloud gate. Implementations must never log the key.
+protocol ReasoningKeyStore: Sendable {
+    func lookupClaudeApiKey() -> ClaudeKeyLookup
+    func saveClaudeApiKey(_ key: String) throws
+    func deleteClaudeApiKey()
+    /// Delete keys saved for the removed Gemini and OpenAI entries.
+    func deleteLegacyProviderKeys()
+}
+
+extension ReasoningKeyStore {
+    func claudeApiKey() -> String? { lookupClaudeApiKey().key }
+}
+
+/// The production key store, backed by the Keychain item that
+/// ``KeychainHelper`` writes for the "cloud_claude" provider.
 struct KeychainReasoningKeyStore: ReasoningKeyStore {
     static let claudeProvider = "cloud_claude"
+    static let legacyProviders = ["cloud_gemini", "cloud_openai"]
+    /// Must match `KeychainHelper.service` and its account naming.
+    private static let service = "com.flightrisk.app"
+    private static let claudeAccount = "flightrisk_api_key_cloud_claude"
 
-    func claudeApiKey() -> String? {
-        guard let key = KeychainHelper.loadApiKey(provider: Self.claudeProvider),
-              !key.isEmpty else { return nil }
-        return key
+    func lookupClaudeApiKey() -> ClaudeKeyLookup {
+        // Read directly so a locked Keychain can be told apart from a
+        // missing key; KeychainHelper.load returns nil for both.
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.claudeAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data,
+                  let key = String(data: data, encoding: .utf8),
+                  !key.isEmpty else { return .missing }
+            return .found(key)
+        case errSecItemNotFound:
+            return .missing
+        default:
+            return .unreadable
+        }
+    }
+
+    func saveClaudeApiKey(_ key: String) throws {
+        try KeychainHelper.saveApiKey(key, provider: Self.claudeProvider)
+    }
+
+    func deleteClaudeApiKey() {
+        KeychainHelper.deleteApiKey(provider: Self.claudeProvider)
+    }
+
+    func deleteLegacyProviderKeys() {
+        for provider in Self.legacyProviders {
+            KeychainHelper.deleteApiKey(provider: provider)
+        }
     }
 }
 

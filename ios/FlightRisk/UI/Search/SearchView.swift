@@ -76,6 +76,14 @@ struct SearchView: View {
                 }
             }
 
+            // ----- Reasoning status: "Cloud active" indicator and fallback notice -----
+            VStack {
+                Spacer().frame(height: 60)
+                ReasoningStatusBanner()
+                Spacer()
+            }
+            .allowsHitTesting(false)
+
             // ----- Layer 7: Drone alert banner -----
             if let droneAlert = viewModel.droneAlert {
                 VStack {

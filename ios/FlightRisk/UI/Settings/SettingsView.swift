@@ -27,8 +27,9 @@ struct SettingsView: View {
     @State private var cloudOptIn: Bool = false
     @State private var hasSavedClaudeKey: Bool = false
     @State private var showCloudConsent: Bool = false
-    @State private var pendingCloudSelection: Bool = false
+    @State private var consentSelectsCloud: Bool = false
     private let reasoningSettings = ReasoningSettings()
+    private let reasoningKeyStore = KeychainReasoningKeyStore()
     @State private var advancedExpanded: Bool = false
     @State private var showApiKeySaved: Bool = false
     @State private var hasInternet: Bool = true
@@ -65,6 +66,23 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will free ~1.5 GB. You'll need WiFi to re-download.")
+        }
+        // Cloud consent dialog for the reasoning section, attached to the
+        // Form so it is presented once from either the toggle or the picker.
+        .alert("Send images to Anthropic?", isPresented: $showCloudConsent) {
+            Button("Allow Cloud Reasoning") {
+                confirmCloudOptIn()
+            }
+            Button("Cancel", role: .cancel) {
+                consentSelectsCloud = false
+            }
+        } message: {
+            Text(Self.cloudConsentMessage)
+        }
+        .onChange(of: gemmaState) { _, _ in
+            // Let the selector pick up Gemma as soon as it becomes ready (or
+            // drop it when it is unloaded or deleted).
+            onLlmBackendChanged(reasoningProvider.rawValue)
         }
         .onChange(of: reasoningStatus.selected) { _, newValue in
             // With no explicit choice stored, follow the resolved default.
@@ -154,6 +172,13 @@ struct SettingsView: View {
 
             if cloudOptIn {
                 claudeKeyRows
+            }
+
+            // Removing a saved key is always possible, opted in or not.
+            if hasSavedClaudeKey {
+                Button("Remove Saved Key", role: .destructive) {
+                    removeApiKey()
+                }
             }
 
             if reasoningProvider == .localGemma {
@@ -251,24 +276,15 @@ struct SettingsView: View {
         } footer: {
             Text("Cloud reasoning is off by default. Local Gemma and Off keep every image on this phone.")
         }
-        .alert("Send images to Anthropic?", isPresented: $showCloudConsent) {
-            Button("Allow Cloud Reasoning") {
-                confirmCloudOptIn()
-            }
-            Button("Cancel", role: .cancel) {
-                pendingCloudSelection = false
-            }
-        } message: {
-            Text(Self.cloudConsentMessage)
-        }
     }
 
     /// The consent text shown before cloud reasoning can be turned on.
     static let cloudConsentMessage =
-        "With cloud reasoning on, the cropped image of each detected person and the reference photo "
-        + "you chose are sent to Anthropic (Claude) for analysis. These images can show a face, and "
-        + "Anthropic's privacy policy applies to them. Nothing is sent until you also save a Claude API key "
-        + "and select Cloud Claude. You can turn this off at any time here, which stops all cloud transmission."
+        "With cloud reasoning on, the cropped image of each detected person, the reference photo you chose "
+        + "and the text description you entered are sent to Anthropic (Claude) for analysis. The images can "
+        + "show a face, and Anthropic's privacy policy applies to them. Nothing is sent until you also save a "
+        + "Claude API key and select Cloud Claude. You can turn this off at any time here; turning it off "
+        + "stops sending at once and cancels any request still in progress."
 
     /// The Claude API key rows, shown only after the user opted in.
     @ViewBuilder
@@ -290,13 +306,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .disabled(apiKeyInput.isEmpty)
-
-        if hasSavedClaudeKey {
-            Button("Remove Saved Key", role: .destructive) {
-                removeApiKey()
-            }
-        }
+        .disabled(ReasoningSettings.normalizedKey(apiKeyInput) == nil)
 
         HStack(spacing: 8) {
             Circle()
@@ -321,60 +331,70 @@ struct SettingsView: View {
         return provider.displayName
     }
 
-    /// Picker binding. Picking Cloud Claude before opting in opens the
-    /// consent dialog instead of selecting it.
+    /// Picker binding. The decision (select now, or ask for consent first)
+    /// is made by ``ReasoningSettings/requestProvider(_:)``.
     private var providerBinding: Binding<ReasoningProvider> {
         Binding(
             get: { reasoningProvider },
             set: { newValue in
-                if newValue.isCloud && !reasoningSettings.cloudOptIn {
-                    pendingCloudSelection = true
-                    showCloudConsent = true
-                    return
+                switch reasoningSettings.requestProvider(newValue) {
+                case .applied:
+                    reasoningProvider = newValue
+                    onLlmBackendChanged(newValue.rawValue)
+                case .askForConsent(let selectCloud):
+                    askForCloudConsent(selectCloud: selectCloud)
                 }
-                reasoningSettings.select(newValue)
-                reasoningProvider = newValue
-                onLlmBackendChanged(newValue.rawValue)
             }
         )
     }
 
-    /// Toggle binding. Turning it on opens the consent dialog; turning it
-    /// off takes effect at once.
+    /// Toggle binding. Turning it on asks for consent (the toggle shows on
+    /// while the dialog is open and returns to off on Cancel); turning it off
+    /// applies at once, see ``ReasoningSettings/requestCloudOptIn(_:)``.
     private var cloudOptInBinding: Binding<Bool> {
         Binding(
-            get: { cloudOptIn },
+            get: { cloudOptIn || (showCloudConsent && !consentSelectsCloud) },
             set: { enabled in
-                if enabled {
-                    pendingCloudSelection = false
-                    showCloudConsent = true
-                } else {
-                    disableCloudReasoning()
+                switch reasoningSettings.requestCloudOptIn(enabled) {
+                case .applied:
+                    if !enabled { didDisableCloudReasoning() }
+                case .askForConsent(let selectCloud):
+                    askForCloudConsent(selectCloud: selectCloud)
                 }
             }
         )
+    }
+
+    private func askForCloudConsent(selectCloud: Bool) {
+        guard !showCloudConsent else { return }
+        consentSelectsCloud = selectCloud
+        showCloudConsent = true
     }
 
     private func loadReasoningSettings() {
         cloudOptIn = reasoningSettings.cloudOptIn
         reasoningProvider = reasoningSettings.storedProvider ?? reasoningStatus.selected
-        hasSavedClaudeKey = KeychainReasoningKeyStore().claudeApiKey() != nil
+        refreshSavedKeyState()
         apiKeyInput = ""
     }
 
+    private func refreshSavedKeyState() {
+        hasSavedClaudeKey = reasoningKeyStore.lookupClaudeApiKey() != .missing
+    }
+
     private func confirmCloudOptIn() {
-        reasoningSettings.setCloudOptIn(true)
+        reasoningSettings.confirmCloudConsent(selectCloud: consentSelectsCloud)
         cloudOptIn = true
-        if pendingCloudSelection {
-            reasoningSettings.select(.cloudClaude)
+        if consentSelectsCloud {
             reasoningProvider = .cloudClaude
         }
-        pendingCloudSelection = false
+        consentSelectsCloud = false
         onLlmBackendChanged(reasoningProvider.rawValue)
     }
 
-    private func disableCloudReasoning() {
-        reasoningSettings.setCloudOptIn(false)
+    /// The opt-in was already turned off and saved by ``ReasoningSettings``,
+    /// which also told the cloud backend to cancel requests in flight.
+    private func didDisableCloudReasoning() {
         cloudOptIn = false
         apiKeyInput = ""
         if reasoningProvider.isCloud {
@@ -580,13 +600,13 @@ struct SettingsView: View {
     // MARK: - Helpers
 
     private func saveApiKey() {
-        // Only reachable after opt-in; the key goes straight to the Keychain
-        // and is not kept in view state.
-        guard cloudOptIn else { return }
+        // Only reachable after opt-in. The key is trimmed, goes straight to
+        // the Keychain and is not kept in view state.
+        guard cloudOptIn, let key = ReasoningSettings.normalizedKey(apiKeyInput) else { return }
         do {
-            try KeychainHelper.saveApiKey(apiKeyInput, provider: KeychainReasoningKeyStore.claudeProvider)
+            try reasoningKeyStore.saveClaudeApiKey(key)
             apiKeyInput = ""
-            hasSavedClaudeKey = true
+            refreshSavedKeyState()
             onApiKeyChanged("")
             showApiKeySaved = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -598,9 +618,10 @@ struct SettingsView: View {
     }
 
     private func removeApiKey() {
-        KeychainHelper.deleteApiKey(provider: KeychainReasoningKeyStore.claudeProvider)
+        // Deletes the key and cancels any cloud request in flight at once.
+        reasoningSettings.removeClaudeKey(from: reasoningKeyStore)
         apiKeyInput = ""
-        hasSavedClaudeKey = false
+        refreshSavedKeyState()
         onApiKeyChanged("")
     }
 
@@ -705,6 +726,31 @@ struct CloudActiveIndicator: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(FlightRiskTheme.alertOrange)
             .accessibilityLabel("Cloud reasoning active. Person crops and the reference photo are sent to Anthropic.")
+    }
+}
+
+/// Small banner for the Search screen: the "Cloud active" indicator while
+/// cloud reasoning is active, and the fallback notice when the selected
+/// provider could not be used.
+struct ReasoningStatusBanner: View {
+    var body: some View {
+        let status = ReasoningActivity.shared.status
+        if status.isCloudActive || status.notice != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if status.isCloudActive {
+                    CloudActiveIndicator()
+                }
+                if let notice = status.notice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+        }
     }
 }
 
