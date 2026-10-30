@@ -7,18 +7,14 @@ import SwiftUI
 /// Mirrors the layout of the Android `SettingsScreen.kt`:
 ///   1. Sensitivity presets (pill buttons)
 ///   2. LLM backend picker + API key
-///   3. Drone status (read-only)
-///   4. Advanced threshold sliders (collapsible)
-///   5. About
+///   3. Advanced threshold sliders (collapsible)
+///   4. About
 struct SettingsView: View {
     let config: FlightRiskConfig
     let onPresetSelected: (SensitivityPreset) -> Void
     let onThresholdChanged: (String, Float) -> Void
     let onLlmBackendChanged: (String) -> Void
     let onApiKeyChanged: (String) -> Void
-    let llmAvailable: Bool
-    let droneState: TelloState?
-    let frameSourceMode: FrameSourceMode
     let modelManager: (any GemmaModelManaging)?
 
     @AppStorage("flightrisk_active_preset") private var activePresetRaw: String = SensitivityPreset.balanced.rawValue
@@ -50,7 +46,6 @@ struct SettingsView: View {
             sensitivitySection
             llmSection
             matchingAlgorithmsSection
-            droneSection
             advancedSection
             aboutSection
         }
@@ -477,44 +472,6 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Section 3: Drone Status
-
-    private var droneSection: some View {
-        Section {
-            HStack {
-                Label {
-                    Text(frameSourceMode == .drone ? "Tello Drone" : "Device Camera")
-                } icon: {
-                    Image(systemName: frameSourceMode == .drone ? "airplane" : "camera.fill")
-                }
-                .foregroundStyle(.primary)
-            }
-            .accessibilityLabel("Video source: \(frameSourceMode == .drone ? "Tello Drone" : "Device Camera")")
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 8, height: 8)
-                Text(connectionText)
-                    .foregroundStyle(connectionColor)
-            }
-            .accessibilityLabel("Drone connection: \(connectionText)")
-
-            if let battery = droneState?.telemetry.battery,
-               droneState?.connectionState == .connected || droneState?.connectionState == .streaming {
-                HStack(spacing: 8) {
-                    Image(systemName: batteryIconName(for: battery))
-                        .foregroundStyle(batteryColor(for: battery))
-                    Text("\(battery)%")
-                        .foregroundStyle(batteryColor(for: battery))
-                }
-                .accessibilityLabel("Drone battery: \(battery) percent")
-            }
-        } header: {
-            Text("Drone Status")
-        }
-    }
-
     // MARK: - Section 4: Advanced (Collapsible)
 
     private var advancedSection: some View {
@@ -670,48 +627,6 @@ struct SettingsView: View {
             return "Key saved, in use"
         } else {
             return "Key saved, not in use"
-        }
-    }
-
-    // Connection status helpers
-    private var connectionState: TelloConnectionState {
-        droneState?.connectionState ?? .disconnected
-    }
-
-    private var connectionColor: Color {
-        switch connectionState {
-        case .connected, .streaming: return FlightRiskTheme.matchGreen
-        case .connecting: return FlightRiskTheme.alertOrange
-        case .error: return FlightRiskTheme.alertRed
-        case .disconnected: return .secondary
-        }
-    }
-
-    private var connectionText: String {
-        switch connectionState {
-        case .disconnected: return "Disconnected"
-        case .connecting: return "Connecting..."
-        case .connected: return "Connected"
-        case .streaming: return "Streaming"
-        case .error: return "Error"
-        }
-    }
-
-    private func batteryColor(for level: Int) -> Color {
-        switch level {
-        case 51...: return FlightRiskTheme.matchGreen
-        case 21...50: return FlightRiskTheme.alertOrange
-        default: return FlightRiskTheme.alertRed
-        }
-    }
-
-    private func batteryIconName(for level: Int) -> String {
-        switch level {
-        case 76...: return "battery.100"
-        case 51...75: return "battery.75"
-        case 26...50: return "battery.50"
-        case 1...25: return "battery.25"
-        default: return "battery.0"
         }
     }
 }
@@ -965,12 +880,6 @@ private struct SignalConfigRow: View {
             onThresholdChanged: { _, _ in },
             onLlmBackendChanged: { _ in },
             onApiKeyChanged: { _ in },
-            llmAvailable: true,
-            droneState: TelloState(
-                connectionState: .connected,
-                telemetry: TelloTelemetry(battery: 72)
-            ),
-            frameSourceMode: .camera,
             modelManager: nil
         )
     }

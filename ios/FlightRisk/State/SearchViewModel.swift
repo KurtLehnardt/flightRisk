@@ -54,9 +54,6 @@ final class SearchViewModel {
     /// The currently active match alert, or nil if none.
     var activeAlert: MatchEntry?
 
-    /// Drone-specific alert message (e.g. "Battery low"), or nil.
-    var droneAlert: String?
-
     // MARK: - Detection Boxes
 
     /// Bounding boxes for overlay rendering in SwiftUI.
@@ -75,20 +72,6 @@ final class SearchViewModel {
     /// Height of the most recent frame in pixels.
     var frameHeight: Int = 0
 
-    // MARK: - Drone State
-
-    /// Current Tello drone telemetry and connection state.
-    var droneState: TelloState?
-
-    /// Whether frames come from the on-device camera or Tello video stream.
-    var frameSourceMode: FrameSourceMode = .camera
-
-    /// Latest raw frame from the Tello drone video feed.
-    var latestDroneFrame: CGImage?
-
-    /// Status message about drone connection (e.g. "Connecting...", "Connected").
-    var droneConnectionMessage: String?
-
     // MARK: - LLM Backend Status
 
     /// Name of the currently active LLM backend for display.
@@ -99,11 +82,6 @@ final class SearchViewModel {
 
     /// Status message about the backend (e.g., "Loading model...", thermal warning).
     var backendStatusMessage: String?
-
-    // MARK: - Search Pattern
-
-    /// The currently selected search pattern for autonomous drone flight.
-    var selectedPattern: PatternType = .expandingSquare
 
     // MARK: - Match History
 

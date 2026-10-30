@@ -8,8 +8,6 @@ struct ContentView: View {
     let viewModel: SearchViewModel
     let cameraSession: AVCaptureSession
     let config: FlightRiskConfig
-    let droneState: TelloState?
-    let frameSourceMode: FrameSourceMode
     let gemmaModelManager: (any GemmaModelManaging)?
     let pipeline: SearchPipeline?
     let llmSelector: LlmSelector?
@@ -51,9 +49,6 @@ struct ContentView: View {
                         // so it picks up the new key's availability status
                         Task { await llmSelector?.refreshAsync() }
                     },
-                    llmAvailable: viewModel.activeBackendName != nil && viewModel.activeBackendName != "none",
-                    droneState: droneState,
-                    frameSourceMode: frameSourceMode,
                     modelManager: gemmaModelManager
                 )
                     .tabItem {
