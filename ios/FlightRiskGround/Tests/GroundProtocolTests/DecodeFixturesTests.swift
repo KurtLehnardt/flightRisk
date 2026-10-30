@@ -437,9 +437,9 @@ final class DecodeFixturesTests: XCTestCase {
         XCTAssertNil(r.battery)
         XCTAssertNil(r.connected)
         XCTAssertNil(r.lost)
-        XCTAssertEqual(r.droneId, "7")
-        XCTAssertEqual(r.orphanLandInS, 120)
-        XCTAssertEqual(r.controlMode, .unknown(""))
+        XCTAssertNil(r.droneId, "a number is not a string")
+        XCTAssertNil(r.orphanLandInS, "a numeric string is not a number")
+        XCTAssertNil(r.controlMode, "a wrong-typed enum value reads as nil, not unknown")
     }
 
     func testModelsRoundTripThroughEncode() throws {

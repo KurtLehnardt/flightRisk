@@ -52,10 +52,30 @@ public enum GroundCommand: Equatable, Hashable, Sendable {
         }
     }
 
-    /// The payload as compact JSON with sorted keys, or nil for events without a payload.
+    /// False when a drone id is empty or only whitespace. Such a command must never be sent: in
+    /// fleet mode the ground reads a missing `drone_id` as the drone the laptop controls, so an
+    /// empty id would land (or resume) the wrong drone.
+    public var isSendable: Bool {
+        switch self {
+        case .landDrone(let id), .resumeHeldDrone(let id), .setDetectionProfile(let id, _):
+            return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default:
+            return true
+        }
+    }
+
+    /// The payload as compact JSON with sorted keys and unescaped slashes (byte-identical to the
+    /// Android app), or nil for events without a payload and for commands that are not sendable.
     public func encodedPayload() -> Data? {
-        guard let payload = payload else { return nil }
-        return try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        guard isSendable, let payload = payload else { return nil }
+        return try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .withoutEscapingSlashes])
+    }
+
+    /// What to put on the wire, or nil when the command is not sendable. The client must send
+    /// only through this, never from `eventName` and `payload` directly.
+    public var wireMessage: GroundWireMessage? {
+        guard isSendable else { return nil }
+        return GroundWireMessage(eventName: eventName, payloadJSON: encodedPayload())
     }
 
     /// The five state requests, sent on every connect and every reconnect.
@@ -72,4 +92,10 @@ public enum GroundCommand: Equatable, Hashable, Sendable {
 
     /// Event names the phone may emit. Derived from the cases, so it cannot drift from them.
     public static var allowedEventNames: Set<String> { Set(examples.map(\.eventName)) }
+}
+
+/// An event name and its optional compact JSON payload, ready for Socket.IO framing.
+public struct GroundWireMessage: Equatable, Sendable {
+    public let eventName: String
+    public let payloadJSON: Data?
 }

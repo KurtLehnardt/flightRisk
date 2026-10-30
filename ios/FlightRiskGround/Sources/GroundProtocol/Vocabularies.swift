@@ -27,7 +27,7 @@ public enum NackReason: WireEnum {
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return Self.table.first { $0.1 == self }!.0
+        return Self.table.first { $0.1 == self }?.0 ?? ""
     }
 }
 
@@ -44,7 +44,7 @@ public enum ProfileRefusalReason: WireEnum {
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return Self.table.first { $0.1 == self }!.0
+        return Self.table.first { $0.1 == self }?.0 ?? ""
     }
 }
 
@@ -61,7 +61,7 @@ public enum CeilingRefusalReason: WireEnum {
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return Self.table.first { $0.1 == self }!.0
+        return Self.table.first { $0.1 == self }?.0 ?? ""
     }
 }
 
@@ -139,7 +139,7 @@ public enum EdgeState: WireEnum {
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return Self.table.first { $0.1 == self }!.0
+        return Self.table.first { $0.1 == self }?.0 ?? ""
     }
 }
 
@@ -244,6 +244,6 @@ public enum FleetEventKind: WireEnum {
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return Self.table.first { $0.1 == self }!.0
+        return Self.table.first { $0.1 == self }?.0 ?? ""
     }
 }

@@ -84,15 +84,15 @@ public struct DroneRecord: Codable, Equatable, Sendable {
     /// Height in cm as the dashboard shows it: `height_cm`, else the legacy `height`.
     public var displayHeightCm: Double? { heightCm ?? height }
 
-    /// Overlay a `manual_status` entry, as the dashboard does with Object.assign: the five keys
-    /// a `manual_status` entry always carries replace this record's values, null included.
-    public func merging(manual entry: ManualDroneEntry) -> DroneRecord {
+    /// Lay the keys a `manual_status` entry carries over this record (null replaces too). Internal
+    /// on purpose: only `DroneStateReducer` may combine the two events, in arrival order.
+    func overlaying(_ entry: ManualDroneEntry) -> DroneRecord {
         var copy = self
-        copy.controlMode = entry.controlMode
-        copy.edgeControlMode = entry.edgeControlMode
-        copy.manualLast = entry.manualLast
-        copy.manualSupported = entry.manualSupported
-        copy.orphanLandInS = entry.orphanLandInS
+        if entry.carriedKeys.contains("control_mode") { copy.controlMode = entry.controlMode }
+        if entry.carriedKeys.contains("edge_control_mode") { copy.edgeControlMode = entry.edgeControlMode }
+        if entry.carriedKeys.contains("manual_last") { copy.manualLast = entry.manualLast }
+        if entry.carriedKeys.contains("manual_supported") { copy.manualSupported = entry.manualSupported }
+        if entry.carriedKeys.contains("orphan_land_in_s") { copy.orphanLandInS = entry.orphanLandInS }
         return copy
     }
 }
@@ -126,12 +126,27 @@ public struct ManualDroneEntry: Codable, Equatable, Sendable {
     @Lenient public var manualLast: JSONValue?
     @Lenient public var manualSupported: Bool?
     @Lenient public var orphanLandInS: Double?
+    /// The wire keys this entry actually carried (a key with a null value counts). A
+    /// `manual_status` replaces only these keys on a drone's record.
+    public internal(set) var carriedKeys: Set<String> = []
 
     enum CodingKeys: String, CodingKey {
         case controlMode = "control_mode", edgeControlMode = "edge_control_mode"
         case manualLast = "manual_last", manualSupported = "manual_supported"
         case orphanLandInS = "orphan_land_in_s"
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        _controlMode = try c.decode(Lenient<ControlMode>.self, forKey: .controlMode)
+        _edgeControlMode = try c.decode(Lenient<ControlMode>.self, forKey: .edgeControlMode)
+        _manualLast = try c.decode(Lenient<JSONValue>.self, forKey: .manualLast)
+        _manualSupported = try c.decode(Lenient<Bool>.self, forKey: .manualSupported)
+        _orphanLandInS = try c.decode(Lenient<Double>.self, forKey: .orphanLandInS)
+        carriedKeys = Set(c.allKeys.map(\.stringValue))
+    }
+
+    public init() {}
 }
 
 public struct ManualStatusPayload: Codable, Equatable, Sendable {
@@ -490,7 +505,8 @@ public struct DetectionProfilesPayload: Codable, Equatable, Sendable {
     /// The dashboard's `profileLabel`: the profile's label, else its name, else `--`.
     public func label(for name: String?) -> String {
         if let p = profiles?.first(where: { $0.name == name }), let l = p.label { return l }
-        return (name?.isEmpty == false ? name : nil) ?? "--"
+        if let n = name, !n.isEmpty { return n }
+        return "--"
     }
 }
 

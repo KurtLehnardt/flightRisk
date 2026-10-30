@@ -5,7 +5,7 @@ final class TextTests: XCTestCase {
     func testLandAllResults() throws {
         let none = GroundText.landAllResult(try Fixtures.decode(LandAllAck.self, "land_all_ack", "reached_no_drone"))
         XCTAssertTrue(none.isFailure)
-        XCTAssertEqual(none.text, "LAND ALL reached no drone. Land every drone with its local control now.")
+        XCTAssertEqual(none.text, "LAND ALL FAILED: no drone was reached. Land each drone by hand (per-drone Land, or the drone's own controls).")
         let all = GroundText.landAllResult(try Fixtures.decode(LandAllAck.self, "land_all_ack", "fleet_reached_all"))
         XCTAssertFalse(all.isFailure)
         XCTAssertEqual(all.text, "LAND ALL reached drones (coordinator 2, transport 2)")
@@ -37,7 +37,10 @@ final class TextTests: XCTestCase {
         }
         XCTAssertEqual(try banner("drone_lost"), "DRONE LOST: drone-2")
         XCTAssertEqual(try banner("land_all"), "LAND ALL sent")
-        XCTAssertEqual(try banner("land_all_failed"), "LAND ALL sent", "the dashboard banner ignores detail; the detail still shows failed: drone-2")
+        XCTAssertEqual(try banner("land_all_failed"), "LAND ALL sent", "plain banner text; use fleetEventBannerInfo for the failure")
+        let failed = try XCTUnwrap(GroundText.fleetEventBannerInfo(try Fixtures.decode(FleetEvent.self, "fleet_event", "land_all_failed")))
+        XCTAssertTrue(failed.isFailure)
+        XCTAssertEqual(failed.text, "LAND ALL FAILED: failed: drone-2. Land each drone by hand (per-drone Land, or the drone's own controls).")
         XCTAssertEqual(try banner("plan_invalidated"), "PLAN EDITED: press Plan search again")
         XCTAssertEqual(try banner("start"), "start")
         XCTAssertEqual(try banner("retask"), "RETASK: drone-2 no lanes accepted yet; 2 lanes awaiting drone-1")
@@ -70,6 +73,8 @@ final class TextTests: XCTestCase {
     }
 
     func testConnectionStrings() {
+        XCTAssertEqual(GroundText.landAllSending, "LAND ALL sending\u{2026}")
+        XCTAssertEqual(GroundText.landAllNoReplyYet, "LAND ALL: no reply from the ground yet. Check the connection.")
         XCTAssertTrue(GroundText.landAllNotSent.hasPrefix("LAND ALL was not sent"))
         XCTAssertTrue(GroundText.landAllNotSent.contains("Shift+L"))
     }

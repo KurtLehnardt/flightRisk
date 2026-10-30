@@ -33,10 +33,61 @@ public enum JSONValue: Codable, Equatable, Sendable {
     }
 }
 
+/// A collection that decodes element by element, skipping elements that do not decode, so one
+/// bad entry never drops the whole collection.
+protocol LenientCollection {
+    static func decodeLenient(from decoder: Decoder) -> Any?
+}
+
+/// Accepts any JSON value without failing; used to step past an element that did not decode.
+private struct SkipValue: Decodable {
+    init(from decoder: Decoder) throws {}
+}
+
+private struct DynamicKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}
+
+extension Array: LenientCollection where Element: Decodable {
+    static func decodeLenient(from decoder: Decoder) -> Any? {
+        guard var c = try? decoder.unkeyedContainer() else { return nil }
+        var out: [Element] = []
+        while !c.isAtEnd {
+            if Element.self == Int.self {
+                // Same 32-bit whole-number rule as an Int field.
+                // Lenient never throws, so the element is consumed either way.
+                if let l = try? c.decode(Lenient<Int>.self) {
+                    if let v = l.wrappedValue as? Element { out.append(v) }
+                } else { break }
+            } else if let e = try? c.decode(Element.self) { out.append(e) } else { _ = try? c.decode(SkipValue.self) }
+        }
+        return out
+    }
+}
+
+extension Dictionary: LenientCollection where Key == String, Value: Decodable {
+    static func decodeLenient(from decoder: Decoder) -> Any? {
+        guard let c = try? decoder.container(keyedBy: DynamicKey.self) else { return nil }
+        var out: [String: Value] = [:]
+        for key in c.allKeys {
+            if Value.self == Int.self {
+                if let v = (try? c.decode(Lenient<Int>.self, forKey: key))?.wrappedValue as? Value { out[key.stringValue] = v }
+            } else if let v = try? c.decode(Value.self, forKey: key) { out[key.stringValue] = v }
+        }
+        return out
+    }
+}
+
 /// Property wrapper for a wire field the server may omit, send as null, or send with an
 /// unexpected type. Every such case decodes to nil and never throws, so one odd field can never
-/// make a whole payload undecodable. Numbers are accepted for String fields and numeric strings
-/// for Double and Int fields, as the dashboard's JavaScript does.
+/// make a whole payload undecodable. Types are strict, as in the dashboard and the Android app:
+/// a number is never read from a string, a string never from a number, a boolean never from 0
+/// or 1. An Int field accepts a whole number that fits in 32 bits and reads anything else
+/// (fractional, huge, non-numeric) as nil, never trapping. Arrays and string-keyed maps decode
+/// element by element and skip the elements that do not decode.
 @propertyWrapper
 public struct Lenient<Value: Codable & Equatable & Sendable>: Codable, Equatable, Sendable {
     public var wrappedValue: Value?
@@ -45,19 +96,18 @@ public struct Lenient<Value: Codable & Equatable & Sendable>: Codable, Equatable
     public init() { self.wrappedValue = nil }
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if c.decodeNil() { wrappedValue = nil; return }
-        if let v = try? c.decode(Value.self) { wrappedValue = v; return }
-        if Value.self == String.self {
-            if let i = try? c.decode(Int.self) { wrappedValue = String(i) as? Value; return }
-            if let d = try? c.decode(Double.self) { wrappedValue = String(d) as? Value; return }
-        } else if Value.self == Double.self {
-            if let s = try? c.decode(String.self), let d = Double(s) { wrappedValue = d as? Value; return }
-        } else if Value.self == Int.self {
-            if let s = try? c.decode(String.self), let i = Int(s) { wrappedValue = i as? Value; return }
-            if let d = try? c.decode(Double.self), d.rounded() == d { wrappedValue = Int(d) as? Value; return }
-        }
         wrappedValue = nil
+        guard let c = try? decoder.singleValueContainer(), !c.decodeNil() else { return }
+        if Value.self == Int.self {
+            if let d = try? c.decode(Double.self), d.isFinite, d == d.rounded(.down),
+               d >= Double(Int32.min), d <= Double(Int32.max) {
+                wrappedValue = Int(d) as? Value
+            }
+        } else if let collection = Value.self as? any LenientCollection.Type {
+            wrappedValue = collection.decodeLenient(from: decoder) as? Value
+        } else {
+            wrappedValue = try? c.decode(Value.self)
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,8 +134,10 @@ public protocol WireEnum: Codable, Equatable, Hashable, Sendable {
 
 extension WireEnum {
     public init(from decoder: Decoder) throws {
+        // A value that is not a string is not a vocabulary value: throwing here makes a Lenient
+        // field read as nil, so a wrong-typed `event` or `reason` never hides a valid fallback.
         let c = try decoder.singleValueContainer()
-        self.init(wire: (try? c.decode(String.self)) ?? "")
+        self.init(wire: try c.decode(String.self))
     }
 
     public func encode(to encoder: Encoder) throws {

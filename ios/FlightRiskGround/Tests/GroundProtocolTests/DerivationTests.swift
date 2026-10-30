@@ -195,19 +195,21 @@ final class DerivationTests: XCTestCase {
 
     // MARK: manual_status overlay, countdown, resume
 
-    func testManualStatusOverlaysTheFleetStatusRecord() throws {
-        let s = try fleet("all_connected")
-        let m = try Fixtures.decode(ManualStatusPayload.self, "manual_status", "held_orphan_countdown")
-        let merged = try XCTUnwrap(s.drones?["drone-2"]).merging(manual: try XCTUnwrap(m.drones?["drone-2"]))
-        XCTAssertEqual(ControlState(id: "drone-2", record: merged, manualControlled: m.controlled), .held(orphanLandInS: 120))
-        XCTAssertEqual(merged.battery, 87, "other fields are kept")
-        let cleared = merged.merging(manual: try XCTUnwrap(m.drones?["drone-1"]))
-        XCTAssertNil(cleared.orphanLandInS, "a null in manual_status replaces the old value, as Object.assign does")
+    func testReducerLaysManualStatusOverFleetStatusWhenItArrivesLater() throws {
+        var r = DroneStateReducer()
+        r.apply(.fleetStatus(try fleet("all_connected")))
+        r.apply(.manualStatus(try Fixtures.decode(ManualStatusPayload.self, "manual_status", "held_orphan_countdown")))
+        XCTAssertEqual(r.card(for: "drone-2")?.control, .held(orphanLandInS: 120))
+        XCTAssertEqual(r.drones["drone-2"]?.battery, 87, "other fields are kept")
+        r.apply(.manualStatus(try Fixtures.decode(ManualStatusPayload.self, "manual_status", "manual_controlled")))
+        XCTAssertNil(r.drones["drone-2"]?.orphanLandInS, "a null in manual_status replaces the old value")
+        XCTAssertEqual(r.manualControlled, "drone-2")
     }
 
     func testLocalCountdownCountsDownAndReplacesWithNewValues() {
         XCTAssertEqual(OrphanCountdown.remaining(received: 120, elapsedSeconds: 0), 120)
         XCTAssertEqual(OrphanCountdown.remaining(received: 120, elapsedSeconds: 7.9), 113)
+        XCTAssertEqual(OrphanCountdown.remaining(received: 29.6, elapsedSeconds: 2), 27.6, accuracy: 1e-9)
         XCTAssertEqual(OrphanCountdown.remaining(received: 120, elapsedSeconds: 500), 0)
         XCTAssertEqual(OrphanCountdown.remaining(received: 120, elapsedSeconds: -3), 120)
     }

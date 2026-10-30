@@ -3,12 +3,20 @@ import Foundation
 /// Human-readable text for status chips and refusals. Pure functions, no UI. Wording copies the
 /// dashboard (`flightrisk/dashboard/static/ui/ui.js`) wherever docs/mobile-contract.md gives it.
 public enum GroundText {
-    /// The dashboard's `fmt`: one decimal at most, `--` for absent values.
+    /// The dashboard's `fmt`: `Math.round(v * 10) / 10`, `--` for absent values. JavaScript
+    /// rounds halves toward positive infinity, so -0.25 gives -0.2, not -0.3.
     public static func number(_ v: Double?) -> String {
         guard let v = v, v.isFinite else { return "--" }
-        let rounded = (v * 10).rounded() / 10
-        if rounded == rounded.rounded(), abs(rounded) < 1e15 { return String(Int64(rounded)) }
-        return String(rounded)
+        return jsNumber(((v * 10) + 0.5).rounded(.down) / 10)
+    }
+
+    /// A number as JavaScript prints it in string concatenation: 120 not 120.0, 29.6 as is,
+    /// and -0 as 0.
+    public static func jsNumber(_ v: Double) -> String {
+        guard v.isFinite else { return "--" }
+        if v == 0 { return "0" }
+        if v == v.rounded(), abs(v) < 1e15 { return String(Int64(v)) }
+        return String(v)
     }
 
     public static let staleValuesNote = "No live link: values are the last ones received"
@@ -16,7 +24,8 @@ public enum GroundText {
     /// "Drone link down: <detail>. Land still works." when `drone_link_ok == false`, else nil.
     public static func droneLinkNotice(_ record: DroneRecord) -> String? {
         guard record.droneLinkOk == false else { return nil }
-        let detail = (record.droneLinkDetail?.isEmpty == false) ? record.droneLinkDetail! : "the edge cannot reach the drone"
+        var detail = "the edge cannot reach the drone"
+        if let d = record.droneLinkDetail, !d.isEmpty { detail = d }
         return "Drone link down: \(detail). Land still works."
     }
 
@@ -29,16 +38,21 @@ public enum GroundText {
 
     // MARK: LAND ALL
 
+    /// The sentence the ground itself broadcasts as `error` when `reached_any` is false.
     public static let landAllReachedNoDrone =
         "LAND ALL reached no drone. Land every drone with its local control now."
-    public static let landAllSending = "Sending LAND ALL"
-    public static let landAllNoReplyYet = "No reply yet to LAND ALL"
+    public static let landAllSending = "LAND ALL sending\u{2026}"
+    public static let landAllNoReplyYet = "LAND ALL: no reply from the ground yet. Check the connection."
     public static let landAllNotSent =
         "LAND ALL was not sent: not connected to the ground. Reconnecting. Use the laptop's LAND ALL (Shift+L) or the drones' own controls."
+    private static let landByHand = "Land each drone by hand (per-drone Land, or the drone's own controls)."
+    /// Shown when an ack reports that no drone was reached, or says nothing.
+    public static let landAllFailedNoDrone = "LAND ALL FAILED: no drone was reached. " + landByHand
 
-    /// Text for a `land_all_ack`. `isFailure` is true when `reached_any == false`.
+    /// Text for a `land_all_ack`. Anything other than `reached_any == true` is a failure: a
+    /// missing, null, string or false value never counts as success.
     public static func landAllResult(_ ack: LandAllAck) -> (text: String, isFailure: Bool) {
-        if ack.reachedAny == false { return (landAllReachedNoDrone, true) }
+        if ack.reachedAny != true { return (landAllFailedNoDrone, true) }
         var parts: [String] = []
         if let n = ack.coordinator { parts.append("coordinator \(n)") }
         if let n = ack.transport { parts.append("transport \(n)") }
@@ -49,11 +63,31 @@ public enum GroundText {
 
     // MARK: fleet events
 
-    /// The banner the dashboard shows for a `fleet_event`, or nil when it shows none.
+    /// A `fleet_event` shown as a banner. `isFailure` is true for a failed LAND ALL.
+    public struct Banner: Equatable, Sendable {
+        public let text: String
+        public let isFailure: Bool
+    }
+
+    /// The banner for a `fleet_event`, or nil when none is shown. A `land_all` event whose detail
+    /// starts with "failed" (the ground sends "failed: drone-2" when the emergency land could not
+    /// reach a link) is a failure, not "LAND ALL sent".
+    public static func fleetEventBannerInfo(_ ev: FleetEvent) -> Banner? {
+        if ev.resolvedKind == .landAll, let d = ev.detail, d.hasPrefix("failed") {
+            return Banner(text: "LAND ALL FAILED: \(d). " + landByHand, isFailure: true)
+        }
+        guard let text = fleetEventBanner(ev) else { return nil }
+        return Banner(text: text, isFailure: false)
+    }
+
+    /// The banner text the dashboard shows for a `fleet_event`, or nil when it shows none. Use
+    /// `fleetEventBannerInfo` to also get the failure flag and the failed LAND ALL text.
     public static func fleetEventBanner(_ ev: FleetEvent) -> String? {
         guard let kind = ev.resolvedKind else { return nil }
-        let who = (ev.droneId?.isEmpty == false) ? " " + ev.droneId! : ""
-        let detail = (ev.detail?.isEmpty == false) ? ev.detail : nil
+        var who = ""
+        if let id = ev.droneId, !id.isEmpty { who = " " + id }
+        var detail: String?
+        if let d = ev.detail, !d.isEmpty { detail = d }
         switch kind {
         case .retaskFailed: return "RETASK FAILED: " + (detail ?? ev.droneId ?? "")
         case .retask: return "RETASK:" + who + (detail.map { " " + $0 } ?? "")
@@ -71,7 +105,8 @@ public enum GroundText {
     /// The error line for a refused plan or start, as the dashboard words it; nil for other kinds.
     /// The ground's `detail` is shown as sent; the phone never rewrites or second-guesses it.
     public static func fleetRefusal(_ ev: FleetEvent) -> String? {
-        let detail = (ev.detail?.isEmpty == false) ? ev.detail! : "unknown"
+        var detail = "unknown"
+        if let d = ev.detail, !d.isEmpty { detail = d }
         switch ev.resolvedKind {
         case .planRefused?: return "Plan refused: " + detail
         case .startRefused?: return "Start refused: " + detail
@@ -85,7 +120,8 @@ public enum GroundText {
     public static func manualRefusal(_ reply: ManualReply) -> String? {
         guard reply.ok == false else { return nil }
         let id = reply.droneId ?? "drone"
-        let why = (reply.detail?.isEmpty == false) ? reply.detail! : (reply.reason.map { nackReasonText($0) } ?? "refused")
+        var why = reply.reason.map { nackReasonText($0) } ?? "refused"
+        if let d = reply.detail, !d.isEmpty { why = d }
         return "\(id): \(why)"
     }
 
@@ -142,11 +178,13 @@ public enum GroundText {
         default: break
         }
         if d.fallback == true {
-            let asked = (d.requested?.isEmpty == false) ? label(d.requested) : "the requested profile"
+            var asked = "the requested profile"
+            if let r = d.requested, !r.isEmpty { asked = label(r) }
             let why: String
             if d.fallbackReason?.wire == "weights_missing" { why = "weights missing on the edge" }
             else {
-                let raw = (d.fallbackReason?.wire.isEmpty == false) ? d.fallbackReason!.wire : "unknown"
+                var raw = "unknown"
+                if let w = d.fallbackReason?.wire, !w.isEmpty { raw = w }
                 why = "could not be used (\(raw))"
             }
             return ("Active: \(label(d.active)) (fallback: \(asked) \(why)).", .warn)

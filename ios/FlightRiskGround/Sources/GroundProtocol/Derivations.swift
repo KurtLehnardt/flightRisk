@@ -61,7 +61,7 @@ public enum DroneActivity: Equatable, Hashable, Sendable {
 public enum ControlState: Equatable, Hashable, Sendable {
     /// HELD. `orphanLandInS` is set while the ground counts down to landing a held drone that
     /// nobody controls, and nil for a plain hold.
-    case held(orphanLandInS: Int?)
+    case held(orphanLandInS: Double?)
     /// MANUAL. `underOperatorControl` is true when the dashboard's controller holds this drone.
     case manual(underOperatorControl: Bool)
     /// Under the autonomous search (or no control information).
@@ -72,9 +72,8 @@ public enum ControlState: Equatable, Hashable, Sendable {
     ///   - manualControlled: `fleet_status.manual_controlled` or `manual_status.controlled`.
     public init(id: String, record: DroneRecord, manualControlled: String?) {
         if let landIn = record.orphanLandInS, landIn.isFinite {
-            let whole = landIn.rounded(.towardZero)
-            let clamped = min(max(whole, Double(Int32.min)), Double(Int32.max))
-            self = .held(orphanLandInS: Int(clamped))
+            // Kept exactly as sent: the dashboard prints the raw number ("29.6 s"), never rounds it.
+            self = .held(orphanLandInS: landIn)
         } else if !id.isEmpty, let m = manualControlled, id == m {
             self = .manual(underOperatorControl: true)
         } else if record.controlMode == .held || record.edgeControlMode == .held {
@@ -93,7 +92,7 @@ public enum ControlState: Equatable, Hashable, Sendable {
     /// Exactly the dashboard's `modeText` text. Empty means show nothing.
     public var dashboardText: String {
         switch self {
-        case .held(let n?): return "HELD: auto-landing in \(n) s, no controller"
+        case .held(let n?): return "HELD: auto-landing in \(GroundText.jsNumber(n)) s, no controller"
         case .held(nil): return "HELD: hovering, search paused"
         case .manual(true): return "MANUAL: under your control"
         case .manual(false): return "MANUAL"
@@ -117,7 +116,7 @@ public enum ControlState: Equatable, Hashable, Sendable {
     }
 
     /// The seconds shown on the countdown, if any.
-    public var orphanLandInS: Int? {
+    public var orphanLandInS: Double? {
         if case .held(let n) = self { return n }
         return nil
     }
@@ -125,7 +124,7 @@ public enum ControlState: Equatable, Hashable, Sendable {
     /// The dashboard's video-tile badge: MANUAL or HELD, or the countdown text while counting.
     public var tileBadge: String {
         switch self {
-        case .held(let n?): return "HELD: auto-landing in \(n) s, no controller"
+        case .held(let n?): return "HELD: auto-landing in \(GroundText.jsNumber(n)) s, no controller"
         case .held(nil): return "HELD"
         case .manual: return "MANUAL"
         case .autonomous: return ""
@@ -135,11 +134,10 @@ public enum ControlState: Equatable, Hashable, Sendable {
 
 /// The local HELD countdown: count down between updates, replace with every new value.
 public enum OrphanCountdown {
-    /// Whole seconds left, never below zero.
-    public static func remaining(received: Int, elapsedSeconds: Double) -> Int {
+    /// Seconds left after whole elapsed seconds, never below zero.
+    public static func remaining(received: Double, elapsedSeconds: Double) -> Double {
         guard elapsedSeconds.isFinite, elapsedSeconds > 0 else { return max(0, received) }
-        let elapsed = Int(min(elapsedSeconds.rounded(.down), Double(Int32.max)))
-        return max(0, received - elapsed)
+        return max(0, received - elapsedSeconds.rounded(.down))
     }
 }
 

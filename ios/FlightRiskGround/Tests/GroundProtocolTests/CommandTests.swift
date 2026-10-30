@@ -81,7 +81,7 @@ final class CommandTests: XCTestCase {
     }
 
     func testLandDroneAlwaysCarriesCommandLandAndNothingElse() throws {
-        for id in ["drone-1", "drone-2", "", "x y"] {
+        for id in ["drone-1", "drone-2", "x y"] {
             let cmd = GroundCommand.landDrone(droneId: id)
             XCTAssertEqual(cmd.eventName, "drone_command")
             XCTAssertEqual(cmd.payload, ["command": "land", "drone_id": id])
