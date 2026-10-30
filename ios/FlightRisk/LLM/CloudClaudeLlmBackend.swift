@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import OSLog
+import os
 import UniformTypeIdentifiers
 
 /// LLM backend that calls the Anthropic Messages API (Claude) for
@@ -14,6 +15,11 @@ import UniformTypeIdentifiers
 /// Images are JPEG-encoded and sent as base64 `image` content blocks.
 /// The response is parsed for the structured MATCH / CONFIDENCE /
 /// REASONING format that the Python agent also uses.
+///
+/// Cloud use is controlled by a ``CloudGate`` that reads the saved opt-in,
+/// the selected provider and the Keychain key at call time. The gate is
+/// checked before encoding and again immediately before the request is
+/// sent, and requests in flight are cancelled as soon as the gate closes.
 final class CloudClaudeLlmBackend: LlmBackend {
 
     // MARK: - Constants
@@ -29,39 +35,121 @@ final class CloudClaudeLlmBackend: LlmBackend {
 
     let name: String = "claude"
 
-    /// Anthropic API key. Set externally by the caller (e.g. AppState
-    /// loading from Keychain). When empty, ``isAvailable`` is false.
-    var apiKey: String
-
     /// Claude model identifier.
     private let model: String
 
     /// HTTP timeout in seconds.
     private let timeoutInterval: TimeInterval
 
-    /// Connectivity check callback. Injected by ``LlmSelector`` so the
-    /// backend doesn't own its own NWPathMonitor.
-    var connectivityCheck: () -> Bool = { true }
+    /// Dedicated session, so requests in flight can be cancelled when the
+    /// cloud gate closes without touching any other network traffic.
+    private let session: URLSession
 
+    /// Mutable state shared between the selector, the search pipeline and
+    /// the revocation observer. Every access goes through the lock.
+    private struct State {
+        var gate: CloudGate = { nil }
+        var isOnline = true
+        /// Incremented whenever the gate is found closed; a request started
+        /// under an older generation is cancelled.
+        var generation = 0
+        var inFlight: [UUID: Task<(Data, URLResponse), Error>] = [:]
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private var revocationObserver: NSObjectProtocol?
+
+    /// True only while the gate yields a key (opt-in on, Cloud Claude
+    /// selected, key saved) and the device is online. Evaluated at call time.
     var isAvailable: Bool {
-        !apiKey.isEmpty && connectivityCheck()
+        let (gate, online) = state.withLock { ($0.gate, $0.isOnline) }
+        return online && gate() != nil
     }
 
     // MARK: - Init
 
     /// - Parameters:
-    ///   - apiKey: Anthropic API key. Pass empty string if not yet loaded.
     ///   - model: Claude model identifier.
     ///   - timeoutInterval: HTTP timeout in seconds.
+    ///   - gate: Returns the API key only while cloud use is allowed. The
+    ///     default is closed; ``LlmSelector`` installs the real gate when the
+    ///     backend is registered.
+    ///   - sessionConfiguration: Configuration for the dedicated session.
+    ///     Tests pass one with a stub `URLProtocol`.
     init(
-        apiKey: String = "",
         model: String = "claude-sonnet-4-20250514",
-        timeoutInterval: TimeInterval = 30
+        timeoutInterval: TimeInterval = 30,
+        gate: @escaping CloudGate = { nil },
+        sessionConfiguration: URLSessionConfiguration = .ephemeral
     ) {
-        self.apiKey = apiKey
         self.model = model
         self.timeoutInterval = timeoutInterval
+        self.session = URLSession(configuration: sessionConfiguration)
+        state.withLock { $0.gate = gate }
+        // Settings changes that can close the gate (opt-out, selecting
+        // another provider, removing the key) post this notification
+        // synchronously, so requests in flight are cancelled at once.
+        revocationObserver = NotificationCenter.default.addObserver(
+            forName: ReasoningSettings.cloudGateMayHaveClosed,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.cancelIfGateClosed()
+        }
     }
+
+    deinit {
+        if let revocationObserver {
+            NotificationCenter.default.removeObserver(revocationObserver)
+        }
+        session.invalidateAndCancel()
+    }
+
+    // MARK: - Gate control
+
+    /// Replace the gate. Cancels requests in flight if the new gate is closed.
+    func setGate(_ gate: @escaping CloudGate) {
+        state.withLock { $0.gate = gate }
+        cancelIfGateClosed()
+    }
+
+    /// Update the connectivity flag (set by ``LlmSelector``).
+    func setOnline(_ online: Bool) {
+        state.withLock { $0.isOnline = online }
+    }
+
+    /// Cancel every request in flight if the gate no longer yields a key.
+    func cancelIfGateClosed() {
+        let gate = state.withLock { $0.gate }
+        if gate() == nil {
+            cancelAllRequests()
+        }
+    }
+
+    /// Cancel every request in flight and any request that is about to start.
+    func cancelAllRequests() {
+        let tasks = state.withLock { s -> [Task<(Data, URLResponse), Error>] in
+            s.generation += 1
+            let tasks = Array(s.inFlight.values)
+            s.inFlight.removeAll()
+            return tasks
+        }
+        tasks.forEach { $0.cancel() }
+        session.getAllTasks { $0.forEach { $0.cancel() } }
+    }
+
+    /// The key from the gate, or nil when cloud use is not allowed right now.
+    private func currentKey() -> String? {
+        let gate = state.withLock { $0.gate }
+        guard let key = gate(), !key.isEmpty else { return nil }
+        return key
+    }
+
+    private static let blockedResult = ReasoningResult(
+        isMatch: false,
+        confidence: "unavailable",
+        reasoning: "Cloud reasoning is not allowed right now (not opted in, not selected, no API key, or offline)"
+    )
 
     // MARK: - Public API
 
@@ -70,13 +158,8 @@ final class CloudClaudeLlmBackend: LlmBackend {
         candidateImage: CGImage,
         description: String?
     ) async -> ReasoningResult {
-        guard isAvailable else {
-            return ReasoningResult(
-                isMatch: false,
-                confidence: "unavailable",
-                reasoning: "Claude API not available (no API key or no internet)"
-            )
-        }
+        // First gate check: nothing is encoded unless cloud use is allowed.
+        guard isAvailable else { return Self.blockedResult }
 
         guard let refB64 = cgImageToBase64(referenceImage),
               let candB64 = cgImageToBase64(candidateImage) else {
@@ -121,13 +204,8 @@ final class CloudClaudeLlmBackend: LlmBackend {
         candidateImage: CGImage,
         description: String
     ) async -> ReasoningResult {
-        guard isAvailable else {
-            return ReasoningResult(
-                isMatch: false,
-                confidence: "unavailable",
-                reasoning: "Claude API not available (no API key or no internet)"
-            )
-        }
+        // First gate check: nothing is encoded unless cloud use is allowed.
+        guard isAvailable else { return Self.blockedResult }
 
         guard let candB64 = cgImageToBase64(candidateImage) else {
             return ReasoningResult(
@@ -181,16 +259,38 @@ final class CloudClaudeLlmBackend: LlmBackend {
             return ReasoningResult(isMatch: false, confidence: "error", reasoning: "Failed to serialize request")
         }
 
+        // Second gate check, immediately before sending. One copy of the key
+        // is used for both the check and the header, so the header can never
+        // be empty, and the generation is read first so a revocation that
+        // happens from here on cancels this request.
+        let generation = state.withLock { $0.generation }
+        guard state.withLock({ $0.isOnline }), let key = currentKey() else {
+            return Self.blockedResult
+        }
+
         var request = URLRequest(url: Self.apiURL)
         request.httpMethod = "POST"
         request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
         request.setValue(Self.apiVersion, forHTTPHeaderField: "anthropic-version")
         request.httpBody = jsonData
 
+        let id = UUID()
+        let session = self.session
+        let task = Task { try await session.data(for: request) }
+        let registered = state.withLock { s -> Bool in
+            guard s.generation == generation else { return false }
+            s.inFlight[id] = task
+            return true
+        }
+        if !registered {
+            task.cancel()
+        }
+        defer { state.withLock { _ = $0.inFlight.removeValue(forKey: id) } }
+
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await task.value
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 return ReasoningResult(isMatch: false, confidence: "error", reasoning: "Invalid response")
@@ -219,6 +319,10 @@ final class CloudClaudeLlmBackend: LlmBackend {
             return parseMatchResponse(fullText)
 
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                logger.info("Cloud request cancelled because cloud reasoning was turned off")
+                return Self.blockedResult
+            }
             logger.error("API call failed: \(error.localizedDescription)")
             return ReasoningResult(
                 isMatch: false,
