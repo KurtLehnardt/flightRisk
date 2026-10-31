@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 import os
 
 // MARK: - Transport
@@ -66,6 +67,12 @@ public enum GroundTransportError: Error, Equatable, Sendable, CustomStringConver
 /// Network.framework does not offer the permessage-deflate extension, so a
 /// server cannot send compressed frames that expand after these checks.
 ///
+/// Address policy: `connect()` resolves the host with `getaddrinfo` on a
+/// background queue, refuses cleartext (`ws://`) unless every resolved address
+/// is a local network address (`LanAddressPolicy`), and then connects to the
+/// checked IP address, not to the name. A `wss://` connection is encrypted and
+/// not subject to the rule; this app does not pin certificates.
+///
 /// Headers: the upgrade request carries no `Origin` (the dashboard's
 /// Engine.IO refuses a foreign origin and checks none when the header is
 /// absent) and no credentials; the API key travels only inside the Socket.IO
@@ -74,18 +81,51 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     /// The largest chunk read from the connection at a time.
     public static let chunkBytes = 64 * 1024
 
-    private let connection: NWConnection
     private let queue = DispatchQueue(label: "app.flightrisk.ground.websocket")
     private let maxFrameBytes: Int
+    private let url: URL
+    private let openTimeout: TimeInterval
+    private let networkMessageLimit: Bool
+    private let resolver: GroundHostResolver
+    private let lock = NSLock()
+    private var storedConnection: NWConnection?
+    private var isClosed = false
 
     public convenience init(url: URL, maxFrameBytes: Int, openTimeout: TimeInterval = 10) {
         self.init(url: url, maxFrameBytes: maxFrameBytes, openTimeout: openTimeout, networkMessageLimit: true)
     }
 
     /// `networkMessageLimit: false` exists only so tests can prove the chunked
-    /// guard on its own.
-    init(url: URL, maxFrameBytes: Int, openTimeout: TimeInterval, networkMessageLimit: Bool) {
+    /// guard on its own. `resolver` is replaced only by tests.
+    init(
+        url: URL,
+        maxFrameBytes: Int,
+        openTimeout: TimeInterval,
+        networkMessageLimit: Bool,
+        resolver: @escaping GroundHostResolver = GroundSystemResolver.resolve
+    ) {
+        self.url = url
         self.maxFrameBytes = maxFrameBytes
+        self.openTimeout = openTimeout
+        self.networkMessageLimit = networkMessageLimit
+        self.resolver = resolver
+    }
+
+    /// The factory the app passes to `GroundClient` (the default).
+    public static let factory: GroundTransportFactory = { url, maxFrameBytes in
+        NWGroundTransport(url: url, maxFrameBytes: maxFrameBytes)
+    }
+
+    /// True once a connection object exists (tests assert none is made for a refused address).
+    var hasConnection: Bool { connection != nil }
+
+    private var connection: NWConnection? {
+        lock.withLock { storedConnection }
+    }
+
+    /// Builds the connection for a target the policy already passed. The
+    /// connection goes to the checked IP address, never to the name.
+    private func makeConnection(_ target: GroundConnectTarget) throws -> NWConnection {
         let webSocket = NWProtocolWebSocket.Options()
         webSocket.autoReplyPing = true
         if networkMessageLimit {
@@ -94,22 +134,37 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
         // Deliberately no additional headers: no Origin, no Authorization.
         let tcp = NWProtocolTCP.Options()
         tcp.connectionTimeout = max(1, Int(openTimeout.rounded(.up)))
-        let parameters = url.scheme == "wss"
-            ? NWParameters(tls: NWProtocolTLS.Options(), tcp: tcp)
-            : NWParameters(tls: nil, tcp: tcp)
+        let parameters: NWParameters
+        if target.url.scheme?.lowercased() == "wss" {
+            let tls = NWProtocolTLS.Options()
+            if let name = target.tlsServerName {
+                sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, name)
+            }
+            parameters = NWParameters(tls: tls, tcp: tcp)
+        } else {
+            parameters = NWParameters(tls: nil, tcp: tcp)
+        }
         parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
-        connection = NWConnection(to: .url(url), using: parameters)
-    }
-
-    /// The factory the app passes to `GroundClient` (the default).
-    public static let factory: GroundTransportFactory = { url, maxFrameBytes in
-        NWGroundTransport(url: url, maxFrameBytes: maxFrameBytes)
+        let connection = NWConnection(to: .url(target.url), using: parameters)
+        let accepted = lock.withLock { () -> Bool in
+            if isClosed { return false }
+            storedConnection = connection
+            return true
+        }
+        guard accepted else {
+            connection.cancel()
+            throw GroundTransportError.closed(code: nil)
+        }
+        return connection
     }
 
     public func connect() async throws {
+        // Resolve off the main thread, check every address, and only then open a
+        // socket, to the checked IP address.
+        let target = try await GroundConnectPlanner.planOffMainThread(url: url, resolver: resolver)
         final class Once: @unchecked Sendable { var done = false }
         let once = Once()
-        let connection = self.connection
+        let connection = try makeConnection(target)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // The handler runs on `queue`, a serial queue, so `once` needs no lock.
             connection.stateUpdateHandler = { state in
@@ -136,7 +191,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     public func send(_ text: String) async throws {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        let connection = self.connection
+        guard let connection = self.connection else { throw GroundTransportError.closed(code: nil) }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(text.utf8), contentContext: context, isComplete: true, completion: .contentProcessed { error in
                 if let error {
@@ -162,6 +217,10 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
         completion: @escaping @Sendable (Result<GroundTransportMessage, Error>) -> Void
     ) {
         let limit = maxFrameBytes
+        guard let connection else {
+            completion(.failure(GroundTransportError.closed(code: nil)))
+            return
+        }
         connection.receive(minimumIncompleteLength: 1, maximumLength: Self.chunkBytes) { [weak self] content, context, isComplete, error in
             guard let self else {
                 completion(.failure(GroundTransportError.closed(code: nil)))
@@ -169,7 +228,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             }
             if let error {
                 if case let .posix(code) = error, code == .EMSGSIZE {
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.messageTooLarge(limit: limit)))
                 } else {
                     completion(.failure(GroundTransportError.failed(Self.describe(error))))
@@ -180,7 +239,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             if let content {
                 if data.count + content.count > limit {
                     // Stop reading this message at once; never buffer it whole.
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.messageTooLarge(limit: limit)))
                     return
                 }
@@ -195,7 +254,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             switch currentOpcode {
             case .text?:
                 guard let text = String(data: data, encoding: .utf8) else {
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.invalidText))
                     return
                 }
@@ -214,7 +273,11 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     }
 
     public func close() async {
-        connection.cancel()
+        let connection = lock.withLock { () -> NWConnection? in
+            isClosed = true
+            return storedConnection
+        }
+        connection?.cancel()
     }
 
     private static func closeCode(_ metadata: NWProtocolWebSocket.Metadata?) -> Int? {

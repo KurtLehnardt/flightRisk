@@ -615,6 +615,9 @@ public actor GroundClient {
         if let codecError = error as? SocketIOCodecError {
             return codecError.description
         }
+        if let refusal = error as? GroundAddressRefusal {
+            return refusal.reason
+        }
         if let transportError = error as? GroundTransportError {
             return transportError.description
         }

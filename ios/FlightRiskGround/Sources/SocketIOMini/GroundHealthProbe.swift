@@ -8,6 +8,8 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
     case wrongKey(version: String?)
     /// The ground could not be reached.
     case unreachable(String)
+    /// Cleartext to a non-local address was refused before any request was made.
+    case addressNotAllowed(String)
     /// The ground answered with an unexpected HTTP status (a redirect included:
     /// redirects are never followed).
     case unexpectedStatus(Int)
@@ -19,6 +21,7 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
         case let .ok(version): return "reachable, key accepted" + (version.map { ", version \($0)" } ?? "")
         case let .wrongKey(version): return "reachable, wrong key" + (version.map { ", version \($0)" } ?? "")
         case let .unreachable(detail): return "unreachable: \(detail)"
+        case let .addressNotAllowed(reason): return "refused: \(reason)"
         case let .unexpectedStatus(status): return "unexpected HTTP status \(status)"
         case let .invalidResponse(detail): return "not a FlightRisk dashboard response: \(detail)"
         }
@@ -36,8 +39,16 @@ public struct GroundHealthProbe: Sendable {
     private let apiKey: GroundAPIKey
     private let http: any GroundHTTPClient
     private let timeout: TimeInterval
+    private let resolver: GroundHostResolver
 
-    public init(endpoint: GroundEndpoint, apiKey: GroundAPIKey, http: any GroundHTTPClient = URLSessionGroundHTTPClient(), timeout: TimeInterval = 5) {
+    public init(
+        endpoint: GroundEndpoint,
+        apiKey: GroundAPIKey,
+        http: any GroundHTTPClient = URLSessionGroundHTTPClient(),
+        timeout: TimeInterval = 5,
+        resolver: @escaping GroundHostResolver = GroundSystemResolver.resolve
+    ) {
+        self.resolver = resolver
         self.endpoint = endpoint
         self.apiKey = apiKey
         self.http = http
@@ -46,11 +57,29 @@ public struct GroundHealthProbe: Sendable {
 
     public func run() async -> GroundHealthResult {
         let redact = GroundRedactor(key: apiKey)
+        // The address policy runs before the key is put in any header or any request is made.
+        let target: GroundConnectTarget
+        do {
+            target = try await GroundConnectPlanner.planOffMainThread(url: endpoint.httpBaseURL, resolver: resolver)
+        } catch let refusal as GroundAddressRefusal {
+            return .addressNotAllowed(refusal.reason)
+        } catch {
+            return .unreachable(redact(Self.describe(error)))
+        }
+        // Cleartext goes to the checked IP address with the original Host header, so a
+        // second lookup cannot swap the address. An encrypted request keeps the name for
+        // certificate checks (this app does not pin certificates).
+        let cleartext = endpoint.secure == false
+        var requestHost: String?
+        if cleartext {
+            requestHost = "\(endpoint.host.contains(":") ? "[\(endpoint.host)]" : endpoint.host):\(endpoint.port)"
+        }
         var headers: [String: String] = ["Accept": "application/json"]
         if !apiKey.isEmpty {
             headers["Authorization"] = "Bearer \(apiKey.secret)"
         }
-        let base = endpoint.httpBaseURL
+        if let requestHost { headers["Host"] = requestHost }
+        let base = cleartext ? target.url : endpoint.httpBaseURL
         var version: String?
         do {
             let health = try await http.get(base.appendingPathComponent("api/health"), headers: headers, timeout: timeout)

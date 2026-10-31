@@ -29,6 +29,8 @@ public enum GroundConfigurationError: Error, Equatable, Sendable, CustomStringCo
     case invalidHost(String)
     case invalidPort(Int)
     case invalidURL(String)
+    /// A cleartext address that is not on the local network (the reason is a sentence).
+    case cleartextNotAllowed(String)
 
     public var description: String {
         switch self {
@@ -38,6 +40,8 @@ public enum GroundConfigurationError: Error, Equatable, Sendable, CustomStringCo
             return "The port \(port) is outside 1 to 65535."
         case let .invalidURL(text):
             return "\"\(text)\" is not a ground station address of the form ws://HOST:PORT."
+        case let .cleartextNotAllowed(reason):
+            return "This address is refused: \(reason)."
         }
     }
 }
@@ -86,6 +90,10 @@ public struct GroundEndpoint: Sendable, Equatable, CustomStringConvertible {
         case "ws", "http": secure = false
         case "wss", "https": secure = true
         default: throw GroundConfigurationError.invalidURL(text)
+        }
+        // A numeric public address is refused at once; a name is checked when connecting.
+        if let refusal = LanAddressPolicy.earlyRefusal(host: host, secure: secure) {
+            throw GroundConfigurationError.cleartextNotAllowed(refusal.reason)
         }
         return try GroundEndpoint(host: host, port: components.port ?? defaultPort, secure: secure)
     }
