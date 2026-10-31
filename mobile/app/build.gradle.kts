@@ -45,6 +45,11 @@ android {
 }
 
 dependencies {
+    // Shared ground-station contract (models, decoders, Socket.IO frame codec)
+    implementation(project(":contract"))
+    // The contract's JSON element types appear in its public API
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
+
     // Core Android
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
