@@ -204,7 +204,7 @@ enum GroundLinkStatus: Equatable {
         case .notConfigured: return "Not configured: add the ground station address and key in Settings."
         case .keychainLocked: return "Keychain locked: unlock the phone to connect to the ground station."
         case .off: return "Ground link off. Switch it on in Settings."
-        case let .addressRefused(reason): return "Address refused, nothing is sent: \(reason). Change the address in Settings."
+        case let .addressRefused(reason): return "Address refused, nothing is sent: \(GroundText.shorten(reason)). Change the address in Settings."
         case .paused: return "Not connected: the app was in the background."
         case let .connecting(attempt): return attempt > 1 ? "Connecting (attempt \(attempt))\u{2026}" : "Connecting\u{2026}"
         case .connected: return "Connected"
@@ -323,6 +323,8 @@ struct GroundDroneCardModel: Identifiable, Equatable {
     let alertText: String?
 
     var id: String { card.id }
+    /// The id as shown: cut to 40 characters. `id` stays the real id that commands carry.
+    var displayId: String { GroundText.shortId(card.id) }
 }
 
 /// Text the Ground tab adds to `GroundText`.
@@ -332,7 +334,7 @@ enum GroundUIText {
     static let landAllNotSentWrongKey = "LAND ALL was NOT sent: the ground refused this phone's key. " + landAllFallback
     static let landAllNotSentLinkOff = "LAND ALL was NOT sent: this phone's ground link is off or not set up. " + landAllFallback
     static func landAllNotSentAddressRefused(_ reason: String) -> String {
-        "LAND ALL was NOT sent: this phone's ground address is refused (\(reason)). " + landAllFallback
+        "LAND ALL was NOT sent: this phone's ground address is refused (\(GroundText.shorten(reason))). " + landAllFallback
     }
     static let landAllNotSentKeychainLocked =
         "LAND ALL was NOT sent: the Keychain is locked, so this phone cannot connect to the ground. " + landAllFallback
@@ -357,14 +359,21 @@ enum GroundUIText {
             + ". Reached none: " + none.joined(separator: ", ") + ". Land the rest by hand."
     }
 
-    static func droneNotSent(_ id: String, action: String, linkOff: Bool, refusal: String? = nil) -> String {
-        let why = refusal.map { "this phone's ground address is refused (\($0))" }
+    static let landAllNoAnswer =
+        "LAND ALL: the ground never answered; land the drones with their own controls."
+    static let earlierLandAllNoAnswer = "An earlier LAND ALL got no answer from the ground. Do not assume it landed the drones."
+    static let staleNoRecentUpdate = "No recent update from the ground: no fleet status for 30 s."
+
+    static func droneNotSent(_ rawId: String, action: String, linkOff: Bool, refusal: String? = nil) -> String {
+        let id = GroundText.shortId(rawId)
+        let why = refusal.map { "this phone's ground address is refused (\(GroundText.shorten($0)))" }
             ?? (linkOff ? "this phone's ground link is off or not set up" : "this phone is not connected to the ground")
         return "\(id): \(action) was NOT sent: \(why). Land it with its own controls, or use the ground laptop."
     }
 
-    static func droneSendFailed(_ id: String, action: String) -> String {
-        "\(id): \(action) was NOT sent: the connection failed while sending. Land it with its own controls, or use the ground laptop."
+    static func droneSendFailed(_ rawId: String, action: String) -> String {
+        let id = GroundText.shortId(rawId)
+        return "\(id): \(action) was NOT sent: the connection failed while sending. Land it with its own controls, or use the ground laptop."
     }
 
     static func droneNoUsableId(action: String) -> String {
@@ -373,36 +382,38 @@ enum GroundUIText {
             : "\(action) was not sent: this drone has no usable id."
     }
 
-    static func droneSending(_ id: String, action: String) -> String { "\(id): \(action) sending\u{2026}" }
+    static func droneSending(_ id: String, action: String) -> String { "\(GroundText.shortId(id)): \(action) sending\u{2026}" }
 
     static func droneHandedOver(_ id: String, action: String) -> String {
-        "\(id): \(action) sending\u{2026} Handed to the connection; waiting for the ground's reply."
+        "\(GroundText.shortId(id)): \(action) sending\u{2026} Handed to the connection; waiting for the ground's reply."
     }
 
     static func droneNoReplyYet(_ id: String, action: String) -> String {
-        "\(id): \(action): no reply from the ground yet. Check the connection."
+        "\(GroundText.shortId(id)): \(action): no reply from the ground yet. Check the connection."
     }
 
-    static func droneNoFinalAnswer(_ id: String, action: String) -> String {
-        action == "Land"
+    static func droneNoFinalAnswer(_ rawId: String, action: String) -> String {
+        let id = GroundText.shortId(rawId)
+        return action == "Land"
             ? "\(id): no final answer from the drone's edge. Land it with its own controls."
             : "\(id): \(action): no final answer from the drone's edge."
     }
 
-    static func droneConnectionLost(_ id: String, action: String) -> String {
-        action == "Land"
+    static func droneConnectionLost(_ rawId: String, action: String) -> String {
+        let id = GroundText.shortId(rawId)
+        return action == "Land"
             ? "\(id): connection lost before the answer; land it with its own controls."
             : "\(id): \(action): connection lost before the answer."
     }
 
     static func legacyLandAccepted(_ id: String) -> String {
-        "\(id): Land accepted by the ground (no confirmation from the drone)."
+        "\(GroundText.shortId(id)): Land accepted by the ground (no confirmation from the drone)."
     }
 
     /// A refused or failed manual reply whose action the phone did not send (or a land the
     /// phone did not send), for example an orphan auto-land that could not be delivered.
     static func droneActionFailed(_ id: String, action: String, why: String) -> String {
-        "\(id): \(action) failed (\(why)). Land it with its own controls."
+        "\(GroundText.shortId(id)): \(GroundText.shorten(action, max: 40)) failed (\(GroundText.shorten(why))). Land it with its own controls."
     }
 
     static func heldCountdown(_ seconds: Double) -> String {
@@ -442,6 +453,13 @@ final class GroundViewModel {
     static let successFadeAfter: TimeInterval = 10
     static let droneSuccessFadeAfter: TimeInterval = 60
     static let warningFadeAfter: TimeInterval = 8
+    /// A connected link with no `fleet_status` for this long marks the state stale: the ground
+    /// can keep answering pings and still have stopped sending state.
+    static let freshnessTimeout: TimeInterval = 30
+    /// The ground answers every LAND ALL within its own 35 s deadline. A tap still unanswered
+    /// after this long will never be answered, so it stops counting: otherwise every later ack
+    /// would be credited to the tap before it.
+    static let landAllExpiresAfter: TimeInterval = 40
     static let maxBanners = 10
     static let maxToasts = 5
     static let maxDetections = 50
@@ -464,6 +482,8 @@ final class GroundViewModel {
     /// True while the drone state is from before a disconnect, a reconnect or a gap in events.
     private(set) var isStateStale = false
     private(set) var staleNote: String?
+    /// True when the link is connected but no `fleet_status` has arrived for `freshnessTimeout`.
+    private(set) var hasNoRecentUpdate = false
     private(set) var groundStatus: StatusPayload?
     private(set) var landAllFeedback: GroundCommandFeedback?
     /// Keyed by drone id.
@@ -526,7 +546,9 @@ final class GroundViewModel {
     @ObservationIgnored private var staleSince: Date?
     /// LAND ALL taps handed to the connection and not yet answered, oldest first. Each
     /// `land_all_ack` answers the oldest.
-    @ObservationIgnored private var landAllOutstanding: [Int] = []
+    @ObservationIgnored private var landAllOutstanding: [(attempt: Int, sentAt: Date)] = []
+    /// When the latest `fleet_status` arrived on the current connection; nil until one does.
+    @ObservationIgnored private var lastFleetStatusAt: Date?
     /// Drones whose land was sent to a ground without a fleet, oldest first; each
     /// `command_ack` answers the oldest.
     @ObservationIgnored private var pendingLegacyLands: [String] = []
@@ -680,7 +702,7 @@ final class GroundViewModel {
     /// "Test connection": the REST health probe with the saved address and key. The text never
     /// contains the key.
     func testConnection() async -> String {
-        if let reason = addressRefusal { return "Refused: \(reason). Nothing was sent." }
+        if let reason = addressRefusal { return "Refused: \(GroundText.shorten(reason)). Nothing was sent." }
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
             return "Save the ground station address first."
         }
@@ -693,17 +715,17 @@ final class GroundViewModel {
         let result = await GroundHealthProbe(endpoint: endpoint, apiKey: key, http: http).run()
         switch result {
         case let .ok(version):
-            return "Reachable, key accepted" + (version.map { " (ground version \($0))" } ?? "") + "."
+            return "Reachable, key accepted" + (version.map { " (ground version \(GroundText.shorten($0, max: GroundText.maxIdText)))" } ?? "") + "."
         case let .wrongKey(version):
-            return "Reachable, but the ground refused the key" + (version.map { " (ground version \($0))" } ?? "") + "."
+            return "Reachable, but the ground refused the key" + (version.map { " (ground version \(GroundText.shorten($0, max: GroundText.maxIdText)))" } ?? "") + "."
         case let .unreachable(detail):
-            return "Unreachable: \(detail). Check the address and that the phone is on the ground's network."
+            return "Unreachable: \(GroundText.shorten(detail)). Check the address and that the phone is on the ground's network."
         case let .addressNotAllowed(reason):
-            return "Refused: \(reason). Nothing was sent."
+            return "Refused: \(GroundText.shorten(reason)). Nothing was sent."
         case let .unexpectedStatus(status):
             return "The address answered with HTTP \(status); it may not be a FlightRisk ground station."
         case let .invalidResponse(detail):
-            return "Not a FlightRisk ground station response: \(detail)."
+            return "Not a FlightRisk ground station response: \(GroundText.shorten(detail))."
         }
     }
 
@@ -736,7 +758,7 @@ final class GroundViewModel {
         let at = clock()
         if outcome == .sent, generation == generationAtSend, linkStatus.isConnected {
             // Only a send on the link that is still up can be answered by an ack.
-            landAllOutstanding.append(attempt)
+            landAllOutstanding.append((attempt, at))
         }
         guard landAllFeedback?.attempt == attempt else { return }  // A newer tap took over.
         switch outcome {
@@ -893,6 +915,8 @@ final class GroundViewModel {
                 landAllFeedback = nil
             }
         }
+        expireLandAll(at: date)
+        checkFreshness(at: date)
         let lands = Self.aged(landFeedback, action: "Land", at: date)
         if lands != landFeedback { landFeedback = lands }
         let resumes = Self.aged(resumeFeedback, action: "Resume search", at: date)
@@ -900,6 +924,33 @@ final class GroundViewModel {
         if toasts.contains(where: { !$0.isError && date.timeIntervalSince($0.receivedAt) >= Self.warningFadeAfter }) {
             toasts.removeAll { !$0.isError && date.timeIntervalSince($0.receivedAt) >= Self.warningFadeAfter }
         }
+    }
+
+    /// A LAND ALL tap unanswered for `landAllExpiresAfter` stops waiting for an ack: its own
+    /// feedback becomes a failure (or a banner when a newer tap took over the feedback), and a
+    /// later ack is credited to the newer tap. Nothing is resent.
+    private func expireLandAll(at date: Date) {
+        let expired = landAllOutstanding.filter { date.timeIntervalSince($0.sentAt) >= Self.landAllExpiresAfter }
+        guard !expired.isEmpty else { return }
+        landAllOutstanding.removeAll { entry in expired.contains { $0.attempt == entry.attempt } }
+        for entry in expired {
+            if var current = landAllFeedback, current.attempt == entry.attempt, current.isWaiting {
+                current.phase = .failed
+                current.text = GroundUIText.landAllNoAnswer
+                current.updatedAt = date
+                landAllFeedback = current
+            } else {
+                addBanner(GroundUIText.earlierLandAllNoAnswer, isFailure: true, at: date)
+            }
+        }
+    }
+
+    /// The ground keeps answering pings but stopped sending `fleet_status`: the values are no
+    /// longer live. The next `fleet_status` clears it.
+    private func checkFreshness(at date: Date) {
+        guard linkStatus.isConnected, !isStateStale, let last = lastFleetStatusAt,
+              date.timeIntervalSince(last) >= Self.freshnessTimeout else { return }
+        markStale(GroundUIText.staleNoRecentUpdate, noRecentUpdate: true)
     }
 
     /// The per-drone feedback after time has passed. Returns the same dictionary when nothing
@@ -961,7 +1012,9 @@ final class GroundViewModel {
     }
 
     /// Applies one decoded server event.
-    func handle(_ event: GroundProtocol.GroundEvent) {
+    func handle(_ incoming: GroundProtocol.GroundEvent) {
+        // Every string from the ground is cut here, before anything is stored or composed.
+        let event = GroundIngest.sanitized(incoming)
         let at = clock()
         switch event {
         case let .status(p):
@@ -973,7 +1026,10 @@ final class GroundViewModel {
                 for (id, record) in p.drones ?? [:] {
                     if let v = record.orphanLandInS, v.isFinite { orphanBase[id] = (v, at) }
                 }
-                if linkStatus.isConnected { clearStale() }
+                if linkStatus.isConnected {
+                    clearStale()
+                    lastFleetStatusAt = at
+                }
             }
         case let .manualStatus(p):
             reducer.apply(event)
@@ -1035,9 +1091,9 @@ final class GroundViewModel {
         case let .streamVideoState(s):
             streamVideoEnabled = s.enabled
         case let .error(e):
-            addToast(e.message ?? "The ground reported an error.", isError: true, at: at)
+            addToast(e.message.map { GroundText.shorten($0) } ?? "The ground reported an error.", isError: true, at: at)
         case let .warning(e):
-            addToast(e.message ?? "The ground reported a warning.", isError: false, at: at)
+            addToast(e.message.map { GroundText.shorten($0) } ?? "The ground reported a warning.", isError: false, at: at)
         case .unknown, .undecodable:
             break
         }
@@ -1158,6 +1214,7 @@ final class GroundViewModel {
         droneAlerts = [:]
         pendingLegacyLands = []
         landAllOutstanding = []
+        lastFleetStatusAt = nil
     }
 
     private func apply(_ state: GroundConnectionState) {
@@ -1172,7 +1229,7 @@ final class GroundViewModel {
             linkStatus = .connected
         case let .reconnecting(attempt, retryIn, reason):
             let seconds = Double(retryIn.components.seconds) + Double(retryIn.components.attoseconds) / 1e18
-            linkStatus = .reconnecting(attempt: attempt, retryInSeconds: seconds, reason: reason.description)
+            linkStatus = .reconnecting(attempt: attempt, retryInSeconds: seconds, reason: GroundText.shorten(reason.description))
             markStale(GroundUIText.staleAfterDisconnect)
             connectionLost()
         case .failed:
@@ -1216,13 +1273,15 @@ final class GroundViewModel {
         if lostResumes != resumeFeedback { resumeFeedback = lostResumes }
     }
 
-    private func markStale(_ note: String) {
+    private func markStale(_ note: String, noRecentUpdate: Bool = false) {
         if !isStateStale { staleSince = clock() }
         isStateStale = true
         staleNote = note
+        hasNoRecentUpdate = noRecentUpdate
     }
 
     private func clearStale() {
+        hasNoRecentUpdate = false
         isStateStale = false
         staleNote = nil
         staleSince = nil
@@ -1356,8 +1415,10 @@ final class GroundViewModel {
         )
     }
 
-    private func applyManualReply(_ reply: ManualReply, final: Bool, at: Date) {
+    private func applyManualReply(_ received: ManualReply, final: Bool, at: Date) {
+        let reply = GroundIngest.sanitized(received)
         let id = reply.droneId ?? ""
+        let shownId = GroundText.shortId(id)
         let actionWire = reply.action?.wire ?? "command"
         let isLand: Bool?
         switch reply.action {
@@ -1372,7 +1433,9 @@ final class GroundViewModel {
             if let d = reply.detail, !d.isEmpty { why = d }
             if let isLand, ownCommand {
                 // An answer to the phone's own land or resume.
-                let refusal = GroundText.manualRefusal(reply) ?? "\(id): \(why)"
+                var shown = reply
+                shown.droneId = reply.droneId.map { GroundText.shortId($0) }
+                let refusal = GroundText.manualRefusal(shown) ?? "\(shownId): \(why)"
                 let text = isLand ? refusal + ". Land the drone with its own controls." : refusal + "."
                 let started = droneFeedback(isLand, id)?.startedAt ?? at
                 setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: nextAttempt(), phase: .failed, text: text, startedAt: started, updatedAt: at))
@@ -1390,11 +1453,11 @@ final class GroundViewModel {
         let started = droneFeedback(isLand, id)?.startedAt ?? at
         let attempt = droneFeedback(isLand, id)?.attempt ?? nextAttempt()
         if final {
-            let text = isLand ? "\(id): Land acknowledged by the drone's edge." : "\(id): search resumed."
+            let text = isLand ? "\(shownId): Land acknowledged by the drone's edge." : "\(shownId): search resumed."
             setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .succeeded, text: text, startedAt: started, updatedAt: at))
         } else if droneFeedback(isLand, id)?.phase != .succeeded {
             let action = isLand ? "Land" : "Resume search"
-            let text = "\(id): \(action) accepted by the ground; waiting for the drone's edge."
+            let text = "\(shownId): \(action) accepted by the ground; waiting for the drone's edge."
             setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .accepted, text: text, startedAt: started, updatedAt: at))
         }
     }

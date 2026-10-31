@@ -35,13 +35,13 @@ struct DroneStatusCardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(FlightRiskTheme.detectionBlue)
-                .accessibilityLabel("Land \(model.id)")
+                .accessibilityLabel("Land \(model.displayId)")
                 if model.canResume {
                     Button(action: onResume) {
                         Label("Resume search", systemImage: "play")
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Resume the search of \(model.id)")
+                    .accessibilityLabel("Resume the search of \(model.displayId)")
                 }
             }
             if let f = model.landFeedback, let text = model.landFeedbackText { feedbackLine(f, text) }
@@ -61,7 +61,7 @@ struct DroneStatusCardView: View {
     private var values: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(model.id).font(.headline)
+                Text(model.displayId).font(.headline)
                 chip(model.linkChipText, color: linkColor)
                     .accessibilityIdentifier("ground.card.link")
                 if let control = model.controlChip {
