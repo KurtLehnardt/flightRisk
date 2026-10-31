@@ -1,4 +1,4 @@
-"""Frame processing loop for the Amber dashboard.
+"""Frame processing loop for the FlightRisk dashboard.
 
 Extracts the detection -> scoring -> tracking -> emission pipeline
 from ``app.py`` into a focused module. The ``_frame_loop`` function

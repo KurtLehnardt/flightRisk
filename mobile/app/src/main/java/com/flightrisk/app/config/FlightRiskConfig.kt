@@ -9,13 +9,13 @@ import androidx.security.crypto.MasterKey
 /**
  * Centralized configuration for the FlightRisk mobile app.
  *
- * Port of `flightrisk/config.py` (`AmberConfig`) to Kotlin. Every default
+ * Port of `flightrisk/config.py` (the Python `FlightRiskConfig` class) to Kotlin. Every default
  * below mirrors the value that was hardcoded in the Python codebase, so the
  * mobile and server configs stay in sync.
  *
  * On mobile, overrides come from [SharedPreferences] rather than environment
  * variables. The [fromPreferences] factory reads `FLIGHTRISK_*` preference
- * keys with the same semantics as `AmberConfig.from_env`.
+ * keys with the same semantics as the Python `FlightRiskConfig.from_env`.
  */
 data class FlightRiskConfig(
     val vision: VisionConfig = VisionConfig(),
@@ -63,7 +63,7 @@ data class FlightRiskConfig(
          * Build a config with values overridden from [SharedPreferences].
          *
          * Only a curated subset of the most commonly-tuned values is
-         * exposed via preferences, matching the Python `AmberConfig.from_env`
+         * exposed via preferences, matching the Python `FlightRiskConfig.from_env`
          * pattern.
          */
         fun fromPreferences(
