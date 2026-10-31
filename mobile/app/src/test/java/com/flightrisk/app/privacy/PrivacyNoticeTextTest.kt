@@ -39,8 +39,14 @@ class PrivacyNoticeTextTest {
         assertTrue(e.contains("off by default"))
     }
 
+    @Test fun noticeNamesTheConditionsOfTheOptionalCases() {
+        assertTrue(text.contains("except in the optional cases described below"))
+        assertTrue(text.contains("does not join it"))
+        assertTrue(text.contains("edge token is sent to the address you entered"))
+    }
+
     @Test fun deleteResultMessages() {
-        assertTrue(PrivacySettingsText.deleteResult(SavedDataEraser.Result(2, 5, 0)).contains("2 saved records and 5 files"))
+        assertTrue(PrivacySettingsText.deleteResult(SavedDataEraser.Result(2, 5, 0)).contains("2 sessions and 5 files"))
         assertTrue(PrivacySettingsText.deleteResult(SavedDataEraser.Result(0, 1, 3)).contains("3 files could not be deleted"))
     }
 }

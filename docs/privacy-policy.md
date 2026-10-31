@@ -49,8 +49,8 @@ This section covers templates and embeddings only. Images (the reference photo a
 
 **On Android,** during a search the app stores the following in its private storage on your device:
 
-- **A video of the search.** Each search is recorded as an MP4 video of the camera view with the detection boxes drawn on it, in the app's `recordings` folder. There is no setting to turn this off. The video can show people.
-- **Match images.** The match snapshot and the cropped image of the matched person are saved as image files in the app's `snapshots` folder.
+- **A video of the search.** Only if you turn on "Record search video" in Settings (off by default), each search is recorded as an MP4 video of the camera view with the detection boxes drawn on it, in the app's `recordings` folder. The video can show people. Existing installs start with the setting off.
+- **Match images.** Only while "Record search video" is on, the cropped image of the matched person is saved as an image file in the app's `snapshots` folder.
 - **A local database** (SQLite, through Room) with the session, its start and end time, counts, the match scores and timestamps, the reasoning text, the file paths of the images and video, and the description you typed.
 - **A reference photo taken with the camera** is saved as a file in the app's cache. The app does not delete it; Android may clear the cache, and uninstalling the app removes it.
 - **GPS coordinates are kept in memory only.** The database has no location fields.
@@ -59,7 +59,7 @@ This data:
 
 - Is stored **only on your device**, in the app's private storage.
 - Is **never transmitted** by the app to any server, cloud service, or third party, except through the optional features in Sections 5 and 5B.
-- **The app has no delete control yet** for this data. On Android, it is removed by clearing the app's storage in the system Settings or by uninstalling the app. A delete action is planned.
+- **Delete control.** Settings has "Delete saved sessions and recordings", with a confirmation. It deletes the saved sessions, matches and feedback, the recordings and the match images. Clearing the app's storage or uninstalling the app also removes them.
 - **Can be copied by Android backup.** Android Auto Backup and device-to-device transfer can copy the video, the images and the database to your Google account or to another phone, because the app excludes only its preference files (the encrypted secret store, the cloud reasoning choice, the ground station link consent and the general config file) from backup. A change is planned.
 
 ---
@@ -156,7 +156,7 @@ The only exceptions are the optional features you turn on or start yourself: clo
 ## 10. Data Retention and Deletion
 
 - **Biometric templates and embeddings:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
-- **Session data on Android (video, match images, scores, reasoning text, description):** Stored locally until removed. The app has no delete control yet; clear the app's storage in the system Settings or uninstall the app. On iPhone no session data is stored.
+- **Session data on Android (video, match images, scores, reasoning text, description):** Stored locally until removed. Video and match images exist only if "Record search video" is on. Use "Delete saved sessions and recordings" in Settings, clear the app's storage in the system Settings, or uninstall the app. On iPhone no session data is stored.
 - **App deletion:** Uninstalling the app removes all locally stored data (backups made by the operating system are separate).
 
 ---

@@ -54,14 +54,21 @@ class PrivacyGateTest {
 
     @Test fun permissionRequestIsOnlyReachableAfterTheGate() {
         val src = java.io.File("src/main/java/com/flightrisk/app/MainActivity.kt").readText()
-        val calls = Regex("requestPermissionsIfNeeded\\(\\)").findAll(src).map { it.range.first }.toList()
         // Definition + the gated call at startup + the call after acknowledgement.
-        assertEquals(3, calls.size)
-        val startup = src.indexOf("if (PrivacyNoticeGate.mayRequestPermissions(privacyPrefs))")
-        assertTrue(startup > 0)
-        assertTrue(src.indexOf("requestPermissionsIfNeeded()", startup) - startup < 200)
-        val accept = src.indexOf("PrivacyNoticeGate.acknowledge(privacyPrefs)")
-        assertTrue(accept > 0)
-        assertTrue(src.indexOf("requestPermissionsIfNeeded()", accept) - accept < 200)
+        assertEquals(3, Regex("requestPermissionsIfNeeded\\(\\)").findAll(src).count())
+        assertTrue(
+            Regex("if \\(PrivacyNoticeGate\\.mayRequestPermissions\\(privacyPrefs\\)\\) \\{\\s*requestPermissionsIfNeeded\\(\\)\\s*\\}")
+                .containsMatchIn(src),
+        )
+        assertTrue(
+            Regex("PrivacyNoticeGate\\.acknowledge\\(privacyPrefs\\)\\s*noticeAcknowledged = true\\s*requestPermissionsIfNeeded\\(\\)")
+                .containsMatchIn(src),
+        )
+    }
+
+    @Test fun pipelineSavesMatchPicturesOnlyThroughThePolicy() {
+        val src = java.io.File("src/main/java/com/flightrisk/app/pipeline/SearchPipeline.kt").readText()
+        assertFalse(src.contains("sessionRepository.addMatch("))
+        assertTrue(src.contains("recording = sessionRecorder != null"))
     }
 }

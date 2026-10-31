@@ -17,6 +17,36 @@ object PrivacyNoticeGate {
     }
 }
 
+/** Where a match is saved; [SessionRepository] is adapted to this by the pipeline. */
+interface MatchSink<T : Any> {
+    suspend fun addMatch(
+        sessionId: String,
+        matchType: String,
+        reidScore: Double,
+        faceScore: Double,
+        combinedScore: Double,
+        snapshot: T?,
+    ): Long
+}
+
+/**
+ * Saves a match through [sink]. The picture is passed on only while [recording]
+ * is on, so with recording off nothing is written to the snapshots folder.
+ */
+suspend fun <T : Any> persistMatch(
+    sink: MatchSink<T>,
+    recording: Boolean,
+    sessionId: String,
+    matchType: String,
+    reidScore: Double,
+    faceScore: Double,
+    combinedScore: Double,
+    crop: T?,
+): Long = sink.addMatch(
+    sessionId, matchType, reidScore, faceScore, combinedScore,
+    RecordingPolicy.snapshotToSave(recording, crop),
+)
+
 /** What the recorder and the match snapshots do, given the recording setting. */
 object RecordingPolicy {
     /** Video is recorded only when the person turned the setting on. */

@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,9 +32,17 @@ import com.flightrisk.app.privacy.PrivacySettingsText
 import com.flightrisk.app.privacy.SavedDataEraser
 import com.flightrisk.app.privacy.SharedPrefsPrivacyPrefs
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+/**
+ * The delete runs in this process-wide scope, not in the screen's scope, so
+ * leaving Settings while it runs does not stop it half way.
+ */
+private val eraseScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
  * Settings: the "Record search video" switch (off by default) and the action
@@ -54,7 +61,6 @@ fun PrivacyDataSection(
     var confirming by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
 
     Column(modifier = modifier) {
         Text(
@@ -121,18 +127,18 @@ fun PrivacyDataSection(
                     onClick = {
                         confirming = false
                         busy = true
-                        scope.launch {
+                        eraseScope.launch {
                             message = try {
-                                val result = withContext(Dispatchers.IO) {
-                                    SavedDataEraser(
-                                        SessionRepository(context),
-                                        listOf(
-                                            File(context.filesDir, "recordings"),
-                                            File(context.filesDir, "snapshots"),
-                                        ),
-                                    ).eraseAll()
-                                }
+                                val result = SavedDataEraser(
+                                    SessionRepository(context),
+                                    listOf(
+                                        File(context.filesDir, "recordings"),
+                                        File(context.filesDir, "snapshots"),
+                                    ),
+                                ).eraseAll()
                                 PrivacySettingsText.deleteResult(result)
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 PrivacySettingsText.DELETE_FAILED
                             }

@@ -68,6 +68,22 @@ class SavedDataEraserTest {
         assertEquals(0, result.failedFiles)
     }
 
+    @Test fun symbolicLinkIsRemovedButItsTargetIsKept() = runBlocking {
+        val outside = File(root, "outside").apply { mkdirs() }
+        val precious = File(outside, "precious.txt").apply { writeText("keep") }
+        try {
+            Files.createSymbolicLink(File(recordings, "link_dir").toPath(), outside.toPath())
+            Files.createSymbolicLink(File(recordings, "link_file").toPath(), precious.toPath())
+        } catch (e: UnsupportedOperationException) {
+            return@runBlocking
+        }
+        val result = SavedDataEraser(FakeRows(0), listOf(recordings)).eraseAll()
+        assertEquals(2, result.files)
+        assertEquals(0, result.failedFiles)
+        assertEquals(0, recordings.listFiles()!!.size)
+        assertTrue(precious.exists())
+    }
+
     @Test fun emptyStoreGivesZeroResult() = runBlocking {
         val result = SavedDataEraser(FakeRows(0), listOf(recordings, snapshots)).eraseAll()
         assertEquals(SavedDataEraser.Result(0, 0, 0), result)

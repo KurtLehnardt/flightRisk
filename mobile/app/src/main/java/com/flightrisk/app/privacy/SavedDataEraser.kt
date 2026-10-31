@@ -38,7 +38,10 @@ class SavedDataEraser(
             var failed = 0
             val children = dir.listFiles() ?: return 0 to 0
             for (child in children) {
-                if (child.isDirectory) {
+                if (java.nio.file.Files.isSymbolicLink(child.toPath())) {
+                    // Delete only the link, never what it points to.
+                    if (child.delete()) deleted++ else failed++
+                } else if (child.isDirectory) {
                     val (d, f) = deleteContents(child)
                     deleted += d
                     failed += f

@@ -21,7 +21,7 @@ object PrivacyNoticeText {
         ),
         Item(
             "On-Device Processing",
-            "Person detection and matching run on your device. Camera frames are not uploaded. " +
+            "Person detection and matching run on your device. Camera frames are not uploaded, except in the optional cases described below. " +
                 "Search video is not recorded unless you turn on Record search video in Settings. " +
                 "Cloud reasoning, a ground station and a Tello drone are described below.",
         ),
@@ -37,12 +37,12 @@ object PrivacyNoticeText {
                 "this phone sends what its camera detects to the address you entered: box positions " +
                 "and scores, not pictures of people and not face data. If the ground station asks for " +
                 "video, the phone also sends a small picture of the whole camera view, which can show people. " +
-                "You can turn it off at any time.",
+                "The edge token is sent to the address you entered. You can turn it off at any time.",
         ),
         Item(
             "Tello Drone (Optional)",
-            "If you connect a Tello drone, the app joins the drone's own Wi-Fi network and receives its " +
-                "video and telemetry on your device. That link is not encrypted. Frames from the drone " +
+            "If you use a Tello drone, you connect the phone to the Tello's own Wi-Fi network (the app does " +
+                "not join it) and the app receives its video and telemetry on your device. That link is not encrypted. Frames from the drone " +
                 "are processed on your device in the same way as camera frames.",
         ),
         Item(
@@ -74,7 +74,7 @@ object PrivacySettingsText {
     const val RECORD_EXPLANATION =
         "When this is on, each search is saved as a video file in this app's private storage on " +
             "this phone, and match pictures are saved with it. The video can show people, including " +
-            "faces. Phone backup does not include these files, and you can delete them with " +
+            "faces. A change applies from the next search. Phone backup does not include these files, and you can delete them with " +
             "\"Delete saved sessions and recordings\" below. It is off by default."
 
     const val DELETE_TITLE = "Delete saved sessions and recordings"
@@ -88,10 +88,10 @@ object PrivacySettingsText {
 
     fun deleteResult(result: SavedDataEraser.Result): String =
         if (result.failedFiles > 0) {
-            "Deleted ${result.rows} saved records and ${result.files} files. " +
+            "Deleted ${result.rows} sessions and ${result.files} files. " +
                 "${result.failedFiles} files could not be deleted."
         } else {
-            "Deleted ${result.rows} saved records and ${result.files} files."
+            "Deleted ${result.rows} sessions and ${result.files} files."
         }
 
     const val DELETE_FAILED = "Could not delete the saved sessions."

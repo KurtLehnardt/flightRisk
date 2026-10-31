@@ -10,7 +10,7 @@ import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.observability.MetricsCollector
 import com.flightrisk.app.observability.StructuredLogger
 import com.flightrisk.app.persistence.SessionRepository
-import com.flightrisk.app.privacy.RecordingPolicy
+import com.flightrisk.app.privacy.persistMatch
 import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.config.MatchingAlgorithmConfig
 import com.flightrisk.app.config.SignalConfig
@@ -816,7 +816,7 @@ class SearchPipeline(
                                 faceScore = faceScore,
                                 alertLevel = alertLevel,
                                 trackId = trackKey,
-                                snapshot = RecordingPolicy.snapshotToSave(sessionRecorder != null, crop),
+                                snapshot = crop,
                                 gemmaMatch = null,
                                 gemmaConfidence = if (llmAvailable) "pending" else null,
                                 reasoning = if (llmAvailable) "Awaiting LLM reasoning..." else null,
@@ -843,13 +843,16 @@ class SearchPipeline(
                             if (sid != null && sessionRepository != null) {
                                 pipelineScope?.launch {
                                     try {
-                                        sessionRepository.addMatch(
+                                        // The picture is written to disk only while recording is on.
+                                        persistMatch(
+                                            sink = repositoryMatchSink(sessionRepository),
+                                            recording = sessionRecorder != null,
                                             sessionId = sid,
                                             matchType = matchType,
                                             reidScore = reidScore.toDouble(),
                                             faceScore = faceScore.toDouble(),
                                             combinedScore = matchScore.toDouble(),
-                                            snapshot = crop,
+                                            crop = crop,
                                         )
                                     } catch (e: Exception) {
                                         Log.w(TAG, "Failed to persist match: ${e.message}")
@@ -1088,3 +1091,23 @@ class SearchPipeline(
         return cx * 10000 + cy
     }
 }
+
+/** Adapts [SessionRepository] to the [com.flightrisk.app.privacy.MatchSink] that [persistMatch] writes to. */
+private fun repositoryMatchSink(repo: SessionRepository) =
+    object : com.flightrisk.app.privacy.MatchSink<Bitmap> {
+        override suspend fun addMatch(
+            sessionId: String,
+            matchType: String,
+            reidScore: Double,
+            faceScore: Double,
+            combinedScore: Double,
+            snapshot: Bitmap?,
+        ): Long = repo.addMatch(
+            sessionId = sessionId,
+            matchType = matchType,
+            reidScore = reidScore,
+            faceScore = faceScore,
+            combinedScore = combinedScore,
+            snapshot = snapshot,
+        )
+    }

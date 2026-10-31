@@ -58,6 +58,8 @@ class TempCameraPhotosTest {
         assertTrue(app.contains("TempCameraPhotos.sweep(cacheDir)"))
         val picker = File("src/main/java/com/flightrisk/app/ui/target/TargetPickerScreen.kt").readText()
         assertTrue(picker.contains("TempCameraPhotos.delete(photoFile)"))
-        assertTrue(picker.contains("finally"))
+        assertTrue(
+            Regex("finally \\{\\s*//[^\\n]*\\n\\s*TempCameraPhotos\\.delete\\(photoFile\\)").containsMatchIn(picker),
+        )
     }
 }
