@@ -7,11 +7,15 @@
     - flightrisk_reasoning.xml, the cloud reasoning opt-in and provider: the
       opt-in is consent given on this device and must not be restored to
       another one without its consent dialog.
+    - flightrisk_ground_link.xml, the ground station link opt-in and the
+      address consented to: consent to send detections to a computer is given
+      on this device only and must not be restored to another one.
     - flightrisk_config.xml, which may still hold a Claude key in plain text
       from the oldest builds until the one-time migration has moved it.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
     <exclude domain="sharedpref" path="flightrisk_reasoning.xml" />
+    <exclude domain="sharedpref" path="flightrisk_ground_link.xml" />
     <exclude domain="sharedpref" path="flightrisk_config.xml" />
 </full-backup-content>

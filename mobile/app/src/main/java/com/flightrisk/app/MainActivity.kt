@@ -43,6 +43,7 @@ import com.flightrisk.app.llm.local.ModelState
 import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.persistence.SessionRepository
 import com.flightrisk.app.pipeline.SearchPipeline
+import com.flightrisk.app.transport.GroundLink
 import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.FaceRecognizer
@@ -240,6 +241,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Ground station link (phone as an edge). Off until the user turns it on in
+        // Settings; it connects only while a search runs and the app is in view.
+        lifecycle.addObserver(GroundLink.controller(applicationContext).lifecycleObserver)
+
         // Request permissions
         requestPermissionsIfNeeded()
 
@@ -413,6 +418,7 @@ class MainActivity : ComponentActivity() {
 
             val pipeline = SearchPipeline(config, ls, am, lp, repo, recorder)
             searchPipeline = pipeline
+            pipeline.detectionPublisher = GroundLink.controller(ctx).detectionPublisher
 
             // Adapt scorer weights based on active LLM backend
             // Wait (briefly) for the saved-key check after start-up, so the weights
