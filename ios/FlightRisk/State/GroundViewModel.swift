@@ -515,7 +515,6 @@ final class GroundViewModel {
     // BEGIN mission cards (U10): the result of the last profile selection. Cleared when the
     // ground's next `detection_profiles` arrives.
     private(set) var profileFeedback: ProfileFeedback?
-    @ObservationIgnored private var profileLossEpoch = 0
     // END mission cards
     /// At most `maxMatchAlerts`, oldest dropped first.
     private(set) var matchAlerts: [MatchAlert] = []
@@ -875,6 +874,9 @@ final class GroundViewModel {
             if (profiles.fleetDefault ?? "") == profile { return }
             command = .setFleetDetectionProfile(profile: profile)
         }
+        // A second tap for the same choice while the first waits for its answer would send the
+        // same command twice: the ground's `override` changes only when it answers.
+        if let f = profileFeedback, f.awaitsAnswer, f.target == droneId, f.profile == profile { return }
         let attempt = nextAttempt()
         let label: String
         if profile.isEmpty {
@@ -885,13 +887,14 @@ final class GroundViewModel {
         // Waiting is set before sending: a fast reply must clear it, not be overwritten by it.
         profileFeedback = ProfileFeedback(
             attempt: attempt, text: MissionFormat.profileSent(target: droneId, label: label),
-            isFailure: false, awaitsAnswer: true, startedAt: clock()
+            isFailure: false, awaitsAnswer: true, startedAt: clock(), target: droneId, profile: profile
         )
-        let epochAtSend = profileLossEpoch
         let outcome = await emit(command)
         let why: String?
         switch outcome {
-        case .sent: why = profileLossEpoch == epochAtSend ? nil : MissionFormat.whyLinkLost
+        // Sent: if the link dropped afterwards, `onProfileLinkLost` already said the answer is
+        // unknown ("Check the active profile"); the change may have reached the ground.
+        case .sent: why = nil
         case .sendFailed, .refused: why = MissionFormat.whySendFailed
         case .notConnected, .noClient, .shutDown: why = MissionFormat.whyNotConnected
         }
@@ -911,7 +914,6 @@ final class GroundViewModel {
 
     /// The link is gone while a selection waits: say so, because no answer can come.
     private func onProfileLinkLost() {
-        profileLossEpoch += 1
         guard var f = profileFeedback, f.awaitsAnswer else { return }
         f.text = "Profile change: " + MissionFormat.whyLinkLost
         f.isFailure = true

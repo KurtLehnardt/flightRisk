@@ -1,6 +1,8 @@
 import Foundation
 import GroundProtocol
 import SocketIOMini
+import SwiftUI
+import UIKit
 import XCTest
 @testable import FlightRisk
 
@@ -254,10 +256,121 @@ final class ProfilesCeilingViewStateTests: XCTestCase {
             return (hi + 0.05) / (lo + 0.05)
         }
         let pairs = MissionPalette.textPairs
-        XCTAssertEqual(pairs.count, 18)
+        XCTAssertEqual(pairs.count, 28)
         for pair in pairs {
             XCTAssertGreaterThanOrEqual(ratio(pair.foreground, pair.background), 4.5, "\(pair.name) on \(pair.background)")
         }
+    }
+
+    // MARK: review round: bounded identifiers, label table, notLive tag, layout
+
+    private func hostileProfiles(names: Int, nameBytes: Int, drones: Int) throws -> DetectionProfilesPayload {
+        var p = try profiles("fallback")
+        p.profiles = (0..<names).map { i in
+            var d = try! decode(DetectionProfile.self, "{}")
+            d.name = String(repeating: "n", count: nameBytes) + "\(i)"
+            d.label = String(repeating: "L", count: nameBytes)
+            return d
+        }
+        var map: [String: DroneProfileState] = [:]
+        for i in 0..<drones {
+            var s = try! decode(DroneProfileState.self, "{}")
+            s.supported = true
+            s.override = p.profiles![i % names].name
+            s.active = p.profiles![(i + 1) % names].name
+            s.requested = s.active
+            map["drone-\(i)-" + String(repeating: "d", count: 1_000)] = s
+        }
+        p.drones = map
+        return p
+    }
+
+    func testIdentifiersAndLabelsBuiltFromAHostileFrameAreBounded() throws {
+        let p = try hostileProfiles(names: 24, nameBytes: 330_000, drones: 64)
+        let card = try XCTUnwrap(MissionFormat.profilesCard(p, isStale: false, connected: true))
+        var total = 0
+        func add(_ s: String) { total += s.utf8.count }
+        add(MissionFormat.profileIdentifier(row: nil, option: nil))
+        for o in card.fleetOptions.indices { add(MissionFormat.profileIdentifier(row: nil, option: o)); add(card.fleetOptions[o].label) }
+        for (i, row) in card.drones.enumerated() {
+            add(MissionFormat.profileIdentifier(row: i, option: nil))
+            add(row.displayId); add(row.statusText)
+            for o in row.options.indices { add(MissionFormat.profileIdentifier(row: i, option: o)); add(row.options[o].label) }
+        }
+        add(card.fleetDefaultText)
+        // 65 rows x 25 options x (about 100 bytes of label and identifier) is a few hundred KB;
+        // the unshortened ground strings alone would be over 500 MB.
+        XCTAssertLessThan(total, 1_000_000, "constructed text is \(total) bytes")
+        XCTAssertTrue(card.fleetOptions.allSatisfy { $0.label.count <= 80 })
+        XCTAssertEqual(MissionFormat.profileIdentifier(row: 3, option: 2), "ground.profiles.drone.3.2")
+    }
+
+    func testLabelLookupDoesNotScaleWithTheListSize() throws {
+        var p = try profiles("fallback")
+        var list: [DetectionProfile] = (0..<300_000).map { _ in try! decode(DetectionProfile.self, "{}") }
+        for i in 0..<24 {
+            var d = try! decode(DetectionProfile.self, "{}")
+            d.name = "named\(i)"
+            d.label = "Label \(i)"
+            list.append(d)
+        }
+        p.profiles = list
+        var drones: [String: DroneProfileState] = [:]
+        for i in 0..<64 {
+            var s = try! decode(DroneProfileState.self, "{}")
+            s.supported = true
+            s.active = "named3"
+            drones["drone-\(i)"] = s
+        }
+        p.drones = drones
+        let start = Date()
+        let card = try XCTUnwrap(MissionFormat.profilesCard(p, isStale: false, connected: true))
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.25, "building the card took \(elapsed) s")
+        XCTAssertEqual(card.fleetOptions.count, 25)
+        XCTAssertEqual(card.fleetOptions[4].label, "Label 3")
+        XCTAssertEqual(card.drones[0].statusText, "Active: Label 3.")
+        XCTAssertFalse(card.partial)
+    }
+
+    func testLabelTableFirstEntryWinsAndIsCapped() throws {
+        var p = try profiles("fallback")
+        var a = try decode(DetectionProfile.self, "{}"); a.name = "x"; a.label = "First"
+        var b = try decode(DetectionProfile.self, "{}"); b.name = "x"; b.label = "Second"
+        var c = try decode(DetectionProfile.self, "{}"); c.name = "nolabel"
+        p.profiles = [a, b, c]
+        let t = MissionFormat.profileLabels(p)
+        XCTAssertEqual(t["x"], "First")
+        XCTAssertEqual(t["nolabel"], "nolabel")
+        p.profiles = (0..<1_000).map { i in var d = try! decode(DetectionProfile.self, "{}"); d.name = "n\(i)"; return d }
+        XCTAssertEqual(MissionFormat.profileLabels(p).count, MissionFormat.maxLabelNames)
+        XCTAssertEqual(MissionFormat.profileLabel(p, "n999"), "n999", "a name past the cap still shows its own name")
+    }
+
+    func testProfilesCardCarriesTheNotLiveTag() throws {
+        let p = try profiles("fallback")
+        XCTAssertEqual(MissionFormat.profilesCard(p, isStale: true, connected: true)?.notLiveNote, "Not live: last values from the ground.")
+        XCTAssertEqual(MissionFormat.profilesCard(p, isStale: false, connected: false)?.notLiveNote, "Not live: last values from the ground.")
+        XCTAssertNil(MissionFormat.profilesCard(p, isStale: false, connected: true)?.notLiveNote)
+    }
+
+    func testControlsNoteWordingWhenTheGroundDidNotSay() throws {
+        XCTAssertEqual(MissionFormat.controlsOffNote, "The ground has not enabled detection profile changes.")
+    }
+
+    @MainActor
+    func testWrapLayoutNeverReportsMoreThanItIsOfferedAndWrapsALongLabel() {
+        let long = String(repeating: "A very long profile label ", count: 4)
+        let view = MissionWrapLayout(spacing: 8) {
+            Text(long).font(.footnote).fixedSize(horizontal: false, vertical: true).padding(12)
+            Text("Short").padding(12)
+        }
+        let host = UIHostingController(rootView: view)
+        let size = host.sizeThatFits(in: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        XCTAssertLessThanOrEqual(size.width, 300, "reported width \(size.width)")
+        let single = UIHostingController(rootView: Text(long).font(.footnote).fixedSize().padding(12)).sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        XCTAssertGreaterThan(single.width, 300, "the label is wider than the offered width on one line")
+        XCTAssertGreaterThan(size.height, single.height, "the long label wrapped onto more lines")
     }
 }
 
@@ -345,6 +458,18 @@ final class ProfileSelectionTests: XCTestCase {
         let t = harness.recorder.last!
         await harness.push(t, "detection_profiles", try fixture("detection_profiles.json", "refused")) { self.vm.detectionProfiles?.drones?["drone-1"]?.override == "top_down" }
         return t
+    }
+
+    func testASecondTapForTheSameChoiceWhileWaitingSendsNothing() async throws {
+        let t = try await live("fallback")
+        await vm.selectDroneProfile("drone-1", profile: "top_down")
+        await vm.selectDroneProfile("drone-1", profile: "top_down")
+        XCTAssertEqual(setCount(t), 1, "the repeated tap is dropped")
+        await vm.selectDroneProfile("drone-1", profile: "level")
+        XCTAssertEqual(setCount(t), 2, "a different choice is still sent")
+        await vm.selectFleetProfile("level")
+        await vm.selectFleetProfile("level")
+        XCTAssertEqual(setCount(t), 3)
     }
 
     func testRefusedWhilePending() async throws {
@@ -439,6 +564,7 @@ final class ProfileSelectionTests: XCTestCase {
         t.serverDrop()
         await harness.waitUntil("link down") { !self.vm.linkStatus.isConnected }
         XCTAssertEqual(vm.profileFeedback?.text, "Profile change: " + MissionFormat.whyLinkLost)
+        XCTAssertFalse(vm.profileFeedback?.text.contains("NOT changed") ?? true, "a sent command may have been applied")
         XCTAssertEqual(vm.profileFeedback?.awaitsAnswer, false)
     }
 

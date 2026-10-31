@@ -5,7 +5,7 @@ import SwiftUI
 // this card has no edit controls and sends nothing. The wording follows the dashboard's
 // ceiling_settings.html and the Android CeilingCard.
 
-struct CeilingDroneRow: Equatable, Identifiable {
+struct CeilingDroneRow: Equatable {
     let id: String
     let displayId: String
     /// "Slot 100 cm", or "Slot 120 cm (own; default 130 cm)".
@@ -39,7 +39,7 @@ extension MissionFormat {
             return ("Edge refused: \(GroundText.shorten(why))", .warn)
         }
         if let note = e.note, !note.isEmpty {
-            return ("Edge: \(GroundText.shorten(note.replacingOccurrences(of: "_", with: " ")))", .warn)
+            return ("Edge: \(GroundText.shorten(note).replacingOccurrences(of: "_", with: " "))", .warn)
         }
         let s = "Edge: ceiling \(GroundText.number(e.ceilingCm)), margin \(GroundText.number(e.marginCm)), slot \(GroundText.number(e.slotCm)) cm"
         return e.inSync == true ? (s, .info) : (s + " (not yet applied)", .warn)
@@ -117,7 +117,7 @@ struct CeilingView: View {
                         }
                         MissionStatusLine(text: row.edgeText, severity: row.edgeSeverity)
                     }
-                    .accessibilityIdentifier("ground.ceiling.drone.\(row.id)")
+                    .accessibilityIdentifier("ground.ceiling.drone.\(index)")
                 }
                 if card.partial {
                     Text("Only part of the list is shown.")

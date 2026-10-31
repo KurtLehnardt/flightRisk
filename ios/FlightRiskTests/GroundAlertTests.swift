@@ -82,6 +82,16 @@ final class GroundAlertTests: XCTestCase {
         XCTAssertLessThanOrEqual(card.statusText.count, 170)
     }
 
+    func testFirstKeysAreTheSmallestInOrder() {
+        var table: [String: String] = [:]
+        for i in 0..<1_000 { table["k\(String(format: "%04d", i))"] = "v" }
+        XCTAssertEqual(MissionFormat.firstKeys(of: table, count: 3), ["k0000", "k0001", "k0002"])
+        XCTAssertEqual(MissionFormat.firstKeys(of: ["b": "", "a": ""], count: 8), ["a", "b"])
+        var p = try! reasoning("cloud_allowed")
+        p.unavailable = table
+        XCTAssertEqual(MissionFormat.reasoningCard(p)?.unavailableNotes.first, "K0000: v")
+    }
+
     func testReasoningNotLiveTag() throws {
         XCTAssertEqual(MissionFormat.reasoningCard(try reasoning("off"), isStale: true)?.notLiveNote, "Not live: last values from the ground.")
         XCTAssertNil(MissionFormat.reasoningCard(try reasoning("off"), isStale: false)?.notLiveNote)
@@ -104,7 +114,8 @@ final class GroundAlertTests: XCTestCase {
     func testReminderOnConnectShape() throws {
         let row = try XCTUnwrap(GroundAlertsState(alerts: [try alert("reminder_on_connect")], isStale: false).rows.first)
         XCTAssertTrue(row.isReminder)
-        XCTAssertTrue(row.accessibilitySummary.contains("still waiting for the operator"))
+        XCTAssertTrue(row.accessibilitySummary.contains("Reminder at 12:34:56: the ground said this alert was waiting for the operator."))
+        XCTAssertEqual(GroundAlertsState.reminderTag(time: "12:34:56"), "Reminder at 12:34:56: the ground said this alert was waiting for the operator.")
         XCTAssertEqual(row.scoreText, "Score 86% (ReID 86%, face 0%)")
     }
 
@@ -177,6 +188,15 @@ final class GroundAlertViewModelTests: XCTestCase {
         XCTAssertTrue(vm.isStateStale, "no fleet_status yet: the cards say not live")
         XCTAssertNotNil(state.notLiveNote)
         XCTAssertNotNil(MissionFormat.reasoningCard(vm.reasoningProvider, isStale: vm.isStateStale)?.notLiveNote)
+    }
+
+    func testTheSnapshotIsNotKept() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        XCTAssertNil(vm.matchAlerts[0].snapshot)
+        XCTAssertEqual(vm.matchAlerts[0].score, 0.86)
+        await harness.push(t, "match_alert_reminder", try ContractFixtures.payloadJSON("match_alert.json", "reminder_on_connect")) { self.vm.matchAlerts.first?.renotify == true }
+        XCTAssertNil(vm.matchAlerts[0].snapshot)
     }
 
     func testThePhoneCannotBuildAMatchAlertResponse() {

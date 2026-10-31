@@ -26,7 +26,7 @@ struct GroundAlertRow: Equatable, Identifiable {
         parts.append("at " + timeText)
         parts.append(scoreText)
         if let reasonText { parts.append(reasonText) }
-        if isReminder { parts.append("still waiting for the operator") }
+        if isReminder { parts.append(GroundAlertsState.reminderTag(time: timeText)) }
         return parts.joined(separator: ", ")
     }
 }
@@ -34,8 +34,11 @@ struct GroundAlertRow: Equatable, Identifiable {
 struct GroundAlertsState: Equatable {
     static let maxAlerts = 100
     static let note = "Reported by the ground. Answer match alerts on the laptop."
-    static let reminderTag = "Reminder: still waiting for the operator."
-    static let emptyText = "No match alerts from the ground."
+    /// The ground sends a reminder while an alert waits and a separate event when it is resolved;
+    /// the phone ignores the latter, so the tag says what the ground said, and when.
+    static func reminderTag(time: String) -> String {
+        "Reminder at \(time): the ground said this alert was waiting for the operator."
+    }
 
     let rows: [GroundAlertRow]
     let notLiveNote: String?
@@ -119,7 +122,7 @@ struct GroundMatchAlertView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if row.isReminder {
-                            Text(GroundAlertsState.reminderTag)
+                            Text(GroundAlertsState.reminderTag(time: row.timeText))
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(MissionPalette.color(MissionPalette.warning))
                         }

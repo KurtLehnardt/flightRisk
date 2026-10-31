@@ -46,6 +46,18 @@ extension MissionFormat {
         return "Available: " + shown.map(providerName).joined(separator: ", ") + (more > 0 ? " +\(more) more" : "")
     }
 
+    /// The `count` smallest keys in order, found in one pass without sorting the whole table.
+    static func firstKeys(of table: [String: String], count: Int) -> [String] {
+        var best: [String] = []
+        for key in table.keys {
+            if best.count == count, let last = best.last, key >= last { continue }
+            let at = best.firstIndex { key < $0 } ?? best.count
+            best.insert(key, at: at)
+            if best.count > count { best.removeLast() }
+        }
+        return best
+    }
+
     static func reasoningCard(_ r: ReasoningProviderPayload?, isStale: Bool = false) -> ReasoningCardState? {
         guard let r else { return nil }
         let status: String
@@ -61,9 +73,9 @@ extension MissionFormat {
         }
         // Keys are cut and sorted before text is built, so 10,000 entries cost one sort of the keys.
         let unavailable = r.unavailable ?? [:]
-        let notes = unavailable.keys.sorted().prefix(maxUnavailable).map { key -> String in
-            let name = key.prefix(1).uppercased() + key.dropFirst()
-            return "\(GroundText.shorten(name, max: 40)): \(GroundText.shorten(unavailable[key]))"
+        let notes = firstKeys(of: unavailable, count: maxUnavailable).map { key -> String in
+            let cut = GroundText.shorten(key, max: 40)
+            return "\(cut.prefix(1).uppercased() + cut.dropFirst()): \(GroundText.shorten(unavailable[key]))"
         }
         return ReasoningCardState(
             statusText: status,
