@@ -201,4 +201,17 @@ data class GroundUiState(
     val board: DroneBoard = DroneBoard.EMPTY,
     /** The latest whole-state payloads of the ground (plan, profiles, ceiling, reasoning). For later units. */
     val snapshot: GroundSnapshot = GroundSnapshot(),
+    /** False until the ground sends a `fleet_plan` in this session; the plan canvas then says the plan is not confirmed. */
+    val planIsCurrent: Boolean = false,
+    /** The result of the last detection profile selection, or null. */
+    val profileFeedback: ProfileFeedback? = null,
+)
+
+/** The visible result of one detection profile selection on the profiles card. */
+data class ProfileFeedback(
+    val attempt: Int,
+    val text: String,
+    val isFailure: Boolean,
+    /** Sent and waiting for the ground's `detection_profiles` answer. */
+    val awaitsAnswer: Boolean,
 )

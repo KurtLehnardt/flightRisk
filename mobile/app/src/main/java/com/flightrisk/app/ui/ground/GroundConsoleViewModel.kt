@@ -25,10 +25,12 @@ import com.flightrisk.contract.ClientCommand
 import com.flightrisk.contract.CommandAck
 import com.flightrisk.contract.ConnectionState
 import com.flightrisk.contract.ControlModeDisplay
+import com.flightrisk.contract.DetectionProfiles
 import com.flightrisk.contract.DisplayText
 import com.flightrisk.contract.DroneBoard
 import com.flightrisk.contract.DroneRecord
 import com.flightrisk.contract.FleetEvent
+import com.flightrisk.contract.FleetPlan
 import com.flightrisk.contract.FleetStatus
 import com.flightrisk.contract.LandAllAck
 import com.flightrisk.contract.ManualAction
@@ -521,6 +523,80 @@ class GroundConsoleViewModel(
         if (isLand) landFeedback[id] = value else resumeFeedback[id] = value
     }
 
+    // ======== BEGIN mission cards (U4a/U4b): profile selection and plan currency ========
+    // The profiles card is the only place that sends set_detection_profile and
+    // set_fleet_detection_profile. Both go through the client's command functions and the
+    // emit policy. Nothing is queued or resent. The ground is the authority: the phone only
+    // refuses what the ground has already said cannot work (not live, controls off, unknown
+    // profile or drone) and says why.
+
+    /** False until a `fleet_plan` arrives in the current session; a plan kept from before a reconnect may no longer be the ground's plan. */
+    private var planIsCurrent = false
+
+    /** The result of the last profile selection. Cleared when the ground's next `detection_profiles` arrives. */
+    private var profileFeedback: ProfileFeedback? = null
+
+    /** Selects [profile] for [droneId]; an empty [profile] follows the fleet default. */
+    fun selectDroneProfile(droneId: String, profile: String): Job = scope.launch { sendProfile(droneId, profile) }
+
+    /** Selects [profile] as the fleet default; an empty [profile] clears the default. */
+    fun selectFleetProfile(profile: String): Job = scope.launch { sendProfile(null, profile) }
+
+    fun dismissProfileFeedback() {
+        profileFeedback = null
+        publish()
+    }
+
+    private fun currentSnapshot(): GroundSnapshot = client?.snapshot?.value ?: retainedSnapshot ?: GroundSnapshot()
+
+    private fun refuseProfile(target: String?, why: String) {
+        profileFeedback = ProfileFeedback(nextAttempt(), MissionFormat.profileNotSent(target, why), isFailure = true, awaitsAnswer = false)
+        publish()
+    }
+
+    private suspend fun sendProfile(droneId: String?, profile: String) {
+        val profiles = currentSnapshot().detectionProfiles
+        if (profiles == null || !profiles.available) return refuseProfile(droneId, MissionFormat.WHY_NO_BOARD)
+        MissionFormat.profileBlockedReason(profiles, isStale(displayBoard()), link.isConnected)?.let { return refuseProfile(droneId, it) }
+        if (profile.isNotEmpty() && profiles.profiles.none { it.name == profile }) return refuseProfile(droneId, MissionFormat.WHY_UNKNOWN_PROFILE)
+        if (droneId != null) {
+            val state = profiles.drones[droneId] ?: return refuseProfile(droneId, MissionFormat.WHY_UNKNOWN_DRONE)
+            if (state.supported != true) return refuseProfile(droneId, MissionFormat.WHY_UNSUPPORTED)
+            // A null factory result means "do not send".
+            if (ClientCommand.setDetectionProfile(droneId, profile) == null) return refuseProfile(droneId, MissionFormat.WHY_NO_USABLE_ID)
+        }
+        val attempt = nextAttempt()
+        val label = if (profile.isEmpty()) {
+            if (droneId == null) MissionFormat.NO_FLEET_DEFAULT else MissionFormat.FOLLOW_FLEET_DEFAULT
+        } else {
+            MissionFormat.profileLabel(profiles, profile)
+        }
+        val epochAtSend = lossEpoch
+        val outcome = emit { if (droneId == null) it.setFleetDetectionProfile(profile) else it.setDetectionProfile(droneId, profile) }
+        profileFeedback = when {
+            outcome == Outcome.SENT && lossEpoch == epochAtSend ->
+                ProfileFeedback(attempt, MissionFormat.profileSent(droneId, label), isFailure = false, awaitsAnswer = true)
+            outcome == Outcome.SENT -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_LINK_LOST), isFailure = true, awaitsAnswer = false)
+            outcome == Outcome.SEND_FAILED -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_SEND_FAILED), isFailure = true, awaitsAnswer = false)
+            else -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_NOT_CONNECTED), isFailure = true, awaitsAnswer = false)
+        }
+        publish()
+    }
+
+    /** The ground answered with its profile state: the status lines now carry the result or refusal. */
+    private fun onProfilesFromGround() {
+        if (profileFeedback?.awaitsAnswer == true) profileFeedback = null
+    }
+
+    /** The link is gone while a selection waits: say so, because no answer can come. */
+    private fun onProfileLinkLost() {
+        val f = profileFeedback ?: return
+        if (f.awaitsAnswer) {
+            profileFeedback = f.copy(text = "Profile change: " + MissionFormat.WHY_LINK_LOST, isFailure = true, awaitsAnswer = false)
+        }
+    }
+    // ======== END mission cards ========
+
     // ---------------------------------------------------------------- ticking
 
     /**
@@ -599,9 +675,11 @@ class GroundConsoleViewModel(
                 // The client re-requests the full state itself; the state stays stale until a fresh fleet_status.
                 fleetFresh = false
                 noRecentUpdate = false
+                planIsCurrent = false // The ground sends its plan again after the state requests.
             }
             is GroundEvent.SessionEnded -> {
                 fleetFresh = false
+                planIsCurrent = false // Also covers events dropped by a stalled consumer.
                 connectionLost()
             }
             is GroundEvent.Server -> handleServer(event.event)
@@ -647,6 +725,8 @@ class GroundConsoleViewModel(
                     )
                 }
             }
+            is FleetPlan -> planIsCurrent = true
+            is DetectionProfiles -> onProfilesFromGround()
             is ManualReply -> applyManualReply(event, at)
             is LandAllAck -> applyLandAllAck(event, at)
             is CommandAck -> applyCommandAck(at)
@@ -765,6 +845,8 @@ class GroundConsoleViewModel(
      */
     private fun connectionLost() {
         lossEpoch++
+        planIsCurrent = false
+        onProfileLinkLost()
         val at = clock.nowMs()
         landAllOutstanding.clear()
         pendingLegacyLands.clear()
@@ -933,6 +1015,8 @@ class GroundConsoleViewModel(
 
     /** A different ground: nothing from the old one may stay on screen. */
     private fun forgetGroundState() {
+        planIsCurrent = false
+        profileFeedback = null
         retainedBoard = null
         retainedSnapshot = null
         orphanBase.clear()
@@ -1043,6 +1127,8 @@ class GroundConsoleViewModel(
             ),
             board = board,
             snapshot = snapshot,
+            planIsCurrent = planIsCurrent,
+            profileFeedback = profileFeedback,
         )
     }
 
@@ -1166,14 +1252,16 @@ class GroundConsoleViewModel(
 
         /**
          * The events this screen may emit: the five state requests the client
-         * sends itself, LAND ALL, per-drone land and resume. Narrower than the
-         * contract's allow-list on purpose (no detection profile change); a
-         * later unit that adds such a control widens this policy.
+         * sends itself, LAND ALL, per-drone land and resume, and the two
+         * detection profile selections of the profiles card. Narrower than the
+         * contract's allow-list on purpose (no ceiling, reasoning or plan
+         * control); a later unit that adds a control widens this policy.
          */
         val EMIT_POLICY: EmitPolicy = EmitPolicy.CONTRACT.narrowedTo(
             setOf(
                 "get_fleet_status", "get_detection_profiles", "get_ceiling_settings", "get_reasoning_provider",
                 "get_manual_status", "land_all", "drone_command", "manual_resume_search",
+                "set_detection_profile", "set_fleet_detection_profile",
             ),
         )
 

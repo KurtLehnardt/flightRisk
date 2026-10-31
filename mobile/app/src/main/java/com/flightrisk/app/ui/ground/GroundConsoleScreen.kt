@@ -54,6 +54,10 @@ class GroundActions(
     val onRemoveKey: () -> Unit = {},
     val onTestConnection: () -> Unit = {},
     val onSetEnabled: (Boolean) -> Unit = {},
+    // Mission cards (U4a): the only controls that send a detection profile selection.
+    val onSelectDroneProfile: (String, String) -> Unit = { _, _ -> },
+    val onSelectFleetProfile: (String) -> Unit = {},
+    val onDismissProfileFeedback: () -> Unit = {},
 )
 
 /** The Ground console: an operator console for one FlightRisk ground station. */
@@ -75,6 +79,9 @@ fun GroundConsoleScreen(viewModel: GroundConsoleViewModel, modifier: Modifier = 
         onRemoveKey = viewModel::removeKey,
         onTestConnection = viewModel::testConnection,
         onSetEnabled = viewModel::setEnabled,
+        onSelectDroneProfile = { id, profile -> viewModel.selectDroneProfile(id, profile) },
+        onSelectFleetProfile = { viewModel.selectFleetProfile(it) },
+        onDismissProfileFeedback = viewModel::dismissProfileFeedback,
     )
     GroundConsoleContent(state, actions, modifier)
 }
@@ -149,7 +156,7 @@ private fun GroundConsoleColumn(state: GroundUiState, actions: GroundActions, ma
             // ---- Slots for the cards later units add. Each reads its state from GroundUiState
             // (state.snapshot for plan, profiles, ceiling and reasoning; state.board for drones).
             // U10 mission cards: detection profiles, ceiling and reasoning provider (read only).
-            item(key = "slot-mission-cards") { MissionCardsSlot(state) }
+            item(key = "slot-mission-cards") { MissionCardsSlot(state, actions) }
             // U9/U8 plan canvas (and video tiles): state.snapshot.fleetPlan, client frames.
             item(key = "slot-plan-canvas") { PlanCanvasSlot(state) }
 
@@ -167,16 +174,40 @@ private fun GroundConsoleColumn(state: GroundUiState, actions: GroundActions, ma
     }
 }
 
-/** Empty slot for the mission cards (detection profiles, ceiling, reasoning provider). A later unit fills it. */
+/**
+ * The mission cards: detection profiles (view and select), ceiling and reasoning provider (read
+ * only). A card is left out when the ground has no data for it. They sit below the drone list, so
+ * they never move the drone cards, the Land buttons or the pinned LAND ALL bar.
+ */
 @Composable
-@Suppress("UNUSED_PARAMETER")
-fun MissionCardsSlot(state: GroundUiState) {
+fun MissionCardsSlot(state: GroundUiState, actions: GroundActions) {
+    val snapshot = state.snapshot
+    val connected = state.link.isConnected
+    val profiles = remember(snapshot.detectionProfiles, state.isStateStale, connected) {
+        MissionFormat.profilesCard(snapshot.detectionProfiles, state.isStateStale, connected)
+    }
+    val ceiling = remember(snapshot.ceilingSettings) { MissionFormat.ceilingCard(snapshot.ceilingSettings) }
+    val reasoning = remember(snapshot.reasoningProvider) { MissionFormat.reasoningCard(snapshot.reasoningProvider) }
+    if (profiles == null && ceiling == null && reasoning == null) return
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        profiles?.let {
+            ProfilesCard(
+                card = it,
+                feedback = state.profileFeedback,
+                onSelectDrone = actions.onSelectDroneProfile,
+                onSelectFleet = actions.onSelectFleetProfile,
+                onDismissFeedback = actions.onDismissProfileFeedback,
+            )
+        }
+        ceiling?.let { CeilingCard(it) }
+        reasoning?.let { ReasoningCard(it) }
+    }
 }
 
-/** Empty slot for the plan canvas. A later unit fills it. */
+/** The read-only plan canvas. It shows "Last plan (not confirmed this session)" until the ground sends a plan in this session. */
 @Composable
-@Suppress("UNUSED_PARAMETER")
 fun PlanCanvasSlot(state: GroundUiState) {
+    PlanCanvasFor(state)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
