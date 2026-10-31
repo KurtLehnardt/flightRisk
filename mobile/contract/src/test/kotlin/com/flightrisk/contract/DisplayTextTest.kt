@@ -140,7 +140,20 @@ class DisplayTextTest {
 
     @Test
     fun landAllNotSentNamesTheFallbacks() {
-        assertTrue(DisplayText.LAND_ALL_NOT_SENT.contains("Shift+L"))
-        assertTrue(DisplayText.LAND_ALL_NOT_SENT.startsWith("LAND ALL was not sent"))
+        assertEquals(
+            "LAND ALL was NOT sent: this phone is not connected to the ground. " +
+                "Land the drones now with their own controls, or press LAND ALL on the ground laptop.",
+            DisplayText.LAND_ALL_NOT_SENT,
+        )
+        assertFalse(DisplayText.LAND_ALL_NOT_SENT.contains("Shift+L"))
+    }
+
+    @Test
+    fun landAllNotSentWrongKeyNamesTheRefusedKey() {
+        assertEquals(
+            "LAND ALL was NOT sent: the ground refused this phone's key. " +
+                "Land the drones now with their own controls, or press LAND ALL on the ground laptop.",
+            DisplayText.LAND_ALL_NOT_SENT_WRONG_KEY,
+        )
     }
 }
