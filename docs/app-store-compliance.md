@@ -113,7 +113,7 @@ Declared in `mobile/app/src/main/AndroidManifest.xml`.
 | Permission | Rationale |
 |-----------|-----------|
 | `android.permission.CAMERA` | Required for real-time person detection and face matching to locate a missing child. Detection runs on the device. |
-| `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Records GPS coordinates when a match is detected so the user can navigate back to that location. Stored locally only. |
+| `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Reads the location (through Google Play services, `FusedLocationProviderClient`) when a match is detected so the user can navigate back to that location. Kept in memory only; the database has no location fields. |
 | `android.permission.INTERNET` | Needed for the paths the user starts: the connection to the ground station address the user enters (dashboard link on port 5555 by default, and the optional phone-as-edge link on port 9000 by default), the optional cloud reasoning request to Anthropic after the opt-in, and the optional on-device model download. |
 | `android.permission.ACCESS_NETWORK_STATE` | Used to check that a network is available before a cloud reasoning request (`NET_CAPABILITY_VALIDATED`) and to check that the phone is on Wi-Fi when it looks for a Tello drone. |
 | `android.permission.ACCESS_WIFI_STATE` | Used to read the current Wi-Fi connection when checking whether the phone is joined to a Tello drone's own Wi-Fi network. |
@@ -143,23 +143,24 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 - With the default settings, no photo, crop, face data or location leaves the phone. Camera frames are not uploaded.
 - With cloud reasoning on (opt-in, a saved Claude key and Cloud Claude selected), the cropped image of each detected person, the reference photo and the typed description are sent to Anthropic over TLS. The images can show a face.
 - With the ground station link on, commands and status requests go to the address the user entered. With the phone-as-edge link on, box positions and scores go to that address. The user's own ground station is not a third party the developer runs, but Google's rules on "shared" and "collected" data may still treat these as data transmitted off the device. The owner decides.
-- The phone stores match thumbnails, scores, GPS fixes and timestamps in a local database. Android Auto Backup may copy that database to the user's Google account if the user has backup enabled (the app excludes only its preference files, not the database). **Unsure:** whether this matters for the form.
+- Every Android search is recorded as an MP4 video of the camera view with the detection boxes drawn on it (`SearchPipeline.kt`, `SessionRecorder`, in `filesDir/recordings`), with no setting to turn it off. Match images are saved as JPEG files in `filesDir/snapshots`. The Room database holds scores, timestamps, reasoning text, file paths and the typed description. A reference photo taken with the camera stays as a file in the cache. GPS coordinates are kept in memory only. All of this is in the app's private storage and is not sent anywhere by the app, but the backup rules exclude only preference files, so Android Auto Backup and device transfer can copy the video, images and database. The app has no delete control yet (planned); data is removed by clearing app storage or uninstalling. **Unsure:** how Google's form treats data that stays on the device but is backed up by the operating system.
+- Location comes through Google Play services (`FusedLocationProviderClient`), which is a Google component on the phone; the owner should consider whether to name it on the form.
 
 #### Data collected or shared (provisional draft)
 
 | Question | Draft answer |
 |----------|--------------|
-| Does your app collect or share any of the required user data types? | Provisional. The earlier answer "No" does not hold when cloud reasoning is on, because images are sent to Anthropic. The owner decides how to answer, including whether the optional cloud feature and the user's own ground station count. |
+| Does your app collect or share any of the required user data types? | Provisional. The earlier answer "No" does not hold when cloud reasoning is on, because images are sent to Anthropic. Images also leave the phone through phone-as-edge (a picture of the whole camera view, sent to the user's own ground station when it asks for video). The owner decides how to answer, including whether the optional cloud feature and the user's own ground station count. |
 | Is all of the user data collected by your app encrypted in transit? | Provisional. Cloud reasoning: yes (TLS). The ground station and edge links: no, they are plain `http://` and `ws://` (only on a private network, by the app's own rule). |
-| Do you provide a way for users to request that their data is deleted? | Yes. All local session data is user-deletable from within the app. |
+| Do you provide a way for users to request that their data is deleted? | Provisional. **No, not yet:** the app has no delete control. Android session data (video, images, database) is removed by clearing the app's storage in system Settings or uninstalling. A delete action is planned; do not answer "Yes" until it ships. |
 
 #### Data types (provisional draft)
 
 | Data Type | Collected | Shared | Ephemeral | Purpose |
 |-----------|-----------|--------|-----------|---------|
 | Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
-| Location (precise) | Yes (local only) | No | No (user-deletable) | App functionality |
-| Photos/Videos | Provisional: yes when cloud reasoning is on (reference photo and crops go to Anthropic); otherwise no | Provisional | -- | App functionality |
+| Location (precise) | Read on the device, kept in memory only | No | Yes (not stored) | App functionality |
+| Photos/Videos | Provisional: the app records every search as a video and saves match images in private storage (not sent by the app, but backed up by Android); with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | No (stored until removed) | App functionality |
 | Face / biometric data | Processed on-device. With cloud reasoning on, crops and the reference photo that can show a face go to Anthropic | Provisional | Yes (session-scoped) for templates and embeddings | App functionality |
 | Personal identifiers | No | No | -- | -- |
 | App activity | No | No | -- | -- |
@@ -174,7 +175,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 ### Face Detection Feature Flag
 
 - **Declaration required:** Yes. Google Play requires disclosure when an app uses face detection.
-- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default." The earlier text said that no face data is transmitted; that is not true of images when cloud reasoning is on.
+- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, searches are recorded as video in the app's private storage." The earlier text said that no face data is transmitted; that is not true of images when cloud reasoning is on.
 
 ### Age Rating (IARC)
 
@@ -191,7 +192,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 
 Include in the app description or "About this app" section, after the owner and a lawyer have reviewed it:
 
-> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. The optional ground station link sends commands to a computer you run, on your own network. See our privacy policy for full details.
+> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Each search is recorded as a video in the app's private storage on your phone. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
@@ -235,7 +236,7 @@ Claude (Anthropic) is the only cloud provider on Android. Cloud reasoning is off
 - Consent dialog text (`ReasoningSettings.kt`, `MESSAGE`): the same words as on iOS.
 - The Claude API key and the ground station keys are stored in `EncryptedSharedPreferences` (backed by the Android Keystore), never in plain preferences, files or logs. The opt-in file and the secure file are excluded from Auto Backup and device transfer, so the opt-in is not restored to another device.
 - A "Cloud active: images are sent to Anthropic" indicator shows in Settings and on the Search screen while cloud is the active backend.
-- The first-launch notice (`OnboardingScreen.kt`) states that camera frames are not uploaded and that images leave the phone only with cloud reasoning on.
+- The first-launch notice (`OnboardingScreen.kt`, line 175) states that camera frames are not uploaded and that images leave the phone only with cloud reasoning on. That second sentence is not true when phone-as-edge is on and the ground asks for video.
 
 ### Phone as an Edge (Android)
 

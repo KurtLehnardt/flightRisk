@@ -19,7 +19,7 @@ All face detection, face recognition (ArcFace), and appearance matching (CLIP Re
 - Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.
 - No biometric templates or embeddings are transmitted to any server, cloud service, or third party.
-- **Images are different from templates.** With the default settings, no image of any person leaves your device. Only if you turn on cloud reasoning, save a Claude API key and select Cloud Claude (Section 5) are images sent off the device: the reference photo you provided and the cropped image of each candidate person that is sent for analysis. Those images can show a face. See Section 5 for exactly what is sent and how to turn it off.
+- **Images are different from templates.** With the default settings, no image of any person leaves your device. Images leave the phone in two cases only, both optional and off by default. First, if you turn on cloud reasoning, save a Claude API key and select Cloud Claude (Section 5), the reference photo you provided and the cropped image of each candidate person are sent for analysis. Second, on Android with phone-as-edge turned on (Section 5B), a small picture of the whole camera view, which can show people, is sent to the ground station you entered when that ground station asks for video. Those images can show a face.
 
 ---
 
@@ -39,25 +39,28 @@ This section covers templates and embeddings only. Images (the reference photo a
 
 - **BIPA (Illinois Biometric Information Privacy Act):** Biometric templates and embeddings are not stored beyond the active session and are not transmitted. If you enable a cloud LLM backend, images that may show a face are transmitted to the provider you chose (Section 5). Whether that transmission is subject to BIPA depends on the provider's processing and has not been determined; do not enable the feature for other people's images without that review.
 - **GDPR (EU General Data Protection Regulation):** Templates and embeddings are processed ephemerally and locally under your sole control. When you enable a cloud LLM backend, the provider you choose receives images and acts as a recipient of that data. You are responsible for having a lawful basis for that transfer.
-- **Other biometric privacy laws:** The same rule applies in every jurisdiction: templates and embeddings stay on the device; images leave the device only through the opt-in cloud LLM feature.
+- **Other biometric privacy laws:** The same rule applies in every jurisdiction: templates and embeddings stay on the device; images leave the device only through the opt-in cloud reasoning feature and, on Android, the opt-in phone-as-edge camera view sent to your own ground station (Section 5B).
 
 ---
 
 ## 4. Session Data (Local Storage)
 
-During a search session, the app may store the following data locally in a SQLite database on your device:
+**On iPhone,** match results are kept in memory only. The iPhone app writes no database and no session files.
 
-- Match thumbnails (cropped images of detected persons who matched your search criteria)
-- Match confidence scores
-- GPS coordinates of where matches were detected
-- Timestamps
+**On Android,** during a search the app stores the following in its private storage on your device:
+
+- **A video of the search.** Each search is recorded as an MP4 video of the camera view with the detection boxes drawn on it, in the app's `recordings` folder. There is no setting to turn this off. The video can show people.
+- **Match images.** The match snapshot and the cropped image of the matched person are saved as image files in the app's `snapshots` folder.
+- **A local database** (SQLite, through Room) with the session, its start and end time, counts, the match scores and timestamps, the reasoning text, the file paths of the images and video, and the description you typed.
+- **A reference photo taken with the camera** is saved as a file in the app's cache. The app does not delete it; Android may clear the cache, and uninstalling the app removes it.
+- **GPS coordinates are kept in memory only.** The database has no location fields.
 
 This data:
 
-- Is stored **only on your device** in a local SQLite database.
-- Is **never transmitted** by the app to any server, cloud service, or third party.
-- Is **user-deletable** at any time from within the app settings.
-- Is not backed up to iCloud or Google Drive by the app itself. Your operating system's own backup (iCloud or iTunes backup on iPhone, Android Auto Backup to your Google account) may include the app's local database if you have backup turned on; that is outside the app's control. On Android the app excludes only its preference files from backup (the encrypted secret store, the cloud reasoning choice, the ground station link consent and the general config file), not the database.
+- Is stored **only on your device**, in the app's private storage.
+- Is **never transmitted** by the app to any server, cloud service, or third party, except through the optional features in Sections 5 and 5B.
+- **The app has no delete control yet** for this data. On Android, it is removed by clearing the app's storage in the system Settings or by uninstalling the app. A delete action is planned.
+- **Can be copied by Android backup.** Android Auto Backup and device-to-device transfer can copy the video, the images and the database to your Google account or to another phone, because the app excludes only its preference files (the encrypted secret store, the cloud reasoning choice, the ground station link consent and the general config file) from backup. A change is planned.
 
 ---
 
@@ -114,17 +117,17 @@ This section applies to the Android app. Everything in Section 5 about cloud rea
 
 ## 6. Location Data
 
-- GPS coordinates are recorded **locally** when a match event is detected, so you can navigate back to the location where the match occurred.
-- Location data is stored only in the local SQLite database on your device.
+- GPS coordinates are read when a match event is detected, so you can navigate back to the location where the match occurred. On Android the location comes through Google Play services (`FusedLocationProviderClient`).
+- Location data is kept in memory only. It is not written to the database or to a file, on iPhone or on Android.
 - Location data is **never transmitted** to any server, cloud service, or third party.
-- You can delete all location data from within the app settings at any time.
+- Because location data is not stored, there is nothing to delete; it is gone when the app closes.
 
 ---
 
 ## 7. Camera Usage
 
 - The camera is used solely for real-time person detection and face matching to help locate a missing child.
-- Camera frames are processed on-device in real time and are not recorded, stored, or transmitted, except for match thumbnails stored locally as described in Section 4 and the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5).
+- On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, each search is recorded as a video of the camera view in the app's private storage, and match images are saved as files (Section 4). Camera frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole camera view sent to your ground station when it asks for video (Section 5B).
 
 ---
 
@@ -146,15 +149,15 @@ The only exceptions are the optional features you turn on or start yourself: clo
 - The app does not target children as users.
 - The app does not collect any personal information from children.
 - No user accounts are created. No names, email addresses, or identifying information of any person (adult or child) are collected by the app.
-- The reference photo used for matching is provided by the parent/guardian and processed on-device. It is not stored beyond the session and is not transmitted unless the optional cloud reasoning feature (Section 5) is enabled, in which case it is sent to Anthropic.
+- The reference photo used for matching is provided by the parent/guardian and processed on-device. On iPhone it is not stored beyond the session. On Android, a reference photo taken with the camera is saved as a file in the app's cache (the app does not delete it; Android may clear the cache, and uninstalling the app removes it). It is not transmitted unless the optional cloud reasoning feature (Section 5) is enabled, in which case it is sent to Anthropic.
 
 ---
 
 ## 10. Data Retention and Deletion
 
 - **Biometric templates and embeddings:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
-- **Session data (thumbnails, scores, locations):** Stored locally until the user deletes it. The user can delete all session data at any time from within the app.
-- **App deletion:** Uninstalling the app removes all locally stored data.
+- **Session data on Android (video, match images, scores, reasoning text, description):** Stored locally until removed. The app has no delete control yet; clear the app's storage in the system Settings or uninstall the app. On iPhone no session data is stored.
+- **App deletion:** Uninstalling the app removes all locally stored data (backups made by the operating system are separate).
 
 ---
 

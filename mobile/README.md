@@ -46,7 +46,7 @@ Cloud reasoning is off by default. `CloudReasoningGate` yields the key, and so l
 ## Phone as an edge
 
 - **Off by default.** It starts only when the user turns on "Send detections to the ground station" in Settings after reading a disclosure that names what is sent and the address, and says the link is not encrypted. The consent is tied to the address (changing the address turns the link off). The choice is stored in `flightrisk_ground_link` preferences, which backup excludes. A saved token alone starts nothing.
-- **When it runs.** Only while the link is on, the app is in view and a search is running. The Search screen shows "Sending detections to HOST" (or "... and camera view to HOST").
+- **When it runs.** Only while the link is on, the app is in view and a search is running. The Search screen shows "Sending detections to ADDRESS", or "Sending detections and camera view to ADDRESS" while the ground has asked for video.
 - **What is sent.** The legacy `detections` message built by `DetectionsWire`: box positions, confidence scores, and `reid_embedding` and `crop` for each detection. Crops are null by default (no pictures of people are made or sent), and no embedding is produced yet, so `reid_embedding` is null as well. There is no `drone_id` and no `face_embedding`. At most 50 detections go into a message and at most two messages a second. A message is at most 1 MiB; when it is larger, crops and then the thumbnail are dropped, and a frame that is still too large is dropped and counted.
 - **Camera view.** A small thumbnail of the whole camera view, which can show people, is sent only after the ground sends `stream_video` with `enabled: true`, and stops when it sends `false`.
 - **The ground cannot match these detections yet**, because the app sends no appearance embeddings. The disclosure says to use this mode for testing and mapping only.
@@ -57,7 +57,7 @@ Cloud reasoning is off by default. `CloudReasoningGate` yields the key, and so l
 
 ## Build and test
 
-Prerequisites: Android Studio Koala or later, JDK 17, Android SDK 34, and the SDK location. Gradle finds the SDK from `ANDROID_HOME` or from `sdk.dir` in `mobile/local.properties` (which is not committed). If the Gradle caches are already populated, add `--offline`.
+Prerequisites: Android Studio Narwhal 3 Feature Drop (2025.1.3) or later (the build uses Android Gradle Plugin 8.13.2), JDK 17, Android SDK 34, and the SDK location. Gradle finds the SDK from `ANDROID_HOME` or from `sdk.dir` in `mobile/local.properties` (which is not committed). If the Gradle caches are already populated, add `--offline`.
 
 ```bash
 cd mobile
