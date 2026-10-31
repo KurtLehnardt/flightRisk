@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Face
@@ -34,6 +35,7 @@ import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.ui.ground.GroundConsoleRoute
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreen
 import com.flightrisk.app.ui.search.SearchScreenState
@@ -68,6 +70,13 @@ sealed class NavDestination(
         contentDesc = "Target photo picker",
     )
 
+    data object Ground : NavDestination(
+        route = "ground",
+        label = "Ground",
+        icon = Icons.Default.Place,
+        contentDesc = "Ground station console",
+    )
+
     data object Settings : NavDestination(
         route = "settings",
         label = "Settings",
@@ -79,6 +88,7 @@ sealed class NavDestination(
 private val destinations = listOf(
     NavDestination.Search,
     NavDestination.Target,
+    NavDestination.Ground,
     NavDestination.Settings,
 )
 
@@ -236,6 +246,10 @@ fun FlightRiskNavHost(
                     savedBitmap = targetBitmap,
                     savedQualityReport = targetQualityReport,
                 )
+            }
+
+            composable(NavDestination.Ground.route) {
+                GroundConsoleRoute()
             }
 
             composable(NavDestination.Settings.route) {
