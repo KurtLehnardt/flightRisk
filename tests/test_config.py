@@ -13,9 +13,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from flightrisk.config import (
-    FlightRiskConfig,
     DashboardConfig,
     DroneConfig,
+    FlightRiskConfig,
     ReasoningConfig,
     VisionConfig,
     get_config,
