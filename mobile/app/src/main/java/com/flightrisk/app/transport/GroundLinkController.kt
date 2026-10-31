@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The saved choice for the ground station link: on or off, and the address
@@ -71,6 +72,8 @@ data class GroundLinkUiState(
     val status: EdgeLinkStatus = EdgeLinkStatus.Off,
     /** True while the connection loop is running (link on, app in view, a search running). */
     val running: Boolean = false,
+    /** True while the ground has asked for video, so the whole camera view goes out too. */
+    val sendingCameraView: Boolean = false,
 )
 
 /** The words the link shows. */
@@ -81,11 +84,17 @@ object GroundLinkText {
 
     const val DISCLOSURE =
         "While a search is running, this phone will send what its camera detects to the ground station address you entered: " +
-            "the position of each person it finds, a small picture of each person, and appearance data that helps tell people apart " +
-            "(and, only if you turn face matching on, face data). It can also send a small picture of the whole camera view when the " +
-            "ground asks for video. This link is not encrypted unless it uses wss://, and this version of the app does not support " +
-            "wss://, so use it only on a network you trust. The phone sends nothing else and cannot control anything on the ground station. " +
-            "You can turn this off at any time."
+            "where each person appears in the picture (box positions) and how sure the phone is (scores). No pictures of people " +
+            "and no face data are sent. If the ground station asks for video, the phone also sends a small picture of the whole " +
+            "camera view, which can show people. The ground station cannot yet match these detections to a search target, so use " +
+            "this mode for testing and mapping only. The link is not encrypted, and this version of the app does not support " +
+            "wss://, so use it only on a network you trust. The address you entered is remembered, not the network: on a different " +
+            "Wi-Fi, another device with the same address would receive what is sent, including your edge token. " +
+            "The phone sends nothing else and cannot control anything on the ground station. You can turn this off at any time."
+
+    const val NEEDS_TOKEN = "Save the edge token from the ground station first."
+    const val STORAGE_UNAVAILABLE = "Secure storage unavailable on this device"
+    const val PORT_HINT = "The edge port is usually 9000; 5555 is the dashboard."
 
     fun statusLine(state: GroundLinkUiState): String {
         if (!state.enabled) return "Off. Nothing is sent."
@@ -95,6 +104,8 @@ object GroundLinkText {
             EdgeLinkStatus.Connected -> "Connected. Sending detections to ${state.address}."
             is EdgeLinkStatus.Reconnecting -> "Connection lost (${s.reason}). Trying again in ${(s.retryInMs + 999) / 1000} s."
             EdgeLinkStatus.TokenRejected -> TOKEN_REJECTED
+            EdgeLinkStatus.NeedsToken -> NEEDS_TOKEN
+            EdgeLinkStatus.StorageUnavailable -> STORAGE_UNAVAILABLE
             is EdgeLinkStatus.AddressRefused -> "Not connected: ${s.reason}"
         }
     }
@@ -103,13 +114,30 @@ object GroundLinkText {
     fun indicator(state: GroundLinkUiState): GroundLinkIndicator? {
         if (!state.enabled) return null
         return when (state.status) {
-            EdgeLinkStatus.Connected -> GroundLinkIndicator("Sending detections to ${state.address}", sending = true)
+            EdgeLinkStatus.Connected ->
+                if (!state.running) {
+                    null
+                } else if (state.sendingCameraView) {
+                    GroundLinkIndicator("Sending detections and camera view to ${state.address}", sending = true)
+                } else {
+                    GroundLinkIndicator("Sending detections to ${state.address}", sending = true)
+                }
             EdgeLinkStatus.TokenRejected -> GroundLinkIndicator(TOKEN_REJECTED, sending = false)
+            EdgeLinkStatus.NeedsToken -> GroundLinkIndicator(NEEDS_TOKEN, sending = false)
+            EdgeLinkStatus.StorageUnavailable -> GroundLinkIndicator(STORAGE_UNAVAILABLE, sending = false)
             is EdgeLinkStatus.AddressRefused -> GroundLinkIndicator(statusLine(state), sending = false)
             else -> null
         }
     }
 }
+
+/**
+ * Proof that the user accepted the disclosure for [addressText]. Only the
+ * disclosure dialog creates one (the constructor is internal to the app), and
+ * [GroundLinkController.enable] refuses to turn the link on without one that
+ * matches the address.
+ */
+class DisclosureAccepted internal constructor(val addressText: String)
 
 /** [text] for the Search screen; [sending] is true only while detections go out. */
 data class GroundLinkIndicator(val text: String, val sending: Boolean)
@@ -164,15 +192,24 @@ class GroundLinkController(
     /** Starts and stops the link with the activity: it stops when the app leaves the screen. */
     val lifecycleObserver: DefaultLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) = setForeground(true)
-        override fun onStop(owner: LifecycleOwner) = setForeground(false)
+        override fun onStop(owner: LifecycleOwner) {
+            // A rotation recreates the activity; the link goes down only when the app really leaves.
+            if ((owner as? android.app.Activity)?.isChangingConfigurations == true) return
+            setForeground(false)
+        }
     }
 
     /**
-     * Turns the link on for [addressText] after the user read the disclosure.
+     * Turns the link on for [addressText] after the user accepted the disclosure
+     * for that address ([accepted], created by the dialog).
      * Returns false and shows the reason in [GroundLinkUiState.addressProblem]
      * when the address is refused.
      */
-    fun enable(addressText: String): Boolean {
+    fun enable(addressText: String, accepted: DisclosureAccepted?): Boolean {
+        if (accepted == null || accepted.addressText != addressText) {
+            _state.update { it.copy(addressProblem = "Read and accept the disclosure first.") }
+            return false
+        }
         val parsed = EdgeEndpoint.parse(addressText)
         if (parsed !is EndpointParseResult.Ok) {
             _state.update { it.copy(addressProblem = (parsed as EndpointParseResult.Invalid).reason) }
@@ -185,6 +222,12 @@ class GroundLinkController(
             reconcileLocked()
         }
         return true
+    }
+
+    /** Shows why [addressText] is refused (or clears the message). Changes nothing else. */
+    fun checkAddress(addressText: String) {
+        val parsed = EdgeEndpoint.parse(addressText)
+        _state.update { it.copy(addressProblem = (parsed as? EndpointParseResult.Invalid)?.reason) }
     }
 
     /** Turns the link off and closes the connection. */
@@ -286,14 +329,26 @@ class GroundLinkController(
         stopPublisherLocked(keepProblem = false)
         val p = publisherFactory(endpoint!!)
         publisher = p
-        statusJob = scope.launch { p.status.collect { status -> _state.update { it.copy(status = status) } } }
+        statusJob = scope.launch {
+            launch {
+                p.status.collect { status ->
+                    // Only the current publisher may write the state; a late update after stop is dropped.
+                    synchronized(lock) { if (publisher === p) _state.update { it.copy(status = status) } }
+                }
+            }
+            launch {
+                p.thumbnailsOn.collect { on ->
+                    synchronized(lock) { if (publisher === p) _state.update { it.copy(sendingCameraView = on) } }
+                }
+            }
+        }
         _state.update { it.copy(running = true) }
         p.start()
     }
 
     private fun stopPublisherLocked(keepProblem: Boolean) {
         val p = publisher ?: run {
-            _state.update { if (keepProblem) it.copy(running = false) else it.copy(running = false, status = EdgeLinkStatus.Off) }
+            _state.update { if (keepProblem) it.copy(running = false) else it.copy(running = false, sendingCameraView = false, status = EdgeLinkStatus.Off) }
             return
         }
         statusJob?.cancel()
@@ -301,8 +356,9 @@ class GroundLinkController(
         p.stop()
         publisher = null
         _state.update {
-            val problem = it.status is EdgeLinkStatus.TokenRejected || it.status is EdgeLinkStatus.AddressRefused
-            it.copy(running = false, status = if (keepProblem && problem) it.status else EdgeLinkStatus.Off)
+            val problem = it.status is EdgeLinkStatus.TokenRejected || it.status is EdgeLinkStatus.AddressRefused ||
+                it.status is EdgeLinkStatus.NeedsToken || it.status is EdgeLinkStatus.StorageUnavailable
+            it.copy(running = false, sendingCameraView = false, status = if (keepProblem && problem) it.status else EdgeLinkStatus.Off)
         }
     }
 
@@ -339,7 +395,7 @@ object GroundLink {
             publisherFactory = { endpoint ->
                 EdgePublisher(
                     endpoint = endpoint,
-                    tokenProvider = { secrets.load(SecretName.EDGE_TOKEN) },
+                    tokenProvider = { withContext(Dispatchers.IO) { secrets.lookup(SecretName.EDGE_TOKEN) } },
                     scope = scope,
                     port = EdgeSocketPort(),
                     logSink = AndroidGroundLog(),

@@ -32,7 +32,6 @@ class EdgePublisherTest {
     private fun publishAndWait(h: EdgeHarness, c: com.flightrisk.app.ground.FakeConnection, frame: com.flightrisk.app.pipeline.PublishedFrame, expectedSent: Int) = runBlocking {
         h.publisher.publish(frame)
         eventually("sent $expectedSent") { c.sent.size >= expectedSent }
-        eventually("not busy") { !h.publisher.wantsFrame() || true }
     }
 
     @Test
@@ -77,7 +76,7 @@ class EdgePublisherTest {
             assertEquals(DetectionsWire.DETECTION_KEYS, det.keys)
             assertFalse(det.containsKey("face_embedding"))
             assertEquals(JsonNull, msg["thumbnail"])
-            assertTrue(det["crop"] is JsonPrimitive && det["crop"] !is JsonNull)
+            assertEquals("no pictures of people by default", JsonNull, det["crop"])
             assertEquals(1_700_000_000.5, (msg["timestamp"] as JsonPrimitive).content.toDouble(), 0.0)
         } finally {
             h.close()
@@ -176,11 +175,11 @@ class EdgePublisherTest {
             val c = connected(h)
             val huge = List(20_000) { 0.123456789 + it }
             h.publisher.publish(testFrame(id = 1, detections = 50, reid = huge))
-            assertEquals(1, h.publisher.stats().framesDroppedTooLarge)
+            runBlocking { eventually("dropped") { h.publisher.stats().framesDroppedTooLarge == 1L } }
             assertEquals(0, h.publisher.stats().framesSent)
             assertEquals(listOf("auth"), c.sent.map(::typeOf))
             h.clock.advance(1000)
-            assertTrue("not stuck busy after a drop", h.publisher.wantsFrame())
+            runBlocking { eventually("not stuck busy after a drop") { h.publisher.wantsFrame() } }
             publishAndWait(h, c, testFrame(id = 2), 2)
             assertEquals(1, h.publisher.stats().framesSent)
             assertTrue(c.sent.all { it.toByteArray().size <= DetectionsWire.MAX_BYTES })
@@ -190,8 +189,8 @@ class EdgePublisherTest {
     }
 
     @Test
-    fun `crops are removed to fit and counted`() {
-        val h = EdgeHarness()
+    fun `crops, when switched on, are removed to fit and counted`() {
+        val h = EdgeHarness(config = EdgePublisherConfig(sendCrops = true))
         try {
             val c = connected(h)
             val bigCrop = ByteArray(400_000) { (it % 251).toByte() }
@@ -210,8 +209,9 @@ class EdgePublisherTest {
         try {
             val c = connected(h)
             h.publisher.publish(testFrame(id = 1, timestamp = Double.NaN))
-            assertEquals(1, h.publisher.stats().framesDroppedInvalid)
+            runBlocking { eventually("invalid counted") { h.publisher.stats().framesDroppedInvalid == 1L } }
             h.clock.advance(1000)
+            runBlocking { eventually("idle") { h.publisher.wantsFrame() } }
             val bad = com.flightrisk.app.pipeline.PublishedFrame(
                 frameId = 2, timestampSeconds = 1.0, frameWidth = 1, frameHeight = 1, detections = listOf(
                     com.flightrisk.app.pipeline.PublishedDetection(listOf(Double.NaN, 0.0, 1.0, 1.0), 0.5),
@@ -232,7 +232,7 @@ class EdgePublisherTest {
         val port = GatePort(gate)
         val h = EdgeHarness()
         val publisher = com.flightrisk.app.transport.EdgePublisher(
-            endpoint = h.endpoint, tokenProvider = { TEST_TOKEN }, scope = h.scope, port = port, clock = h.clock, random = { 0.0 },
+            endpoint = h.endpoint, tokenProvider = { tokenRead(TEST_TOKEN) }, scope = h.scope, port = port, clock = h.clock, random = { 0.0 },
         )
         try {
             publisher.start()
@@ -240,6 +240,7 @@ class EdgePublisherTest {
             // The auth frame is sent; the first detections frame then blocks in send.
             publisher.publish(testFrame(id = 1))
             runBlocking { eventually("auth sent") { gate.sent.size >= 1 } }
+            runBlocking { eventually("frame 1 is in the blocked write") { !publisher.wantsFrame() } }
             for (i in 2..200) {
                 h.clock.advance(1000)
                 assertFalse("busy socket must not want frames", publisher.wantsFrame())
@@ -261,7 +262,7 @@ class EdgePublisherTest {
         try {
             val c = connected(h)
             publishAndWait(h, c, testFrame(id = 1), 2)
-            runBlocking { eventually("idle") { true } }
+            runBlocking { eventually("first frame done") { h.publisher.stats().framesSent == 1L } }
             h.publisher.publish(testFrame(id = 2))
             assertEquals(1, h.publisher.stats().framesDroppedRate)
             assertFalse(h.publisher.wantsFrame())
@@ -388,7 +389,7 @@ class EdgePublisherTest {
         val port = RecordingPort()
         val h = EdgeHarness()
         val publisher = com.flightrisk.app.transport.EdgePublisher(
-            endpoint = h.endpoint, tokenProvider = { TEST_TOKEN }, scope = h.scope, port = port, clock = h.clock,
+            endpoint = h.endpoint, tokenProvider = { tokenRead(TEST_TOKEN) }, scope = h.scope, port = port, clock = h.clock,
         )
         try {
             publisher.start()
@@ -397,6 +398,146 @@ class EdgePublisherTest {
             assertNull(publisher.toString().takeIf { it.contains(TEST_TOKEN) })
         } finally {
             publisher.stop()
+            h.close()
+        }
+    }
+
+    @Test
+    fun `no pictures of people are made or sent by default, even when asked for by the ground`() {
+        val h = EdgeHarness()
+        try {
+            val c = connected(h)
+            c.server("{\"type\":\"stream_video\",\"enabled\":true}")
+            runBlocking { eventually("video on") { h.publisher.thumbnailsEnabled } }
+            val cropCalls = AtomicInteger()
+            publishAndWait(h, c, testFrame(detections = 5, cropCalls = cropCalls), 2)
+            val dets = parseObject(c.sent[1])["detections"] as JsonArray
+            assertEquals(5, dets.size)
+            assertTrue(dets.all { it.jsonObject["crop"] == JsonNull })
+            assertEquals(0, cropCalls.get())
+            assertEquals(0, h.publisher.maxCrops())
+            assertTrue(h.publisher.wantsThumbnail())
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `with crops on, at most 8 go out, for the most confident people, and all boxes stay`() {
+        val h = EdgeHarness(config = EdgePublisherConfig(sendCrops = true))
+        try {
+            val c = connected(h)
+            val frame = com.flightrisk.app.pipeline.PublishedFrame(
+                frameId = 1, timestampSeconds = 1.0, frameWidth = 10, frameHeight = 10,
+                detections = List(20) { i ->
+                    com.flightrisk.app.pipeline.PublishedDetection(listOf(0.0, 0.0, 1.0, 1.0 + i), confidence = i / 20.0, cropJpeg = { byteArrayOf(1, 2) })
+                },
+            )
+            assertEquals(8, h.publisher.maxCrops())
+            publishAndWait(h, c, frame, 2)
+            val dets = (parseObject(c.sent[1])["detections"] as JsonArray).map { it.jsonObject }
+            assertEquals(20, dets.size)
+            val withCrop = dets.indices.filter { dets[it]["crop"] != JsonNull }
+            assertEquals((12..19).toList(), withCrop)
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `images are compressed on the worker and not on the thread that publishes`() {
+        val h = EdgeHarness(config = EdgePublisherConfig(sendCrops = true))
+        try {
+            val c = connected(h)
+            c.server("{\"type\":\"stream_video\",\"enabled\":true}")
+            runBlocking { eventually("video on") { h.publisher.thumbnailsEnabled } }
+            val threads = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+            val frame = com.flightrisk.app.pipeline.PublishedFrame(
+                frameId = 1, timestampSeconds = 1.0, frameWidth = 10, frameHeight = 10,
+                thumbnailJpeg = { threads += Thread.currentThread(); byteArrayOf(1) },
+                detections = listOf(com.flightrisk.app.pipeline.PublishedDetection(listOf(0.0, 0.0, 1.0, 1.0), 0.5, cropJpeg = { threads += Thread.currentThread(); byteArrayOf(2) })),
+            )
+            h.publisher.publish(frame)
+            assertTrue("nothing compressed on the caller yet", threads.none { it === Thread.currentThread() })
+            runBlocking { eventually("sent") { c.sent.size >= 2 } }
+            assertEquals(2, threads.size)
+            assertTrue(threads.none { it === Thread.currentThread() })
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `without a token a non-loopback ground is not contacted and the status says why`() {
+        val h = EdgeHarness(token = null, host = "192.168.1.20")
+        try {
+            h.publisher.start()
+            runBlocking { eventually("needs token") { h.publisher.status.value == EdgeLinkStatus.NeedsToken } }
+            repeat(3) { h.clock.advance(60_000) }
+            Thread.sleep(100)
+            assertEquals(0, h.port.opened.size)
+            assertEquals("Save the edge token from the ground station first.", GroundLinkText.NEEDS_TOKEN)
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `a secure storage failure is reported on its own and nothing is contacted`() {
+        val h = EdgeHarness(storageProblem = true, host = "192.168.1.20")
+        try {
+            h.publisher.start()
+            runBlocking { eventually("storage") { h.publisher.status.value == EdgeLinkStatus.StorageUnavailable } }
+            assertEquals(0, h.port.opened.size)
+            assertEquals("Secure storage unavailable on this device", GroundLinkText.STORAGE_UNAVAILABLE)
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `a failed write does not hide a 4001 that is waiting to be read`() {
+        val h = EdgeHarness()
+        try {
+            val c = connected(h)
+            // The write fails, and the ground's 4001 is the next thing the receive side sees.
+            c.failSends = IOException("broken pipe")
+            h.publisher.publish(testFrame())
+            c.serverError(WebSocketClosedException(EdgeLink.CLOSE_UNAUTHORIZED, "unauthorized"))
+            runBlocking { eventually("outcome") { h.publisher.status.value != EdgeLinkStatus.Connected } }
+            // The receive side decides: either it saw the 4001 (no retry) or the dropped link (one retry), never a loop.
+            Thread.sleep(100)
+            repeat(3) { h.clock.advance(60_000); Thread.sleep(50) }
+            assertTrue("at most one extra attempt: ${h.port.opened.size}", h.port.opened.size <= 2)
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `once heartbeats are seen, silence ends the session`() {
+        val h = EdgeHarness(config = EdgePublisherConfig(heartbeatDeadlineMs = 3_000))
+        try {
+            val c = connected(h)
+            c.server("{\"type\":\"heartbeat\",\"seq\":1}")
+            runBlocking { eventually("watchdog armed") { h.clock.sleepers().isNotEmpty() } }
+            repeat(4) { h.clock.advance(1_000); Thread.sleep(30) }
+            runBlocking { eventually("reconnecting") { h.publisher.status.value is EdgeLinkStatus.Reconnecting } }
+            assertTrue((h.publisher.status.value as EdgeLinkStatus.Reconnecting).reason.contains("heartbeats"))
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `without heartbeats there is no deadline`() {
+        val h = EdgeHarness(config = EdgePublisherConfig(heartbeatDeadlineMs = 3_000))
+        try {
+            connected(h)
+            repeat(10) { h.clock.advance(60_000) }
+            Thread.sleep(100)
+            assertEquals(EdgeLinkStatus.Connected, h.publisher.status.value)
+        } finally {
             h.close()
         }
     }

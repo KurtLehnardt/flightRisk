@@ -1,5 +1,6 @@
 package com.flightrisk.app.transport
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -35,10 +36,11 @@ class TransportSourceAuditTest {
     @Test
     fun `the publisher writes only through the contract encoders`() {
         val publisher = sources().getValue("EdgePublisher.kt")
-        val sends = Regex("""\.send\(([^)]*)\)|sendWithTimeout\([^,]+,\s*([^)]*)\)""").findAll(publisher).map { it.value }.toList()
-        assertTrue(sends.isNotEmpty())
-        assertTrue("Unexpected send: $sends", sends.all { it.contains("message") || it.contains("authMessage") || it.contains("frame") })
-        assertTrue(publisher.contains("EdgeLink.authMessage(token)"))
+        val sends = Regex("""sendWithTimeout\(connection,\s*([^)]*\))?""").findAll(publisher)
+            .map { it.value.replace(Regex("\\s+"), " ") }.filter { !it.contains("private") }.toList()
+        // Exactly two call sites: the auth message and the encoded detections message.
+        assertEquals(sends.toString(), setOf("sendWithTimeout(connection, EdgeLink.authMessage(token)", "sendWithTimeout(connection, message)"), sends.toSet())
         assertTrue(publisher.contains("DetectionsWire.encode"))
+        assertTrue(Regex("""\.send\(""").findAll(publisher).count() == 1)
     }
 }

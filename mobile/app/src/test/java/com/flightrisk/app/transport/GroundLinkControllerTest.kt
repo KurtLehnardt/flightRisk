@@ -20,6 +20,8 @@ import org.junit.Test
 
 class GroundLinkControllerTest {
 
+    private fun ok(address: String) = DisclosureAccepted(address)
+
     private class MemoryPrefs(var enabled: Boolean = false, var address: String = "") : GroundLinkPrefs {
         var saves = 0
         override fun enabled() = enabled
@@ -31,14 +33,17 @@ class GroundLinkControllerTest {
         }
     }
 
-    private class Harness(val prefs: MemoryPrefs = MemoryPrefs(), val storage: MemoryStorage = MemoryStorage()) {
+    private class Harness(
+        val prefs: MemoryPrefs = MemoryPrefs(),
+        val storage: MemoryStorage = MemoryStorage(mapOf(SecretName.EDGE_TOKEN.storageKey to TEST_TOKEN)),
+    ) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val secrets = SecretStore(storage, isMainThread = { false })
         val port = FakePort()
         val clock = FakeClock()
         val created = java.util.concurrent.CopyOnWriteArrayList<EdgePublisher>()
         val controller = GroundLinkController(prefs, secrets, scope) { endpoint ->
-            EdgePublisher(endpoint, { secrets.load(SecretName.EDGE_TOKEN) }, scope, port, clock = clock, random = { 0.0 })
+            EdgePublisher(endpoint, { secrets.lookup(SecretName.EDGE_TOKEN) }, scope, port, clock = clock, random = { 0.0 })
                 .also { created += it }
         }
         val state get() = controller.state.value
@@ -81,7 +86,7 @@ class GroundLinkControllerTest {
     fun `enabling saves the choice and connects only while the app is in view and a search runs`() {
         val h = Harness()
         try {
-            assertTrue(h.controller.enable("192.168.1.20"))
+            assertTrue(h.controller.enable("192.168.1.20", ok("192.168.1.20")))
             assertTrue(h.prefs.enabled)
             assertEquals("192.168.1.20:9000", h.prefs.address)
             assertEquals(0, h.created.size)
@@ -110,7 +115,7 @@ class GroundLinkControllerTest {
     fun `going to the background stops the link`() {
         val h = Harness()
         try {
-            h.controller.enable("192.168.1.20:9000")
+            h.controller.enable("192.168.1.20:9000", ok("192.168.1.20:9000"))
             h.controller.setForeground(true)
             h.controller.detectionPublisher.onSearchStarted()
             runBlocking { h.port.connection(0) }
@@ -129,7 +134,7 @@ class GroundLinkControllerTest {
     fun `disabling stops the link and is saved`() {
         val h = Harness()
         try {
-            h.controller.enable("192.168.1.20")
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
             h.controller.setForeground(true)
             h.controller.detectionPublisher.onSearchStarted()
             runBlocking { h.port.connection(0) }
@@ -146,11 +151,11 @@ class GroundLinkControllerTest {
     fun `a refused address shows its reason and the link stays off`() {
         val h = Harness()
         try {
-            assertFalse(h.controller.enable("wss://192.168.1.20"))
+            assertFalse(h.controller.enable("wss://192.168.1.20", ok("wss://192.168.1.20")))
             assertTrue(h.state.addressProblem!!.contains("encrypted"))
             assertFalse(h.state.enabled)
             assertFalse(h.prefs.enabled)
-            assertFalse(h.controller.enable(""))
+            assertFalse(h.controller.enable("", ok("")))
             assertEquals("Enter the ground station's address.", h.state.addressProblem)
             assertEquals(0, h.prefs.saves)
         } finally {
@@ -162,7 +167,7 @@ class GroundLinkControllerTest {
     fun `changing the address turns the link off so consent covers the new destination`() {
         val h = Harness()
         try {
-            h.controller.enable("192.168.1.20")
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
             h.controller.setForeground(true)
             h.controller.detectionPublisher.onSearchStarted()
             runBlocking { h.port.connection(0) }
@@ -172,7 +177,7 @@ class GroundLinkControllerTest {
             assertEquals("192.168.1.99:9000", h.state.address)
             assertFalse(h.state.running)
             // Saving the same address again changes nothing.
-            h.controller.enable("192.168.1.99")
+            h.controller.enable("192.168.1.99", ok("192.168.1.99"))
             assertTrue(h.controller.changeAddress("192.168.1.99:9000"))
             assertTrue(h.state.enabled)
         } finally {
@@ -201,18 +206,17 @@ class GroundLinkControllerTest {
     fun `saving a token stores it, never echoes it, and reconnects with it`() {
         val h = Harness()
         try {
-            h.controller.enable("192.168.1.20")
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
             h.controller.setForeground(true)
             h.controller.detectionPublisher.onSearchStarted()
             runBlocking { h.port.connection(0) }
-            h.controller.saveToken("  $TEST_TOKEN ")
-            runBlocking { eventually("saved") { h.state.hasToken } }
-            assertEquals(TEST_TOKEN, h.storage.map[SecretName.EDGE_TOKEN.storageKey])
+            h.controller.saveToken("  test-token-2 ")
+            runBlocking { eventually("saved") { h.storage.map[SecretName.EDGE_TOKEN.storageKey] == "test-token-2" } }
             assertEquals("Token saved.", h.state.tokenMessage)
-            assertFalse(h.state.toString().contains(TEST_TOKEN))
-            assertFalse(h.controller.toString().contains(TEST_TOKEN))
+            assertFalse(h.state.toString().contains("test-token-2"))
+            assertFalse(h.controller.toString().contains("test-token-2"))
             runBlocking { h.port.connection(1) }
-            runBlocking { eventually("auth with the new token") { h.port.opened[1].sent.firstOrNull()?.contains(TEST_TOKEN) == true } }
+            runBlocking { eventually("auth with the new token") { h.port.opened[1].sent.firstOrNull()?.contains("test-token-2") == true } }
         } finally {
             h.close()
         }
@@ -220,7 +224,7 @@ class GroundLinkControllerTest {
 
     @Test
     fun `a bad token is refused without being stored and the remove button deletes a saved one`() {
-        val h = Harness()
+        val h = Harness(storage = MemoryStorage())
         try {
             h.controller.saveToken("has space")
             assertTrue(h.state.tokenMessage!!.startsWith("The token was not saved"))
@@ -256,7 +260,7 @@ class GroundLinkControllerTest {
     fun `a rejected token shows the fix-it message and survives the search ending`() {
         val h = Harness()
         try {
-            h.controller.enable("192.168.1.20")
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
             h.controller.setForeground(true)
             h.controller.detectionPublisher.onSearchStarted()
             val c = runBlocking { h.port.connection(0) }
@@ -268,7 +272,7 @@ class GroundLinkControllerTest {
             h.controller.detectionPublisher.onSearchStopped()
             assertEquals(EdgeLinkStatus.TokenRejected, h.state.status)
             // Fixing the token starts clean.
-            h.controller.saveToken(TEST_TOKEN)
+            h.controller.saveToken("test-token-2")
             runBlocking { eventually("cleared") { h.state.status != EdgeLinkStatus.TokenRejected } }
             assertEquals(1, h.port.opened.size)
         } finally {
@@ -291,11 +295,102 @@ class GroundLinkControllerTest {
     }
 
     @Test
-    fun `the disclosure names what is sent, where, and that it is not encrypted`() {
+    fun `the disclosure says exactly what goes out and no more`() {
         val d = GroundLinkText.DISCLOSURE
-        for (word in listOf("detects", "small picture of each person", "appearance data", "address you entered", "not encrypted", "turn this off")) {
+        for (word in listOf("box positions", "scores", "No pictures of people", "no face data", "camera view", "address you entered",
+            "cannot yet match", "testing and mapping only", "not encrypted", "turn this off", "different Wi-Fi", "edge token")) {
             assertTrue("missing '$word'", d.contains(word))
         }
+        for (claim in listOf("appearance data", "helps tell people apart", "small picture of each person")) {
+            assertFalse("claims data that is never sent: '$claim'", d.contains(claim))
+        }
+    }
+
+    @Test
+    fun `enable fails without proof that the disclosure was accepted for this address`() {
+        val h = Harness()
+        try {
+            assertFalse(h.controller.enable("192.168.1.20", null))
+            assertFalse(h.controller.enable("192.168.1.20", DisclosureAccepted("192.168.1.99")))
+            assertFalse(h.state.enabled)
+            assertFalse(h.prefs.enabled)
+            assertEquals(0, h.prefs.saves)
+            assertEquals("Read and accept the disclosure first.", h.state.addressProblem)
+            assertTrue(h.controller.enable("192.168.1.20", DisclosureAccepted("192.168.1.20")))
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `no token means no connection and a clear message, which survives the search ending`() {
+        val h = Harness(storage = MemoryStorage())
+        try {
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
+            h.controller.setForeground(true)
+            h.controller.detectionPublisher.onSearchStarted()
+            runBlocking { eventually("needs token") { h.state.status == EdgeLinkStatus.NeedsToken } }
+            assertEquals(0, h.port.opened.size)
+            assertEquals("Save the edge token from the ground station first.", GroundLinkText.statusLine(h.state))
+            assertEquals(GroundLinkText.NEEDS_TOKEN, GroundLinkText.indicator(h.state)?.text)
+            h.controller.detectionPublisher.onSearchStopped()
+            assertEquals(EdgeLinkStatus.NeedsToken, h.state.status)
+            h.controller.saveToken(TEST_TOKEN)
+            runBlocking { eventually("cleared") { h.state.status != EdgeLinkStatus.NeedsToken } }
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `the indicator needs a running link and mentions the camera view when it goes out`() {
+        val base = GroundLinkUiState(enabled = true, address = "192.168.1.20:9000", status = EdgeLinkStatus.Connected)
+        assertNull("a late Connected after stop must not show Sending", GroundLinkText.indicator(base.copy(running = false)))
+        assertEquals("Sending detections to 192.168.1.20:9000", GroundLinkText.indicator(base.copy(running = true))?.text)
+        assertEquals(
+            "Sending detections and camera view to 192.168.1.20:9000",
+            GroundLinkText.indicator(base.copy(running = true, sendingCameraView = true))?.text,
+        )
+    }
+
+    @Test
+    fun `the camera view flag follows the ground's stream_video and clears when the link stops`() {
+        val h = Harness()
+        try {
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
+            h.controller.setForeground(true)
+            h.controller.detectionPublisher.onSearchStarted()
+            val c = runBlocking { h.port.connection(0) }
+            runBlocking { eventually("connected") { h.state.status == EdgeLinkStatus.Connected } }
+            c.server("{\"type\":\"stream_video\",\"enabled\":true}")
+            runBlocking { eventually("video") { h.state.sendingCameraView } }
+            h.controller.detectionPublisher.onSearchStopped()
+            assertFalse(h.state.sendingCameraView)
+            assertFalse(h.state.running)
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `the consent file is excluded from backup and device transfer`() {
+        fun excludes(name: String): Map<String, Set<String>> {
+            val file = listOf("src/main/res/xml", "app/src/main/res/xml").map { java.io.File(it, name) }.first { it.isFile }
+            val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
+            val result = mutableMapOf<String, MutableSet<String>>()
+            val nodes = doc.getElementsByTagName("exclude")
+            for (i in 0 until nodes.length) {
+                val e = nodes.item(i) as org.w3c.dom.Element
+                val section = (e.parentNode as org.w3c.dom.Element).tagName
+                if (e.getAttribute("domain") == "sharedpref") result.getOrPut(section) { mutableSetOf() } += e.getAttribute("path")
+            }
+            return result
+        }
+        val required = "${SharedGroundLinkPrefs.PREFS_NAME}.xml"
+        assertTrue(required in excludes("backup_rules.xml").getValue("full-backup-content"))
+        val modern = excludes("data_extraction_rules.xml")
+        assertTrue(required in modern.getValue("cloud-backup"))
+        assertTrue(required in modern.getValue("device-transfer"))
     }
 
     @Test

@@ -62,6 +62,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
@@ -540,6 +541,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
+            // The user may have stopped the search while the models loaded; a cancelled
+            // setup must not start the pipeline (it would turn the ground link on).
+            ensureActive()
 
             // Start the pipeline
             pipeline.start()

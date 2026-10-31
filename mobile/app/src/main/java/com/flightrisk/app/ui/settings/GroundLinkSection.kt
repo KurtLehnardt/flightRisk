@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.flightrisk.app.transport.DisclosureAccepted
 import com.flightrisk.app.transport.GroundLink
 import com.flightrisk.app.transport.GroundLinkController
 import com.flightrisk.app.transport.GroundLinkIndicator
@@ -86,7 +87,7 @@ private fun GroundLinkSectionContent(
             confirmButton = {
                 TextButton(onClick = {
                     showDisclosure = false
-                    controller.enable(addressInput)
+                    controller.enable(addressInput, DisclosureAccepted(addressInput))
                 }) { Text("Send detections") }
             },
             dismissButton = { TextButton(onClick = { showDisclosure = false }) { Text("Cancel") } },
@@ -126,7 +127,8 @@ private fun GroundLinkSectionContent(
                         if (com.flightrisk.app.transport.EdgeEndpoint.parse(addressInput) is com.flightrisk.app.ground.EndpointParseResult.Ok) {
                             showDisclosure = true
                         } else {
-                            controller.enable(addressInput)
+                            // Refused by the parser: show its reason (no consent is involved).
+                            controller.checkAddress(addressInput)
                         }
                     } else {
                         controller.disable()
@@ -145,7 +147,13 @@ private fun GroundLinkSectionContent(
             placeholder = { Text("192.168.1.20:9000") },
             singleLine = true,
             isError = state.addressProblem != null,
-            supportingText = { Text(state.addressProblem ?: "Plain address on your local network. The port defaults to 9000.") },
+            supportingText = {
+                Text(
+                    state.addressProblem
+                        ?: if (addressInput.trim().endsWith(":5555")) GroundLinkText.PORT_HINT
+                        else "Plain address on your local network. The port defaults to 9000.",
+                )
+            },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
         )
@@ -193,7 +201,9 @@ private fun GroundLinkSectionContent(
 
         Spacer(modifier = Modifier.height(12.dp))
         val problem = state.enabled && (state.status is com.flightrisk.app.transport.EdgeLinkStatus.TokenRejected ||
-            state.status is com.flightrisk.app.transport.EdgeLinkStatus.AddressRefused)
+            state.status is com.flightrisk.app.transport.EdgeLinkStatus.AddressRefused ||
+            state.status is com.flightrisk.app.transport.EdgeLinkStatus.NeedsToken ||
+            state.status is com.flightrisk.app.transport.EdgeLinkStatus.StorageUnavailable)
         Text(
             text = GroundLinkText.statusLine(state),
             style = MaterialTheme.typography.bodyMedium,

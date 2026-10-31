@@ -603,6 +603,8 @@ class SearchPipeline(
                     detections = detections,
                     frameId = publishFrameId++,
                     timestampSeconds = System.currentTimeMillis() / 1000.0,
+                    withThumbnail = publisher.wantsThumbnail(),
+                    maxCrops = publisher.maxCrops(),
                 ),
             )
         } catch (e: Exception) {

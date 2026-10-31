@@ -8,17 +8,21 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Turns the pipeline's bitmaps into a [PublishedFrame]. This is the only
- * place the app compresses images for the ground station link. It builds the
- * JPEG bytes lazily, so a frame the publisher drops costs no image work, and
- * it holds no reference to the bitmaps after the publish call returns.
+ * place the app compresses images for the ground station link.
  *
- * The wire format itself (JSON keys, base64, the size limit) lives only in
- * the contract module's `DetectionsWire`.
+ * The pipeline thread only makes small scaled copies of what the publisher
+ * asked for (the whole-view thumbnail when the ground asked for video, and
+ * crops for the most confident people when crops are on); the JPEG
+ * compression runs later, in the lambdas, on the publisher's worker. The
+ * camera frame itself is not used after [publishedFrame] returns.
+ *
+ * The wire format (JSON keys, base64, the size limit) lives only in the
+ * contract module's `DetectionsWire`.
  */
 object BitmapFrames {
-    /** Whole-frame thumbnail size and quality. */
-    const val THUMBNAIL_WIDTH = 320
-    const val THUMBNAIL_HEIGHT = 180
+    /** Whole-frame thumbnail: at most this wide or tall, keeping the aspect ratio. */
+    const val THUMBNAIL_MAX_WIDTH = 320
+    const val THUMBNAIL_MAX_HEIGHT = 240
     const val THUMBNAIL_QUALITY = 60
 
     /** The longest side of a person crop, and its quality. Small on purpose. */
@@ -30,39 +34,53 @@ object BitmapFrames {
         detections: List<Detection>,
         frameId: Long,
         timestampSeconds: Double,
-    ): PublishedFrame =
-        PublishedFrame(
+        withThumbnail: Boolean,
+        maxCrops: Int,
+    ): PublishedFrame {
+        val thumb = if (withThumbnail) scaledToFit(frame, THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT) else null
+        val cropOwners = detections.indices.sortedByDescending { detections[it].confidence }.take(maxCrops.coerceAtLeast(0)).toSet()
+        return PublishedFrame(
             frameId = frameId,
             timestampSeconds = timestampSeconds,
             frameWidth = frame.width,
             frameHeight = frame.height,
-            thumbnailJpeg = { jpeg(frame, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, THUMBNAIL_QUALITY) },
-            detections = detections.map { d ->
+            thumbnailJpeg = { thumb?.let { compress(it, THUMBNAIL_QUALITY) } },
+            detections = detections.mapIndexed { i, d ->
+                val crop = if (i in cropOwners) scaledToFit(d.crop, CROP_MAX_SIDE, CROP_MAX_SIDE) else null
                 PublishedDetection(
                     bbox = d.bbox.map { it.toDouble() },
                     confidence = d.confidence.toDouble(),
-                    cropJpeg = { scaledCrop(d.crop) },
+                    cropJpeg = { crop?.let { compress(it, CROP_QUALITY) } },
                 )
             },
         )
-
-    private fun scaledCrop(crop: Bitmap): ByteArray? {
-        val longest = maxOf(crop.width, crop.height)
-        if (longest <= 0) return null
-        val scale = minOf(1.0, CROP_MAX_SIDE.toDouble() / longest)
-        val w = maxOf(1, (crop.width * scale).toInt())
-        val h = maxOf(1, (crop.height * scale).toInt())
-        return jpeg(crop, w, h, CROP_QUALITY)
     }
 
-    private fun jpeg(source: Bitmap, width: Int, height: Int, quality: Int): ByteArray? =
+    /** A copy no larger than the limits, keeping the aspect ratio, or null if it cannot be made. */
+    private fun scaledToFit(source: Bitmap, maxWidth: Int, maxHeight: Int): Bitmap? =
         try {
-            val scaled = if (source.width == width && source.height == height) source else Bitmap.createScaledBitmap(source, width, height, true)
-            val out = ByteArrayOutputStream()
-            val ok = scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
-            if (scaled !== source) scaled.recycle()
-            if (ok) out.toByteArray() else null
+            if (source.width <= 0 || source.height <= 0) {
+                null
+            } else {
+                val scale = minOf(1.0, maxWidth.toDouble() / source.width, maxHeight.toDouble() / source.height)
+                val w = maxOf(1, (source.width * scale).toInt())
+                val h = maxOf(1, (source.height * scale).toInt())
+                Bitmap.createScaledBitmap(source, w, h, true)
+            }
         } catch (_: RuntimeException) {
             null
+        }
+
+    private fun compress(bitmap: Bitmap, quality: Int): ByteArray? =
+        try {
+            val out = ByteArrayOutputStream()
+            if (bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) out.toByteArray() else null
+        } catch (_: RuntimeException) {
+            null
+        } finally {
+            try {
+                bitmap.recycle()
+            } catch (_: RuntimeException) {
+            }
         }
 }

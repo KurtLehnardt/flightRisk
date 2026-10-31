@@ -38,7 +38,7 @@ class EdgeLoopbackTest {
         host: String = "127.0.0.1",
     ) = EdgePublisher(
         endpoint = GroundEndpoint.of(host, port)!!,
-        tokenProvider = { TEST_TOKEN },
+        tokenProvider = { tokenRead(TEST_TOKEN) },
         scope = scope,
         port = edgePort,
         clock = clock,

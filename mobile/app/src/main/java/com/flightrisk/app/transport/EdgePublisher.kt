@@ -6,6 +6,7 @@ import com.flightrisk.app.ground.GroundClock
 import com.flightrisk.app.ground.GroundEndpoint
 import com.flightrisk.app.ground.GroundLog
 import com.flightrisk.app.ground.Redact
+import com.flightrisk.app.ground.SecretRead
 import com.flightrisk.app.ground.SocketIoConnection
 import com.flightrisk.app.ground.SocketIoPort
 import com.flightrisk.app.ground.WebSocketClosedException
@@ -17,7 +18,9 @@ import com.flightrisk.contract.EdgeAction
 import com.flightrisk.contract.EdgeLink
 import com.flightrisk.contract.WireDetection
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -49,6 +52,12 @@ sealed interface EdgeLinkStatus {
 
     /** The host is not on a private network, so nothing was sent. Not retried. */
     data class AddressRefused(val reason: String) : EdgeLinkStatus
+
+    /** No edge token is saved and the ground is not on this phone, so nothing was sent. Not retried. */
+    data object NeedsToken : EdgeLinkStatus
+
+    /** Secure storage could not be read, so nothing was sent. Not retried. */
+    data object StorageUnavailable : EdgeLinkStatus
 }
 
 /** Counters since [EdgePublisher.start]. Nothing here holds image or token data. */
@@ -79,6 +88,17 @@ data class EdgePublisherConfig(
     val sendTimeoutMs: Long = 10_000,
     /** At most this many detections go into one message; the rest are left out. */
     val maxDetectionsPerFrame: Int = 50,
+    /**
+     * Pictures of people. Off: the ground does not use crops for these
+     * detections, so none are made or sent (every `crop` is null).
+     */
+    val sendCrops: Boolean = false,
+    /** With [sendCrops] on, crops go only to the most confident detections. */
+    val maxCropsPerMessage: Int = 8,
+    /** Once the ground has sent heartbeats, silence for this long ends the session (3 x its 1 s interval). */
+    val heartbeatDeadlineMs: Long = 3_000,
+    /** Where frames are compressed and encoded: never on the pipeline's frame loop. */
+    val encodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 )
 
 /**
@@ -107,7 +127,7 @@ data class EdgePublisherConfig(
  */
 class EdgePublisher(
     val endpoint: GroundEndpoint,
-    private val tokenProvider: suspend () -> String?,
+    private val tokenProvider: suspend () -> SecretRead,
     private val scope: CoroutineScope,
     private val port: SocketIoPort,
     private val config: EdgePublisherConfig = EdgePublisherConfig(),
@@ -125,9 +145,12 @@ class EdgePublisher(
     private val lock = Any()
     private var job: Job? = null
 
-    @Volatile private var outbox: Channel<String>? = null
+    @Volatile private var outbox: Channel<PublishedFrame>? = null
     @Volatile private var live = false
-    @Volatile private var streamVideo = false
+    private val video = MutableStateFlow(false)
+    private var streamVideo: Boolean
+        get() = video.value
+        set(v) { video.value = v }
     @Volatile private var activeSecrets: List<String> = emptyList()
     private val busy = AtomicBoolean(false)
     @Volatile private var lastAcceptedAt = Long.MIN_VALUE / 2
@@ -153,6 +176,13 @@ class EdgePublisher(
 
     /** True while thumbnails are on (the ground sent `stream_video` enabled). */
     val thumbnailsEnabled: Boolean get() = streamVideo
+
+    /** Whether the whole camera view is going out (the ground asked for video). */
+    val thumbnailsOn: StateFlow<Boolean> = video
+
+    override fun wantsThumbnail(): Boolean = streamVideo
+
+    override fun maxCrops(): Int = if (config.sendCrops) config.maxCropsPerMessage else 0
 
     /** Starts the connection loop. Does nothing while it already runs. */
     fun start() {
@@ -192,35 +222,34 @@ class EdgePublisher(
             return
         }
         lastAcceptedAt = now
-        val message = try {
-            encode(frame)
-        } catch (e: Exception) {
-            null
-        }
-        if (message == null || !channel.trySend(message).isSuccess) {
-            busy.set(false)
-        }
+        // Compression and encoding happen on the worker, not on the caller's thread.
+        if (!channel.trySend(frame).isSuccess) busy.set(false)
     }
 
-    /** The encoded message, or null when the frame is dropped (and counted). */
+    /** The encoded message, or null when the frame is dropped (and counted). Runs on the worker. */
     private fun encode(frame: PublishedFrame): String? {
         val withVideo = streamVideo
         val faceOn = faceMatchingEnabled()
         val capped = frame.detections.take(config.maxDetectionsPerFrame)
         detectionsDropped.addAndGet((frame.detections.size - capped.size).toLong())
+        val cropOwners: Set<Int> = if (config.sendCrops) {
+            capped.indices.sortedByDescending { capped[it].confidence }.take(config.maxCropsPerMessage).toSet()
+        } else {
+            emptySet()
+        }
         val message = DetectionsMessage(
             timestamp = frame.timestampSeconds,
             frameId = frame.frameId,
             frameWidth = frame.frameWidth,
             frameHeight = frame.frameHeight,
             thumbnail = if (withVideo) frame.thumbnailJpeg()?.let(DetectionsWire::base64Jpeg) else null,
-            detections = capped.map { d ->
+            detections = capped.mapIndexed { i, d ->
                 WireDetection(
                     bbox = d.bbox,
                     confidence = d.confidence,
                     reidEmbedding = d.reidEmbedding,
                     faceEmbedding = if (faceOn) d.faceEmbedding else null,
-                    crop = d.cropJpeg()?.let(DetectionsWire::base64Jpeg),
+                    crop = if (i in cropOwners) d.cropJpeg()?.let(DetectionsWire::base64Jpeg) else null,
                 )
             },
         )
@@ -243,6 +272,8 @@ class EdgePublisher(
 
     private sealed interface Outcome {
         data object TokenRejected : Outcome
+        data object NeedsToken : Outcome
+        data object StorageUnavailable : Outcome
         data class AddressRefused(val reason: String) : Outcome
         data class Dropped(val reason: String, val upMs: Long?) : Outcome
     }
@@ -255,6 +286,16 @@ class EdgePublisher(
                 Outcome.TokenRejected -> {
                     log(GroundLog.Level.WARN, "the ground rejected the edge token; not retrying")
                     _status.value = EdgeLinkStatus.TokenRejected
+                    return
+                }
+                Outcome.NeedsToken -> {
+                    log(GroundLog.Level.WARN, "no edge token is saved; not connecting")
+                    _status.value = EdgeLinkStatus.NeedsToken
+                    return
+                }
+                Outcome.StorageUnavailable -> {
+                    log(GroundLog.Level.WARN, "secure storage is unavailable; not connecting")
+                    _status.value = EdgeLinkStatus.StorageUnavailable
                     return
                 }
                 is Outcome.AddressRefused -> {
@@ -275,13 +316,19 @@ class EdgePublisher(
     }
 
     private suspend fun runSession(): Outcome {
-        val token = try {
+        val token: String? = when (val read = try {
             tokenProvider()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null
+            SecretRead.Unreadable
+        }) {
+            is SecretRead.Value -> read.value
+            SecretRead.Absent -> null
+            SecretRead.Unreadable -> return Outcome.StorageUnavailable
         }
+        // Every ground on a network requires a token, so without one nothing is sent.
+        if (token == null && !isLoopback(endpoint.host)) return Outcome.NeedsToken
         activeSecrets = listOfNotNull(token)
         val connection: SocketIoConnection = try {
             port.open(endpoint, activeSecrets)
@@ -293,28 +340,56 @@ class EdgePublisher(
             return Outcome.Dropped(describe(e), null)
         }
         val startedAt = clock.nowMs()
+        var sendFailure: String? = null
         try {
             if (token != null) {
                 if (!sendWithTimeout(connection, EdgeLink.authMessage(token))) throw IOException("sending the first message timed out")
             }
-            val channel = Channel<String>(1)
+            val frames = Channel<PublishedFrame>(1)
             busy.set(false)
             streamVideo = false
-            outbox = channel
+            outbox = frames
             live = true
             _status.value = EdgeLinkStatus.Connected
             coroutineScope {
-                launch {
-                    for (message in channel) {
+                // The worker never throws: on a failed write it closes the connection and lets
+                // the receive side below decide the outcome (a 4001 close frame may be waiting).
+                launch(config.encodeDispatcher) {
+                    for (frame in frames) {
                         try {
+                            val message = encode(frame) ?: continue
                             if (!sendWithTimeout(connection, message)) throw IOException("sending a frame timed out")
                             sent.incrementAndGet()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            sendFailure = describe(e)
+                            live = false
+                            frames.close()
+                            connection.close()
                         } finally {
                             busy.set(false)
                         }
                     }
                 }
-                while (true) handleGroundMessage(connection.receive())
+                var lastHeartbeatAt = Long.MIN_VALUE
+                var watchdog: Job? = null
+                while (true) {
+                    val text = connection.receive()
+                    if (handleGroundMessage(text)) {
+                        lastHeartbeatAt = clock.nowMs()
+                        if (watchdog == null) {
+                            watchdog = launch {
+                                while (true) {
+                                    clock.sleep(config.heartbeatDeadlineMs / 3)
+                                    if (clock.nowMs() - lastHeartbeatAt > config.heartbeatDeadlineMs) {
+                                        throw IOException("the ground stopped sending heartbeats")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -322,7 +397,7 @@ class EdgePublisher(
             if (e.code == EdgeLink.CLOSE_UNAUTHORIZED) return Outcome.TokenRejected
             return Outcome.Dropped(describe(e), clock.nowMs() - startedAt)
         } catch (e: Exception) {
-            return Outcome.Dropped(describe(e), clock.nowMs() - startedAt)
+            return Outcome.Dropped(sendFailure ?: describe(e), clock.nowMs() - startedAt)
         } finally {
             live = false
             outbox = null
@@ -336,13 +411,21 @@ class EdgePublisher(
     private suspend fun sendWithTimeout(connection: SocketIoConnection, frame: String): Boolean =
         withTimeoutOrNull(config.sendTimeoutMs) { connection.send(frame) } != null
 
-    /** Acts on `stream_video` only; everything else, including text that is not JSON, is ignored. */
-    private fun handleGroundMessage(text: String) {
+    /**
+     * Acts on `stream_video` only; everything else, including text that is not
+     * JSON, is ignored. Returns true for a `heartbeat`, which only feeds the
+     * dead-link deadline.
+     */
+    private fun handleGroundMessage(text: String): Boolean {
         when (val action = EdgeLink.actionFor(text)) {
             is EdgeAction.SetThumbnail -> streamVideo = action.enabled
             EdgeAction.Ignore -> Unit
         }
+        return (EdgeLink.parse(text) as? com.flightrisk.contract.GroundToEdgeMessage.Ignored)?.type == "heartbeat"
     }
+
+    private fun isLoopback(host: String): Boolean =
+        host.equals("localhost", ignoreCase = true) || host.startsWith("127.") || host == "::1"
 
     private fun describe(e: Throwable): String =
         Redact.text(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""), activeSecrets, maxLength = 200)

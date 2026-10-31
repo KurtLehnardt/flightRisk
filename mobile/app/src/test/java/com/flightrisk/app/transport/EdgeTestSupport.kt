@@ -5,6 +5,7 @@ import com.flightrisk.app.ground.FakeClock
 import com.flightrisk.app.ground.FakeConnection
 import com.flightrisk.app.ground.FakePort
 import com.flightrisk.app.ground.GroundEndpoint
+import com.flightrisk.app.ground.SecretRead
 import com.flightrisk.app.ground.SocketIoConnection
 import com.flightrisk.app.ground.SocketIoPort
 import com.flightrisk.app.pipeline.PublishedDetection
@@ -22,20 +23,24 @@ import java.util.concurrent.atomic.AtomicInteger
 
 const val TEST_TOKEN = "test-token"
 
+fun tokenRead(token: String?): SecretRead = if (token == null) SecretRead.Absent else SecretRead.Value(token)
+
 /** A publisher on a fake port with a fake clock. */
 class EdgeHarness(
     val token: String? = TEST_TOKEN,
     val config: EdgePublisherConfig = EdgePublisherConfig(),
     face: Boolean = false,
     val port: FakePort = FakePort(),
+    host: String = "127.0.0.1",
+    val storageProblem: Boolean = false,
 ) {
     val clock = FakeClock()
     val log = CapturingLog()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val endpoint = GroundEndpoint.of("127.0.0.1", 9000)!!
+    val endpoint = GroundEndpoint.of(host, 9000)!!
     val publisher = EdgePublisher(
         endpoint = endpoint,
-        tokenProvider = { token },
+        tokenProvider = { if (storageProblem) SecretRead.Unreadable else tokenRead(token) },
         scope = scope,
         port = port,
         config = config,
