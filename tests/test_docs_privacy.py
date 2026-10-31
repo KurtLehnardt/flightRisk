@@ -20,8 +20,13 @@ def test_policy_has_no_unqualified_no_data_leaves_claim():
                 re.IGNORECASE,
             )
             assert qualified, f"unqualified claim: {line}"
-    # The cloud LLM disclosure must still be present and say images are sent.
-    assert "Cloud LLM" in text
+    # The cloud reasoning disclosure must still be present as its own section
+    # (the older "Cloud LLM" wording was replaced) and say images are sent.
+    assert re.search(r"^## 5\. Cloud Reasoning", text, re.MULTILINE)
+    assert "are sent to Anthropic (Claude)" in text
+    # Android section 5B: the second way images leave the phone must be disclosed.
+    assert re.search(r"^## 5B\. Android", text, re.MULTILINE)
+    assert "camera view" in text
     assert "reference photo" in text
     assert "can show a face" in text
 

@@ -4,15 +4,16 @@
 
 ## Purpose
 
-A mandatory privacy notice screen shown to the user on first launch, **before** the camera permission prompt is triggered. The user must acknowledge the notice before proceeding.
+A mandatory privacy notice screen shown to the user on first launch, **before** the camera permission prompt is triggered. The user must acknowledge the notice before proceeding. That is the intended behaviour; it holds on iOS, and **not on Android today** (see Trigger Conditions).
 
 ---
 
 ## Trigger Conditions
 
 - Shown on the very first app launch (or after app data is cleared).
-- Shown **before** any camera or location permission dialog is presented.
-- Not shown again after the user has acknowledged it (controlled by a persisted flag).
+- Intended to be shown **before** any camera or location permission dialog. On iOS this holds. **On Android it does not:** `MainActivity.onCreate` calls `requestPermissionsIfNeeded()` (camera, fine and coarse location) before it sets the content, so the system permission prompts appear on first launch before the notice. This is listed in `docs/mobile-followups.md`.
+- Not shown again after the user has acknowledged it (controlled by a persisted flag). On Android the flag is written but never read; see "Persistence" below.
+- **Restored phones.** On Android the completion flag `flightrisk_onboarding_complete` is in `flightrisk_prefs`, which the backup rules do not exclude. A phone restored from backup or set up by device transfer can therefore inherit the flag and never show the notice. Planned fix: see `docs/mobile-followups.md`.
 
 ---
 
@@ -20,7 +21,7 @@ A mandatory privacy notice screen shown to the user on first launch, **before** 
 
 ### Title
 
-**"Privacy Notice"** on iOS. The Android title may differ.
+**"Privacy Notice"** on both platforms.
 
 ### Body Text
 
@@ -35,7 +36,15 @@ The text below is what the iOS app shows. The wording of the ground station and 
 > - **Location Data.** GPS coordinates are attached to match alerts so you can navigate to the location. Location data stays on your device.
 > - **No Analytics or Accounts.** FlightRisk does not collect analytics or telemetry. There is no account or sign-in.
 
-The Android notice is not changed by this update and is not described here.
+### Android body text
+
+This is the text in `mobile/app/src/main/java/com/flightrisk/app/ui/onboarding/OnboardingScreen.kt` (`PrivacyNoticeStep`). The cloud item uses the same words as the iOS cloud item. The Android notice is worse than incomplete: its sentence "Images leave the phone only with cloud reasoning on" (line 175) is **false** when phone-as-edge is on and the ground asks for video, because a picture of the whole camera view is then sent to the ground station, and it says nothing about the video that every Android search records in the app's private storage. It also has **no ground station item** and **no privacy policy link**: the ground station link, the phone-as-edge mode and the direct Tello link have their own screens and, for phone-as-edge, a disclosure and consent step in Settings, but the first-launch notice does not mention them. This is listed for the owner to decide (`docs/mobile-followups.md`).
+
+> - **Camera Access.** FlightRisk uses your camera to scan for people who match the target photo you provide.
+> - **On-Device Processing.** Person detection and matching run on your device. Camera frames are not uploaded. Images leave the phone only with cloud reasoning on, as described below.
+> - **Cloud Reasoning (Off by Default).** Cloud reasoning is off. If you turn it on in Settings, save a Claude API key and select Cloud Claude, the cropped image of each detected person, the reference photo and the text description you entered are sent to Anthropic. The images can show a face. You can turn it off at any time.
+> - **Location Data.** GPS coordinates are attached to match alerts so you can navigate to the location. Location data stays on your device.
+> - **No Data Collection.** FlightRisk does not collect analytics, telemetry, or personal data. There is no account or sign-in.
 
 ### Privacy Policy Link
 
@@ -74,11 +83,12 @@ A single primary action button at the bottom of the screen:
 
 ### Android
 
-- Store acknowledgment as a boolean in `SharedPreferences`:
+- The acknowledgment is written as a boolean to the `SharedPreferences` file `flightrisk_prefs`:
   - Key: `flightrisk_privacy_notice_acknowledged`
   - Value: `true` when the user taps "I Understand"
+- **Nothing reads that key.** At launch the app reads only `flightrisk_onboarding_complete` (same file), which is written when the user accepts the photo at the end of onboarding. Onboarding always starts at the notice, so a person who tapped "I Understand" but quit before finishing is shown the notice again. This is different from iOS, where the notice step is skipped in that case.
 
-### Check Logic
+### Check Logic (iOS)
 
 ```
 on app launch:
@@ -92,6 +102,8 @@ on app launch:
       set flightrisk_privacy_notice_acknowledged = true
       continue onboarding
 ```
+
+On Android the check is simply: if `flightrisk_onboarding_complete` is true, show the main app; otherwise show onboarding from the notice.
 
 ---
 
@@ -112,7 +124,7 @@ on app launch:
 - [ ] Notice does not appear on subsequent launches after acknowledgment
 - [ ] Notice reappears if app data/storage is cleared
 - [ ] "I Understand" button records the flag correctly
-- [ ] Camera permission prompt appears only after acknowledgment
+- [ ] Camera permission prompt appears only after acknowledgment (iOS; fails on Android today, see above)
 - [ ] Privacy policy link opens correctly
 - [ ] A device with only the old key set goes straight to the main app and is not asked again
 - [ ] A device with only the new key set resumes onboarding after the notice
