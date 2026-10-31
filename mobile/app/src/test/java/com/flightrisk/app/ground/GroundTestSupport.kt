@@ -14,6 +14,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 /** The only key the tests use. */
 const val TEST_KEY = "test-key"
 
+/** The five state requests the client sends after every connect, in order. */
+val STATE_REQUEST_FRAMES = listOf(
+    "42[\"get_fleet_status\"]", "42[\"get_detection_profiles\"]", "42[\"get_ceiling_settings\"]",
+    "42[\"get_reasoning_provider\"]", "42[\"get_manual_status\"]",
+)
+
 /** A clock that moves only when the test calls [advance]. */
 class FakeClock : GroundClock {
     private var now = 0L
@@ -87,6 +93,11 @@ class FakeConnection : SocketIoConnection {
 
     /** The event frames the client sent (`42[...]`). */
     fun eventFrames(): List<String> = sent.filter { it.startsWith("42") }
+
+    /** The event frames other than the automatic state requests. */
+    fun commandFrames(): List<String> = eventFrames().filterNot { it in STATE_REQUEST_FRAMES }
+
+    override suspend fun closeGracefully() = close()
 }
 
 /** A port that hands out [FakeConnection]s and records them. */
@@ -95,7 +106,7 @@ class FakePort : SocketIoPort {
 
     @Volatile var failOpen: Exception? = null
 
-    override suspend fun open(endpoint: GroundEndpoint): SocketIoConnection {
+    override suspend fun open(endpoint: GroundEndpoint, secrets: List<String>): SocketIoConnection {
         failOpen?.let { throw it }
         return FakeConnection().also { opened += it }
     }

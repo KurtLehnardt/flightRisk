@@ -155,6 +155,65 @@ class DashboardRestClientTest {
     }
 
     @Test
+    fun `a hostile deeply nested or huge body is refused without crashing the probe`() {
+        val deep = "[".repeat(50_000) + "]".repeat(50_000)
+        FakeDashboard(mapOf("/api/health" to { o -> json(o, deep) })).use { d ->
+            val r = probe(d)
+            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody)
+        }
+        val deepObject = "{\"a\":".repeat(20_000) + "1" + "}".repeat(20_000)
+        FakeDashboard(mapOf("/api/health" to { o -> json(o, healthJson) }, "/api/status" to { o -> json(o, deepObject) })).use { d ->
+            val r = probe(d)
+            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody && r.path == "/api/status")
+        }
+        val many = "[" + "1,".repeat(120_000) + "1]"
+        FakeDashboard(mapOf("/api/health" to { o -> json(o, many) })).use { d ->
+            assertTrue(probe(d, maxBody = 1024 * 1024) is HealthProbeResult.UnexpectedBody)
+        }
+    }
+
+    @Test
+    fun `a chunk size near 2^63 is refused, not wrapped around`() {
+        FakeDashboard(
+            mapOf(
+                "/api/health" to { o ->
+                    respond(
+                        o, "200 OK", listOf("Content-Type: application/json", "Transfer-Encoding: chunked"),
+                        "2\r\n{}\r\n7fffffffffffffff\r\nxx",
+                    )
+                },
+            ),
+        ).use { d ->
+            val r = probe(d)
+            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody)
+        }
+    }
+
+    @Test
+    fun `a server that trickles its answer cannot stretch the probe past its deadline`() {
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        LoopbackServer { s ->
+            readRequestHead(s.getInputStream())
+            val o = s.getOutputStream()
+            for (c in "HTTP/1.1 200 OK\r\nX-Pad: " + "a".repeat(5_000)) {
+                if (stop.get()) break
+                o.write(c.code)
+                o.flush()
+                Thread.sleep(100)
+            }
+        }.use { server ->
+            val start = System.nanoTime()
+            val r = runBlocking {
+                DashboardRestClient(GroundEndpoint.of("127.0.0.1", server.port)!!, DashboardApiKey.of(TEST_KEY), timeoutMs = 1_000).probe()
+            }
+            stop.set(true)
+            val ms = (System.nanoTime() - start) / 1_000_000
+            assertTrue(r.toString(), r is HealthProbeResult.Unreachable)
+            assertTrue("took $ms ms", ms < 2_500)
+        }
+    }
+
+    @Test
     fun `a public address is refused before any connection, and an unreachable ground is reported without the key`() {
         val public = runBlocking {
             DashboardRestClient(

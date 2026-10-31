@@ -120,27 +120,39 @@ class GroundConsoleClientTest {
     }
 
     @Test
-    fun `every connect and reconnect signals the app, which then requests the five states`() = harnessTest {
+    fun `every connect and reconnect requests the five states by itself and signals the app`() = harnessTest {
         collect()
         client.start()
         val first = connect(0)
         eventually { events.isNotEmpty() }
         assertEquals(GroundEvent.SessionStarted(SessionInfo(1, 25_000, 20_000)), events.first())
+        eventually("automatic state requests") { first.eventFrames().size == 5 }
+        assertEquals(STATE_REQUEST_FRAMES, first.eventFrames())
+        // The public method stays for a manual refresh.
         val results = client.requestFullState()
         assertTrue(results.all { it is SendResult.Sent })
-        assertEquals(
-            listOf(
-                "42[\"get_fleet_status\"]", "42[\"get_detection_profiles\"]", "42[\"get_ceiling_settings\"]",
-                "42[\"get_reasoning_provider\"]", "42[\"get_manual_status\"]",
-            ),
-            first.eventFrames(),
-        )
+        assertEquals(STATE_REQUEST_FRAMES + STATE_REQUEST_FRAMES, first.eventFrames())
         first.server("41")
         awaitStatus<ConnectionStatus.Reconnecting>()
         advanceBackoff()
-        connect(1)
+        val second = connect(1)
         eventually { events.count { it is GroundEvent.SessionStarted } == 2 }
         assertEquals(2, (events.last { it is GroundEvent.SessionStarted } as GroundEvent.SessionStarted).info.connectCount)
+        eventually("state requests after the reconnect") { second.eventFrames() == STATE_REQUEST_FRAMES }
+    }
+
+    @Test
+    fun `state requests follow the held early events and a narrowed policy can drop them`() = harnessTest(
+        policy = EmitPolicy.CONTRACT.without("get_manual_status"),
+    ) {
+        collect()
+        client.start()
+        val c = openSession(0)
+        c.server(statusFrame)
+        c.server(ack)
+        eventually { c.eventFrames().size == 4 }
+        assertEquals(STATE_REQUEST_FRAMES - "42[\"get_manual_status\"]", c.eventFrames())
+        assertTrue((events[1] as GroundEvent.Server).event is Status)
     }
 
     @Test
@@ -286,7 +298,7 @@ class GroundConsoleClientTest {
         c.server(ack)
         awaitStatus<ConnectionStatus.Connected>()
         delay(50)
-        assertTrue("never sent later", c.eventFrames().isEmpty())
+        assertTrue("never sent later", c.commandFrames().isEmpty())
     }
 
     @Test
@@ -302,8 +314,8 @@ class GroundConsoleClientTest {
         eventually { port.opened.size == 2 }
         val second = connect(1)
         delay(50)
-        assertTrue(first.eventFrames().isEmpty())
-        assertTrue(second.eventFrames().isEmpty())
+        assertTrue(first.commandFrames().isEmpty())
+        assertTrue(second.commandFrames().isEmpty())
     }
 
     @Test
@@ -374,7 +386,7 @@ class GroundConsoleClientTest {
                 "42[\"set_detection_profile\",{\"drone_id\":\"drone-1\",\"profile\":\"top_down\"}]",
                 "42[\"set_fleet_detection_profile\",{\"profile\":\"top_down\"}]",
             ),
-            c.eventFrames(),
+            c.commandFrames(),
         )
     }
 
@@ -395,7 +407,7 @@ class GroundConsoleClientTest {
             client.landDrone("drone-1"),
         )
         assertEquals(SendResult.Sent("land_all"), client.landAll())
-        assertEquals(listOf("42[\"land_all\"]"), c.eventFrames())
+        assertEquals(listOf("42[\"land_all\"]"), c.commandFrames())
     }
 
     // Video and state paths
@@ -490,19 +502,20 @@ class GroundConsoleClientTest {
     }
 
     @Test
-    fun `backoff resets only after the link stayed up for one ping interval`() = harnessTest {
+    fun `backoff resets only after the link stayed up for the minimum stable time`() = harnessTest {
         client.start()
         connect(0).server("1")
         assertEquals(1, awaitStatus<ConnectionStatus.Reconnecting>().attempt)
         advanceBackoff()
         val short = connect(1)
-        clock.advance(24_999)
+        // Longer than the 25 s ping interval, shorter than the 30 s minimum.
+        clock.advance(29_999)
         short.server("1")
         eventually { (status as? ConnectionStatus.Reconnecting)?.attempt == 2 }
         assertEquals(2_000L, (status as ConnectionStatus.Reconnecting).retryInMs)
         assertEquals(2_000L, advanceBackoff())
         val long = connect(2)
-        clock.advance(25_000)
+        clock.advance(30_000)
         long.server("1")
         eventually { (status as? ConnectionStatus.Reconnecting)?.attempt == 1 }
         assertEquals(1_000L, (status as ConnectionStatus.Reconnecting).retryInMs)

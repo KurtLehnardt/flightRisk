@@ -15,6 +15,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -22,15 +23,22 @@ import java.util.concurrent.CopyOnWriteArrayList
  * for example to `http://127.0.0.1:18555` for a throwaway dashboard started
  * with `FLIGHTRISK_API_KEY=test-key` on a loopback port. The key comes from
  * `FLIGHTRISK_LIVE_TEST_KEY` (default `test-key`). Never point it at a live
- * ground station: the test sends LAND ALL.
+ * ground station: the test sends LAND ALL, so it refuses any address that is
+ * not loopback.
  */
 class GroundConsoleLiveTest {
     private val url: String? = System.getenv("FLIGHTRISK_LIVE_TEST_URL")?.takeIf { it.isNotBlank() }
     private val key: String = System.getenv("FLIGHTRISK_LIVE_TEST_KEY") ?: TEST_KEY
 
+    /** Only a loopback dashboard is accepted: this test sends LAND ALL. */
     private fun endpoint(): GroundEndpoint {
         assumeTrue("FLIGHTRISK_LIVE_TEST_URL is not set", url != null)
-        return GroundEndpoint.parse(url!!) ?: throw AssertionError("FLIGHTRISK_LIVE_TEST_URL is not host:port")
+        val endpoint = GroundEndpoint.parse(url!!) ?: throw AssertionError("FLIGHTRISK_LIVE_TEST_URL is not host:port")
+        val addresses = InetAddress.getAllByName(endpoint.host)
+        if (addresses.isEmpty() || !addresses.all { it.isLoopbackAddress }) {
+            throw AssertionError("the live test runs only against a throwaway dashboard on a loopback address")
+        }
+        return endpoint
     }
 
     @Test
@@ -43,7 +51,6 @@ class GroundConsoleLiveTest {
         scope.launch {
             client.events.collect {
                 events += it
-                if (it is GroundEvent.SessionStarted) client.requestFullState()
             }
         }
         try {
@@ -74,9 +81,9 @@ class GroundConsoleLiveTest {
         val opened = CopyOnWriteArrayList<GroundEndpoint>()
         val real = WebSocketSocketIoPort()
         val countingPort = object : SocketIoPort {
-            override suspend fun open(endpoint: GroundEndpoint): SocketIoConnection {
+            override suspend fun open(endpoint: GroundEndpoint, secrets: List<String>): SocketIoConnection {
                 opened += endpoint
-                return real.open(endpoint)
+                return real.open(endpoint, secrets)
             }
         }
         val client = GroundConsoleClient(endpoint, DashboardApiKey.of("wrong-test-key"), scope, port = countingPort)

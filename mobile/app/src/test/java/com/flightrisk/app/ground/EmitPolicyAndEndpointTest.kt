@@ -136,6 +136,13 @@ class EndpointAndAddressTest {
         assertNull(GroundEndpoint.parse("192.168.1.20:70000"))
         assertNull(GroundEndpoint.parse("bad host"))
         assertNull(GroundEndpoint.parse(""))
+        assertTrue((GroundEndpoint.parseDetailed("https://192.168.1.20") as EndpointParseResult.Invalid).reason.contains("https"))
+        assertTrue((GroundEndpoint.parseDetailed("[fe80::1%wlan0]:5555") as EndpointParseResult.Invalid).reason.contains("zone"))
+        assertTrue((GroundEndpoint.parseDetailed("192.168.1.20:99999") as EndpointParseResult.Invalid).reason.contains("port"))
+        assertEquals(
+            EndpointParseResult.Ok(GroundEndpoint.of("192.168.1.20", 5555)!!),
+            GroundEndpoint.parseDetailed("http://192.168.1.20:5555"),
+        )
         assertNull(GroundEndpoint.of("fe80:::1"))
         assertNull(GroundEndpoint.of("1::2::3"))
         assertNull(GroundEndpoint.of("12345::1"))
