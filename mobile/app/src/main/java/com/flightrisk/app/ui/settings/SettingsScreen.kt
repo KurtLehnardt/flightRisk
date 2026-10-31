@@ -120,6 +120,7 @@ fun SettingsScreen(
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     onLocalModelDownload: () -> Unit = {},
     onLocalModelDelete: () -> Unit = {},
+    searchActive: Boolean = false,
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     modifier: Modifier = Modifier,
@@ -181,6 +182,13 @@ fun SettingsScreen(
 
             // ----- Ground station link (phone as an edge) -----
             GroundLinkSection()
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Saved data: recording switch and delete action -----
+            PrivacyDataSection(searchActive = searchActive)
 
             Spacer(modifier = Modifier.height(24.dp))
             HorizontalDivider()

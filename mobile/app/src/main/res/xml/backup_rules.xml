@@ -12,10 +12,28 @@
       on this device only and must not be restored to another one.
     - flightrisk_config.xml, which may still hold a Claude key in plain text
       from the oldest builds until the one-time migration has moved it.
+    - flightrisk_privacy_local.xml, the privacy notice acknowledgement and the
+      "Record search video" choice: both are decisions made on this phone, so a
+      restored phone shows the notice again and does not record video.
+    - flightrisk_prefs.xml, the onboarding completion flag (a restored phone
+      repeats onboarding after the notice).
+    - flightrisk_ground_settings.xml, the ground console address and switch.
+    - The Room database (flightrisk_sessions.db and its journal files), the
+      recorded session videos (files/recordings) and the match pictures
+      (files/snapshots): they can show people, including faces.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
     <exclude domain="sharedpref" path="flightrisk_reasoning.xml" />
     <exclude domain="sharedpref" path="flightrisk_ground_link.xml" />
     <exclude domain="sharedpref" path="flightrisk_config.xml" />
+    <exclude domain="sharedpref" path="flightrisk_privacy_local.xml" />
+    <exclude domain="sharedpref" path="flightrisk_prefs.xml" />
+    <exclude domain="sharedpref" path="flightrisk_ground_settings.xml" />
+    <exclude domain="database" path="flightrisk_sessions.db" />
+    <exclude domain="database" path="flightrisk_sessions.db-journal" />
+    <exclude domain="database" path="flightrisk_sessions.db-wal" />
+    <exclude domain="database" path="flightrisk_sessions.db-shm" />
+    <exclude domain="file" path="recordings" />
+    <exclude domain="file" path="snapshots" />
 </full-backup-content>
