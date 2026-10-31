@@ -27,6 +27,7 @@
 		44EC4A350B81DCC01EBF6F6A /* ReasoningSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CAABBA552EF1B74A2F7647 /* ReasoningSettings.swift */; };
 		4F4EB30EC0EE96F58F284375 /* SocketIOMini in Frameworks */ = {isa = PBXBuildFile; productRef = D8DC38056B611E2DDF929198 /* SocketIOMini */; };
 		509EA4DAD8A0D8DB112428E2 /* LocalGemmaLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E57C5C08DCED1065C9DC84 /* LocalGemmaLlmBackend.swift */; };
+		54BEF6E800A3C73BD1EAAEE5 /* PlanGridViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */; };
 		57D2434AAC2BC55FDA4B1A0B /* NoOpLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */; };
 		59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */; };
 		608310DEB0B9BB2C48207287 /* ImageDescriptionExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4428E3DF406C0107B2594B /* ImageDescriptionExtractor.swift */; };
@@ -34,6 +35,7 @@
 		64FC4A97E2FAE8712E1BDC6A /* MatchScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD2E1ADD5D69C905B7E5D46 /* MatchScorer.swift */; };
 		6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */; };
 		6AF505A5D046DC3739216B9F /* GroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30992F7C11E4B063F8C2633E /* GroundView.swift */; };
+		7026AAAD19D14D86BE19651E /* PlanGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1371036140E40440DEB3B4F /* PlanGridView.swift */; };
 		76CE20839065DD97C67256DC /* MatchEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE5A8559D99E845C9AE19D2 /* MatchEntry.swift */; };
 		7770863F21ADB6FF49C25A20 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 44B591CBF45FFA639742AD36 /* MLX */; };
 		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
@@ -147,7 +149,9 @@
 		B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVCaptureFrameSource.swift; sourceTree = "<group>"; };
 		B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskTheme.swift; sourceTree = "<group>"; };
 		B69634E5AA5C105D3BEC3074 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanGridViewStateTests.swift; sourceTree = "<group>"; };
 		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		C1371036140E40440DEB3B4F /* PlanGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanGridView.swift; sourceTree = "<group>"; };
 		C7CAABBA552EF1B74A2F7647 /* ReasoningSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningSettings.swift; sourceTree = "<group>"; };
 		D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertCardView.swift; sourceTree = "<group>"; };
 		DB1B56CF1671883797BA7506 /* FlightRisk.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FlightRisk.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -225,6 +229,7 @@
 				4F23C5A72BB537E18797473D /* GroundViewModelTests.swift */,
 				8943A4554AA1A516C8F35352 /* Info.plist */,
 				14B4251664E956AD316034AF /* MatchScorerTests.swift */,
+				BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */,
 				06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */,
 			);
 			path = FlightRiskTests;
@@ -261,6 +266,7 @@
 				51D9998960BF9D4D1E803A8B /* GroundSettingsSection.swift */,
 				0A4323FB3838BCED8CE6672A /* GroundTopBar.swift */,
 				30992F7C11E4B063F8C2633E /* GroundView.swift */,
+				C1371036140E40440DEB3B4F /* PlanGridView.swift */,
 			);
 			path = Ground;
 			sourceTree = "<group>";
@@ -573,6 +579,7 @@
 				96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */,
 				A617E36E19773432F46C8273 /* PersonReID.swift in Sources */,
 				876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */,
+				7026AAAD19D14D86BE19651E /* PlanGridView.swift in Sources */,
 				44EC4A350B81DCC01EBF6F6A /* ReasoningSettings.swift in Sources */,
 				CE312B422E6D04F5F6610AD6 /* SearchPipeline.swift in Sources */,
 				3B1BF5F74447F81F021A510C /* SearchView.swift in Sources */,
@@ -595,6 +602,7 @@
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,
 				E81B8F714B847F9E364B7649 /* GroundViewModelTests.swift in Sources */,
 				BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */,
+				54BEF6E800A3C73BD1EAAEE5 /* PlanGridViewStateTests.swift in Sources */,
 				D288D9B4336216C304CC56FA /* ReasoningSettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
