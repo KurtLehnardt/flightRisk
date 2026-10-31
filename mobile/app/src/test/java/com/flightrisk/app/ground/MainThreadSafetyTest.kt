@@ -32,7 +32,7 @@ class MainThreadSafetyTest {
     @Volatile private var failWrites = false
 
     private val guard = IoGuard { op ->
-        if (Thread.currentThread().name == "fake-main") {
+        if (Thread.currentThread().name.startsWith("fake-main")) {
             violations += op
             throw IllegalStateException("blocking $op on the main thread")
         }
@@ -45,6 +45,8 @@ class MainThreadSafetyTest {
     }
 
     /** A fake dashboard: upgrade, open, connect ack, then it reads (and ignores) until the client leaves. */
+    private val received = CopyOnWriteArrayList<String>()
+
     private fun dashboard(connected: CountDownLatch = CountDownLatch(1)) = LoopbackServer { s: Socket ->
         val input = s.getInputStream()
         val out = s.getOutputStream()
@@ -54,7 +56,7 @@ class MainThreadSafetyTest {
         writeServerText(out, ContractFixtures.frame("socketio_connect_ack"))
         connected.countDown()
         try {
-            while (true) readClientFrame(input)
+            while (true) received += String(readClientFrame(input).second)
         } catch (_: Exception) {
         }
     }
@@ -76,6 +78,8 @@ class MainThreadSafetyTest {
                 withContext(main) { c.start() }
                 assertTrue(connected.await(10, TimeUnit.SECONDS))
                 eventually { c.connection.value is ConnectionStatus.Connected }
+                // Let the automatic state requests go out first.
+                eventually { received.size >= STATE_REQUEST_FRAMES.size }
                 failWrites = true
                 val result = withContext(main) { c.landAll() }
                 assertTrue(result.toString(), (result as SendResult.NotSent).reason is NotSentReason.SendFailed)

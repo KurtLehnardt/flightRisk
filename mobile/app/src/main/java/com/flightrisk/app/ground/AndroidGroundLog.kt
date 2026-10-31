@@ -4,9 +4,11 @@ import android.util.Log
 
 /**
  * [GroundLog] to logcat under the tag `FlightRiskGround`. The client redacts
- * every message before it reaches this sink; this sink redacts once more with
- * [extraSecrets] (for example [SecretStore.valuesForRedaction]) so a secret
- * the client does not know about cannot reach logcat either.
+ * every message with all its secrets and only then truncates it, so give the
+ * client the same extra secrets (`GroundConsoleClient(extraSecrets = ...)`)
+ * that this sink gets: a secret first seen here could already have been cut
+ * to an unrecognisable prefix. This sink redacts once more with
+ * [extraSecrets] as a second line of defence.
  */
 class AndroidGroundLog(private val extraSecrets: () -> List<String> = { emptyList() }) : GroundLog {
     override fun log(level: GroundLog.Level, message: String) {

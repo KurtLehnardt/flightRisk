@@ -159,7 +159,7 @@ class DashboardRestClientTest {
         val deep = "[".repeat(50_000) + "]".repeat(50_000)
         FakeDashboard(mapOf("/api/health" to { o -> json(o, deep) })).use { d ->
             val r = probe(d)
-            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody)
+            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody && r.detail.contains("nested"))
         }
         val deepObject = "{\"a\":".repeat(20_000) + "1" + "}".repeat(20_000)
         FakeDashboard(mapOf("/api/health" to { o -> json(o, healthJson) }, "/api/status" to { o -> json(o, deepObject) })).use { d ->
@@ -168,7 +168,8 @@ class DashboardRestClientTest {
         }
         val many = "[" + "1,".repeat(120_000) + "1]"
         FakeDashboard(mapOf("/api/health" to { o -> json(o, many) })).use { d ->
-            assertTrue(probe(d, maxBody = 1024 * 1024) is HealthProbeResult.UnexpectedBody)
+            val r = probe(d, maxBody = 1024 * 1024)
+            assertTrue(r.toString(), r is HealthProbeResult.UnexpectedBody && r.detail.contains("values"))
         }
     }
 
