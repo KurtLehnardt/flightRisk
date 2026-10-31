@@ -512,6 +512,11 @@ final class GroundViewModel {
     private(set) var detectionProfiles: DetectionProfilesPayload?
     private(set) var ceilingSettings: CeilingSettingsPayload?
     private(set) var reasoningProvider: ReasoningProviderPayload?
+    // BEGIN mission cards (U10): the result of the last profile selection. Cleared when the
+    // ground's next `detection_profiles` arrives.
+    private(set) var profileFeedback: ProfileFeedback?
+    @ObservationIgnored private var profileLossEpoch = 0
+    // END mission cards
     /// At most `maxMatchAlerts`, oldest dropped first.
     private(set) var matchAlerts: [MatchAlert] = []
     private(set) var streamVideoEnabled: Bool?
@@ -821,6 +826,109 @@ final class GroundViewModel {
     func dismissToast(_ id: UUID) { toasts.removeAll { $0.id == id } }
     func dismissDroneAlert(_ id: String) { droneAlerts[id] = nil }
 
+    // BEGIN mission cards (U10): detection profile selection
+    // The profiles card is the only place that sends `set_detection_profile` and
+    // `set_fleet_detection_profile`, and both go through `emit(_:)`. Nothing is queued or resent.
+    // The ground is the authority: the phone only refuses what the ground has already said cannot
+    // work (not live, controls off, unknown profile or drone, a switch pending) and says why.
+
+    /// Selects `profile` for `droneId`; an empty `profile` follows the fleet default.
+    func selectDroneProfile(_ droneId: String, profile: String) async {
+        await sendProfile(droneId: droneId, profile: profile)
+    }
+
+    /// Selects `profile` as the fleet default; an empty `profile` clears the default.
+    func selectFleetProfile(_ profile: String) async {
+        await sendProfile(droneId: nil, profile: profile)
+    }
+
+    func dismissProfileFeedback() { profileFeedback = nil }
+
+    private func refuseProfile(_ target: String?, _ why: String) {
+        profileFeedback = ProfileFeedback(
+            attempt: nextAttempt(), text: MissionFormat.profileNotSent(target: target, why: why),
+            isFailure: true, awaitsAnswer: false, startedAt: clock()
+        )
+    }
+
+    private func sendProfile(droneId: String?, profile: String) async {
+        guard let profiles = detectionProfiles, MissionFormat.hasBoard(profiles) else {
+            return refuseProfile(droneId, MissionFormat.whyNoBoard)
+        }
+        if let blocked = MissionFormat.profileBlockedReason(profiles, isStale: isStateStale, connected: linkStatus.isConnected) {
+            return refuseProfile(droneId, blocked)
+        }
+        if !profile.isEmpty, !(profiles.profiles ?? []).contains(where: { $0.name == profile }) {
+            return refuseProfile(droneId, MissionFormat.whyUnknownProfile)
+        }
+        let command: GroundCommand
+        if let droneId {
+            guard let state = profiles.drones?[droneId] else { return refuseProfile(droneId, MissionFormat.whyUnknownDrone) }
+            if state.supported != true { return refuseProfile(droneId, MissionFormat.whyUnsupported) }
+            // The dashboard disables the selector while a switch is pending.
+            if state.pending == true { return refuseProfile(droneId, MissionFormat.whyPending) }
+            // An unchanged choice sends nothing.
+            if (state.override ?? "") == profile { return }
+            command = .setDetectionProfile(droneId: droneId, profile: profile)
+            if !command.isSendable { return refuseProfile(droneId, MissionFormat.whyNoUsableID) }
+        } else {
+            if (profiles.fleetDefault ?? "") == profile { return }
+            command = .setFleetDetectionProfile(profile: profile)
+        }
+        let attempt = nextAttempt()
+        let label: String
+        if profile.isEmpty {
+            label = droneId == nil ? MissionFormat.noFleetDefault : MissionFormat.followFleetDefault
+        } else {
+            label = MissionFormat.profileLabel(profiles, profile)
+        }
+        // Waiting is set before sending: a fast reply must clear it, not be overwritten by it.
+        profileFeedback = ProfileFeedback(
+            attempt: attempt, text: MissionFormat.profileSent(target: droneId, label: label),
+            isFailure: false, awaitsAnswer: true, startedAt: clock()
+        )
+        let epochAtSend = profileLossEpoch
+        let outcome = await emit(command)
+        let why: String?
+        switch outcome {
+        case .sent: why = profileLossEpoch == epochAtSend ? nil : MissionFormat.whyLinkLost
+        case .sendFailed, .refused: why = MissionFormat.whySendFailed
+        case .notConnected, .noClient, .shutDown: why = MissionFormat.whyNotConnected
+        }
+        // Only this attempt's own feedback may be replaced: a newer attempt keeps its text.
+        if let why, profileFeedback?.attempt == attempt {
+            profileFeedback = ProfileFeedback(
+                attempt: attempt, text: MissionFormat.profileNotSent(target: droneId, why: why),
+                isFailure: true, awaitsAnswer: false, startedAt: profileFeedback?.startedAt ?? clock()
+            )
+        }
+    }
+
+    /// The ground answered with its profile state: the status lines now carry the result or refusal.
+    private func onProfilesFromGround() {
+        if profileFeedback?.awaitsAnswer == true { profileFeedback = nil }
+    }
+
+    /// The link is gone while a selection waits: say so, because no answer can come.
+    private func onProfileLinkLost() {
+        profileLossEpoch += 1
+        guard var f = profileFeedback, f.awaitsAnswer else { return }
+        f.text = "Profile change: " + MissionFormat.whyLinkLost
+        f.isFailure = true
+        f.awaitsAnswer = false
+        profileFeedback = f
+    }
+
+    /// A selection unanswered for `replyTimeout` (5 s) says so.
+    private func expireProfileFeedback(at date: Date) {
+        guard var f = profileFeedback, f.awaitsAnswer, date.timeIntervalSince(f.startedAt) >= Self.replyTimeout else { return }
+        f.text = MissionFormat.profileNoAnswer
+        f.isFailure = true
+        f.awaitsAnswer = false
+        profileFeedback = f
+    }
+    // END mission cards
+
     // MARK: Derived view state
 
     var droneCards: [GroundDroneCardModel] {
@@ -916,6 +1024,7 @@ final class GroundViewModel {
             }
         }
         expireLandAll(at: date)
+        expireProfileFeedback(at: date)
         checkFreshness(at: date)
         let lands = Self.aged(landFeedback, action: "Land", at: date)
         if lands != landFeedback { landFeedback = lands }
@@ -1067,6 +1176,7 @@ final class GroundViewModel {
             }
         case let .detectionProfiles(p):
             detectionProfiles = p
+            onProfilesFromGround()
         case let .ceilingSettings(p):
             ceilingSettings = p
         case let .reasoningProvider(p):
@@ -1207,6 +1317,7 @@ final class GroundViewModel {
         detectionProfiles = nil
         ceilingSettings = nil
         reasoningProvider = nil
+        profileFeedback = nil
         matchAlerts = []
         streamVideoEnabled = nil
         landFeedback = [:]
@@ -1247,6 +1358,7 @@ final class GroundViewModel {
     /// still waiting becomes a visible failure; nothing is resent.
     private func connectionLost() {
         planIsCurrent = false
+        onProfileLinkLost()
         let at = clock()
         landAllOutstanding = []
         pendingLegacyLands = []

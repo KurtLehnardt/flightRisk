@@ -55,14 +55,17 @@ struct GroundView: View {
                                                     planIsCurrent: viewModel.planIsCurrent))
                     }
                     Group {
-                        // U10 detection profiles and ceiling: `viewModel.detectionProfiles`,
-                        // `viewModel.ceilingSettings`.
+                        // U10 detection profiles (view and select) and the read-only ceiling card.
+                        DetectionProfilesView(viewModel: viewModel)
+                        CeilingView(viewModel: viewModel)
                     }
                     Group {
-                        // U11 ground reasoning provider (read only): `viewModel.reasoningProvider`.
+                        // U11 ground reasoning provider (read only).
+                        GroundReasoningView(viewModel: viewModel)
                     }
                     Group {
-                        // U11 ground match alerts: `viewModel.matchAlerts`.
+                        // U11 ground match alerts (read only list rows, never a sheet).
+                        GroundMatchAlertView(viewModel: viewModel)
                     }
                 }
                 .padding(16)
