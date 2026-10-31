@@ -2,7 +2,6 @@ package com.flightrisk.app.config
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
@@ -39,14 +38,24 @@ data class FlightRiskConfig(
             return instance ?: synchronized(this) {
                 instance ?: fromPreferences(
                     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
-                    getEncryptedPrefs(context),
                 ).also { instance = it }
             }
         }
 
         private const val SECURE_PREFS_NAME = "flightrisk_secure_prefs"
 
-        fun getEncryptedPrefs(context: Context): SharedPreferences {
+        private val encryptedPrefs = SingleInstance<SharedPreferences>()
+
+        /**
+         * The app's encrypted preferences, created once per process under a
+         * lock. Creating them concurrently on a fresh install can create two
+         * Tink keysets, one of which is lost. Blocks on the Keystore the first
+         * time: call it off the main thread.
+         */
+        fun getEncryptedPrefs(context: Context): SharedPreferences =
+            encryptedPrefs.get { createEncryptedPrefs(context.applicationContext) }
+
+        private fun createEncryptedPrefs(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
@@ -65,20 +74,15 @@ data class FlightRiskConfig(
          * Only a curated subset of the most commonly-tuned values is
          * exposed via preferences, matching the Python `AmberConfig.from_env`
          * pattern.
+         *
+         * No secret is read here. The Claude API key lives only in
+         * `SecretStore` under `FLIGHTRISK_CLAUDE_API_KEY` and is read at call
+         * time by the cloud gate (`llm/CloudReasoningGate.kt`), never kept in
+         * this long-lived config. The old `FLIGHTRISK_API_KEY` values (plain
+         * and encrypted) are moved once by `ReasoningSettings.migrateLegacyKeyOnce`.
          */
-        fun fromPreferences(
-            prefs: SharedPreferences,
-            securePrefs: SharedPreferences? = null,
-        ): FlightRiskConfig {
+        fun fromPreferences(prefs: SharedPreferences): FlightRiskConfig {
             val config = FlightRiskConfig()
-
-            // Migrate API key from plain prefs to encrypted prefs on first read
-            val apiKey: String? = securePrefs?.getString("FLIGHTRISK_API_KEY", null)
-                ?: prefs.getString("FLIGHTRISK_API_KEY", null)?.also { plainKey ->
-                    securePrefs?.edit()?.putString("FLIGHTRISK_API_KEY", plainKey)?.apply()
-                    prefs.edit().remove("FLIGHTRISK_API_KEY").apply()
-                    Log.i("FlightRiskConfig", "Migrated API key to encrypted storage")
-                }
 
             return config.copy(
                 vision = config.vision.copy(
@@ -100,7 +104,6 @@ data class FlightRiskConfig(
                 reasoning = config.reasoning.copy(
                     model = prefs.getString("FLIGHTRISK_GEMMA_MODEL", null)
                         ?: config.reasoning.model,
-                    apiKey = apiKey ?: config.reasoning.apiKey,
                     alertCooldown = prefs.getFloat(
                         "FLIGHTRISK_ALERT_COOLDOWN",
                         config.reasoning.alertCooldown.toFloat()
@@ -171,7 +174,6 @@ data class VisionConfig(
  */
 data class ReasoningConfig(
     val model: String = "gemma4:latest",
-    val apiKey: String? = null,
     val queueMaxSize: Int = 10,
     val alertCooldown: Double = 10.0,
     val gemmaRateLimit: Double = 5.0,

@@ -42,6 +42,16 @@ class EncryptedPrefsSecretStorage(private val open: () -> SharedPreferences) : S
             null
         }
 
+    override fun readResult(key: String): SecretRead {
+        val p = prefs ?: return SecretRead.Unreadable
+        return try {
+            p.getString(key, null)?.let { SecretRead.Value(it) } ?: SecretRead.Absent
+        } catch (e: Exception) {
+            failure = "could not read the secure storage (${e.javaClass.simpleName})"
+            SecretRead.Unreadable
+        }
+    }
+
     override fun write(changes: Map<String, String?>): Boolean {
         val p = prefs ?: return false
         return try {

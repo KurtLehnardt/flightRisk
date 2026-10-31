@@ -31,6 +31,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.flightrisk.app.llm.ReasoningAction
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
@@ -113,8 +114,7 @@ private val destinations = listOf(
  * @param onPhotoSelected Callback when a target photo is confirmed.
  * @param onPresetSelected Callback when a sensitivity preset is selected.
  * @param onThresholdChanged Callback for raw threshold changes.
- * @param onLlmBackendChanged Callback for LLM backend changes.
- * @param onApiKeyChanged Callback for API key changes.
+ * @param onReasoningAction Callback for actions in the Settings reasoning section.
  * @param droneState Current drone connection/telemetry state, or null.
  * @param frameSourceMode Whether frames come from device camera or drone.
  * @param latestDroneFrame The most recent video frame from the drone, or null.
@@ -139,8 +139,7 @@ fun FlightRiskNavHost(
     onPhotoSelected: (Bitmap, QualityReport) -> Unit,
     onPresetSelected: (SensitivityPreset) -> Unit,
     onThresholdChanged: (String, Float) -> Unit,
-    onLlmBackendChanged: (String) -> Unit,
-    onApiKeyChanged: (String) -> Unit,
+    onReasoningAction: (ReasoningAction) -> Unit,
     onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     onLocalModelDownload: () -> Unit = {},
@@ -257,8 +256,7 @@ fun FlightRiskNavHost(
                     state = settingsState,
                     onPresetSelected = onPresetSelected,
                     onThresholdChanged = onThresholdChanged,
-                    onLlmBackendChanged = onLlmBackendChanged,
-                    onApiKeyChanged = onApiKeyChanged,
+                    onReasoningAction = onReasoningAction,
                     onSignalEnabledChanged = onSignalEnabledChanged,
                     onSignalWeightChanged = onSignalWeightChanged,
                     onLocalModelDownload = onLocalModelDownload,

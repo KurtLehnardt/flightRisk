@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Auto Backup rules for Android 11 (API 30) and lower. Everything is backed
-    up except the encrypted secret store: its values cannot be decrypted
-    without this device's Android Keystore key, so a restored copy would only
-    make the secret store unreadable on the new device.
+    Auto Backup rules for Android 11 (API 30) and lower. Excluded:
+    - flightrisk_secure_prefs.xml, the encrypted secret store: its values
+      cannot be decrypted without this device's Android Keystore key, so a
+      restored copy would only make the secret store unreadable.
+    - flightrisk_reasoning.xml, the cloud reasoning opt-in and provider: the
+      opt-in is consent given on this device and must not be restored to
+      another one without its consent dialog.
+    - flightrisk_config.xml, which may still hold a Claude key in plain text
+      from the oldest builds until the one-time migration has moved it.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="flightrisk_reasoning.xml" />
+    <exclude domain="sharedpref" path="flightrisk_config.xml" />
 </full-backup-content>

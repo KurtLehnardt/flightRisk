@@ -79,6 +79,7 @@ import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.pipeline.MatchEntry
+import com.flightrisk.app.ui.settings.ReasoningStatusBanner
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.AlertRedDark
@@ -113,6 +114,9 @@ private const val TAG = "SearchScreen"
  * @property droneConnectionMessage User-facing status/error message for the drone connection
  *   attempt (e.g. troubleshooting guidance after a failed connect), or null when there is
  *   nothing to report.
+ * @property cloudReasoningActive True while cloud reasoning is the active backend, so the
+ *   "Cloud active" indicator is shown where images are sent.
+ * @property reasoningNotice The reasoning fallback notice, or null.
  */
 data class SearchScreenState(
     val isSearching: Boolean = false,
@@ -132,6 +136,8 @@ data class SearchScreenState(
     val latestDroneFrame: Bitmap? = null,
     val droneConnectionMessage: String? = null,
     val selectedPattern: PatternType = PatternType.EXPANDING_SQUARE,
+    val cloudReasoningActive: Boolean = false,
+    val reasoningNotice: String? = null,
 )
 
 // -----------------------------------------------------------------------
@@ -260,6 +266,15 @@ fun SearchScreen(
                 .padding(WindowInsets.statusBars.asPaddingValues())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
+            // Reasoning banner: "Cloud active" while images go to Anthropic, and the fallback notice.
+            if (state.cloudReasoningActive || state.reasoningNotice != null) {
+                ReasoningStatusBanner(
+                    cloudActive = state.cloudReasoningActive,
+                    notice = state.reasoningNotice,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             if (state.isSearching) {
                 HudOverlay(
                     fps = state.fps,

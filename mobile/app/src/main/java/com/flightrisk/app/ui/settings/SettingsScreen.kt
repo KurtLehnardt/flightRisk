@@ -62,6 +62,11 @@ import com.flightrisk.app.config.SignalStatus
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.llm.ReasoningAction
+import com.flightrisk.app.llm.ReasoningProvider
+import com.flightrisk.app.llm.ReasoningReason
+import com.flightrisk.app.llm.ReasoningSettings
+import com.flightrisk.app.llm.ReasoningUiState
 import com.flightrisk.app.llm.local.ModelState
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
@@ -76,18 +81,15 @@ import com.flightrisk.app.ui.theme.MatchGreen
  * @property reidThreshold Current ReID threshold (0.0-1.0).
  * @property faceThreshold Current face match threshold (0.0-1.0).
  * @property scorerThreshold Current scorer match threshold (0.0-1.0).
- * @property llmBackend Currently selected LLM backend name.
- * @property llmApiKey Current API key for cloud LLM.
- * @property llmAvailable Whether the selected LLM backend is available.
+ * @property reasoning The reasoning section: selected and active provider, cloud
+ *   opt-in, saved-key state, pending consent and messages. It holds no key.
  */
 data class SettingsScreenState(
     val activePreset: SensitivityPreset? = SensitivityPreset.BALANCED,
     val reidThreshold: Float = 0.55f,
     val faceThreshold: Float = 0.45f,
     val scorerThreshold: Float = 0.45f,
-    val llmBackend: String = "cloud_claude",
-    val llmApiKey: String = "",
-    val llmAvailable: Boolean = false,
+    val reasoning: ReasoningUiState = ReasoningUiState(),
     val signalConfigs: Map<String, SignalConfig> = emptyMap(),
     val signalStatuses: Map<String, SignalStatus> = emptyMap(),
     val localModelState: ModelState = ModelState.Idle,
@@ -103,8 +105,7 @@ data class SettingsScreenState(
  * @param onPresetSelected Callback when a sensitivity preset is selected.
  * @param onThresholdChanged Callback when a raw threshold is changed.
  *   Params: (name, value) where name is "reid", "face", or "scorer".
- * @param onLlmBackendChanged Callback when the LLM backend is changed.
- * @param onApiKeyChanged Callback when the API key is changed.
+ * @param onReasoningAction Callback for every action in the reasoning section.
  * @param droneState Current drone connection and telemetry state, or null.
  * @param frameSourceMode Current frame source (camera or drone).
  * @param modifier Modifier for the root container.
@@ -114,8 +115,7 @@ fun SettingsScreen(
     state: SettingsScreenState,
     onPresetSelected: (SensitivityPreset) -> Unit,
     onThresholdChanged: (String, Float) -> Unit,
-    onLlmBackendChanged: (String) -> Unit,
-    onApiKeyChanged: (String) -> Unit,
+    onReasoningAction: (ReasoningAction) -> Unit,
     onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     onLocalModelDownload: () -> Unit = {},
@@ -166,11 +166,8 @@ fun SettingsScreen(
 
             // ----- LLM Backend section -----
             LlmBackendSection(
-                selectedBackend = state.llmBackend,
-                apiKey = state.llmApiKey,
-                isAvailable = state.llmAvailable,
-                onBackendChanged = onLlmBackendChanged,
-                onApiKeyChanged = onApiKeyChanged,
+                reasoning = state.reasoning,
+                onAction = onReasoningAction,
                 localModelState = state.localModelState,
                 localModelName = state.localModelName,
                 localModelSizeMb = state.localModelSizeMb,
@@ -323,15 +320,16 @@ private fun SensitivityPill(
 // -----------------------------------------------------------------------
 
 /**
- * LLM backend selection with radio buttons and API key input.
+ * Reasoning provider selection (Local, Cloud Claude, None), the explicit
+ * "Allow cloud reasoning" switch with its consent dialog, the Claude key field
+ * (only after opt-in), "Remove saved key" (whenever a key is saved) and the
+ * "Cloud active" indicator. Decisions are made by `ReasoningSettings` through
+ * [onAction]; this composable only shows the state.
  */
 @Composable
 private fun LlmBackendSection(
-    selectedBackend: String,
-    apiKey: String,
-    isAvailable: Boolean,
-    onBackendChanged: (String) -> Unit,
-    onApiKeyChanged: (String) -> Unit,
+    reasoning: ReasoningUiState,
+    onAction: (ReasoningAction) -> Unit,
     localModelState: ModelState = ModelState.Idle,
     localModelName: String = "",
     localModelSizeMb: Int = 0,
@@ -339,9 +337,19 @@ private fun LlmBackendSection(
     onLocalModelDelete: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val status = reasoning.status
+    val selected = reasoning.selected
+
+    reasoning.consent?.let {
+        CloudConsentDialog(
+            onConfirm = { onAction(ReasoningAction.ConfirmConsent) },
+            onDismiss = { onAction(ReasoningAction.DismissConsent) },
+        )
+    }
+
     Column(modifier = modifier) {
         Text(
-            text = "LLM Backend",
+            text = "AI Reasoning",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.semantics { heading() },
@@ -350,80 +358,129 @@ private fun LlmBackendSection(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Select the reasoning backend for match verification.",
+            text = "Cloud reasoning is off by default. Local and None keep every image on this phone.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Cloud Claude
-        LlmBackendOption(
-            name = "Cloud Claude",
-            backendId = "cloud_claude",
-            isSelected = selectedBackend == "cloud_claude",
-            onSelect = { onBackendChanged("cloud_claude") },
-        )
-
-        // Local Model
-        LlmBackendOption(
-            name = "Local Model (On-Device)",
-            backendId = "local",
-            isSelected = selectedBackend == "local",
-            onSelect = { onBackendChanged("local") },
-        )
-
-        // None (vision only)
-        LlmBackendOption(
-            name = "None (Vision Only)",
-            backendId = "none",
-            isSelected = selectedBackend == "none",
-            onSelect = { onBackendChanged("none") },
-        )
-
-        // API key input (only for cloud)
-        if (selectedBackend == "cloud_claude") {
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = onApiKeyChanged,
-                label = { Text("Claude API Key") },
-                placeholder = { Text("sk-ant-...") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .sizeIn(minHeight = 48.dp),
+        for (provider in ReasoningProvider.entries) {
+            val unavailable = provider != ReasoningProvider.OFF && status.unavailable.containsKey(provider)
+            LlmBackendOption(
+                name = if (unavailable) "${provider.displayName} (unavailable)" else provider.displayName,
+                isSelected = selected == provider,
+                onSelect = { onAction(ReasoningAction.PickProvider(provider)) },
             )
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-            // Status indicator
+        // Active backend, with the "Cloud active" indicator whenever cloud is in use.
+        if (status.isCloudActive) {
+            CloudActiveIndicator()
+        } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(
-                            color = if (isAvailable) MatchGreen else AlertRed,
-                            shape = RoundedCornerShape(4.dp),
-                        ),
-                )
+                StatusDot(color = if (status.active == ReasoningProvider.OFF) MaterialTheme.colorScheme.onSurfaceVariant else MatchGreen)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (isAvailable) "Available" else "Unavailable",
+                    text = "Active: ${status.active.displayName}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (isAvailable) MatchGreen else AlertRed,
-                    modifier = Modifier.semantics {
-                        contentDescription = "LLM status: ${if (isAvailable) "available" else "unavailable"}"
-                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { contentDescription = "Active reasoning: ${status.active.displayName}" },
                 )
             }
         }
 
+        status.notice?.let { notice ->
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = notice, style = MaterialTheme.typography.bodySmall, color = AlertOrange)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Explicit opt-in. Turning it on opens the consent dialog; the switch
+        // shows on while the dialog is open and returns to off on Cancel. This
+        // matches iOS and enables nothing until the dialog is confirmed.
+        val pendingOptIn = reasoning.consent?.selectCloud == false
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .sizeIn(minHeight = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "Allow cloud reasoning",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = reasoning.cloudOptIn || pendingOptIn,
+                onCheckedChange = { onAction(ReasoningAction.SetCloudOptIn(it)) },
+                modifier = Modifier.semantics {
+                    contentDescription = "Allow cloud reasoning: ${if (reasoning.cloudOptIn) "on" else "off"}. " +
+                        "Asks for confirmation before any image can be sent to Anthropic."
+                },
+            )
+        }
+
+        if (status.checkingKey) {
+            Text(
+                text = ReasoningReason.CHECKING_KEY,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        status.unavailable[ReasoningProvider.CLOUD_CLAUDE]?.let { reason ->
+            Text(
+                text = "Cloud Claude unavailable: $reason",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (reasoning.secureStorageUnavailable) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "${ReasoningReason.SECURE_STORAGE_UNAVAILABLE}. Cloud reasoning stays off.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AlertRed,
+            )
+        }
+
+        if (reasoning.showKeyField) {
+            Spacer(modifier = Modifier.height(12.dp))
+            ClaudeKeyField(
+                hasSavedKey = reasoning.hasSavedKey,
+                onSave = { onAction(ReasoningAction.SaveKey(it)) },
+            )
+        }
+
+        // Removing a saved key is always possible, opted in or not.
+        if (reasoning.showRemoveKey) {
+            TextButton(
+                onClick = { onAction(ReasoningAction.RemoveKey) },
+                modifier = Modifier.sizeIn(minHeight = 48.dp),
+            ) {
+                Text("Remove saved key", color = AlertRed)
+            }
+        }
+
+        reasoning.message?.let { message ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { onAction(ReasoningAction.DismissMessage) }) { Text("OK") }
+            }
+        }
+
         // Local model management (shown when local is selected)
-        if (selectedBackend == "local") {
+        if (selected == ReasoningProvider.LOCAL) {
             Spacer(modifier = Modifier.height(12.dp))
             LocalModelCard(
                 modelState = localModelState,
@@ -432,7 +489,57 @@ private fun LlmBackendSection(
                 onDownload = onLocalModelDownload,
                 onDelete = onLocalModelDelete,
             )
+        } else if (selected == ReasoningProvider.OFF) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Reasoning is off. Matches are scored without a language model.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
+    }
+}
+
+/**
+ * The Claude key field. It starts empty every time (a saved key is never
+ * loaded back), trims what was pasted, and is cleared after Save. The text
+ * lives only in this composable's state.
+ */
+@Composable
+private fun ClaudeKeyField(hasSavedKey: Boolean, onSave: (String) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    OutlinedTextField(
+        value = input,
+        onValueChange = { input = it },
+        label = { Text("Claude API Key") },
+        placeholder = { Text(if (hasSavedKey) "Replace saved key" else "sk-ant-...") },
+        singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier
+            .fillMaxWidth()
+            .sizeIn(minHeight = 48.dp),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            onClick = {
+                val key = ReasoningSettings.normalizedKey(input)
+                input = ""
+                if (key != null) onSave(key)
+            },
+            enabled = ReasoningSettings.normalizedKey(input) != null,
+            modifier = Modifier.sizeIn(minHeight = 48.dp),
+        ) {
+            Text("Save API key")
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        StatusDot(color = if (hasSavedKey) MatchGreen else AlertRed)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (hasSavedKey) "Key saved" else "No API key saved",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (hasSavedKey) MatchGreen else AlertRed,
+        )
     }
 }
 
@@ -609,7 +716,6 @@ private fun StatusDot(color: Color, modifier: Modifier = Modifier) {
 @Composable
 private fun LlmBackendOption(
     name: String,
-    backendId: String,
     isSelected: Boolean,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier,

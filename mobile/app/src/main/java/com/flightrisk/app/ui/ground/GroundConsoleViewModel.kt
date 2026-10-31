@@ -19,6 +19,7 @@ import com.flightrisk.app.ground.HealthProbeResult
 import com.flightrisk.app.ground.NotSentReason
 import com.flightrisk.app.ground.SecretAvailability
 import com.flightrisk.app.ground.SecretName
+import com.flightrisk.app.config.AppSecrets
 import com.flightrisk.app.ground.SecretStore
 import com.flightrisk.app.ground.SendResult
 import com.flightrisk.contract.ClientCommand
@@ -1294,7 +1295,7 @@ class GroundConsoleViewModel(
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    GroundConsoleViewModel(SecretStore(app), SharedPrefsGroundSettings(app)) as T
+                    GroundConsoleViewModel(AppSecrets.store(app), SharedPrefsGroundSettings(app)) as T
             }
         }
     }
