@@ -179,6 +179,13 @@ fun SettingsScreen(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
+            // ----- Ground station link (phone as an edge) -----
+            GroundLinkSection()
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
             // ----- Drone section -----
             DroneSection(
                 frameSourceMode = frameSourceMode,

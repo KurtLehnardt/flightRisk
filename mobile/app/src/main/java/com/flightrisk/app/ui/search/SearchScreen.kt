@@ -79,6 +79,7 @@ import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.pipeline.MatchEntry
+import com.flightrisk.app.ui.settings.GroundLinkIndicatorBanner
 import com.flightrisk.app.ui.settings.ReasoningStatusBanner
 import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
@@ -274,6 +275,9 @@ fun SearchScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
+
+            // Ground station link: "Sending detections to <host>" while images of people go out.
+            GroundLinkIndicatorBanner()
 
             if (state.isSearching) {
                 HudOverlay(

@@ -26,8 +26,8 @@ class CloudPathAuditTest {
         "com/flightrisk/app/ground/RawWebSocket.kt" to "The user's own ground station (plain http/ws on the local network)",
         "com/flightrisk/app/ground/SocketIoPort.kt" to "The user's own ground station (plain http/ws on the local network)",
         "com/flightrisk/app/ground/DashboardRestClient.kt" to "The user's own ground station (plain http on the local network)",
-        "com/flightrisk/app/transport/EdgeTransport.kt" to "Unreferenced (dead) edge client for the user's own ground station",
-        "com/flightrisk/app/transport/GroundTransport.kt" to "Unreferenced (dead) listener",
+        "com/flightrisk/app/transport/EdgeSocketPort.kt" to
+            "The user's own ground station edge port (plain ws on the local network), only while the opt-in link is on",
         "com/flightrisk/app/drone/TelloConnection.kt" to "Tello drone UDP commands on its own Wi-Fi",
         "com/flightrisk/app/drone/TelloFrameSource.kt" to "Tello drone UDP video on its own Wi-Fi",
     )
