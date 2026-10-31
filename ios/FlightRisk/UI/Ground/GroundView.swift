@@ -6,14 +6,16 @@ import SwiftUI
 /// every state. Everything below is a pure function of `GroundViewModel`.
 struct GroundView: View {
     let viewModel: GroundViewModel
+    /// The height of this view, measured; nil until the first layout pass.
+    @State private var availableHeight: CGFloat?
 
     var body: some View {
         VStack(spacing: 0) {
-            GroundTopBar(viewModel: viewModel)
+            GroundTopBar(viewModel: viewModel, feedbackMaxHeight: GroundLayout.feedbackMaxHeight(available: availableHeight ?? 700))
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if let note = viewModel.staleNote, viewModel.isStateStale, !viewModel.droneCards.isEmpty {
+                    if let note = viewModel.staleNote, viewModel.isStateStale, !viewModel.droneCards.isEmpty || viewModel.hasNoRecentUpdate {
                         // First in the list: nothing below is live.
                         Label(note + " Values below are not live.", systemImage: "clock.arrow.circlepath")
                             .font(.subheadline.weight(.semibold))
@@ -67,6 +69,10 @@ struct GroundView: View {
             }
             .refreshable { await viewModel.refresh() }
         }
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: GroundHeightKey.self, value: proxy.size.height)
+        })
+        .onPreferenceChange(GroundHeightKey.self) { availableHeight = $0 }
     }
 
     private var emptyText: String {
@@ -106,4 +112,9 @@ struct GroundView: View {
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
     }
+}
+
+private struct GroundHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

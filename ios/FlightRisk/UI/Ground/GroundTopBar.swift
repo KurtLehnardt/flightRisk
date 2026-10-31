@@ -8,6 +8,8 @@ import SwiftUI
 /// dashboard; the result line below it always says what happened.
 struct GroundTopBar: View {
     let viewModel: GroundViewModel
+    /// The most height the scrolling text area may take (`GroundLayout.feedbackMaxHeight`).
+    var feedbackMaxHeight: CGFloat = GroundLayout.minFeedbackHeight
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -24,9 +26,16 @@ struct GroundTopBar: View {
                 Spacer(minLength: 8)
                 landAllButton
             }
-            connectionBanner
-            if let feedback = viewModel.landAllFeedback {
-                LandAllFeedbackView(feedback: feedback, viewModel: viewModel)
+            // The texts from the ground scroll inside a height cap; LAND ALL and every Retry,
+            // Dismiss and "Send again" button stay outside it, always visible.
+            ViewThatFits(in: .vertical) {
+                textArea
+                ScrollView { textArea }
+            }
+            .frame(maxHeight: feedbackMaxHeight)
+            connectionActions
+            if let feedback = viewModel.landAllFeedback, feedback.offersRetry {
+                LandAllFeedbackActions(feedback: feedback, viewModel: viewModel)
             }
         }
         .padding(.horizontal, 16)
@@ -51,6 +60,34 @@ struct GroundTopBar: View {
         .accessibilityIdentifier("ground.landAll")
     }
 
+    /// The connection text and the LAND ALL result, which can be long and scroll.
+    private var textArea: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            connectionBanner
+            if let feedback = viewModel.landAllFeedback {
+                LandAllFeedbackText(feedback: feedback)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The Retry buttons of the connection banner. They never scroll away.
+    @ViewBuilder
+    private var connectionActions: some View {
+        switch viewModel.linkStatus {
+        case .wrongKey:
+            Button("Retry") { viewModel.retryConnection() }
+                .buttonStyle(.bordered)
+                .foregroundStyle(FlightRiskTheme.alertOrange)
+                .accessibilityIdentifier("ground.retry")
+        case .reconnecting, .connecting:
+            Button("Retry now") { viewModel.retryConnection() }
+                .buttonStyle(.bordered)
+        default:
+            EmptyView()
+        }
+    }
+
     @ViewBuilder
     private var connectionBanner: some View {
         switch viewModel.linkStatus {
@@ -62,10 +99,6 @@ struct GroundTopBar: View {
                 Text(viewModel.linkStatus.text)
                     .font(.footnote)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
-                Button("Retry") { viewModel.retryConnection() }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("ground.retry")
             }
             .foregroundStyle(FlightRiskTheme.alertOrange)
         case .reconnecting, .connecting:
@@ -74,9 +107,6 @@ struct GroundTopBar: View {
                 Text(viewModel.linkStatus.text)
                     .font(.footnote)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 4)
-                Button("Retry now") { viewModel.retryConnection() }
-                    .buttonStyle(.bordered)
             }
             .foregroundStyle(.secondary)
         default:
@@ -110,11 +140,9 @@ private struct LinkPill: View {
     }
 }
 
-/// The result of the latest LAND ALL. Failures stay until dismissed; "no reply yet" and
-/// failures offer sending LAND ALL again (a new command, never an automatic retry).
-private struct LandAllFeedbackView: View {
+/// The text of the latest LAND ALL result. It scrolls with the bar's text area.
+private struct LandAllFeedbackText: View {
     let feedback: GroundCommandFeedback
-    let viewModel: GroundViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -126,17 +154,10 @@ private struct LandAllFeedbackView: View {
                     .accessibilityIdentifier("ground.landAllResult")
             }
             if let detail = feedback.detail {
-                Text(detail).font(.footnote).foregroundStyle(.secondary)
-            }
-            if feedback.offersRetry {
-                HStack {
-                    Button("Send LAND ALL again") { Task { await viewModel.landAll() } }
-                        .buttonStyle(.bordered)
-                    if feedback.isFailure || feedback.phase == .partial {
-                        Button("Dismiss") { viewModel.dismissLandAllFeedback() }
-                            .buttonStyle(.borderless)
-                    }
-                }
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .foregroundStyle(feedback.isWarning ? FlightRiskTheme.alertOrange : .primary)
@@ -153,6 +174,25 @@ private struct LandAllFeedbackView: View {
         case .succeeded: return "checkmark.circle"
         case .partial: return "exclamationmark.triangle"
         case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+/// "Send LAND ALL again" and Dismiss: failures stay until dismissed; "no reply yet" and
+/// failures offer sending LAND ALL again (a new command, never an automatic retry). These
+/// buttons are outside the scrolling text area, so they are always reachable.
+private struct LandAllFeedbackActions: View {
+    let feedback: GroundCommandFeedback
+    let viewModel: GroundViewModel
+
+    var body: some View {
+        HStack {
+            Button("Send LAND ALL again") { Task { await viewModel.landAll() } }
+                .buttonStyle(.bordered)
+            if feedback.isFailure || feedback.phase == .partial {
+                Button("Dismiss") { viewModel.dismissLandAllFeedback() }
+                    .buttonStyle(.borderless)
+            }
         }
     }
 }
