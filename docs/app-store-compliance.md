@@ -1,5 +1,7 @@
 # FlightRisk Mobile -- App Store Compliance Checklist
 
+The Apple sections describe the iOS app and the Google Play sections describe the Android app, each as the code on `main` does it. Answers to the store questionnaires are the owner's decision. Statements the author could not verify are marked provisional or unsure, and `docs/mobile-followups.md` lists them.
+
 ---
 
 ## Apple App Store
@@ -22,9 +24,8 @@ The app has no direct link to a drone. The earlier direct Tello link was removed
 `Info.plist` sets `NSAppTransportSecurity` with `NSAllowsLocalNetworking` = true and nothing else. There is no `NSAllowsArbitraryLoads`, no `NSAllowsArbitraryLoadsInWebContent` and no exception domain. A test checks this.
 
 - Why it is needed: the ground station is a computer on the user's local network that serves plain `ws://` and `http://`. The app talks to the address typed in Settings over a WebSocket (`NWConnection`) and over HTTP (`URLSession`, for the "Test connection" health check). Apple documents `NSAllowsLocalNetworking` as allowing loads of local resources, such as unqualified and `.local` host names, without disabling App Transport Security for the rest. Whether it also covers plain IP addresses has not been verified here.
-- What it does not do: App Transport Security applies to `URLSession`, not to `NWConnection`. The WebSocket link is therefore not restricted by this setting, and `GroundEndpoint.parse` accepts any host. The app does not itself limit unencrypted connections to the local network.
+- What it does not do: App Transport Security applies to `URLSession`, not to `NWConnection`, so this setting does not restrict the WebSocket link. The restriction comes from the app's own address policy (`LanAddressPolicy`, `ios/FlightRiskGround/Sources/SocketIOMini`): a `ws://` or `http://` address is used only if it resolves to a local network address, and the check runs before the key or any request is sent. That policy was checked with unit tests and an injected resolver only; its behaviour with Network.framework on a device has not been verified.
 - What the user should know: a `ws://` or `http://` link is not encrypted, and the API key for the ground station travels in the clear on that link (in the `Authorization` header of the health check, and as the `api_key` field of the Socket.IO connect packet). Use a network you trust, such as a private WiFi network or the fleet access point, and not a public or shared one. Away from the local network, use an encrypted address (`wss://` or `https://`); a VPN also works if it gives the ground station a private-range address (100.64.0.0/10, used by Tailscale, is refused for cleartext). If a user enters a `ws://` or `http://` address that is not local, the app refuses it and sends nothing. The app also accepts `wss://` and `https://` addresses; those are encrypted but need a certificate the phone trusts.
-- Follow-up: a separate change is planned to add a local-address policy for the ground address, like the one on Android. Until it ships, the docs must not say the app or iOS blocks non-local cleartext addresses, because neither does.
 
 ### Network destinations in the iOS app
 
@@ -103,44 +104,77 @@ Include the following in the "Notes" field during submission:
 
 ## Google Play Store
 
+The Android answers below describe what the code does. **The Data Safety answers are the owner's decision.** Every answer marked provisional depends on how Google's definitions are read, and nothing here has been reviewed by a lawyer.
+
 ### Permission Rationale
+
+Declared in `mobile/app/src/main/AndroidManifest.xml`.
 
 | Permission | Rationale |
 |-----------|-----------|
-| `android.permission.CAMERA` | Required for real-time person detection and face matching to locate a missing child. All processing is on-device. |
-| `android.permission.ACCESS_FINE_LOCATION` | Records GPS coordinates when a match is detected so the user can navigate back to that location. Stored locally only. |
+| `android.permission.CAMERA` | Required for real-time person detection and face matching to locate a missing child. Detection runs on the device. |
+| `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Records GPS coordinates when a match is detected so the user can navigate back to that location. Stored locally only. |
+| `android.permission.INTERNET` | Needed for the paths the user starts: the connection to the ground station address the user enters (dashboard link on port 5555 by default, and the optional phone-as-edge link on port 9000 by default), the optional cloud reasoning request to Anthropic after the opt-in, and the optional on-device model download. |
+| `android.permission.ACCESS_NETWORK_STATE` | Used to check that a network is available before a cloud reasoning request (`NET_CAPABILITY_VALIDATED`) and to check that the phone is on Wi-Fi when it looks for a Tello drone. |
+| `android.permission.ACCESS_WIFI_STATE` | Used to read the current Wi-Fi connection when checking whether the phone is joined to a Tello drone's own Wi-Fi network. |
+| `android.permission.CHANGE_WIFI_STATE` | Declared. **Unsure:** no code that changes Wi-Fi state was found. The owner should confirm whether it is still needed, and remove it if not. |
+| `android.permission.VIBRATE` | Vibrates the phone on a match alert. |
+
+The manifest also declares that a camera and Wi-Fi hardware are required (`uses-feature`).
+
+### Network destinations in the Android app
+
+Found by searching `mobile/app/src/main/java` for connection-opening code. A unit test (`CloudPathAuditTest`) fails if a new file opens a connection or names a cloud host.
+
+1. The ground station address typed in the Ground screen: a plain socket WebSocket (`RawWebSocket`) and a plain HTTP health check (`MiniHttp`). Commands, status requests and the dashboard key; no images. Not encrypted (see "Cleartext policy" below).
+2. The ground station's edge port, only when the user turns on "Send detections to the ground station" in Settings (phone-as-edge): box positions and scores, and a small picture of the whole camera view only when the ground asks for video. Not encrypted. See below.
+3. `https://api.anthropic.com/v1/messages` through OkHttp, only after the cloud opt-in.
+4. `https://storage.googleapis.com/mediapipe-models/...` through `HttpURLConnection`, only when the user taps "Download Model" for the on-device Gemma model. It is a plain GET for a file; no photo, crop, description or location is sent. Google sees the phone's IP address and the requested file. Its handling is outside this project and was not reviewed. (The iOS app downloads from Hugging Face instead.)
+5. The Tello drone on its own Wi-Fi network (UDP), when the user flies a Tello from the Android app. This is a local link to the drone; video is received, not sent.
+
+### Cleartext policy
+
+The Android network security config (`res/xml/network_security_config.xml`) blocks cleartext for every platform HTTP stack except `localhost` and `127.0.0.1`, and trusts only system certificate authorities. The ground clients use plain sockets, which that file does not govern, and enforce their own rule in code (`LanAddressPolicy`): cleartext only to private, link-local and loopback addresses (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, `::1`, `fc00::/7`, `fe80::/10`), judged on the resolved address, before a connection is made or the key is sent. A host name that resolves to any public address is refused. The ground link is not encrypted, so the dashboard key and the edge token travel in the clear on the user's network. The Android app does not support `wss://` or `https://` for the ground link.
 
 ### Data Safety Section
 
-#### Data collected or shared
+**Provisional.** Facts first:
 
-| Question | Answer |
-|----------|--------|
-| Does your app collect or share any of the required user data types? | No |
-| Is all of the user data collected by your app encrypted in transit? | N/A (no data transmitted by default). When Cloud LLM is enabled, yes (TLS). |
+- With the default settings, no photo, crop, face data or location leaves the phone. Camera frames are not uploaded.
+- With cloud reasoning on (opt-in, a saved Claude key and Cloud Claude selected), the cropped image of each detected person, the reference photo and the typed description are sent to Anthropic over TLS. The images can show a face.
+- With the ground station link on, commands and status requests go to the address the user entered. With the phone-as-edge link on, box positions and scores go to that address. The user's own ground station is not a third party the developer runs, but Google's rules on "shared" and "collected" data may still treat these as data transmitted off the device. The owner decides.
+- The phone stores match thumbnails, scores, GPS fixes and timestamps in a local database. Android Auto Backup may copy that database to the user's Google account if the user has backup enabled (the app excludes only its preference files, not the database). **Unsure:** whether this matters for the form.
+
+#### Data collected or shared (provisional draft)
+
+| Question | Draft answer |
+|----------|--------------|
+| Does your app collect or share any of the required user data types? | Provisional. The earlier answer "No" does not hold when cloud reasoning is on, because images are sent to Anthropic. The owner decides how to answer, including whether the optional cloud feature and the user's own ground station count. |
+| Is all of the user data collected by your app encrypted in transit? | Provisional. Cloud reasoning: yes (TLS). The ground station and edge links: no, they are plain `http://` and `ws://` (only on a private network, by the app's own rule). |
 | Do you provide a way for users to request that their data is deleted? | Yes. All local session data is user-deletable from within the app. |
 
-#### Data types
+#### Data types (provisional draft)
 
 | Data Type | Collected | Shared | Ephemeral | Purpose |
 |-----------|-----------|--------|-----------|---------|
-| Location (approximate) | No | No | -- | -- |
+| Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
 | Location (precise) | Yes (local only) | No | No (user-deletable) | App functionality |
-| Photos/Videos | No | No | -- | -- |
-| Face / biometric data | Processed on-device | No | Yes (session-scoped) | App functionality |
+| Photos/Videos | Provisional: yes when cloud reasoning is on (reference photo and crops go to Anthropic); otherwise no | Provisional | -- | App functionality |
+| Face / biometric data | Processed on-device. With cloud reasoning on, crops and the reference photo that can show a face go to Anthropic | Provisional | Yes (session-scoped) for templates and embeddings | App functionality |
 | Personal identifiers | No | No | -- | -- |
 | App activity | No | No | -- | -- |
 | App diagnostics | No | No | -- | -- |
 
-**Summary for Data Safety form:**
-- No data collected (in Google's definition: data is not transmitted off-device).
-- No data shared with third parties.
-- Camera and location used for core functionality only.
+**Summary for the Data Safety form:**
+- The developer runs no server and receives no data from the app.
+- Data leaves the phone only through paths the user starts: the ground station links the user configures, cloud reasoning after the opt-in, and the on-device model download.
+- No analytics, advertising or tracking SDKs are included.
+- Camera and location are used for core functionality only.
 
 ### Face Detection Feature Flag
 
 - **Declaration required:** Yes. Google Play requires disclosure when an app uses face detection.
-- **Declaration text:** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. All face processing happens entirely on-device. No face data is collected, transmitted, or stored beyond the active session."
+- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default." The earlier text said that no face data is transmitted; that is not true of images when cloud reasoning is on.
 
 ### Age Rating (IARC)
 
@@ -151,13 +185,15 @@ Include the following in the "Notes" field during submission:
 ### Privacy Policy URL
 
 - **Required:** Yes. Must be provided in Google Play Console under "Store listing > Privacy policy."
-- **URL:** To be set at deployment (host `docs/privacy-policy.md` as a web page).
+- **URL:** To be set at deployment (host `docs/privacy-policy.md` as a web page). The Android onboarding notice does not link to the policy yet (the iOS notice does).
 
 ### Store Listing Notes (Recommended)
 
-Include in the app description or "About this app" section:
+Include in the app description or "About this app" section, after the owner and a lawyer have reviewed it:
 
-> All face recognition and person matching runs entirely on your device. No biometric data is collected, transmitted, or stored. See our privacy policy for full details.
+> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. The optional ground station link sends commands to a computer you run, on your own network. See our privacy policy for full details.
+
+The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
 ---
 
@@ -190,6 +226,21 @@ Claude (Anthropic) is the only cloud provider on iOS. OpenAI and Gemini are not 
 - The Claude API key and the ground station key are stored in the iOS Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`), never in UserDefaults, files or logs.
 - The ground station's own reasoning provider is display only on the phone. The phone cannot switch it and cannot turn on cloud use on the ground.
 
+### Cloud Reasoning Opt-In (Android)
+
+Claude (Anthropic) is the only cloud provider on Android. Cloud reasoning is off by default, and a saved key alone never turns it on.
+
+- Settings keys (SharedPreferences file `flightrisk_reasoning`): `flightrisk_reasoning_provider` (`local`, `cloud_claude` or `none`) and `flightrisk_allow_cloud_llm` (default false). Only a stored Boolean `true` counts as opted in. A stored cloud choice without the opt-in is ignored and removed. The default is the on-device model when it is available and none otherwise.
+- Cloud Claude is used only when the opt-in switch is on, a Claude API key is saved and Cloud Claude is selected (`CloudReasoningGate`, checked at the start of every call and again immediately before the request). Turning the switch on, or picking Cloud Claude before opting in, shows the consent dialog. Turning it off, switching provider or removing the key cancels a request in flight.
+- Consent dialog text (`ReasoningSettings.kt`, `MESSAGE`): the same words as on iOS.
+- The Claude API key and the ground station keys are stored in `EncryptedSharedPreferences` (backed by the Android Keystore), never in plain preferences, files or logs. The opt-in file and the secure file are excluded from Auto Backup and device transfer, so the opt-in is not restored to another device.
+- A "Cloud active: images are sent to Anthropic" indicator shows in Settings and on the Search screen while cloud is the active backend.
+- The first-launch notice (`OnboardingScreen.kt`) states that camera frames are not uploaded and that images leave the phone only with cloud reasoning on.
+
+### Phone as an Edge (Android)
+
+Off by default, and not available on iOS. When the user turns on "Send detections to the ground station" after reading the disclosure, the app sends detection boxes and scores to the ground station address the user entered (port 9000 by default), only while a search is running and the app is in view. It sends no person crops and no face data (crops are null by default). It sends a small picture of the whole camera view, which can show people, only after the ground station asks for video. The link is not encrypted and requires the ground's edge token for any address except loopback. The consent is stored in `flightrisk_ground_link`, which backup excludes, and is tied to the address. The ground station cannot yet match these detections to a search target.
+
 ### Pre-Submission Checklist
 
 - [ ] Privacy policy created and hosted
@@ -203,6 +254,8 @@ Claude (Anthropic) is the only cloud provider on iOS. OpenAI and Gemini are not 
 - [ ] Cloud LLM opt-in disclosure implemented in-app
 - [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
 - [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in
+- [ ] Owner and lawyer confirmation of the Google Play Data Safety answers and the face detection declaration, which are provisional (see `docs/mobile-followups.md`)
+- [ ] Owner decision on `CHANGE_WIFI_STATE` (declared; no use found) and on the Android onboarding notice, which says nothing about the ground station link or phone-as-edge (each has its own consent step) and has no privacy policy link
 - [x] Desktop dashboard: cloud LLM (Claude) off by default and gated on `FLIGHTRISK_ALLOW_CLOUD_LLM=1`
 - [ ] User data deletion flow implemented and tested
 - [ ] No third-party analytics/tracking/advertising SDKs included
