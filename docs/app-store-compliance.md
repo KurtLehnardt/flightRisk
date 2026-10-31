@@ -21,26 +21,35 @@ The app has no direct link to a drone. The earlier direct Tello link was removed
 
 `Info.plist` sets `NSAppTransportSecurity` with `NSAllowsLocalNetworking` = true and nothing else. There is no `NSAllowsArbitraryLoads`, no `NSAllowsArbitraryLoadsInWebContent` and no exception domain. A test checks this.
 
-- Why it is needed: the ground station is a computer on the user's local network that serves plain `ws://` and `http://` (the app uses WebSocket and HTTP to the address typed in Settings). Without the exception, iOS refuses cleartext connections to local addresses and `.local` names.
-- What it allows: cleartext connections to local-network destinations (IP addresses, unqualified host names and `.local` names). All other destinations still require HTTPS. The only other destination the app contacts is `https://api.anthropic.com`, and only after the cloud opt-in (below).
-- What the user should know: a `ws://` or `http://` link is not encrypted, and the API key for the ground station travels in the clear on that link (in the `Authorization` header of the health check, and as the `api_key` field of the Socket.IO connect packet). Use a network you trust, such as a private WiFi network or the fleet access point, and not a public or shared one. The app also accepts `wss://` and `https://` addresses; those are encrypted but need a certificate the phone trusts.
-- The app does not itself check that an address is private. Because the exception is limited to local networking, iOS is expected to refuse a `ws://` or `http://` address that is not local. This has not been tested on a device.
+- Why it is needed: the ground station is a computer on the user's local network that serves plain `ws://` and `http://`. The app talks to the address typed in Settings over a WebSocket (`NWConnection`) and over HTTP (`URLSession`, for the "Test connection" health check). Apple documents `NSAllowsLocalNetworking` as allowing loads of local resources, such as unqualified and `.local` host names, without disabling App Transport Security for the rest. Whether it also covers plain IP addresses has not been verified here.
+- What it does not do: App Transport Security applies to `URLSession`, not to `NWConnection`. The WebSocket link is therefore not restricted by this setting, and `GroundEndpoint.parse` accepts any host. The app does not itself limit unencrypted connections to the local network.
+- What the user should know: a `ws://` or `http://` link is not encrypted, and the API key for the ground station travels in the clear on that link (in the `Authorization` header of the health check, and as the `api_key` field of the Socket.IO connect packet). Use a network you trust, such as a private WiFi network or the fleet access point, and not a public or shared one. Away from the local network, use an encrypted address (`wss://` or `https://`) or a VPN. If a user enters a `ws://` address on the internet, the app connects and sends the key in the clear. The app also accepts `wss://` and `https://` addresses; those are encrypted but need a certificate the phone trusts.
+- Follow-up: a separate change is planned to add a local-address policy for the ground address, like the one on Android. Until it ships, the docs must not say the app or iOS blocks non-local cleartext addresses, because neither does.
+
+### Network destinations in the iOS app
+
+Found by searching `ios/FlightRisk` and `ios/FlightRiskGround/Sources` for `URLSession`, `NWConnection`, WebSocket and hub use:
+
+1. The ground station address typed in Settings: WebSocket via `NWConnection` (`GroundTransport.swift`) and the health check via `URLSession` (`URLSessionGroundHTTPClient`).
+2. `https://api.anthropic.com/v1/messages` via `URLSession` (`CloudClaudeLlmBackend.swift`), only after the cloud opt-in.
+3. Hugging Face (`huggingface.co`), through `defaultHubApi` in `GemmaModelManager.download()`, only when the user taps the model download button in Settings. It downloads `mlx-community/gemma-2-2b-it-4bit`. Hugging Face sees the phone's IP address and the requested file names; no user data is sent. Its handling of that is outside this project and was not reviewed.
 
 ### Privacy Nutrition Labels (App Privacy)
+
+**Provisional.** The table below is a draft and the owner decides the final answers. Apple counts data sent to a server that the developer does not run (a third party) as collected unless the narrow exceptions apply, so the cloud path and the ground link probably change some rows. What is known: with cloud reasoning on, the reference photo and person crops (which can show a face) and the typed description go to Anthropic; the camera and location data are otherwise processed and stored on the device; the Hugging Face download exposes the IP address to Hugging Face. Rows marked "Provisional" depend on that decision.
 
 | Data Type | Collected | Linked to User | Used for Tracking | Purpose |
 |-----------|-----------|----------------|-------------------|---------|
 | Camera | Yes | No | No | App Functionality |
 | Precise Location | Yes | No | No | App Functionality |
-| Photos or Videos | No | -- | -- | -- |
+| Photos or Videos | Provisional: yes when cloud reasoning is on (reference photo and crops go to Anthropic); otherwise no | -- | -- | App Functionality |
 | Identifiers | No | -- | -- | -- |
 | Usage Data | No | -- | -- | -- |
 | Diagnostics | No | -- | -- | -- |
 | Contact Info | No | -- | -- | -- |
 
 **Summary for App Store Connect:**
-- The app sends no data to the developer. Data leaves the device in two cases, both started by the user: commands to the ground station address the user typed in Settings, and, only after the cloud opt-in, images and text to Anthropic (see below). Whether these cases change the answers in the App Privacy questionnaire is for the owner to confirm; see the open questions in the pull request that introduced this section.
-- Data Not Collected: The app does not collect data on a server run by the developer.
+- The app has no server of the developer's own and sends the developer nothing. Data leaves the device in three cases, each started by the user: commands to the ground station address typed in Settings, images and text to Anthropic after the cloud opt-in, and a model download from Hugging Face that reveals the IP address. These are not decided here; the owner answers the questionnaire. The earlier line "Data Not Collected" is withdrawn because it conflicts with the Camera and Location rows and with Apple's definition.
 - Data Not Linked to User: No user accounts, no identifiers collected.
 - Data Not Used for Tracking: No advertising or tracking SDKs.
 
@@ -48,12 +57,12 @@ The app has no direct link to a drone. The earlier direct Tello link was removed
 
 #### Guideline 5.1.1 -- Data Collection and Storage
 
-- **Compliance:** The app collects camera frames and location data solely for core functionality (locating a missing child). No data is transmitted off-device except through two user-started paths. First, the ground station link: the app connects only to the address the user enters in Settings and sends land and detection-profile commands and status requests, never camera frames, crops or the reference photo. Second, the optional cloud reasoning feature, which is off by default and sends the cropped person images, the reference photo and the typed description to Anthropic only after the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. No user accounts are created. No personal information is collected, stored off-device, or shared.
-- **Documentation to provide:** Link to privacy policy. Description of the on-device processing architecture and of the two user-started network paths above. Explanation of ephemeral biometric data handling.
+- **Compliance:** The app collects camera frames and location data solely for core functionality (locating a missing child). No user data is transmitted off-device except through two user-started paths, and a third user-started network use exposes the IP address. First, the ground station link: the app connects to the address the user enters in Settings and sends land, resume-search and detection-profile commands and status requests, never camera frames, crops or the reference photo. The app does not restrict that address to the local network. Third, the on-device model download from Hugging Face, which sends no user data (the host sees the IP address). Second, the optional cloud reasoning feature, which is off by default and sends the cropped person images, the reference photo and the typed description to Anthropic only after the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. No user accounts are created. No personal information is collected, stored off-device, or shared.
+- **Documentation to provide:** Link to privacy policy. Description of the on-device processing architecture and of the three user-started network paths above. Explanation of ephemeral biometric data handling.
 
 #### Guideline 5.1.2 -- Data Use and Sharing
 
-- **Compliance:** No data is shared with third parties. No analytics, advertising, or tracking SDKs are included. The optional cloud reasoning feature transmits to Anthropic only, with explicit opt-in and a consent dialog. No other cloud provider is supported on iOS.
+- **Compliance:** No user data is shared with third parties other than Anthropic after the cloud opt-in; Hugging Face sees the IP address during a user-started model download. No analytics, advertising, or tracking SDKs are included. The optional cloud reasoning feature transmits to Anthropic only, with explicit opt-in and a consent dialog. No other cloud provider is supported on iOS.
 - **Documentation to provide:** Privacy policy URL. In-app disclosure of cloud reasoning data transmission (the consent dialog in Settings). First-launch privacy notice (see `first-launch-notice.md`).
 
 #### Guideline 5.1.3 -- Health and Health Research (Not Applicable)
@@ -80,9 +89,11 @@ Include the following in the "Notes" field during submission:
 
 > FlightRisk is a tool for parents and guardians to locate a missing child. Person detection and appearance matching run on the device using CoreML. The app has no accounts and no analytics.
 >
-> Local network permission: the Ground tab can connect to a "ground station", a computer the user runs on their own network. The user types its address in Settings (for example ws://192.168.1.20:5555) and a key, which is stored in the Keychain. The app connects only to that address. To test this without a ground station, leave the address empty; the app then makes no local network connection and the permission prompt does not appear.
+> Local network permission: the Ground tab can connect to a "ground station", a computer the user runs on their own network. The user types its address in Settings (for example ws://192.168.1.20:5555) and a key, which is stored in the Keychain. The app connects to that address and to no other ground station. To test this without a ground station, leave the address empty; the app then makes no local network connection and the permission prompt does not appear.
 >
-> App Transport Security: Info.plist sets NSAllowsLocalNetworking only, so that the ws:// and http:// connection to the ground station on the local network works. There is no NSAllowsArbitraryLoads.
+> App Transport Security: Info.plist sets NSAllowsLocalNetworking only, so that the plain-HTTP health check to a ground station on the local network works. There is no NSAllowsArbitraryLoads. The WebSocket link uses Network.framework, to which App Transport Security does not apply. The app does not itself restrict cleartext addresses to the local network.
+>
+> The Settings screen can download an on-device language model from Hugging Face when the user taps the download button; nothing is downloaded otherwise.
 >
 > Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
 >

@@ -356,11 +356,13 @@ struct OnboardingView: View {
 /// Decision for people who finished onboarding under the old notice: they are
 /// not asked again. The notice changed in two ways, and neither widens what an
 /// existing install does. The ground station link is off until the person
-/// types an address in Settings, and that screen states where data goes. The
+/// types an address in Settings. The
 /// cloud wording became stricter and more complete, and cloud reasoning now
 /// needs the opt-in on top of a key, so it can only send less than before.
 /// Their old acknowledgement is copied to the new key by
-/// ``migrateLegacyAcknowledgement(defaults:)`` so it is never lost. A person
+/// ``migrateLegacyAcknowledgement(defaults:)`` the first time the notice state
+/// is read, which happens only on the onboarding path; reading either key
+/// gives the right answer without the copy. A person
 /// who has neither key is shown the notice.
 enum PrivacyNotice {
     static let acknowledgedKey = "flightrisk_privacy_notice_acknowledged"
@@ -372,9 +374,11 @@ enum PrivacyNotice {
 
     /// The ground station bullet.
     static let groundLinkText =
-        "If you add a ground station address in Settings, the app connects over your local network to that address only, "
-        + "to show drone status and send land commands. A ws:// or http:// link is not encrypted, so use a network you trust. "
-        + "The station's key is kept in the iOS Keychain."
+        "If you add a ground station address in Settings, the app connects to that address only, "
+        + "to show drone status and send land, resume-search and detection-profile commands. "
+        + "The app does not limit a ws:// or http:// link to your local network, and that link is not encrypted: "
+        + "use a network you trust, and away from your local network use a wss:// or https:// address or a VPN. "
+        + "The station's key is sent to the address you enter and is kept on this phone in the iOS Keychain."
 
     /// The cloud bullet. It matches the consent text in Settings
     /// (`SettingsView.cloudConsentMessage`).
@@ -385,7 +389,8 @@ enum PrivacyNotice {
 
     /// True when either key says the person already accepted a notice.
     static func isAcknowledged(defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: acknowledgedKey) || defaults.bool(forKey: legacyOnboardingCompleteKey)
+        migrateLegacyAcknowledgement(defaults: defaults)
+        return defaults.bool(forKey: acknowledgedKey) || defaults.bool(forKey: legacyOnboardingCompleteKey)
     }
 
     /// Record the tap on "I Understand". The legacy key is written only when

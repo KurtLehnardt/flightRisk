@@ -106,6 +106,13 @@ final class PrivacyComplianceTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: PrivacyNotice.legacyOnboardingCompleteKey))
     }
 
+    func testReadingMigratesOldKeyOnce() {
+        defaults.set(true, forKey: PrivacyNotice.legacyOnboardingCompleteKey)
+        XCTAssertNil(defaults.object(forKey: PrivacyNotice.acknowledgedKey))
+        XCTAssertTrue(PrivacyNotice.isAcknowledged(defaults: defaults))
+        XCTAssertTrue(defaults.bool(forKey: PrivacyNotice.acknowledgedKey))
+    }
+
     func testNewKeyOnlyCounts() {
         defaults.set(true, forKey: PrivacyNotice.acknowledgedKey)
         XCTAssertTrue(PrivacyNotice.isAcknowledged(defaults: defaults))
@@ -126,6 +133,10 @@ final class PrivacyComplianceTests: XCTestCase {
         XCTAssertFalse(ground.localizedCaseInsensitiveContains("Tello"))
         XCTAssertTrue(ground.contains("not encrypted"))
         XCTAssertTrue(ground.contains("Keychain"))
+        XCTAssertTrue(ground.contains("does not limit"))
+        XCTAssertTrue(ground.contains("wss://"))
+        XCTAssertTrue(ground.contains("resume-search"))
+        XCTAssertFalse(ground.contains("over your local network"))
 
         let cloud = PrivacyNotice.cloudText
         XCTAssertTrue(cloud.contains("Anthropic"))

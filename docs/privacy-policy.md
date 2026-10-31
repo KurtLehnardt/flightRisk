@@ -75,7 +75,7 @@ Saving a key by itself does not turn cloud reasoning on. With cloud reasoning of
 
 **When enabled:**
 
-- The app sends **images and text** to Anthropic (`https://api.anthropic.com/v1/messages`): for a photo comparison, the **reference photo** you provided plus the **cropped image of the candidate person**; for a description comparison, the cropped image together with the **text description you typed**. Images are JPEG-encoded. These images can show a face.
+- The app sends **images and text** to Anthropic (`https://api.anthropic.com/v1/messages`): for a photo comparison, the **reference photo** you provided plus the **cropped image of the candidate person**; for a description comparison, the cropped image alone. In both cases the **text description you typed** is added to the request when you entered one. Images are JPEG-encoded. These images can show a face.
 - No face embeddings, appearance feature vectors, GPS coordinates, or other session data are included.
 - The consent dialog tells you this before the feature can be turned on. It reads: "With cloud reasoning on, the cropped image of each detected person, the reference photo you chose and the text description you entered are sent to Anthropic (Claude) for analysis. The images can show a face, and Anthropic's privacy policy applies to them. Nothing is sent until you also save a Claude API key and select Cloud Claude. You can turn this off at any time here; turning it off stops sending at once and cancels any request still in progress."
 - The data transmitted is subject to Anthropic's privacy policy. FlightRisk does not control how Anthropic retains it.
@@ -88,10 +88,10 @@ Saving a key by itself does not turn cloud reasoning on. With cloud reasoning of
 
 The Ground tab can connect to a ground station, which is a computer you run yourself. This is off until you type a ground station address and key in Settings and switch the link on.
 
-- The app connects **only to the address you enter**. It does not search for stations, and it does not use Bluetooth or Bonjour discovery. The app has no direct connection to a drone.
-- Over this link the app reads status from the ground station and sends commands that you tap (for example land commands and detection profile choices). It does not send camera frames, person crops, the reference photo or your location.
+- The app connects to the address you enter and to no other ground station address. It does not search for stations, and it does not use Bluetooth or Bonjour discovery. The app has no direct connection to a drone.
+- Over this link the app reads status from the ground station and sends commands that you tap (land commands, resume-search commands and detection profile choices). It does not send camera frames, person crops, the reference photo or your location.
 - The address is saved on your device. The ground station key is stored in the iOS Keychain on your device (this device only, available when the phone is unlocked) and is sent to the ground station you entered so that it accepts the connection.
-- If the address starts with `ws://` or `http://`, which is normal on a home or field network, the link is **not encrypted**. Anyone on that network could read the traffic, including the key. Use a network you trust. The app asks iOS for permission to use the local network (the "local network" prompt) and has an exception that allows these unencrypted connections to local addresses only.
+- If the address starts with `ws://` or `http://`, which is normal on a home or field network, the link is **not encrypted**. Anyone on that network could read the traffic, including the key. Use a network you trust. The app itself does not limit unencrypted connections to your local network. If you enter a `ws://` or `http://` address that is not on your local network, the app still connects to it and sends the key in the clear. Away from your local network, use an encrypted `wss://` or `https://` address or a VPN. The app declares the iOS local network permission and the App Transport Security setting `NSAllowsLocalNetworking`; neither one stops the app from connecting to a non-local address.
 - What the ground station does with data is governed by whoever runs it. That is outside this policy and outside the app.
 
 ---
@@ -120,7 +120,7 @@ The Ground tab can connect to a ground station, which is a computer you run your
 - No analytics, advertising, or tracking SDKs are included in the app.
 - No user accounts are created or required.
 
-The only exceptions are the two optional features you turn on yourself: cloud reasoning (Section 5), which transmits the reference photo, cropped person images and your typed description to Anthropic, and the ground station link (Section 5A), which sends your commands to the address you entered.
+The only exceptions are the optional features you turn on or start yourself: cloud reasoning (Section 5), which transmits the reference photo, cropped person images and your typed description to Anthropic, the ground station link (Section 5A), which sends your commands to the address you entered, and the on-device model download from Hugging Face (Section 11), which sends no photos or session data.
 
 ---
 
@@ -145,7 +145,7 @@ The only exceptions are the two optional features you turn on yourself: cloud re
 ## 11. Security
 
 - All on-device data is protected by the operating system's native app sandboxing (iOS App Sandbox / Android app-private storage).
-- The app makes network connections only in two cases. Cloud reasoning, when you have turned it on, uses TLS encryption to Anthropic. The ground station link goes to the address you entered and is encrypted only if you entered a `wss://` or `https://` address; a `ws://` or `http://` link is not encrypted (Section 5A).
+- The app makes network connections in three cases, each started by you. Cloud reasoning, when you have turned it on, uses TLS encryption to Anthropic. The ground station link goes to the address you entered and is encrypted only if you entered a `wss://` or `https://` address; a `ws://` or `http://` link is not encrypted, and the app does not restrict it to your local network (Section 5A). The on-device model download is a user-started model download: when you tap the download button for the on-device Gemma model in Settings, the app downloads the model `mlx-community/gemma-2-2b-it-4bit` from Hugging Face (huggingface.co), a third party. No photo, crop, description or location is sent, but Hugging Face necessarily sees the phone's IP address and which model files are requested; what it does with that is governed by its own policy, which this project has not reviewed.
 - API keys are kept in the iOS Keychain, not in app preferences, files or logs.
 
 ---
