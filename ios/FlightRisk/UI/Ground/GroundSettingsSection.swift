@@ -94,7 +94,7 @@ struct GroundSettingsSection: View {
         } header: {
             Text("Ground Station")
         } footer: {
-            Text("Enter ws://HOST:PORT (port 5555 if omitted) and the ground's FLIGHTRISK_API_KEY.")
+            Text("Enter ws://HOST:PORT (port 5555 if omitted) and the ground's FLIGHTRISK_API_KEY. A ws:// or http:// address must be on your local network; use wss:// or https:// for any other address.")
         }
         .onAppear {
             if addressInput.isEmpty { addressInput = viewModel.savedAddress ?? "" }

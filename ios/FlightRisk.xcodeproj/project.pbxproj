@@ -41,6 +41,7 @@
 		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
 		79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */; };
 		8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */; };
+		863E2CA269FEA140DEDD2D2D /* GroundText+Shorten.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */; };
 		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
 		8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */; };
 		91785B276FA44B045B246A82 /* TargetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38053A9FBEF419992A818002 /* TargetStore.swift */; };
@@ -55,6 +56,7 @@
 		AA9AAF1E1B1621C5E5B696CD /* GemmaModelManaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518B2C833E229980A24769E8 /* GemmaModelManaging.swift */; };
 		AF3B98A2CC75019FF34B6A5C /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A483878F013177DA84B870B /* KeychainHelper.swift */; };
 		B26C3324809A7B3AE2C8F928 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FA34371D88E8E82BA143CA4 /* OnboardingView.swift */; };
+		B35B5D2E9BBDEA6C449DF905 /* GroundHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E9100C0DC1B5F8CFD1FCB8 /* GroundHardeningTests.swift */; };
 		B5A0C591FE8390D32BBF8F78 /* DroneStatusCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE27DFFA90B637CA614C7BF /* DroneStatusCardView.swift */; };
 		BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B4251664E956AD316034AF /* MatchScorerTests.swift */; };
 		CB26A272F738D7CF9B82DBFD /* GroundSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */; };
@@ -63,6 +65,7 @@
 		D17815DB27EE996EC24CC0A6 /* DetectionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */; };
 		D26276CDE6ACCAE2FE5BD83A /* GroundViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2F430D7789339A8B286F19 /* GroundViewModel.swift */; };
 		D288D9B4336216C304CC56FA /* ReasoningSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */; };
+		D6CA86F10FD513C9BF201B8C /* GroundLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71B77E3623BE1947AB032CE8 /* GroundLayout.swift */; };
 		D8C1FB13C942A48596579DB4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */; };
 		DAB66B86DEB63AB9BE8015DF /* ClothingColorMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE6FB61B6DB63745F6AB545 /* ClothingColorMatcher.swift */; };
 		DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */; };
@@ -96,6 +99,7 @@
 		055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPreviewView.swift; sourceTree = "<group>"; };
 		05E57C5C08DCED1065C9DC84 /* LocalGemmaLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalGemmaLlmBackend.swift; sourceTree = "<group>"; };
 		06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningSettingsTests.swift; sourceTree = "<group>"; };
+		07E9100C0DC1B5F8CFD1FCB8 /* GroundHardeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundHardeningTests.swift; sourceTree = "<group>"; };
 		0850BA245B55AC2813FD6D1A /* InsightFaceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightFaceMatcher.swift; sourceTree = "<group>"; };
 		0A4323FB3838BCED8CE6672A /* GroundTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundTopBar.swift; sourceTree = "<group>"; };
 		0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskApp.swift; sourceTree = "<group>"; };
@@ -139,10 +143,12 @@
 		6FFDA478D1331861625B42ED /* PersonDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonDetector.swift; sourceTree = "<group>"; };
 		7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskConfigTests.swift; sourceTree = "<group>"; };
 		703EF934C8A58C9E09EF38A7 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		71B77E3623BE1947AB032CE8 /* GroundLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundLayout.swift; sourceTree = "<group>"; };
 		74AD7FC8D8DF5C80E4A44593 /* ConfidenceProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfidenceProgressView.swift; sourceTree = "<group>"; };
 		74F1A35C7E18DE766B9D604B /* MatchAlertBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertBannerView.swift; sourceTree = "<group>"; };
 		7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmBackend.swift; sourceTree = "<group>"; };
 		7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmSelector.swift; sourceTree = "<group>"; };
+		7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GroundText+Shorten.swift"; sourceTree = "<group>"; };
 		7DE27DFFA90B637CA614C7BF /* DroneStatusCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneStatusCardView.swift; sourceTree = "<group>"; };
 		8591AC23892D277F0A94595D /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
 		8796F00CD5B575072807AE3A /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
@@ -231,6 +237,7 @@
 			children = (
 				FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */,
 				7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */,
+				07E9100C0DC1B5F8CFD1FCB8 /* GroundHardeningTests.swift */,
 				29869F7F4A76DB453E330A17 /* GroundReviewRoundTests.swift */,
 				61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */,
 				46395AAA00BADD452181BA8C /* GroundTestSupport.swift */,
@@ -274,6 +281,7 @@
 			isa = PBXGroup;
 			children = (
 				7DE27DFFA90B637CA614C7BF /* DroneStatusCardView.swift */,
+				71B77E3623BE1947AB032CE8 /* GroundLayout.swift */,
 				51D9998960BF9D4D1E803A8B /* GroundSettingsSection.swift */,
 				0A4323FB3838BCED8CE6672A /* GroundTopBar.swift */,
 				30992F7C11E4B063F8C2633E /* GroundView.swift */,
@@ -339,6 +347,7 @@
 			isa = PBXGroup;
 			children = (
 				5C62204D4A923643A5EB39B4 /* .gitkeep */,
+				7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */,
 				3F2F430D7789339A8B286F19 /* GroundViewModel.swift */,
 				8796F00CD5B575072807AE3A /* SearchViewModel.swift */,
 			);
@@ -565,7 +574,9 @@
 				A68102B7EDB361FA7EEBF233 /* FrameSource.swift in Sources */,
 				1884829E3DF19EF87111C55C /* GemmaModelManager.swift in Sources */,
 				AA9AAF1E1B1621C5E5B696CD /* GemmaModelManaging.swift in Sources */,
+				D6CA86F10FD513C9BF201B8C /* GroundLayout.swift in Sources */,
 				2B73B1CE2D1F065B47DF28CC /* GroundSettingsSection.swift in Sources */,
+				863E2CA269FEA140DEDD2D2D /* GroundText+Shorten.swift in Sources */,
 				398280750FFA4EE92E5FBBF7 /* GroundTopBar.swift in Sources */,
 				6AF505A5D046DC3739216B9F /* GroundView.swift in Sources */,
 				D26276CDE6ACCAE2FE5BD83A /* GroundViewModel.swift in Sources */,
@@ -610,6 +621,7 @@
 			files = (
 				DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */,
 				59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */,
+				B35B5D2E9BBDEA6C449DF905 /* GroundHardeningTests.swift in Sources */,
 				60974D12CF1C4E33FC9ED595 /* GroundReviewRoundTests.swift in Sources */,
 				CB26A272F738D7CF9B82DBFD /* GroundSettingsTests.swift in Sources */,
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,

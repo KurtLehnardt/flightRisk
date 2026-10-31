@@ -409,12 +409,15 @@ final class FakeHTTP: GroundHTTPClient, @unchecked Sendable {
     private var recorded: [Request] = []
     var responses: [String: (Int, Data)] = [:]
     var error: Error?
+    /// Hosts whose requests fail as an unreachable host would.
+    var failingHosts: Set<String> = []
 
     var requests: [Request] { lock.withLock { recorded } }
 
     func get(_ url: URL, headers: [String: String], timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         lock.withLock { recorded.append(Request(url: url, headers: headers)) }
         if let error { throw error }
+        if let host = url.host, failingHosts.contains(host) { throw URLError(.cannotConnectToHost) }
         return responses[url.path] ?? (404, Data())
     }
 }
