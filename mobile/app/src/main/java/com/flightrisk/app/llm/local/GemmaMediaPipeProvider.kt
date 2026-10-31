@@ -3,6 +3,7 @@ package com.flightrisk.app.llm.local
 import android.content.Context
 import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -142,9 +143,8 @@ class GemmaMediaPipeProvider(
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelFile.absolutePath)
                     .setMaxTokens(512)
-                    .setTemperature(0.6f)
-                    .setTopK(40)
-                    .setRandomSeed(42)
+                    // The session topK below must not exceed this value (the MediaPipe default is 40).
+                    .setMaxTopK(40)
                     .build()
 
                 inference = LlmInference.createFromOptions(context, options)
@@ -187,7 +187,17 @@ class GemmaMediaPipeProvider(
 
         return withContext(Dispatchers.IO) {
             try {
-                llm.generateResponse(prompt)
+                // Since tasks-genai 0.10.22 the sampling options live on the session, not on the
+                // engine options. A fresh session per call keeps generation stateless, as before.
+                val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                    .setTemperature(0.6f)
+                    .setTopK(40)
+                    .setRandomSeed(42)
+                    .build()
+                LlmInferenceSession.createFromOptions(llm, sessionOptions).use { session ->
+                    session.addQueryChunk(prompt)
+                    session.generateResponse()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Inference failed", e)
                 throw e

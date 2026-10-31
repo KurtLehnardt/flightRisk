@@ -115,10 +115,17 @@ struct MatchScorer {
             rawScores[name] = value
         }
 
+        // Every floating-point accumulation below walks the signals in this
+        // fixed order. Dictionary iteration order is randomized per process,
+        // and Float addition is not associative, so iterating a dictionary
+        // directly made the rounded score vary between runs.
+        let orderedNames = Self.canonicalOrder(of: rawScores.keys)
+
         // Compute active weights (redistribute when a signal is missing)
         var activeWeights: [String: Float] = [:]
         var totalWeight: Float = 0
-        for (name, value) in rawScores {
+        for name in orderedNames {
+            let value = rawScores[name]!
             if value > 0 {
                 guard let w = signals[name] else { continue }
                 activeWeights[name] = w
@@ -138,14 +145,18 @@ struct MatchScorer {
 
         // Normalize weights to sum to 1.0 (redistribute missing signal weight)
         var normWeights: [String: Float] = [:]
-        for (name, w) in activeWeights {
-            normWeights[name] = w / totalWeight
+        for name in orderedNames {
+            if let w = activeWeights[name] {
+                normWeights[name] = w / totalWeight
+            }
         }
 
-        // Weighted sum
+        // Weighted sum, accumulated in canonical signal order.
         var combined: Float = 0
-        for (name, w) in normWeights {
-            combined += rawScores[name]! * w
+        for name in orderedNames {
+            if let w = normWeights[name] {
+                combined += rawScores[name]! * w
+            }
         }
         // Round to 3 decimal places
         combined = Float(Int(combined * 1000)) / 1000.0
@@ -172,6 +183,17 @@ struct MatchScorer {
             confidenceLevel: confidenceLevel,
             signalsUsed: activeWeights.count  // total for transparency
         )
+    }
+
+    /// Fixed signal order used for all floating-point accumulation: the
+    /// built-in signals in documented order (reid, face, reasoning), followed
+    /// by any registered extra signals sorted by name.
+    private static func canonicalOrder<S: Sequence>(of names: S) -> [String] where S.Element == String {
+        let builtinOrder = ["reid", "face", "reasoning"]
+        let present = Set(names)
+        let builtins = builtinOrder.filter { present.contains($0) }
+        let extras = present.subtracting(builtinOrder).sorted()
+        return builtins + extras
     }
 
     /// Determine alert level from a score result.
