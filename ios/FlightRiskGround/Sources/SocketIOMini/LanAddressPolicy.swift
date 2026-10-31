@@ -112,6 +112,13 @@ public struct GroundAddressRefusal: Error, Equatable, Sendable, CustomStringConv
 /// "Cleartext on the local network"). The Android app enforces the same
 /// ranges.
 ///
+/// For a cleartext host NAME the rule is: connect only to the allowed answers,
+/// and refuse only when none of the answers is allowed. A dual-stack `.local`
+/// or router name often publishes a global IPv6 address next to its private
+/// ones; that public answer is simply never connected to, because every socket
+/// goes to an address that was checked (never to the name). The Android policy
+/// is stricter and refuses a name when ANY answer is public.
+///
 /// Allowed: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `::1`, `fc00::/7`,
 /// `fe80::/10`, and an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) whose IPv4
 /// part is allowed. Refused: everything else, including 100.64/10 (carrier
@@ -146,47 +153,74 @@ public enum LanAddressPolicy {
         }
     }
 
-    /// The address a numeric host spells, or nil when `host` is a name. Accepts
-    /// the strict forms (`inet_pton`) and the legacy IPv4 spellings that
-    /// `getaddrinfo` also accepts (`0x7f.1`, `2130706433`, `0177.0.0.1`).
+    /// The address a numeric host spells, or nil when `host` is a name or is a
+    /// spelling this code does not read itself. IPv4 is read only as four plain
+    /// decimal numbers (no leading zeros, no hex, octal or short forms) and IPv6
+    /// with `inet_pton`. Any other spelling returns nil, so it goes to the system
+    /// resolver and is judged by the bytes the resolver returns. (On macOS,
+    /// `inet_pton`, `inet_aton` and `getaddrinfo` disagree about leading zeros,
+    /// which is why this parser does not accept them.)
     public static func numericAddress(_ host: String) -> GroundResolvedAddress? {
         var host = host
         if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-        var v6 = in6_addr()
         if host.contains(":") {
+            var v6 = in6_addr()
             guard inet_pton(AF_INET6, host, &v6) == 1 else { return nil }
             return GroundResolvedAddress(bytes: withUnsafeBytes(of: v6) { Array($0) })
         }
-        // inet_aton reads the same legacy spellings as getaddrinfo (a leading 0 is
-        // octal, 0x is hex), unlike inet_pton, which reads 010 as decimal 10.
-        guard !host.isEmpty, host.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == "x" || $0 == "X" }) else { return nil }
-        var v4 = in_addr()
-        if inet_aton(host, &v4) == 1 {
-            return GroundResolvedAddress(bytes: withUnsafeBytes(of: v4) { Array($0) })
-        }
-        return nil
+        guard let bytes = plainDottedQuad(host) else { return nil }
+        return GroundResolvedAddress(bytes: bytes)
     }
 
-    /// Resolves `host` (a numeric literal needs no lookup), refuses cleartext
-    /// unless EVERY resolved address is allowed, and returns the address to
-    /// connect to: the first one, which is the one that was checked.
+    /// Four decimal numbers 0 to 255 separated by dots, without leading zeros.
+    static func plainDottedQuad(_ text: String) -> [UInt8]? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var bytes: [UInt8] = []
+        for part in parts {
+            guard !part.isEmpty, part.count <= 3, part.allSatisfy({ $0 >= "0" && $0 <= "9" }),
+                  part == "0" || part.first != "0", let value = UInt8(part)
+            else { return nil }
+            bytes.append(value)
+        }
+        return bytes
+    }
+
+    /// True for a spelling that the system would read as an IPv4 address but that
+    /// is not four plain decimal numbers (`0x7f.1`, `2130706433`, `192.168.001.010`).
+    public static func isLegacyIPv4Spelling(_ host: String) -> Bool {
+        guard plainDottedQuad(host) == nil, !host.isEmpty,
+              host.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == "x" || $0 == "X" })
+        else { return false }
+        var v4 = in_addr()
+        return inet_aton(host, &v4) == 1
+    }
+
+    /// The addresses a connection may be made to, in the order to try them: IPv4
+    /// first, then IPv6, each group in the resolver's order.
     ///
-    /// For an encrypted connection (`cleartext == false`) nothing is refused.
-    public static func checkedAddress(host: String, cleartext: Bool, resolver: GroundHostResolver) throws -> GroundResolvedAddress {
-        let addresses: [GroundResolvedAddress]
+    /// - A numeric literal needs no lookup. For cleartext it must be allowed.
+    /// - A name is resolved once. For cleartext only the allowed answers are kept
+    ///   and the name is refused when none is allowed.
+    /// - For an encrypted connection (`cleartext == false`) nothing is refused.
+    public static func checkedAddresses(host: String, cleartext: Bool, resolver: GroundHostResolver) throws -> [GroundResolvedAddress] {
         let host = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+        let answers: [GroundResolvedAddress]
         if let literal = numericAddress(host) {
-            addresses = [literal]
+            answers = [literal]
         } else {
-            addresses = try resolver(host)
+            do {
+                answers = try resolver(host)
+            } catch let error as GroundAddressRefusal {
+                throw error
+            } catch {
+                throw GroundLookupError.notFound(host: host)
+            }
         }
-        guard let first = addresses.first else {
-            throw GroundTransportError.failed("the host name did not resolve")
-        }
-        if cleartext, let refused = addresses.first(where: { !isAllowed($0) }) {
-            throw GroundAddressRefusal.cleartext(address: refused)
-        }
-        return first
+        guard !answers.isEmpty else { throw GroundLookupError.notFound(host: host) }
+        let usable = cleartext ? answers.filter(isAllowed) : answers
+        guard !usable.isEmpty else { throw GroundAddressRefusal.cleartext(address: answers[0]) }
+        return usable.filter { !$0.isIPv6 } + usable.filter(\.isIPv6)
     }
 
     /// The early check for a typed address: a cleartext numeric literal that is
@@ -197,48 +231,134 @@ public enum LanAddressPolicy {
     }
 }
 
+// MARK: - Lookup errors
+
+/// The host name could not be looked up. `description` is a sentence for the user.
+public enum GroundLookupError: Error, Equatable, Sendable, CustomStringConvertible {
+    case notFound(host: String)
+    case timedOut(host: String)
+
+    public var description: String {
+        switch self {
+        case let .notFound(host): return "Could not find \(host) on the network"
+        case let .timedOut(host): return "Looking up \(host) timed out"
+        }
+    }
+}
+
 // MARK: - Connect plan
 
-/// Where one connection attempt actually goes: the URL rewritten to the
-/// checked IP literal, so a second lookup (DNS rebinding) cannot change it.
+/// Where a connection attempt goes.
+///
+/// Cleartext (`ws://`, `http://`): `attempts` holds one URL per checked address,
+/// each with the IP literal as its host, in the order to try. The name is never
+/// looked up again, so DNS rebinding cannot change the destination.
+/// `hostHeader` is the original name (IPv6 in brackets) with the port, for the
+/// HTTP `Host` header.
+///
+/// Encrypted (`wss://`, `https://`): `attempts` is the original URL. The
+/// connection is made by name, so TLS authenticates the name, the `Host`
+/// header is unchanged and the system can try several addresses.
 public struct GroundConnectTarget: Sendable, Equatable {
-    /// The URL with the checked IP address as its host.
-    public let url: URL
-    public let address: GroundResolvedAddress
-    /// The name for TLS (SNI and certificate checks) of a `wss://` or `https://` connection to a host name.
-    public let tlsServerName: String?
+    public let attempts: [URL]
+    public let addresses: [GroundResolvedAddress]
+    public let hostHeader: String?
+    public var isCleartext: Bool { hostHeader != nil }
 }
 
 public enum GroundConnectPlanner {
-    /// Resolves once, applies the policy, and rewrites the URL to the checked address.
+    /// Resolves once and applies the policy.
     public static func plan(url: URL, resolver: GroundHostResolver) throws -> GroundConnectTarget {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(),
-              let host = components.host, !host.isEmpty
+              let rawHost = components.host, !rawHost.isEmpty
         else {
             throw GroundConfigurationError.invalidURL(url.absoluteString)
         }
-        let encrypted = scheme == "wss" || scheme == "https"
-        let address = try LanAddressPolicy.checkedAddress(host: host, cleartext: !encrypted, resolver: resolver)
-        let isLiteral = LanAddressPolicy.numericAddress(host) != nil
-        let text = address.description
-        if address.isIPv6, address.scopeID != 0 {
-            components.percentEncodedHost = "[" + text.replacingOccurrences(of: "%", with: "%25") + "]"
-        } else {
-            components.host = address.isIPv6 ? "[" + text + "]" : text
+        if scheme == "wss" || scheme == "https" {
+            return GroundConnectTarget(attempts: [url], addresses: [], hostHeader: nil)
         }
-        guard let rewritten = components.url else {
-            throw GroundConfigurationError.invalidURL(url.absoluteString)
+        let host = rawHost.hasPrefix("[") && rawHost.hasSuffix("]") ? String(rawHost.dropFirst().dropLast()) : rawHost
+        let addresses = try LanAddressPolicy.checkedAddresses(host: host, cleartext: true, resolver: resolver)
+        var attempts: [URL] = []
+        for address in addresses {
+            var copy = components
+            let text = address.description
+            if address.isIPv6, address.scopeID != 0 {
+                copy.percentEncodedHost = "[" + text.replacingOccurrences(of: "%", with: "%25") + "]"
+            } else {
+                copy.host = address.isIPv6 ? "[" + text + "]" : text
+            }
+            guard let rewritten = copy.url else { throw GroundConfigurationError.invalidURL(url.absoluteString) }
+            attempts.append(rewritten)
         }
-        return GroundConnectTarget(url: rewritten, address: address, tlsServerName: encrypted && !isLiteral ? host : nil)
+        let shownHost = host.contains(":") ? "[\(host)]" : host
+        let header = components.port.map { "\(shownHost):\($0)" } ?? shownHost
+        return GroundConnectTarget(attempts: attempts, addresses: addresses, hostHeader: header)
     }
 
-    /// Like `plan(url:resolver:)`, with the lookup on a background queue.
-    public static func planOffMainThread(url: URL, resolver: @escaping GroundHostResolver) async throws -> GroundConnectTarget {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try plan(url: url, resolver: resolver) })
+    /// Like `plan(url:resolver:)`, with the lookup on its own background queue, so the
+    /// caller never waits on `getaddrinfo`: after `timeout` seconds, or when the task is
+    /// cancelled or `lookup.cancel()` is called, it returns at once and the lookup is
+    /// left to finish unobserved.
+    public static func planOffMainThread(
+        url: URL,
+        resolver: @escaping GroundHostResolver,
+        timeout: TimeInterval = 10,
+        lookup: GroundLookup = GroundLookup()
+    ) async throws -> GroundConnectTarget {
+        try await lookup.run(url: url, resolver: resolver, timeout: timeout)
+    }
+}
+
+/// One name lookup that the caller can stop waiting for.
+public final class GroundLookup: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<GroundConnectTarget, Error>?
+    private var cancelled = false
+
+    public init() {}
+
+    /// Makes a pending (or the next) `run` throw `GroundTransportError.closed`.
+    public func cancel() {
+        let pending: CheckedContinuation<GroundConnectTarget, Error>? = lock.withLock {
+            cancelled = true
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(throwing: GroundTransportError.closed(code: nil))
+    }
+
+    private func finish(_ result: Result<GroundConnectTarget, Error>) {
+        let pending: CheckedContinuation<GroundConnectTarget, Error>? = lock.withLock {
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(with: result)
+    }
+
+    func run(url: URL, resolver: @escaping GroundHostResolver, timeout: TimeInterval) async throws -> GroundConnectTarget {
+        let host = URLComponents(url: url, resolvingAgainstBaseURL: false)?.host ?? ""
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<GroundConnectTarget, Error>) in
+                let startNow = lock.withLock { () -> Bool in
+                    if cancelled { return false }
+                    self.continuation = continuation
+                    return true
+                }
+                guard startNow else {
+                    continuation.resume(throwing: GroundTransportError.closed(code: nil))
+                    return
+                }
+                DispatchQueue.global(qos: .userInitiated).async { [self] in
+                    finish(Result { try GroundConnectPlanner.plan(url: url, resolver: resolver) })
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, timeout)) { [self] in
+                    finish(.failure(GroundLookupError.timedOut(host: host)))
+                }
             }
+        } onCancel: {
+            cancel()
         }
     }
 }

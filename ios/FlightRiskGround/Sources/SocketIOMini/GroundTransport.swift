@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import Security
 import os
 
 // MARK: - Transport
@@ -87,6 +86,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     private let openTimeout: TimeInterval
     private let networkMessageLimit: Bool
     private let resolver: GroundHostResolver
+    private let lookup = GroundLookup()
     private let lock = NSLock()
     private var storedConnection: NWConnection?
     private var isClosed = false
@@ -123,29 +123,38 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
         lock.withLock { storedConnection }
     }
 
-    /// Builds the connection for a target the policy already passed. The
-    /// connection goes to the checked IP address, never to the name.
-    private func makeConnection(_ target: GroundConnectTarget) throws -> NWConnection {
+    /// The network parameters for one attempt. For cleartext: no proxy is used if the
+    /// direct path works (`preferNoProxies` is only a preference, so a proxy may still
+    /// be used when the direct connection fails; the key is sent only after the
+    /// server's Engine.IO open, never in the upgrade request), the original name is the
+    /// `Host` header, and the cellular interface is not used, because a private address
+    /// is not necessarily on the local network there.
+    static func makeParameters(
+        cleartext: Bool, hostHeader: String?, maxFrameBytes: Int, networkMessageLimit: Bool, connectTimeout: Int
+    ) -> NWParameters {
         let webSocket = NWProtocolWebSocket.Options()
         webSocket.autoReplyPing = true
         if networkMessageLimit {
             webSocket.maximumMessageSize = maxFrameBytes
         }
-        // Deliberately no additional headers: no Origin, no Authorization.
+        // No Origin and no Authorization. The only extra header is the original Host
+        // name on a cleartext connection to a checked IP address.
+        if cleartext, let hostHeader {
+            webSocket.setAdditionalHeaders([(name: "Host", value: hostHeader)])
+        }
         let tcp = NWProtocolTCP.Options()
-        tcp.connectionTimeout = max(1, Int(openTimeout.rounded(.up)))
-        let parameters: NWParameters
-        if target.url.scheme?.lowercased() == "wss" {
-            let tls = NWProtocolTLS.Options()
-            if let name = target.tlsServerName {
-                sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, name)
-            }
-            parameters = NWParameters(tls: tls, tcp: tcp)
-        } else {
-            parameters = NWParameters(tls: nil, tcp: tcp)
+        tcp.connectionTimeout = max(1, connectTimeout)
+        let parameters = cleartext ? NWParameters(tls: nil, tcp: tcp) : NWParameters(tls: NWProtocolTLS.Options(), tcp: tcp)
+        if cleartext {
+            parameters.preferNoProxies = true
+            parameters.prohibitedInterfaceTypes = [.cellular]
         }
         parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
-        let connection = NWConnection(to: .url(target.url), using: parameters)
+        return parameters
+    }
+
+    /// Registers the connection, unless the transport was closed meanwhile.
+    private func adopt(_ connection: NWConnection) throws {
         let accepted = lock.withLock { () -> Bool in
             if isClosed { return false }
             storedConnection = connection
@@ -155,16 +164,45 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             connection.cancel()
             throw GroundTransportError.closed(code: nil)
         }
-        return connection
     }
 
     public func connect() async throws {
-        // Resolve off the main thread, check every address, and only then open a
-        // socket, to the checked IP address.
-        let target = try await GroundConnectPlanner.planOffMainThread(url: url, resolver: resolver)
+        // Resolve off the main thread, keep only allowed addresses, and only then open a
+        // socket, to a checked IP address. Each attempt goes to a literal; a name is never
+        // looked up again. The overall deadline is the open timeout, shared by the attempts.
+        let deadline = Date().addingTimeInterval(openTimeout)
+        let target = try await GroundConnectPlanner.planOffMainThread(
+            url: url, resolver: resolver, timeout: openTimeout, lookup: lookup
+        )
+        var lastError: Error = GroundTransportError.failed("no address to connect to")
+        for (index, attemptURL) in target.attempts.enumerated() {
+            let remainingAttempts = target.attempts.count - index
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0, index > 0 { break }
+            let share = max(1, Int((max(remaining, 1) / Double(remainingAttempts)).rounded(.up)))
+            let parameters = Self.makeParameters(
+                cleartext: target.isCleartext, hostHeader: target.hostHeader, maxFrameBytes: maxFrameBytes,
+                networkMessageLimit: networkMessageLimit, connectTimeout: share
+            )
+            let connection = NWConnection(to: .url(attemptURL), using: parameters)
+            try adopt(connection)
+            do {
+                try await open(connection)
+                return
+            } catch {
+                if isClosedByUs { throw GroundTransportError.closed(code: nil) }
+                lastError = error
+                connection.cancel()
+            }
+        }
+        throw lastError
+    }
+
+    private var isClosedByUs: Bool { lock.withLock { isClosed } }
+
+    private func open(_ connection: NWConnection) async throws {
         final class Once: @unchecked Sendable { var done = false }
         let once = Once()
-        let connection = try makeConnection(target)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // The handler runs on `queue`, a serial queue, so `once` needs no lock.
             connection.stateUpdateHandler = { state in
@@ -277,6 +315,8 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             isClosed = true
             return storedConnection
         }
+        // A name lookup in progress is abandoned at once; it finishes on its own queue.
+        lookup.cancel()
         connection?.cancel()
     }
 
@@ -361,11 +401,25 @@ public struct URLSessionGroundHTTPClient: GroundHTTPClient {
         }
     }
 
-    public func get(_ url: URL, headers: [String: String], timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+    /// The session configuration for a request to `url`. For a cleartext `http://` URL the
+    /// request never goes through a system proxy (an empty proxy dictionary overrides manual,
+    /// PAC and MDM proxy settings, which would otherwise receive the `Authorization` header in
+    /// cleartext) and never uses the cellular interface (a private address is not necessarily
+    /// on the local network there).
+    static func makeConfiguration(for url: URL) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
+        if url.scheme?.lowercased() == "http" {
+            configuration.connectionProxyDictionary = [:]
+            configuration.allowsCellularAccess = false
+        }
+        return configuration
+    }
+
+    public func get(_ url: URL, headers: [String: String], timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+        let configuration = Self.makeConfiguration(for: url)
         let session = URLSession(configuration: configuration, delegate: RefuseRedirects(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)

@@ -152,6 +152,7 @@ enum GroundAddress {
         do {
             return .success(try GroundEndpoint.parse(trimmed))
         } catch let error as GroundConfigurationError {
+            if case let .cleartextNotAllowed(reason) = error { return .failure(.refused(reason: reason, message: error.description)) }
             return .failure(.invalid(error.description))
         } catch {
             return .failure(.invalid("\"\(trimmed)\" is not a ground station address of the form ws://HOST:PORT."))
@@ -162,11 +163,15 @@ enum GroundAddress {
 enum GroundAddressError: Error, Equatable {
     case empty
     case invalid(String)
+    /// A cleartext address that is not on the local network. `reason` is the sentence;
+    /// `message` is what Settings shows.
+    case refused(reason: String, message: String)
 
     var message: String {
         switch self {
         case .empty: return "Enter the ground station address, for example ws://192.168.1.20:5555."
         case let .invalid(text): return text
+        case let .refused(_, message): return message
         }
     }
 }
@@ -186,6 +191,8 @@ enum GroundLinkStatus: Equatable {
     case connecting(attempt: Int)
     case connected
     case reconnecting(attempt: Int, retryInSeconds: Double, reason: String)
+    /// The saved address is a cleartext address that is not on the local network; nothing is sent to it.
+    case addressRefused(String)
     /// The ground refused the key. Distinct from network loss; the client waits for the user.
     case wrongKey
     case stopped
@@ -197,6 +204,7 @@ enum GroundLinkStatus: Equatable {
         case .notConfigured: return "Not configured: add the ground station address and key in Settings."
         case .keychainLocked: return "Keychain locked: unlock the phone to connect to the ground station."
         case .off: return "Ground link off. Switch it on in Settings."
+        case let .addressRefused(reason): return "Address refused, nothing is sent: \(reason). Change the address in Settings."
         case .paused: return "Not connected: the app was in the background."
         case let .connecting(attempt): return attempt > 1 ? "Connecting (attempt \(attempt))\u{2026}" : "Connecting\u{2026}"
         case .connected: return "Connected"
@@ -216,6 +224,7 @@ enum GroundLinkStatus: Equatable {
         case .wrongKey: return "WRONG KEY"
         case .keychainLocked: return "LOCKED"
         case .notConfigured: return "NOT SET UP"
+        case .addressRefused: return "REFUSED"
         case .off: return "OFF"
         case .paused, .stopped: return "OFFLINE"
         }
@@ -322,6 +331,9 @@ enum GroundUIText {
     static let landAllHandedOver = GroundText.landAllSending + " Handed to the connection; waiting for the ground's reply."
     static let landAllNotSentWrongKey = "LAND ALL was NOT sent: the ground refused this phone's key. " + landAllFallback
     static let landAllNotSentLinkOff = "LAND ALL was NOT sent: this phone's ground link is off or not set up. " + landAllFallback
+    static func landAllNotSentAddressRefused(_ reason: String) -> String {
+        "LAND ALL was NOT sent: this phone's ground address is refused (\(reason)). " + landAllFallback
+    }
     static let landAllNotSentKeychainLocked =
         "LAND ALL was NOT sent: the Keychain is locked, so this phone cannot connect to the ground. " + landAllFallback
     static let landAllSendFailed = "LAND ALL was NOT sent: the connection failed while sending. " + landAllFallback
@@ -345,8 +357,9 @@ enum GroundUIText {
             + ". Reached none: " + none.joined(separator: ", ") + ". Land the rest by hand."
     }
 
-    static func droneNotSent(_ id: String, action: String, linkOff: Bool) -> String {
-        let why = linkOff ? "this phone's ground link is off or not set up" : "this phone is not connected to the ground"
+    static func droneNotSent(_ id: String, action: String, linkOff: Bool, refusal: String? = nil) -> String {
+        let why = refusal.map { "this phone's ground address is refused (\($0))" }
+            ?? (linkOff ? "this phone's ground link is off or not set up" : "this phone is not connected to the ground")
         return "\(id): \(action) was NOT sent: \(why). Land it with its own controls, or use the ground laptop."
     }
 
@@ -667,6 +680,7 @@ final class GroundViewModel {
     /// "Test connection": the REST health probe with the saved address and key. The text never
     /// contains the key.
     func testConnection() async -> String {
+        if let reason = addressRefusal { return "Refused: \(reason). Nothing was sent." }
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
             return "Save the ground station address first."
         }
@@ -736,7 +750,14 @@ final class GroundViewModel {
             let text = linkStatus == .wrongKey ? GroundUIText.landAllNotSentWrongKey : GroundText.landAllNotSent
             landAllFeedback = failure(text, attempt: attempt, startedAt: started)
         case .noClient, .shutDown:
-            let text = linkStatus == .keychainLocked ? GroundUIText.landAllNotSentKeychainLocked : GroundUIText.landAllNotSentLinkOff
+            let text: String
+            if linkStatus == .keychainLocked {
+                text = GroundUIText.landAllNotSentKeychainLocked
+            } else if case let .addressRefused(reason) = linkStatus {
+                text = GroundUIText.landAllNotSentAddressRefused(reason)
+            } else {
+                text = GroundUIText.landAllNotSentLinkOff
+            }
             landAllFeedback = failure(text, attempt: attempt, startedAt: started)
         case .sendFailed, .refused:
             landAllFeedback = failure(GroundUIText.landAllSendFailed, attempt: attempt, startedAt: started)
@@ -1024,7 +1045,14 @@ final class GroundViewModel {
 
     // MARK: Private: connection
 
+    /// The refusal sentence when the saved address is a cleartext address off the local network.
+    private var addressRefusal: String? {
+        guard let address = savedAddress, case let .failure(.refused(reason, _)) = GroundAddress.validate(address) else { return nil }
+        return reason
+    }
+
     private func idleStatus() -> GroundLinkStatus {
+        if let reason = addressRefusal { return .addressRefused(reason) }
         if savedAddress != nil, keyState == .unavailable { return .keychainLocked }
         if !isConfigured { return .notConfigured }
         if !isEnabled { return .off }
@@ -1035,7 +1063,7 @@ final class GroundViewModel {
     private func connectIfWanted() {
         guard client == nil, isEnabled, !appInBackground else { return }
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
-            linkStatus = .notConfigured
+            linkStatus = addressRefusal.map { .addressRefused($0) } ?? .notConfigured
             return
         }
         // The key goes from the Keychain straight into the client and is not kept here.
@@ -1271,7 +1299,7 @@ final class GroundViewModel {
         case .notConnected:
             setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: false), attempt: attempt, startedAt: started))
         case .noClient, .shutDown:
-            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: true), attempt: attempt, startedAt: started))
+            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: true, refusal: addressRefusal), attempt: attempt, startedAt: started))
         case .sendFailed, .refused:
             setDroneFeedback(isLand, id, failure(GroundUIText.droneSendFailed(id, action: action), attempt: attempt, startedAt: started))
         }

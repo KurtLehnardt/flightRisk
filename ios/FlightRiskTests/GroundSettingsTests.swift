@@ -47,7 +47,7 @@ final class GroundSettingsTests: XCTestCase {
     }
 
     func testCleartextPublicAddressIsRefusedWithTheReason() async {
-        for text in ["ws://8.8.8.8:5555", "8.8.8.8", "http://100.64.0.1", "ws://0x08080808"] {
+        for text in ["ws://8.8.8.8:5555", "8.8.8.8", "http://100.64.0.1"] {
             guard case let .failure(error) = GroundAddress.validate(text) else {
                 XCTFail("\(text) should be refused")
                 continue
@@ -60,6 +60,28 @@ final class GroundSettingsTests: XCTestCase {
         let message = vm.saveAddress("ws://8.8.8.8:5555")
         XCTAssertNotNil(message)
         XCTAssertNil(vm.savedAddress)
+        await harness.tearDown()
+    }
+
+    func testASavedAddressThatIsNowRefusedShowsTheRefusalEverywhere() async {
+        let harness = GroundHarness()
+        harness.defaults.set("ws://8.8.8.8:5555", forKey: GroundConnectionSettings.addressKey)
+        harness.defaults.set(true, forKey: GroundConnectionSettings.enabledKey)
+        _ = harness.makeViewModel().saveKey(GroundHarness.testKey)
+        let vm = harness.makeViewModel()
+        let reason = "cleartext is only allowed to local network addresses; use wss:// or https:// for this address"
+        guard case let .addressRefused(shown) = vm.linkStatus else { return XCTFail("status was \(vm.linkStatus)") }
+        XCTAssertEqual(shown, reason)
+        XCTAssertTrue(vm.linkStatus.text.contains(reason))
+        XCTAssertFalse(vm.linkStatus.text.contains("Not configured"))
+        let test = await vm.testConnection()
+        XCTAssertTrue(test.contains(reason))
+        XCTAssertFalse(test.contains("Save the ground station address first"))
+        await vm.landAll()
+        let text = vm.landAllFeedback?.text ?? ""
+        XCTAssertTrue(text.contains("LAND ALL was NOT sent"), text)
+        XCTAssertTrue(text.contains(reason), text)
+        XCTAssertFalse(text.contains(GroundHarness.testKey))
         await harness.tearDown()
     }
 

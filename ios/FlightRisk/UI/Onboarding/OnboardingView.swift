@@ -378,7 +378,8 @@ enum PrivacyNotice {
         + "to show drone status and send land, resume-search and detection-profile commands. "
         + "The app refuses a ws:// or http:// address unless it is on your local network, and it checks that before anything, including the key, is sent. "
         + "A ws:// or http:// link is not encrypted, so use a network you trust. "
-        + "Away from your local network, use a wss:// or https:// address or a VPN; the app does not pin certificates. "
+        + "Away from your local network, use a wss:// or https:// address. A VPN also works if it gives the ground station an address in a private range; "
+        + "addresses in 100.64.0.0/10, which Tailscale uses, are refused for ws:// and http://. The app does not pin certificates. "
         + "The station's key is sent to the address you enter and is kept on this phone in the iOS Keychain."
 
     /// The cloud bullet. It matches the consent text in Settings

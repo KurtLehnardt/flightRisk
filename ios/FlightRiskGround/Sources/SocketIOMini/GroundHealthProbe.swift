@@ -58,28 +58,34 @@ public struct GroundHealthProbe: Sendable {
     public func run() async -> GroundHealthResult {
         let redact = GroundRedactor(key: apiKey)
         // The address policy runs before the key is put in any header or any request is made.
+        // An encrypted URL is not looked up here: it keeps its name for the certificate check
+        // (this app does not pin certificates).
         let target: GroundConnectTarget
         do {
-            target = try await GroundConnectPlanner.planOffMainThread(url: endpoint.httpBaseURL, resolver: resolver)
+            target = try await GroundConnectPlanner.planOffMainThread(url: endpoint.httpBaseURL, resolver: resolver, timeout: timeout)
         } catch let refusal as GroundAddressRefusal {
             return .addressNotAllowed(refusal.reason)
         } catch {
             return .unreachable(redact(Self.describe(error)))
         }
-        // Cleartext goes to the checked IP address with the original Host header, so a
-        // second lookup cannot swap the address. An encrypted request keeps the name for
-        // certificate checks (this app does not pin certificates).
-        let cleartext = endpoint.secure == false
-        var requestHost: String?
-        if cleartext {
-            requestHost = "\(endpoint.host.contains(":") ? "[\(endpoint.host)]" : endpoint.host):\(endpoint.port)"
-        }
+        // Cleartext goes to each checked IP address in turn with the original name as the
+        // Host header, so a second lookup cannot swap the address. The timeout is shared
+        // by the attempts.
         var headers: [String: String] = ["Accept": "application/json"]
         if !apiKey.isEmpty {
             headers["Authorization"] = "Bearer \(apiKey.secret)"
         }
-        if let requestHost { headers["Host"] = requestHost }
-        let base = cleartext ? target.url : endpoint.httpBaseURL
+        if let hostHeader = target.hostHeader { headers["Host"] = hostHeader }
+        var last: GroundHealthResult = .unreachable("no address to connect to")
+        for (index, base) in target.attempts.enumerated() {
+            let share = max(1, timeout / Double(target.attempts.count - index))
+            last = await probeOnce(base: base, headers: headers, timeout: share, redact: redact)
+            guard case .unreachable = last else { return last }
+        }
+        return last
+    }
+
+    private func probeOnce(base: URL, headers: [String: String], timeout: TimeInterval, redact: GroundRedactor) async -> GroundHealthResult {
         var version: String?
         do {
             let health = try await http.get(base.appendingPathComponent("api/health"), headers: headers, timeout: timeout)
@@ -117,6 +123,9 @@ public struct GroundHealthProbe: Sendable {
         }
         if case let .bodyTooLarge(limit) = error as? GroundHTTPError {
             return "response body larger than \(limit) bytes"
+        }
+        if let lookup = error as? GroundLookupError {
+            return lookup.description
         }
         return String(describing: type(of: error))
     }
