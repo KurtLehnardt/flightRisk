@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto Backup rules for Android 11 (API 30) and lower. Everything is backed
+    up except the encrypted secret store: its values cannot be decrypted
+    without this device's Android Keystore key, so a restored copy would only
+    make the secret store unreadable on the new device.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
+</full-backup-content>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup and device-transfer rules for Android 12 (API 31) and higher.
+    Everything is included except the encrypted secret store, which cannot be
+    decrypted without this device's Android Keystore key.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>
