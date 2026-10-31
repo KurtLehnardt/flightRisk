@@ -11,7 +11,7 @@ A mandatory privacy notice screen shown to the user on first launch, **before** 
 ## Trigger Conditions
 
 - Shown on the very first app launch (or after app data is cleared).
-- Intended to be shown **before** any camera or location permission dialog. On iOS this holds. **On Android it does not:** `MainActivity.onCreate` calls `requestPermissionsIfNeeded()` (camera, fine and coarse location) before it sets the content, so the system permission prompts appear on first launch before the notice. This is listed in `docs/mobile-followups.md`.
+- Intended to be shown **before** any camera or location permission dialog. This holds on iOS and on Android: the Android app shows the notice first and calls `requestPermissionsIfNeeded()` (camera, fine and coarse location) only after "I Understand".
 - Not shown again after the user has acknowledged it (controlled by a persisted flag). On Android the flag is written but never read; see "Persistence" below.
 - **Restored phones.** On Android the completion flag `flightrisk_onboarding_complete` is in `flightrisk_prefs`, which the backup rules do not exclude. A phone restored from backup or set up by device transfer can therefore inherit the flag and never show the notice. Planned fix: see `docs/mobile-followups.md`.
 

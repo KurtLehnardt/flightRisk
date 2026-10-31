@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.flightrisk.app.privacy.TempCameraPhotos
 import com.flightrisk.app.ui.quality.ImageQualityScorer
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.theme.AlertRed
@@ -108,18 +109,26 @@ fun TargetPickerScreen(
 
     // Camera capture launcher
     var photoUri by remember { mutableStateOf<Uri?>(null) }
+    var photoFile by remember { mutableStateOf<java.io.File?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success: Boolean ->
-        if (success) {
-            photoUri?.let { uri ->
-                val bitmap = loadBitmapFromUri(context, uri)
-                if (bitmap != null) {
-                    selectedBitmap = bitmap
-                    qualityReport = ImageQualityScorer.analyze(bitmap)
-                    photoConfirmed = false
+        try {
+            if (success) {
+                photoUri?.let { uri ->
+                    val bitmap = loadBitmapFromUri(context, uri)
+                    if (bitmap != null) {
+                        selectedBitmap = bitmap
+                        qualityReport = ImageQualityScorer.analyze(bitmap)
+                        photoConfirmed = false
+                    }
                 }
             }
+        } finally {
+            // The capture file holds a picture of a child; delete it once decoded.
+            TempCameraPhotos.delete(photoFile)
+            photoFile = null
+            photoUri = null
         }
     }
 
@@ -175,7 +184,10 @@ fun TargetPickerScreen(
 
                 OutlinedButton(
                     onClick = {
-                        val uri = createTempImageUri(context)
+                        TempCameraPhotos.delete(photoFile)
+                        val file = TempCameraPhotos.create(context.cacheDir)
+                        val uri = fileProviderUri(context, file)
+                        photoFile = file
                         photoUri = uri
                         cameraLauncher.launch(uri)
                     },
@@ -469,17 +481,11 @@ private fun loadBitmapFromUri(
 }
 
 /**
- * Create a temporary URI for camera capture output.
+ * The FileProvider URI for a camera capture file.
  */
-private fun createTempImageUri(context: android.content.Context): Uri {
-    val file = java.io.File.createTempFile(
-        "flightrisk_target_",
-        ".jpg",
-        context.cacheDir,
-    )
-    return androidx.core.content.FileProvider.getUriForFile(
+private fun fileProviderUri(context: android.content.Context, file: java.io.File): Uri =
+    androidx.core.content.FileProvider.getUriForFile(
         context,
         "${context.packageName}.fileprovider",
         file,
     )
-}

@@ -62,6 +62,9 @@ class CloudPathAuditTest {
         val hosts = sources().flatMap { (path, text) -> https.findAll(text).map { path to it.value.trim('"') }.toList() }
         val expected = setOf(
             "com/flightrisk/app/llm/CloudClaudeLlmBackend.kt" to "https://api.anthropic.com/v1/messages",
+            // A link the person can tap to read the privacy policy; the app opens no connection to it.
+            "com/flightrisk/app/privacy/PrivacyNoticeText.kt" to
+                "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md",
         )
         val others = hosts.filterNot { it in expected || it.first == "com/flightrisk/app/llm/local/GemmaMediaPipeProvider.kt" }
         assertTrue("Unexpected https endpoints: $others", others.isEmpty())

@@ -45,28 +45,26 @@ import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.target.TargetPickerScreen
 import com.flightrisk.app.ui.theme.AlertRed
 
-/** SharedPreferences key for privacy notice acknowledgment. */
-const val PREF_PRIVACY_ACKNOWLEDGED = "flightrisk_privacy_notice_acknowledged"
-
 /** SharedPreferences key for onboarding completion. */
 const val PREF_ONBOARDING_COMPLETE = "flightrisk_onboarding_complete"
 
-/** SharedPreferences file name. */
+/** SharedPreferences file name. Excluded from backup and device transfer. */
 const val PREFS_NAME = "flightrisk_prefs"
 
 /**
  * First-launch onboarding flow.
  *
  * Steps:
- * 1. Privacy notice (camera use, on-device processing)
+ * The privacy notice is shown before this flow and before any permission
+ * prompt (see PrivacyNoticeScreen); this flow starts after it.
+ *
  * 2. Emergency callout (call 911 if child in danger)
  * 3. "My child is missing" CTA
  * 4. Photo selection (inline TargetPickerScreen)
  * 5. Quality check with retry
  * 6. Transition to search
  *
- * Stores acknowledgment in SharedPreferences so the flow is only shown
- * once.
+ * Stores completion in SharedPreferences so the flow is only shown once.
  *
  * @param onComplete Callback when onboarding is complete. Receives the
  *   selected target bitmap.
@@ -77,7 +75,7 @@ fun OnboardingScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var currentStep by remember { mutableIntStateOf(0) }
+    var currentStep by remember { mutableIntStateOf(1) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qualityReport by remember { mutableStateOf<QualityReport?>(null) }
 
@@ -89,12 +87,6 @@ fun OnboardingScreen(
             label = "onboarding_step",
         ) { step ->
             when (step) {
-                0 -> PrivacyNoticeStep(
-                    onAccept = {
-                        savePrivacyAcknowledgment(context)
-                        currentStep = 1
-                    },
-                )
                 1 -> EmergencyCalloutStep(
                     onContinue = { currentStep = 2 },
                     onCall911 = {
@@ -123,120 +115,6 @@ fun OnboardingScreen(
                 )
             }
         }
-    }
-}
-
-// -----------------------------------------------------------------------
-// Step 1: Privacy notice
-// -----------------------------------------------------------------------
-
-@Composable
-private fun PrivacyNoticeStep(
-    onAccept: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Privacy Notice",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.semantics { heading() },
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                .padding(20.dp),
-        ) {
-            PrivacyBullet(
-                title = "Camera Access",
-                description = "FlightRisk uses your camera to scan for people " +
-                    "who match the target photo you provide.",
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            PrivacyBullet(
-                title = "On-Device Processing",
-                description = "Person detection and matching run on your device. " +
-                    "Camera frames are not uploaded. Images leave the phone only " +
-                    "with cloud reasoning on, as described below.",
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            PrivacyBullet(
-                title = "Cloud Reasoning (Off by Default)",
-                description = "Cloud reasoning is off. If you turn it on in Settings, save a " +
-                    "Claude API key and select Cloud Claude, the cropped image of each detected " +
-                    "person, the reference photo and the text description you entered are sent " +
-                    "to Anthropic. The images can show a face. You can turn it off at any time.",
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            PrivacyBullet(
-                title = "Location Data",
-                description = "GPS coordinates are attached to match alerts so you can " +
-                    "navigate to the location. Location data stays on your device.",
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            PrivacyBullet(
-                title = "No Data Collection",
-                description = "FlightRisk does not collect analytics, telemetry, or " +
-                    "personal data. There is no account or sign-in.",
-            )
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = onAccept,
-            modifier = Modifier
-                .fillMaxWidth()
-                .sizeIn(minHeight = 56.dp),
-        ) {
-            Text(
-                text = "I Understand",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-@Composable
-private fun PrivacyBullet(
-    title: String,
-    description: String,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -485,13 +363,6 @@ private fun QualityCheckStep(
 // -----------------------------------------------------------------------
 // SharedPreferences helpers
 // -----------------------------------------------------------------------
-
-private fun savePrivacyAcknowledgment(context: Context) {
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(PREF_PRIVACY_ACKNOWLEDGED, true)
-        .apply()
-}
 
 private fun saveOnboardingComplete(context: Context) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

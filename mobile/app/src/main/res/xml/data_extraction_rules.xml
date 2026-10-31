@@ -5,7 +5,12 @@
     (it cannot be decrypted without this device's Android Keystore key), the
     cloud reasoning opt-in and the ground station link opt-in (consent given on
     this device only), and the general config file (it may still hold a plain-text Claude key from the oldest
-    builds until the migration moves it).
+    builds until the migration moves it). It also excludes the privacy notice
+    acknowledgement and the "Record search video" choice
+    (flightrisk_privacy_local.xml), the onboarding flag (flightrisk_prefs.xml),
+    the ground console settings (flightrisk_ground_settings.xml), the Room
+    database, the recorded videos (files/recordings) and the match pictures
+    (files/snapshots), for cloud backup and for device transfer alike.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -13,11 +18,29 @@
         <exclude domain="sharedpref" path="flightrisk_reasoning.xml" />
         <exclude domain="sharedpref" path="flightrisk_ground_link.xml" />
         <exclude domain="sharedpref" path="flightrisk_config.xml" />
+        <exclude domain="sharedpref" path="flightrisk_privacy_local.xml" />
+        <exclude domain="sharedpref" path="flightrisk_prefs.xml" />
+        <exclude domain="sharedpref" path="flightrisk_ground_settings.xml" />
+        <exclude domain="database" path="flightrisk_sessions.db" />
+        <exclude domain="database" path="flightrisk_sessions.db-journal" />
+        <exclude domain="database" path="flightrisk_sessions.db-wal" />
+        <exclude domain="database" path="flightrisk_sessions.db-shm" />
+        <exclude domain="file" path="recordings" />
+        <exclude domain="file" path="snapshots" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
         <exclude domain="sharedpref" path="flightrisk_reasoning.xml" />
         <exclude domain="sharedpref" path="flightrisk_ground_link.xml" />
         <exclude domain="sharedpref" path="flightrisk_config.xml" />
+        <exclude domain="sharedpref" path="flightrisk_privacy_local.xml" />
+        <exclude domain="sharedpref" path="flightrisk_prefs.xml" />
+        <exclude domain="sharedpref" path="flightrisk_ground_settings.xml" />
+        <exclude domain="database" path="flightrisk_sessions.db" />
+        <exclude domain="database" path="flightrisk_sessions.db-journal" />
+        <exclude domain="database" path="flightrisk_sessions.db-wal" />
+        <exclude domain="database" path="flightrisk_sessions.db-shm" />
+        <exclude domain="file" path="recordings" />
+        <exclude domain="file" path="snapshots" />
     </device-transfer>
 </data-extraction-rules>

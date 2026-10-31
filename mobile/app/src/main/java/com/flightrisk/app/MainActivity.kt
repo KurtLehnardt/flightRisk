@@ -42,6 +42,11 @@ import com.flightrisk.app.llm.local.LocalLlmProvider
 import com.flightrisk.app.llm.local.ModelState
 import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.persistence.SessionRepository
+import com.flightrisk.app.privacy.PrivacyNoticeGate
+import com.flightrisk.app.privacy.PrivacyPrefs
+import com.flightrisk.app.privacy.RecordingPolicy
+import com.flightrisk.app.privacy.SharedPrefsPrivacyPrefs
+import com.flightrisk.app.ui.privacy.PrivacyNoticeScreen
 import com.flightrisk.app.pipeline.SearchPipeline
 import com.flightrisk.app.transport.GroundLink
 import com.flightrisk.app.recording.SessionRecorder
@@ -87,6 +92,8 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private var onboardingComplete by mutableStateOf(false)
+    private lateinit var privacyPrefs: PrivacyPrefs
+    private var noticeAcknowledged by mutableStateOf(false)
     private var searchState by mutableStateOf(SearchScreenState())
     private var settingsState by mutableStateOf(SettingsScreenState())
     private var targetBitmap by mutableStateOf<Bitmap?>(null)
@@ -170,6 +177,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        privacyPrefs = SharedPrefsPrivacyPrefs(applicationContext)
+        noticeAcknowledged = !PrivacyNoticeGate.shouldShowNotice(privacyPrefs)
         onboardingComplete = isOnboardingComplete(this)
 
         // Load initial settings from config. No secret is read here.
@@ -246,12 +255,23 @@ class MainActivity : ComponentActivity() {
         // Settings; it connects only while a search runs and the app is in view.
         lifecycle.addObserver(GroundLink.controller(applicationContext).lifecycleObserver)
 
-        // Request permissions
-        requestPermissionsIfNeeded()
+        // The camera and location prompts wait for the privacy notice. When the
+        // notice is not acknowledged yet, they are requested after "I Understand".
+        if (PrivacyNoticeGate.mayRequestPermissions(privacyPrefs)) {
+            requestPermissionsIfNeeded()
+        }
 
         setContent {
             FlightRiskTheme {
-                if (!onboardingComplete) {
+                if (!noticeAcknowledged) {
+                    PrivacyNoticeScreen(
+                        onAccept = {
+                            PrivacyNoticeGate.acknowledge(privacyPrefs)
+                            noticeAcknowledged = true
+                            requestPermissionsIfNeeded()
+                        },
+                    )
+                } else if (!onboardingComplete) {
                     OnboardingScreen(
                         onComplete = { bitmap ->
                             targetBitmap = bitmap
@@ -415,7 +435,13 @@ class MainActivity : ComponentActivity() {
 
             val repo = sessionRepository ?: SessionRepository(ctx).also { sessionRepository = it }
             val recordingsDir = java.io.File(ctx.filesDir, "recordings")
-            val recorder = SessionRecorder(recordingsDir).also { sessionRecorder = it }
+            // Video is recorded only if the person turned on "Record search video".
+            val recorder = if (RecordingPolicy.shouldRecord(privacyPrefs)) {
+                SessionRecorder(recordingsDir)
+            } else {
+                null
+            }
+            sessionRecorder = recorder
 
             val pipeline = SearchPipeline(config, ls, am, lp, repo, recorder)
             searchPipeline = pipeline

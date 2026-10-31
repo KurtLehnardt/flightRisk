@@ -261,6 +261,7 @@ fun FlightRiskNavHost(
                     onSignalWeightChanged = onSignalWeightChanged,
                     onLocalModelDownload = onLocalModelDownload,
                     onLocalModelDelete = onLocalModelDelete,
+                    searchActive = searchState.isSearching,
                     droneState = droneState,
                     frameSourceMode = frameSourceMode,
                 )
