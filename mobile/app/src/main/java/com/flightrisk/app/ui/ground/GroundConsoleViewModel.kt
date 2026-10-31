@@ -562,8 +562,14 @@ class GroundConsoleViewModel(
         if (droneId != null) {
             val state = profiles.drones[droneId] ?: return refuseProfile(droneId, MissionFormat.WHY_UNKNOWN_DRONE)
             if (state.supported != true) return refuseProfile(droneId, MissionFormat.WHY_UNSUPPORTED)
+            // The dashboard disables the selector while a switch is pending.
+            if (state.pending == true) return refuseProfile(droneId, MissionFormat.WHY_PENDING)
+            // A selector never fires for an unchanged value, so an unchanged choice sends nothing.
+            if ((state.override ?: "") == profile) return
             // A null factory result means "do not send".
             if (ClientCommand.setDetectionProfile(droneId, profile) == null) return refuseProfile(droneId, MissionFormat.WHY_NO_USABLE_ID)
+        } else if ((profiles.fleetDefault ?: "") == profile) {
+            return
         }
         val attempt = nextAttempt()
         val label = if (profile.isEmpty()) {
@@ -571,14 +577,21 @@ class GroundConsoleViewModel(
         } else {
             MissionFormat.profileLabel(profiles, profile)
         }
+        // Waiting is set before sending, as LAND ALL does: a fast reply must clear it, not be overwritten by it.
+        profileFeedback = ProfileFeedback(
+            attempt, MissionFormat.profileSent(droneId, label), isFailure = false, awaitsAnswer = true, startedAtMs = clock.nowMs(),
+        )
+        publish()
         val epochAtSend = lossEpoch
         val outcome = emit { if (droneId == null) it.setFleetDetectionProfile(profile) else it.setDetectionProfile(droneId, profile) }
-        profileFeedback = when {
-            outcome == Outcome.SENT && lossEpoch == epochAtSend ->
-                ProfileFeedback(attempt, MissionFormat.profileSent(droneId, label), isFailure = false, awaitsAnswer = true)
-            outcome == Outcome.SENT -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_LINK_LOST), isFailure = true, awaitsAnswer = false)
-            outcome == Outcome.SEND_FAILED -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_SEND_FAILED), isFailure = true, awaitsAnswer = false)
-            else -> ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, MissionFormat.WHY_NOT_CONNECTED), isFailure = true, awaitsAnswer = false)
+        val why = when {
+            outcome == Outcome.SENT && lossEpoch == epochAtSend -> null
+            outcome == Outcome.SENT -> MissionFormat.WHY_LINK_LOST
+            outcome == Outcome.SEND_FAILED -> MissionFormat.WHY_SEND_FAILED
+            else -> MissionFormat.WHY_NOT_CONNECTED
+        }
+        if (why != null) {
+            profileFeedback = ProfileFeedback(attempt, MissionFormat.profileNotSent(droneId, why), isFailure = true, awaitsAnswer = false)
         }
         publish()
     }
@@ -615,6 +628,11 @@ class GroundConsoleViewModel(
             }
         }
         expireLandAll(now)
+        profileFeedback?.let { f ->
+            if (f.awaitsAnswer && now - f.startedAtMs >= REPLY_TIMEOUT_MS) {
+                profileFeedback = f.copy(text = MissionFormat.PROFILE_NO_ANSWER, isFailure = true, awaitsAnswer = false)
+            }
+        }
         age(landFeedback, GroundText.ACTION_LAND, now)
         age(resumeFeedback, GroundText.ACTION_RESUME, now)
         checkFreshness(now)
@@ -1253,9 +1271,11 @@ class GroundConsoleViewModel(
         /**
          * The events this screen may emit: the five state requests the client
          * sends itself, LAND ALL, per-drone land and resume, and the two
-         * detection profile selections of the profiles card. Narrower than the
-         * contract's allow-list on purpose (no ceiling, reasoning or plan
-         * control); a later unit that adds a control widens this policy.
+         * detection profile selections of the profiles card. That is every event
+         * in the contract's allow-list today, so the policy equals it; it is
+         * still built by narrowing, so it can never allow more than the
+         * contract does. It has no ceiling, reasoning or plan control because
+         * the contract has none.
          */
         val EMIT_POLICY: EmitPolicy = EmitPolicy.CONTRACT.narrowedTo(
             setOf(

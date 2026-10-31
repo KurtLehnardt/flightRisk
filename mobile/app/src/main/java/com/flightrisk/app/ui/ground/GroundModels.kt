@@ -214,4 +214,6 @@ data class ProfileFeedback(
     val isFailure: Boolean,
     /** Sent and waiting for the ground's `detection_profiles` answer. */
     val awaitsAnswer: Boolean,
+    /** When the selection was handed to the connection, for the reply timeout. */
+    val startedAtMs: Long = 0L,
 )

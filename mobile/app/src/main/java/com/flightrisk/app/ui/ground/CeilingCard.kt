@@ -15,8 +15,8 @@ import androidx.compose.ui.unit.dp
  * controls and sends nothing.
  */
 @Composable
-fun CeilingCard(card: MissionFormat.CeilingCardUi) {
-    MissionCard("Ceiling and altitude", "ground.ceiling") {
+fun CeilingCard(card: MissionFormat.CeilingCardUi, isStateStale: Boolean = false) {
+    MissionCard("Ceiling and altitude", "ground.ceiling", MissionFormat.notLiveNote(isStateStale)) {
         Text(card.headline, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
         Text(card.maxSlotText, style = MaterialTheme.typography.bodySmall)
         card.lockedText?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("ground.ceiling.locked")) }

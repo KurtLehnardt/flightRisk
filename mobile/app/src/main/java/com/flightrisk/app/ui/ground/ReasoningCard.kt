@@ -12,8 +12,8 @@ import androidx.compose.ui.text.font.FontWeight
  * the ground into cloud use; only the ground's own setting does that.
  */
 @Composable
-fun ReasoningCard(card: MissionFormat.ReasoningCardUi) {
-    MissionCard("Reasoning", "ground.reasoning") {
+fun ReasoningCard(card: MissionFormat.ReasoningCardUi, isStateStale: Boolean = false) {
+    MissionCard("Reasoning", "ground.reasoning", MissionFormat.notLiveNote(isStateStale)) {
         Text(card.statusText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
         Text(card.cloudBadge, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("ground.reasoning.cloud"))
         card.availableText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

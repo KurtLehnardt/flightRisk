@@ -48,10 +48,54 @@ class MissionCardsViewModelTest {
 
     @Test
     fun `an empty profile follows the fleet default and clears it`() = harnessTest {
-        val c = withProfiles("unsupported")
+        // In the refused fixture drone-1 has an override; in the unsupported fixture the fleet has a default.
+        val c = withProfiles("refused")
         vm.selectDroneProfile("drone-1", "").join()
+        c.fixture("detection_profiles.json", "unsupported")
+        eventually("fleet default shown") { ui.snapshot.detectionProfiles?.fleetDefault == "default" }
         vm.selectFleetProfile("").join()
         eventually("frames") { c.commandFrames() == listOf(dronePayload("drone-1", ""), fleetPayload("")) }
+    }
+
+    @Test
+    fun `choosing the current choice sends nothing`() = harnessTest {
+        val c = withProfiles("unsupported")
+        vm.selectFleetProfile("default").join()
+        vm.selectDroneProfile("drone-1", "").join()
+        assertNothingSent(c)
+        assertNull(ui.profileFeedback)
+    }
+
+    @Test
+    fun `a drone with a switch pending cannot be selected`() = harnessTest {
+        val c = withProfiles("pending")
+        vm.selectDroneProfile("drone-1", "level").join()
+        assertEquals("Profile for drone-1 was NOT changed: ${MissionFormat.WHY_PENDING}", ui.profileFeedback!!.text)
+        assertNothingSent(c)
+    }
+
+    @Test
+    fun `the waiting message is set before sending and times out with a plain text`() = harnessTest {
+        val c = withProfiles("unsupported")
+        vm.selectDroneProfile("drone-1", "top_down").join()
+        eventually("frame") { c.commandFrames().size == 1 }
+        assertTrue(ui.profileFeedback!!.awaitsAnswer)
+        advance(4_000)
+        assertTrue(ui.profileFeedback!!.awaitsAnswer)
+        advance(1_000)
+        val f = ui.profileFeedback!!
+        assertFalse(f.awaitsAnswer)
+        assertTrue(f.isFailure)
+        assertEquals(MissionFormat.PROFILE_NO_ANSWER, f.text)
+    }
+
+    @Test
+    fun `a session start clears the plan flag`() = harnessTest {
+        val c = connectWithFleet()
+        c.fixture("fleet_plan.json", "two_drones")
+        eventually("current") { ui.planIsCurrent }
+        onMain { vm.handle(com.flightrisk.app.ground.GroundEvent.SessionStarted(com.flightrisk.app.ground.SessionInfo(2, 25_000, 20_000))) }
+        assertFalse(ui.planIsCurrent)
     }
 
     @Test
@@ -211,7 +255,7 @@ class MissionCardsViewModelTest {
     }
 
     @Test
-    fun `a new session start clears the flag even without a drop event`() = harnessTest {
+    fun `a session end clears the flag even without a drop event`() = harnessTest {
         val c = connectWithFleet()
         c.fixture("fleet_plan.json", "two_drones")
         eventually("current") { ui.planIsCurrent }

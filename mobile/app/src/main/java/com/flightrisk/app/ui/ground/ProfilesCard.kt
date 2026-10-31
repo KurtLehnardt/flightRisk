@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 
 /** The frame every mission card shares: a titled, rounded block. */
 @Composable
-internal fun MissionCard(title: String, tag: String, content: @Composable () -> Unit) {
+internal fun MissionCard(title: String, tag: String, notLiveNote: String? = null, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -35,6 +35,7 @@ internal fun MissionCard(title: String, tag: String, content: @Composable () -> 
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        notLiveNote?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("$tag.notLive")) }
         content()
     }
 }
@@ -111,7 +112,8 @@ private fun OptionRow(
                 .testTag("$tagPrefix.${o.value.ifEmpty { "none" }}")
                 .semantics { selected = o.selected; contentDescription = "$who: ${o.label}" + if (o.selected) ", selected" else "" }
             if (o.selected) {
-                Button(onClick = { onSelect(o.value) }, enabled = enabled, modifier = mod) { Text(o.label) }
+                // Tapping the current choice does nothing, as a dashboard selector does for an unchanged value.
+                Button(onClick = {}, enabled = enabled, modifier = mod) { Text(o.label) }
             } else {
                 OutlinedButton(onClick = { onSelect(o.value) }, enabled = enabled, modifier = mod) { Text(o.label) }
             }

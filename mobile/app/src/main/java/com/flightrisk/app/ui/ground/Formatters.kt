@@ -53,7 +53,7 @@ data class ProfilesCardUi(
 object MissionFormat {
     const val NOT_SUPPORTED = "Not supported"
     const val FOLLOW_FLEET_DEFAULT = "Follow fleet default"
-    const val NO_FLEET_DEFAULT = "No default"
+    const val NO_FLEET_DEFAULT = "Keep each drone's startup profile"
     const val MAX_PROFILES = 24
     const val MAX_DRONES = 64
     const val NOT_CONNECTED_NOTE = "Not connected to the ground: profile changes are off."
@@ -70,8 +70,20 @@ object MissionFormat {
         return DisplayText.DASH
     }
 
-    /** The dashboard's `profileStatusCore`: the status line under a drone's profile selector. */
+    const val DETECTOR_FAILING = "DETECTOR FAILING: the edge cannot process frames. "
+
+    /**
+     * The status line under a drone's profile selector: the dashboard's `profileStatus`, which puts
+     * [DETECTOR_FAILING] in front of the status and marks it bad when `detector_ok` is false.
+     */
     fun profileStatus(d: DroneProfileState, profiles: DetectionProfiles): Pair<String, Severity> {
+        val (text, severity) = profileStatusCore(d, profiles)
+        if (d.detectorOk == false) return DETECTOR_FAILING + text to Severity.BAD
+        return text to severity
+    }
+
+    /** The dashboard's `profileStatusCore`. */
+    fun profileStatusCore(d: DroneProfileState, profiles: DetectionProfiles): Pair<String, Severity> {
         fun label(n: String?) = profileLabel(profiles, n)
         if (d.supported != true) return UNSUPPORTED_EDGE to Severity.WARN
         if (d.pending == true) return "Switching to ${label(d.requested)}..." to Severity.INFO
@@ -142,7 +154,7 @@ object MissionFormat {
                 severity = severity,
                 supported = supported,
                 options = if (supported) options(d.override, FOLLOW_FLEET_DEFAULT) else emptyList(),
-                canSelect = supported && blocked == null,
+                canSelect = supported && blocked == null && d.pending != true,
             )
         }
         return ProfilesCardUi(
@@ -163,6 +175,13 @@ object MissionFormat {
     fun profileSent(target: String?, label: String): String =
         (if (target == null) "Fleet default profile change sent: $label." else "Profile change sent for ${GroundText.shortId(target)}: $label.") +
             " Waiting for the ground's answer."
+
+    const val WHY_PENDING = "a switch for this drone is still waiting for the edge."
+    const val PROFILE_NO_ANSWER = "Profile change: no answer from the ground yet. Check the active profile."
+    /** Shown on the read-only cards while the state is not live. */
+    const val NOT_LIVE_VALUES = "Not live: last values from the ground."
+
+    fun notLiveNote(isStale: Boolean): String? = if (isStale) NOT_LIVE_VALUES else null
 
     const val WHY_NOT_CONNECTED = "this phone is not connected to the ground."
     const val WHY_SEND_FAILED = "the connection failed while sending."
@@ -265,6 +284,18 @@ object MissionFormat {
         is ReasoningProviderKind.Unknown -> GroundText.shorten(kind.raw, 40)
     }
 
+    const val MAX_AVAILABLE = 8
+
+    /** "Available: Gemma, Off", cut to [MAX_AVAILABLE] distinct entries and "+N more" before any text is built. */
+    fun availableText(available: List<ReasoningProviderKind>): String? {
+        if (available.isEmpty()) return null
+        // Raw names are compared before shortening, so a flood of entries costs one pass and no regex work.
+        val distinct = available.distinctBy { it.raw }
+        val more = distinct.size - MAX_AVAILABLE
+        val shown = distinct.take(MAX_AVAILABLE).joinToString(", ") { providerName(it) }
+        return "Available: $shown" + if (more > 0) " +$more more" else ""
+    }
+
     fun reasoningCard(r: ReasoningProvider?): ReasoningCardUi? {
         if (r == null) return null
         val status = when {
@@ -278,7 +309,7 @@ object MissionFormat {
         }
         return ReasoningCardUi(
             statusText = status,
-            availableText = r.available.takeIf { it.isNotEmpty() }?.joinToString(", ", "Available: ") { providerName(it) },
+            availableText = availableText(r.available),
             cloudBadge = if (r.cloudAllowed == true) "Cloud allowed" else "Cloud not allowed",
             cloudAllowed = r.cloudAllowed == true,
             unavailableNotes = r.unavailable.entries.take(8).map { (k, v) -> "${GroundText.shorten(k.replaceFirstChar { c -> c.uppercase() }, 40)}: ${GroundText.shorten(v)}" },
@@ -288,6 +319,7 @@ object MissionFormat {
     // -------------------------------------------------------------- plan canvas
 
     /** The plan canvas as plain data, so the empty and not-live states are testable without a view. Read only. */
+    @androidx.compose.runtime.Immutable
     data class PlanCanvasUi(
         val drawing: PlanDrawing?,
         /** True when the ground state is not live. */
@@ -321,8 +353,11 @@ object MissionFormat {
                 if (d.skippedUncovered > 0) {
                     parts += "${d.skippedUncovered} uncovered entr${if (d.skippedUncovered == 1) "y" else "ies"} not drawn"
                 }
-                for (id in d.takeoffFallbackDroneIds) {
+                for (id in d.takeoffFallbackDroneIds.take(MAX_DISTINCT_REASONS)) {
                     parts += "takeoff point out of range for ${GroundText.shortId(id)}; drawn from the zone corner"
+                }
+                if (d.takeoffFallbackDroneIds.size > MAX_DISTINCT_REASONS) {
+                    parts += "and ${d.takeoffFallbackDroneIds.size - MAX_DISTINCT_REASONS} more with a takeoff point out of range"
                 }
                 var text = if (parts.isEmpty()) "" else parts.joinToString("; ") + "."
                 if (d.truncated) text += (if (text.isEmpty()) "" else " ") + PARTIAL_NOTE
@@ -422,6 +457,12 @@ object PlanColors {
             add(Triple("secondary text light", secondaryTextLight, lightBackground))
             add(Triple("secondary text dark", secondaryTextDark, darkBackground))
         }
+
+    /** Strokes and fills are dimmed to this opacity while the plan is not live; labels stay opaque. */
+    const val DIM_ALPHA = 0.8f
+
+    /** The colour of a zone label: always opaque, live or not. */
+    fun label(c: Color): Color = c
 
     fun drone(index: Int, dark: Boolean): Color = (if (dark) droneDark else droneLight)[index.coerceIn(0, droneColorCount - 1)]
     fun warning(dark: Boolean): Color = if (dark) warningDark else warningLight

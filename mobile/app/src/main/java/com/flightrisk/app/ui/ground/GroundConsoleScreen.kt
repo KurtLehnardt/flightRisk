@@ -199,8 +199,8 @@ fun MissionCardsSlot(state: GroundUiState, actions: GroundActions) {
                 onDismissFeedback = actions.onDismissProfileFeedback,
             )
         }
-        ceiling?.let { CeilingCard(it) }
-        reasoning?.let { ReasoningCard(it) }
+        ceiling?.let { CeilingCard(it, state.isStateStale) }
+        reasoning?.let { ReasoningCard(it, state.isStateStale) }
     }
 }
 

@@ -1,6 +1,5 @@
 package com.flightrisk.app.ui.ground
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -73,7 +73,7 @@ fun PlanCanvasCard(ui: MissionFormat.PlanCanvasUi, modifier: Modifier = Modifier
     val text = PlanColors.text(dark)
     val secondary = PlanColors.secondaryText(dark)
     val warning = PlanColors.warning(dark)
-    val measurer = rememberTextMeasurer()
+    val measurer = rememberTextMeasurer(cacheSize = 64)
     val summary = ui.accessibilitySummary
     Column(
         modifier = modifier
@@ -93,12 +93,17 @@ fun PlanCanvasCard(ui: MissionFormat.PlanCanvasUi, modifier: Modifier = Modifier
         val d = ui.drawing
         if (d != null && !ui.isEmpty) {
             val aspect = aspectOf(d.bounds)
-            Canvas(
+            val notLive = ui.isNotLive
+            // The paths and labels are built once per drawing, size and theme; a redraw only replays them.
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fixedAspect(aspect, MAX_CANVAS_HEIGHT)
-                    .alpha(if (ui.isNotLive) 0.7f else 1f),
-            ) { drawPlan(d, dark, measurer) }
+                    .drawWithCache {
+                        val ops = buildPlanOps(d, dark, notLive, measurer, size)
+                        onDrawBehind { for (op in ops) op() }
+                    },
+            )
             Legend(d, ui, text, secondary, warning, dark)
         } else {
             Text(MissionFormat.EMPTY_TEXT, style = MaterialTheme.typography.bodySmall, color = secondary)
@@ -152,12 +157,15 @@ private fun Legend(d: PlanDrawing, ui: MissionFormat.PlanCanvasUi, text: Color, 
 internal fun zoneColor(z: ZoneDrawing, dark: Boolean): Color =
     if (z.lost) PlanColors.lost(dark) else PlanColors.drone(MissionFormat.colorIndex(z.droneId), dark)
 
-private fun DrawScope.drawPlan(d: PlanDrawing, dark: Boolean, measurer: TextMeasurer) {
+private fun Density.buildPlanOps(d: PlanDrawing, dark: Boolean, notLive: Boolean, measurer: TextMeasurer, size: Size): List<DrawScope.() -> Unit> {
+    val ops = ArrayList<DrawScope.() -> Unit>()
     val pad = 18.dp.toPx()
     val t = PlanGeometry.transform(d.bounds, size.width.toDouble(), size.height.toDouble(), pad.toDouble())
-    if (!(t.scale > 0)) return
-    val warning = PlanColors.warning(dark)
-    val lostGrey = PlanColors.lost(dark)
+    if (!(t.scale > 0)) return ops
+    // Strokes and fills are dimmed while the plan is not live; labels stay opaque so they keep their contrast.
+    fun dim(c: Color) = if (notLive) c.copy(alpha = c.alpha * PlanColors.DIM_ALPHA) else c
+    val warning = dim(PlanColors.warning(dark))
+    val lostGrey = dim(PlanColors.lost(dark))
     val background = PlanColors.background(dark)
     fun pt(p: PlanPoint): Offset {
         val m = t.map(p)
@@ -170,27 +178,36 @@ private fun DrawScope.drawPlan(d: PlanDrawing, dark: Boolean, measurer: TextMeas
     }
     val dash = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))
     val fineDash = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))
+    val minArrow = MIN_ARROW_SEGMENT_DP.dp.toPx()
 
     d.grid?.let {
         val (o, s) = topLeftSize(it)
-        drawRect(PlanColors.secondaryText(dark), o, s, style = Stroke(1.5.dp.toPx()))
+        val c = dim(PlanColors.secondaryText(dark))
+        ops += { drawRect(c, o, s, style = Stroke(1.5.dp.toPx())) }
     }
     for (area in d.uncoveredAreas) {
         val (o, s) = topLeftSize(area.rect)
-        drawRect(warning.copy(alpha = 0.22f), o, s, style = Fill)
-        drawRect(warning, o, s, style = Stroke(1.dp.toPx(), pathEffect = fineDash))
+        ops += {
+            drawRect(warning.copy(alpha = warning.alpha * 0.22f), o, s, style = Fill)
+            drawRect(warning, o, s, style = Stroke(1.dp.toPx(), pathEffect = fineDash))
+        }
     }
     var arrows = 0
     for (z in d.zones) {
-        val color = zoneColor(z, dark)
+        val full = zoneColor(z, dark)
+        val color = dim(full)
         z.rect?.let {
             val (o, s) = topLeftSize(it)
             if (z.lost) {
-                drawRect(lostGrey.copy(alpha = 0.15f), o, s, style = Fill)
-                drawRect(lostGrey, o, s, style = Stroke(1.5.dp.toPx(), pathEffect = dash))
+                ops += {
+                    drawRect(lostGrey.copy(alpha = lostGrey.alpha * 0.15f), o, s, style = Fill)
+                    drawRect(lostGrey, o, s, style = Stroke(1.5.dp.toPx(), pathEffect = dash))
+                }
             } else {
-                drawRect(color.copy(alpha = 0.08f), o, s, style = Fill)
-                drawRect(color, o, s, style = Stroke(1.dp.toPx()))
+                ops += {
+                    drawRect(color.copy(alpha = color.alpha * 0.08f), o, s, style = Fill)
+                    drawRect(color, o, s, style = Stroke(1.dp.toPx()))
+                }
             }
         }
         if (z.points.size > 1) {
@@ -201,53 +218,59 @@ private fun DrawScope.drawPlan(d: PlanDrawing, dark: Boolean, measurer: TextMeas
                 val p = pt(z.points[i])
                 path.lineTo(p.x, p.y)
             }
-            drawPath(
-                path, color,
-                style = Stroke(2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round, pathEffect = if (z.lost) dash else null),
+            val stroke = Stroke(
+                2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                pathEffect = if (z.lost) dash else null,
             )
+            ops += { drawPath(path, color, style = stroke) }
+            val arrowPath = Path()
             for (s in z.segments) {
                 if (s.isZeroLength || arrows >= ARROW_BUDGET) continue
                 val a = pt(s.from)
                 val b = pt(s.to)
-                if (hypot(b.x - a.x, b.y - a.y) < MIN_ARROW_SEGMENT_DP.dp.toPx()) continue
-                drawArrow(a, b, color)
+                if (hypot(b.x - a.x, b.y - a.y) < minArrow) continue
+                addArrow(arrowPath, a, b, 5.dp.toPx())
                 arrows++
             }
+            ops += { drawPath(arrowPath, color) }
         }
         z.start?.let {
             val c = pt(it)
-            drawCircle(background, 6.dp.toPx(), c)
-            drawCircle(color, 6.dp.toPx(), c, style = Stroke(2.5.dp.toPx()))
+            val r = 6.dp.toPx()
+            val w = Stroke(2.5.dp.toPx())
+            ops += {
+                drawCircle(background, r, c)
+                drawCircle(color, r, c, style = w)
+            }
         }
         z.rect?.let {
             val corner = pt(PlanPoint(it.minX, it.maxY))
             val id = GroundText.shortId(z.droneId)
             val label = if (z.lost) "$id LOST" else id
-            drawText(
-                measurer, label, Offset(corner.x + 3.dp.toPx(), corner.y + 3.dp.toPx()),
-                style = TextStyle(color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+            val layout = measurer.measure(
+                label, TextStyle(color = PlanColors.label(full), fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
             )
+            val at = Offset(corner.x + 3.dp.toPx(), corner.y + 3.dp.toPx())
+            ops += { drawText(layout, topLeft = at) }
         }
     }
     for (lane in d.uncoveredLanes) {
-        drawLine(
-            warning, pt(lane.from), pt(lane.to), strokeWidth = 4.dp.toPx(),
-            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 5.dp.toPx())),
-        )
+        val from = pt(lane.from)
+        val to = pt(lane.to)
+        val w = 4.dp.toPx()
+        val fx = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 5.dp.toPx()))
+        ops += { drawLine(warning, from, to, strokeWidth = w, cap = androidx.compose.ui.graphics.StrokeCap.Round, pathEffect = fx) }
     }
+    return ops
 }
 
-private fun DrawScope.drawArrow(a: Offset, b: Offset, color: Color) {
+private fun addArrow(p: Path, a: Offset, b: Offset, size: Float) {
     val mid = Offset((a.x + b.x) / 2, (a.y + b.y) / 2)
     val angle = atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble())
-    val size = 5.dp.toPx()
-    val p = Path()
     p.moveTo(mid.x + (cos(angle) * size).toFloat(), mid.y + (sin(angle) * size).toFloat())
     p.lineTo(mid.x + (cos(angle + 2.5) * size).toFloat(), mid.y + (sin(angle + 2.5) * size).toFloat())
     p.lineTo(mid.x + (cos(angle - 2.5) * size).toFloat(), mid.y + (sin(angle - 2.5) * size).toFloat())
     p.close()
-    drawPath(p, color)
 }
 
 /** The plan canvas of the Ground screen: remembers the geometry for the plan value, so a new frame does not recompute it. */

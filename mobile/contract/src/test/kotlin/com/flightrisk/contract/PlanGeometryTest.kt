@@ -86,6 +86,19 @@ class PlanGeometryTest {
     }
 
     @Test
+    fun `an offset takeoff point starts the path and stays inside the bounds`() {
+        val d = PlanGeometry.drawing(
+            plan(
+                """{"zones":[{"drone_id":"drone-1","x_cm":100,"y_cm":0,"w_cm":150,"h_cm":400,"takeoff_x_cm":175,"takeoff_y_cm":-50,
+                  "lanes":[{"direction":"forward","distance_cm":450},{"direction":"right","distance_cm":75},{"direction":"back","distance_cm":400}]}]}""",
+            ),
+        )
+        assertEquals(pts(175 to -50, 175 to 400, 250 to 400, 250 to 0), d.zones[0].points)
+        assertEquals(PlanPoint(175.0, -50.0), d.zones[0].start)
+        assertEquals(box(100, -50, 250, 400), d.bounds)
+    }
+
+    @Test
     fun `zero distance lane repeats the point`() {
         val z = zone("""{"drone_id":"d","x_cm":0,"y_cm":0,"w_cm":10,"h_cm":10,"lanes":[{"direction":"forward","distance_cm":0},{"direction":"right","distance_cm":5}]}""")
         val d = PlanGeometry.zoneDrawing(z)

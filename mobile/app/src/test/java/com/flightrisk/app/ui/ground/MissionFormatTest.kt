@@ -39,7 +39,7 @@ class MissionFormatTest {
         val row = c.drones.single()
         assertEquals("Switching to Top-down search (HERIDAL)...", row.statusText)
         assertEquals(Severity.INFO, row.severity)
-        assertTrue(row.canSelect)
+        assertFalse(row.canSelect) // the dashboard disables a selector while its switch is pending
         assertNull(c.blockedNote)
     }
 
@@ -123,7 +123,7 @@ class MissionFormatTest {
         assertEquals("Follow fleet default", row.options[0].label)
         // override is top_down in this fixture.
         assertEquals("top_down", row.options.single { it.selected }.value)
-        assertEquals("No default", card("pending").fleetOptions[0].label)
+        assertEquals("Keep each drone's startup profile", card("pending").fleetOptions[0].label)
         assertTrue(card("pending").fleetOptions[0].selected)
     }
 
@@ -134,6 +134,87 @@ class MissionFormatTest {
         val d = p.drones.getValue("drone-1").copy(mismatch = false, refusal = p.drones.getValue("drone-1").refusal!!.copy(detail = long))
         val text = MissionFormat.profileStatus(d, p).first
         assertTrue(text.length < 400)
+    }
+
+    // ---- detector failing, pending, caps, not live
+
+    @Test
+    fun `a failing detector is shown in front of every status and marked bad`() {
+        for (case in listOf("pending", "fallback", "refused", "unsupported", "standby_controls_disabled")) {
+            val p = profiles(case)
+            for ((id, d) in p.drones) {
+                val core = MissionFormat.profileStatusCore(d, p)
+                val failing = MissionFormat.profileStatus(d.copy(detectorOk = false), p)
+                assertEquals("$case $id", MissionFormat.DETECTOR_FAILING + core.first, failing.first)
+                assertEquals(Severity.BAD, failing.second)
+                assertEquals("DETECTOR FAILING: the edge cannot process frames. ", MissionFormat.DETECTOR_FAILING)
+                assertEquals(core, MissionFormat.profileStatus(d.copy(detectorOk = true), p))
+                assertEquals(core, MissionFormat.profileStatus(d.copy(detectorOk = null), p))
+            }
+        }
+        // The card rows carry it too.
+        val p = profiles("unsupported")
+        val failingProfiles = p.copy(drones = p.drones.mapValues { (_, d) -> d.copy(detectorOk = false) })
+        val row = MissionFormat.profilesCard(failingProfiles, false, true)!!.drones[0]
+        assertEquals("DETECTOR FAILING: the edge cannot process frames. Active: Startup default (yolo11n).", row.statusText)
+        assertEquals(Severity.BAD, row.severity)
+    }
+
+    @Test
+    fun `a drone with a switch pending cannot be selected`() {
+        val c = card("pending")
+        assertFalse(c.drones.single().canSelect)
+        assertTrue(c.canSelect)
+        assertTrue(card("fallback").drones.single().canSelect)
+    }
+
+    @Test
+    fun `ten thousand available providers give a short, fast text`() {
+        val many = (1..10_000).map { com.flightrisk.contract.ReasoningProviderKind.of("provider-$it-" + "x".repeat(200)) }
+        val started = System.nanoTime()
+        val text = MissionFormat.availableText(many)!!
+        val ms = (System.nanoTime() - started) / 1_000_000
+        assertTrue("took $ms ms", ms < 1_000)
+        assertTrue(text.length < 2_500)
+        assertTrue(text, text.endsWith(" +9992 more"))
+        val dup = MissionFormat.availableText(List(10_000) { com.flightrisk.contract.ReasoningProviderKind.Gemma })
+        assertEquals("Available: Gemma", dup)
+        assertNull(MissionFormat.availableText(emptyList()))
+        // The whole card stays bounded too.
+        val r = ReasoningProvider(
+            com.flightrisk.contract.ReasoningProviderKind.Gemma, "Gemma", "m", many, (1..10_000).associate { "p$it" to "r$it" }.toSortedMap(), true,
+        )
+        assertTrue(MissionFormat.reasoningCard(r)!!.unavailableNotes.size <= 8)
+    }
+
+    @Test
+    fun `many takeoff fallbacks are listed with a count`() {
+        val zones = (1..10).joinToString(",") { """{"drone_id":"drone-$it","x_cm":5,"y_cm":6,"w_cm":10,"h_cm":10,"takeoff_x_cm":1e12,"takeoff_y_cm":4,"lanes":[]}""" }
+        val note = MissionFormat.planCanvas(plan("""{"zones":[$zones]}"""), false, true).skippedNote!!
+        assertTrue(note, note.contains("and 7 more with a takeoff point out of range"))
+        assertTrue(note.length < 600)
+    }
+
+    @Test
+    fun `the read only cards say not live only while the state is stale`() {
+        assertEquals("Not live: last values from the ground.", MissionFormat.notLiveNote(true))
+        assertNull(MissionFormat.notLiveNote(false))
+    }
+
+    @Test
+    fun `labels stay opaque and dimmed strokes keep 3 to 1 when the plan is not live`() {
+        for ((dark, bg) in listOf(false to PlanColors.lightBackground, true to PlanColors.darkBackground)) {
+            val colors = (0 until PlanColors.droneColorCount).map { PlanColors.drone(it, dark) } + PlanColors.lost(dark) + PlanColors.warning(dark)
+            for (c in colors) {
+                // Labels use the full colour, so the 4.5:1 pairs above are what the not-live rendering shows.
+                assertEquals(c, PlanColors.label(c))
+                val a = PlanColors.DIM_ALPHA
+                val blended = androidx.compose.ui.graphics.Color(
+                    c.red * a + bg.red * (1 - a), c.green * a + bg.green * (1 - a), c.blue * a + bg.blue * (1 - a),
+                )
+                assertTrue("dimmed stroke $c on dark=$dark", GroundColors.contrast(blended, bg) >= 3.0)
+            }
+        }
     }
 
     // ---- ceiling card
@@ -320,7 +401,7 @@ class MissionFormatTest {
         val all = listOf("pending", "fallback", "refused", "unsupported", "standby_controls_disabled").map { card(it).toString() } +
             listOf("edge_pending", "edge_refused", "locked_in_flight").map { ceiling(it).toString() } +
             listOf("cloud_allowed", "cloud_allowed_no_key").map { reasoning(it).toString() }
-        assertNotNull(all)
+        assertEquals(10, all.size)
         assertTrue(all.none { it.contains("test-key") || it.contains("sk-") })
     }
 }
