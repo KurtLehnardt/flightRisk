@@ -55,6 +55,11 @@ struct ContentView: View {
                         Label("Settings", systemImage: "gearshape")
                     }
                     .tag(2)
+                GroundView(viewModel: .live)
+                    .tabItem {
+                        Label("Ground", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .tag(3)
             }
         } else {
             OnboardingView { [pipeline] image, report in
