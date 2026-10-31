@@ -470,6 +470,11 @@ final class GroundViewModel {
     private(set) var latestFrames: [String: FramePayload] = [:]
     private(set) var latestFrameAt: [String: Date] = [:]
     private(set) var fleetPlan: FleetPlanPayload?
+    // BEGIN plan-is-current (U9). The ground sends `fleet_plan` only when it has a plan, so a plan kept
+    // from before a reconnect cannot be told from the current one. False from every connect, reconnect
+    // and dropped-events gap until a `fleet_plan` arrives in the new session.
+    private(set) var planIsCurrent = false
+    // END plan-is-current
     private(set) var fleetDetections: [FleetDetection] = []
     private(set) var detectionProfiles: DetectionProfilesPayload?
     private(set) var ceilingSettings: CeilingSettingsPayload?
@@ -909,10 +914,12 @@ final class GroundViewModel {
             stateSequence += 1
             apply(state)
         case .reconnected:
+            planIsCurrent = false
             markStale(GroundUIText.staleRefreshing)
             Task { await self.sendStateRequests() }
         case let .eventsDropped(count):
             log(.warning, "\(count) events were dropped; requesting the full state again")
+            planIsCurrent = false
             markStale(GroundUIText.staleRefreshing)
             let sequence = stateSequence
             let generationAtGap = generation
@@ -966,6 +973,7 @@ final class GroundViewModel {
             }
         case let .fleetPlan(p):
             fleetPlan = p
+            planIsCurrent = true
         case let .fleetDetection(d):
             fleetDetections.append(d)
             if fleetDetections.count > Self.maxDetections { fleetDetections.removeFirst(fleetDetections.count - Self.maxDetections) }
@@ -1108,6 +1116,7 @@ final class GroundViewModel {
         latestFrames = [:]
         latestFrameAt = [:]
         fleetPlan = nil
+        planIsCurrent = false
         fleetDetections = []
         detectionProfiles = nil
         ceilingSettings = nil
@@ -1150,6 +1159,7 @@ final class GroundViewModel {
     /// The link is gone: no answer to anything sent on it can arrive any more. Every command
     /// still waiting becomes a visible failure; nothing is resent.
     private func connectionLost() {
+        planIsCurrent = false
         let at = clock()
         landAllOutstanding = []
         pendingLegacyLands = []
