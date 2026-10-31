@@ -8,6 +8,10 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.flightrisk.app.ui.ground.GroundConsoleViewModel
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,6 +82,25 @@ class MainActivity : ComponentActivity() {
     private var settingsState by mutableStateOf(SettingsScreenState())
     private var targetBitmap by mutableStateOf<Bitmap?>(null)
     private var targetQualityReport by mutableStateOf<QualityReport?>(null)
+
+    // Ground console (U3). One block: the ViewModel is owned by the activity, so it outlives tab
+    // switches, and it follows the activity between foreground and background. It connects only
+    // when the user saved an address and a key and switched the link on.
+    private val groundConsoleViewModel: GroundConsoleViewModel by viewModels {
+        GroundConsoleViewModel.factory(applicationContext)
+    }
+
+    init {
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> groundConsoleViewModel.onForeground()
+                    Lifecycle.Event.ON_STOP -> if (!isChangingConfigurations) groundConsoleViewModel.onBackground()
+                    else -> Unit
+                }
+            },
+        )
+    }
 
     // Drone state
     private var droneManager: DroneManager? = null
