@@ -52,8 +52,6 @@ struct FlightRiskApp: App {
                 viewModel: viewModel,
                 cameraSession: frameSource.session,
                 config: config,
-                droneState: nil,
-                frameSourceMode: .camera,
                 gemmaModelManager: gemmaModelManager,
                 pipeline: pipeline,
                 llmSelector: llmSelector
@@ -79,16 +77,21 @@ struct FlightRiskApp: App {
         // Set frame source for the pipeline
         await pipeline.setFrameSource(frameSource)
 
-        // Register LLM backends
-        // Cloud Claude (loaded from Keychain)
-        let claudeBackend = CloudClaudeLlmBackend(
-            apiKey: KeychainHelper.loadApiKey(provider: "cloud_claude") ?? ""
-        )
-        await llmSelector.registerBackend(claudeBackend)
+        // Publish every reasoning status change (including whether cloud
+        // reasoning is active) to the views.
+        await llmSelector.setStatusHandler { status in
+            Task { @MainActor in
+                ReasoningActivity.shared.update(status)
+            }
+        }
 
-        // Local Gemma
+        // Register LLM backends: on-device Gemma first, cloud Claude second.
+        // Claude starts without a key; the selector hands it the Keychain key
+        // only while the user's explicit cloud opt-in is on.
         let gemmaBackend = LocalGemmaLlmBackend(modelManager: gemmaModelManager)
-        await llmSelector.registerBackend(gemmaBackend)
+        let claudeBackend = CloudClaudeLlmBackend()
+        await llmSelector.registerOnDeviceFirst(local: gemmaBackend, cloud: claudeBackend)
+        await llmSelector.refreshAsync()
 
         // Start connectivity monitoring
         await llmSelector.startMonitoring()

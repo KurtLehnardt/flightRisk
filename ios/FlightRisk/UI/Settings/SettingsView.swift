@@ -7,23 +7,25 @@ import SwiftUI
 /// Mirrors the layout of the Android `SettingsScreen.kt`:
 ///   1. Sensitivity presets (pill buttons)
 ///   2. LLM backend picker + API key
-///   3. Drone status (read-only)
-///   4. Advanced threshold sliders (collapsible)
-///   5. About
+///   3. Advanced threshold sliders (collapsible)
+///   4. About
 struct SettingsView: View {
     let config: FlightRiskConfig
     let onPresetSelected: (SensitivityPreset) -> Void
     let onThresholdChanged: (String, Float) -> Void
     let onLlmBackendChanged: (String) -> Void
     let onApiKeyChanged: (String) -> Void
-    let llmAvailable: Bool
-    let droneState: TelloState?
-    let frameSourceMode: FrameSourceMode
     let modelManager: (any GemmaModelManaging)?
 
     @AppStorage("flightrisk_active_preset") private var activePresetRaw: String = SensitivityPreset.balanced.rawValue
     @State private var apiKeyInput: String = ""
-    @State private var llmBackend: String = "cloud_claude"
+    @State private var reasoningProvider: ReasoningProvider = .off
+    @State private var cloudOptIn: Bool = false
+    @State private var hasSavedClaudeKey: Bool = false
+    @State private var showCloudConsent: Bool = false
+    @State private var consentSelectsCloud: Bool = false
+    private let reasoningSettings = ReasoningSettings()
+    private let reasoningKeyStore = KeychainReasoningKeyStore()
     @State private var advancedExpanded: Bool = false
     @State private var showApiKeySaved: Bool = false
     @State private var hasInternet: Bool = true
@@ -44,13 +46,12 @@ struct SettingsView: View {
             sensitivitySection
             llmSection
             matchingAlgorithmsSection
-            droneSection
             advancedSection
             aboutSection
         }
         .navigationTitle("Settings")
         .onAppear {
-            apiKeyInput = KeychainHelper.loadApiKey(provider: llmBackend) ?? ""
+            loadReasoningSettings()
             checkNetworkConnectivity()
         }
         .alert("Delete AI Model?", isPresented: $showDeleteConfirmation) {
@@ -61,11 +62,32 @@ struct SettingsView: View {
         } message: {
             Text("This will free ~1.5 GB. You'll need WiFi to re-download.")
         }
-        .task(id: llmBackend) {
-            guard llmBackend == "local_gemma", let manager = modelManager else { return }
+        // Cloud consent dialog for the reasoning section, attached to the
+        // Form so it is presented once from either the toggle or the picker.
+        .alert("Send images to Anthropic?", isPresented: $showCloudConsent) {
+            Button("Allow Cloud Reasoning") {
+                confirmCloudOptIn()
+            }
+            Button("Cancel", role: .cancel) {
+                consentSelectsCloud = false
+            }
+        } message: {
+            Text(Self.cloudConsentMessage)
+        }
+        .onChange(of: gemmaState) { _, _ in
+            // Let the selector pick up Gemma as soon as it becomes ready (or
+            // drop it when it is unloaded or deleted).
+            onLlmBackendChanged(reasoningProvider.rawValue)
+        }
+        .onChange(of: reasoningStatus.selected) { _, newValue in
+            // With no explicit choice stored, follow the resolved default.
+            if reasoningSettings.storedProvider == nil { reasoningProvider = newValue }
+        }
+        .task(id: reasoningProvider) {
+            guard reasoningProvider == .localGemma, let manager = modelManager else { return }
             gemmaState = await manager.state
             // Poll state periodically during download
-            while !Task.isCancelled && llmBackend == "local_gemma" {
+            while !Task.isCancelled && reasoningProvider == .localGemma {
                 try? await Task.sleep(for: .seconds(0.5))
                 gemmaState = await manager.state
             }
@@ -100,57 +122,65 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Section 2: LLM Backend
+    // MARK: - Section 2: AI Reasoning
 
+    /// Reasoning provider picker (Local Gemma, Cloud Claude, Off), the
+    /// explicit cloud opt-in with its consent dialog, the Claude key field
+    /// (shown only after opt-in) and a "Cloud active" indicator.
     private var llmSection: some View {
         Section {
-            Picker("Backend", selection: $llmBackend) {
-                Text("Cloud Claude").tag("cloud_claude")
-                Text("Cloud Gemini").tag("cloud_gemini")
-                Text("Cloud OpenAI").tag("cloud_openai")
-                Text("Local Gemma").tag("local_gemma")
-                Text("None").tag("none")
-            }
-            .onChange(of: llmBackend) { _, newValue in
-                apiKeyInput = KeychainHelper.loadApiKey(provider: newValue) ?? ""
-                onLlmBackendChanged(newValue)
-            }
-
-            if llmBackend.hasPrefix("cloud_") {
-                SecureField(apiKeyPlaceholder, text: $apiKeyInput)
-                    .textContentType(.password)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-
-                Button {
-                    saveApiKey()
-                } label: {
-                    HStack {
-                        Text("Save API Key")
-                        Spacer()
-                        if showApiKeySaved {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(FlightRiskTheme.matchGreen)
-                        }
-                    }
+            Picker("Provider", selection: providerBinding) {
+                ForEach(ReasoningProvider.allCases) { provider in
+                    Text(pickerLabel(for: provider)).tag(provider)
                 }
-                .disabled(apiKeyInput.isEmpty)
+            }
 
+            if reasoningStatus.isCloudActive {
+                CloudActiveIndicator()
+            } else {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(llmStatusColor)
+                        .fill(reasoningStatus.active == .off ? Color.secondary : FlightRiskTheme.matchGreen)
                         .frame(width: 8, height: 8)
-                    Text(llmStatusText)
+                    Text("Active: \(reasoningStatus.active.displayName)")
                         .font(.footnote)
-                        .foregroundStyle(llmStatusColor)
+                        .foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("LLM status: \(llmStatusText)")
-            } else if llmBackend == "local_gemma" {
-                Text("Runs on-device. No API key required.")
+                .accessibilityLabel("Active reasoning: \(reasoningStatus.active.displayName)")
+            }
+
+            if let notice = reasoningStatus.notice {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(FlightRiskTheme.alertOrange)
+            }
+
+            Toggle("Allow cloud reasoning", isOn: cloudOptInBinding)
+                .accessibilityHint("Asks for confirmation before any image can be sent to Anthropic")
+
+            if let reason = reasoningStatus.unavailable[.cloudClaude] {
+                Text("Cloud Claude unavailable: \(reason)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if cloudOptIn {
+                claudeKeyRows
+            }
+
+            // Removing a saved key is always possible, opted in or not.
+            if hasSavedClaudeKey {
+                Button("Remove Saved Key", role: .destructive) {
+                    removeApiKey()
+                }
+            }
+
+            if reasoningProvider == .localGemma {
+                Text("Runs on-device. No image leaves the phone.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Local Gemma model runs on-device. No API key required.")
+                    .accessibilityLabel("Local Gemma model runs on-device. No image leaves the phone.")
 
                 // State-driven UI
                 switch gemmaState {
@@ -231,14 +261,142 @@ struct SettingsView: View {
                 Text("Local analysis uses text descriptions. Match confidence is automatically adjusted.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-            } else {
-                Text("LLM reasoning disabled")
+            } else if reasoningProvider == .off {
+                Text("Reasoning is off. Matches are scored without a language model.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         } header: {
             Text("AI Reasoning")
+        } footer: {
+            Text("Cloud reasoning is off by default. Local Gemma and Off keep every image on this phone.")
         }
+    }
+
+    /// The consent text shown before cloud reasoning can be turned on.
+    static let cloudConsentMessage =
+        "With cloud reasoning on, the cropped image of each detected person, the reference photo you chose "
+        + "and the text description you entered are sent to Anthropic (Claude) for analysis. The images can "
+        + "show a face, and Anthropic's privacy policy applies to them. Nothing is sent until you also save a "
+        + "Claude API key and select Cloud Claude. You can turn this off at any time here; turning it off "
+        + "stops sending at once and cancels any request still in progress."
+
+    /// The Claude API key rows, shown only after the user opted in.
+    @ViewBuilder
+    private var claudeKeyRows: some View {
+        SecureField(hasSavedClaudeKey ? "Replace saved key" : "sk-ant-...", text: $apiKeyInput)
+            .textContentType(.password)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+
+        Button {
+            saveApiKey()
+        } label: {
+            HStack {
+                Text("Save API Key")
+                Spacer()
+                if showApiKeySaved {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(FlightRiskTheme.matchGreen)
+                }
+            }
+        }
+        .disabled(ReasoningSettings.normalizedKey(apiKeyInput) == nil)
+
+        HStack(spacing: 8) {
+            Circle()
+                .fill(llmStatusColor)
+                .frame(width: 8, height: 8)
+            Text(llmStatusText)
+                .font(.footnote)
+                .foregroundStyle(llmStatusColor)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Cloud Claude status: \(llmStatusText)")
+    }
+
+    private var reasoningStatus: ReasoningStatus {
+        ReasoningActivity.shared.status
+    }
+
+    private func pickerLabel(for provider: ReasoningProvider) -> String {
+        if reasoningStatus.unavailable[provider] != nil, provider != .off {
+            return "\(provider.displayName) (unavailable)"
+        }
+        return provider.displayName
+    }
+
+    /// Picker binding. The decision (select now, or ask for consent first)
+    /// is made by ``ReasoningSettings/requestProvider(_:)``.
+    private var providerBinding: Binding<ReasoningProvider> {
+        Binding(
+            get: { reasoningProvider },
+            set: { newValue in
+                switch reasoningSettings.requestProvider(newValue) {
+                case .applied:
+                    reasoningProvider = newValue
+                    onLlmBackendChanged(newValue.rawValue)
+                case .askForConsent(let selectCloud):
+                    askForCloudConsent(selectCloud: selectCloud)
+                }
+            }
+        )
+    }
+
+    /// Toggle binding. Turning it on asks for consent (the toggle shows on
+    /// while the dialog is open and returns to off on Cancel); turning it off
+    /// applies at once, see ``ReasoningSettings/requestCloudOptIn(_:)``.
+    private var cloudOptInBinding: Binding<Bool> {
+        Binding(
+            get: { cloudOptIn || (showCloudConsent && !consentSelectsCloud) },
+            set: { enabled in
+                switch reasoningSettings.requestCloudOptIn(enabled) {
+                case .applied:
+                    if !enabled { didDisableCloudReasoning() }
+                case .askForConsent(let selectCloud):
+                    askForCloudConsent(selectCloud: selectCloud)
+                }
+            }
+        )
+    }
+
+    private func askForCloudConsent(selectCloud: Bool) {
+        guard !showCloudConsent else { return }
+        consentSelectsCloud = selectCloud
+        showCloudConsent = true
+    }
+
+    private func loadReasoningSettings() {
+        cloudOptIn = reasoningSettings.cloudOptIn
+        reasoningProvider = reasoningSettings.storedProvider ?? reasoningStatus.selected
+        refreshSavedKeyState()
+        apiKeyInput = ""
+    }
+
+    private func refreshSavedKeyState() {
+        hasSavedClaudeKey = reasoningKeyStore.lookupClaudeApiKey() != .missing
+    }
+
+    private func confirmCloudOptIn() {
+        reasoningSettings.confirmCloudConsent(selectCloud: consentSelectsCloud)
+        cloudOptIn = true
+        if consentSelectsCloud {
+            reasoningProvider = .cloudClaude
+        }
+        consentSelectsCloud = false
+        onLlmBackendChanged(reasoningProvider.rawValue)
+    }
+
+    /// The opt-in was already turned off and saved by ``ReasoningSettings``,
+    /// which also told the cloud backend to cancel requests in flight.
+    private func didDisableCloudReasoning() {
+        cloudOptIn = false
+        apiKeyInput = ""
+        if reasoningProvider.isCloud {
+            let localReady = reasoningStatus.unavailable[.localGemma] == nil
+            reasoningProvider = reasoningSettings.selectedProvider(localModelAvailable: localReady)
+        }
+        onLlmBackendChanged(reasoningProvider.rawValue)
     }
 
     // MARK: - Section: Matching Algorithms
@@ -311,44 +469,6 @@ struct SettingsView: View {
         default:
             // clothingColor, heightRatio, reasoning are always available
             return enabled ? .active : .inactive
-        }
-    }
-
-    // MARK: - Section 3: Drone Status
-
-    private var droneSection: some View {
-        Section {
-            HStack {
-                Label {
-                    Text(frameSourceMode == .drone ? "Tello Drone" : "Device Camera")
-                } icon: {
-                    Image(systemName: frameSourceMode == .drone ? "airplane" : "camera.fill")
-                }
-                .foregroundStyle(.primary)
-            }
-            .accessibilityLabel("Video source: \(frameSourceMode == .drone ? "Tello Drone" : "Device Camera")")
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 8, height: 8)
-                Text(connectionText)
-                    .foregroundStyle(connectionColor)
-            }
-            .accessibilityLabel("Drone connection: \(connectionText)")
-
-            if let battery = droneState?.telemetry.battery,
-               droneState?.connectionState == .connected || droneState?.connectionState == .streaming {
-                HStack(spacing: 8) {
-                    Image(systemName: batteryIconName(for: battery))
-                        .foregroundStyle(batteryColor(for: battery))
-                    Text("\(battery)%")
-                        .foregroundStyle(batteryColor(for: battery))
-                }
-                .accessibilityLabel("Drone battery: \(battery) percent")
-            }
-        } header: {
-            Text("Drone Status")
         }
     }
 
@@ -437,16 +557,29 @@ struct SettingsView: View {
     // MARK: - Helpers
 
     private func saveApiKey() {
+        // Only reachable after opt-in. The key is trimmed, goes straight to
+        // the Keychain and is not kept in view state.
+        guard cloudOptIn, let key = ReasoningSettings.normalizedKey(apiKeyInput) else { return }
         do {
-            try KeychainHelper.saveApiKey(apiKeyInput, provider: llmBackend)
-            onApiKeyChanged(apiKeyInput)
+            try reasoningKeyStore.saveClaudeApiKey(key)
+            apiKeyInput = ""
+            refreshSavedKeyState()
+            onApiKeyChanged("")
             showApiKeySaved = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 showApiKeySaved = false
             }
         } catch {
-            // Silently fail; the status dot will show unavailable
+            // Saving failed; the status row keeps showing that no key is saved.
         }
+    }
+
+    private func removeApiKey() {
+        // Deletes the key and cancels any cloud request in flight at once.
+        reasoningSettings.removeClaudeKey(from: reasoningKeyStore)
+        apiKeyInput = ""
+        refreshSavedKeyState()
+        onApiKeyChanged("")
     }
 
     private func clearPreset() {
@@ -457,15 +590,6 @@ struct SettingsView: View {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "\(version) (\(build))"
-    }
-
-    private var apiKeyPlaceholder: String {
-        switch llmBackend {
-        case "cloud_claude": return "sk-ant-..."
-        case "cloud_gemini": return "AIza..."
-        case "cloud_openai": return "sk-..."
-        default: return "API Key"
-        }
     }
 
     private func checkNetworkConnectivity() {
@@ -481,70 +605,66 @@ struct SettingsView: View {
         monitor.start(queue: queue)
     }
 
-    // LLM status helpers
+    // Cloud Claude status helpers
     private var llmStatusColor: Color {
         if !hasInternet {
             return FlightRiskTheme.alertOrange
-        } else if apiKeyInput.isEmpty {
+        } else if !hasSavedClaudeKey {
             return FlightRiskTheme.alertRed
-        } else if llmAvailable {
+        } else if reasoningStatus.isCloudActive {
             return FlightRiskTheme.matchGreen
         } else {
-            return FlightRiskTheme.alertRed
+            return .secondary
         }
     }
 
     private var llmStatusText: String {
         if !hasInternet {
             return "No internet"
-        } else if apiKeyInput.isEmpty {
-            return "No API key"
-        } else if llmAvailable {
-            return "Available"
+        } else if !hasSavedClaudeKey {
+            return "No API key saved"
+        } else if reasoningStatus.isCloudActive {
+            return "Key saved, in use"
         } else {
-            return "Unavailable"
+            return "Key saved, not in use"
         }
     }
+}
 
-    // Connection status helpers
-    private var connectionState: TelloConnectionState {
-        droneState?.connectionState ?? .disconnected
+// MARK: - Cloud Active Indicator
+
+/// A visible marker shown whenever cloud reasoning is the active backend.
+/// Other views can show it by checking `ReasoningActivity.shared.isCloudActive`.
+struct CloudActiveIndicator: View {
+    var body: some View {
+        Label("Cloud active: images are sent to Anthropic", systemImage: "icloud.and.arrow.up")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(FlightRiskTheme.alertOrange)
+            .accessibilityLabel("Cloud reasoning active. Person crops and the reference photo are sent to Anthropic.")
     }
+}
 
-    private var connectionColor: Color {
-        switch connectionState {
-        case .connected, .streaming: return FlightRiskTheme.matchGreen
-        case .connecting: return FlightRiskTheme.alertOrange
-        case .error: return FlightRiskTheme.alertRed
-        case .disconnected: return .secondary
-        }
-    }
-
-    private var connectionText: String {
-        switch connectionState {
-        case .disconnected: return "Disconnected"
-        case .connecting: return "Connecting..."
-        case .connected: return "Connected"
-        case .streaming: return "Streaming"
-        case .error: return "Error"
-        }
-    }
-
-    private func batteryColor(for level: Int) -> Color {
-        switch level {
-        case 51...: return FlightRiskTheme.matchGreen
-        case 21...50: return FlightRiskTheme.alertOrange
-        default: return FlightRiskTheme.alertRed
-        }
-    }
-
-    private func batteryIconName(for level: Int) -> String {
-        switch level {
-        case 76...: return "battery.100"
-        case 51...75: return "battery.75"
-        case 26...50: return "battery.50"
-        case 1...25: return "battery.25"
-        default: return "battery.0"
+/// Small banner for the Search screen: the "Cloud active" indicator while
+/// cloud reasoning is active, and the fallback notice when the selected
+/// provider could not be used.
+struct ReasoningStatusBanner: View {
+    var body: some View {
+        let status = ReasoningActivity.shared.status
+        if status.isCloudActive || status.notice != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if status.isCloudActive {
+                    CloudActiveIndicator()
+                }
+                if let notice = status.notice {
+                    Text(notice)
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
         }
     }
 }
@@ -760,12 +880,6 @@ private struct SignalConfigRow: View {
             onThresholdChanged: { _, _ in },
             onLlmBackendChanged: { _ in },
             onApiKeyChanged: { _ in },
-            llmAvailable: true,
-            droneState: TelloState(
-                connectionState: .connected,
-                telemetry: TelloTelemetry(battery: 72)
-            ),
-            frameSourceMode: .camera,
             modelManager: nil
         )
     }
