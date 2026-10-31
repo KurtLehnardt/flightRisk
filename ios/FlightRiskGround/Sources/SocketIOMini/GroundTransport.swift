@@ -66,6 +66,12 @@ public enum GroundTransportError: Error, Equatable, Sendable, CustomStringConver
 /// Network.framework does not offer the permessage-deflate extension, so a
 /// server cannot send compressed frames that expand after these checks.
 ///
+/// Address policy: `connect()` resolves the host with `getaddrinfo` on a
+/// background queue, refuses cleartext (`ws://`) unless every resolved address
+/// is a local network address (`LanAddressPolicy`), and then connects to the
+/// checked IP address, not to the name. A `wss://` connection is encrypted and
+/// not subject to the rule; this app does not pin certificates.
+///
 /// Headers: the upgrade request carries no `Origin` (the dashboard's
 /// Engine.IO refuses a foreign origin and checks none when the header is
 /// absent) and no credentials; the API key travels only inside the Socket.IO
@@ -74,31 +80,35 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     /// The largest chunk read from the connection at a time.
     public static let chunkBytes = 64 * 1024
 
-    private let connection: NWConnection
     private let queue = DispatchQueue(label: "app.flightrisk.ground.websocket")
     private let maxFrameBytes: Int
+    private let url: URL
+    private let openTimeout: TimeInterval
+    private let networkMessageLimit: Bool
+    private let resolver: GroundHostResolver
+    private let lookup = GroundLookup()
+    private let lock = NSLock()
+    private var storedConnection: NWConnection?
+    private var isClosed = false
 
     public convenience init(url: URL, maxFrameBytes: Int, openTimeout: TimeInterval = 10) {
         self.init(url: url, maxFrameBytes: maxFrameBytes, openTimeout: openTimeout, networkMessageLimit: true)
     }
 
     /// `networkMessageLimit: false` exists only so tests can prove the chunked
-    /// guard on its own.
-    init(url: URL, maxFrameBytes: Int, openTimeout: TimeInterval, networkMessageLimit: Bool) {
+    /// guard on its own. `resolver` is replaced only by tests.
+    init(
+        url: URL,
+        maxFrameBytes: Int,
+        openTimeout: TimeInterval,
+        networkMessageLimit: Bool,
+        resolver: @escaping GroundHostResolver = GroundSystemResolver.resolve
+    ) {
+        self.url = url
         self.maxFrameBytes = maxFrameBytes
-        let webSocket = NWProtocolWebSocket.Options()
-        webSocket.autoReplyPing = true
-        if networkMessageLimit {
-            webSocket.maximumMessageSize = maxFrameBytes
-        }
-        // Deliberately no additional headers: no Origin, no Authorization.
-        let tcp = NWProtocolTCP.Options()
-        tcp.connectionTimeout = max(1, Int(openTimeout.rounded(.up)))
-        let parameters = url.scheme == "wss"
-            ? NWParameters(tls: NWProtocolTLS.Options(), tcp: tcp)
-            : NWParameters(tls: nil, tcp: tcp)
-        parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
-        connection = NWConnection(to: .url(url), using: parameters)
+        self.openTimeout = openTimeout
+        self.networkMessageLimit = networkMessageLimit
+        self.resolver = resolver
     }
 
     /// The factory the app passes to `GroundClient` (the default).
@@ -106,10 +116,93 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
         NWGroundTransport(url: url, maxFrameBytes: maxFrameBytes)
     }
 
+    /// True once a connection object exists (tests assert none is made for a refused address).
+    var hasConnection: Bool { connection != nil }
+
+    private var connection: NWConnection? {
+        lock.withLock { storedConnection }
+    }
+
+    /// The network parameters for one attempt. For cleartext: no proxy is used if the
+    /// direct path works (`preferNoProxies` is only a preference, so a proxy may still
+    /// be used when the direct connection fails; the key is sent only after the
+    /// server's Engine.IO open, never in the upgrade request), the original name is the
+    /// `Host` header, and the cellular interface is not used, because a private address
+    /// is not necessarily on the local network there.
+    static func makeParameters(
+        cleartext: Bool, hostHeader: String?, maxFrameBytes: Int, networkMessageLimit: Bool, connectTimeout: Int
+    ) -> NWParameters {
+        let webSocket = NWProtocolWebSocket.Options()
+        webSocket.autoReplyPing = true
+        if networkMessageLimit {
+            webSocket.maximumMessageSize = maxFrameBytes
+        }
+        // No Origin and no Authorization. The only extra header is the original Host
+        // name on a cleartext connection to a checked IP address.
+        if cleartext, let hostHeader {
+            webSocket.setAdditionalHeaders([(name: "Host", value: hostHeader)])
+        }
+        let tcp = NWProtocolTCP.Options()
+        tcp.connectionTimeout = max(1, connectTimeout)
+        let parameters = cleartext ? NWParameters(tls: nil, tcp: tcp) : NWParameters(tls: NWProtocolTLS.Options(), tcp: tcp)
+        if cleartext {
+            parameters.preferNoProxies = true
+            parameters.prohibitedInterfaceTypes = [.cellular]
+        }
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocket, at: 0)
+        return parameters
+    }
+
+    /// Registers the connection, unless the transport was closed meanwhile.
+    private func adopt(_ connection: NWConnection) throws {
+        let accepted = lock.withLock { () -> Bool in
+            if isClosed { return false }
+            storedConnection = connection
+            return true
+        }
+        guard accepted else {
+            connection.cancel()
+            throw GroundTransportError.closed(code: nil)
+        }
+    }
+
     public func connect() async throws {
+        // Resolve off the main thread, keep only allowed addresses, and only then open a
+        // socket, to a checked IP address. Each attempt goes to a literal; a name is never
+        // looked up again. The overall deadline is the open timeout, shared by the attempts.
+        let deadline = Date().addingTimeInterval(openTimeout)
+        let target = try await GroundConnectPlanner.planOffMainThread(
+            url: url, resolver: resolver, timeout: openTimeout, lookup: lookup
+        )
+        var lastError: Error = GroundTransportError.failed("no address to connect to")
+        for (index, attemptURL) in target.attempts.enumerated() {
+            let remainingAttempts = target.attempts.count - index
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0, index > 0 { break }
+            let share = max(1, Int((max(remaining, 1) / Double(remainingAttempts)).rounded(.up)))
+            let parameters = Self.makeParameters(
+                cleartext: target.isCleartext, hostHeader: target.hostHeader, maxFrameBytes: maxFrameBytes,
+                networkMessageLimit: networkMessageLimit, connectTimeout: share
+            )
+            let connection = NWConnection(to: .url(attemptURL), using: parameters)
+            try adopt(connection)
+            do {
+                try await open(connection)
+                return
+            } catch {
+                if isClosedByUs { throw GroundTransportError.closed(code: nil) }
+                lastError = error
+                connection.cancel()
+            }
+        }
+        throw lastError
+    }
+
+    private var isClosedByUs: Bool { lock.withLock { isClosed } }
+
+    private func open(_ connection: NWConnection) async throws {
         final class Once: @unchecked Sendable { var done = false }
         let once = Once()
-        let connection = self.connection
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // The handler runs on `queue`, a serial queue, so `once` needs no lock.
             connection.stateUpdateHandler = { state in
@@ -136,7 +229,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     public func send(_ text: String) async throws {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        let connection = self.connection
+        guard let connection = self.connection else { throw GroundTransportError.closed(code: nil) }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(text.utf8), contentContext: context, isComplete: true, completion: .contentProcessed { error in
                 if let error {
@@ -162,6 +255,10 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
         completion: @escaping @Sendable (Result<GroundTransportMessage, Error>) -> Void
     ) {
         let limit = maxFrameBytes
+        guard let connection else {
+            completion(.failure(GroundTransportError.closed(code: nil)))
+            return
+        }
         connection.receive(minimumIncompleteLength: 1, maximumLength: Self.chunkBytes) { [weak self] content, context, isComplete, error in
             guard let self else {
                 completion(.failure(GroundTransportError.closed(code: nil)))
@@ -169,7 +266,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             }
             if let error {
                 if case let .posix(code) = error, code == .EMSGSIZE {
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.messageTooLarge(limit: limit)))
                 } else {
                     completion(.failure(GroundTransportError.failed(Self.describe(error))))
@@ -180,7 +277,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             if let content {
                 if data.count + content.count > limit {
                     // Stop reading this message at once; never buffer it whole.
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.messageTooLarge(limit: limit)))
                     return
                 }
@@ -195,7 +292,7 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
             switch currentOpcode {
             case .text?:
                 guard let text = String(data: data, encoding: .utf8) else {
-                    self.connection.forceCancel()
+                    self.connection?.forceCancel()
                     completion(.failure(GroundTransportError.invalidText))
                     return
                 }
@@ -214,7 +311,13 @@ public final class NWGroundTransport: GroundTransport, @unchecked Sendable {
     }
 
     public func close() async {
-        connection.cancel()
+        let connection = lock.withLock { () -> NWConnection? in
+            isClosed = true
+            return storedConnection
+        }
+        // A name lookup in progress is abandoned at once; it finishes on its own queue.
+        lookup.cancel()
+        connection?.cancel()
     }
 
     private static func closeCode(_ metadata: NWProtocolWebSocket.Metadata?) -> Int? {
@@ -298,11 +401,25 @@ public struct URLSessionGroundHTTPClient: GroundHTTPClient {
         }
     }
 
-    public func get(_ url: URL, headers: [String: String], timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+    /// The session configuration for a request to `url`. For a cleartext `http://` URL the
+    /// request never goes through a system proxy (an empty proxy dictionary overrides manual,
+    /// PAC and MDM proxy settings, which would otherwise receive the `Authorization` header in
+    /// cleartext) and never uses the cellular interface (a private address is not necessarily
+    /// on the local network there).
+    static func makeConfiguration(for url: URL) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
+        if url.scheme?.lowercased() == "http" {
+            configuration.connectionProxyDictionary = [:]
+            configuration.allowsCellularAccess = false
+        }
+        return configuration
+    }
+
+    public func get(_ url: URL, headers: [String: String], timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+        let configuration = Self.makeConfiguration(for: url)
         let session = URLSession(configuration: configuration, delegate: RefuseRedirects(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)

@@ -8,6 +8,8 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
     case wrongKey(version: String?)
     /// The ground could not be reached.
     case unreachable(String)
+    /// Cleartext to a non-local address was refused before any request was made.
+    case addressNotAllowed(String)
     /// The ground answered with an unexpected HTTP status (a redirect included:
     /// redirects are never followed).
     case unexpectedStatus(Int)
@@ -19,6 +21,7 @@ public enum GroundHealthResult: Sendable, Equatable, CustomStringConvertible {
         case let .ok(version): return "reachable, key accepted" + (version.map { ", version \($0)" } ?? "")
         case let .wrongKey(version): return "reachable, wrong key" + (version.map { ", version \($0)" } ?? "")
         case let .unreachable(detail): return "unreachable: \(detail)"
+        case let .addressNotAllowed(reason): return "refused: \(reason)"
         case let .unexpectedStatus(status): return "unexpected HTTP status \(status)"
         case let .invalidResponse(detail): return "not a FlightRisk dashboard response: \(detail)"
         }
@@ -36,8 +39,16 @@ public struct GroundHealthProbe: Sendable {
     private let apiKey: GroundAPIKey
     private let http: any GroundHTTPClient
     private let timeout: TimeInterval
+    private let resolver: GroundHostResolver
 
-    public init(endpoint: GroundEndpoint, apiKey: GroundAPIKey, http: any GroundHTTPClient = URLSessionGroundHTTPClient(), timeout: TimeInterval = 5) {
+    public init(
+        endpoint: GroundEndpoint,
+        apiKey: GroundAPIKey,
+        http: any GroundHTTPClient = URLSessionGroundHTTPClient(),
+        timeout: TimeInterval = 5,
+        resolver: @escaping GroundHostResolver = GroundSystemResolver.resolve
+    ) {
+        self.resolver = resolver
         self.endpoint = endpoint
         self.apiKey = apiKey
         self.http = http
@@ -46,11 +57,35 @@ public struct GroundHealthProbe: Sendable {
 
     public func run() async -> GroundHealthResult {
         let redact = GroundRedactor(key: apiKey)
+        // The address policy runs before the key is put in any header or any request is made.
+        // An encrypted URL is not looked up here: it keeps its name for the certificate check
+        // (this app does not pin certificates).
+        let target: GroundConnectTarget
+        do {
+            target = try await GroundConnectPlanner.planOffMainThread(url: endpoint.httpBaseURL, resolver: resolver, timeout: timeout)
+        } catch let refusal as GroundAddressRefusal {
+            return .addressNotAllowed(refusal.reason)
+        } catch {
+            return .unreachable(redact(Self.describe(error)))
+        }
+        // Cleartext goes to each checked IP address in turn with the original name as the
+        // Host header, so a second lookup cannot swap the address. The timeout is shared
+        // by the attempts.
         var headers: [String: String] = ["Accept": "application/json"]
         if !apiKey.isEmpty {
             headers["Authorization"] = "Bearer \(apiKey.secret)"
         }
-        let base = endpoint.httpBaseURL
+        if let hostHeader = target.hostHeader { headers["Host"] = hostHeader }
+        var last: GroundHealthResult = .unreachable("no address to connect to")
+        for (index, base) in target.attempts.enumerated() {
+            let share = max(1, timeout / Double(target.attempts.count - index))
+            last = await probeOnce(base: base, headers: headers, timeout: share, redact: redact)
+            guard case .unreachable = last else { return last }
+        }
+        return last
+    }
+
+    private func probeOnce(base: URL, headers: [String: String], timeout: TimeInterval, redact: GroundRedactor) async -> GroundHealthResult {
         var version: String?
         do {
             let health = try await http.get(base.appendingPathComponent("api/health"), headers: headers, timeout: timeout)
@@ -88,6 +123,9 @@ public struct GroundHealthProbe: Sendable {
         }
         if case let .bodyTooLarge(limit) = error as? GroundHTTPError {
             return "response body larger than \(limit) bytes"
+        }
+        if let lookup = error as? GroundLookupError {
+            return lookup.description
         }
         return String(describing: type(of: error))
     }
