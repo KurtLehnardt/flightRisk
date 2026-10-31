@@ -68,6 +68,13 @@ enum GroundIngest {
             return .fleetStatus(payload)
         case let .fleetEvent(ev):
             return .fleetEvent(sanitized(ev))
+        case var .matchAlert(alert):
+            // The phone never shows the snapshot (up to megabytes per alert), so it is not kept.
+            alert.snapshot = nil
+            return .matchAlert(alert)
+        case var .matchAlertReminder(alert):
+            alert.snapshot = nil
+            return .matchAlertReminder(alert)
         case let .manualAck(reply):
             return .manualAck(sanitized(reply))
         case let .manualResult(reply):
