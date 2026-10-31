@@ -26,9 +26,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.flightrisk.app.ui.theme.AlertOrange
-import com.flightrisk.app.ui.theme.DetectionBlue
-import com.flightrisk.app.ui.theme.MatchGreen
 import com.flightrisk.contract.ConnectionState
 
 /**
@@ -64,9 +61,9 @@ fun DroneStatusCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(card.id, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(card.displayId, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
                 Chip(card.linkChipText, linkColor(card), Modifier.testTag("ground.card.${card.id}.link"))
-                card.controlChip?.let { Chip(it, if (card.isStateStale) Color.Gray else AlertOrange) }
+                card.controlChip?.let { Chip(it, if (card.isStateStale) GroundColors.ChipGrey else GroundColors.ChipOrange) }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Value("Battery", card.batteryText)
@@ -82,7 +79,7 @@ fun DroneStatusCard(
                 )
             }
             card.linkNotice?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = AlertOrange, modifier = Modifier.testTag("ground.card.${card.id}.linkNotice"))
+                WarningText(it, Modifier.testTag("ground.card.${card.id}.linkNotice"))
             }
             if (card.isPartial) {
                 Text(GroundText.PARTIAL_RECORD, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -93,13 +90,7 @@ fun DroneStatusCard(
         }
         card.alertText?.let { text ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = AlertOrange,
-                    modifier = Modifier.weight(1f).testTag("ground.card.${card.id}.alert"),
-                )
+                WarningText(text, Modifier.weight(1f).testTag("ground.card.${card.id}.alert"), bold = true)
                 TextButton(onClick = onDismissAlert) { Text("Dismiss") }
             }
         }
@@ -108,10 +99,10 @@ fun DroneStatusCard(
             Button(
                 onClick = onLand,
                 enabled = true,
-                colors = ButtonDefaults.buttonColors(containerColor = DetectionBlue, contentColor = Color.White),
+                colors = ButtonDefaults.buttonColors(containerColor = GroundColors.ChipBlue, contentColor = Color.White),
                 modifier = Modifier
                     .testTag("ground.card.${card.id}.land")
-                    .semantics { contentDescription = "Land ${card.id}" },
+                    .semantics { contentDescription = "${card.landTitle} ${card.displayId}" },
             ) { Text(card.landTitle) }
             if (card.canResume) {
                 OutlinedButton(
@@ -131,30 +122,28 @@ fun DroneStatusCard(
 private fun FeedbackLine(feedback: CommandFeedback?, text: String?, tag: String, onDismiss: () -> Unit) {
     if (feedback == null || text == null) return
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (feedback.isFailure) FontWeight.Bold else FontWeight.Normal,
-            color = if (feedback.isWarning) AlertOrange else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f).testTag(tag),
-        )
+        if (feedback.isWarning) {
+            WarningText(text, Modifier.weight(1f).testTag(tag), bold = feedback.isFailure)
+        } else {
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f).testTag(tag))
+        }
         if (feedback.canDismiss) TextButton(onClick = onDismiss) { Text("Dismiss") }
     }
 }
 
 /** Grey while the whole state is stale: a live colour would claim a live link. */
 private fun linkColor(card: DroneCardUi): Color = when {
-    card.linkChipGreyed -> Color.Gray
-    card.connection == ConnectionState.CONNECTED -> MatchGreen
-    card.connection == ConnectionState.DOWN || card.connection == ConnectionState.LOST -> AlertOrange
-    else -> Color.Gray
+    card.linkChipGreyed -> GroundColors.ChipGrey
+    card.connection == ConnectionState.CONNECTED -> GroundColors.ChipGreen
+    card.connection == ConnectionState.DOWN || card.connection == ConnectionState.LOST -> GroundColors.ChipOrange
+    else -> GroundColors.ChipGrey
 }
 
 @Composable
 internal fun Chip(text: String, color: Color, modifier: Modifier = Modifier) {
     Text(
         text,
-        color = Color.White,
+        color = GroundColors.ChipText,
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
         modifier = modifier
@@ -169,4 +158,22 @@ private fun Value(label: String, text: String) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(text, style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+/**
+ * A warning or failure text on the theme's error container, which keeps at
+ * least 4.5:1 contrast in both light and dark mode (orange text on the grey
+ * card background did not).
+ */
+@Composable
+internal fun WarningText(text: String, modifier: Modifier = Modifier, bold: Boolean = false) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        color = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(6.dp))
+            .padding(6.dp),
+    )
 }

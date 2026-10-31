@@ -100,7 +100,8 @@ class GroundLandAllTest {
         onMain { vm.onBackground() }
         assertEquals(GroundLink.Paused, ui.link)
         tapLandAll()
-        assertEquals(GroundText.LAND_ALL_NOT_SENT_LINK_OFF, ui.landAllText)
+        // The link is configured and on, only paused: the plain "not connected" text, not "link off".
+        assertEquals(notConnected, ui.landAllText)
     }
 
     @Test

@@ -277,12 +277,15 @@ class GroundDroneCommandsTest {
     }
 
     @Test
-    fun `a resume that is not offered sends nothing`() = harnessTest {
+    fun `a resume that is not offered sends nothing and says why`() = harnessTest {
         val c = connectWithFleet("all_connected")
         vm.resumeHeldDrone("drone-1").join()
         delay(100)
         assertTrue(c.commandFrames().isEmpty())
-        assertNull(card("drone-1").resumeFeedback)
+        // Nothing is sent, and the tap is answered: it never does nothing silently.
+        val f = card("drone-1").resumeFeedback!!
+        assertEquals(CommandPhase.FAILED, f.phase)
+        assertEquals("drone-1: Resume search was not sent: the ground no longer reports this drone as held.", f.text)
     }
 
     @Test
@@ -314,10 +317,14 @@ class GroundDroneCommandsTest {
     }
 
     @Test
-    fun `the ground events the view model sees in order never reach a second code path`() = harnessTest {
+    fun `a session start does not make the view model request state itself`() = harnessTest {
         val c = connectWithFleet()
+        eventually("the clients own requests") { c.eventFrames().size >= 5 }
+        delay(100)
+        val before = c.eventFrames().size
         onMain { vm.handle(GroundEvent.SessionStarted(com.flightrisk.app.ground.SessionInfo(9, 1, 1))) }
+        delay(150)
+        assertEquals(before, c.eventFrames().size)
         assertTrue(ui.isStateStale)
-        assertNotNull(c)
     }
 }

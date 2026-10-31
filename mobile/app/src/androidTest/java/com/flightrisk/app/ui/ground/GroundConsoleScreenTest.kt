@@ -3,6 +3,7 @@ package com.flightrisk.app.ui.ground
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -114,6 +115,24 @@ class GroundConsoleScreenTest {
         show(GroundUiState(link = GroundLink.Connected, cards = listOf(card("drone-1"), card("drone-2", canResume = true))))
         compose.onNodeWithTag("ground.card.drone-2.resume").assertIsDisplayed()
         compose.onNodeWithTag("ground.card.drone-1.resume").assertDoesNotExist()
+    }
+
+    @Test
+    fun aVeryLongFailureTextCannotPushTheButtonsOffTheScreen() {
+        val long = "LAND ALL FAILED: " + "x".repeat(1_200)
+        val failed = CommandFeedback(1, CommandPhase.FAILED, long, startedAtMs = 0, updatedAtMs = 0)
+        show(GroundUiState(link = GroundLink.Connected, landAll = failed, landAllText = long, cards = listOf(card())))
+        compose.onNodeWithTag("ground.landAll").assertIsDisplayed()
+        compose.onNodeWithTag("ground.landAllAgain").assertIsDisplayed()
+        compose.onNodeWithTag("ground.landAllDismiss").assertIsDisplayed()
+        compose.onNodeWithTag("ground.card.drone-1.land").assertIsDisplayed()
+    }
+
+    @Test
+    fun landAgainIsTheAccessibleLabelAfterAFailure() {
+        val failed = CommandFeedback(1, CommandPhase.FAILED, "drone-1: failed", startedAtMs = 0, updatedAtMs = 0)
+        show(GroundUiState(link = GroundLink.Connected, cards = listOf(card(landFeedback = failed))))
+        compose.onNodeWithContentDescription("Land again drone-1").assertIsDisplayed()
     }
 
     @Test

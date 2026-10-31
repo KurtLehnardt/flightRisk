@@ -26,7 +26,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import com.flightrisk.app.ui.theme.AlertOrange
 
 /**
  * The connection settings of the Ground screen: the ground address, the
@@ -69,7 +68,7 @@ fun ConnectionCard(
             modifier = Modifier.fillMaxWidth().testTag("ground.connection.address"),
         )
         state.addressError?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = AlertOrange, modifier = Modifier.testTag("ground.connection.addressError"))
+            WarningText(it, Modifier.testTag("ground.connection.addressError"))
         }
         Button(onClick = { onSaveAddress(address) }, modifier = Modifier.testTag("ground.connection.saveAddress")) { Text("Save address") }
 
@@ -81,7 +80,7 @@ fun ConnectionCard(
                 KeyState.UNKNOWN -> "API key: checking the secure storage…"
             },
             style = MaterialTheme.typography.bodyMedium,
-            color = if (state.keyState == KeyState.UNAVAILABLE) AlertOrange else MaterialTheme.colorScheme.onSurface,
+            color = if (state.keyState == KeyState.UNAVAILABLE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("ground.connection.keyState"),
         )
         OutlinedTextField(

@@ -62,7 +62,7 @@ sealed interface GroundLink {
         }
 }
 
-private fun Double.formatSeconds(): String = if (this == Math.floor(this)) toLong().toString() else "%.1f".format(this)
+private fun Double.formatSeconds(): String = if (this == Math.floor(this)) toLong().toString() else "%.1f".format(java.util.Locale.ROOT, this)
 
 /** What a command is doing, from the tap to the ground's final answer. */
 enum class CommandPhase {
@@ -159,6 +159,9 @@ data class DroneCardUi(
     val resumeFeedbackText: String?,
     val alertText: String?,
 ) {
+    /** The id as shown: cut short when the ground sent a very long one. Commands still carry the real [id]. */
+    val displayId: String get() = GroundText.shortId(id)
+
     /** "Land again" once a land failed or got no answer. */
     val landTitle: String get() = if (landFeedback?.offersRetry == true) "Land again" else "Land"
 }

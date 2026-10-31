@@ -63,6 +63,7 @@ class GroundConnectionTest {
         onMain { vm.saveAddress("host:99999") }
         assertEquals("The port must be a number from 1 to 65535.", ui.connection.addressError)
         onMain { vm.saveAddress("http://192.168.1.20:6000/") }
+        vm.awaitIdle()
         assertNull(ui.connection.addressError)
         assertEquals("192.168.1.20:6000", settings.address)
     }

@@ -49,6 +49,7 @@ class GroundHarness(
     key: String? = TEST_KEY,
     enabled: Boolean = true,
     broken: Boolean = false,
+    ticker: Boolean = false,
     var probeResult: HealthProbeResult = HealthProbeResult.Ok("1.0", com.flightrisk.app.ground.StatusSummary(true, "edge", 2)),
 ) {
     val port = FakePort()
@@ -56,7 +57,25 @@ class GroundHarness(
     val vmClock = FakeClock()
     val storage = TestStorage(if (key != null) mapOf(SecretName.DASHBOARD_API_KEY.storageKey to key) else emptyMap(), broken)
     val secrets = SecretStore(storage, isMainThread = { Thread.currentThread().name == "fake-main" })
-    val settings = MemoryGroundSettings(address, enabled)
+    /** The thread names the settings were read or written on. */
+    val settingsThreads = java.util.concurrent.CopyOnWriteArrayList<String>()
+    val settings = object : GroundSettingsStore {
+        private var savedAddress = address
+        private var savedEnabled = enabled
+        override var address: String?
+            get() = savedAddress.also { settingsThreads += Thread.currentThread().name }
+            set(value) {
+                settingsThreads += Thread.currentThread().name
+                savedAddress = value
+            }
+        override var enabled: Boolean
+            get() = savedEnabled.also { settingsThreads += Thread.currentThread().name }
+            set(value) {
+                settingsThreads += Thread.currentThread().name
+                savedEnabled = value
+            }
+    }
+    @Volatile var lastClientScope: CoroutineScope? = null
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "fake-main").apply { isDaemon = true } }
     private val main = executor.asCoroutineDispatcher()
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -66,6 +85,7 @@ class GroundHarness(
         secrets = secrets,
         settings = settings,
         clientFactory = { endpoint, k, scope ->
+            lastClientScope = scope
             GroundConsoleClient(
                 endpoint, k, scope, port = port, config = GroundClientConfig(), emitPolicy = GroundConsoleViewModel.EMIT_POLICY,
                 clock = clientClock, random = { 0.0 },
@@ -78,9 +98,14 @@ class GroundHarness(
         clock = vmClock,
         mainDispatcher = main,
         ioDispatcher = Dispatchers.IO,
-        startTicker = false,
+        startTicker = ticker,
         cleanupScope = cleanup,
     )
+
+    init {
+        // The settings are read off the main thread; wait until they are loaded.
+        runBlocking { vm.awaitIdle() }
+    }
 
     val ui: GroundUiState get() = vm.uiState.value
 
@@ -158,9 +183,10 @@ fun harnessTest(
     key: String? = TEST_KEY,
     enabled: Boolean = true,
     broken: Boolean = false,
+    ticker: Boolean = false,
     block: suspend GroundHarness.() -> Unit,
 ) = runBlocking {
-    val h = GroundHarness(address, key, enabled, broken)
+    val h = GroundHarness(address, key, enabled, broken, ticker)
     try {
         h.block()
         // The key must never be in anything the screen can show.

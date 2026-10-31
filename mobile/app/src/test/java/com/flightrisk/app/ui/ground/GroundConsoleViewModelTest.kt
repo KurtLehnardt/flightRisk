@@ -138,6 +138,7 @@ class GroundConsoleViewModelTest {
         val c = connect()
         c.event("fleet_status", """{"drones":{"drone-1":{"connected":true,"lost":false,"battery":87,"height_cm":100,"control_mode":"held","orphan_land_in_s":29.6}},"manual_controlled":null}""")
         eventually("held card") { ui.cards.firstOrNull()?.controlChip == "HELD" }
+        delay(150) // the event handler records the countdown base after the board changed
         assertEquals("HELD: auto-landing in 29.6 s, no controller", ui.cards.single().controlText)
         advance(1_000)
         assertEquals("HELD: auto-landing in 28.6 s, no controller", ui.cards.single().controlText)
@@ -153,6 +154,7 @@ class GroundConsoleViewModelTest {
         val c = connect()
         c.fixture("fleet_status.json", "one_held_orphan_countdown")
         eventually("held") { ui.cards.any { it.controlChip == "HELD" } }
+        delay(150) // the event handler records the countdown base after the board changed
         val held = { ui.cards.first { it.id == "drone-2" } }
         advance(5_000)
         assertEquals("HELD: auto-landing in 115 s, no controller", held().controlText)
@@ -170,6 +172,7 @@ class GroundConsoleViewModelTest {
         eventually("cards") { ui.cards.isNotEmpty() }
         c.fixture("manual_status.json", "held_orphan_countdown")
         eventually("held") { ui.cards.any { it.controlChip == "HELD" } }
+        delay(150) // the event handler records the countdown base after the board changed
         advance(10_000)
         assertEquals("HELD: auto-landing in 110 s, no controller", ui.cards.first { it.id == "drone-2" }.controlText)
     }
@@ -196,7 +199,7 @@ class GroundConsoleViewModelTest {
         val c = connect()
         c.fixture("error.json", "no_drones_connected")
         for (i in 1..5) c.event("warning", """{"message":"w$i"}""")
-        eventually("six toasts offered") { ui.toasts.size == 5 }
+        eventually("six toasts offered") { ui.toasts.any { it.text == "w5" } }
         // Five slots: the error is kept, the oldest warning (w1) went first.
         val texts = ui.toasts.map { it.text }
         assertTrue(texts.contains("No drones connected"))

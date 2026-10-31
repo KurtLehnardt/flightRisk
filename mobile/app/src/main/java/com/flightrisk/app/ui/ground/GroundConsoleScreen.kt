@@ -22,7 +22,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,9 +37,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.flightrisk.app.ui.theme.AlertOrange
-import com.flightrisk.app.ui.theme.AlertRed
-import com.flightrisk.app.ui.theme.MatchGreen
 
 /** The callbacks of the Ground screen, so the content can be drawn (and tested) without a ViewModel. */
 class GroundActions(
@@ -56,7 +59,7 @@ class GroundActions(
 /** The Ground console: an operator console for one FlightRisk ground station. */
 @Composable
 fun GroundConsoleScreen(viewModel: GroundConsoleViewModel, modifier: Modifier = Modifier) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val actions = GroundActions(
         onLandAll = { viewModel.landAll() },
         onLandDrone = { viewModel.landDrone(it) },
@@ -82,8 +85,17 @@ fun GroundConsoleScreen(viewModel: GroundConsoleViewModel, modifier: Modifier = 
  */
 @Composable
 fun GroundConsoleContent(state: GroundUiState, actions: GroundActions, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxSize()) {
-        GroundTopBar(state, actions)
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // Text from the ground can be long; the bar's text area is limited so the drone list keeps its height.
+        val maxText = GroundLayout.feedbackMaxHeightDp(maxHeight.value).dp
+        GroundConsoleColumn(state, actions, maxText)
+    }
+}
+
+@Composable
+private fun GroundConsoleColumn(state: GroundUiState, actions: GroundActions, maxText: androidx.compose.ui.unit.Dp) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        GroundTopBar(state, actions, maxText)
         HorizontalDivider()
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("ground.list"),
@@ -167,8 +179,9 @@ fun MissionCardsSlot(state: GroundUiState) {
 fun PlanCanvasSlot(state: GroundUiState) {
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GroundTopBar(state: GroundUiState, actions: GroundActions) {
+private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: androidx.compose.ui.unit.Dp) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
         Column(
             modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -180,11 +193,11 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions) {
                     Text("APPEARANCE ONLY", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
                 Row(modifier = Modifier.weight(1f)) {}
-                // Always visible, always enabled, one tap, no confirmation.
+                // Always visible, always enabled, one tap, no confirmation. It sits outside the scrolling text.
                 Button(
                     onClick = actions.onLandAll,
                     enabled = true,
-                    colors = ButtonDefaults.buttonColors(containerColor = AlertRed, contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = GroundColors.ChipRed, contentColor = Color.White),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .heightIn(min = 52.dp)
@@ -192,107 +205,101 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions) {
                         .semantics { contentDescription = "Land all drones" },
                 ) { Text("LAND ALL", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium) }
             }
-            ConnectionBanner(state.link, actions)
-            state.landAll?.let { LandAllFeedbackView(it, state.landAllText ?: it.text, actions) }
-        }
-    }
-}
-
-@Composable
-private fun ConnectionBanner(link: GroundLink, actions: GroundActions) {
-    when (link) {
-        GroundLink.Connected -> Unit
-        GroundLink.WrongKey -> BannerWithRetry(link.text, "Retry", AlertOrange, actions, "ground.retry")
-        is GroundLink.Reconnecting, is GroundLink.Connecting -> BannerWithRetry(link.text, "Retry now", MaterialTheme.colorScheme.onSurfaceVariant, actions, "ground.retry")
-        is GroundLink.AddressRefused, GroundLink.StorageUnavailable ->
-            Text(link.text, style = MaterialTheme.typography.bodySmall, color = AlertOrange, modifier = Modifier.testTag("ground.connectionBanner"))
-        else ->
-            Text(link.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("ground.connectionBanner"))
-    }
-}
-
-@Composable
-private fun BannerWithRetry(text: String, button: String, color: Color, actions: GroundActions, tag: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text, style = MaterialTheme.typography.bodySmall, color = color, modifier = Modifier.weight(1f).testTag("ground.connectionBanner"))
-        OutlinedButton(onClick = actions.onRetry, modifier = Modifier.testTag(tag)) { Text(button) }
-    }
-}
-
-private fun linkPillColor(link: GroundLink): Color = when (link) {
-    GroundLink.Connected -> MatchGreen
-    is GroundLink.Connecting, is GroundLink.Reconnecting, GroundLink.WrongKey, GroundLink.StorageUnavailable, is GroundLink.AddressRefused -> AlertOrange
-    else -> Color.Gray
-}
-
-/**
- * The result of the latest LAND ALL. Failures and partial results stay until
- * dismissed; "no reply yet" and failures offer sending LAND ALL again (a new
- * command, never an automatic retry).
- */
-@Composable
-private fun LandAllFeedbackView(feedback: CommandFeedback, text: String, actions: GroundActions) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (feedback.isFailure) FontWeight.Bold else FontWeight.Normal,
-            color = if (feedback.isWarning) AlertOrange else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.testTag("ground.landAllResult"),
-        )
-        feedback.detail?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("ground.landAllDetail"))
-        }
-        if (feedback.offersRetry) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = actions.onLandAll, modifier = Modifier.testTag("ground.landAllAgain")) { Text("Send LAND ALL again") }
-                if (feedback.canDismiss) TextButton(onClick = actions.onDismissLandAll) { Text("Dismiss") }
+            // The messages scroll inside a limited area; the buttons below them never scroll away.
+            val feedback = state.landAll
+            if (state.link != GroundLink.Connected || feedback != null) {
+                Column(
+                    modifier = Modifier.heightIn(max = maxText).verticalScroll(rememberScrollState()).testTag("ground.topText"),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (state.link != GroundLink.Connected) ConnectionText(state.link)
+                    if (feedback != null) {
+                        val text = state.landAllText ?: feedback.text
+                        if (feedback.isWarning) {
+                            WarningText(text, Modifier.fillMaxWidth().testTag("ground.landAllResult"), bold = feedback.isFailure)
+                        } else {
+                            Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("ground.landAllResult"))
+                        }
+                        feedback.detail?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("ground.landAllDetail"))
+                        }
+                    }
+                }
+            }
+            val retryLabel = when (state.link) {
+                GroundLink.WrongKey -> "Retry"
+                is GroundLink.Reconnecting, is GroundLink.Connecting -> "Retry now"
+                else -> null
+            }
+            if (retryLabel != null || feedback?.offersRetry == true) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (retryLabel != null) {
+                        OutlinedButton(onClick = actions.onRetry, modifier = Modifier.testTag("ground.retry")) { Text(retryLabel) }
+                    }
+                    if (feedback?.offersRetry == true) {
+                        OutlinedButton(onClick = actions.onLandAll, modifier = Modifier.testTag("ground.landAllAgain")) { Text("Send LAND ALL again") }
+                    }
+                    if (feedback?.canDismiss == true) {
+                        TextButton(onClick = actions.onDismissLandAll, modifier = Modifier.testTag("ground.landAllDismiss")) { Text("Dismiss") }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
+private fun ConnectionText(link: GroundLink) {
+    when (link) {
+        GroundLink.WrongKey, is GroundLink.AddressRefused, GroundLink.StorageUnavailable ->
+            WarningText(link.text, Modifier.fillMaxWidth().testTag("ground.connectionBanner"))
+        else ->
+            Text(link.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("ground.connectionBanner"))
+    }
+}
+
+private fun linkPillColor(link: GroundLink): Color = when (link) {
+    GroundLink.Connected -> GroundColors.ChipGreen
+    is GroundLink.Connecting, is GroundLink.Reconnecting, GroundLink.WrongKey, GroundLink.StorageUnavailable, is GroundLink.AddressRefused -> GroundColors.ChipOrange
+    else -> GroundColors.ChipGrey
+}
+
+@Composable
 private fun ToastRow(toast: GroundToast, actions: GroundActions) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            toast.text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (toast.isError) AlertOrange else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).testTag("ground.toast"),
-        )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (toast.isError) {
+            WarningText(toast.text, Modifier.weight(1f).testTag("ground.toast"), bold = true)
+        } else {
+            Text(
+                toast.text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .weight(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                    .padding(6.dp)
+                    .testTag("ground.toast"),
+            )
+        }
         TextButton(onClick = { actions.onDismissToast(toast.id) }) { Text("Dismiss") }
     }
 }
 
 @Composable
 private fun BannerRow(banner: GroundBanner, actions: GroundActions) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            banner.text,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (banner.isFailure) FontWeight.Bold else FontWeight.Normal,
-            color = if (banner.isFailure) AlertOrange else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).testTag("ground.banner"),
-        )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (banner.isFailure) {
+            WarningText(banner.text, Modifier.weight(1f).testTag("ground.banner"), bold = true)
+        } else {
+            Text(
+                banner.text,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .weight(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                    .padding(6.dp)
+                    .testTag("ground.banner"),
+            )
+        }
         TextButton(onClick = { actions.onDismissBanner(banner.id) }) { Text("Dismiss") }
     }
 }

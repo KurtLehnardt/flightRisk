@@ -88,7 +88,8 @@ class GroundConsoleViewModel(
     private val clock: GroundClock = GroundClock.SYSTEM,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    startTicker: Boolean = true,
+    private val startTicker: Boolean = true,
+    private val clientDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val cleanupScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) : ViewModel() {
 
@@ -103,6 +104,7 @@ class GroundConsoleViewModel(
     // Connection
     private var client: GroundConsoleClient? = null
     private var clientScope: CoroutineScope? = null
+    private var collectorScope: CoroutineScope? = null
     private var link: GroundLink = GroundLink.NotConfigured
     private var keyState = KeyState.UNKNOWN
     private var inBackground = true
@@ -120,6 +122,8 @@ class GroundConsoleViewModel(
     private var retainedSnapshot: GroundSnapshot? = null
     private var staleSinceMs: Long? = null
     private val orphanBase = HashMap<String, Pair<Double, Long>>()
+    private var lastFleetStatusAt = 0L
+    private var noRecentUpdate = false
 
     // Command feedback
     private var attemptCounter = 0
@@ -132,12 +136,16 @@ class GroundConsoleViewModel(
     private var toasts: List<GroundToast> = emptyList()
 
     /** LAND ALL taps handed to the connection and not yet answered, oldest first. */
-    private val landAllOutstanding = ArrayList<Int>()
+    private val landAllOutstanding = ArrayList<Pair<Int, Long>>()
 
     /** Drones whose land was sent to a ground without a fleet, oldest first; each `command_ack` answers the oldest. */
     private val pendingLegacyLands = ArrayList<String>()
 
-    // Settings
+    // Settings. Read from the preferences file off the main thread, then kept here.
+    private var addressSetting: String? = null
+    private var enabledSetting = false
+    private var settingsLoaded = false
+    private var settingsJob: Job? = null
     private var addressError: String? = null
     private var message: String? = null
     private var testing = false
@@ -146,16 +154,27 @@ class GroundConsoleViewModel(
     init {
         keyState = KeyState.UNKNOWN
         link = idleLink()
-        if (startTicker) {
-            tickerJob = scope.launch {
-                while (true) {
-                    delay(TICK_MS)
-                    tick()
-                }
+        startTicker()
+        settingsJob = scope.launch {
+            val (address, enabled) = withContext(ioDispatcher) { settings.address to settings.enabled }
+            if (!settingsLoaded) {
+                addressSetting = address
+                enabledSetting = enabled
+                settingsLoaded = true
+            }
+            refreshKeyState()
+        }
+        publish()
+    }
+
+    private fun startTicker() {
+        if (!startTicker || tickerJob?.isActive == true) return
+        tickerJob = scope.launch {
+            while (true) {
+                delay(TICK_MS)
+                tick()
             }
         }
-        scope.launch { refreshKeyState() }
-        publish()
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -163,7 +182,9 @@ class GroundConsoleViewModel(
     /** The app came to the foreground: connect when the link is configured and switched on. */
     fun onForeground() {
         inBackground = false
+        startTicker()
         scope.launch {
+            settingsJob?.join()
             refreshKeyState()
             connectIfWanted()
         }
@@ -176,6 +197,9 @@ class GroundConsoleViewModel(
      */
     fun onBackground() {
         inBackground = true
+        // Nothing on the screen can change in the background, so the one second ticker stops.
+        tickerJob?.cancel()
+        tickerJob = null
         epoch++
         if (client != null) {
             closeClient()
@@ -206,8 +230,10 @@ class GroundConsoleViewModel(
             is EndpointParseResult.Ok -> {
                 addressError = null
                 val normalized = parsed.endpoint.hostHeader
-                val changed = normalized != settings.address
-                settings.address = normalized
+                val changed = normalized != addressSetting
+                settingsLoaded = true
+                addressSetting = normalized
+                scope.launch { withContext(ioDispatcher) { settings.address = normalized } }
                 if (changed) forgetGroundState()
                 message = "Address saved."
                 restart()
@@ -265,7 +291,9 @@ class GroundConsoleViewModel(
 
     /** Switches the link on or off. On connects only when an address and a key are saved. */
     fun setEnabled(enabled: Boolean) {
-        settings.enabled = enabled
+        settingsLoaded = true
+        enabledSetting = enabled
+        scope.launch { withContext(ioDispatcher) { settings.enabled = enabled } }
         epoch++
         if (!enabled && client != null) closeClient()
         link = if (client == null) idleLink() else link
@@ -313,6 +341,22 @@ class GroundConsoleViewModel(
             refuseUnusableId(id, isLand = false)
         } else if (canResume(id)) {
             sendDroneCommand(id, isLand = false)
+        } else {
+            // The card offered Resume a moment ago; say why nothing was sent instead of doing nothing.
+            val at = clock.nowMs()
+            val text = "${GroundText.shortId(id)}: Resume search was not sent: ${resumeBlockedReason(id)}."
+            setDroneFeedback(false, id, CommandFeedback(nextAttempt(), CommandPhase.FAILED, text, startedAtMs = at, updatedAtMs = at))
+            publish()
+        }
+    }
+
+    private fun resumeBlockedReason(id: String): String {
+        val board = displayBoard()
+        return when {
+            !link.isConnected -> "this phone is not connected to the ground"
+            isStale(board) -> "the drone state is not live"
+            board.connection(id).isStale -> "the drone's own link is down"
+            else -> "the ground no longer reports this drone as held"
         }
     }
 
@@ -362,7 +406,7 @@ class GroundConsoleViewModel(
         val outcome = emit { it.landAll() }
         val at = clock.nowMs()
         val sentOnLiveLink = outcome == Outcome.SENT && lossEpoch == epochAtSend
-        if (sentOnLiveLink) landAllOutstanding.add(attempt)
+        if (sentOnLiveLink) landAllOutstanding.add(attempt to at)
         if (landAllFeedback?.attempt != attempt) {
             publish()
             return // A newer tap took over.
@@ -379,8 +423,14 @@ class GroundConsoleViewModel(
                 landAllFeedback = failure(text, attempt, started)
             }
             Outcome.NO_CLIENT -> {
-                val text = if (link == GroundLink.StorageUnavailable) GroundText.LAND_ALL_NOT_SENT_STORAGE else GroundText.LAND_ALL_NOT_SENT_LINK_OFF
+                val text = when {
+                    link == GroundLink.StorageUnavailable -> GroundText.LAND_ALL_NOT_SENT_STORAGE
+                    // Configured and on, but the client is not up yet (a cold start or a return to the foreground).
+                    linkIsWanted() -> DisplayText.LAND_ALL_NOT_SENT
+                    else -> GroundText.LAND_ALL_NOT_SENT_LINK_OFF
+                }
                 landAllFeedback = failure(text, attempt, started)
+                if (linkIsWanted()) startConnecting()
             }
             Outcome.SEND_FAILED -> landAllFeedback = failure(GroundText.LAND_ALL_SEND_FAILED, attempt, started)
         }
@@ -412,7 +462,10 @@ class GroundConsoleViewModel(
                     setDroneFeedback(isLand, id, CommandFeedback(attempt, CommandPhase.HANDED_OVER, GroundText.droneHandedOver(id, action), startedAtMs = started, updatedAtMs = at))
                 }
             Outcome.NOT_CONNECTED -> setDroneFeedback(isLand, id, failure(GroundText.droneNotSent(id, action, linkOff = false), attempt, started))
-            Outcome.NO_CLIENT -> setDroneFeedback(isLand, id, failure(GroundText.droneNotSent(id, action, linkOff = true), attempt, started))
+            Outcome.NO_CLIENT -> {
+                setDroneFeedback(isLand, id, failure(GroundText.droneNotSent(id, action, linkOff = !linkIsWanted()), attempt, started))
+                if (linkIsWanted()) startConnecting()
+            }
             Outcome.SEND_FAILED -> setDroneFeedback(isLand, id, failure(GroundText.droneSendFailed(id, action), attempt, started))
         }
         publish()
@@ -423,6 +476,22 @@ class GroundConsoleViewModel(
         val at = clock.nowMs()
         setDroneFeedback(isLand, id, CommandFeedback(nextAttempt(), CommandPhase.FAILED, GroundText.droneNoUsableId(action), startedAtMs = at, updatedAtMs = at))
         publish()
+    }
+
+    /** True when an address and a key are saved (or still being read) and the link is switched on. */
+    private fun linkIsWanted(): Boolean {
+        if (keyState == KeyState.NONE || keyState == KeyState.UNAVAILABLE) return false
+        if (!settingsLoaded) return true
+        return addressSetting != null && enabledSetting
+    }
+
+    private fun startConnecting() {
+        if (inBackground) return
+        scope.launch {
+            settingsJob?.join()
+            refreshKeyState()
+            connectIfWanted()
+        }
     }
 
     private enum class Outcome { SENT, NOT_CONNECTED, NO_CLIENT, SEND_FAILED }
@@ -469,12 +538,42 @@ class GroundConsoleViewModel(
                 landAllFeedback = null
             }
         }
+        expireLandAll(now)
         age(landFeedback, GroundText.ACTION_LAND, now)
         age(resumeFeedback, GroundText.ACTION_RESUME, now)
+        checkFreshness(now)
         if (toasts.any { !it.isError && now - it.receivedAtMs >= WARNING_FADE_MS }) {
             toasts = toasts.filterNot { !it.isError && now - it.receivedAtMs >= WARNING_FADE_MS }
         }
         publish()
+    }
+
+    /**
+     * The ground answers every LAND ALL within its own 35 s deadline. A tap
+     * still unanswered after that (plus a margin) will never be answered, so it
+     * stops counting: otherwise every later ack would be credited to the tap
+     * before it.
+     */
+    private fun expireLandAll(now: Long) {
+        val expired = landAllOutstanding.filter { now - it.second >= LAND_ALL_EXPIRES_MS }
+        if (expired.isEmpty()) return
+        landAllOutstanding.removeAll(expired)
+        for ((attempt, _) in expired) {
+            val current = landAllFeedback
+            if (current != null && current.attempt == attempt && current.isWaiting) {
+                landAllFeedback = current.copy(phase = CommandPhase.FAILED, text = GroundText.LAND_ALL_NO_ANSWER, updatedAtMs = now)
+            } else {
+                addBanner(GroundText.EARLIER_LAND_ALL_NO_ANSWER, true, now)
+            }
+        }
+    }
+
+    /** The ground keeps answering pings but stopped sending fleet_status: the values are no longer live. */
+    private fun checkFreshness(now: Long) {
+        if (link.isConnected && fleetFresh && now - lastFleetStatusAt >= FRESHNESS_TIMEOUT_MS) {
+            fleetFresh = false
+            noRecentUpdate = true
+        }
     }
 
     private fun age(feedback: MutableMap<String, CommandFeedback>, action: String, now: Long) {
@@ -499,6 +598,7 @@ class GroundConsoleViewModel(
             is GroundEvent.SessionStarted -> {
                 // The client re-requests the full state itself; the state stays stale until a fresh fleet_status.
                 fleetFresh = false
+                noRecentUpdate = false
             }
             is GroundEvent.SessionEnded -> {
                 fleetFresh = false
@@ -509,21 +609,25 @@ class GroundConsoleViewModel(
         publish()
     }
 
+    private fun markFleetFresh(at: Long) {
+        fleetFresh = true
+        noRecentUpdate = false
+        lastFleetStatusAt = at
+        freshInThisClient = true
+        retainedBoard = null
+    }
+
     private fun handleServer(event: ServerEvent) {
         val at = clock.nowMs()
         when (event) {
             is FleetStatus.Fleet -> {
                 orphanBase.clear()
                 for ((id, d) in event.drones) d.orphanLandInS?.takeIf { it.isFinite() }?.let { orphanBase[id] = it to at }
-                fleetFresh = true
-                freshInThisClient = true
-                retainedBoard = null
+                markFleetFresh(at)
             }
             is FleetStatus.Legacy -> {
                 orphanBase.clear()
-                fleetFresh = true
-                freshInThisClient = true
-                retainedBoard = null
+                markFleetFresh(at)
             }
             is ManualStatus -> for ((id, m) in event.drones) {
                 if (ManualDroneStatus.KEY_ORPHAN_LAND_IN_S in m.carriedKeys) {
@@ -532,13 +636,13 @@ class GroundConsoleViewModel(
                 }
             }
             is FleetEvent -> {
-                DisplayText.fleetBanner(event)?.let { addBanner(it, DisplayText.isFailure(event), at) }
-                DisplayText.refusal(event)?.let { addBanner(it, true, at) }
+                DisplayText.fleetBanner(event)?.let { addBanner(GroundText.shorten(it), DisplayText.isFailure(event), at) }
+                DisplayText.refusal(event)?.let { addBanner(GroundText.shorten(it), true, at) }
                 if (event is FleetEvent.LandAll && event.failed) {
                     // A failed LAND ALL stays in the top bar until dismissed or a new tap.
                     val current = landAllFeedback
                     landAllFeedback = CommandFeedback(
-                        current?.attempt ?: nextAttempt(), CommandPhase.FAILED, DisplayText.landAllFailed(event.detail ?: ""),
+                        current?.attempt ?: nextAttempt(), CommandPhase.FAILED, GroundText.shorten(DisplayText.landAllFailed(GroundText.shorten(event.detail))),
                         startedAtMs = current?.startedAtMs ?: at, updatedAtMs = at,
                     )
                 }
@@ -547,8 +651,8 @@ class GroundConsoleViewModel(
             is LandAllAck -> applyLandAllAck(event, at)
             is CommandAck -> applyCommandAck(at)
             is ServerMessage -> when (event.level) {
-                ServerMessage.Level.ERROR -> addToast(event.message ?: "The ground reported an error.", true, at)
-                ServerMessage.Level.WARNING -> addToast(event.message ?: "The ground reported a warning.", false, at)
+                ServerMessage.Level.ERROR -> addToast(GroundText.shorten(event.message ?: "The ground reported an error."), true, at)
+                ServerMessage.Level.WARNING -> addToast(GroundText.shorten(event.message ?: "The ground reported a warning."), false, at)
             }
             else -> Unit // status, plan, profiles, video state and unknown events are not used by this screen.
         }
@@ -627,7 +731,7 @@ class GroundConsoleViewModel(
             val why = GroundText.manualWhy(reply)
             if (isLand != null && ownCommand) {
                 // An answer to the phone's own land or resume.
-                val refusal = "$id: $why"
+                val refusal = "${GroundText.shortId(id)}: $why"
                 val text = if (isLand) "$refusal. Land the drone with its own controls." else "$refusal."
                 val started = droneFeedback(isLand, id)?.startedAtMs ?: at
                 setDroneFeedback(isLand, id, CommandFeedback(nextAttempt(), CommandPhase.FAILED, text, startedAtMs = started, updatedAtMs = at))
@@ -636,7 +740,9 @@ class GroundConsoleViewModel(
                 // auto-land that could not be delivered. Sticky on the card until dismissed.
                 val who = id.ifEmpty { "drone" }
                 val text = GroundText.droneActionFailed(who, actionWire, why)
+                droneAlerts.remove(who)
                 droneAlerts[who] = CommandFeedback(nextAttempt(), CommandPhase.FAILED, text, startedAtMs = at, updatedAtMs = at)
+                while (droneAlerts.size > MAX_ALERTS) droneAlerts.remove(droneAlerts.keys.first())
                 if (board().drones[who] == null) addBanner(text, true, at)
             }
             return
@@ -710,7 +816,7 @@ class GroundConsoleViewModel(
                 GroundLink.Reconnecting(status.attempt, status.retryInMs / 1000.0, GroundText.dropReason(status.reason))
             is ConnectionStatus.Failed -> when (val reason = status.reason) {
                 is FailureReason.AuthRejected -> GroundLink.WrongKey
-                is FailureReason.AddressNotAllowed -> GroundLink.AddressRefused(reason.detail)
+                is FailureReason.AddressNotAllowed -> GroundLink.AddressRefused(GroundText.shorten(reason.detail))
             }
             ConnectionStatus.ShutDown -> idleLink()
         }
@@ -722,9 +828,9 @@ class GroundConsoleViewModel(
     }
 
     private fun idleLink(): GroundLink = when {
-        settings.address != null && keyState == KeyState.UNAVAILABLE -> GroundLink.StorageUnavailable
-        settings.address == null || keyState != KeyState.SAVED -> GroundLink.NotConfigured
-        !settings.enabled -> GroundLink.Off
+        addressSetting != null && keyState == KeyState.UNAVAILABLE -> GroundLink.StorageUnavailable
+        addressSetting == null || keyState != KeyState.SAVED -> GroundLink.NotConfigured
+        !enabledSetting -> GroundLink.Off
         inBackground -> GroundLink.Paused
         else -> GroundLink.Stopped
     }
@@ -742,8 +848,8 @@ class GroundConsoleViewModel(
 
     /** Connects when an address and a key are saved and the link is on. Never starts a connection otherwise. */
     private suspend fun connectIfWanted() {
-        if (client != null || !settings.enabled || inBackground) return
-        val endpoint = (settings.address?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
+        if (client != null || !enabledSetting || inBackground) return
+        val endpoint = (addressSetting?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
         if (endpoint == null) {
             link = GroundLink.NotConfigured
             publish()
@@ -752,7 +858,7 @@ class GroundConsoleViewModel(
         val myEpoch = epoch
         // The key goes from the secure storage straight into the client and is not kept here.
         val raw = secrets.load(SecretName.DASHBOARD_API_KEY)
-        if (epoch != myEpoch || client != null || !settings.enabled || inBackground) return
+        if (epoch != myEpoch || client != null || !enabledSetting || inBackground) return
         if (raw == null) {
             refreshKeyState()
             return
@@ -770,18 +876,22 @@ class GroundConsoleViewModel(
     }
 
     private fun startClient(endpoint: GroundEndpoint, key: DashboardApiKey) {
-        val cs = CoroutineScope(SupervisorJob() + mainDispatcher)
+        // The client does its socket IO, parsing and decoding on its own scope (off the main thread);
+        // only this view model's collectors below run on the main thread.
+        val cs = CoroutineScope(SupervisorJob() + clientDispatcher)
+        val collectors = CoroutineScope(SupervisorJob() + mainDispatcher)
         val c = clientFactory(endpoint, key, cs)
         client = c
         clientScope = cs
+        collectorScope = collectors
         fleetFresh = false
         freshInThisClient = false
         link = GroundLink.Connecting(1)
         // `events` is collected from exactly this one place. Video frames are not used by this screen.
-        cs.launch { c.events.collect { if (client === c) handle(it) } }
-        cs.launch { c.connection.collect { if (client === c) onConnectionStatus(it) } }
-        cs.launch { c.board.collect { if (client === c) publish() } }
-        cs.launch { c.snapshot.collect { if (client === c) publish() } }
+        collectors.launch { c.events.collect { if (client === c) handle(it) } }
+        collectors.launch { c.connection.collect { if (client === c) onConnectionStatus(it) } }
+        collectors.launch { c.board.collect { if (client === c) publish() } }
+        collectors.launch { c.snapshot.collect { if (client === c) publish() } }
         c.start()
         publish()
     }
@@ -791,8 +901,10 @@ class GroundConsoleViewModel(
         retainedBoard = displayBoard()
         retainedSnapshot = c.snapshot.value
         val cs = clientScope
+        val collectors = collectorScope
         client = null
         clientScope = null
+        collectorScope = null
         epoch++
         fleetFresh = false
         connectionLost()
@@ -802,6 +914,7 @@ class GroundConsoleViewModel(
                 c.shutdown()
             } finally {
                 cs?.cancel()
+                collectors?.cancel()
             }
         }
         publish()
@@ -835,7 +948,7 @@ class GroundConsoleViewModel(
     }
 
     private suspend fun runProbe(): String {
-        val endpoint = (settings.address?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
+        val endpoint = (addressSetting?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
             ?: return "Save the ground station address first."
         val raw = secrets.load(SecretName.DASHBOARD_API_KEY)
         if (raw == null) {
@@ -855,13 +968,13 @@ class GroundConsoleViewModel(
             is HealthProbeResult.WrongKey -> "Reachable, but the ground refused the key" + version(result.version) + "."
             is HealthProbeResult.Redirected -> "The address answered with a redirect (HTTP ${result.status}); it may not be a FlightRisk ground station."
             is HealthProbeResult.UnexpectedStatus -> "The address answered with HTTP ${result.status}; it may not be a FlightRisk ground station."
-            is HealthProbeResult.UnexpectedBody -> "Not a FlightRisk ground station response: ${result.detail}."
-            is HealthProbeResult.AddressNotAllowed -> "Address refused: ${result.detail}"
-            is HealthProbeResult.Unreachable -> "Unreachable: ${result.detail}. Check the address and that the phone is on the ground's network."
+            is HealthProbeResult.UnexpectedBody -> "Not a FlightRisk ground station response: ${GroundText.shorten(result.detail)}."
+            is HealthProbeResult.AddressNotAllowed -> "Address refused: ${GroundText.shorten(result.detail)}"
+            is HealthProbeResult.Unreachable -> "Unreachable: ${GroundText.shorten(result.detail)}. Check the address and that the phone is on the ground's network."
         }
     }
 
-    private fun version(v: String?): String = v?.let { " (ground version $it)" } ?: ""
+    private fun version(v: String?): String = v?.let { " (ground version ${GroundText.shorten(it, 40)})" } ?: ""
 
     // ---------------------------------------------------------------- derived state
 
@@ -893,7 +1006,12 @@ class GroundConsoleViewModel(
         } else {
             staleSinceMs = null
         }
-        val noteText = if (!stale) null else if (!link.isConnected) GroundText.STALE_AFTER_DISCONNECT else GroundText.STALE_REFRESHING
+        val noteText = when {
+            !stale -> null
+            !link.isConnected -> GroundText.STALE_AFTER_DISCONNECT
+            noRecentUpdate -> GroundText.STALE_NO_UPDATE
+            else -> GroundText.STALE_REFRESHING
+        }
         val snapshot = client?.snapshot?.value ?: retainedSnapshot ?: GroundSnapshot()
         val cards = board.drones.values.map { buildCard(it, board, stale, noteText, now) }
         val connected = cards.count { it.connection == ConnectionState.CONNECTED }
@@ -915,10 +1033,10 @@ class GroundConsoleViewModel(
             toasts = toasts,
             appearanceOnly = snapshot.status?.appearanceOnly == true,
             connection = ConnectionCardState(
-                savedAddress = settings.address,
+                savedAddress = addressSetting,
                 addressError = addressError,
                 keyState = keyState,
-                enabled = settings.enabled,
+                enabled = enabledSetting,
                 message = message,
                 testing = testing,
                 testResult = testResult,
@@ -962,7 +1080,7 @@ class GroundConsoleViewModel(
                 val i = record.drone.laneIndex
                 val n = record.drone.lanesTotal
                 lane = if (i != null && n != null) "$i/$n" else null
-                notice = DisplayText.droneLinkDown(record.drone)
+                notice = DisplayText.droneLinkDown(record.drone)?.let { GroundText.shorten(it) }
             }
             is DroneRecord.Legacy -> {
                 battery = record.drone.battery
@@ -985,7 +1103,7 @@ class GroundConsoleViewModel(
             isHeldWithCountdown = hasCountdown,
             batteryText = lastValue(battery?.let { DisplayText.fmt(it) + "%" } ?: DisplayText.DASH),
             altitudeText = lastValue(height?.let { DisplayText.fmt(it) + " cm" } ?: DisplayText.DASH),
-            laneText = lane,
+            laneText = lane?.let { lastValue(it) },
             linkNotice = notice,
             isPartial = (record as? DroneRecord.Fleet)?.partial == true,
             isStateStale = stale,
@@ -1014,6 +1132,9 @@ class GroundConsoleViewModel(
 
     // ---------------------------------------------------------------- tests
 
+    /** True while the one second ticker runs. For tests. */
+    internal fun tickerRunning(): Boolean = tickerJob?.isActive == true
+
     /** The client's own connection status, or null without a client. For tests. */
     internal fun currentClientStatusForTest(): ConnectionStatus? = client?.connection?.value
 
@@ -1030,6 +1151,13 @@ class GroundConsoleViewModel(
         /** How long the ground waits for an edge before it reports `no_reply` itself (`MANUAL_REPLY_TIMEOUT_S`). */
         const val MANUAL_REPLY_TIMEOUT_MS = 4_000L
         const val SUCCESS_FADE_MS = 10_000L
+
+        /** The ground's LAND ALL deadline is 35 s; a tap unanswered for this long will never be answered. */
+        const val LAND_ALL_EXPIRES_MS = 40_000L
+
+        /** No `fleet_status` for this long while connected marks the state stale. */
+        const val FRESHNESS_TIMEOUT_MS = 30_000L
+        const val MAX_ALERTS = 100
         const val DRONE_SUCCESS_FADE_MS = 60_000L
         const val WARNING_FADE_MS = 8_000L
         const val MAX_BANNERS = 10
