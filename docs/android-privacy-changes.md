@@ -4,7 +4,7 @@ This note describes what the Android privacy change altered, so the privacy docu
 
 ## Recording
 
-- Settings has a switch "Record search video". It is off by default and is stored in `flightrisk_privacy_local.xml`, which backup and device transfer exclude. An existing install reads false because the key did not exist before; no value is migrated to on.
+- Settings has a switch "Record search video" that applies from the next search. It is off by default and is stored in `flightrisk_privacy_local.xml`, which backup and device transfer exclude. An existing install reads false because the key did not exist before; no value is migrated to on.
 - `MainActivity` creates a `SessionRecorder` only when the switch is on. With the switch off, no video file is written and no recordings folder is created by the recorder.
 - Match pictures (the JPEG files in `files/snapshots`) are saved only while the recording switch is on. Nothing in the app reads `snapshotPath` or `cropPath` (no screen shows them), so skipping them does not affect any screen. The match rows themselves (scores, type, time) are still saved in the database.
 - Videos and pictures that an older version already saved stay until the person uses the delete action.
