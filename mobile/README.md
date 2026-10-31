@@ -60,7 +60,7 @@ mobile/
 
 ## Configuration
 
-`FlightRiskConfig` mirrors the Python `AmberConfig` with identical defaults.
+`FlightRiskConfig` mirrors the Python `FlightRiskConfig` class in `flightrisk/config.py` with identical defaults.
 Overrides are read from SharedPreferences (keys prefixed `FLIGHTRISK_`).
 
 Three sensitivity presets control alert thresholds:

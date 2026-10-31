@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from flightrisk.config import (
-    AmberConfig,
+    FlightRiskConfig,
     DashboardConfig,
     DroneConfig,
     ReasoningConfig,
@@ -115,7 +115,7 @@ class TestDefaultsMatchCurrentHardcodedValues:
         assert db.captures_dir == "captures"
 
     def test_flightrisk_config_bundles_all_sections(self):
-        cfg = AmberConfig()
+        cfg = FlightRiskConfig()
         assert isinstance(cfg.vision, VisionConfig)
         assert isinstance(cfg.reasoning, ReasoningConfig)
         assert isinstance(cfg.drone, DroneConfig)
@@ -123,8 +123,8 @@ class TestDefaultsMatchCurrentHardcodedValues:
 
     def test_each_flightrisk_config_instance_gets_independent_sections(self):
         """default_factory must prevent shared mutable state between instances."""
-        a = AmberConfig()
-        b = AmberConfig()
+        a = FlightRiskConfig()
+        b = FlightRiskConfig()
         a.vision.reid_threshold = 0.99
         assert b.vision.reid_threshold == 0.55
 
@@ -148,62 +148,62 @@ class TestFromEnv:
             "FLIGHTRISK_MAVLINK_ADDRESS",
         ):
             monkeypatch.delenv(key, raising=False)
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.vision.reid_threshold == 0.55
         assert cfg.dashboard.port == 5555
 
     def test_detector_model_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_DETECTOR_MODEL", "yolo11s.pt")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.vision.detector_model == "yolo11s.pt"
 
     def test_detector_confidence_override_casts_to_float(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_DETECTOR_CONFIDENCE", "0.7")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.vision.detector_confidence == 0.7
         assert isinstance(cfg.vision.detector_confidence, float)
 
     def test_reid_threshold_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_REID_THRESHOLD", "0.8")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.vision.reid_threshold == 0.8
 
     def test_scorer_threshold_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_SCORER_THRESHOLD", "0.6")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.vision.scorer_match_threshold == 0.6
 
     def test_gemma_model_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_GEMMA_MODEL", "gemma4:e2b")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.reasoning.model == "gemma4:e2b"
 
     def test_alert_cooldown_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_ALERT_COOLDOWN", "20.5")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.reasoning.alert_cooldown == 20.5
 
     def test_queue_size_override_casts_to_int(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_QUEUE_SIZE", "25")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.reasoning.queue_maxsize == 25
         assert isinstance(cfg.reasoning.queue_maxsize, int)
 
     def test_port_override_casts_to_int(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_PORT", "9090")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.dashboard.port == 9090
         assert isinstance(cfg.dashboard.port, int)
 
     def test_mavlink_address_override(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_MAVLINK_ADDRESS", "udp://:99999")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.drone.mavlink_default_address == "udp://:99999"
 
     def test_multiple_overrides_combine_and_others_stay_default(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_PORT", "7000")
         monkeypatch.setenv("FLIGHTRISK_REID_THRESHOLD", "0.9")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.dashboard.port == 7000
         assert cfg.vision.reid_threshold == 0.9
         assert cfg.vision.detector_confidence == 0.4

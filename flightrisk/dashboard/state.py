@@ -1,4 +1,4 @@
-"""Typed state container for the Amber dashboard.
+"""Typed state container for the FlightRisk dashboard.
 
 Replaces the untyped ``_state = {}`` dict with a ``@dataclass`` that
 provides IDE auto-complete, static type checking, and explicit

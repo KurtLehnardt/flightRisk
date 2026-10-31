@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from flightrisk.config import AmberConfig, reset_config
+from flightrisk.config import FlightRiskConfig, reset_config
 from flightrisk.reasoning import (
     PROVIDERS,
     cloud_llm_allowed,
@@ -112,14 +112,14 @@ class TestNormalizeProvider:
             normalize_provider("gpt")
 
     def test_none_uses_configured_default(self):
-        cfg = AmberConfig()
+        cfg = FlightRiskConfig()
         cfg.reasoning.provider = "gemma"
         with patch("flightrisk.reasoning.get_config", return_value=cfg):
             assert normalize_provider(None) == "gemma"
 
     def test_local_gemma_is_the_shipped_default_and_cloud_is_off(self):
-        assert AmberConfig().reasoning.provider == "gemma"
-        assert AmberConfig().reasoning.allow_cloud is False
+        assert FlightRiskConfig().reasoning.provider == "gemma"
+        assert FlightRiskConfig().reasoning.allow_cloud is False
         assert PROVIDERS == ("claude", "gemma", "off")
 
 
@@ -338,7 +338,7 @@ class TestConfigEnv:
         monkeypatch.setenv("FLIGHTRISK_ALLOW_CLOUD_LLM", "1")
         monkeypatch.setenv("FLIGHTRISK_CLAUDE_MODEL", "claude-sonnet-5-5")
         monkeypatch.setenv("FLIGHTRISK_CLAUDE_EFFORT", "high")
-        cfg = AmberConfig.from_env()
+        cfg = FlightRiskConfig.from_env()
         assert cfg.reasoning.provider == "claude"
         assert cfg.reasoning.allow_cloud is True
         assert cfg.reasoning.claude_model == "claude-sonnet-5-5"

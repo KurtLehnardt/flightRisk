@@ -33,7 +33,7 @@ def run_pipeline(
     show_window: bool = True,
     reasoning_provider: str | None = None,
 ):
-    """Run the Amber detection pipeline.
+    """Run the FlightRisk detection pipeline.
 
     Args:
         source: 'tello', or a path to a video file.

@@ -503,7 +503,7 @@ def edge_pipeline(clean_app_state, monkeypatch):
     monkeypatch.delenv("FLIGHTRISK_EDGE_TOKEN", raising=False)
     # Appearance-only switches the face signal off in the configuration, so
     # the test gets its own configuration singleton.
-    monkeypatch.setattr(config_module, "_config", config_module.AmberConfig.from_env())
+    monkeypatch.setattr(config_module, "_config", config_module.FlightRiskConfig.from_env())
     sio = FakeSocketIO()
     monkeypatch.setattr(app_module, "socketio", sio)
     for key in ("detector", "reid", "tracker", "logger", "metrics", "db", "obstacle_guard",

@@ -155,7 +155,7 @@ class StructuredLogger:
 
 
 class MetricsCollector:
-    """Per-session metrics tracking for the Amber pipeline.
+    """Per-session metrics tracking for the FlightRisk pipeline.
 
     Thread-safe counters for frames, detections, matches, face detection,
     reasoning calls, and errors.
