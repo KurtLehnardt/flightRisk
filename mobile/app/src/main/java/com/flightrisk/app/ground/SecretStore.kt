@@ -35,6 +35,21 @@ sealed interface SecretAvailability {
 }
 
 /**
+ * The result of reading one secret, telling "nothing stored" apart from "could
+ * not be read". [toString] never shows the value.
+ */
+sealed interface SecretRead {
+    class Value(val value: String) : SecretRead {
+        override fun toString(): String = "Value(${Redact.PLACEHOLDER})"
+    }
+
+    data object Absent : SecretRead
+
+    /** The storage could not be opened or the read failed. */
+    data object Unreadable : SecretRead
+}
+
+/**
  * The storage behind [SecretStore]. On a device it is
  * [EncryptedPrefsSecretStorage]; tests use an in-memory map. Implementations
  * never throw: a failure reads as null, writes as false, and shows in
@@ -43,6 +58,17 @@ sealed interface SecretAvailability {
 interface SecretStoragePort {
     /** The stored value for [key], or null when there is none or it cannot be read. */
     fun read(key: String): String?
+
+    /**
+     * Like [read], but a failure is [SecretRead.Unreadable] instead of null.
+     * The default asks [availability] after the read; implementations that
+     * can tell the cases apart directly override it.
+     */
+    fun readResult(key: String): SecretRead {
+        val value = read(key)
+        if (availability() is SecretAvailability.Unavailable) return SecretRead.Unreadable
+        return value?.let { SecretRead.Value(it) } ?: SecretRead.Absent
+    }
 
     /**
      * Applies every change in one commit: a null value removes the key.
@@ -125,17 +151,40 @@ class SecretStore(
     fun valuesForRedaction(): List<String> = SecretName.entries.mapNotNull { get(it) }
 
     /**
+     * The secret [name], telling a missing value apart from storage that cannot
+     * be read. Not on the main thread.
+     */
+    fun lookup(name: SecretName): SecretRead {
+        requireOffMain()
+        return when (val read = storage.readResult(name.storageKey)) {
+            is SecretRead.Value -> if (read.value.isEmpty()) SecretRead.Absent else read
+            else -> read
+        }
+    }
+
+    /**
      * Moves the Claude key from [LEGACY_CLAUDE_KEY] to
      * [SecretName.CLAUDE_API_KEY] in one commit: the new name is written and
      * the old one removed together, so a crash leaves either the old state or
      * the new one. When both names hold a value, the new name wins. Returns
-     * true when there was nothing to move or the move was stored. Not on the
-     * main thread; see the class comment for when to call it.
+     * true only when there was nothing to move or the move was stored; when the
+     * storage cannot be opened or read it returns false and changes nothing,
+     * so the caller tries again later instead of recording the move as done.
+     * Not on the main thread; see the class comment for when to call it.
      */
     fun migrateLegacyKeys(): Boolean {
         requireOffMain()
-        val legacy = storage.read(LEGACY_CLAUDE_KEY) ?: return true
-        val current = storage.read(SecretName.CLAUDE_API_KEY.storageKey)
+        if (storage.availability() is SecretAvailability.Unavailable) return false
+        val legacy = when (val read = storage.readResult(LEGACY_CLAUDE_KEY)) {
+            SecretRead.Absent -> return true
+            SecretRead.Unreadable -> return false
+            is SecretRead.Value -> read.value
+        }
+        val current = when (val read = storage.readResult(SecretName.CLAUDE_API_KEY.storageKey)) {
+            SecretRead.Unreadable -> return false
+            SecretRead.Absent -> null
+            is SecretRead.Value -> read.value
+        }
         val changes = linkedMapOf<String, String?>()
         if (current.isNullOrEmpty() && legacy.isNotBlank()) {
             changes[SecretName.CLAUDE_API_KEY.storageKey] = legacy.trim()

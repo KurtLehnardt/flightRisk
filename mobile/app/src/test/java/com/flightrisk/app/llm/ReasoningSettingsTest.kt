@@ -178,7 +178,7 @@ class ReasoningSettingsTest {
     fun `key migration moves a plain-preferences key from the oldest builds, writing new before deleting old`() {
         val prefs = FakePrefs(mapOf(SecretStore.LEGACY_CLAUDE_KEY to " $TEST_CLAUDE_KEY "))
         val storage = FakeSecretStorage()
-        val s = ReasoningSettings(prefs)
+        val s = ReasoningSettings(FakePrefs(), legacyPrefs = prefs)
         assertTrue(s.migrateLegacyKeyOnce(SecretStore(storage, isMainThread = { false })))
         assertEquals(TEST_CLAUDE_KEY, storage.map[SecretName.CLAUDE_API_KEY.storageKey])
         assertFalse(prefs.map.containsKey(SecretStore.LEGACY_CLAUDE_KEY))
@@ -188,12 +188,13 @@ class ReasoningSettingsTest {
     @Test
     fun `failed key migration keeps the old key and is retried`() {
         val prefs = FakePrefs(mapOf(SecretStore.LEGACY_CLAUDE_KEY to TEST_CLAUDE_KEY))
+        val reasoningPrefs = FakePrefs()
         val storage = FakeSecretStorage().apply { failWrites = true }
         val secrets = SecretStore(storage, isMainThread = { false })
-        val s = ReasoningSettings(prefs)
+        val s = ReasoningSettings(reasoningPrefs, legacyPrefs = prefs)
         assertFalse(s.migrateLegacyKeyOnce(secrets))
         assertEquals(TEST_CLAUDE_KEY, prefs.map[SecretStore.LEGACY_CLAUDE_KEY])
-        assertFalse(prefs.map.containsKey(ReasoningSettings.KEY_MIGRATION_DONE_KEY))
+        assertFalse(reasoningPrefs.map.containsKey(ReasoningSettings.KEY_MIGRATION_DONE_KEY))
 
         storage.failWrites = false
         assertTrue(s.migrateLegacyKeyOnce(secrets))

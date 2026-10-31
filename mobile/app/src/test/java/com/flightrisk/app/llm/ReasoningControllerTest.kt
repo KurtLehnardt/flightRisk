@@ -119,7 +119,7 @@ class ReasoningControllerTest {
     }
 
     @Test
-    fun `start runs the migration once off the given dispatcher and never opts in`() = runTest(UnconfinedTestDispatcher()) {
+    fun `start runs the migration and the key lookup and never opts in`() = runTest(UnconfinedTestDispatcher()) {
         h.storage.map["FLIGHTRISK_API_KEY"] = TEST_CLAUDE_KEY
         val c = controller()
         c.start { h.settings.migrateLegacyKeyOnce(h.secretStore) }

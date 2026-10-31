@@ -68,6 +68,9 @@ class FakeSecretStorage(initial: Map<String, String> = emptyMap()) : SecretStora
     @Volatile var failWrites = false
     val reads = AtomicInteger()
 
+    /** The thread names of every write, to check that writes stay off the caller's thread. */
+    val writeThreads = CopyOnWriteArrayList<String>()
+
     /** Runs before every read; tests use it to change state between two gate checks. */
     @Volatile var beforeRead: (() -> Unit)? = null
 
@@ -79,6 +82,7 @@ class FakeSecretStorage(initial: Map<String, String> = emptyMap()) : SecretStora
     }
 
     override fun write(changes: Map<String, String?>): Boolean {
+        writeThreads += Thread.currentThread().name
         if (unavailable || failWrites) return false
         for ((k, v) in changes) if (v == null) map.remove(k) else map[k] = v
         return true
@@ -105,7 +109,11 @@ data class StubRequest(val requestLine: String, val apiKey: String?, val body: S
  * or, with [hold], keeps the request open until the client gives up, so a test
  * can cancel it while it is in flight. Nothing leaves the machine.
  */
-class StubClaudeServer(@Volatile var hold: Boolean = false) : AutoCloseable {
+class StubClaudeServer(
+    @Volatile var hold: Boolean = false,
+    /** When set, the raw HTTP response to send instead of the fixed match. */
+    @Volatile var rawResponse: String? = null,
+) : AutoCloseable {
     val requests = CopyOnWriteArrayList<StubRequest>()
     val clientClosed = AtomicInteger()
 
@@ -119,6 +127,11 @@ class StubClaudeServer(@Volatile var hold: Boolean = false) : AutoCloseable {
             // Wait for the client to close the connection (a cancelled call).
             while (input.read() >= 0) Unit
             clientClosed.incrementAndGet()
+        } else if (rawResponse != null) {
+            socket.getOutputStream().apply {
+                write(rawResponse!!.toByteArray())
+                flush()
+            }
         } else {
             val answer = """{"content":[{"type":"text","text":"MATCH: yes\nCONFIDENCE: high\nREASONING: same jacket"}]}"""
             val bytes = answer.toByteArray()
@@ -142,6 +155,7 @@ class CloudHarness(
     secrets: Map<String, String> = emptyMap(),
     val online: () -> Boolean = { true },
     localUsable: Boolean = false,
+    lookupKeyAtStart: Boolean = true,
 ) : AutoCloseable {
     val prefs = FakePrefs(prefs)
     val storage = FakeSecretStorage(secrets)
@@ -165,7 +179,7 @@ class CloudHarness(
     val local = FakeLocalBackend(usable = localUsable)
     val selector = LlmSelector(settings, gate, localModelUsable = { local.usable }, isOnline = online).apply {
         registerOnDeviceFirst(local, backend)
-        refreshWithKeyLookup()
+        if (lookupKeyAtStart) refreshWithKeyLookup()
     }
 
     /** Opts in, selects Cloud Claude and saves the test key, as the user would. */

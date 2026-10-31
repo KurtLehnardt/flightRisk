@@ -44,7 +44,18 @@ data class FlightRiskConfig(
 
         private const val SECURE_PREFS_NAME = "flightrisk_secure_prefs"
 
-        fun getEncryptedPrefs(context: Context): SharedPreferences {
+        private val encryptedPrefs = SingleInstance<SharedPreferences>()
+
+        /**
+         * The app's encrypted preferences, created once per process under a
+         * lock. Creating them concurrently on a fresh install can create two
+         * Tink keysets, one of which is lost. Blocks on the Keystore the first
+         * time: call it off the main thread.
+         */
+        fun getEncryptedPrefs(context: Context): SharedPreferences =
+            encryptedPrefs.get { createEncryptedPrefs(context.applicationContext) }
+
+        private fun createEncryptedPrefs(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()

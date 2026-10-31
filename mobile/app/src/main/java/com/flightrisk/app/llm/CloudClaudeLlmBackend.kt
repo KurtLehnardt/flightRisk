@@ -8,10 +8,12 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Call
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -27,6 +29,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * LLM backend that calls the Anthropic Messages API (Claude) for visual
@@ -73,14 +76,28 @@ class CloudClaudeLlmBackend(
 
     override val name: String = NAME
 
-    /** Dedicated client, so cancelling cloud calls never touches other traffic. */
+    /**
+     * Dedicated client, so cancelling cloud calls never touches other traffic.
+     * It never follows a redirect (OkHttp would re-send the body and keep the
+     * `x-api-key` header across hosts, and could downgrade https to http) and
+     * never re-sends a request: [SingleAttempt] refuses a second network
+     * attempt within one call and strips `Retry-After`, which would otherwise
+     * make OkHttp repeat the upload after a 503.
+     */
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         .writeTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         .callTimeout(timeoutMs * 2, TimeUnit.MILLISECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .retryOnConnectionFailure(false)
+        .addNetworkInterceptor(SingleAttempt)
         .build()
+
+    /** Test hook run between the second gate check and registering the call. */
+    @Volatile
+    internal var beforeSend: (() -> Unit)? = null
 
     private val lock = Any()
 
@@ -198,8 +215,10 @@ class CloudClaudeLlmBackend(
             .header("x-api-key", key)
             .header("anthropic-version", API_VERSION)
             .post(body.toRequestBody(JSON))
+            .tag(AttemptCounter::class.java, AttemptCounter())
             .build()
         val call = client.newCall(request)
+        beforeSend?.invoke()
 
         val registered = synchronized(lock) {
             if (generation != generationAtStart) false else inFlight.add(call)
@@ -212,7 +231,8 @@ class CloudClaudeLlmBackend(
         return try {
             call.execute().use { response ->
                 if (response.code != 200) {
-                    // The error body is not logged: it is not needed and could echo request data.
+                    // Redirects (3xx) are not followed and count as errors. The error
+                    // body is not logged: it is not needed and could echo request data.
                     log("Claude API error ${response.code}")
                     return ReasoningResult(isMatch = false, confidence = "error", reasoning = "API error ${response.code}")
                 }
@@ -270,6 +290,27 @@ class CloudClaudeLlmBackend(
     }
 
     override fun toString(): String = "CloudClaudeLlmBackend(model=$model, available=$isAvailable)"
+
+    /** Counts the network attempts of one call. */
+    private class AttemptCounter {
+        val attempts = AtomicInteger()
+    }
+
+    /** Allows one network attempt per call and removes `Retry-After` from responses. */
+    private object SingleAttempt : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val counter = chain.request().tag(AttemptCounter::class.java)
+            if (counter != null && counter.attempts.incrementAndGet() > 1) {
+                throw IOException("A cloud request is never sent twice")
+            }
+            val response = chain.proceed(chain.request())
+            return if (response.header("Retry-After") != null) {
+                response.newBuilder().removeHeader("Retry-After").build()
+            } else {
+                response
+            }
+        }
+    }
 
     companion object {
         const val NAME = "claude"

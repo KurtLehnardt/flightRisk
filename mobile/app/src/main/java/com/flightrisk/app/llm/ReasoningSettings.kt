@@ -2,7 +2,9 @@ package com.flightrisk.app.llm
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.flightrisk.app.ground.SecretAvailability
 import com.flightrisk.app.ground.SecretName
+import com.flightrisk.app.ground.SecretRead
 import com.flightrisk.app.ground.SecretStore
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -70,6 +72,7 @@ object ReasoningReason {
         "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic;"
     const val CLOUD_BLOCKED = "$CLOUD_BLOCKED_PREFIX turn on \"Allow cloud reasoning\" to opt in."
     const val CLAUDE_KEY_MISSING = "No Claude API key is saved on this device."
+    const val CHECKING_KEY = "Checking the saved Claude API key…"
     const val SECURE_STORAGE_UNAVAILABLE = "Secure storage unavailable on this device"
     const val OFFLINE = "No internet connection."
     const val CLAUDE_NOT_REGISTERED = "The Claude backend is not loaded."
@@ -104,9 +107,15 @@ fun interface CloudGateListener {
 
 /**
  * Persisted reasoning settings: the provider the user picked and the explicit
- * cloud opt-in. Stored in the plain `flightrisk_config` SharedPreferences
- * (the same file as `FlightRiskConfig`); the Claude key never lives here, it
- * stays in [SecretStore].
+ * cloud opt-in. Stored in their own plain SharedPreferences file
+ * (`flightrisk_reasoning`), which is excluded from backup and device transfer
+ * (`res/xml/backup_rules.xml`, `data_extraction_rules.xml`), so a restored or
+ * transferred install never carries an opt-in its device did not consent to.
+ * The Claude key never lives here; it stays in [SecretStore].
+ *
+ * [legacyPrefs] is the `flightrisk_config` file, where the oldest builds kept
+ * the key as plain text and where earlier versions of this change stored these
+ * settings. [migrateLegacyValues] and [migrateLegacyKeyOnce] clean it up.
  *
  * Rules, the same as iOS and the dashboard:
  * - Cloud is never the default. With nothing stored, the provider is Local
@@ -121,10 +130,15 @@ fun interface CloudGateListener {
  * main thread. Writes use `apply()`, which updates the in-memory values at
  * once, so the cloud gate sees a change before the method returns.
  */
-class ReasoningSettings(private val prefs: SharedPreferences) {
+class ReasoningSettings(
+    private val prefs: SharedPreferences,
+    private val legacyPrefs: SharedPreferences? = null,
+) {
 
-    constructor(context: Context) :
-        this(context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+    constructor(context: Context) : this(
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+        context.applicationContext.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE),
+    )
 
     private val listeners = CopyOnWriteArrayList<CloudGateListener>()
 
@@ -230,10 +244,14 @@ class ReasoningSettings(private val prefs: SharedPreferences) {
      * Cleans up values written by earlier builds. Removes a stored provider
      * that is unknown (for example "cloud_gemini" or "cloud_openai"), removes
      * a stored cloud choice without the opt-in, and removes an opt-in value
-     * that is not a Boolean. It never sets the opt-in and never selects cloud.
+     * that is not a Boolean. Reasoning values found in the backed-up
+     * `flightrisk_config` file are removed from it; only a non-cloud provider
+     * is carried over, and the opt-in never is, so the consent dialog must be
+     * confirmed again. It never sets the opt-in and never selects cloud.
      * Main-safe and idempotent.
      */
     fun migrateLegacyValues() {
+        moveOutOfLegacyFile()
         val all = readAll()
         val editor = prefs.edit()
         var changed = false
@@ -257,42 +275,74 @@ class ReasoningSettings(private val prefs: SharedPreferences) {
 
     /**
      * Moves the Claude key to its new name, once. Earlier builds kept it as
-     * `FLIGHTRISK_API_KEY`: in this plain preferences file (the oldest builds)
-     * and in the encrypted file. This copies a plain-file key into
-     * [SecretName.CLAUDE_API_KEY] when that is empty and only then deletes the
-     * plain copy, then runs [SecretStore.migrateLegacyKeys], which writes the
-     * new name and deletes the old one in one commit. A crash at any point
-     * leaves the key under the old name or the new one, never lost; a failed
-     * step is retried on the next launch. It never changes the opt-in or the
-     * provider. Blocks on the Keystore: call it off the main thread.
+     * `FLIGHTRISK_API_KEY`: in the encrypted file and, in the oldest builds,
+     * in the plain [legacyPrefs] file. This first runs
+     * [SecretStore.migrateLegacyKeys], which writes the new name and deletes
+     * the encrypted old one in one commit, then copies a plain-file key into
+     * [SecretName.CLAUDE_API_KEY] only when that is still empty, and only then
+     * deletes the plain copy. A crash at any point
+     * leaves the key under the old name or the new one, never lost. When the
+     * secure storage cannot be opened or read, nothing is moved or deleted and
+     * the done flag is not set, so the next launch tries again. It never
+     * changes the opt-in or the provider. Blocks on the Keystore: call it off
+     * the main thread.
      *
-     * @return true when the migration is done (now or earlier).
+     * @return true only when the migration is done (now or earlier).
      */
     fun migrateLegacyKeyOnce(secrets: SecretStore): Boolean {
         if (readAll()[KEY_MIGRATION_DONE_KEY] == true) return true
-        val plain = (readAll()[SecretStore.LEGACY_CLAUDE_KEY] as? String)?.trim()
-        if (plain != null) {
-            if (plain.isNotEmpty() && secrets.get(SecretName.CLAUDE_API_KEY) == null) {
-                if (!secrets.set(SecretName.CLAUDE_API_KEY, plain)) return false
-            }
-            if (!prefs.edit().remove(SecretStore.LEGACY_CLAUDE_KEY).commit()) return false
-        }
+        // Nothing moves while the secure storage cannot be used: the plain copy
+        // and the encrypted old name stay where they are, and the flag stays
+        // unset, so the next launch tries again.
+        if (secrets.availability() is SecretAvailability.Unavailable) return false
+        // The encrypted old name first: it is newer than a plain-file copy.
         if (!secrets.migrateLegacyKeys()) return false
+        val legacy = legacyPrefs
+        val plain = legacy?.let { readAll(it)[SecretStore.LEGACY_CLAUDE_KEY] as? String }?.trim()
+        if (legacy != null && plain != null) {
+            if (plain.isNotEmpty()) {
+                when (secrets.lookup(SecretName.CLAUDE_API_KEY)) {
+                    SecretRead.Unreadable -> return false
+                    SecretRead.Absent -> if (!secrets.set(SecretName.CLAUDE_API_KEY, plain)) return false
+                    is SecretRead.Value -> Unit
+                }
+            }
+            if (!legacy.edit().remove(SecretStore.LEGACY_CLAUDE_KEY).commit()) return false
+        }
         return prefs.edit().putBoolean(KEY_MIGRATION_DONE_KEY, true).commit()
+    }
+
+    /** Removes reasoning values from the backed-up legacy file, carrying over only a non-cloud provider. */
+    private fun moveOutOfLegacyFile() {
+        val legacy = legacyPrefs ?: return
+        val old = readAll(legacy)
+        val keys = listOf(PROVIDER_KEY, CLOUD_OPT_IN_KEY, KEY_MIGRATION_DONE_KEY).filter { old.containsKey(it) }
+        if (keys.isEmpty()) return
+        val provider = ReasoningProvider.fromStored(old[PROVIDER_KEY] as? String)
+        if (provider != null && !provider.isCloud && !readAll().containsKey(PROVIDER_KEY)) {
+            prefs.edit().putString(PROVIDER_KEY, provider.storedValue).apply()
+        }
+        val editor = legacy.edit()
+        keys.forEach { editor.remove(it) }
+        editor.apply()
     }
 
     override fun toString(): String =
         "ReasoningSettings(provider=${storedProvider?.storedValue ?: "default"}, cloudOptIn=$cloudOptIn)"
 
-    private fun readAll(): Map<String, *> =
+    private fun readAll(from: SharedPreferences = prefs): Map<String, *> =
         try {
-            prefs.all ?: emptyMap<String, Any?>()
+            from.all ?: emptyMap<String, Any?>()
         } catch (_: RuntimeException) {
             emptyMap<String, Any?>()
         }
 
     companion object {
-        const val PREFS_NAME = "flightrisk_config"
+        /** Excluded from backup and device transfer. */
+        const val PREFS_NAME = "flightrisk_reasoning"
+
+        /** The backed-up general config file that held these values and the oldest plain key. */
+        const val LEGACY_PREFS_NAME = "flightrisk_config"
         const val PROVIDER_KEY = "flightrisk_reasoning_provider"
         const val CLOUD_OPT_IN_KEY = "flightrisk_allow_cloud_llm"
         const val KEY_MIGRATION_DONE_KEY = "flightrisk_claude_key_migrated"

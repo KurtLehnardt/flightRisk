@@ -27,7 +27,7 @@ import com.flightrisk.app.drone.TelloWifiChecker
 
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
-import com.flightrisk.app.ground.SecretStore
+import com.flightrisk.app.config.AppSecrets
 import com.flightrisk.app.llm.CloudClaudeLlmBackend
 import com.flightrisk.app.llm.CloudReasoningGate
 import com.flightrisk.app.llm.LocalLlmBackend
@@ -192,7 +192,7 @@ class MainActivity : ComponentActivity() {
         localLlmProvider = provider
         val localBackend = LocalLlmBackend(provider).also { localLlmBackend = it }
         val reasoningSettings = ReasoningSettings(applicationContext)
-        val secretStore = SecretStore(applicationContext)
+        val secretStore = AppSecrets.store(applicationContext)
         val cloudGate = CloudReasoningGate(reasoningSettings, SecretStoreClaudeKeySource(secretStore))
         val cloudBackend = CloudClaudeLlmBackend.forDevice(applicationContext, cloudGate).also { cloudLlmBackend = it }
         val selector = LlmSelector(
@@ -415,7 +415,10 @@ class MainActivity : ComponentActivity() {
             searchPipeline = pipeline
 
             // Adapt scorer weights based on active LLM backend
-            pipeline.adaptWeightsForBackend(ls.status.value.active == ReasoningProvider.LOCAL)
+            // Wait (briefly) for the saved-key check after start-up, so the weights
+            // follow the backend that will actually answer.
+            val reasoning = ls.awaitKeyChecked()
+            pipeline.adaptWeightsForBackend(reasoning.active == ReasoningProvider.LOCAL)
 
             // Wire frame source: pull from drone or camera based on active mode
             pipeline.frameSource = SearchPipeline.FrameSource {
@@ -891,6 +894,7 @@ class MainActivity : ComponentActivity() {
         reasoningStateJob = null
         cloudLlmBackend?.close()
         cloudLlmBackend = null
+        llmSelector?.stopMonitoring()
         reasoningController = null
 
         // Clean up local LLM

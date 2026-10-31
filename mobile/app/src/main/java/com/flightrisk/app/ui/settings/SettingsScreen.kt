@@ -400,7 +400,8 @@ private fun LlmBackendSection(
         Spacer(modifier = Modifier.height(12.dp))
 
         // Explicit opt-in. Turning it on opens the consent dialog; the switch
-        // shows on while the dialog is open and returns to off on Cancel.
+        // shows on while the dialog is open and returns to off on Cancel. This
+        // matches iOS and enables nothing until the dialog is confirmed.
         val pendingOptIn = reasoning.consent?.selectCloud == false
         Row(
             modifier = Modifier
@@ -421,6 +422,14 @@ private fun LlmBackendSection(
                     contentDescription = "Allow cloud reasoning: ${if (reasoning.cloudOptIn) "on" else "off"}. " +
                         "Asks for confirmation before any image can be sent to Anthropic."
                 },
+            )
+        }
+
+        if (status.checkingKey) {
+            Text(
+                text = ReasoningReason.CHECKING_KEY,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 

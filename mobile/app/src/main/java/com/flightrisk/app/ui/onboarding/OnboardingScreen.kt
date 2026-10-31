@@ -171,17 +171,19 @@ private fun PrivacyNoticeStep(
 
             PrivacyBullet(
                 title = "On-Device Processing",
-                description = "All person detection and matching runs entirely on " +
-                    "your device. Camera frames are never uploaded or stored.",
+                description = "Person detection and matching run on your device. " +
+                    "Camera frames are not uploaded. Images leave the phone only " +
+                    "with cloud reasoning on, as described below.",
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             PrivacyBullet(
-                title = "Optional Cloud Features",
-                description = "If you enable Cloud Claude, match snapshots may be sent " +
-                    "to Anthropic's API for reasoning verification. This is optional " +
-                    "and can be disabled in Settings.",
+                title = "Cloud Reasoning (Off by Default)",
+                description = "Cloud reasoning is off. If you turn it on in Settings, save a " +
+                    "Claude API key and select Cloud Claude, the cropped image of each detected " +
+                    "person, the reference photo and the text description you entered are sent " +
+                    "to Anthropic. The images can show a face. You can turn it off at any time.",
             )
 
             Spacer(modifier = Modifier.height(16.dp))

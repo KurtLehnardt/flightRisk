@@ -1,7 +1,7 @@
 package com.flightrisk.app.llm
 
 import com.flightrisk.app.ground.Redact
-import com.flightrisk.app.ground.SecretAvailability
+import com.flightrisk.app.ground.SecretRead
 import com.flightrisk.app.ground.SecretName
 import com.flightrisk.app.ground.SecretStore
 import java.util.concurrent.atomic.AtomicInteger
@@ -33,14 +33,14 @@ interface ClaudeKeySource {
 
 /** [ClaudeKeySource] over [SecretStore] ([SecretName.CLAUDE_API_KEY]). */
 class SecretStoreClaudeKeySource(private val secrets: SecretStore) : ClaudeKeySource {
-    override fun lookup(): ClaudeKeyLookup {
-        val value = secrets.get(SecretName.CLAUDE_API_KEY)
-        // A read failure also returns null, so ask the storage whether it works
-        // before reporting "no key".
-        if (secrets.availability() is SecretAvailability.Unavailable) return ClaudeKeyLookup.Unavailable
-        val key = ReasoningSettings.normalizedKey(value) ?: return ClaudeKeyLookup.Missing
-        return ClaudeKeyLookup.Found(key)
-    }
+    override fun lookup(): ClaudeKeyLookup =
+        // A storage that cannot be opened or read is reported as such, never as "no key".
+        when (val read = secrets.lookup(SecretName.CLAUDE_API_KEY)) {
+            SecretRead.Unreadable -> ClaudeKeyLookup.Unavailable
+            SecretRead.Absent -> ClaudeKeyLookup.Missing
+            is SecretRead.Value -> ReasoningSettings.normalizedKey(read.value)?.let { ClaudeKeyLookup.Found(it) }
+                ?: ClaudeKeyLookup.Missing
+        }
 
     override fun save(key: String): Boolean = secrets.set(SecretName.CLAUDE_API_KEY, key)
 
