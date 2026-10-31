@@ -241,14 +241,14 @@ class GroundConsoleViewModelTest {
     // ---- 8. Emit policy
 
     @Test
-    fun `the screen can emit only the state requests, LAND ALL, land and resume`() {
+    fun `the screen can emit only the state requests, LAND ALL, land, resume and the two profile selections`() {
         val policy = GroundConsoleViewModel.EMIT_POLICY
         assertTrue(policy.allows(ClientCommand.LandAll))
         assertTrue(policy.allows(ClientCommand.landDrone("drone-1")!!))
         assertTrue(policy.allows(ClientCommand.resumeHeldDrone("drone-1")!!))
         ClientCommand.STATE_REQUESTS.forEach { assertTrue(policy.allows(it)) }
-        assertFalse(policy.allows(ClientCommand.setDetectionProfile("drone-1", "x")!!))
-        assertFalse(policy.allows(ClientCommand.SetFleetDetectionProfile("x")))
+        assertTrue(policy.allows(ClientCommand.setDetectionProfile("drone-1", "x")!!))
+        assertTrue(policy.allows(ClientCommand.SetFleetDetectionProfile("x")))
         val forbidden = setOf(
             "plan_fleet", "start_fleet", "start_search", "stop_search", "manual_take_control", "manual_command",
             "set_ceiling_settings", "set_reasoning_provider", "set_stream_video", "set_target", "register_drone",
@@ -260,10 +260,13 @@ class GroundConsoleViewModelTest {
             setOf(
                 "get_fleet_status", "get_detection_profiles", "get_ceiling_settings", "get_reasoning_provider",
                 "get_manual_status", "land_all", "drone_command", "manual_resume_search",
+                "set_detection_profile", "set_fleet_detection_profile",
             ),
             policy.allowedEvents,
         )
-        assertTrue(policy.allowedEvents.size < EmitPolicy.CONTRACT.allowedEvents.size)
+        // The two profile selections complete the contract's list; the policy is still a narrowing of it.
+        assertEquals(EmitPolicy.CONTRACT.allowedEvents, policy.allowedEvents)
+        assertEquals(setOf("land_all"), policy.narrowedTo(emptySet()).allowedEvents)
     }
 
     @Test
