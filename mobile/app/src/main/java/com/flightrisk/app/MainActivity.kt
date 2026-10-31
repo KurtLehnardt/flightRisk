@@ -27,9 +27,16 @@ import com.flightrisk.app.drone.TelloWifiChecker
 
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
+import com.flightrisk.app.ground.SecretStore
 import com.flightrisk.app.llm.CloudClaudeLlmBackend
+import com.flightrisk.app.llm.CloudReasoningGate
 import com.flightrisk.app.llm.LocalLlmBackend
 import com.flightrisk.app.llm.LlmSelector
+import com.flightrisk.app.llm.ReasoningAction
+import com.flightrisk.app.llm.ReasoningController
+import com.flightrisk.app.llm.ReasoningProvider
+import com.flightrisk.app.llm.ReasoningSettings
+import com.flightrisk.app.llm.SecretStoreClaudeKeySource
 import com.flightrisk.app.llm.local.GemmaMediaPipeProvider
 import com.flightrisk.app.llm.local.LocalLlmProvider
 import com.flightrisk.app.llm.local.ModelState
@@ -130,6 +137,11 @@ class MainActivity : ComponentActivity() {
     private var localLlmBackend: LocalLlmBackend? = null
     private var localModelStateJob: Job? = null
 
+    // Reasoning (U5): cloud is opt-in, off by default; the Claude key lives only in SecretStore.
+    private var cloudLlmBackend: CloudClaudeLlmBackend? = null
+    private var reasoningController: ReasoningController? = null
+    private var reasoningStateJob: Job? = null
+
 
     // ------------------------------------------------------------------
     // Permission launcher
@@ -158,49 +170,73 @@ class MainActivity : ComponentActivity() {
 
         onboardingComplete = isOnboardingComplete(this)
 
-        // Load initial settings from config
+        // Load initial settings from config. No secret is read here.
         val config = FlightRiskConfig.getInstance(this)
-        val savedApiKey = config.reasoning.apiKey ?: ""
         settingsState = SettingsScreenState(
             activePreset = SensitivityPreset.BALANCED,
             reidThreshold = config.vision.reidThreshold.toFloat(),
             faceThreshold = config.vision.faceMatchThreshold.toFloat(),
             scorerThreshold = config.vision.scorerMatchThreshold.toFloat(),
-            llmApiKey = savedApiKey,
-            llmAvailable = savedApiKey.isNotBlank(),
         )
 
-        // Initialize alert, LLM, and location subsystems
+        // Initialize alert and location subsystems
         alertManager = AlertManager(applicationContext)
-        llmSelector = LlmSelector(applicationContext).also { it.startMonitoring() }
         locationProvider = LocationProvider(applicationContext)
 
-        // Initialize local LLM provider + backend
+        // Reasoning. Cloud Claude is used only while the saved opt-in is on,
+        // Cloud Claude is selected and a key is saved in SecretStore; the cloud
+        // backend checks that itself on every call (CloudReasoningGate). The
+        // on-device backend is registered first, and the cloud backend is never
+        // a fallback.
         val provider = GemmaMediaPipeProvider(applicationContext)
         localLlmProvider = provider
-        localLlmBackend = LocalLlmBackend(provider)
+        val localBackend = LocalLlmBackend(provider).also { localLlmBackend = it }
+        val reasoningSettings = ReasoningSettings(applicationContext)
+        val secretStore = SecretStore(applicationContext)
+        val cloudGate = CloudReasoningGate(reasoningSettings, SecretStoreClaudeKeySource(secretStore))
+        val cloudBackend = CloudClaudeLlmBackend.forDevice(applicationContext, cloudGate).also { cloudLlmBackend = it }
+        val selector = LlmSelector(
+            settings = reasoningSettings,
+            gate = cloudGate,
+            localModelUsable = {
+                val state = provider.state.value
+                state is ModelState.Ready || state is ModelState.Downloaded
+            },
+            isOnline = { CloudClaudeLlmBackend.hasValidatedInternet(applicationContext) },
+            context = applicationContext,
+        )
+        selector.registerOnDeviceFirst(local = localBackend, cloud = cloudBackend)
+        selector.startMonitoring()
+        llmSelector = selector
+        val controller = ReasoningController(reasoningSettings, cloudGate, selector, lifecycleScope)
+        reasoningController = controller
 
-        // Register cloud backend (priority 1) then local backend (priority 2)
-        if (savedApiKey.isNotBlank()) {
-            llmSelector!!.registerBackend(
-                CloudClaudeLlmBackend(applicationContext, savedApiKey)
-            )
+        // The Claude key moves once from FLIGHTRISK_API_KEY to FLIGHTRISK_CLAUDE_API_KEY
+        // (write new, then delete old), off the main thread. It never turns cloud on.
+        lifecycleScope.launch {
+            controller.start { reasoningSettings.migrateLegacyKeyOnce(secretStore) }
         }
-        llmSelector!!.registerBackend(localLlmBackend!!)
 
-        // Observe local model state for settings UI
+        // Settings and the Search banner follow the resolved reasoning state.
+        reasoningStateJob = lifecycleScope.launch {
+            controller.ui.collect { ui ->
+                settingsState = settingsState.copy(reasoning = ui)
+                searchState = searchState.copy(
+                    cloudReasoningActive = ui.isCloudActive,
+                    reasoningNotice = ui.status.notice,
+                )
+            }
+        }
+
+        // Observe local model state for settings UI and re-resolve the active backend.
         localModelStateJob = lifecycleScope.launch {
             provider.state.collect { modelState ->
                 settingsState = settingsState.copy(
                     localModelState = modelState,
                     localModelName = provider.modelInfo.displayName,
                     localModelSizeMb = (provider.modelInfo.sizeBytes / 1_000_000).toInt(),
-                    llmAvailable = when (settingsState.llmBackend) {
-                        "cloud_claude" -> settingsState.llmApiKey.isNotBlank()
-                        "local" -> modelState is ModelState.Ready || modelState is ModelState.Downloaded
-                        else -> false
-                    },
                 )
+                selector.refresh()
             }
         }
 
@@ -229,8 +265,7 @@ class MainActivity : ComponentActivity() {
                         onPhotoSelected = ::handlePhotoSelected,
                         onPresetSelected = ::handlePresetSelected,
                         onThresholdChanged = ::handleThresholdChanged,
-                        onLlmBackendChanged = ::handleLlmBackendChanged,
-                        onApiKeyChanged = ::handleApiKeyChanged,
+                        onReasoningAction = ::handleReasoningAction,
                         onLocalModelDownload = ::handleLocalModelDownload,
                         onLocalModelDelete = ::handleLocalModelDelete,
                         droneState = currentDroneState,
@@ -364,10 +399,7 @@ class MainActivity : ComponentActivity() {
             // --- Create SearchPipeline ---
 
             val am = alertManager ?: AlertManager(ctx).also { alertManager = it }
-            val ls = llmSelector ?: LlmSelector(ctx).also {
-                it.startMonitoring()
-                llmSelector = it
-            }
+            val ls = llmSelector ?: return@launch
             val lp = locationProvider ?: LocationProvider(ctx).also {
                 locationProvider = it
             }
@@ -383,7 +415,7 @@ class MainActivity : ComponentActivity() {
             searchPipeline = pipeline
 
             // Adapt scorer weights based on active LLM backend
-            pipeline.adaptWeightsForBackend(settingsState.llmBackend == "local")
+            pipeline.adaptWeightsForBackend(ls.status.value.active == ReasoningProvider.LOCAL)
 
             // Wire frame source: pull from drone or camera based on active mode
             pipeline.frameSource = SearchPipeline.FrameSource {
@@ -611,43 +643,15 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "Threshold changed: $name=$value")
     }
 
-    private fun handleLlmBackendChanged(backend: String) {
-        val localState = localLlmProvider?.state?.value
-        settingsState = settingsState.copy(
-            llmBackend = backend,
-            llmAvailable = when (backend) {
-                "cloud_claude" -> settingsState.llmApiKey.isNotBlank()
-                "local" -> localState is ModelState.Ready || localState is ModelState.Downloaded
-                else -> false
-            },
-        )
-
-        // Reorder backends in the selector based on user preference
-        val selector = llmSelector ?: return
-        selector.clear()
-        when (backend) {
-            "cloud_claude" -> {
-                val apiKey = settingsState.llmApiKey
-                if (apiKey.isNotBlank()) {
-                    selector.registerBackend(
-                        CloudClaudeLlmBackend(applicationContext, apiKey)
-                    )
-                }
-                localLlmBackend?.let { selector.registerBackend(it) }
-            }
-            "local" -> {
-                localLlmBackend?.let { selector.registerBackend(it) }
-                val apiKey = settingsState.llmApiKey
-                if (apiKey.isNotBlank()) {
-                    selector.registerBackend(
-                        CloudClaudeLlmBackend(applicationContext, apiKey)
-                    )
-                }
-            }
-            // "none" — only NoOp fallback
-        }
-
-        Log.i(TAG, "LLM backend changed: $backend")
+    /**
+     * Reasoning actions from Settings. The consent decisions, the opt-in and
+     * the key (SecretStore, off the main thread) are handled by
+     * [ReasoningController]; the selector refresh it ends with updates the
+     * "Cloud active" indicator and the fallback notice.
+     */
+    private fun handleReasoningAction(action: ReasoningAction) {
+        reasoningController?.onAction(action)
+        Log.i(TAG, "Reasoning action: ${action.javaClass.simpleName}")
     }
 
     // ------------------------------------------------------------------
@@ -678,17 +682,6 @@ class MainActivity : ComponentActivity() {
                 Log.e(TAG, "Local model delete failed", e)
             }
         }
-    }
-
-    private fun handleApiKeyChanged(apiKey: String) {
-        FlightRiskConfig.getEncryptedPrefs(this)
-            .edit()
-            .putString("FLIGHTRISK_API_KEY", apiKey)
-            .apply()
-        settingsState = settingsState.copy(
-            llmApiKey = apiKey,
-            llmAvailable = apiKey.isNotBlank() && settingsState.llmBackend == "cloud_claude",
-        )
     }
 
     // ------------------------------------------------------------------
@@ -892,6 +885,13 @@ class MainActivity : ComponentActivity() {
             Log.w(TAG, "Error closing FaceRecognizer", e)
         }
         faceRecognizer = null
+
+        // Clean up reasoning: cancel any cloud request still in flight.
+        reasoningStateJob?.cancel()
+        reasoningStateJob = null
+        cloudLlmBackend?.close()
+        cloudLlmBackend = null
+        reasoningController = null
 
         // Clean up local LLM
         localModelStateJob?.cancel()
