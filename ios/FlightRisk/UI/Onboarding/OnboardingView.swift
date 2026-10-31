@@ -10,10 +10,12 @@ import SwiftUI
 /// 4. Quality check with retry
 ///
 /// Persists completion via `@AppStorage` so the flow is only shown
-/// once. The key matches the one read by ``ContentView``.
+/// once. The key matches the one read by ``ContentView``. Acknowledging the
+/// privacy notice is stored separately (see ``PrivacyNotice``), so a person who
+/// accepted the notice but quit before finishing setup is not asked again.
 struct OnboardingView: View {
     @AppStorage("flightrisk_onboarding_complete") private var onboardingComplete = false
-    @State private var currentStep = 0
+    @State private var currentStep = PrivacyNotice.isAcknowledged() ? 1 : 0
     @State private var selectedImage: CGImage?
     @State private var qualityReport: QualityReport?
 
@@ -82,20 +84,31 @@ struct OnboardingView: View {
                     )
                     PrivacyBulletView(
                         title: "On-Device Processing",
-                        description: "All person detection and matching runs entirely on your device. Camera frames are never uploaded or stored."
+                        description: "Person detection and matching run on your device. Camera frames are not uploaded or stored."
                     )
                     PrivacyBulletView(
-                        title: "Optional Cloud Features",
-                        description: "If you enable Cloud Claude, match snapshots may be sent to Anthropic's API for reasoning verification. This is optional and can be disabled in Settings."
+                        title: "Ground Station (Optional)",
+                        description: PrivacyNotice.groundLinkText
+                    )
+                    PrivacyBulletView(
+                        title: "Cloud Reasoning (Off by Default)",
+                        description: PrivacyNotice.cloudText
                     )
                     PrivacyBulletView(
                         title: "Location Data",
                         description: "GPS coordinates are attached to match alerts so you can navigate to the location. Location data stays on your device."
                     )
                     PrivacyBulletView(
-                        title: "No Data Collection",
-                        description: "FlightRisk does not collect analytics, telemetry, or personal data. There is no account or sign-in."
+                        title: "No Analytics or Accounts",
+                        description: "FlightRisk does not collect analytics or telemetry. There is no account or sign-in."
                     )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Privacy Policy")
+                            .font(.subheadline)
+                            .fontWeight(.bold)
+                        Link("Read the full privacy policy", destination: PrivacyNotice.policyURL)
+                            .font(.subheadline)
+                    }
                 }
                 .padding(20)
                 .background(Color(.secondarySystemBackground))
@@ -104,6 +117,7 @@ struct OnboardingView: View {
                 Spacer().frame(height: 8)
 
                 Button {
+                    PrivacyNotice.acknowledge()
                     withAnimation { currentStep = 1 }
                 } label: {
                     Text("I Understand")
@@ -327,6 +341,69 @@ struct OnboardingView: View {
         }
         .buttonStyle(.borderedProminent)
         .accessibilityLabel("Go back and try another photo")
+    }
+}
+
+// MARK: - PrivacyNotice
+
+/// The first-launch privacy notice: its text and the acknowledgement keys.
+///
+/// Two keys exist. `flightrisk_onboarding_complete` is the original key,
+/// written when the whole onboarding flow finishes. `flightrisk_privacy_notice_acknowledged`
+/// is the key named in `docs/first-launch-notice.md`, written when the person
+/// taps "I Understand".
+///
+/// Decision for people who finished onboarding under the old notice: they are
+/// not asked again. The notice changed in two ways, and neither widens what an
+/// existing install does. The ground station link is off until the person
+/// types an address in Settings. The
+/// cloud wording became stricter and more complete, and cloud reasoning now
+/// needs the opt-in on top of a key, so it can only send less than before.
+/// Their old acknowledgement is copied to the new key by
+/// ``migrateLegacyAcknowledgement(defaults:)`` the first time the notice state
+/// is read, which happens only on the onboarding path; reading either key
+/// gives the right answer without the copy. A person
+/// who has neither key is shown the notice.
+enum PrivacyNotice {
+    static let acknowledgedKey = "flightrisk_privacy_notice_acknowledged"
+    static let legacyOnboardingCompleteKey = "flightrisk_onboarding_complete"
+
+    /// Stand-in location of the policy until a hosted page exists. It is the
+    /// public repository copy of `docs/privacy-policy.md`.
+    static let policyURL = URL(string: "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md")!
+
+    /// The ground station bullet.
+    static let groundLinkText =
+        "If you add a ground station address in Settings, the app connects to that address only, "
+        + "to show drone status and send land, resume-search and detection-profile commands. "
+        + "The app does not limit a ws:// or http:// link to your local network, and that link is not encrypted: "
+        + "use a network you trust, and away from your local network use a wss:// or https:// address or a VPN. "
+        + "The station's key is sent to the address you enter and is kept on this phone in the iOS Keychain."
+
+    /// The cloud bullet. It matches the consent text in Settings
+    /// (`SettingsView.cloudConsentMessage`).
+    static let cloudText =
+        "Cloud reasoning is off. If you turn it on in Settings, save a Claude API key and select Cloud Claude, "
+        + "the cropped image of each detected person, the reference photo and the text description you entered are sent to Anthropic. "
+        + "The images can show a face. You can turn it off at any time."
+
+    /// True when either key says the person already accepted a notice.
+    static func isAcknowledged(defaults: UserDefaults = .standard) -> Bool {
+        migrateLegacyAcknowledgement(defaults: defaults)
+        return defaults.bool(forKey: acknowledgedKey) || defaults.bool(forKey: legacyOnboardingCompleteKey)
+    }
+
+    /// Record the tap on "I Understand". The legacy key is written only when
+    /// onboarding finishes, so the camera screens still follow the photo step.
+    static func acknowledge(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: acknowledgedKey)
+    }
+
+    /// Copy an old acknowledgement to the new key. Never clears anything.
+    static func migrateLegacyAcknowledgement(defaults: UserDefaults = .standard) {
+        if defaults.bool(forKey: legacyOnboardingCompleteKey), !defaults.bool(forKey: acknowledgedKey) {
+            defaults.set(true, forKey: acknowledgedKey)
+        }
     }
 }
 
