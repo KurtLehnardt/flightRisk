@@ -34,13 +34,19 @@ Captures are match snapshots: the full frame, the person crop and a metadata JSO
 | Match crops sent to the browser | Socket.IO to the operator's dashboard as base64 JPEG | Sent to the connected dashboard only |
 | Video recordings | `recordings/` (`flightrisk/recorder.py`), only when the operator starts a recording | Not encrypted |
 | Crops and reference photo sent to a reasoning model | Local Ollama by default (`flightrisk/reasoning/agent.py`; `OLLAMA_HOST` may point to another machine) | Sent to that host; not started when `--no-llm` is used |
-| Reference photo and person crops sent to a cloud LLM | Mobile app only: Anthropic, OpenAI or Google, via `CloudClaudeLlmBackend` and its siblings | Sent only after the user selects a cloud backend and stores an API key |
+| Reference photo, person crops and typed description sent to a cloud LLM | iOS app only: Anthropic (`https://api.anthropic.com`), via `CloudClaudeLlmBackend` | Off by default. Sent only when the opt-in toggle (`flightrisk_allow_cloud_llm`) is on, a Claude API key is saved and Cloud Claude is selected. A saved key alone sends nothing |
+| Commands and status requests from the phone to a ground station | iOS app to the address the user typed in Settings (`ws://` or `http://` on the local network, or `wss://`/`https://`) | Sent only while the ground link is switched on. The phone sends land and detection-profile commands and status requests. It sends no camera frames, crops or reference photo |
+| Ground station address, ground station API key and Claude API key | iOS app | The address is in UserDefaults. Both keys are in the Keychain (this device only, accessible when unlocked), never in UserDefaults, files or logs |
 | Telemetry logs, metrics and traces | The local Grafana stack (Loki, Prometheus, Tempo volumes), only when `FLIGHTRISK_OTEL_ENABLED=true` | Operator actions, drone communication, flight-safety and pipeline events as numbers, ids and short tokens; secrets redacted; never embeddings, crops, frames or reasoning text. See `observability/README.md` |
 | Operator text and the target photo in telemetry | Operator text in the Loki logs; the photo and a thumbnail in `~/.flightrisk/artifacts/targets/` (mode 0700, files 0600), served to Grafana by a 127.0.0.1-only preview server with expiring signed URLs | Only when `FLIGHTRISK_TELEMETRY_CONTENT=1` (off by default in code); text redacted and capped at 500 characters |
 
+The iOS app opens network connections to exactly two kinds of destination. The first is the ground station address the user enters in Settings. The second is `api.anthropic.com`, and only after the cloud opt-in. The direct Tello link that earlier iOS builds had was removed, so the app no longer talks to a drone itself. On the ground link the iOS app is a console: it receives status from the ground and sends commands. Detections and person crops are sent to a ground station by an edge device (the Android app acting as an edge, or an edge process on a computer), not by the iOS app.
+
+The ground link is not encrypted when the address starts with `ws://` or `http://`, which is the normal case on a LAN. The iOS app therefore sets `NSAllowsLocalNetworking` (and no wider App Transport Security exception) so that these connections work. The API key for the ground station crosses that link in the clear. The link belongs on a trusted private network, like the edge link above.
+
 The mobile app stores match thumbnails, scores, GPS fixes and timestamps in a local SQLite database on the phone. Nothing in the dashboard or the mobile app sends data to an analytics or advertising service.
 
-The cloud LLM path is the one place images can leave the user's device. It sends the reference photo and the candidate crop (both can show a face) to the provider the user chose. The earlier wording of the policy that no biometric data leaves the phone was true of embeddings and templates only. The policy now states both facts.
+The cloud LLM path is the one place images can leave the user's device. It sends the reference photo, the candidate crop (both can show a face) and, for a description comparison, the typed description to Anthropic. It is off by default; see the table row above for the three conditions. The earlier wording of the policy that no biometric data leaves the phone was true of embeddings and templates only. The policy now states both facts.
 
 ## Test fixtures
 
@@ -52,6 +58,6 @@ Tests use only synthetic imagery: rectangles and noise arrays generated in code,
 - Captures: kept until the operator deletes the files in `captures/`; with the default settings none are written.
 - Session database rows and recordings: kept until the operator deletes `flightrisk_sessions.db` or the files in `recordings/`. There is no automatic expiry.
 - Mobile app: thumbnails, scores and locations stay until the user deletes them in settings or uninstalls the app.
-- Cloud LLM: retention after transmission is governed by the provider's policy and is outside FlightRisk's control.
+- Cloud LLM: retention after transmission is governed by Anthropic's policy and is outside FlightRisk's control.
 - Telemetry: logs, metrics and traces are deleted after 7 days by the Grafana stack (`LOKI_RETENTION_PERIOD` for logs); target-photo artifacts after `FLIGHTRISK_ARTIFACT_RETENTION_DAYS` (default 7), at most 50 kept.
 - Deployments that handle real imagery must use filesystem-level encryption, because image files are not encrypted by the application.

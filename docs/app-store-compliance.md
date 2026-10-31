@@ -6,10 +6,25 @@
 
 ### Permission Usage Descriptions (Info.plist)
 
+These are the strings in `ios/FlightRisk/Info.plist` and the `info.properties` block of `ios/project.yml`. A unit test checks that the two agree.
+
 | Key | Value |
 |-----|-------|
-| `NSCameraUsageDescription` | "FlightRisk uses the camera to detect and match people to help locate a missing child. All processing happens on your device." |
-| `NSLocationWhenInUseUsageDescription` | "FlightRisk records your location when a match is detected so you can navigate back to where the match occurred." |
+| `NSCameraUsageDescription` | "FlightRisk uses your camera to scan for people matching the target photo." |
+| `NSLocationWhenInUseUsageDescription` | "FlightRisk attaches GPS coordinates to match alerts so you can navigate to the location." |
+| `NSPhotoLibraryUsageDescription` | "FlightRisk needs access to your photo library to select a target reference photo." |
+| `NSLocalNetworkUsageDescription` | "FlightRisk connects to the ground station address you enter in Settings, over your local network, to show its status and send commands." |
+
+The app has no direct link to a drone. The earlier direct Tello link was removed, and the local network string no longer names it. The app does not browse for Bonjour services, so `NSBonjourServices` is not declared.
+
+### App Transport Security
+
+`Info.plist` sets `NSAppTransportSecurity` with `NSAllowsLocalNetworking` = true and nothing else. There is no `NSAllowsArbitraryLoads`, no `NSAllowsArbitraryLoadsInWebContent` and no exception domain. A test checks this.
+
+- Why it is needed: the ground station is a computer on the user's local network that serves plain `ws://` and `http://` (the app uses WebSocket and HTTP to the address typed in Settings). Without the exception, iOS refuses cleartext connections to local addresses and `.local` names.
+- What it allows: cleartext connections to local-network destinations (IP addresses, unqualified host names and `.local` names). All other destinations still require HTTPS. The only other destination the app contacts is `https://api.anthropic.com`, and only after the cloud opt-in (below).
+- What the user should know: a `ws://` or `http://` link is not encrypted, and the API key for the ground station travels in the clear on that link (in the `Authorization` header of the health check, and as the `api_key` field of the Socket.IO connect packet). Use a network you trust, such as a private WiFi network or the fleet access point, and not a public or shared one. The app also accepts `wss://` and `https://` addresses; those are encrypted but need a certificate the phone trusts.
+- The app does not itself check that an address is private. Because the exception is limited to local networking, iOS is expected to refuse a `ws://` or `http://` address that is not local. This has not been tested on a device.
 
 ### Privacy Nutrition Labels (App Privacy)
 
@@ -24,7 +39,8 @@
 | Contact Info | No | -- | -- | -- |
 
 **Summary for App Store Connect:**
-- Data Not Collected: The app does not collect data that leaves the device.
+- The app sends no data to the developer. Data leaves the device in two cases, both started by the user: commands to the ground station address the user typed in Settings, and, only after the cloud opt-in, images and text to Anthropic (see below). Whether these cases change the answers in the App Privacy questionnaire is for the owner to confirm; see the open questions in the pull request that introduced this section.
+- Data Not Collected: The app does not collect data on a server run by the developer.
 - Data Not Linked to User: No user accounts, no identifiers collected.
 - Data Not Used for Tracking: No advertising or tracking SDKs.
 
@@ -32,13 +48,13 @@
 
 #### Guideline 5.1.1 -- Data Collection and Storage
 
-- **Compliance:** The app collects camera frames and location data solely for core functionality (locating a missing child). No data is transmitted off-device except via the optional Cloud LLM feature, which transmits only cropped person images and requires explicit user opt-in. No user accounts are created. No personal information is collected, stored off-device, or shared.
-- **Documentation to provide:** Link to privacy policy. Description of on-device-only processing architecture. Explanation of ephemeral biometric data handling.
+- **Compliance:** The app collects camera frames and location data solely for core functionality (locating a missing child). No data is transmitted off-device except through two user-started paths. First, the ground station link: the app connects only to the address the user enters in Settings and sends land and detection-profile commands and status requests, never camera frames, crops or the reference photo. Second, the optional cloud reasoning feature, which is off by default and sends the cropped person images, the reference photo and the typed description to Anthropic only after the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. No user accounts are created. No personal information is collected, stored off-device, or shared.
+- **Documentation to provide:** Link to privacy policy. Description of the on-device processing architecture and of the two user-started network paths above. Explanation of ephemeral biometric data handling.
 
 #### Guideline 5.1.2 -- Data Use and Sharing
 
-- **Compliance:** No data is shared with third parties. No analytics, advertising, or tracking SDKs are included. The optional Cloud LLM feature transmits cropped images only to the provider selected by the user, with explicit opt-in and clear disclosure.
-- **Documentation to provide:** Privacy policy URL. In-app disclosure of Cloud LLM data transmission. First-launch privacy notice (see `first-launch-notice.md`).
+- **Compliance:** No data is shared with third parties. No analytics, advertising, or tracking SDKs are included. The optional cloud reasoning feature transmits to Anthropic only, with explicit opt-in and a consent dialog. No other cloud provider is supported on iOS.
+- **Documentation to provide:** Privacy policy URL. In-app disclosure of cloud reasoning data transmission (the consent dialog in Settings). First-launch privacy notice (see `first-launch-notice.md`).
 
 #### Guideline 5.1.3 -- Health and Health Research (Not Applicable)
 
@@ -62,7 +78,15 @@
 
 Include the following in the "Notes" field during submission:
 
-> FlightRisk is an AI-powered tool for parents and guardians to locate a missing child in crowded environments. All face recognition and appearance matching runs entirely on-device using ONNX Runtime / CoreML. No biometric data leaves the device. Face embeddings are ephemeral (session-scoped) and are never stored permanently or transmitted. The optional Cloud LLM feature requires explicit opt-in and transmits only cropped person images. No user accounts, no data collection from minors, no third-party data sharing. See the in-app privacy notice shown at first launch.
+> FlightRisk is a tool for parents and guardians to locate a missing child. Person detection and appearance matching run on the device using CoreML. The app has no accounts and no analytics.
+>
+> Local network permission: the Ground tab can connect to a "ground station", a computer the user runs on their own network. The user types its address in Settings (for example ws://192.168.1.20:5555) and a key, which is stored in the Keychain. The app connects only to that address. To test this without a ground station, leave the address empty; the app then makes no local network connection and the permission prompt does not appear.
+>
+> App Transport Security: Info.plist sets NSAllowsLocalNetworking only, so that the ws:// and http:// connection to the ground station on the local network works. There is no NSAllowsArbitraryLoads.
+>
+> Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
+>
+> The first-launch privacy notice is shown before the camera starts.
 
 ---
 
@@ -145,6 +169,16 @@ The desktop dashboard (`python -m flightrisk --dashboard`) follows the same rule
 - The dashboard's AI Reasoning selector shows Claude as unavailable, with the reason, until cloud use is allowed. The runtime switch cannot opt itself in.
 - When Claude is active, the startup log states that cloud reasoning is on and names the variable that supplied the key (never the key itself).
 
+### Cloud Reasoning Opt-In (iOS)
+
+Claude (Anthropic) is the only cloud provider on iOS. OpenAI and Gemini are not supported. Cloud reasoning is off by default, and a saved key alone never turns it on.
+
+- Settings keys (UserDefaults suite `flightrisk_config`): `flightrisk_reasoning_provider` (`local_gemma`, `cloud_claude` or `off`) and `flightrisk_allow_cloud_llm` (default false). A stored cloud choice without the opt-in flag is ignored and removed.
+- Cloud Claude is used only when the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. Turning the toggle on shows a consent dialog; turning it off stops sending at once and cancels a request in progress.
+- Consent dialog text (`SettingsView.cloudConsentMessage`): "With cloud reasoning on, the cropped image of each detected person, the reference photo you chose and the text description you entered are sent to Anthropic (Claude) for analysis. The images can show a face, and Anthropic's privacy policy applies to them. Nothing is sent until you also save a Claude API key and select Cloud Claude. You can turn this off at any time here; turning it off stops sending at once and cancels any request still in progress."
+- The Claude API key and the ground station key are stored in the iOS Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`), never in UserDefaults, files or logs.
+- The ground station's own reasoning provider is display only on the phone. The phone cannot switch it and cannot turn on cloud use on the ground.
+
 ### Pre-Submission Checklist
 
 - [ ] Privacy policy created and hosted
@@ -156,6 +190,8 @@ The desktop dashboard (`python -m flightrisk --dashboard`) follows the same rule
 - [ ] Age rating set to 17+ on both platforms
 - [ ] App Review Notes prepared (iOS)
 - [ ] Cloud LLM opt-in disclosure implemented in-app
+- [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
+- [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in
 - [x] Desktop dashboard: cloud LLM (Claude) off by default and gated on `FLIGHTRISK_ALLOW_CLOUD_LLM=1`
 - [ ] User data deletion flow implemented and tested
 - [ ] No third-party analytics/tracking/advertising SDKs included

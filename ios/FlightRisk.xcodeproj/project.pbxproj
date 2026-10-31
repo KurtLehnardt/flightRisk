@@ -37,6 +37,7 @@
 		76CE20839065DD97C67256DC /* MatchEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE5A8559D99E845C9AE19D2 /* MatchEntry.swift */; };
 		7770863F21ADB6FF49C25A20 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 44B591CBF45FFA639742AD36 /* MLX */; };
 		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
+		79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */; };
 		8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */; };
 		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
 		8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */; };
@@ -150,6 +151,7 @@
 		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		C7CAABBA552EF1B74A2F7647 /* ReasoningSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningSettings.swift; sourceTree = "<group>"; };
 		D4B4FC7F5D9B533A56711BE4 /* MatchAlertCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertCardView.swift; sourceTree = "<group>"; };
+		D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyComplianceTests.swift; sourceTree = "<group>"; };
 		DB1B56CF1671883797BA7506 /* FlightRisk.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FlightRisk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E207121F168B27516A42FBAC /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		E6240A16E4B71AA353C43D80 /* FaceRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceRecognizer.swift; sourceTree = "<group>"; };
@@ -225,6 +227,7 @@
 				4F23C5A72BB537E18797473D /* GroundViewModelTests.swift */,
 				8943A4554AA1A516C8F35352 /* Info.plist */,
 				14B4251664E956AD316034AF /* MatchScorerTests.swift */,
+				D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */,
 				06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */,
 			);
 			path = FlightRiskTests;
@@ -595,6 +598,7 @@
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,
 				E81B8F714B847F9E364B7649 /* GroundViewModelTests.swift in Sources */,
 				BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */,
+				79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */,
 				D288D9B4336216C304CC56FA /* ReasoningSettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

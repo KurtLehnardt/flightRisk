@@ -1,7 +1,7 @@
 # FlightRisk Mobile -- Privacy Policy
 
 **Effective Date:** September 4, 2026
-**Last Updated:** September 4, 2026
+**Last Updated:** October 30, 2026
 **Contact:** krlehnardt@gmail.com
 
 ---
@@ -19,7 +19,7 @@ All face detection, face recognition (ArcFace), and appearance matching (CLIP Re
 - Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.
 - No biometric templates or embeddings are transmitted to any server, cloud service, or third party.
-- **Images are different from templates.** With the default settings, no image of any person leaves your device. Only if you select a cloud LLM backend and store an API key for it (Section 5) are images sent off the device: the reference photo you provided and the cropped image of each candidate person that is sent for analysis. Those images can show a face. See Section 5 for exactly what is sent and how to turn it off.
+- **Images are different from templates.** With the default settings, no image of any person leaves your device. Only if you turn on cloud reasoning, save a Claude API key and select Cloud Claude (Section 5) are images sent off the device: the reference photo you provided and the cropped image of each candidate person that is sent for analysis. Those images can show a face. See Section 5 for exactly what is sent and how to turn it off.
 
 ---
 
@@ -55,25 +55,44 @@ During a search session, the app may store the following data locally in a SQLit
 This data:
 
 - Is stored **only on your device** in a local SQLite database.
-- Is **never transmitted** to any server, cloud service, or third party.
+- Is **never transmitted** by the app to any server, cloud service, or third party.
 - Is **user-deletable** at any time from within the app settings.
 - Is not backed up to iCloud or Google Drive unless you have enabled full-device backups through your operating system (which is outside the app's control).
 
 ---
 
-## 5. Cloud LLM Calls (Optional)
+## 5. Cloud Reasoning (Optional)
 
-FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, OpenAI, or Gemini) that provides additional analysis of potential matches.
+FlightRisk supports an **optional** cloud reasoning feature that uses Claude, a service of Anthropic, for additional analysis of potential matches. Claude is the only cloud service the iOS app can use.
 
-**When disabled (default):** No data is transmitted to any cloud service. All processing is entirely on-device. The feature stays disabled until you choose a cloud backend and store an API key for it; with no API key stored, the app falls back to the on-device model or to no reasoning at all.
+**When disabled (default):** No data is transmitted to any cloud service. Cloud reasoning is off until you do all three of the following in Settings:
+
+1. Turn on "Allow cloud reasoning" and confirm the consent dialog.
+2. Save a Claude API key.
+3. Select Cloud Claude as the reasoning provider.
+
+Saving a key by itself does not turn cloud reasoning on. With cloud reasoning off, the app uses the on-device model or no reasoning at all.
 
 **When enabled:**
 
-- The app sends **images** to the configured LLM endpoint (for Claude, `https://api.anthropic.com/v1/messages`): for a photo comparison, the **reference photo** you provided plus the **cropped image of the candidate person**; for a description comparison, the cropped image alone together with your text description. Images are JPEG-encoded. These images can show a face.
+- The app sends **images and text** to Anthropic (`https://api.anthropic.com/v1/messages`): for a photo comparison, the **reference photo** you provided plus the **cropped image of the candidate person**; for a description comparison, the cropped image together with the **text description you typed**. Images are JPEG-encoded. These images can show a face.
 - No face embeddings, appearance feature vectors, GPS coordinates, or other session data are included.
-- You are warned and must explicitly opt in before this feature is activated.
-- The data transmitted is subject to the privacy policy of the LLM provider you select (Anthropic, OpenAI, or Google).
-- You can disable this feature at any time, which immediately stops all cloud transmission.
+- The consent dialog tells you this before the feature can be turned on. It reads: "With cloud reasoning on, the cropped image of each detected person, the reference photo you chose and the text description you entered are sent to Anthropic (Claude) for analysis. The images can show a face, and Anthropic's privacy policy applies to them. Nothing is sent until you also save a Claude API key and select Cloud Claude. You can turn this off at any time here; turning it off stops sending at once and cancels any request still in progress."
+- The data transmitted is subject to Anthropic's privacy policy. FlightRisk does not control how Anthropic retains it.
+- You can turn this off at any time, which stops cloud transmission at once and cancels any request still in progress.
+- Your Claude API key is stored in the iOS Keychain on your device (this device only, available when the phone is unlocked). It is sent only to Anthropic, as the credential for these requests.
+
+---
+
+## 5A. Ground Station Link (Optional)
+
+The Ground tab can connect to a ground station, which is a computer you run yourself. This is off until you type a ground station address and key in Settings and switch the link on.
+
+- The app connects **only to the address you enter**. It does not search for stations, and it does not use Bluetooth or Bonjour discovery. The app has no direct connection to a drone.
+- Over this link the app reads status from the ground station and sends commands that you tap (for example land commands and detection profile choices). It does not send camera frames, person crops, the reference photo or your location.
+- The address is saved on your device. The ground station key is stored in the iOS Keychain on your device (this device only, available when the phone is unlocked) and is sent to the ground station you entered so that it accepts the connection.
+- If the address starts with `ws://` or `http://`, which is normal on a home or field network, the link is **not encrypted**. Anyone on that network could read the traffic, including the key. Use a network you trust. The app asks iOS for permission to use the local network (the "local network" prompt) and has an exception that allows these unencrypted connections to local addresses only.
+- What the ground station does with data is governed by whoever runs it. That is outside this policy and outside the app.
 
 ---
 
@@ -89,7 +108,7 @@ FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, O
 ## 7. Camera Usage
 
 - The camera is used solely for real-time person detection and face matching to help locate a missing child.
-- Camera frames are processed on-device in real time and are not recorded, stored, or transmitted, except for match thumbnails stored locally as described in Section 4 and the crops and reference photo sent when the optional cloud LLM feature is enabled (Section 5).
+- Camera frames are processed on-device in real time and are not recorded, stored, or transmitted, except for match thumbnails stored locally as described in Section 4 and the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5).
 
 ---
 
@@ -101,7 +120,7 @@ FlightRisk supports an **optional** cloud-based LLM reasoning feature (Claude, O
 - No analytics, advertising, or tracking SDKs are included in the app.
 - No user accounts are created or required.
 
-The only exception is the optional Cloud LLM feature (Section 5), which transmits the reference photo and cropped person images to the LLM provider you explicitly select and enable.
+The only exceptions are the two optional features you turn on yourself: cloud reasoning (Section 5), which transmits the reference photo, cropped person images and your typed description to Anthropic, and the ground station link (Section 5A), which sends your commands to the address you entered.
 
 ---
 
@@ -111,7 +130,7 @@ The only exception is the optional Cloud LLM feature (Section 5), which transmit
 - The app does not target children as users.
 - The app does not collect any personal information from children.
 - No user accounts are created. No names, email addresses, or identifying information of any person (adult or child) are collected by the app.
-- The reference photo used for matching is provided by the parent/guardian and processed on-device. It is not stored beyond the session and is not transmitted unless the optional Cloud LLM feature (Section 5) is enabled, in which case it is sent to the provider you selected.
+- The reference photo used for matching is provided by the parent/guardian and processed on-device. It is not stored beyond the session and is not transmitted unless the optional cloud reasoning feature (Section 5) is enabled, in which case it is sent to Anthropic.
 
 ---
 
@@ -126,7 +145,8 @@ The only exception is the optional Cloud LLM feature (Section 5), which transmit
 ## 11. Security
 
 - All on-device data is protected by the operating system's native app sandboxing (iOS App Sandbox / Android app-private storage).
-- No data is transmitted over the network unless the optional Cloud LLM feature is enabled, in which case transmissions use TLS encryption.
+- The app makes network connections only in two cases. Cloud reasoning, when you have turned it on, uses TLS encryption to Anthropic. The ground station link goes to the address you entered and is encrypted only if you entered a `wss://` or `https://` address; a `ws://` or `http://` link is not encrypted (Section 5A).
+- API keys are kept in the iOS Keychain, not in app preferences, files or logs.
 
 ---
 
