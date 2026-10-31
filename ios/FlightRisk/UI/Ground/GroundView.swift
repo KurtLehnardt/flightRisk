@@ -48,7 +48,8 @@ struct GroundView: View {
                         // U8 video tiles: `viewModel.latestFrames`, `viewModel.streamVideoEnabled`.
                     }
                     Group {
-                        PlanGridView(state: PlanGridViewState(plan: viewModel.fleetPlan, isStale: viewModel.isStateStale))
+                        PlanGridView(state: PlanGridViewState(plan: viewModel.fleetPlan, isStale: viewModel.isStateStale,
+                                                    planIsCurrent: viewModel.planIsCurrent))
                     }
                     Group {
                         // U10 detection profiles and ceiling: `viewModel.detectionProfiles`,

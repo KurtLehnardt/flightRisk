@@ -6,22 +6,56 @@ import SwiftUI
 /// the plan is right. Uncovered areas are reported as "Not searched" and nothing more.
 struct PlanGridViewState: Equatable {
     static let emptyText = "No plan yet. Plan from the dashboard."
+    /// Lanes of a lost drone that nobody took.
     static let uncoveredLegend = "Not searched"
+    /// Coverage gaps of a map plan, from the nominal camera model. A neutral report, not a verdict.
+    static let areaLegend = "May not be covered (camera model)"
+    static let partialNote = "Only part of the plan is drawn."
 
     let drawing: PlanDrawing?
     /// True when the ground state is not live (not connected, or waiting for a fresh status).
     let isStale: Bool
+    /// False until a `fleet_plan` arrives in the current session: a plan kept from before a
+    /// reconnect may no longer be the ground's plan.
+    let planIsCurrent: Bool
 
-    init(plan: FleetPlanPayload?, isStale: Bool) {
-        self.drawing = plan.map { PlanGeometry.drawing($0) }
+    init(plan: FleetPlanPayload?, isStale: Bool, planIsCurrent: Bool = true) {
+        self.drawing = plan.map { Self.cachedDrawing($0) }
         self.isStale = isStale
+        self.planIsCurrent = planIsCurrent
+    }
+
+    // The Ground view builds this state on every body evaluation; the geometry is recomputed only
+    // when the plan value changes.
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cache: (plan: FleetPlanPayload, drawing: PlanDrawing)?
+
+    private static func cachedDrawing(_ plan: FleetPlanPayload) -> PlanDrawing {
+        cacheLock.lock()
+        if let c = cache, c.plan == plan {
+            cacheLock.unlock()
+            return c.drawing
+        }
+        cacheLock.unlock()
+        let d = PlanGeometry.drawing(plan)
+        cacheLock.lock()
+        cache = (plan, d)
+        cacheLock.unlock()
+        return d
     }
 
     /// True when there is no plan, or a plan with nothing to draw.
     var isEmpty: Bool { drawing?.isEmpty ?? true }
 
-    /// "Search plan", or "Last plan" while the ground state is stale.
-    var title: String { isStale ? "Last plan" : "Search plan" }
+    /// True when the plan must not read as the live plan.
+    var isNotLive: Bool { isStale || !planIsCurrent }
+
+    /// "Search plan"; "Last plan" while the ground state is stale; "Last plan (not confirmed this
+    /// session)" until the ground has sent a plan in this session.
+    var title: String {
+        if !planIsCurrent { return "Last plan (not confirmed this session)" }
+        return isStale ? "Last plan" : "Search plan"
+    }
 
     /// The spacing note, for example "Gap between zones: 100 cm", or nil when the plan has none.
     var gapNote: String? {
@@ -29,7 +63,7 @@ struct PlanGridViewState: Equatable {
         return "Gap between zones: \(Self.cm(gap))"
     }
 
-    /// Notes about data that could not be drawn, or nil when everything was drawn.
+    /// Notes about data that could not be drawn as given, or nil when everything was drawn.
     var skippedNote: String? {
         guard let d = drawing else { return nil }
         var parts: [String] = []
@@ -37,10 +71,24 @@ struct PlanGridViewState: Equatable {
             parts.append("\(d.skippedLanes) lane\(d.skippedLanes == 1 ? "" : "s") not drawn (unknown direction or distance)")
         }
         if d.skippedUncovered > 0 {
-            parts.append("\(d.skippedUncovered) \"\(Self.uncoveredLegend)\" entr\(d.skippedUncovered == 1 ? "y" : "ies") not drawn")
+            parts.append("\(d.skippedUncovered) uncovered entr\(d.skippedUncovered == 1 ? "y" : "ies") not drawn")
         }
-        if d.truncated { parts.append("very large plan, only part is drawn") }
-        return parts.isEmpty ? nil : parts.joined(separator: "; ") + "."
+        for id in d.takeoffFallbackDroneIds {
+            parts.append("takeoff point out of range for \(id); drawn from the zone corner")
+        }
+        var text = parts.isEmpty ? "" : parts.joined(separator: "; ") + "."
+        if d.truncated { text += (text.isEmpty ? "" : " ") + Self.partialNote }
+        return text.isEmpty ? nil : text
+    }
+
+    /// Up to three distinct reasons the ground gave, for lane entries and for area entries.
+    var laneReasons: [String] { Self.distinct(drawing?.uncoveredLanes.map(\.reason) ?? []) }
+    var areaReasons: [String] { Self.distinct(drawing?.uncoveredAreas.map(\.reason) ?? []) }
+
+    private static func distinct(_ reasons: [String?]) -> [String] {
+        var out: [String] = []
+        for r in reasons.compactMap({ $0 }) where !r.isEmpty && !out.contains(r) { out.append(r) }
+        return Array(out.prefix(3))
     }
 
     var accessibilitySummary: String {
@@ -48,7 +96,10 @@ struct PlanGridViewState: Equatable {
         let lost = d.zones.filter(\.lost).count
         var s = "\(title): \(d.zones.count) zone\(d.zones.count == 1 ? "" : "s")"
         if lost > 0 { s += ", \(lost) lost" }
-        if d.hasUncovered { s += ", \(d.uncoveredLanes.count + d.uncoveredAreas.count) \(Self.uncoveredLegend.lowercased())" }
+        if !d.uncoveredLanes.isEmpty { s += ", \(d.uncoveredLanes.count) \(Self.uncoveredLegend.lowercased())" }
+        if !d.uncoveredAreas.isEmpty { s += ", \(d.uncoveredAreas.count) \(Self.areaLegend.lowercased())" }
+        if let gap = gapNote { s += ". " + gap }
+        if let note = skippedNote { s += ". " + note }
         return s
     }
 
@@ -71,12 +122,23 @@ struct PlanGridViewState: Equatable {
 struct PlanGridView: View {
     let state: PlanGridViewState
 
+    /// Dashboard drone colours; the light-mode variants are darker so labels reach 4.5:1 on white.
     private static let droneColors: [Color] = [
-        Color(red: 0x0E / 255.0, green: 0xA5 / 255.0, blue: 0xE9 / 255.0),
-        Color(red: 0xF5 / 255.0, green: 0x9E / 255.0, blue: 0x0B / 255.0),
-        Color(red: 0x8B / 255.0, green: 0x5C / 255.0, blue: 0xF6 / 255.0),
-        Color(red: 0x10 / 255.0, green: 0xB9 / 255.0, blue: 0x81 / 255.0),
+        dynamic(light: (0x03, 0x69, 0xA1), dark: (0x0E, 0xA5, 0xE9)),
+        dynamic(light: (0xB4, 0x53, 0x09), dark: (0xF5, 0x9E, 0x0B)),
+        dynamic(light: (0x6D, 0x28, 0xD9), dark: (0x8B, 0x5C, 0xF6)),
+        dynamic(light: (0x04, 0x78, 0x57), dark: (0x10, 0xB9, 0x81)),
     ]
+    /// The warning colour as text and strokes: darker than the theme's orange on light backgrounds.
+    private static let warning = dynamic(light: (0xC2, 0x41, 0x0C), dark: (0xFB, 0x92, 0x3C))
+    private static let lostGrey = dynamic(light: (0x52, 0x52, 0x5B), dark: (0xA1, 0xA1, 0xAA))
+
+    private static func dynamic(light: (Int, Int, Int), dark: (Int, Int, Int)) -> Color {
+        Color(UIColor { trait in
+            let c = trait.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat(c.0) / 255, green: CGFloat(c.1) / 255, blue: CGFloat(c.2) / 255, alpha: 1)
+        })
+    }
     private static let padding = 18.0
     private static let arrowBudget = 600
 
@@ -84,7 +146,7 @@ struct PlanGridView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(state.title).font(.headline)
-                if state.isStale {
+                if state.isNotLive {
                     Text("not live").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -94,7 +156,7 @@ struct PlanGridView: View {
                 }
                 .aspectRatio(Self.aspect(d.bounds), contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: 420)
-                .opacity(state.isStale ? 0.7 : 1)
+                .opacity(state.isNotLive ? 0.7 : 1)
                 legend(d)
             } else {
                 Text(PlanGridViewState.emptyText)
@@ -125,11 +187,19 @@ struct PlanGridView: View {
                 Label("LOST: the drone is lost; its zone is greyed", systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if d.hasUncovered {
+            if !d.uncoveredLanes.isEmpty {
                 Label(PlanGridViewState.uncoveredLegend, systemImage: "square.dashed")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(FlightRiskTheme.alertOrange)
+                    .foregroundStyle(Self.warning)
                     .accessibilityIdentifier("ground.plan.notSearched")
+                ForEach(state.laneReasons, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
+            }
+            if !d.uncoveredAreas.isEmpty {
+                Label(PlanGridViewState.areaLegend, systemImage: "square.dashed")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Self.warning)
+                    .accessibilityIdentifier("ground.plan.mayNotBeCovered")
+                ForEach(state.areaReasons, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
             }
             if let gap = state.gapNote { Text(gap).font(.caption).foregroundStyle(.secondary) }
             if let skipped = state.skippedNote { Text(skipped).font(.caption).foregroundStyle(.secondary) }
@@ -152,7 +222,7 @@ struct PlanGridView: View {
     }
 
     static func color(_ z: ZoneDrawing) -> Color {
-        if z.lost { return .gray }
+        if z.lost { return lostGrey }
         return droneColors[PlanGridViewState.colorIndex(droneId: z.droneId, count: droneColors.count)]
     }
 
@@ -170,7 +240,6 @@ struct PlanGridView: View {
             let a = pt(PlanPoint(x: b.minX, y: b.maxY)), c = pt(PlanPoint(x: b.maxX, y: b.minY))
             return Path(CGRect(x: a.x, y: a.y, width: c.x - a.x, height: c.y - a.y))
         }
-        let warning = FlightRiskTheme.alertOrange
 
         if let grid = d.grid {
             context.stroke(rectPath(grid), with: .color(.secondary), lineWidth: 1.5)
@@ -186,8 +255,8 @@ struct PlanGridView: View {
             if let r = z.rect {
                 let p = rectPath(r)
                 if z.lost {
-                    context.fill(p, with: .color(.gray.opacity(0.15)))
-                    context.stroke(p, with: .color(.gray), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    context.fill(p, with: .color(lostGrey.opacity(0.15)))
+                    context.stroke(p, with: .color(lostGrey), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                 } else {
                     context.fill(p, with: .color(color.opacity(0.08)))
                     context.stroke(p, with: .color(color), lineWidth: 1)

@@ -78,6 +78,11 @@ public struct ZoneDrawing: Equatable, Sendable {
     /// Lanes not drawn: unknown direction, or a distance that is missing, not finite, negative
     /// or absurdly large.
     public var skippedLanes: Int
+    /// Lanes cut off by the per-zone lane cap. The picture shows only part of the path.
+    public var droppedLanes: Int
+    /// True when the zone carried a takeoff point that is not usable (not finite or out of range),
+    /// so the path is drawn from the zone corner instead.
+    public var takeoffFellBack: Bool
 }
 
 public struct UncoveredLaneDrawing: Equatable, Sendable {
@@ -104,8 +109,12 @@ public struct PlanDrawing: Equatable, Sendable {
     public var uncoveredAreas: [UncoveredAreaDrawing]
     public var gapCm: Double?
     public var stripCm: Double?
-    /// Zone lanes not drawn, summed over all zones.
+    /// Zone lanes not drawn because of unusable data, summed over all zones.
     public var skippedLanes: Int
+    /// Zone lanes not drawn because of the per-zone lane cap, summed over all zones.
+    public var droppedLanes: Int
+    /// Drone ids whose unusable takeoff point was replaced by the zone corner.
+    public var takeoffFallbackDroneIds: [String]
     /// Uncovered entries not drawn (unusable numbers or an unknown shape).
     public var skippedUncovered: Int
     /// True when a cap cut some zones, lanes or uncovered entries off the drawing.
@@ -195,16 +204,19 @@ public enum PlanGeometry {
     public static func zoneDrawing(_ zone: PlanZone) -> ZoneDrawing {
         let rect = box(x: zone.xCm, y: zone.yCm, w: zone.wCm, h: zone.hCm)
         var start: PlanPoint?
+        var fellBack = false
         if let tx = clean(zone.takeoffXCm), let ty = clean(zone.takeoffYCm) {
             start = PlanPoint(x: tx, y: ty)
         } else if let x = clean(zone.xCm), let y = clean(zone.yCm) {
             start = PlanPoint(x: x, y: y)
+            fellBack = [zone.takeoffXCm, zone.takeoffYCm].contains { $0 != nil && clean($0) == nil }
         }
         let allLanes = zone.lanes ?? []
         let lanes = Array(allLanes.prefix(maxLanesPerZone))
         var points: [PlanPoint] = []
         var segments: [PlanSegment] = []
-        var skipped = allLanes.count - lanes.count
+        let dropped = allLanes.count - lanes.count
+        var skipped = 0
         if let start {
             let t = trace(start: start, lanes: lanes)
             points = t.points
@@ -214,7 +226,8 @@ public enum PlanGeometry {
             skipped += lanes.count
         }
         return ZoneDrawing(droneId: zone.droneId ?? "", altCm: clean(zone.altCm), lost: zone.lost ?? false,
-                           rect: rect, start: start, points: points, segments: segments, skippedLanes: skipped)
+                           rect: rect, start: start, points: points, segments: segments, skippedLanes: skipped,
+                           droppedLanes: dropped, takeoffFellBack: fellBack)
     }
 
     /// Everything the plan grid draws, in the plan frame. Never fails: unusable data is skipped
@@ -224,6 +237,7 @@ public enum PlanGeometry {
         let allZones = plan.zones ?? []
         var truncated = allZones.count > maxZones
         let zones = allZones.prefix(maxZones).map(zoneDrawing)
+        if zones.contains(where: { $0.droppedLanes > 0 }) { truncated = true }
 
         var lanes: [UncoveredLaneDrawing] = []
         var areas: [UncoveredAreaDrawing] = []
@@ -260,6 +274,8 @@ public enum PlanGeometry {
             uncoveredLanes: lanes, uncoveredAreas: areas,
             gapCm: clean(plan.gapCm), stripCm: clean(plan.stripCm),
             skippedLanes: zones.reduce(0) { $0 + $1.skippedLanes },
+            droppedLanes: zones.reduce(0) { $0 + $1.droppedLanes },
+            takeoffFallbackDroneIds: zones.filter(\.takeoffFellBack).map(\.droneId),
             skippedUncovered: skippedUncovered, truncated: truncated)
     }
 

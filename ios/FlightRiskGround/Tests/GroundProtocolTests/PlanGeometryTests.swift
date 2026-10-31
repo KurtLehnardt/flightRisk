@@ -154,7 +154,12 @@ final class PlanGeometryTests: XCTestCase {
         let plan = try decode(#"{"zones":[{"drone_id":"d","x_cm":0,"y_cm":0,"w_cm":10,"h_cm":10,"lanes":[\#(lanes)]}]}"#)
         let d = PlanGeometry.drawing(plan)
         XCTAssertEqual(d.zones[0].points.count, PlanGeometry.maxLanesPerZone + 1)
-        XCTAssertEqual(d.zones[0].skippedLanes, 5000 - PlanGeometry.maxLanesPerZone)
+        // Lanes cut by the cap are counted apart from unusable ones and mark the drawing as partial.
+        XCTAssertEqual(d.zones[0].droppedLanes, 5000 - PlanGeometry.maxLanesPerZone)
+        XCTAssertEqual(d.zones[0].skippedLanes, 0)
+        XCTAssertEqual(d.droppedLanes, 5000 - PlanGeometry.maxLanesPerZone)
+        XCTAssertEqual(d.skippedLanes, 0)
+        XCTAssertTrue(d.truncated)
     }
 
     func testManyZonesAndUncoveredEntriesAreCapped() throws {
@@ -188,6 +193,23 @@ final class PlanGeometryTests: XCTestCase {
         XCTAssertTrue(PlanGeometry.drawing(try decode("{}")).isEmpty)
         XCTAssertTrue(PlanGeometry.drawing(try decode("{}")).isEmpty)
         XCTAssertTrue(PlanGeometry.drawing(try decode(#"{"grid":{"x_cm":0,"y_cm":0,"w_cm":400,"h_cm":400},"zones":[],"uncovered":[]}"#)).isEmpty)
+    }
+
+    func testUnusableTakeoffFallsBackToTheZoneCornerAndIsReported() throws {
+        var z = try zone(#"{"drone_id":"drone-7","x_cm":5,"y_cm":6,"w_cm":10,"h_cm":10,"takeoff_x_cm":30,"takeoff_y_cm":40,"lanes":[{"direction":"forward","distance_cm":1}]}"#)
+        XCTAssertFalse(PlanGeometry.zoneDrawing(z).takeoffFellBack)
+        z.takeoffXCm = .nan
+        let d = PlanGeometry.zoneDrawing(z)
+        XCTAssertTrue(d.takeoffFellBack)
+        XCTAssertEqual(d.points, pts([(5, 6), (5, 7)]))
+        z.takeoffXCm = 1.0e12
+        XCTAssertTrue(PlanGeometry.zoneDrawing(z).takeoffFellBack)
+        var plan = try decode("{}")
+        plan.zones = [z]
+        XCTAssertEqual(PlanGeometry.drawing(plan).takeoffFallbackDroneIds, ["drone-7"])
+        // A takeoff that is simply absent is not a fallback.
+        let plain = try zone(#"{"drone_id":"d","x_cm":5,"y_cm":6,"w_cm":10,"h_cm":10,"lanes":[]}"#)
+        XCTAssertFalse(PlanGeometry.zoneDrawing(plain).takeoffFellBack)
     }
 
     // MARK: mapping

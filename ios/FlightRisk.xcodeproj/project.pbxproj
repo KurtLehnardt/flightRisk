@@ -57,6 +57,7 @@
 		B5A0C591FE8390D32BBF8F78 /* DroneStatusCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE27DFFA90B637CA614C7BF /* DroneStatusCardView.swift */; };
 		BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B4251664E956AD316034AF /* MatchScorerTests.swift */; };
 		CB26A272F738D7CF9B82DBFD /* GroundSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */; };
+		CD8AB112C62FE48B21A526C6 /* PlanCurrentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */; };
 		CE312B422E6D04F5F6610AD6 /* SearchPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1579D100580E363B8D28F94E /* SearchPipeline.swift */; };
 		D17815DB27EE996EC24CC0A6 /* DetectionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C18CD4930C862B6F14DAA97 /* DetectionOverlayView.swift */; };
 		D26276CDE6ACCAE2FE5BD83A /* GroundViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2F430D7789339A8B286F19 /* GroundViewModel.swift */; };
@@ -145,6 +146,7 @@
 		8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetPickerView.swift; sourceTree = "<group>"; };
 		902776655DE043AA56400A70 /* FlightRiskTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FlightRiskTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoOpLlmBackend.swift; sourceTree = "<group>"; };
+		ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanCurrentTests.swift; sourceTree = "<group>"; };
 		B191F1BA99C2BE70899B22C8 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVCaptureFrameSource.swift; sourceTree = "<group>"; };
 		B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskTheme.swift; sourceTree = "<group>"; };
@@ -229,6 +231,7 @@
 				4F23C5A72BB537E18797473D /* GroundViewModelTests.swift */,
 				8943A4554AA1A516C8F35352 /* Info.plist */,
 				14B4251664E956AD316034AF /* MatchScorerTests.swift */,
+				ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */,
 				BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */,
 				06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */,
 			);
@@ -602,6 +605,7 @@
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,
 				E81B8F714B847F9E364B7649 /* GroundViewModelTests.swift in Sources */,
 				BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */,
+				CD8AB112C62FE48B21A526C6 /* PlanCurrentTests.swift in Sources */,
 				54BEF6E800A3C73BD1EAAEE5 /* PlanGridViewStateTests.swift in Sources */,
 				D288D9B4336216C304CC56FA /* ReasoningSettingsTests.swift in Sources */,
 			);
