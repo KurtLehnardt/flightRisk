@@ -122,12 +122,27 @@ final class TransportRecorder: @unchecked Sendable {
 }
 
 /// An in-memory key store. Its mirror is empty so a `dump` of the view model cannot show it.
+/// `isLocked` makes reads fail as a locked Keychain does.
 final class InMemoryGroundKeyStore: GroundKeyStore, @unchecked Sendable, CustomReflectable {
     private let lock = NSLock()
     private var stored: String?
+    private var locked = false
+
+    var isLocked: Bool {
+        get { lock.withLock { locked } }
+        set { lock.withLock { locked = newValue } }
+    }
 
     var hasKey: Bool { lock.withLock { stored?.isEmpty == false } }
-    func loadKey() -> GroundAPIKey? { lock.withLock { stored.flatMap { $0.isEmpty ? nil : GroundAPIKey($0) } } }
+
+    func lookupKey() -> GroundKeyLookup {
+        lock.withLock {
+            if locked { return .unavailable }
+            guard let stored, !stored.isEmpty else { return .notFound }
+            return .found(GroundAPIKey(stored))
+        }
+    }
+
     func saveKey(_ key: String) throws { lock.withLock { stored = key } }
     func deleteKey() { lock.withLock { stored = nil } }
     var customMirror: Mirror { Mirror(self, children: []) }
@@ -284,6 +299,26 @@ final class GroundHarness {
     }
 }
 
+/// Loads a case payload from tests/fixtures/mobile_contract, found by walking up from this file.
+enum ContractFixtures {
+    static func payloadJSON(_ file: String, _ name: String, testFile: StaticString = #filePath, line: UInt = #line) throws -> String {
+        var url = URL(fileURLWithPath: "\(#filePath)").deletingLastPathComponent()
+        while url.path != "/" {
+            let candidate = url.appendingPathComponent("tests/fixtures/mobile_contract/\(file)")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let root = try JSONSerialization.jsonObject(with: Data(contentsOf: candidate)) as? [String: Any]
+                let cases = try XCTUnwrap(root?["cases"] as? [String: [String: Any]], file: testFile, line: line)
+                let payload = try XCTUnwrap(cases[name]?["payload"], "missing case \(name)", file: testFile, line: line)
+                let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                return String(decoding: data, as: UTF8.self)
+            }
+            url.deleteLastPathComponent()
+        }
+        XCTFail("tests/fixtures/mobile_contract/\(file) not found above this test file", file: testFile, line: line)
+        throw XCTSkip("fixtures missing")
+    }
+}
+
 enum GroundSamples {
     /// drone-1 connected and flying a lane; drone-2 DOWN, link down, held with the orphan countdown.
     static let fleetTwo = #"""
@@ -303,7 +338,12 @@ enum GroundSamples {
     static let manualHeld = #"{"controlled":null,"drones":{"drone-3":{"control_mode":"held","orphan_land_in_s":90}}}"#
 
     static let ackReachedAll = #"{"coordinator":2,"local":null,"reached_any":true,"transport":2}"#
+    static let ackPartial = #"{"coordinator":2,"local":null,"reached_any":true,"transport":0}"#
     static let ackReachedNone = #"{"coordinator":null,"local":null,"reached_any":false,"transport":null}"#
     static let fleetEventLandAllFailed = #"{"detail":"failed: drone-2","event":"land_all"}"#
+    /// drone-1 held with its own link up; drone-2 held but DOWN; nobody controls either.
+    static let heldOneDown = #"""
+    {"drones":{"drone-1":{"drone_id":"drone-1","connected":true,"lost":false,"control_mode":"held"},"drone-2":{"drone_id":"drone-2","connected":false,"lost":false,"control_mode":"held"}},"manual_controlled":null}
+    """#
     static let fleetEventPlanRefused = #"{"detail":"drone-2: not connected.","event":"plan_refused"}"#
 }

@@ -13,20 +13,27 @@ struct GroundView: View {
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if let note = viewModel.staleNote, viewModel.isStateStale, !viewModel.droneCards.isEmpty {
+                        // First in the list: nothing below is live.
+                        Label(note + " Values below are not live.", systemImage: "clock.arrow.circlepath")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.secondary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                            .accessibilityIdentifier("ground.staleBanner")
+                    }
                     toastList
                     bannerList
                     Text(viewModel.readoutText)
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("ground.readout")
-                    if let note = viewModel.staleNote, viewModel.isStateStale, !viewModel.droneCards.isEmpty {
-                        Text(note).font(.footnote).italic().foregroundStyle(.secondary)
-                    }
                     ForEach(viewModel.droneCards) { card in
                         DroneStatusCardView(
                             model: card,
                             onLand: { Task { await viewModel.landDrone(card.id) } },
-                            onResume: { Task { await viewModel.resumeHeldDrone(card.id) } }
+                            onResume: { Task { await viewModel.resumeHeldDrone(card.id) } },
+                            onDismissAlert: { viewModel.dismissDroneAlert(card.id) }
                         )
                     }
                     if viewModel.droneCards.isEmpty {

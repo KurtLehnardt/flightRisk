@@ -1,6 +1,7 @@
 import Foundation
 import GroundProtocol
 import os
+import Security
 import SocketIOMini
 import UIKit
 
@@ -13,41 +14,99 @@ import UIKit
 // - LAND ALL and per-drone Land are never disabled by any drone, fleet or connection state.
 //   When the link is down a tap says plainly that nothing was sent; nothing is ever queued.
 // - Every result is shown. "Sent" only means "handed to the connection" until the ground's
-//   answer arrives; a missing answer shows "no reply yet" after `replyTimeout`.
+//   answer arrives; a missing answer turns into a visible "no reply" or "no final answer"
+//   state, and a link lost while a command waits turns into a visible failure.
+// - Any refused or failed manual reply, whatever its action (an orphan auto-land included), is
+//   shown on the drone's card until dismissed.
 // - No command is retried automatically.
 // - Drone state comes only from `DroneStateReducer`, fed with every server event in arrival
-//   order. State from before a disconnect is kept but marked stale until a fresh
-//   `fleet_status` arrives.
+//   order. State from before a disconnect is kept but marked stale ("LAST: ...", "last value")
+//   until a fresh `fleet_status` arrives.
 // - The API key goes from the Keychain straight into `GroundAPIKey` and from there only into
 //   the client. It is never stored in this object, shown, or logged.
 
 // MARK: - Settings storage
 
+/// The result of reading the dashboard API key.
+enum GroundKeyLookup: Equatable {
+    case found(GroundAPIKey)
+    /// No key is saved.
+    case notFound
+    /// A key may be saved but cannot be read now (for example the phone is locked).
+    case unavailable
+}
+
+/// Whether a key is saved, as the views show it. Never the key itself.
+enum GroundKeyState: Equatable {
+    case saved
+    case none
+    case unavailable
+}
+
 /// Where the dashboard API key is kept. Only the Keychain implementation is used in the app.
 protocol GroundKeyStore: Sendable {
-    /// Whether a key is saved, without handing it out.
-    var hasKey: Bool { get }
-    /// The saved key wrapped for the client, or nil when none is saved.
-    func loadKey() -> GroundAPIKey?
+    func lookupKey() -> GroundKeyLookup
     func saveKey(_ key: String) throws
     func deleteKey()
 }
 
-/// The dashboard API key in the Keychain, through `KeychainHelper` with provider `ground`.
+extension GroundKeyStore {
+    var keyState: GroundKeyState {
+        switch lookupKey() {
+        case .found: return .saved
+        case .notFound: return .none
+        case .unavailable: return .unavailable
+        }
+    }
+
+    /// The saved key wrapped for the client, or nil when none can be read.
+    func loadKey() -> GroundAPIKey? {
+        if case let .found(key) = lookupKey() { return key }
+        return nil
+    }
+}
+
+/// The dashboard API key in the Keychain, saved and deleted through `KeychainHelper` with
+/// provider `ground`.
 ///
 /// The contract names this secret `FLIGHTRISK_DASHBOARD_API_KEY` (the ground's
 /// `FLIGHTRISK_API_KEY`). `KeychainHelper` names its items `flightrisk_api_key_<provider>`,
 /// so the item's account is `flightrisk_api_key_ground` in the service `com.flightrisk.app`,
-/// stored with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+/// stored with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Reading uses its own query on
+/// the same item, because `KeychainHelper.load` cannot tell "no key" from "cannot read now".
 struct KeychainGroundKeyStore: GroundKeyStore {
     static let provider = "ground"
     static let contractSecretName = "FLIGHTRISK_DASHBOARD_API_KEY"
+    /// Must match `KeychainHelper`'s service and account naming.
+    static let service = "com.flightrisk.app"
+    static let account = "flightrisk_api_key_\(provider)"
 
-    var hasKey: Bool { loadKey() != nil }
+    func lookupKey() -> GroundKeyLookup {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return Self.lookup(status: status, data: result as? Data)
+    }
 
-    func loadKey() -> GroundAPIKey? {
-        guard let stored = KeychainHelper.loadApiKey(provider: Self.provider), !stored.isEmpty else { return nil }
-        return GroundAPIKey(stored)
+    /// Maps a Keychain read to a lookup. Only "item not found" means no key; every other
+    /// failure (errSecInteractionNotAllowed while the phone is locked, among others) means the
+    /// key cannot be read now.
+    static func lookup(status: OSStatus, data: Data?) -> GroundKeyLookup {
+        switch status {
+        case errSecSuccess:
+            guard let data, let text = String(data: data, encoding: .utf8), !text.isEmpty else { return .notFound }
+            return .found(GroundAPIKey(text))
+        case errSecItemNotFound:
+            return .notFound
+        default:
+            return .unavailable
+        }
     }
 
     func saveKey(_ key: String) throws {
@@ -118,6 +177,8 @@ enum GroundAddressError: Error, Equatable {
 enum GroundLinkStatus: Equatable {
     /// No address or no key saved yet.
     case notConfigured
+    /// A key may be saved, but the Keychain cannot be read now (the phone is locked).
+    case keychainLocked
     /// Configured, but the user switched the link off.
     case off
     /// The app is in the background; the link is closed until it returns.
@@ -134,6 +195,7 @@ enum GroundLinkStatus: Equatable {
     var text: String {
         switch self {
         case .notConfigured: return "Not configured: add the ground station address and key in Settings."
+        case .keychainLocked: return "Keychain locked: unlock the phone to connect to the ground station."
         case .off: return "Ground link off. Switch it on in Settings."
         case .paused: return "Not connected: the app was in the background."
         case let .connecting(attempt): return attempt > 1 ? "Connecting (attempt \(attempt))\u{2026}" : "Connecting\u{2026}"
@@ -149,8 +211,10 @@ enum GroundLinkStatus: Equatable {
     var pillText: String {
         switch self {
         case .connected: return "LIVE"
-        case .connecting, .reconnecting: return "RECONNECTING"
+        case .connecting: return "CONNECTING"
+        case .reconnecting: return "RECONNECTING"
         case .wrongKey: return "WRONG KEY"
+        case .keychainLocked: return "LOCKED"
         case .notConfigured: return "NOT SET UP"
         case .off: return "OFF"
         case .paused, .stopped: return "OFFLINE"
@@ -158,32 +222,46 @@ enum GroundLinkStatus: Equatable {
     }
 }
 
-/// The visible result of one command.
+/// The visible result of one command, or of a failure the ground reported for a drone.
 struct GroundCommandFeedback: Equatable {
     enum Phase: Equatable {
         /// The tap was taken; the command is on its way to the connection.
         case sending
         /// Handed to the connection. Not proof of delivery: the ground's answer is.
         case handedOver
-        /// The ground accepted it and its final answer is still due.
+        /// The ground accepted it. When `awaitsFinalAnswer` is true its final answer
+        /// (`manual_result`) is still due and times out into a failure.
         case accepted
         /// No answer within the reply timeout. The operator may tap again.
         case noReplyYet
         case succeeded
+        /// Reached only some drones: a warning that never fades.
+        case partial
         case failed
     }
 
+    /// Distinguishes taps, including two taps within the same instant.
+    let attempt: Int
     var phase: Phase
     var text: String
     var detail: String?
     let startedAt: Date
     var updatedAt: Date
+    var awaitsFinalAnswer = true
 
     var isFailure: Bool { phase == .failed }
-    var isWaiting: Bool { phase == .sending || phase == .handedOver }
+    var isWarning: Bool { phase == .failed || phase == .partial || phase == .noReplyYet }
+    /// Still waiting for the ground (or the edge) to answer.
+    var isWaiting: Bool {
+        switch phase {
+        case .sending, .handedOver, .noReplyYet: return true
+        case .accepted: return awaitsFinalAnswer
+        case .succeeded, .partial, .failed: return false
+        }
+    }
     /// Whether to offer a "send again" button next to the text. A second tap is simply
     /// another command; nothing is retried automatically.
-    var offersRetry: Bool { phase == .noReplyYet || phase == .failed }
+    var offersRetry: Bool { phase == .noReplyYet || phase == .failed || phase == .partial }
 }
 
 /// A `fleet_event` banner or a refused plan or start.
@@ -205,11 +283,22 @@ struct GroundToast: Identifiable, Equatable {
 /// Everything one drone status card shows. Built from `DroneStateReducer.cards`.
 struct GroundDroneCardModel: Identifiable, Equatable {
     let card: DroneCardState
+    /// "CONNECTED", or "LAST: CONNECTED" while the whole state is stale.
+    let linkChipText: String
+    /// True when the link chip must not use its live colour (the state is stale).
+    let linkChipGreyed: Bool
     /// "MANUAL", "HELD" or nil.
     let controlChip: String?
-    /// The control text with the HELD countdown counted down locally; empty for none.
+    /// The control text with the HELD countdown counted down locally; empty for none. Ends in
+    /// "(last value)" while the state is stale.
     let controlText: String
+    /// "87%", "87% (last value)" or "--".
+    let batteryText: String
+    /// "100 cm", "100 cm (last value)" or "--".
+    let altitudeText: String
     let isPartial: Bool
+    /// True when the whole state is stale (not connected, or waiting for a fresh fleet status).
+    let isStateStale: Bool
     /// True when the values are not live: the whole state is stale or the drone is DOWN or LOST.
     let isStale: Bool
     /// Why the values are not live, or nil.
@@ -217,29 +306,58 @@ struct GroundDroneCardModel: Identifiable, Equatable {
     let canResume: Bool
     let landFeedback: GroundCommandFeedback?
     let resumeFeedback: GroundCommandFeedback?
+    /// A failure the ground reported for this drone (for example a failed orphan auto-land).
+    let alert: GroundCommandFeedback?
+    /// The feedback texts with their age, as the card shows them.
+    let landFeedbackText: String?
+    let resumeFeedbackText: String?
+    let alertText: String?
 
     var id: String { card.id }
 }
 
 /// Text the Ground tab adds to `GroundText`.
 enum GroundUIText {
+    private static let landAllFallback = "Land the drones now with their own controls, or press LAND ALL on the ground laptop."
     static let landAllHandedOver = GroundText.landAllSending + " Handed to the connection; waiting for the ground's reply."
-    static let landAllNotSentLinkOff =
-        "LAND ALL was not sent: the ground station link is off or not set up. Use the laptop's LAND ALL (Shift+L) or the drones' own controls."
-    static let landAllSendFailed =
-        "LAND ALL was not sent: the connection failed while sending. Use the laptop's LAND ALL (Shift+L) or the drones' own controls."
+    static let landAllNotSentWrongKey = "LAND ALL was NOT sent: the ground refused this phone's key. " + landAllFallback
+    static let landAllNotSentLinkOff = "LAND ALL was NOT sent: this phone's ground link is off or not set up. " + landAllFallback
+    static let landAllNotSentKeychainLocked =
+        "LAND ALL was NOT sent: the Keychain is locked, so this phone cannot connect to the ground. " + landAllFallback
+    static let landAllSendFailed = "LAND ALL was NOT sent: the connection failed while sending. " + landAllFallback
+    static let landAllConnectionLost =
+        "LAND ALL: the connection was lost before the ground answered. " + landAllFallback
     static let staleAfterDisconnect = "Last values: not connected to the ground."
     static let staleRefreshing = "Last values: waiting for a fresh fleet status from the ground."
+    static let lastValueSuffix = " (last value)"
     static let partialRecord = "Partial record: only manual-control data so far; waiting for the fleet status."
     static let privacyNote = "Connects only to the ground station address you enter."
 
+    /// The dashboard's partial-ack text (ui.js `landAllAckFeedback`): reached_any is true but at
+    /// least one path reports 0 drones. Nil when no path reports 0.
+    static func landAllPartial(_ ack: LandAllAck) -> String? {
+        guard ack.reachedAny == true else { return nil }
+        let paths: [(String, Int?)] = [("coordinator", ack.coordinator), ("transport", ack.transport), ("local", ack.local)]
+        let none = paths.filter { $0.1 == 0 }.map(\.0)
+        guard !none.isEmpty else { return nil }
+        let got = paths.compactMap { name, count in count.flatMap { $0 > 0 ? "\(name) \($0)" : nil } }
+        return "LAND ALL reached only some drones. Reached: " + got.joined(separator: ", ")
+            + ". Reached none: " + none.joined(separator: ", ") + ". Land the rest by hand."
+    }
+
     static func droneNotSent(_ id: String, action: String, linkOff: Bool) -> String {
-        let why = linkOff ? "the ground station link is off or not set up" : "not connected to the ground"
-        return "\(id): \(action) was not sent: \(why). Use the laptop or the drone's own controls."
+        let why = linkOff ? "this phone's ground link is off or not set up" : "this phone is not connected to the ground"
+        return "\(id): \(action) was NOT sent: \(why). Land it with its own controls, or use the ground laptop."
     }
 
     static func droneSendFailed(_ id: String, action: String) -> String {
-        "\(id): \(action) was not sent: the connection failed while sending. Use the laptop or the drone's own controls."
+        "\(id): \(action) was NOT sent: the connection failed while sending. Land it with its own controls, or use the ground laptop."
+    }
+
+    static func droneNoUsableId(action: String) -> String {
+        action == "Land"
+            ? "Land was not sent: this drone has no usable id. Land it with its own controls."
+            : "\(action) was not sent: this drone has no usable id."
     }
 
     static func droneSending(_ id: String, action: String) -> String { "\(id): \(action) sending\u{2026}" }
@@ -252,8 +370,37 @@ enum GroundUIText {
         "\(id): \(action): no reply from the ground yet. Check the connection."
     }
 
+    static func droneNoFinalAnswer(_ id: String, action: String) -> String {
+        action == "Land"
+            ? "\(id): no final answer from the drone's edge. Land it with its own controls."
+            : "\(id): \(action): no final answer from the drone's edge."
+    }
+
+    static func droneConnectionLost(_ id: String, action: String) -> String {
+        action == "Land"
+            ? "\(id): connection lost before the answer; land it with its own controls."
+            : "\(id): \(action): connection lost before the answer."
+    }
+
+    static func legacyLandAccepted(_ id: String) -> String {
+        "\(id): Land accepted by the ground (no confirmation from the drone)."
+    }
+
+    /// A refused or failed manual reply whose action the phone did not send (or a land the
+    /// phone did not send), for example an orphan auto-land that could not be delivered.
+    static func droneActionFailed(_ id: String, action: String, why: String) -> String {
+        "\(id): \(action) failed (\(why)). Land it with its own controls."
+    }
+
     static func heldCountdown(_ seconds: Double) -> String {
         "HELD: auto-landing in \(GroundText.jsNumber(seconds)) s, no controller"
+    }
+
+    /// " (12 s ago)" for an age of at least one second, else "".
+    static func age(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds >= 1 else { return "" }
+        if seconds < 120 { return " (\(Int(seconds)) s ago)" }
+        return " (\(Int(seconds / 60)) min ago)"
     }
 }
 
@@ -274,12 +421,19 @@ final class GroundViewModel {
 
     /// How long a command may wait for the ground's answer before "no reply yet" shows.
     static let replyTimeout: TimeInterval = 5
-    /// How long a successful LAND ALL text stays. Failures stay until dismissed.
+    /// How long the ground waits for an edge before it reports `no_reply` itself
+    /// (`MANUAL_REPLY_TIMEOUT_S`). An accepted command with no final answer after
+    /// `replyTimeout + manualReplyTimeout` is shown as a failure.
+    static let manualReplyTimeout: TimeInterval = 4
+    /// How long a success text stays. Failures and partial results stay until dismissed.
     static let successFadeAfter: TimeInterval = 10
+    static let droneSuccessFadeAfter: TimeInterval = 60
     static let warningFadeAfter: TimeInterval = 8
     static let maxBanners = 10
     static let maxToasts = 5
     static let maxDetections = 50
+    static let maxMatchAlerts = 100
+    static let maxFrameTiles = 16
 
     /// Every event the view model can emit. Equal to `GroundCommand.allowedEventNames`, which
     /// the package derives from the cases of `GroundCommand`, the contract's allow-list.
@@ -302,14 +456,17 @@ final class GroundViewModel {
     /// Keyed by drone id.
     private(set) var landFeedback: [String: GroundCommandFeedback] = [:]
     private(set) var resumeFeedback: [String: GroundCommandFeedback] = [:]
+    /// Failures the ground reported for a drone outside the phone's own commands. Sticky.
+    private(set) var droneAlerts: [String: GroundCommandFeedback] = [:]
     private(set) var banners: [GroundBanner] = []
     private(set) var toasts: [GroundToast] = []
-    /// The time the countdowns and fades are computed against; moved by `tick(now:)`.
+    /// The time the countdowns, ages and fades are computed against; moved by `tick(now:)`.
     private(set) var now: Date
 
     // State for the views of later units (video tiles, plan grid, profiles, ceiling,
     // reasoning, match alerts). Filled from the event switch below.
-    /// The latest `frame` per drone id (`""` for a frame without one).
+    /// The latest `frame` per drone id (`""` for a frame without one), at most `maxFrameTiles`.
+    /// Frames are decoded off the main actor.
     private(set) var latestFrames: [String: FramePayload] = [:]
     private(set) var latestFrameAt: [String: Date] = [:]
     private(set) var fleetPlan: FleetPlanPayload?
@@ -317,15 +474,17 @@ final class GroundViewModel {
     private(set) var detectionProfiles: DetectionProfilesPayload?
     private(set) var ceilingSettings: CeilingSettingsPayload?
     private(set) var reasoningProvider: ReasoningProviderPayload?
+    /// At most `maxMatchAlerts`, oldest dropped first.
     private(set) var matchAlerts: [MatchAlert] = []
     private(set) var streamVideoEnabled: Bool?
 
     // Settings, mirrored for the views.
     private(set) var savedAddress: String?
-    private(set) var hasSavedKey: Bool
+    private(set) var keyState: GroundKeyState
     private(set) var isEnabled: Bool
 
-    var isConfigured: Bool { savedAddress != nil && hasSavedKey }
+    var hasSavedKey: Bool { keyState == .saved }
+    var isConfigured: Bool { savedAddress != nil && keyState == .saved }
 
     // MARK: Dependencies
 
@@ -338,13 +497,20 @@ final class GroundViewModel {
 
     @ObservationIgnored private var client: GroundClient?
     @ObservationIgnored private var generation = 0
+    /// Counts connection-state updates, so a late re-read cannot overwrite a newer state.
+    @ObservationIgnored private var stateSequence = 0
+    @ObservationIgnored private var attemptCounter = 0
     @ObservationIgnored private var appInBackground = false
     @ObservationIgnored private let lifetime = Lifetime()
     /// The value and arrival time of each drone's latest `orphan_land_in_s`.
     @ObservationIgnored private var orphanBase: [String: (value: Double, at: Date)] = [:]
     /// When the state became stale; countdowns freeze there.
     @ObservationIgnored private var staleSince: Date?
-    /// Drones whose land was sent without a fleet; a `command_ack` answers the newest.
+    /// LAND ALL taps handed to the connection and not yet answered, oldest first. Each
+    /// `land_all_ack` answers the oldest.
+    @ObservationIgnored private var landAllOutstanding: [Int] = []
+    /// Drones whose land was sent to a ground without a fleet, oldest first; each
+    /// `command_ack` answers the oldest.
     @ObservationIgnored private var pendingLegacyLands: [String] = []
 
     init(
@@ -370,9 +536,9 @@ final class GroundViewModel {
         }
         now = clock()
         savedAddress = settings.address
-        hasSavedKey = keyStore.hasKey
+        keyState = keyStore.keyState
         isEnabled = settings.enabled
-        linkStatus = Self.idleStatus(configured: savedAddress != nil && hasSavedKey, enabled: isEnabled, background: false)
+        linkStatus = idleStatus()
     }
 
     deinit {
@@ -421,12 +587,13 @@ final class GroundViewModel {
         linkStatus = .paused
     }
 
-    /// Reconnects when the link is configured and switched on. State stays stale until a
-    /// fresh `fleet_status` arrives on the new connection.
+    /// Re-reads the Keychain (it may have been locked) and reconnects when the link is
+    /// configured and switched on. State stays stale until a fresh `fleet_status` arrives.
     func appWillEnterForeground() {
         appInBackground = false
+        keyState = keyStore.keyState
         if client == nil {
-            linkStatus = Self.idleStatus(configured: isConfigured, enabled: isEnabled, background: false)
+            linkStatus = idleStatus()
         }
         connectIfWanted()
     }
@@ -462,7 +629,7 @@ final class GroundViewModel {
         } catch {
             return "The key could not be saved in the Keychain."
         }
-        hasSavedKey = keyStore.hasKey
+        keyState = keyStore.keyState
         restartIfWanted()
         return nil
     }
@@ -470,10 +637,10 @@ final class GroundViewModel {
     /// Deletes the saved key and closes the link.
     func removeKey() {
         keyStore.deleteKey()
-        hasSavedKey = keyStore.hasKey
+        keyState = keyStore.keyState
         closeClient()
         markStale(GroundUIText.staleAfterDisconnect)
-        linkStatus = Self.idleStatus(configured: isConfigured, enabled: isEnabled, background: appInBackground)
+        linkStatus = idleStatus()
     }
 
     /// Switches the link on or off. On connects only when an address and a key are saved.
@@ -482,15 +649,13 @@ final class GroundViewModel {
         isEnabled = enabled
         if enabled {
             connectIfWanted()
-            if client == nil {
-                linkStatus = Self.idleStatus(configured: isConfigured, enabled: true, background: appInBackground)
-            }
+            if client == nil { linkStatus = idleStatus() }
         } else {
             if client != nil {
                 closeClient()
                 markStale(GroundUIText.staleAfterDisconnect)
             }
-            linkStatus = Self.idleStatus(configured: isConfigured, enabled: false, background: appInBackground)
+            linkStatus = idleStatus()
         }
     }
 
@@ -500,7 +665,12 @@ final class GroundViewModel {
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
             return "Save the ground station address first."
         }
-        guard let key = keyStore.loadKey() else { return "Save the dashboard API key first." }
+        let key: GroundAPIKey
+        switch keyStore.lookupKey() {
+        case let .found(found): key = found
+        case .notFound: return "Save the dashboard API key first."
+        case .unavailable: return "Keychain locked: unlock the phone and try again."
+        }
         let result = await GroundHealthProbe(endpoint: endpoint, apiKey: key, http: http).run()
         switch result {
         case let .ok(version):
@@ -521,7 +691,9 @@ final class GroundViewModel {
         if let client {
             Task { await client.retryNow() }
         } else {
+            keyState = keyStore.keyState
             connectIfWanted()
+            if client == nil { linkStatus = idleStatus() }
         }
     }
 
@@ -535,11 +707,17 @@ final class GroundViewModel {
 
     /// LAND ALL. Never disabled, never confirmed, never queued. Always leaves a visible result.
     func landAll() async {
+        let attempt = nextAttempt()
         let started = clock()
-        landAllFeedback = GroundCommandFeedback(phase: .sending, text: GroundText.landAllSending, startedAt: started, updatedAt: started)
+        landAllFeedback = GroundCommandFeedback(attempt: attempt, phase: .sending, text: GroundText.landAllSending, startedAt: started, updatedAt: started)
+        let generationAtSend = generation
         let outcome = await emit(.landAll)
         let at = clock()
-        guard landAllFeedback?.startedAt == started else { return }  // A newer tap or answer took over.
+        if outcome == .sent, generation == generationAtSend, linkStatus.isConnected {
+            // Only a send on the link that is still up can be answered by an ack.
+            landAllOutstanding.append(attempt)
+        }
+        guard landAllFeedback?.attempt == attempt else { return }  // A newer tap took over.
         switch outcome {
         case .sent:
             if landAllFeedback?.phase == .sending {
@@ -548,16 +726,19 @@ final class GroundViewModel {
                 landAllFeedback?.updatedAt = at
             }
         case .notConnected:
-            landAllFeedback = failure(GroundText.landAllNotSent, startedAt: started)
+            let text = linkStatus == .wrongKey ? GroundUIText.landAllNotSentWrongKey : GroundText.landAllNotSent
+            landAllFeedback = failure(text, attempt: attempt, startedAt: started)
         case .noClient, .shutDown:
-            landAllFeedback = failure(GroundUIText.landAllNotSentLinkOff, startedAt: started)
+            let text = linkStatus == .keychainLocked ? GroundUIText.landAllNotSentKeychainLocked : GroundUIText.landAllNotSentLinkOff
+            landAllFeedback = failure(text, attempt: attempt, startedAt: started)
         case .sendFailed, .refused:
-            landAllFeedback = failure(GroundUIText.landAllSendFailed, startedAt: started)
+            landAllFeedback = failure(GroundUIText.landAllSendFailed, attempt: attempt, startedAt: started)
         }
     }
 
     /// Lands one drone (`drone_command {command: "land"}`). Always enabled while the card exists,
-    /// whatever the drone's link or control state. An empty id is refused without sending.
+    /// whatever the drone's link or control state. An id that cannot be sent is refused with a
+    /// visible text.
     func landDrone(_ id: String) async {
         await droneCommand(.landDrone(droneId: id), id: id, action: "Land")
     }
@@ -565,29 +746,40 @@ final class GroundViewModel {
     /// Resumes the search of a held drone nobody controls (`manual_resume_search`). Sent only
     /// when `canResume(id)` is true.
     func resumeHeldDrone(_ id: String) async {
+        let command = GroundCommand.resumeHeldDrone(droneId: id)
+        guard command.isSendable else {
+            refuseUnusableId(id, isLand: false, action: "Resume search")
+            return
+        }
         guard canResume(id) else {
             log(.warning, "resume not offered for this drone; nothing sent")
             return
         }
-        await droneCommand(.resumeHeldDrone(droneId: id), id: id, action: "Resume search")
+        await droneCommand(command, id: id, action: "Resume search")
     }
 
     /// Whether to show "Resume search": the reducer says the drone is held and nobody controls
-    /// it, the state is live, and the link is up.
+    /// it, the drone's own link is up (the ground refuses a resume for a DOWN or LOST drone),
+    /// the state is live, and the link is up.
     func canResume(_ id: String) -> Bool {
-        reducer.canResume(id) && !isStateStale && linkStatus.isConnected
+        guard reducer.canResume(id), !isStateStale, linkStatus.isConnected else { return false }
+        return reducer.card(for: id)?.link.isStale == false
     }
 
     func dismissLandAllFeedback() { landAllFeedback = nil }
     func dismissBanner(_ id: UUID) { banners.removeAll { $0.id == id } }
     func dismissToast(_ id: UUID) { toasts.removeAll { $0.id == id } }
+    func dismissDroneAlert(_ id: String) { droneAlerts[id] = nil }
 
     // MARK: Derived view state
 
     var droneCards: [GroundDroneCardModel] {
-        reducer.cards.map { card in
+        let stale = isStateStale
+        func lastValue(_ text: String) -> String {
+            stale && text != "--" && !text.isEmpty ? text + GroundUIText.lastValueSuffix : text
+        }
+        return reducer.cards.map { card in
             let id = card.id
-            let partial = reducer.isPartial(id)
             var controlText = card.control.text
             if card.control.orphanLandInS != nil {
                 controlText = GroundUIText.heldCountdown(countdownSeconds(for: id, card: card))
@@ -599,18 +791,30 @@ final class GroundViewModel {
             case .autonomous: chip = nil
             }
             var note: String?
-            if isStateStale { note = staleNote ?? GroundUIText.staleAfterDisconnect }
+            if stale { note = staleNote ?? GroundUIText.staleAfterDisconnect }
             else if let s = card.staleNote { note = s }
+            let land = landFeedback[id]
+            let resume = resumeFeedback[id]
+            let alert = droneAlerts[id]
             return GroundDroneCardModel(
                 card: card,
+                linkChipText: stale ? "LAST: \(card.link.text)" : card.link.text,
+                linkChipGreyed: stale,
                 controlChip: chip,
-                controlText: controlText,
-                isPartial: partial,
-                isStale: isStateStale || card.link.isStale,
+                controlText: lastValue(controlText),
+                batteryText: lastValue(card.batteryText),
+                altitudeText: lastValue(card.altitudeText),
+                isPartial: reducer.isPartial(id),
+                isStateStale: stale,
+                isStale: stale || card.link.isStale,
                 staleNote: note,
                 canResume: canResume(id),
-                landFeedback: landFeedback[id],
-                resumeFeedback: resumeFeedback[id]
+                landFeedback: land,
+                resumeFeedback: resume,
+                alert: alert,
+                landFeedbackText: land.map { feedbackText($0) },
+                resumeFeedbackText: resume.map { feedbackText($0) },
+                alertText: alert.map { feedbackText($0) }
             )
         }
     }
@@ -626,6 +830,14 @@ final class GroundViewModel {
         return text
     }
 
+    /// A feedback text with its age once it is no longer in flight.
+    func feedbackText(_ f: GroundCommandFeedback) -> String {
+        switch f.phase {
+        case .sending, .handedOver: return f.text
+        default: return f.text + GroundUIText.age(now.timeIntervalSince(f.updatedAt))
+        }
+    }
+
     /// The HELD countdown, counted down locally from the latest server value as the contract
     /// says, and frozen while the state is stale.
     private func countdownSeconds(for id: String, card: DroneCardState) -> Double {
@@ -637,12 +849,14 @@ final class GroundViewModel {
 
     // MARK: Ticking
 
-    /// Moves `now` (countdowns), shows "no reply yet" for commands without an answer after
-    /// `replyTimeout`, and fades successful LAND ALL texts and warnings. Failures never fade.
+    /// Moves `now` (countdowns, ages), turns unanswered commands into "no reply yet" after
+    /// `replyTimeout` and accepted commands without a final answer into failures after
+    /// `replyTimeout + manualReplyTimeout`, and fades success texts and warnings. Failures and
+    /// partial results never fade.
     func tick(now date: Date) {
         now = date
         if var f = landAllFeedback {
-            if f.isWaiting, date.timeIntervalSince(f.startedAt) >= Self.replyTimeout {
+            if (f.phase == .sending || f.phase == .handedOver), date.timeIntervalSince(f.startedAt) >= Self.replyTimeout {
                 f.phase = .noReplyYet
                 f.text = GroundText.landAllNoReplyYet
                 f.updatedAt = date
@@ -651,13 +865,39 @@ final class GroundViewModel {
                 landAllFeedback = nil
             }
         }
-        for (id, f) in landFeedback where f.isWaiting && date.timeIntervalSince(f.startedAt) >= Self.replyTimeout {
-            landFeedback[id] = noReply(f, id: id, action: "Land", at: date)
+        let lands = Self.aged(landFeedback, action: "Land", at: date)
+        if lands != landFeedback { landFeedback = lands }
+        let resumes = Self.aged(resumeFeedback, action: "Resume search", at: date)
+        if resumes != resumeFeedback { resumeFeedback = resumes }
+        if toasts.contains(where: { !$0.isError && date.timeIntervalSince($0.receivedAt) >= Self.warningFadeAfter }) {
+            toasts.removeAll { !$0.isError && date.timeIntervalSince($0.receivedAt) >= Self.warningFadeAfter }
         }
-        for (id, f) in resumeFeedback where f.isWaiting && date.timeIntervalSince(f.startedAt) >= Self.replyTimeout {
-            resumeFeedback[id] = noReply(f, id: id, action: "Resume search", at: date)
+    }
+
+    /// The per-drone feedback after time has passed. Returns the same dictionary when nothing
+    /// changed, so the caller's assignment does not need to publish.
+    private static func aged(_ feedback: [String: GroundCommandFeedback], action: String, at date: Date) -> [String: GroundCommandFeedback] {
+        var result = feedback
+        for (id, f) in feedback {
+            let sinceStart = date.timeIntervalSince(f.startedAt)
+            let sinceUpdate = date.timeIntervalSince(f.updatedAt)
+            if (f.phase == .sending || f.phase == .handedOver), sinceStart >= replyTimeout {
+                var copy = f
+                copy.phase = .noReplyYet
+                copy.text = GroundUIText.droneNoReplyYet(id, action: action)
+                copy.updatedAt = date
+                result[id] = copy
+            } else if f.phase == .accepted, f.awaitsFinalAnswer, sinceUpdate >= replyTimeout + manualReplyTimeout {
+                var copy = f
+                copy.phase = .failed
+                copy.text = GroundUIText.droneNoFinalAnswer(id, action: action)
+                copy.updatedAt = date
+                result[id] = copy
+            } else if f.phase == .succeeded, sinceUpdate >= droneSuccessFadeAfter {
+                result[id] = nil
+            }
         }
-        toasts.removeAll { !$0.isError && date.timeIntervalSince($0.receivedAt) >= Self.warningFadeAfter }
+        return result
     }
 
     // MARK: Event handling
@@ -666,6 +906,7 @@ final class GroundViewModel {
     func handle(_ event: SocketIOMini.GroundEvent) {
         switch event {
         case let .stateChanged(state):
+            stateSequence += 1
             apply(state)
         case .reconnected:
             markStale(GroundUIText.staleRefreshing)
@@ -673,8 +914,14 @@ final class GroundViewModel {
         case let .eventsDropped(count):
             log(.warning, "\(count) events were dropped; requesting the full state again")
             markStale(GroundUIText.staleRefreshing)
+            let sequence = stateSequence
+            let generationAtGap = generation
             Task {
-                if let client = self.client { self.apply(await client.state) }
+                if let client = self.client {
+                    let state = await client.state
+                    // A state change that arrived meanwhile is newer than this re-read.
+                    if self.generation == generationAtGap, self.stateSequence == sequence { self.apply(state) }
+                }
                 await self.sendStateRequests()
             }
         case let .server(serverEvent):
@@ -708,7 +955,10 @@ final class GroundViewModel {
                 addBanner(info.text, isFailure: info.isFailure, at: at)
                 if info.isFailure, ev.resolvedKind == .landAll {
                     // A failed LAND ALL stays in the top bar until dismissed or a new tap.
-                    landAllFeedback = GroundCommandFeedback(phase: .failed, text: info.text, startedAt: landAllFeedback?.startedAt ?? at, updatedAt: at)
+                    landAllFeedback = GroundCommandFeedback(
+                        attempt: landAllFeedback?.attempt ?? nextAttempt(), phase: .failed, text: info.text,
+                        startedAt: landAllFeedback?.startedAt ?? at, updatedAt: at
+                    )
                 }
             }
             if let refusal = GroundText.fleetRefusal(ev) {
@@ -726,6 +976,7 @@ final class GroundViewModel {
                 matchAlerts[index] = a
             } else {
                 matchAlerts.append(a)
+                if matchAlerts.count > Self.maxMatchAlerts { matchAlerts.removeFirst(matchAlerts.count - Self.maxMatchAlerts) }
             }
         case let .detectionProfiles(p):
             detectionProfiles = p
@@ -740,11 +991,15 @@ final class GroundViewModel {
         case let .landAllAck(ack):
             applyLandAllAck(ack, at: at)
         case .commandAck:
-            if let id = pendingLegacyLands.popLast() {
-                landFeedback[id] = GroundCommandFeedback(
-                    phase: .succeeded, text: "\(id): Land accepted by the ground.",
-                    startedAt: landFeedback[id]?.startedAt ?? at, updatedAt: at
-                )
+            guard !pendingLegacyLands.isEmpty else { break }
+            let id = pendingLegacyLands.removeFirst()
+            if let current = landFeedback[id], current.isWaiting {
+                var accepted = current
+                accepted.phase = .accepted
+                accepted.awaitsFinalAnswer = false  // A ground without a fleet never sends one.
+                accepted.text = GroundUIText.legacyLandAccepted(id)
+                accepted.updatedAt = at
+                landFeedback[id] = accepted
             }
         case let .streamVideoState(s):
             streamVideoEnabled = s.enabled
@@ -759,10 +1014,11 @@ final class GroundViewModel {
 
     // MARK: Private: connection
 
-    private static func idleStatus(configured: Bool, enabled: Bool, background: Bool) -> GroundLinkStatus {
-        if !configured { return .notConfigured }
-        if !enabled { return .off }
-        if background { return .paused }
+    private func idleStatus() -> GroundLinkStatus {
+        if savedAddress != nil, keyState == .unavailable { return .keychainLocked }
+        if !isConfigured { return .notConfigured }
+        if !isEnabled { return .off }
+        if appInBackground { return .paused }
         return .stopped
     }
 
@@ -773,8 +1029,18 @@ final class GroundViewModel {
             return
         }
         // The key goes from the Keychain straight into the client and is not kept here.
-        guard let key = keyStore.loadKey() else {
+        let key: GroundAPIKey
+        switch keyStore.lookupKey() {
+        case let .found(found):
+            key = found
+            keyState = .saved
+        case .notFound:
+            keyState = .none
             linkStatus = .notConfigured
+            return
+        case .unavailable:
+            keyState = .unavailable
+            linkStatus = .keychainLocked
             return
         }
         generation += 1
@@ -794,18 +1060,25 @@ final class GroundViewModel {
                 self.handle(event)
             }
         }
-        let frameTask = Task { [weak self] in
+        // Frames are decoded off the main actor; only the decoded payload hops over.
+        let clock = self.clock
+        let frameTask = Task.detached { [weak self] in
             for await frame in frames {
+                guard let payload = frame.payload,
+                      case let .frame(decoded) = GroundProtocol.GroundEvent.decode(name: frame.name, payload: payload)
+                else { continue }
+                let at = clock()
                 guard let self else { return }
-                guard self.generation == current else { return }
-                guard let payload = frame.payload else { continue }
-                if case let .frame(f) = GroundProtocol.GroundEvent.decode(name: frame.name, payload: payload) {
-                    self.storeFrame(f, at: self.clock())
-                }
+                await self.receiveFrame(decoded, at: at, generation: current)
             }
         }
         lifetime.replaceStreamTasks([eventTask, frameTask])
         Task { await newClient.connect() }
+    }
+
+    private func receiveFrame(_ frame: FramePayload, at: Date, generation frameGeneration: Int) {
+        guard frameGeneration == generation else { return }
+        storeFrame(frame, at: at)
     }
 
     private func closeClient() {
@@ -814,6 +1087,7 @@ final class GroundViewModel {
         generation += 1
         lifetime.setClient(nil)
         lifetime.replaceStreamTasks([])
+        connectionLost()
         Task { await old.shutdown() }
     }
 
@@ -823,9 +1097,7 @@ final class GroundViewModel {
             markStale(GroundUIText.staleAfterDisconnect)
         }
         connectIfWanted()
-        if client == nil {
-            linkStatus = Self.idleStatus(configured: isConfigured, enabled: isEnabled, background: appInBackground)
-        }
+        if client == nil { linkStatus = idleStatus() }
     }
 
     /// A different ground: nothing from the old one may stay on screen.
@@ -844,7 +1116,9 @@ final class GroundViewModel {
         streamVideoEnabled = nil
         landFeedback = [:]
         resumeFeedback = [:]
+        droneAlerts = [:]
         pendingLegacyLands = []
+        landAllOutstanding = []
     }
 
     private func apply(_ state: GroundConnectionState) {
@@ -854,19 +1128,52 @@ final class GroundViewModel {
         case let .connecting(attempt):
             linkStatus = .connecting(attempt: attempt)
             markStale(GroundUIText.staleAfterDisconnect)
+            connectionLost()
         case .connected:
             linkStatus = .connected
         case let .reconnecting(attempt, retryIn, reason):
             let seconds = Double(retryIn.components.seconds) + Double(retryIn.components.attoseconds) / 1e18
             linkStatus = .reconnecting(attempt: attempt, retryInSeconds: seconds, reason: reason.description)
             markStale(GroundUIText.staleAfterDisconnect)
+            connectionLost()
         case .failed:
             linkStatus = .wrongKey
             markStale(GroundUIText.staleAfterDisconnect)
+            connectionLost()
         case .stopped:
-            linkStatus = Self.idleStatus(configured: isConfigured, enabled: isEnabled, background: appInBackground)
+            linkStatus = idleStatus()
             markStale(GroundUIText.staleAfterDisconnect)
+            connectionLost()
         }
+    }
+
+    /// The link is gone: no answer to anything sent on it can arrive any more. Every command
+    /// still waiting becomes a visible failure; nothing is resent.
+    private func connectionLost() {
+        let at = clock()
+        landAllOutstanding = []
+        pendingLegacyLands = []
+        if var f = landAllFeedback, f.phase == .sending || f.phase == .handedOver || f.phase == .noReplyYet {
+            f.phase = .failed
+            f.text = GroundUIText.landAllConnectionLost
+            f.updatedAt = at
+            landAllFeedback = f
+        }
+        func lose(_ feedback: [String: GroundCommandFeedback], action: String) -> [String: GroundCommandFeedback] {
+            var result = feedback
+            for (id, f) in feedback where f.isWaiting && f.phase != .sending {
+                var copy = f
+                copy.phase = .failed
+                copy.text = GroundUIText.droneConnectionLost(id, action: action)
+                copy.updatedAt = at
+                result[id] = copy
+            }
+            return result
+        }
+        let lostLands = lose(landFeedback, action: "Land")
+        if lostLands != landFeedback { landFeedback = lostLands }
+        let lostResumes = lose(resumeFeedback, action: "Resume search")
+        if lostResumes != resumeFeedback { resumeFeedback = lostResumes }
     }
 
     private func markStale(_ note: String) {
@@ -914,30 +1221,47 @@ final class GroundViewModel {
         }
     }
 
+    private func nextAttempt() -> Int {
+        attemptCounter += 1
+        return attemptCounter
+    }
+
+    private func refuseUnusableId(_ id: String, isLand: Bool, action: String) {
+        log(.warning, "refused \(action) for a drone without a usable id")
+        let at = clock()
+        setDroneFeedback(isLand, id, GroundCommandFeedback(
+            attempt: nextAttempt(), phase: .failed, text: GroundUIText.droneNoUsableId(action: action), startedAt: at, updatedAt: at
+        ))
+    }
+
     private func droneCommand(_ command: GroundCommand, id: String, action: String) async {
-        guard command.isSendable else {
-            log(.warning, "refused \(command.eventName) with an empty drone id")
-            return
-        }
         let isLand: Bool
         if case .landDrone = command { isLand = true } else { isLand = false }
+        guard command.isSendable else {
+            refuseUnusableId(id, isLand: isLand, action: action)
+            return
+        }
+        let attempt = nextAttempt()
         let started = clock()
-        setDroneFeedback(isLand, id, GroundCommandFeedback(phase: .sending, text: GroundUIText.droneSending(id, action: action), startedAt: started, updatedAt: started))
+        setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .sending, text: GroundUIText.droneSending(id, action: action), startedAt: started, updatedAt: started))
+        let generationAtSend = generation
         let outcome = await emit(command)
         let at = clock()
-        guard droneFeedback(isLand, id)?.startedAt == started else { return }
+        if outcome == .sent, isLand, reducer.isLegacyShape, generation == generationAtSend, linkStatus.isConnected {
+            pendingLegacyLands.append(id)
+        }
+        guard droneFeedback(isLand, id)?.attempt == attempt else { return }
         switch outcome {
         case .sent:
             if droneFeedback(isLand, id)?.phase == .sending {
-                setDroneFeedback(isLand, id, GroundCommandFeedback(phase: .handedOver, text: GroundUIText.droneHandedOver(id, action: action), startedAt: started, updatedAt: at))
+                setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .handedOver, text: GroundUIText.droneHandedOver(id, action: action), startedAt: started, updatedAt: at))
             }
-            if isLand, reducer.isLegacyShape { pendingLegacyLands.append(id) }
         case .notConnected:
-            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: false), startedAt: started))
+            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: false), attempt: attempt, startedAt: started))
         case .noClient, .shutDown:
-            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: true), startedAt: started))
+            setDroneFeedback(isLand, id, failure(GroundUIText.droneNotSent(id, action: action, linkOff: true), attempt: attempt, startedAt: started))
         case .sendFailed, .refused:
-            setDroneFeedback(isLand, id, failure(GroundUIText.droneSendFailed(id, action: action), startedAt: started))
+            setDroneFeedback(isLand, id, failure(GroundUIText.droneSendFailed(id, action: action), attempt: attempt, startedAt: started))
         }
     }
 
@@ -949,56 +1273,89 @@ final class GroundViewModel {
         if isLand { landFeedback[id] = value } else { resumeFeedback[id] = value }
     }
 
-    private func failure(_ text: String, startedAt: Date) -> GroundCommandFeedback {
-        GroundCommandFeedback(phase: .failed, text: text, startedAt: startedAt, updatedAt: clock())
-    }
-
-    private func noReply(_ f: GroundCommandFeedback, id: String, action: String, at: Date) -> GroundCommandFeedback {
-        var copy = f
-        copy.phase = .noReplyYet
-        copy.text = GroundUIText.droneNoReplyYet(id, action: action)
-        copy.updatedAt = at
-        return copy
+    private func failure(_ text: String, attempt: Int, startedAt: Date) -> GroundCommandFeedback {
+        GroundCommandFeedback(attempt: attempt, phase: .failed, text: text, startedAt: startedAt, updatedAt: clock())
     }
 
     // MARK: Private: answers
 
+    /// Each ack answers the oldest outstanding LAND ALL. While a newer tap still waits, an
+    /// earlier tap's result is shown as a detail (and as a banner when it is not a success),
+    /// and the newer tap keeps its own "sending" and "no reply yet" states.
     private func applyLandAllAck(_ ack: LandAllAck, at: Date) {
-        let result = GroundText.landAllResult(ack)
-        let started = landAllFeedback?.startedAt ?? at
-        if landAllFeedback?.phase == .failed, !result.isFailure {
-            // A failure reported for this LAND ALL stays visible; the counts are added to it.
-            landAllFeedback?.detail = result.text
+        let phase: GroundCommandFeedback.Phase
+        let text: String
+        let base = GroundText.landAllResult(ack)
+        if base.isFailure {
+            phase = .failed
+            text = base.text
+        } else if let partial = GroundUIText.landAllPartial(ack) {
+            phase = .partial
+            text = partial
+        } else {
+            phase = .succeeded
+            text = base.text
+        }
+        if !landAllOutstanding.isEmpty { landAllOutstanding.removeFirst() }
+        let latestStillWaiting = !landAllOutstanding.isEmpty
+        if latestStillWaiting, landAllFeedback?.isWaiting == true {
+            landAllFeedback?.detail = "Earlier LAND ALL: " + text
+            if phase != .succeeded { addBanner(text, isFailure: true, at: at) }
+            return
+        }
+        if landAllFeedback?.phase == .failed {
+            // A failure shown for LAND ALL stays visible; this answer is added to it.
+            landAllFeedback?.detail = text
             landAllFeedback?.updatedAt = at
+            if phase != .succeeded { addBanner(text, isFailure: true, at: at) }
             return
         }
         landAllFeedback = GroundCommandFeedback(
-            phase: result.isFailure ? .failed : .succeeded, text: result.text, startedAt: started, updatedAt: at
+            attempt: landAllFeedback?.attempt ?? nextAttempt(), phase: phase, text: text,
+            startedAt: landAllFeedback?.startedAt ?? at, updatedAt: at
         )
     }
 
     private func applyManualReply(_ reply: ManualReply, final: Bool, at: Date) {
-        guard let id = reply.droneId, !id.isEmpty else { return }
-        let isLand: Bool
-        let action: String
+        let id = reply.droneId ?? ""
+        let actionWire = reply.action?.wire ?? "command"
+        let isLand: Bool?
         switch reply.action {
-        case .land?: isLand = true; action = "Land"
-        case .resumeSearch?: isLand = false; action = "Resume search"
-        default: return
+        case .land?: isLand = true
+        case .resumeSearch?: isLand = false
+        default: isLand = nil
         }
-        let started = droneFeedback(isLand, id)?.startedAt ?? at
-        if let refusal = GroundText.manualRefusal(reply) {
-            let text = isLand ? refusal + ". Land the drone with its own controls." : refusal + "."
-            setDroneFeedback(isLand, id, GroundCommandFeedback(phase: .failed, text: text, startedAt: started, updatedAt: at))
+        let ownCommand = isLand.flatMap { droneFeedback($0, id) } != nil
+
+        if reply.ok == false {
+            var why = reply.reason.map { GroundText.nackReasonText($0) } ?? "refused"
+            if let d = reply.detail, !d.isEmpty { why = d }
+            if let isLand, ownCommand {
+                // An answer to the phone's own land or resume.
+                let refusal = GroundText.manualRefusal(reply) ?? "\(id): \(why)"
+                let text = isLand ? refusal + ". Land the drone with its own controls." : refusal + "."
+                let started = droneFeedback(isLand, id)?.startedAt ?? at
+                setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: nextAttempt(), phase: .failed, text: text, startedAt: started, updatedAt: at))
+            } else {
+                // Any other failure the ground reports for a drone, for example an orphan
+                // auto-land that could not be delivered. Sticky on the card until dismissed.
+                let who = id.isEmpty ? "drone" : id
+                let text = GroundUIText.droneActionFailed(who, action: actionWire, why: why)
+                droneAlerts[who] = GroundCommandFeedback(attempt: nextAttempt(), phase: .failed, text: text, startedAt: at, updatedAt: at)
+                if reducer.drones[who] == nil { addBanner(text, isFailure: true, at: at) }
+            }
             return
         }
-        guard reply.ok == true else { return }
+        guard reply.ok == true, let isLand, !id.isEmpty else { return }
+        let started = droneFeedback(isLand, id)?.startedAt ?? at
+        let attempt = droneFeedback(isLand, id)?.attempt ?? nextAttempt()
         if final {
             let text = isLand ? "\(id): Land acknowledged by the drone's edge." : "\(id): search resumed."
-            setDroneFeedback(isLand, id, GroundCommandFeedback(phase: .succeeded, text: text, startedAt: started, updatedAt: at))
+            setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .succeeded, text: text, startedAt: started, updatedAt: at))
         } else if droneFeedback(isLand, id)?.phase != .succeeded {
+            let action = isLand ? "Land" : "Resume search"
             let text = "\(id): \(action) accepted by the ground; waiting for the drone's edge."
-            setDroneFeedback(isLand, id, GroundCommandFeedback(phase: .accepted, text: text, startedAt: started, updatedAt: at))
+            setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .accepted, text: text, startedAt: started, updatedAt: at))
         }
     }
 
@@ -1006,6 +1363,11 @@ final class GroundViewModel {
         let id = frame.droneId ?? ""
         latestFrames[id] = frame
         latestFrameAt[id] = at
+        if latestFrames.count > Self.maxFrameTiles,
+           let oldest = latestFrameAt.min(by: { $0.value < $1.value })?.key {
+            latestFrames[oldest] = nil
+            latestFrameAt[oldest] = nil
+        }
     }
 
     private func addBanner(_ text: String, isFailure: Bool, at: Date) {
@@ -1018,7 +1380,10 @@ final class GroundViewModel {
 
     private func addToast(_ text: String, isError: Bool, at: Date) {
         toasts.insert(GroundToast(id: UUID(), text: text, isError: isError, receivedAt: at), at: 0)
-        if toasts.count > Self.maxToasts { toasts.removeLast(toasts.count - Self.maxToasts) }
+        while toasts.count > Self.maxToasts {
+            // Drop the oldest warning first; errors go only when nothing else is left.
+            if let index = toasts.lastIndex(where: { !$0.isError }) { toasts.remove(at: index) } else { toasts.removeLast() }
+        }
     }
 
     private func log(_ level: GroundLogLevel, _ message: String) {

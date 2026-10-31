@@ -14,6 +14,14 @@ struct GroundSettingsSection: View {
     @State private var testResult: String?
     @State private var isTesting = false
 
+    private var keyStateText: String {
+        switch viewModel.keyState {
+        case .saved: return "A key is saved in the Keychain."
+        case .none: return "No key saved."
+        case .unavailable: return "Keychain locked: unlock the phone."
+        }
+    }
+
     var body: some View {
         Section {
             Text(GroundUIText.privacyNote)
@@ -43,7 +51,7 @@ struct GroundSettingsSection: View {
                 keyInput = ""
             }
             .disabled(keyInput.isEmpty)
-            Text(viewModel.hasSavedKey ? "A key is saved in the Keychain." : "No key saved.")
+            Text(keyStateText)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if let message = keyMessage {

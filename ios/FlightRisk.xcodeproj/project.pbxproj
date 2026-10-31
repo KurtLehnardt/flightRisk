@@ -30,6 +30,7 @@
 		57D2434AAC2BC55FDA4B1A0B /* NoOpLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */; };
 		59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */; };
 		608310DEB0B9BB2C48207287 /* ImageDescriptionExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4428E3DF406C0107B2594B /* ImageDescriptionExtractor.swift */; };
+		60974D12CF1C4E33FC9ED595 /* GroundReviewRoundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29869F7F4A76DB453E330A17 /* GroundReviewRoundTests.swift */; };
 		64FC4A97E2FAE8712E1BDC6A /* MatchScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD2E1ADD5D69C905B7E5D46 /* MatchScorer.swift */; };
 		6828EAC807D77EE1847B8164 /* FlightRiskTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56EA9AC4FF954E36AA76F68 /* FlightRiskTheme.swift */; };
 		6AF505A5D046DC3739216B9F /* GroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30992F7C11E4B063F8C2633E /* GroundView.swift */; };
@@ -97,6 +98,7 @@
 		1719B00AAD50A040D415CFA2 /* PersonReID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonReID.swift; sourceTree = "<group>"; };
 		1DACFD81851A1FF8A832CCEF /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionTracker.swift; sourceTree = "<group>"; };
+		29869F7F4A76DB453E330A17 /* GroundReviewRoundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundReviewRoundTests.swift; sourceTree = "<group>"; };
 		2A483878F013177DA84B870B /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		30992F7C11E4B063F8C2633E /* GroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundView.swift; sourceTree = "<group>"; };
 		31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -217,6 +219,7 @@
 			children = (
 				FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */,
 				7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */,
+				29869F7F4A76DB453E330A17 /* GroundReviewRoundTests.swift */,
 				61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */,
 				46395AAA00BADD452181BA8C /* GroundTestSupport.swift */,
 				4F23C5A72BB537E18797473D /* GroundViewModelTests.swift */,
@@ -587,6 +590,7 @@
 			files = (
 				DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */,
 				59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */,
+				60974D12CF1C4E33FC9ED595 /* GroundReviewRoundTests.swift in Sources */,
 				CB26A272F738D7CF9B82DBFD /* GroundSettingsTests.swift in Sources */,
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,
 				E81B8F714B847F9E364B7649 /* GroundViewModelTests.swift in Sources */,

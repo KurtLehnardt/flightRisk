@@ -44,7 +44,7 @@ public enum GroundText {
     public static let landAllSending = "LAND ALL sending\u{2026}"
     public static let landAllNoReplyYet = "LAND ALL: no reply from the ground yet. Check the connection."
     public static let landAllNotSent =
-        "LAND ALL was not sent: not connected to the ground. Reconnecting. Use the laptop's LAND ALL (Shift+L) or the drones' own controls."
+        "LAND ALL was NOT sent: this phone is not connected to the ground. Land the drones now with their own controls, or press LAND ALL on the ground laptop."
     private static let landByHand = "Land each drone by hand (per-drone Land, or the drone's own controls)."
     /// Shown when an ack reports that no drone was reached, or says nothing.
     public static let landAllFailedNoDrone = "LAND ALL FAILED: no drone was reached. " + landByHand

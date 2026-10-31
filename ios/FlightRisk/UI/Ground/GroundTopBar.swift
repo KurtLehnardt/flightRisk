@@ -104,7 +104,7 @@ private struct LinkPill: View {
     private var color: Color {
         switch status {
         case .connected: return FlightRiskTheme.matchGreen
-        case .connecting, .reconnecting, .wrongKey: return FlightRiskTheme.alertOrange
+        case .connecting, .reconnecting, .wrongKey, .keychainLocked: return FlightRiskTheme.alertOrange
         default: return .gray
         }
     }
@@ -128,20 +128,18 @@ private struct LandAllFeedbackView: View {
             if let detail = feedback.detail {
                 Text(detail).font(.footnote).foregroundStyle(.secondary)
             }
-            if feedback.offersRetry || feedback.isFailure {
+            if feedback.offersRetry {
                 HStack {
-                    if feedback.offersRetry {
-                        Button("Send LAND ALL again") { Task { await viewModel.landAll() } }
-                            .buttonStyle(.bordered)
-                    }
-                    if feedback.isFailure {
+                    Button("Send LAND ALL again") { Task { await viewModel.landAll() } }
+                        .buttonStyle(.bordered)
+                    if feedback.isFailure || feedback.phase == .partial {
                         Button("Dismiss") { viewModel.dismissLandAllFeedback() }
                             .buttonStyle(.borderless)
                     }
                 }
             }
         }
-        .foregroundStyle(feedback.isFailure || feedback.phase == .noReplyYet ? FlightRiskTheme.alertOrange : .primary)
+        .foregroundStyle(feedback.isWarning ? FlightRiskTheme.alertOrange : .primary)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
@@ -153,6 +151,7 @@ private struct LandAllFeedbackView: View {
         case .sending, .handedOver, .accepted: return "paperplane"
         case .noReplyYet: return "clock.badge.exclamationmark"
         case .succeeded: return "checkmark.circle"
+        case .partial: return "exclamationmark.triangle"
         case .failed: return "exclamationmark.triangle.fill"
         }
     }

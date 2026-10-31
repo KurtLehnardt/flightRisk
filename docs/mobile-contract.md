@@ -70,7 +70,7 @@ The dashboard binds 127.0.0.1 by default. To reach it from a phone, the ground m
 The dashboard runs Flask-SocketIO 5.6.1 on python-socketio 5.16.3 and python-engineio 4.13.3, which speak Socket.IO protocol 5 over Engine.IO protocol 4. `socketio_frames.json` has every frame a phone sends or receives, encoded by those libraries.
 
 - The first frame after the WebSocket opens is the Engine.IO open packet: `0{"sid":...,"upgrades":[],"pingTimeout":20000,"pingInterval":25000,"maxPayload":10485760}`. Times are milliseconds.
-- Then send the namespace connect with the key. The server answers `40{"sid":...}` and sends `status` at once.
+- Then send the namespace connect with the key. The server runs its connect handler before it acknowledges the connect, so `status` (and `target_photo` and `face_report` when a target is set) arrive before `40{"sid":...}`. A client must hold events that arrive before the acknowledgement and deliver them, in order, once the connect completes.
 - Events are `42["name",payload]` in both directions. Every server event has exactly one payload object.
 - The server pings with `2` every `pingInterval` ms; answer `3` at once. If no ping arrives within `pingInterval + pingTimeout` ms, treat the connection as dropped.
 - An event may ask for an ack (`421["get_fleet_status"]`); the dashboard answers `431[]` because its handlers return nothing. Phones do not need acks; every answer comes as an event.
@@ -163,7 +163,7 @@ A DOWN or LOST card shows its values as the last ones received ("No live link: v
 ## Safety display rules
 
 1. **LAND ALL is pinned.** It sits in a top bar that is visible in every state of the Ground screen, never inside a collapsible section, and it is the only element in the danger colour. One tap sends `land_all`, as on the dashboard, which asks for no confirmation.
-2. **LAND ALL is never disabled** by any drone or fleet state (DOWN, LOST, HELD, MANUAL, link down, pending commands). When the socket is not connected, the button stays visible and tappable; a tap then says plainly that LAND ALL was not sent, starts a reconnect, and tells the operator to use the laptop's LAND ALL (Shift+L) or the drones' own controls. The phone never queues the command for later delivery.
+2. **LAND ALL is never disabled** by any drone or fleet state (DOWN, LOST, HELD, MANUAL, link down, pending commands). When the socket is not connected, the button stays visible and tappable; a tap then says plainly that LAND ALL was not sent and starts a reconnect: "LAND ALL was NOT sent: this phone is not connected to the ground. Land the drones now with their own controls, or press LAND ALL on the ground laptop." When the ground refused the phone's key, the reconnect would reuse the refused key, so the text says so instead: "LAND ALL was NOT sent: the ground refused this phone's key. Land the drones now with their own controls, or press LAND ALL on the ground laptop." The phone never queues the command for later delivery.
 3. **Per-drone Land is always enabled**, in every state including DOWN, LOST, HELD and drone link down, and sends `drone_command {command: "land"}`. The ground never gates a land.
 4. **Show the drone link text** "Drone link down: ... Land still works." whenever `drone_link_ok` is false.
 5. **Show the HELD countdown** from `orphan_land_in_s` on the drone's card.

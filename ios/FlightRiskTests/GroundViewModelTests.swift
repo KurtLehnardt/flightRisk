@@ -105,8 +105,8 @@ final class GroundViewModelTests: XCTestCase {
         await harness.waitUntil("stale") { self.vm.isStateStale }
         harness.clock.advance(30)
         vm.tick(now: harness.clock.now)
-        XCTAssertEqual(vm.droneCards[1].controlText, "HELD: auto-landing in 117 s, no controller",
-                       "a stale countdown is frozen at its last value, never extrapolated")
+        XCTAssertEqual(vm.droneCards[1].controlText, "HELD: auto-landing in 117 s, no controller (last value)",
+                       "a stale countdown is frozen at its last value, never extrapolated, and says so")
         XCTAssertEqual(vm.droneCards[1].staleNote, GroundUIText.staleAfterDisconnect)
     }
 
@@ -122,6 +122,14 @@ final class GroundViewModelTests: XCTestCase {
         XCTAssertEqual(vm.droneCards.count, 2)
         XCTAssertTrue(vm.droneCards.allSatisfy { $0.isStale && $0.staleNote == GroundUIText.staleAfterDisconnect })
         XCTAssertEqual(vm.readoutText, "2 drones, 1 connected (last values)")
+        // A stale card never shows a live CONNECTED chip or bare values.
+        let one = vm.droneCards[0]
+        XCTAssertEqual(one.linkChipText, "LAST: CONNECTED")
+        XCTAssertTrue(one.linkChipGreyed)
+        XCTAssertEqual(one.batteryText, "87% (last value)")
+        XCTAssertEqual(one.altitudeText, "100 cm (last value)")
+        XCTAssertEqual(vm.droneCards[1].linkChipText, "LAST: DOWN")
+        XCTAssertEqual(vm.droneCards[1].altitudeText, "--", "an absent value stays a dash")
         XCTAssertFalse(vm.canResume("drone-2"), "resume is never offered on stale state")
     }
 
@@ -231,7 +239,8 @@ final class GroundViewModelTests: XCTestCase {
         let before = harness.recorder.transports.count
         await vm.landAll()
         XCTAssertEqual(vm.landAllFeedback?.phase, .failed)
-        XCTAssertEqual(vm.landAllFeedback?.text, GroundText.landAllNotSent)
+        XCTAssertEqual(vm.landAllFeedback?.text,
+                       "LAND ALL was NOT sent: this phone is not connected to the ground. Land the drones now with their own controls, or press LAND ALL on the ground laptop.")
         // The 60 s backoff is cut short by the not-sent LAND ALL.
         await harness.waitUntil("a reconnect attempt") { self.harness.recorder.transports.count > before }
         let t2 = harness.recorder.transports[before]
@@ -261,7 +270,9 @@ final class GroundViewModelTests: XCTestCase {
         XCTAssertNotEqual(vm.linkStatus.text, GroundLinkStatus.reconnecting(attempt: 1, retryInSeconds: 1, reason: "x").text)
         XCTAssertTrue(vm.linkStatus.text.hasPrefix("Wrong key"))
         await vm.landAll()
-        XCTAssertEqual(vm.landAllFeedback?.text, GroundText.landAllNotSent)
+        XCTAssertEqual(vm.landAllFeedback?.text, GroundUIText.landAllNotSentWrongKey)
+        XCTAssertEqual(vm.landAllFeedback?.text,
+                       "LAND ALL was NOT sent: the ground refused this phone's key. Land the drones now with their own controls, or press LAND ALL on the ground laptop.")
         await harness.waitUntil("a new attempt after the not-sent LAND ALL") { self.harness.recorder.transports.count == 2 }
 
         // The banner's Retry ends the wait for the user at once.
@@ -356,7 +367,11 @@ final class GroundViewModelTests: XCTestCase {
         await vm.resumeHeldDrone("")
         await harness.settle()
         XCTAssertEqual(t.sent.count, before)
-        XCTAssertTrue(vm.landFeedback.isEmpty)
+        let landText = "Land was not sent: this drone has no usable id. Land it with its own controls."
+        XCTAssertEqual(vm.landFeedback[""]?.text, landText)
+        XCTAssertEqual(vm.landFeedback["   "]?.text, landText)
+        XCTAssertEqual(vm.landFeedback[""]?.phase, .failed)
+        XCTAssertEqual(vm.resumeFeedback[""]?.text, "Resume search was not sent: this drone has no usable id.")
     }
 
     func testLegacyGroundCommandAckAnswersTheLand() async {
@@ -367,7 +382,11 @@ final class GroundViewModelTests: XCTestCase {
         XCTAssertEqual(vm.droneCards[0].card.link.text, "--")
         XCTAssertEqual(vm.readoutText, "1 drone, 0 connected (no fleet: local drone only)")
         await vm.landDrone("tello")
-        await harness.push(t, "command_ack", #"{"command":"land"}"#) { self.vm.landFeedback["tello"]?.phase == .succeeded }
+        await harness.push(t, "command_ack", #"{"command":"land"}"#) { self.vm.landFeedback["tello"]?.phase == .accepted }
+        XCTAssertTrue(vm.landFeedback["tello"]?.text.hasPrefix(GroundUIText.legacyLandAccepted("tello")) == true)
+        harness.clock.advance(60)
+        vm.tick(now: harness.clock.now)
+        XCTAssertEqual(vm.landFeedback["tello"]?.phase, .accepted, "a ground without a fleet sends no final answer; no timeout")
     }
 
     // MARK: - Resume search
