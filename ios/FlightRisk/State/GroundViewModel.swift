@@ -684,6 +684,8 @@ final class GroundViewModel {
             return "Reachable, but the ground refused the key" + (version.map { " (ground version \($0))" } ?? "") + "."
         case let .unreachable(detail):
             return "Unreachable: \(detail). Check the address and that the phone is on the ground's network."
+        case let .addressNotAllowed(reason):
+            return "Refused: \(reason). Nothing was sent."
         case let .unexpectedStatus(status):
             return "The address answered with HTTP \(status); it may not be a FlightRisk ground station."
         case let .invalidResponse(detail):

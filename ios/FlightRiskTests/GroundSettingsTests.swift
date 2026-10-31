@@ -46,6 +46,23 @@ final class GroundSettingsTests: XCTestCase {
         }
     }
 
+    func testCleartextPublicAddressIsRefusedWithTheReason() async {
+        for text in ["ws://8.8.8.8:5555", "8.8.8.8", "http://100.64.0.1", "ws://0x08080808"] {
+            guard case let .failure(error) = GroundAddress.validate(text) else {
+                XCTFail("\(text) should be refused")
+                continue
+            }
+            XCTAssertTrue(error.message.contains("cleartext is only allowed to local network addresses; use wss:// or https:// for this address"), text)
+        }
+        XCTAssertNoThrow(try GroundAddress.validate("wss://8.8.8.8").get())
+        let harness = GroundHarness()
+        let vm = harness.viewModel!
+        let message = vm.saveAddress("ws://8.8.8.8:5555")
+        XCTAssertNotNil(message)
+        XCTAssertNil(vm.savedAddress)
+        await harness.tearDown()
+    }
+
     func testSaveAddressPersistsNormalisedValueAndRefusesBadInput() async {
         let harness = GroundHarness()
         let vm = harness.viewModel!
