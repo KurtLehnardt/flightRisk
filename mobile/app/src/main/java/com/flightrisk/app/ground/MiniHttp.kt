@@ -134,7 +134,8 @@ object MiniHttp {
                 }
                 return
             }
-            if (out.size() + size > maxBytes) throw MessageTooLargeException(maxBytes.toLong())
+            // A subtraction, so a huge chunk size cannot wrap around.
+            if (size > maxBytes - out.size()) throw MessageTooLargeException(maxBytes.toLong())
             copyExactly(input, out, size.toInt())
             if (readLine(input, 2).isNotEmpty()) throw ProtocolViolationException("missing CRLF after a chunk")
         }

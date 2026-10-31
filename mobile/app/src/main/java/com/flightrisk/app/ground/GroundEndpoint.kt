@@ -63,35 +63,74 @@ class GroundEndpoint private constructor(
 
         /**
          * Parses what a user types: `host`, `host:port`, `[v6]:port` or
-         * `http://host:port/`. Any other scheme, a path, a query or user
-         * info is refused (null).
+         * `http://host:port/`, or null. [parseDetailed] says why a text was refused.
          */
-        fun parse(text: String): GroundEndpoint? {
+        fun parse(text: String): GroundEndpoint? = (parseDetailed(text) as? EndpointParseResult.Ok)?.endpoint
+
+        /**
+         * Like [parse], with a reason the UI can show when the text is refused.
+         * Refused: any scheme but `http` (the dashboard serves plain HTTP on
+         * the local network; there is no TLS to use), a path, query, fragment
+         * or user info, a port outside 1..65535, and an IPv6 zone id (`%`):
+         * a link-local `fe80::` address needs one on Android, so link-local
+         * IPv6 cannot be used; use the ground's IPv4 or a ULA address.
+         */
+        fun parseDetailed(text: String): EndpointParseResult {
             var t = text.trim()
+            if (t.isEmpty()) return EndpointParseResult.Invalid("Enter the ground station's address.")
             val schemeEnd = t.indexOf("://")
             if (schemeEnd >= 0) {
-                if (!t.substring(0, schemeEnd).equals("http", ignoreCase = true)) return null
+                val scheme = t.substring(0, schemeEnd).lowercase()
+                if (scheme != "http") {
+                    return EndpointParseResult.Invalid(
+                        if (scheme == "https" || scheme == "wss") {
+                            "The ground station serves plain http:// on the local network; https and wss are not supported."
+                        } else {
+                            "Only http:// addresses are supported."
+                        },
+                    )
+                }
                 t = t.substring(schemeEnd + 3)
             }
             t = t.removeSuffix("/")
-            if (t.isEmpty() || t.any { it == '/' || it == '?' || it == '#' || it == '@' || it.isWhitespace() }) return null
-            if (t.startsWith("[")) {
+            if (t.contains('%')) {
+                return EndpointParseResult.Invalid("IPv6 zone ids (%) are not supported; use the ground station's IPv4 address.")
+            }
+            if (t.isEmpty() || t.any { it == '/' || it == '?' || it == '#' || it == '@' || it.isWhitespace() }) {
+                return EndpointParseResult.Invalid("Enter only the host and port, for example 192.168.1.20:5555.")
+            }
+            val hostAndPort: Pair<String, String?> = if (t.startsWith("[")) {
                 val close = t.indexOf(']')
-                if (close < 0) return null
-                val host = t.substring(1, close)
+                if (close < 0) return EndpointParseResult.Invalid("The IPv6 address is missing its closing bracket.")
                 val rest = t.substring(close + 1)
-                if (rest.isEmpty()) return of(host)
-                if (!rest.startsWith(":")) return null
-                return rest.substring(1).toIntOrNull()?.let { of(host, it) }
+                when {
+                    rest.isEmpty() -> t.substring(1, close) to null
+                    rest.startsWith(":") -> t.substring(1, close) to rest.substring(1)
+                    else -> return EndpointParseResult.Invalid("Enter only the host and port, for example 192.168.1.20:5555.")
+                }
+            } else {
+                when (t.count { it == ':' }) {
+                    0 -> t to null
+                    1 -> t.substringBefore(':') to t.substringAfter(':')
+                    else -> t to null // a bare IPv6 literal
+                }
             }
-            val colons = t.count { it == ':' }
-            return when (colons) {
-                0 -> of(t)
-                1 -> t.substringAfter(':').toIntOrNull()?.let { of(t.substringBefore(':'), it) }
-                else -> of(t) // a bare IPv6 literal
-            }
+            val port = hostAndPort.second?.let {
+                it.toIntOrNull()?.takeIf { p -> p in 1..65535 }
+                    ?: return EndpointParseResult.Invalid("The port must be a number from 1 to 65535.")
+            } ?: DEFAULT_PORT
+            return of(hostAndPort.first, port)?.let { EndpointParseResult.Ok(it) }
+                ?: EndpointParseResult.Invalid("That is not a valid host name or IP address.")
         }
     }
+}
+
+/** The result of [GroundEndpoint.parseDetailed]. */
+sealed interface EndpointParseResult {
+    data class Ok(val endpoint: GroundEndpoint) : EndpointParseResult
+
+    /** [reason] is a sentence for the user. */
+    data class Invalid(val reason: String) : EndpointParseResult
 }
 
 /**

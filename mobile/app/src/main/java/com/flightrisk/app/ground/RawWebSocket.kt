@@ -5,25 +5,105 @@ import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /** The server refused the WebSocket upgrade with an HTTP status other than 101. */
 class HandshakeRejectedException(val status: Int) : IOException("the server refused the WebSocket upgrade with HTTP $status")
 
-/** The server closed the WebSocket with a close frame. [reason] is already redacted and truncated. */
+/**
+ * The server closed the WebSocket with a close frame. [reason] is redacted
+ * with the secrets the connection was given and holds at most 123 bytes of
+ * text (the protocol's limit), so it is never truncated.
+ */
 class WebSocketClosedException(val code: Int?, val reason: String) :
     IOException("the server closed the WebSocket" + (code?.let { " with code $it" } ?: "") + (if (reason.isEmpty()) "" else ": $reason"))
+
+/**
+ * Called before every blocking socket operation with its name (`connect`,
+ * `read`, `write`). Production code passes [NONE]; tests use it to prove that
+ * no blocking IO runs on a thread that stands for Android's main thread.
+ */
+fun interface IoGuard {
+    fun beforeBlockingIo(operation: String)
+
+    companion object {
+        val NONE: IoGuard = IoGuard { }
+    }
+}
+
+/**
+ * Socket reads with one overall deadline: before each read the socket timeout
+ * is set to the time left, so a peer that trickles one byte at a time cannot
+ * stretch a handshake or a REST answer past the deadline. Disarm it with
+ * [deadlineNanos] = 0 after the handshake.
+ */
+internal class DeadlineInputStream(
+    private val socket: Socket,
+    private val raw: InputStream,
+    private val guard: IoGuard,
+) : InputStream() {
+    @Volatile var deadlineNanos: Long = 0
+
+    /** The read timeout used when no deadline is armed (0 = none). */
+    @Volatile var idleTimeoutMs: Int = 0
+
+    private fun arm() {
+        guard.beforeBlockingIo("read")
+        val deadline = deadlineNanos
+        if (deadline == 0L) {
+            socket.soTimeout = idleTimeoutMs
+            return
+        }
+        val leftMs = (deadline - System.nanoTime()) / 1_000_000
+        if (leftMs <= 0) throw SocketTimeoutException("the overall deadline passed")
+        socket.soTimeout = leftMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    override fun read(): Int {
+        arm()
+        return raw.read()
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        arm()
+        return raw.read(b, off, len)
+    }
+
+    override fun available(): Int = raw.available()
+    override fun close() = raw.close()
+}
+
+internal class GuardedOutputStream(private val raw: OutputStream, private val guard: IoGuard) : OutputStream() {
+    override fun write(b: Int) {
+        guard.beforeBlockingIo("write")
+        raw.write(b)
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        guard.beforeBlockingIo("write")
+        raw.write(b, off, len)
+    }
+
+    override fun flush() {
+        guard.beforeBlockingIo("write")
+        raw.flush()
+    }
+
+    override fun close() = raw.close()
+}
 
 /**
  * A minimal RFC 6455 WebSocket client for plain `ws://` on the local network.
@@ -37,15 +117,20 @@ class WebSocketClosedException(val code: Int?, val reason: String) :
  * ranges only" and would therefore have to allow cleartext everywhere; this
  * client instead connects only to an address [LanAddressPolicy] has checked.
  *
- * The upgrade request carries no `Origin` header and offers no extensions,
- * so the server never compresses. Text messages only; binary messages are read
- * within the limit and discarded.
+ * The upgrade request carries no `Origin` header and offers no extensions or
+ * subprotocols, so the server never compresses. Text messages only; binary
+ * messages are read within the limit and discarded.
+ *
+ * [abort] closes the socket without writing anything and is safe on any
+ * thread, including Android's main thread. [close] also writes a close frame
+ * first and therefore blocks: call it from an IO thread.
  */
 class RawWebSocket private constructor(
     private val socket: Socket,
     private val input: DataInputStream,
     private val output: BufferedOutputStream,
     private val maxMessageBytes: Long,
+    private val secrets: List<String>,
 ) {
     private val random = SecureRandom()
     private val writeLock = ReentrantLock()
@@ -61,8 +146,8 @@ class RawWebSocket private constructor(
      * binary messages, and throws [WebSocketClosedException] on a close
      * frame, [MessageTooLargeException] when a message would exceed the
      * limit, [ProtocolViolationException] on a protocol error, and
-     * [IOException] when the connection drops or [close] is called.
-     * Call it from one thread at a time.
+     * [IOException] when the connection drops or [abort] is called.
+     * Call it from one IO thread at a time.
      */
     fun receiveText(): String {
         var message: ByteArrayOutputStream? = null
@@ -101,8 +186,9 @@ class RawWebSocket private constructor(
                 else -> throw ProtocolViolationException("unknown data opcode $opcode")
             }
             val buffer = message!!
-            // The limit is checked against the declared length before a single payload byte is read.
-            if (buffer.size() + length > maxMessageBytes) throw MessageTooLargeException(maxMessageBytes)
+            // Checked against the declared length before a single payload byte is
+            // read, written as a subtraction so a huge length cannot wrap around.
+            if (length > maxMessageBytes - buffer.size()) throw MessageTooLargeException(maxMessageBytes)
             MiniHttp.copyExactly(input, buffer, length.toInt())
             if (!fin) continue
             message = null
@@ -111,19 +197,22 @@ class RawWebSocket private constructor(
         }
     }
 
-    /** Sends one text message as a single masked frame. */
+    /** Sends one text message as a single masked frame. Blocking: call it from an IO thread. */
     fun sendText(text: String) {
         val bytes = text.toByteArray(Charsets.UTF_8)
         if (bytes.size > maxMessageBytes) throw MessageTooLargeException(maxMessageBytes)
         sendFrame(OP_TEXT, bytes)
     }
 
-    /** Sends a close frame (best effort) and closes the socket. Safe to call more than once, from any thread. */
+    /**
+     * Sends a close frame (best effort, only when no other write is in
+     * progress) and closes the socket. Blocking: call it from an IO thread.
+     * Never throws.
+     */
     fun close(code: Int = 1000) {
         if (closed) return
         try {
-            // A sender blocked on a full TCP buffer holds the write lock; do not wait for it.
-            if (!closeSent && !socket.isClosed && writeLock.tryLock(CLOSE_LOCK_WAIT_MS, TimeUnit.MILLISECONDS)) {
+            if (!closeSent && !socket.isClosed && writeLock.tryLock()) {
                 try {
                     sendFrame(OP_CLOSE, byteArrayOf((code shr 8).toByte(), code.toByte()))
                 } finally {
@@ -132,30 +221,32 @@ class RawWebSocket private constructor(
             }
         } catch (_: IOException) {
             // The socket is going away anyway.
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+        } catch (_: RuntimeException) {
         } finally {
-            closed = true
-            try {
-                socket.close()
-            } catch (_: IOException) {
-            }
+            abort()
         }
     }
 
-    /** Closes the socket at once without a close frame; unblocks a pending [receiveText]. */
+    /**
+     * Closes the socket at once without writing; unblocks a pending
+     * [receiveText]. Safe on any thread, including Android's main thread, and
+     * never throws.
+     */
     fun abort() {
         closed = true
         try {
             socket.close()
         } catch (_: IOException) {
+        } catch (_: RuntimeException) {
         }
     }
 
     private fun handleClose(payload: ByteArray): Nothing {
+        if (payload.size == 1) throw ProtocolViolationException("a close frame with a one-byte payload")
         val code = if (payload.size >= 2) ((payload[0].toInt() and 0xff) shl 8) or (payload[1].toInt() and 0xff) else null
+        // At most 123 bytes: redacted with the secrets, never long enough to need truncation.
         val reason = if (payload.size > 2) {
-            Redact.text(String(payload, 2, payload.size - 2, Charsets.UTF_8))
+            Redact.text(String(payload, 2, payload.size - 2, Charsets.UTF_8), secrets, maxLength = 1024)
         } else {
             ""
         }
@@ -215,17 +306,20 @@ class RawWebSocket private constructor(
         private const val OP_CLOSE = 0x8
         private const val OP_PING = 0x9
         private const val OP_PONG = 0xA
-        private const val CLOSE_LOCK_WAIT_MS = 200L
         private const val GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
         /**
-         * Connects to [address]:[port] (an address the caller has already
-         * checked) and performs the upgrade for [path], sending [hostHeader]
-         * as the `Host`. No `Origin`, cookie or credential header is sent.
+         * Connects [socket] to [address]:[port] (an address the caller has
+         * already checked) and performs the upgrade for [path], sending
+         * [hostHeader] as the `Host`. No `Origin`, cookie or credential header
+         * is sent. Blocking: call it from an IO thread. Closing [socket] from
+         * another thread aborts it at once.
          *
-         * @param timeoutMs the limit for the TCP connect and for the upgrade response.
-         * @param readTimeoutMs the read timeout after the upgrade (0 = none); the caller's
-         *   own ping watchdog is the main dead-link detector.
+         * @param timeoutMs one overall deadline for the TCP connect and the
+         *   whole upgrade response, however slowly the server sends it.
+         * @param readTimeoutMs the read timeout after the upgrade (0 = none);
+         *   the caller's ping watchdog is the main dead-link detector.
+         * @param secrets values to redact from a server's close reason.
          */
         fun connect(
             address: InetAddress,
@@ -235,15 +329,19 @@ class RawWebSocket private constructor(
             maxMessageBytes: Long,
             timeoutMs: Int,
             readTimeoutMs: Int,
+            secrets: List<String> = emptyList(),
+            guard: IoGuard = IoGuard.NONE,
+            socket: Socket = Socket(),
         ): RawWebSocket {
             require(maxMessageBytes in 1..Int.MAX_VALUE.toLong()) { "maxMessageBytes out of range" }
-            val socket = Socket()
             try {
+                val deadline = System.nanoTime() + timeoutMs * 1_000_000L
                 socket.tcpNoDelay = true
+                guard.beforeBlockingIo("connect")
                 socket.connect(InetSocketAddress(address, port), timeoutMs)
-                socket.soTimeout = timeoutMs
-                val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 16 * 1024))
-                val output = BufferedOutputStream(socket.getOutputStream(), 16 * 1024)
+                val timed = DeadlineInputStream(socket, socket.getInputStream(), guard).also { it.deadlineNanos = deadline }
+                val input = DataInputStream(BufferedInputStream(timed, 16 * 1024))
+                val output = BufferedOutputStream(GuardedOutputStream(socket.getOutputStream(), guard), 16 * 1024)
                 val keyBytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
                 val key = Base64.getEncoder().encodeToString(keyBytes)
                 MiniHttp.writeRequest(
@@ -275,8 +373,12 @@ class RawWebSocket private constructor(
                 if (head.headers.containsKey("sec-websocket-extensions")) {
                     throw ProtocolViolationException("the server chose an extension the client did not offer")
                 }
-                socket.soTimeout = readTimeoutMs
-                return RawWebSocket(socket, input, output, maxMessageBytes)
+                if (head.headers.containsKey("sec-websocket-protocol")) {
+                    throw ProtocolViolationException("the server chose a subprotocol the client did not offer")
+                }
+                timed.deadlineNanos = 0
+                timed.idleTimeoutMs = readTimeoutMs
+                return RawWebSocket(socket, input, output, maxMessageBytes, secrets)
             } catch (e: Throwable) {
                 try {
                     socket.close()

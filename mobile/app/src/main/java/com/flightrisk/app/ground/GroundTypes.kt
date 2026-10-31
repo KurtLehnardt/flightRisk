@@ -47,6 +47,13 @@ sealed interface DropReason {
 
     /** The network failed. */
     data class TransportError(val detail: String) : DropReason
+
+    /**
+     * Handling a frame failed inside the client (for example a
+     * `StackOverflowError` or an `OutOfMemoryError`); the session was closed
+     * and the client reconnects.
+     */
+    data class InternalError(val detail: String) : DropReason
 }
 
 /** Why the client stopped trying until the user acts. */
@@ -117,14 +124,23 @@ sealed interface NotSentReason {
 /** Everything [GroundConsoleClient.events] delivers, in arrival order. */
 sealed interface GroundEvent {
     /**
-     * A session was established (first connect or reconnect). Request the
-     * full state now with [GroundConsoleClient.requestFullState] and treat
-     * older state as stale.
+     * A session was established (first connect or reconnect). Treat older
+     * state as stale; the client requests the full state itself right after
+     * delivering the events that arrived before the connect acknowledgement.
      */
     data class SessionStarted(val info: SessionInfo) : GroundEvent
 
     /** A decoded server event other than a video `frame`. */
     data class Server(val event: ServerEvent) : GroundEvent
+
+    /**
+     * The connected session ended for [reason], in order with the events.
+     * When the app fell behind ([DropReason.ConsumerStalled]), [lostEvent]
+     * names the type of the event that did not fit (it may have been a
+     * `land_all_ack`); the next session re-sends the full state, but a lost
+     * reply is not repeated.
+     */
+    data class SessionEnded(val reason: DropReason, val lostEvent: String?) : GroundEvent
 }
 
 /** The latest whole-state payloads, kept by the client in arrival order. */
@@ -229,7 +245,12 @@ data class GroundClientConfig(
     val maxEarlyEvents: Int = 32,
     /** The most bytes of events held between the namespace connect and its acknowledgement. */
     val maxEarlyBytes: Long = 2L * 1024 * 1024,
-    /** The most undelivered events in [GroundConsoleClient.events] before the session is dropped. */
+    /**
+     * The backoff starts again from the beginning only after a session stayed
+     * up for this long, or for the server's pingInterval when that is longer.
+     */
+    val minStableMs: Long = 30_000,
+    /** The most undelivered events in [GroundConsoleClient.events] before the session is dropped (one slot is kept for [GroundEvent.SessionEnded]). */
     val maxQueuedEvents: Int = 512,
     /** The most undelivered bytes in [GroundConsoleClient.events] before the session is dropped. */
     val maxQueuedBytes: Long = 16L * 1024 * 1024,

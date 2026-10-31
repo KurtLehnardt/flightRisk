@@ -69,7 +69,9 @@ import kotlin.random.Random
  *   [GroundEvent.SessionStarted], in order; they are dropped if the connect
  *   is refused.
  * - After every connect and reconnect [events] delivers
- *   [GroundEvent.SessionStarted]; the app then calls [requestFullState].
+ *   [GroundEvent.SessionStarted], then the held events, and the client sends
+ *   the five state requests itself. When a connected session ends, [events]
+ *   delivers [GroundEvent.SessionEnded] with the reason.
  * - [send] accepts only a [ClientCommand] (the contract's ten events) that
  *   the [EmitPolicy] allows; the policy can only narrow the set and never
  *   blocks `land_all`. A command that cannot be written now returns
@@ -80,6 +82,15 @@ import kotlin.random.Random
  * - The loop and its timers run in [scope]. Call [shutdown] (or cancel the
  *   scope) when the client is no longer needed; dropping the reference alone
  *   leaves the connection open.
+ * - [scope] may run on Android's main thread (for example `viewModelScope`),
+ *   and every public function may be called from it: socket IO always runs
+ *   on the port's IO dispatcher, and closing a connection never writes.
+ * - Untrusted text is checked with [JsonGuard] before it is parsed, and any
+ *   error inside a session (including a `StackOverflowError` or an
+ *   `OutOfMemoryError`) ends only that session, which then reconnects with
+ *   backoff.
+ * - After every connect the client itself sends the five state requests,
+ *   right after the held early events are delivered.
  */
 class GroundConsoleClient(
     val endpoint: GroundEndpoint,
@@ -93,6 +104,7 @@ class GroundConsoleClient(
     private val restClientFactory: (GroundEndpoint, DashboardApiKey?) -> DashboardRestClient =
         { e, k -> DashboardRestClient(e, k) },
     private val logSink: GroundLog = GroundLog.NONE,
+    private val extraSecrets: () -> List<String> = { emptyList() },
 ) {
     private val _connection = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     private val _board = MutableStateFlow(DroneStateReducer.INITIAL)
@@ -151,6 +163,7 @@ class GroundConsoleClient(
         var watchdog: Job? = null
         val held = ArrayList<Pair<ServerEvent, Long>>()
         var heldBytes = 0L
+        @Volatile var lostEvent: String? = null
     }
 
     private sealed interface Outcome {
@@ -224,7 +237,7 @@ class GroundConsoleClient(
                     SendResult.Sent(event)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     val detail = describe(e)
                     s.dropReason = DropReason.TransportError("sending failed: $detail")
                     s.conn.close()
@@ -260,7 +273,7 @@ class GroundConsoleClient(
     suspend fun setFleetDetectionProfile(profile: String): SendResult =
         send(ClientCommand.SetFleetDetectionProfile(profile))
 
-    /** Sends the five state requests. Call it after every [GroundEvent.SessionStarted]. */
+    /** Sends the five state requests again, for a manual refresh. The client already sends them on every connect. */
     suspend fun requestFullState(): List<SendResult> = ClientCommand.STATE_REQUESTS.map { send(it) }
 
     /**
@@ -293,6 +306,7 @@ class GroundConsoleClient(
                 writeMutex.withLock {
                     try {
                         s.conn.send(SocketIoFrames.DISCONNECT)
+                        s.conn.closeGracefully()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
@@ -314,7 +328,13 @@ class GroundConsoleClient(
         var failures = 0
         while (!stopped) {
             publish(ConnectionStatus.Connecting(failures + 1))
-            val outcome = runSession()
+            val outcome = try {
+                runSession()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Outcome.Dropped(reasonFor(e), null, 0)
+            }
             if (stopped) break
             when (outcome) {
                 Outcome.Stopped -> break
@@ -331,7 +351,9 @@ class GroundConsoleClient(
                 }
                 is Outcome.Dropped -> {
                     val up = outcome.upMs
-                    if (up != null && up >= outcome.pingIntervalMs) failures = 0
+                    // The server chooses pingInterval, so a fixed minimum keeps a flapping
+                    // server with a tiny interval from resetting the backoff.
+                    if (up != null && up >= maxOf(outcome.pingIntervalMs, config.minStableMs)) failures = 0
                     failures++
                     val delayMs = config.backoff.delayMs(failures, random())
                     publish(ConnectionStatus.Reconnecting(failures, delayMs, outcome.reason))
@@ -355,20 +377,24 @@ class GroundConsoleClient(
     }
 
     private suspend fun runSession(): Outcome {
+        val startedAt = clock.nowMs()
         val conn = try {
-            port.open(endpoint)
+            openWithDeadline()
         } catch (e: CancellationException) {
             throw e
         } catch (e: AddressNotAllowedException) {
             val detail = redact(e.message)
             log(GroundLog.Level.ERROR, "not connecting: $detail")
             return Outcome.NotAllowed(detail)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             val reason = reasonFor(e)
             log(GroundLog.Level.WARN, "could not connect: $reason")
             return Outcome.Dropped(reason, null, 0)
+        } ?: run {
+            log(GroundLog.Level.WARN, "could not connect: ${DropReason.HandshakeTimeout}")
+            return Outcome.Dropped(DropReason.HandshakeTimeout, null, 0)
         }
-        val s = Session(conn, clock.nowMs())
+        val s = Session(conn, startedAt)
         synchronized(lock) {
             if (stopped) {
                 conn.close()
@@ -385,7 +411,8 @@ class GroundConsoleClient(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Every failure, an Error included, ends this session only; the loop reconnects.
             if (stopped) return Outcome.Stopped
             return dropped(s, s.dropReason ?: reasonFor(e))
         } finally {
@@ -399,8 +426,36 @@ class GroundConsoleClient(
         }
     }
 
+    /**
+     * Opens the connection under the handshake timeout, on the injected
+     * clock; the attempt is cancelled (and its socket closed) when the
+     * timeout passes first. Null means the timeout passed.
+     */
+    private suspend fun openWithDeadline(): SocketIoConnection? = coroutineScope {
+        val attempt = async { port.open(endpoint, allSecrets()) }
+        val timer = async {
+            clock.sleep(config.handshakeTimeoutMs)
+            null
+        }
+        val result = select<SocketIoConnection?> {
+            attempt.onAwait { it }
+            timer.onAwait { it }
+        }
+        timer.cancel()
+        if (result == null) {
+            attempt.cancel()
+            // An attempt that finished just as the timer fired must not leak its socket.
+            try {
+                attempt.await().close()
+            } catch (_: Throwable) {
+            }
+        }
+        result
+    }
+
     private fun dropped(s: Session, reason: DropReason): Outcome {
         val upMs = s.connectedAt?.let { clock.nowMs() - it }
+        if (s.connectedAt != null) markSessionEnded(s, reason)
         log(GroundLog.Level.WARN, "connection lost: $reason")
         return Outcome.Dropped(reason, upMs, s.pingIntervalMs)
     }
@@ -410,6 +465,9 @@ class GroundConsoleClient(
     private suspend fun handleFrame(s: Session, text: String): Outcome? {
         if (text.length > config.maxMessageChars) {
             return dropped(s, DropReason.MessageTooLarge(config.maxMessageChars.toLong()))
+        }
+        JsonGuard.check(text)?.let { problem ->
+            return dropped(s, DropReason.ProtocolError(problem))
         }
         val frame = SocketIoFrames.parse(text)
         if (frame == null) {
@@ -475,7 +533,7 @@ class GroundConsoleClient(
         }
     }
 
-    private fun onConnectAck(s: Session): Outcome? {
+    private suspend fun onConnectAck(s: Session): Outcome? {
         if (s.phase != Phase.AWAITING_ACK) {
             log(GroundLog.Level.WARN, "ignored an unexpected namespace connect")
             return null
@@ -497,6 +555,11 @@ class GroundConsoleClient(
         for ((event, size) in held) {
             deliver(s, event, size)?.let { return it }
         }
+        // Rebuild the full state on every connect and reconnect, without waiting for the app.
+        for (command in ClientCommand.STATE_REQUESTS) {
+            if (emitPolicy.allows(command)) sendRaw(s, SocketIoFrames.event(command))
+        }
+        log(GroundLog.Level.INFO, "requested the full state")
         return null
     }
 
@@ -564,14 +627,32 @@ class GroundConsoleClient(
     private fun enqueue(s: Session, event: GroundEvent, size: Long): Outcome? {
         val count = queuedCount.get()
         val bytes = queuedBytes.get()
-        if (count + 1 > config.maxQueuedEvents || bytes + size > config.maxQueuedBytes) {
+        // The last slots are kept free for SessionEnded markers.
+        if (count + 1 > config.maxQueuedEvents - MARKER_SLOTS || bytes + size > config.maxQueuedBytes) {
+            val lost = (event as? GroundEvent.Server)?.event?.let { it::class.simpleName }
             log(GroundLog.Level.ERROR, "the app is not reading ground events ($count queued); dropping the session")
-            return dropped(s, DropReason.ConsumerStalled(count, bytes))
+            val reason = DropReason.ConsumerStalled(count, bytes)
+            s.lostEvent = lost
+            return dropped(s, reason)
         }
+        put(event, size)
+        return null
+    }
+
+    private fun put(event: GroundEvent, size: Long) {
         queuedCount.incrementAndGet()
         queuedBytes.addAndGet(size)
         channel.trySend(Queued(event, size))
-        return null
+    }
+
+    /**
+     * Tells the app, in order with the events, that a connected session
+     * ended and why. Uses the reserved slots; when even those are full the
+     * connection status still carries the reason.
+     */
+    private fun markSessionEnded(s: Session, reason: DropReason) {
+        if (queuedCount.get() >= config.maxQueuedEvents) return
+        put(GroundEvent.SessionEnded(reason, s.lostEvent), 0)
     }
 
     /**
@@ -636,16 +717,20 @@ class GroundConsoleClient(
         log(GroundLog.Level.INFO, "state: $status")
     }
 
-    private fun reasonFor(e: Exception): DropReason = when (e) {
+    private fun reasonFor(e: Throwable): DropReason = when (e) {
         is MessageTooLargeException -> DropReason.MessageTooLarge(e.limitBytes)
         is WebSocketClosedException -> DropReason.ServerClosed(describe(e))
         is ProtocolViolationException, is HandshakeRejectedException -> DropReason.ProtocolError(describe(e))
+        is Error -> DropReason.InternalError(describe(e))
         else -> DropReason.TransportError(describe(e))
     }
 
-    private fun describe(e: Exception): String = redact(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""))
+    private fun describe(e: Throwable): String = redact(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""))
 
-    private fun redact(text: String?): String = Redact.text(text, secrets)
+    private fun allSecrets(): List<String> = secrets + extraSecrets()
+
+    // All secrets are removed before the text is cut.
+    private fun redact(text: String?): String = Redact.text(text, allSecrets())
 
     private fun log(level: GroundLog.Level, message: String) {
         logSink.log(level, redact(message))
@@ -661,5 +746,8 @@ class GroundConsoleClient(
         private const val MIN_PING_MS = 1_000L
         private const val MAX_PING_MS = 300_000L
         private const val LEAVE_TIMEOUT_MS = 1_000L
+
+        /** Queue slots kept free for [GroundEvent.SessionEnded]. */
+        private const val MARKER_SLOTS = 1
     }
 }

@@ -4,7 +4,6 @@ import com.flightrisk.contract.parseJsonOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.BufferedInputStream
@@ -58,29 +57,35 @@ class DashboardRestClient(
     private val maxBodyBytes: Int = 256 * 1024,
     private val resolver: HostResolver = HostResolver.SYSTEM,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val guard: IoGuard = IoGuard.NONE,
 ) {
     private class Response(val status: Int, val contentType: String?, val body: ByteArray)
 
-    /** `/api/health` then `/api/status`. */
+    /**
+     * `/api/health` then `/api/status`. Safe to call from any thread (all
+     * socket IO runs on [ioDispatcher]); cancelling the caller closes the
+     * socket at once. Never throws except for cancellation.
+     */
     suspend fun probe(): HealthProbeResult {
-        val health = try {
-            get(HEALTH, withKey = false)
+        var path = HEALTH
+        return try {
+            val health = get(HEALTH, withKey = false)
+            val version = when (val checked = checkHealth(health)) {
+                is HealthCheck.Bad -> return checked.result
+                is HealthCheck.Good -> checked.version
+            }
+            path = STATUS
+            val status = get(STATUS, withKey = true)
+            checkStatus(status, version)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            return failure(e)
+        } catch (e: Throwable) {
+            // An Error (a stack overflow from a hostile body, for example) is a failed probe, not a crash.
+            failure(path, e)
         }
-        val version = when (val checked = checkHealth(health)) {
-            is HealthCheck.Bad -> return checked.result
-            is HealthCheck.Good -> checked.version
-        }
-        val status = try {
-            get(STATUS, withKey = true)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return failure(e)
-        }
+    }
+
+    private fun checkStatus(status: Response, version: String?): HealthProbeResult {
         return when (status.status) {
             200 -> {
                 val o = jsonObject(status) ?: return HealthProbeResult.UnexpectedBody(STATUS, "not a JSON object")
@@ -94,7 +99,7 @@ class DashboardRestClient(
                 HealthProbeResult.Ok(
                     version,
                     StatusSummary(
-                        running = (o["running"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toBooleanStrictOrNull(),
+                        running = running.content.toBooleanStrictOrNull(),
                         source = (o["source"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { Redact.text(it) },
                         fleetDrones = (fleet?.get("drones") as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull(),
                     ),
@@ -126,27 +131,40 @@ class DashboardRestClient(
     private fun jsonObject(r: Response): JsonObject? {
         val type = r.contentType?.substringBefore(';')?.trim()
         if (!type.equals("application/json", ignoreCase = true)) return null
-        return parseJsonOrNull(String(r.body, Charsets.UTF_8)) as? JsonObject
+        val text = String(r.body, Charsets.UTF_8)
+        // Checked before parsing: deep nesting would overflow the parser's stack.
+        JsonGuard.check(text)?.let { throw ProtocolViolationException(it) }
+        return parseJsonOrNull(text) as? JsonObject
     }
 
-    private fun failure(e: Exception): HealthProbeResult {
+    private fun failure(path: String, e: Throwable): HealthProbeResult {
         val secrets = listOfNotNull(apiKey?.secret)
         val detail = Redact.text(e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""), secrets)
         return when (e) {
             is AddressNotAllowedException -> HealthProbeResult.AddressNotAllowed(detail)
-            is MessageTooLargeException -> HealthProbeResult.UnexpectedBody("", "the answer is larger than $maxBodyBytes bytes")
-            is ProtocolViolationException -> HealthProbeResult.UnexpectedBody("", detail)
+            is MessageTooLargeException -> HealthProbeResult.UnexpectedBody(path, "the answer is larger than $maxBodyBytes bytes")
+            is ProtocolViolationException, is Error -> HealthProbeResult.UnexpectedBody(path, detail)
             else -> HealthProbeResult.Unreachable(detail)
         }
     }
 
-    private suspend fun get(path: String, withKey: Boolean): Response = withContext(ioDispatcher) {
+    /** One GET under one overall deadline of [timeoutMs] for connect, request and the whole answer. */
+    private suspend fun get(path: String, withKey: Boolean): Response {
+        val socket = Socket()
+        return cancellableSocketIo(socket, ioDispatcher) { socket.use { getBlocking(it, path, withKey) } }
+    }
+
+    private fun getBlocking(socket: Socket, path: String, withKey: Boolean): Response {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        guard.beforeBlockingIo("resolve")
         val address = LanAddressPolicy.resolve(endpoint.host, resolver)
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress(address, endpoint.port), timeoutMs)
-            socket.soTimeout = timeoutMs
-            val input = BufferedInputStream(socket.getInputStream())
-            val output = BufferedOutputStream(socket.getOutputStream())
+        guard.beforeBlockingIo("connect")
+        socket.connect(InetSocketAddress(address, endpoint.port), timeoutMs)
+        run {
+            val input = BufferedInputStream(
+                DeadlineInputStream(socket, socket.getInputStream(), guard).also { it.deadlineNanos = deadline },
+            )
+            val output = BufferedOutputStream(GuardedOutputStream(socket.getOutputStream(), guard))
             val headers = mutableListOf(
                 "Host" to endpoint.hostHeader,
                 "Accept" to "application/json",
@@ -159,7 +177,7 @@ class DashboardRestClient(
             val head = MiniHttp.readResponseHead(input)
             // A redirect's body is never needed; nothing is read from it or followed.
             val body = if (head.status == 200) MiniHttp.readBody(input, head, maxBodyBytes) else ByteArray(0)
-            Response(head.status, head.header("content-type"), body)
+            return Response(head.status, head.header("content-type"), body)
         }
     }
 
