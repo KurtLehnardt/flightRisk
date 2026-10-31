@@ -84,7 +84,10 @@ class DashboardRestClient(
         return when (status.status) {
             200 -> {
                 val o = jsonObject(status) ?: return HealthProbeResult.UnexpectedBody(STATUS, "not a JSON object")
-                if (o["running"] !is JsonPrimitive && o["fleet"] !is JsonObject) {
+                val running = o["running"] as? JsonPrimitive
+                if (running == null || running.isString || running.content.toBooleanStrictOrNull() == null ||
+                    !o.containsKey("source")
+                ) {
                     return HealthProbeResult.UnexpectedBody(STATUS, "not the dashboard's status object")
                 }
                 val fleet = o["fleet"] as? JsonObject

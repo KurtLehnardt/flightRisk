@@ -126,6 +126,9 @@ class DashboardRestClientTest {
         FakeDashboard(mapOf("/api/health" to { o -> json(o, "[1,2]") })).use { d ->
             assertEquals(HealthProbeResult.UnexpectedBody("/api/health", "not a JSON object"), probe(d))
         }
+        FakeDashboard(mapOf("/api/health" to { o -> json(o, healthJson) }, "/api/status" to { o -> json(o, "{\"ok\":true}") })).use { d ->
+            assertEquals(HealthProbeResult.UnexpectedBody("/api/status", "not the dashboard's status object"), probe(d))
+        }
         FakeDashboard(mapOf("/api/health" to { o -> respond(o, "500 INTERNAL SERVER ERROR", emptyList()) })).use { d ->
             assertEquals(HealthProbeResult.UnexpectedStatus("/api/health", 500), probe(d))
         }

@@ -136,5 +136,10 @@ class EndpointAndAddressTest {
         assertNull(GroundEndpoint.parse("192.168.1.20:70000"))
         assertNull(GroundEndpoint.parse("bad host"))
         assertNull(GroundEndpoint.parse(""))
+        assertNull(GroundEndpoint.of("fe80:::1"))
+        assertNull(GroundEndpoint.of("1::2::3"))
+        assertNull(GroundEndpoint.of("12345::1"))
+        assertNull(GroundEndpoint.of("1:2:3"))
+        assertEquals("[2001:db8:0:0:0:0:0:1]:5555", GroundEndpoint.of("2001:db8:0:0:0:0:0:1")!!.hostHeader)
     }
 }

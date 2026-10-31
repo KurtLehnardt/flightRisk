@@ -34,7 +34,7 @@ class GroundEndpoint private constructor(
         const val SOCKET_IO_PATH = "/socket.io/?EIO=4&transport=websocket"
 
         private val HOSTNAME = Regex("^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?$")
-        private val IPV6 = Regex("^[0-9A-Fa-f:.]{2,45}$")
+        private val IPV6 = Regex("^[0-9A-Fa-f:]{2,39}$")
 
         /**
          * An endpoint for [host] and [port], or null when the host is not a
@@ -46,8 +46,19 @@ class GroundEndpoint private constructor(
             var h = host.trim()
             if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length - 1)
             if (h.isEmpty()) return null
-            val valid = if (h.contains(':')) IPV6.matches(h) else HOSTNAME.matches(h)
+            val valid = if (h.contains(':')) isIpv6Literal(h) else HOSTNAME.matches(h)
             return if (valid) GroundEndpoint(h.removeSuffix(".").ifEmpty { return null }, port) else null
+        }
+
+        /** A plain IPv6 literal: at most one `::`, at most eight groups of one to four hex digits. */
+        private fun isIpv6Literal(h: String): Boolean {
+            if (!IPV6.matches(h) || h.contains('.')) return false
+            val doubleColons = h.windowed(2).count { it == "::" }
+            if (doubleColons > 1 || h.contains(":::")) return false
+            val groups = h.split(':')
+            val nonEmpty = groups.filter { it.isNotEmpty() }
+            if (nonEmpty.any { it.length > 4 }) return false
+            return if (doubleColons == 1) nonEmpty.size <= 7 else groups.size == 8 && nonEmpty.size == 8
         }
 
         /**

@@ -77,6 +77,9 @@ import kotlin.random.Random
  * - The API key goes only into the Socket.IO connect frame and the REST
  *   Bearer header. Log lines and every surfaced text are redacted first and
  *   truncated after.
+ * - The loop and its timers run in [scope]. Call [shutdown] (or cancel the
+ *   scope) when the client is no longer needed; dropping the reference alone
+ *   leaves the connection open.
  */
 class GroundConsoleClient(
     val endpoint: GroundEndpoint,
