@@ -191,6 +191,7 @@ _FIELD_ENV = {
     "ceiling_margin_m": "FLIGHTRISK_FIELD_CEILING_MARGIN_M",
 }
 _FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
+_FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
 
 
 class _Default(str):
@@ -254,6 +255,22 @@ class CV2FrameSource:
             self._cap = None
 
 
+def _check_frame_stride(value: Any) -> int:
+    """Return *value* as a frame stride, an integer of at least 1. Raises ``ValueError`` otherwise."""
+    if isinstance(value, bool):
+        raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}")
+    if isinstance(value, str):
+        try:
+            value = int(value.strip())
+        except ValueError:
+            raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}") from None
+    if not isinstance(value, int):
+        raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}")
+    if value < 1:
+        raise ValueError(f"frame stride must be at least 1, got {value}")
+    return value
+
+
 class DroneFrameSource:
     """Iterable over a drone controller's video frames.
 
@@ -262,12 +279,26 @@ class DroneFrameSource:
     stopping, because losing video must not end the edge loop while the
     drone is flying. Iteration stops only when ``stop_event`` is set. The
     drone itself is disconnected by ``main()``, so ``release()`` does nothing.
+
+    With ``frame_stride`` N greater than 1 only every Nth frame is yielded (the
+    1st, the N+1th and so on), so detection runs on those frames alone. Every
+    frame is still read from the drone, because the video stream must be
+    drained, but the skipped ones are dropped here and cost no detection,
+    ReID or encoding work. The default, 1, yields every frame.
     """
 
-    def __init__(self, drone: Any, stop_event: threading.Event | None = None, min_interval_s: float = 1 / 30):
+    def __init__(
+        self,
+        drone: Any,
+        stop_event: threading.Event | None = None,
+        min_interval_s: float = 1 / 30,
+        frame_stride: int = 1,
+    ):
         self._drone = drone
         self._stop = stop_event if stop_event is not None else threading.Event()
         self._min_interval_s = min_interval_s
+        self._frame_stride = _check_frame_stride(frame_stride)
+        self._frames_read = 0
         self._next_at = 0.0
 
     def __iter__(self) -> "DroneFrameSource":
@@ -280,7 +311,10 @@ class DroneFrameSource:
                 break
             self._next_at = time.monotonic() + self._min_interval_s
             frame = self._drone.get_frame()
-            if frame is not None:
+            if frame is None:
+                continue
+            self._frames_read += 1
+            if (self._frames_read - 1) % self._frame_stride == 0:
                 return frame
         raise StopIteration
 
@@ -824,6 +858,31 @@ def _resolve_appearance_only(args: argparse.Namespace, environ: Any = None) -> b
     return _drone_kind(args) is not None
 
 
+def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
+    """The detection frame stride: ``--frame-stride``, else ``FLIGHTRISK_EDGE_FRAME_STRIDE``, else 1.
+
+    Raises ``ValueError`` with an operator-facing message when the
+    environment variable is not a whole number of at least 1. A stride above
+    1 is only supported for the ``tello`` and ``fake`` sources; any other
+    source raises ``ValueError`` rather than silently ignoring it.
+    """
+    env = os.environ if environ is None else environ
+    flag = getattr(args, "frame_stride", None)
+    if flag is not None:
+        stride = flag
+    else:
+        raw = (env.get(_FRAME_STRIDE_ENV_VAR) or "").strip()
+        if not raw:
+            return 1
+        try:
+            stride = _check_frame_stride(raw)
+        except ValueError as exc:
+            raise ValueError(f"{_FRAME_STRIDE_ENV_VAR}: {exc}") from None
+    if stride > 1 and _drone_kind(args) not in ("tello", "fake"):
+        raise ValueError("a frame stride above 1 only applies to --source tello and --source fake")
+    return stride
+
+
 def _drone_kind(args: argparse.Namespace) -> str | None:
     """The drone this edge flies (``tello``, ``fake`` or ``mavlink``), or None for a camera or file edge.
 
@@ -1014,6 +1073,14 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _parse_frame_stride(raw: str) -> int:
+    """Parse ``--frame-stride``: a whole number of at least 1."""
+    try:
+        return _check_frame_stride(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--frame-stride: {exc}") from exc
+
+
 def _parse_alt_slot(raw: str) -> float:
     """Parse ``--alt-slot`` as centimetres.
 
@@ -1138,6 +1205,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Altitude slot in cm (default 100); values below 10 are metres, so 1.6 means 1.6 m. It must not "
              "be above the ceiling limit, FLIGHTRISK_CEILING_CM minus FLIGHTRISK_CEILING_MARGIN_CM "
              "(200 - 60 = 140 cm by default), or the edge refuses to start",
+    )
+    parser.add_argument(
+        "--frame-stride", type=_parse_frame_stride, default=None, metavar="N",
+        help="Run detection on only every Nth video frame (default $" + _FRAME_STRIDE_ENV_VAR + ", else 1, "
+             "every frame). Frames are still read so the drone's video stream is drained, but skipped frames "
+             "cost no detection, ReID or encoding work, which cuts CPU use. Applies to --source tello and "
+             "fake. With --stream-video the thumbnails are sent only for the processed frames",
     )
     face = parser.add_mutually_exclusive_group()
     face.add_argument(
@@ -1451,6 +1525,7 @@ def _run_flight_edge(
             reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
             auth_backoff_max_s=AUTH_BACKOFF_MAX_S,
             appearance_only=runner.appearance_only,
+            frame_stride=getattr(args, "frame_stride", None) or 1,
         )
         transport.connect()
         run_edge_device(
@@ -1499,7 +1574,10 @@ def _flight_frame_source(
     """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL."""
     if _drone_kind(args) != "mavlink":
         # The fake drone only yields blank frames, so a low rate saves CPU.
-        return DroneFrameSource(drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30)
+        return DroneFrameSource(
+            drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30,
+            frame_stride=getattr(args, "frame_stride", None) or 1,
+        )
 
     def _open():
         import cv2  # lazy: keep module import light for tests
@@ -1620,6 +1698,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(f"{ENV_NODE_ID} must be an identifier such as mac or win-1, got {env_node_id!r}")
     try:
         _resolve_appearance_only(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        args.frame_stride = _resolve_frame_stride(args)
     except ValueError as exc:
         parser.error(str(exc))
     try:

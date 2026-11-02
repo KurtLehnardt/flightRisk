@@ -472,6 +472,23 @@ Lay out the drones as in "Placement and heading" above first. The dashboard shou
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
+## Cutting edge CPU load: run detection on every Nth frame (optional)
+
+Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel i7-10610U, 4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Most of that cost is detection, so the edge can skip it on some frames.
+
+`--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame as before. The flag wins over the environment variable, which wins over the default. N must be a whole number of at least 1; 0, negative and non-integer values stop the edge at startup with an error.
+
+- It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored.
+- Every frame is still read from the drone, so the Tello video stream is drained; only the skipped frames' detection work is dropped.
+- With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
+- Detections per second fall in proportion, so a person is seen less often. A stride of 2 was flown on 28 October.
+- The launcher window has no field for it. The launcher passes its environment through to the edges, so export `FLIGHTRISK_EDGE_FRAME_STRIDE` before starting it, or use the flag when starting an edge by hand.
+
+```
+FLIGHTRISK_EDGE_FRAME_STRIDE=2 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+python -m flightrisk.edge_device --source tello --drone-id drone-1 --frame-stride 2 ...
+```
+
 ## Observability (optional)
 
 To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
