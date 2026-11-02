@@ -15,6 +15,7 @@ import argparse
 import inspect
 import socket
 import struct
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -401,6 +402,36 @@ def _loopback_alias_available(ip: str = "127.0.0.2") -> bool:
         s.close()
 
 
+def _assert_wildcard_cannot_take_delivery(port: int, targets: list[tuple[str, TelloController]]) -> None:
+    """Check what a wildcard bind on a port that is bound to specific IPs may do on this platform.
+
+    On macOS and Linux the wildcard bind must be refused. On Windows (without exclusive
+    binding) it may succeed, so the bind is not what protects the edge. What must hold on
+    every platform is delivery isolation: a datagram sent to a specific IP and the port
+    reaches the socket bound to that IP and never the wildcard socket.
+    """
+    wildcard = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        try:
+            wildcard.bind(("0.0.0.0", port))
+        except OSError:
+            return
+        assert sys.platform == "win32", "a wildcard bind on a port bound to a specific IP must fail off Windows"
+        wildcard.settimeout(0.3)
+        for index, (ip, ctrl) in enumerate(targets):
+            probe = f"probe-{index}".encode()
+            sender.sendto(probe, (ip, port))
+            assert _wait_for(lambda: probe in ctrl.tello.get_own_udp_object()["responses"]), (
+                f"the socket bound to {ip}:{port} did not receive its datagram"
+            )
+        with pytest.raises(socket.timeout):
+            wildcard.recvfrom(2048)
+    finally:
+        sender.close()
+        wildcard.close()
+
+
 @pytest.mark.skipif(not _loopback_alias_available(), reason="no 127.0.0.2 on this system (macOS has only 127.0.0.1)")
 def test_same_ports_on_two_local_ips_coexist_and_stay_apart():
     """The real layout: both edges use the same port numbers, each bound to its own local IP."""
@@ -418,12 +449,9 @@ def test_same_ports_on_two_local_ips_coexist_and_stay_apart():
         assert [c.state.battery for c in ctrls] == [81, 47]
         assert drones[0].sources() == {("127.0.0.1", ports["cmd_port"])}
         assert drones[1].sources() == {("127.0.0.2", ports["cmd_port"])}
-        wildcard = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            with pytest.raises(OSError):
-                wildcard.bind(("0.0.0.0", ports["cmd_port"]))
-        finally:
-            wildcard.close()
+        _assert_wildcard_cannot_take_delivery(
+            ports["cmd_port"], [("127.0.0.1", ctrls[0]), ("127.0.0.2", ctrls[1])]
+        )
     finally:
         for ctrl in ctrls:
             _shut(ctrl)
@@ -457,15 +485,10 @@ def test_two_edges_on_the_same_local_ip_and_port_are_refused(pair):
         TelloController(name="drone-2", host=LOOPBACK, binding=clash)
 
 
-def test_a_wildcard_bind_on_a_bound_port_fails(pair):
-    """With the edge's command socket bound to one IP, a wildcard bind of the same port is refused."""
+def test_a_wildcard_bind_on_a_bound_port_cannot_take_delivery(pair):
+    """Refused on macOS and Linux; where it succeeds (Windows) the bound IP still gets its datagrams."""
     ctrl, _ = pair("drone-1", battery=80)
-    other = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        with pytest.raises(OSError):
-            other.bind(("0.0.0.0", ctrl.tello.binding.cmd_port))
-    finally:
-        other.close()
+    _assert_wildcard_cannot_take_delivery(ctrl.tello.binding.cmd_port, [(LOOPBACK, ctrl)])
 
 
 def test_a_local_ip_on_no_adapter_is_refused():
