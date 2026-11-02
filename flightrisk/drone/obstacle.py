@@ -33,13 +33,15 @@ class ObstacleGuard:
         else:
             self._device = torch.device("cpu")
 
-        # Load MiDaS Small model
-        self._model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
+        # Load MiDaS Small model. trust_repo=True keeps torch.hub from asking
+        # "Do you trust this repository (y/N)?" on stdin, which would block
+        # dashboard startup on an interactive console.
+        self._model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
         self._model.to(self._device)
         self._model.eval()
 
         # Load transforms
-        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
         self._transform = midas_transforms.small_transform
 
         # Thread safety
