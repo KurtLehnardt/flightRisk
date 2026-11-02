@@ -34,7 +34,7 @@ def fresh_config(monkeypatch):
     """Give the test its own configuration singleton, restored afterwards."""
     for name in ("FLIGHTRISK_APPEARANCE_ONLY", "FLIGHTRISK_DETECTOR_TILED", "FLIGHTRISK_SAVE_CAPTURES"):
         monkeypatch.delenv(name, raising=False)
-    cfg = config_module.AmberConfig.from_env()
+    cfg = config_module.FlightRiskConfig.from_env()
     monkeypatch.setattr(config_module, "_config", cfg)
     return cfg
 

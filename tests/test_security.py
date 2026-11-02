@@ -293,10 +293,10 @@ class TestCORSOrigins:
 
     def test_cors_single_origin(self, monkeypatch):
         """Single origin from env var."""
-        monkeypatch.setenv("FLIGHTRISK_CORS_ORIGINS", "https://amber.example.com")
+        monkeypatch.setenv("FLIGHTRISK_CORS_ORIGINS", "https://flightrisk.example.com")
         origins = os.environ.get("FLIGHTRISK_CORS_ORIGINS", "*")
         result = origins if origins == "*" else origins.split(",")
-        assert result == ["https://amber.example.com"]
+        assert result == ["https://flightrisk.example.com"]
 
     def test_cors_multiple_origins(self, monkeypatch):
         """Multiple comma-separated origins from env var."""

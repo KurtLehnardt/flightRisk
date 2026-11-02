@@ -6,10 +6,10 @@ scattered as magic literals across `flightrisk/vision/*`, `flightrisk/reasoning/
 place to read (and eventually tune, per deployment profile) those values.
 
 Every default below mirrors the value that was already hardcoded at its
-call site before this module existed, so introducing `AmberConfig` is
+call site before this module existed, so introducing `FlightRiskConfig` is
 behavior-neutral: nothing changes until a value is overridden, either by
-constructing `AmberConfig`/`VisionConfig`/etc. directly or via `FLIGHTRISK_*`
-environment variables (see `AmberConfig.from_env`).
+constructing `FlightRiskConfig`/`VisionConfig`/etc. directly or via `FLIGHTRISK_*`
+environment variables (see `FlightRiskConfig.from_env`).
 
 Usage in a module that owns a tunable constant:
 
@@ -166,7 +166,7 @@ def _parse_bool(value: str) -> bool:
 
 
 @dataclass
-class AmberConfig:
+class FlightRiskConfig:
     """Top-level configuration bundle for the whole system."""
 
     vision: VisionConfig = field(default_factory=VisionConfig)
@@ -175,12 +175,12 @@ class AmberConfig:
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
     @classmethod
-    def from_env(cls) -> "AmberConfig":
+    def from_env(cls) -> "FlightRiskConfig":
         """Build a config with values overridden from `FLIGHTRISK_*` env vars.
 
         Only a curated subset of the most commonly-tuned values is exposed
         via environment variables today. Anything not listed here can still
-        be overridden by constructing `AmberConfig`/`VisionConfig`/etc.
+        be overridden by constructing `FlightRiskConfig`/`VisionConfig`/etc.
         directly (e.g. for tests or deployment-profile presets); YAML-based
         profile loading is a possible future extension, not implemented
         here.
@@ -250,12 +250,12 @@ class AmberConfig:
 
 # Module-level singleton, lazily initialized on first use so importing this
 # module never has side effects (e.g. reading env vars) on its own.
-_config: AmberConfig | None = None
+_config: FlightRiskConfig | None = None
 _config_lock = threading.Lock()
 
 
-def get_config() -> AmberConfig:
-    """Return the process-wide `AmberConfig` singleton.
+def get_config() -> FlightRiskConfig:
+    """Return the process-wide `FlightRiskConfig` singleton.
 
     Loads from environment variables on first call; subsequent calls
     return the same cached instance. Thread-safe via double-checked
@@ -266,7 +266,7 @@ def get_config() -> AmberConfig:
     if _config is None:
         with _config_lock:
             if _config is None:
-                _config = AmberConfig.from_env()
+                _config = FlightRiskConfig.from_env()
     return _config
 
 

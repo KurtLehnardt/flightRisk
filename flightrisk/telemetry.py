@@ -348,7 +348,7 @@ def get_meter(name: str = "flightrisk") -> "metrics.Meter":
 # ---------------------------------------------------------------------------
 
 class FlightRiskMetrics:
-    """Holds all Amber-specific OTel metric instruments."""
+    """Holds all FlightRisk-specific OTel metric instruments."""
 
     def __init__(self, meter):
         self.frame_duration = meter.create_histogram(

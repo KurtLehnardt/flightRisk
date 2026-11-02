@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flightrisk.config import AmberConfig
+from flightrisk.config import FlightRiskConfig
 from flightrisk.dashboard.safety import DEFAULT_RTH_MIN_BATTERY_PCT, SafetyPolicy
 from flightrisk.drone import registry
 from flightrisk.drone.controller import (
@@ -267,12 +267,12 @@ class TestSnapshot:
 
 class TestSafetyPolicy:
     def test_defaults_match_config(self):
-        policy = SafetyPolicy.from_config(AmberConfig())
+        policy = SafetyPolicy.from_config(FlightRiskConfig())
         assert (policy.battery_warn_pct, policy.battery_critical_pct) == (20, 10)
         assert policy.rth_min_battery_pct == DEFAULT_RTH_MIN_BATTERY_PCT == 40
 
     def test_thresholds_come_from_config(self):
-        cfg = AmberConfig()
+        cfg = FlightRiskConfig()
         cfg.drone.battery_warn_threshold = 30
         cfg.drone.battery_critical_threshold = 15
         policy = SafetyPolicy.from_config(cfg)

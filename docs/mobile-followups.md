@@ -55,4 +55,3 @@ None of these has been done:
 
 - `ios/FlightRisk/Config/KeychainHelper.swift` still mentions `cloud_gemini` and `cloud_openai` in a doc comment (the providers were removed).
 - The Android app still carries the direct Tello flight stack; the iOS app does not. Decide whether that is intended.
-- The `AmberConfig` comments in `FlightRiskConfig.swift` and `FlightRiskConfig.kt` belong to the rename in PR #155 and were not touched here. This change rewrote `mobile/README.md` without naming the Python configuration class, so PR #155 will conflict on that file; keep its renamed words (`FlightRiskConfig`) if the sentence is still there when it merges.

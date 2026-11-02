@@ -4,7 +4,7 @@ import Observation
 /// Centralized configuration for the FlightRisk iOS app.
 ///
 /// Port of `FlightRiskConfig.kt` (Android) and `flightrisk/config.py`
-/// (`AmberConfig`) to Swift. Every default mirrors the value in the
+/// (the Python `FlightRiskConfig` class) to Swift. Every default mirrors the value in the
 /// Android/Python codebase so configs stay in sync across platforms.
 ///
 /// On iOS, overrides come from `UserDefaults(suiteName: "flightrisk_config")`

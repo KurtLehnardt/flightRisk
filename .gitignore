@@ -42,9 +42,11 @@ recordings/
 .claude/worktrees/
 
 # iOS
-ios/AmberDrone/build/
-ios/AmberDrone/*.xcworkspace
-ios/AmberDrone/Pods/
+ios/build/
+ios/*.xcworkspace
+xcuserdata/
+*.xcuserstate
+.swiftpm/
 
 # Eval data images (keep manifests)
 eval_data/**/*.jpg
