@@ -7,8 +7,10 @@ Parent deploys a drone, provides a photo of their child, and the drone autonomou
 ## Architecture
 
 ```
-DJI Tello (720p WiFi) → MacBook / iPhone / Android → AI Pipeline → Alert
+DJI Tello (720p WiFi) → MacBook / Android → AI Pipeline → Alert
 ```
+
+The iPhone app is a standalone detector and a console for a ground station. It does not connect to the drone itself.
 
 **Real-time pipeline (every frame):**
 - **YOLO11n** — person detection (40-80+ FPS on Apple Silicon)
@@ -144,17 +146,26 @@ See [observability/README.md](observability/README.md).
 
 ## Mobile Apps
 
-### Android
-1. Open `mobile/` in Android Studio (Hedgehog+)
-2. Gradle sync, connect phone (USB debugging), Run
-3. Settings → LLM Backend → choose Cloud (Claude) or Local (Gemma via MediaPipe)
+Both phone apps can work alone (the camera finds people and compares them with a reference photo, on the phone), and both can act as a console for a ground station on the same network. They follow one contract, [docs/mobile-contract.md](docs/mobile-contract.md). Open items for both apps are in [docs/mobile-followups.md](docs/mobile-followups.md). Neither app has been run on a physical device or a real ground station yet; each README lists what is not verified.
 
-Local LLM downloads Gemma 2 2B on-device (~1.4GB). Matching weights auto-adjust when using local model.
+### Android
+
+Full description: [mobile/README.md](mobile/README.md).
+
+1. Open `mobile/` in Android Studio, let Gradle sync, connect a phone (USB debugging) and run.
+2. The app has three modes: standalone detector, ground console (Ground tab), and an optional phone-as-edge mode that is off by default and sends boxes and scores to your ground station after a disclosure (the app can send the whole camera view only when the ground asks for video).
+3. Settings → AI reasoning: Local model (Gemma 2 2B through MediaPipe, about 1.4 GB downloaded from Google storage when you tap Download), None, or Cloud Claude. Cloud reasoning is off by default and needs an explicit opt-in, a saved key and Cloud Claude selected.
+
+The Android app also still contains the direct Tello (UDP) flight stack. The Ground tab can land drones, resume a held drone and pick detection profiles; it shows no video tiles and no match alerts yet.
 
 ### iOS
+
+Full description: [ios/README.md](ios/README.md) and [docs/ios-ground-client.md](docs/ios-ground-client.md).
+
 1. Open `ios/FlightRisk.xcodeproj` in Xcode (regenerate it with [xcodegen](https://github.com/yonaskolb/XcodeGen) only after editing `ios/project.yml`)
 2. Select a signing team and run
-3. Settings → LLM Backend → choose Cloud (Claude) or Local (Gemma 4 via MLX Swift)
+3. Settings → AI Reasoning: Local Gemma (Gemma 2 2B through MLX Swift, downloaded from Hugging Face when you tap Download), Off, or Cloud Claude. Cloud reasoning is off by default and needs the "Allow cloud reasoning" opt-in, a saved key and Cloud Claude selected.
+4. Settings → Ground Station: enter the ground address and the dashboard API key (kept in the Keychain), tap "Test connection", then switch the link on. The Ground tab then shows drones, video tiles, the plan, detection profiles, the ceiling, the ground's reasoning provider and match alerts, with a pinned LAND ALL. The iOS app has no direct link to a drone and is not an edge.
 
 Requires iOS 17+, iPhone with 6GB+ RAM for local model.
 

@@ -29,15 +29,22 @@ public enum GroundConfigurationError: Error, Equatable, Sendable, CustomStringCo
     case invalidHost(String)
     case invalidPort(Int)
     case invalidURL(String)
+    /// A cleartext address that is not on the local network (the reason is a sentence).
+    case cleartextNotAllowed(String)
 
     public var description: String {
         switch self {
         case let .invalidHost(host):
+            if LanAddressPolicy.isLegacyIPv4Spelling(host) {
+                return "\"\(host)\" is not written as four decimal numbers. Write the address as four decimal numbers like 192.168.1.20."
+            }
             return "The host \"\(host)\" is not a valid host name or IP address."
         case let .invalidPort(port):
             return "The port \(port) is outside 1 to 65535."
         case let .invalidURL(text):
             return "\"\(text)\" is not a ground station address of the form ws://HOST:PORT."
+        case let .cleartextNotAllowed(reason):
+            return "This address is refused: \(reason)."
         }
     }
 }
@@ -86,6 +93,15 @@ public struct GroundEndpoint: Sendable, Equatable, CustomStringConvertible {
         case "ws", "http": secure = false
         case "wss", "https": secure = true
         default: throw GroundConfigurationError.invalidURL(text)
+        }
+        // Only plain dotted decimal IPv4 is accepted (the system reads leading zeros, hex and
+        // short forms differently in different places).
+        if LanAddressPolicy.isLegacyIPv4Spelling(host) {
+            throw GroundConfigurationError.invalidHost(host)
+        }
+        // A numeric public address is refused at once; a name is checked when connecting.
+        if let refusal = LanAddressPolicy.earlyRefusal(host: host, secure: secure) {
+            throw GroundConfigurationError.cleartextNotAllowed(refusal.reason)
         }
         return try GroundEndpoint(host: host, port: components.port ?? defaultPort, secure: secure)
     }

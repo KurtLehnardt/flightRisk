@@ -10,6 +10,7 @@ import com.flightrisk.app.location.LocationProvider
 import com.flightrisk.app.observability.MetricsCollector
 import com.flightrisk.app.observability.StructuredLogger
 import com.flightrisk.app.persistence.SessionRepository
+import com.flightrisk.app.privacy.persistMatch
 import com.flightrisk.app.recording.SessionRecorder
 import com.flightrisk.app.config.MatchingAlgorithmConfig
 import com.flightrisk.app.config.SignalConfig
@@ -17,6 +18,7 @@ import com.flightrisk.app.vision.ClothingColorMatcher
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectionTracker
 import com.flightrisk.app.vision.HeightRatioMatcher
+import com.flightrisk.app.transport.BitmapFrames
 import com.flightrisk.app.vision.InsightFaceMatcher
 import com.flightrisk.app.vision.MatchScorer
 import com.flightrisk.app.vision.OSNetReIDMatcher
@@ -451,6 +453,17 @@ class SearchPipeline(
     var reidCallback: ReidCallback? = null
     var faceCallback: FaceCallback? = null
 
+    /**
+     * Receives each processed frame's detections (the phone as an edge for a
+     * ground station). The default does nothing. It is told when a search
+     * starts and stops, and a failure inside it never stops the pipeline.
+     */
+    @Volatile
+    var detectionPublisher: DetectionPublisher = DetectionPublisher.NoOp
+
+    /** A running frame number for [detectionPublisher]; one per processed frame. */
+    private var publishFrameId = 0L
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -467,6 +480,8 @@ class SearchPipeline(
             Log.w(TAG, "Pipeline already running")
             return
         }
+
+        notifyPublisher { it.onSearchStarted() }
 
         // Cancel any leftover cleanup job from a previous stop() before starting anew.
         cleanupJob?.cancel()
@@ -523,6 +538,8 @@ class SearchPipeline(
     fun stop(reason: String = "user_stopped") {
         if (!running.compareAndSet(true, false)) return
 
+        notifyPublisher { it.onSearchStopped() }
+
         val recordingPath = sessionRecorder?.stop()
 
         // End persistence session. Uses a dedicated cleanup scope (rather than
@@ -568,6 +585,34 @@ class SearchPipeline(
     // Frame processing loop
     // ------------------------------------------------------------------
 
+    private inline fun notifyPublisher(block: (DetectionPublisher) -> Unit) {
+        try {
+            block(detectionPublisher)
+        } catch (e: Exception) {
+            Log.w(TAG, "Detection publisher failed: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Offers this frame to [detectionPublisher] if it wants one; images are built only then. */
+    private fun publishDetections(frame: Bitmap, detections: List<Detection>) {
+        val publisher = detectionPublisher
+        try {
+            if (!publisher.wantsFrame()) return
+            publisher.publish(
+                BitmapFrames.publishedFrame(
+                    frame = frame,
+                    detections = detections,
+                    frameId = publishFrameId++,
+                    timestampSeconds = System.currentTimeMillis() / 1000.0,
+                    withThumbnail = publisher.wantsThumbnail(),
+                    maxCrops = publisher.maxCrops(),
+                ),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Detection publisher failed: ${e.javaClass.simpleName}")
+        }
+    }
+
     /**
      * Main frame processing loop.
      *
@@ -609,6 +654,7 @@ class SearchPipeline(
                 val detections = detector.detect(frame)
                 personsDetected = detections.size
                 totalDetections += detections.size
+                publishDetections(frame, detections)
                 metrics.incFrames()
                 metrics.incPersons(detections.size)
 
@@ -797,13 +843,16 @@ class SearchPipeline(
                             if (sid != null && sessionRepository != null) {
                                 pipelineScope?.launch {
                                     try {
-                                        sessionRepository.addMatch(
+                                        // The picture is written to disk only while recording is on.
+                                        persistMatch(
+                                            sink = repositoryMatchSink(sessionRepository),
+                                            recording = sessionRecorder != null,
                                             sessionId = sid,
                                             matchType = matchType,
                                             reidScore = reidScore.toDouble(),
                                             faceScore = faceScore.toDouble(),
                                             combinedScore = matchScore.toDouble(),
-                                            snapshot = crop,
+                                            crop = crop,
                                         )
                                     } catch (e: Exception) {
                                         Log.w(TAG, "Failed to persist match: ${e.message}")
@@ -1042,3 +1091,23 @@ class SearchPipeline(
         return cx * 10000 + cy
     }
 }
+
+/** Adapts [SessionRepository] to the [com.flightrisk.app.privacy.MatchSink] that [persistMatch] writes to. */
+private fun repositoryMatchSink(repo: SessionRepository) =
+    object : com.flightrisk.app.privacy.MatchSink<Bitmap> {
+        override suspend fun addMatch(
+            sessionId: String,
+            matchType: String,
+            reidScore: Double,
+            faceScore: Double,
+            combinedScore: Double,
+            snapshot: Bitmap?,
+        ): Long = repo.addMatch(
+            sessionId = sessionId,
+            matchType = matchType,
+            reidScore = reidScore,
+            faceScore = faceScore,
+            combinedScore = combinedScore,
+            snapshot = snapshot,
+        )
+    }

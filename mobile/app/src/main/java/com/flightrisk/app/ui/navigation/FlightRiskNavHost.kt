@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Face
@@ -30,10 +31,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.flightrisk.app.llm.ReasoningAction
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.ui.ground.GroundConsoleRoute
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreen
 import com.flightrisk.app.ui.search.SearchScreenState
@@ -68,6 +71,13 @@ sealed class NavDestination(
         contentDesc = "Target photo picker",
     )
 
+    data object Ground : NavDestination(
+        route = "ground",
+        label = "Ground",
+        icon = Icons.Default.Place,
+        contentDesc = "Ground station console",
+    )
+
     data object Settings : NavDestination(
         route = "settings",
         label = "Settings",
@@ -79,6 +89,7 @@ sealed class NavDestination(
 private val destinations = listOf(
     NavDestination.Search,
     NavDestination.Target,
+    NavDestination.Ground,
     NavDestination.Settings,
 )
 
@@ -103,8 +114,7 @@ private val destinations = listOf(
  * @param onPhotoSelected Callback when a target photo is confirmed.
  * @param onPresetSelected Callback when a sensitivity preset is selected.
  * @param onThresholdChanged Callback for raw threshold changes.
- * @param onLlmBackendChanged Callback for LLM backend changes.
- * @param onApiKeyChanged Callback for API key changes.
+ * @param onReasoningAction Callback for actions in the Settings reasoning section.
  * @param droneState Current drone connection/telemetry state, or null.
  * @param frameSourceMode Whether frames come from device camera or drone.
  * @param latestDroneFrame The most recent video frame from the drone, or null.
@@ -129,8 +139,7 @@ fun FlightRiskNavHost(
     onPhotoSelected: (Bitmap, QualityReport) -> Unit,
     onPresetSelected: (SensitivityPreset) -> Unit,
     onThresholdChanged: (String, Float) -> Unit,
-    onLlmBackendChanged: (String) -> Unit,
-    onApiKeyChanged: (String) -> Unit,
+    onReasoningAction: (ReasoningAction) -> Unit,
     onSignalEnabledChanged: (String, Boolean) -> Unit = { _, _ -> },
     onSignalWeightChanged: (String, Float) -> Unit = { _, _ -> },
     onLocalModelDownload: () -> Unit = {},
@@ -238,17 +247,21 @@ fun FlightRiskNavHost(
                 )
             }
 
+            composable(NavDestination.Ground.route) {
+                GroundConsoleRoute()
+            }
+
             composable(NavDestination.Settings.route) {
                 SettingsScreen(
                     state = settingsState,
                     onPresetSelected = onPresetSelected,
                     onThresholdChanged = onThresholdChanged,
-                    onLlmBackendChanged = onLlmBackendChanged,
-                    onApiKeyChanged = onApiKeyChanged,
+                    onReasoningAction = onReasoningAction,
                     onSignalEnabledChanged = onSignalEnabledChanged,
                     onSignalWeightChanged = onSignalWeightChanged,
                     onLocalModelDownload = onLocalModelDownload,
                     onLocalModelDelete = onLocalModelDelete,
+                    searchActive = searchState.isSearching,
                     droneState = droneState,
                     frameSourceMode = frameSourceMode,
                 )

@@ -1,153 +1,77 @@
 package com.flightrisk.app.llm
 
-import android.graphics.Bitmap
+import com.flightrisk.app.ground.SecretName
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 
 /**
- * Unit tests for [LlmSelector].
- *
- * These tests exercise the backend selection logic without Android
- * framework dependencies. Since [LlmSelector] requires a [Context]
- * for [ConnectivityManager], and JUnit tests run on the JVM, we test
- * the selection logic via a [TestableSelector] subclass that bypasses
- * Android-specific initialization.
+ * The real [LlmSelector], with a fake on-device backend, the gated cloud
+ * backend and in-memory settings and secrets. The selector follows the user's
+ * selection; cloud is never preferred, never the default and never a fallback.
  */
 class LlmSelectorTest {
 
-    /** Minimal test backend with controllable availability. */
-    private class FakeBackend(
-        override val name: String,
-        override var isAvailable: Boolean,
-    ) : LlmBackend {
-        override suspend fun analyzeMatch(
-            referenceImage: Bitmap,
-            candidateImage: Bitmap,
-            description: String?,
-        ) = ReasoningResult(false, "test", "fake")
+    private val harnesses = mutableListOf<CloudHarness>()
 
-        override suspend fun describeMatch(
-            candidateImage: Bitmap,
-            description: String,
-        ) = ReasoningResult(false, "test", "fake")
-    }
+    private fun harness(localUsable: Boolean = false, withKey: Boolean = false) = CloudHarness(
+        secrets = if (withKey) mapOf(SecretName.CLAUDE_API_KEY.storageKey to TEST_CLAUDE_KEY) else emptyMap(),
+        localUsable = localUsable,
+    ).also { harnesses += it }
 
-    /**
-     * Testable selector that skips Android ConnectivityManager.
-     * Exposes the internal backend list and refresh logic directly.
-     */
-    private class TestableSelector {
-        private val backends = mutableListOf<LlmBackend>()
-        private val noOp = NoOpLlmBackend()
-        private var active: LlmBackend = noOp
+    @After
+    fun tearDown() = harnesses.forEach { it.close() }
 
-        val isLlmAvailable: Boolean
-            get() = getActiveBackend().name != "none"
-
-        fun registerBackend(backend: LlmBackend) {
-            backends.add(backend)
-            refresh()
-        }
-
-        fun getActiveBackend(): LlmBackend = active
-
-        fun refresh() {
-            active = backends.firstOrNull { it.isAvailable } ?: noOp
-        }
-
-        fun clear() {
-            backends.clear()
-            active = noOp
-        }
-    }
-
-    private lateinit var selector: TestableSelector
-
-    @Before
-    fun setUp() {
-        selector = TestableSelector()
+    @Test
+    fun `falls back to NoOp when nothing is usable`() {
+        val h = harness()
+        assertEquals("none", h.selector.getActiveBackend().name)
+        assertFalse(h.selector.isLlmAvailable)
     }
 
     @Test
-    fun `fallback to NoOp when no backends registered`() {
-        val backend = selector.getActiveBackend()
-        assertEquals("none", backend.name)
-        assertFalse(selector.isLlmAvailable)
+    fun `defaults to the on-device backend when it is usable, even with a saved key`() {
+        val h = harness(localUsable = true, withKey = true)
+        assertEquals(h.local, h.selector.getActiveBackend())
+        assertEquals(ReasoningProvider.LOCAL, h.selector.status.value.selected)
+        assertTrue(h.selector.isLlmAvailable)
     }
 
     @Test
-    fun `fallback to NoOp when all backends unavailable`() {
-        selector.registerBackend(FakeBackend("cloud", isAvailable = false))
-        selector.registerBackend(FakeBackend("local", isAvailable = false))
-
-        val backend = selector.getActiveBackend()
-        assertEquals("none", backend.name)
-        assertFalse(selector.isLlmAvailable)
+    fun `cloud is used only when opted in, selected and a key is saved`() {
+        val h = harness(localUsable = true, withKey = true)
+        h.settings.setCloudOptIn(true)
+        h.selector.refresh()
+        assertEquals(h.local, h.selector.getActiveBackend())
+        h.settings.select(ReasoningProvider.CLOUD_CLAUDE)
+        h.selector.refresh()
+        assertEquals(h.backend, h.selector.getActiveBackend())
     }
 
     @Test
-    fun `selects first available backend by priority`() {
-        selector.registerBackend(FakeBackend("cloud", isAvailable = true))
-        selector.registerBackend(FakeBackend("local", isAvailable = true))
-
-        val backend = selector.getActiveBackend()
-        assertEquals("cloud", backend.name)
-        assertTrue(selector.isLlmAvailable)
+    fun `selecting off uses no backend even when others are usable`() {
+        val h = harness(localUsable = true)
+        h.settings.select(ReasoningProvider.OFF)
+        h.selector.refresh()
+        assertEquals("none", h.selector.getActiveBackend().name)
     }
 
     @Test
-    fun `skips unavailable backends and picks next`() {
-        selector.registerBackend(FakeBackend("cloud", isAvailable = false))
-        selector.registerBackend(FakeBackend("local", isAvailable = true))
-
-        val backend = selector.getActiveBackend()
-        assertEquals("local", backend.name)
-        assertTrue(selector.isLlmAvailable)
-    }
-
-    @Test
-    fun `isLlmAvailable reflects active backend state`() {
-        val cloud = FakeBackend("cloud", isAvailable = true)
-        selector.registerBackend(cloud)
-
-        assertTrue(selector.isLlmAvailable)
-
-        // Simulate losing internet
-        cloud.isAvailable = false
-        selector.refresh()
-
-        assertFalse(selector.isLlmAvailable)
-        assertEquals("none", selector.getActiveBackend().name)
-    }
-
-    @Test
-    fun `refresh re-evaluates backends`() {
-        val cloud = FakeBackend("cloud", isAvailable = false)
-        val local = FakeBackend("local", isAvailable = true)
-
-        selector.registerBackend(cloud)
-        selector.registerBackend(local)
-
-        assertEquals("local", selector.getActiveBackend().name)
-
-        // Cloud becomes available -- should be preferred (higher priority)
-        cloud.isAvailable = true
-        selector.refresh()
-
-        assertEquals("cloud", selector.getActiveBackend().name)
+    fun `refresh follows the on-device model becoming usable`() {
+        val h = harness(localUsable = false)
+        assertEquals("none", h.selector.getActiveBackend().name)
+        h.local.usable = true
+        h.selector.refresh()
+        assertEquals(h.local, h.selector.getActiveBackend())
     }
 
     @Test
     fun `clear resets to NoOp`() {
-        selector.registerBackend(FakeBackend("cloud", isAvailable = true))
-        assertTrue(selector.isLlmAvailable)
-
-        selector.clear()
-
-        assertFalse(selector.isLlmAvailable)
-        assertEquals("none", selector.getActiveBackend().name)
+        val h = harness(localUsable = true)
+        h.selector.clear()
+        assertEquals("none", h.selector.getActiveBackend().name)
+        assertTrue(h.selector.registeredBackendNames.isEmpty())
     }
 }

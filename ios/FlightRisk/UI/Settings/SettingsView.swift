@@ -45,6 +45,7 @@ struct SettingsView: View {
         Form {
             sensitivitySection
             llmSection
+            GroundSettingsSection(viewModel: .live)
             matchingAlgorithmsSection
             advancedSection
             aboutSection

@@ -50,6 +50,18 @@ interface SessionDao {
     @Insert
     suspend fun insertFeedback(feedback: MatchFeedbackEntity)
 
+    @Query("SELECT COUNT(*) FROM sessions")
+    suspend fun getSessionCount(): Int
+
+    @Query("DELETE FROM match_feedback")
+    suspend fun deleteAllFeedback()
+
+    @Query("DELETE FROM matches")
+    suspend fun deleteAllMatches()
+
+    @Query("DELETE FROM sessions")
+    suspend fun deleteAllSessions()
+
     @Query("SELECT COUNT(*) FROM matches")
     suspend fun getTotalMatchCount(): Int
 

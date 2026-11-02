@@ -45,6 +45,11 @@ android {
 }
 
 dependencies {
+    // Shared ground-station contract (models, decoders, Socket.IO frame codec)
+    implementation(project(":contract"))
+    // The contract's JSON element types appear in its public API
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
+
     // Core Android
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
@@ -90,13 +95,15 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // OkHttp (WebSocket transport)
+    // OkHttp (used for the cloud reasoning request only)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    // The BOM must be applied to this configuration too, or ui-test-junit4 has no version.
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.08.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 
     // Debug

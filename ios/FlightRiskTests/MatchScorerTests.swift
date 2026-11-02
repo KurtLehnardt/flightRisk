@@ -78,9 +78,43 @@ final class MatchScorerTests: XCTestCase {
         // All three active: weights 0.35 + 0.40 + 0.25 = 1.0 (no redistribution)
         // combined = 0.7 * 0.35 + 0.8 * 0.40 + 0.90 * 0.25
         //          = 0.245 + 0.32 + 0.225 = 0.79
-        XCTAssertEqual(result.combinedScore, 0.79, accuracy: 0.001)
+        // The scorer truncates to three decimals, so Float rounding noise can
+        // land on 0.789; the tolerance accepts that, and the determinism test
+        // below pins the exact value.
+        XCTAssertEqual(result.combinedScore, 0.79, accuracy: 0.005)
         XCTAssertTrue(result.isMatch)
         XCTAssertEqual(result.signalsUsed, 3)
+    }
+
+    // MARK: - Determinism
+
+    func testScoreIsIdenticalAcrossDictionaryInsertionOrders() {
+        let reasoning = ReasoningResult(isMatch: true, confidence: "high", reasoning: "looks right")
+        let extras: [(String, Float)] = [("thermal", 0.6), ("gait", 0.5), ("audio", 0.4), ("pose", 0.7)]
+        var baseline: Float?
+        var extrasBaseline: Float?
+        for i in 0..<200 {
+            var scorer = MatchScorer()
+            var order = extras
+            // Rotate and alternate direction so insertion order differs per run.
+            order = Array(order[(i % order.count)...] + order[..<(i % order.count)])
+            if i % 2 == 1 { order.reverse() }
+            for (name, weight) in order { scorer.registerSignal(name: name, weight: weight / 4) }
+            var extraScores: [String: Float] = [:]
+            for (name, value) in order { extraScores[name] = value }
+
+            let plain = scorer.score(reidScore: 0.7, faceScore: 0.8, reasoningResult: reasoning).combinedScore
+            let withExtras = scorer.score(
+                reidScore: 0.7, faceScore: 0.8, reasoningResult: reasoning, extraSignalScores: extraScores
+            ).combinedScore
+            if let b = baseline, let e = extrasBaseline {
+                XCTAssertEqual(plain, b, "run \(i) differed")
+                XCTAssertEqual(withExtras, e, "run \(i) with extras differed")
+            } else {
+                baseline = plain
+                extrasBaseline = withExtras
+            }
+        }
     }
 
     // MARK: - Weight redistribution

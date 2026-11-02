@@ -3,6 +3,8 @@ package com.flightrisk.app.persistence
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.room.withTransaction
+import com.flightrisk.app.privacy.SavedRows
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -10,13 +12,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-class SessionRepository(context: Context) {
+class SessionRepository(context: Context) : SavedRows {
 
     companion object {
         private const val TAG = "SessionRepository"
     }
 
-    private val dao = FlightRiskDatabase.getInstance(context).sessionDao()
+    private val database = FlightRiskDatabase.getInstance(context)
+    private val dao = database.sessionDao()
     private val snapshotDir = File(context.filesDir, "snapshots").also { it.mkdirs() }
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
@@ -121,6 +124,19 @@ class SessionRepository(context: Context) {
                 notes = notes,
             )
         )
+    }
+
+    /**
+     * Deletes every session, match and feedback row in one transaction and
+     * returns how many sessions there were. The files they point to are
+     * deleted by [com.flightrisk.app.privacy.SavedDataEraser].
+     */
+    override suspend fun deleteAllRows(): Int = database.withTransaction {
+        val sessions = dao.getSessionCount()
+        dao.deleteAllFeedback()
+        dao.deleteAllMatches()
+        dao.deleteAllSessions()
+        sessions
     }
 
     suspend fun getMatchStats(): Map<String, Any> {

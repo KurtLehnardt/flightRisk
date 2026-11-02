@@ -39,13 +39,23 @@ object DisplayText {
     /** After this long without `land_all_ack`, show [LAND_ALL_NO_REPLY_YET] (docs/mobile-contract.md, rule 7). */
     const val LAND_ALL_NO_REPLY_AFTER_MS = 5_000L
 
+    /** The instruction that follows every "LAND ALL was NOT sent" text. */
+    const val LAND_NOW_BY_OTHER_MEANS =
+        "Land the drones now with their own controls, or press LAND ALL on the ground laptop."
+
     /**
      * A LAND ALL tap while the socket is not connected: the command was not
      * sent and is never queued (docs/mobile-contract.md, safety rule 2).
      */
     const val LAND_ALL_NOT_SENT =
-        "LAND ALL was not sent: not connected to the ground station. " +
-            "Use the laptop's LAND ALL (Shift+L) or the drones' own controls."
+        "LAND ALL was NOT sent: this phone is not connected to the ground. $LAND_NOW_BY_OTHER_MEANS"
+
+    /**
+     * A LAND ALL tap while the ground has refused the phone's key: a reconnect
+     * would reuse the refused key, so the text says so (docs/mobile-contract.md, safety rule 2).
+     */
+    const val LAND_ALL_NOT_SENT_WRONG_KEY =
+        "LAND ALL was NOT sent: the ground refused this phone's key. $LAND_NOW_BY_OTHER_MEANS"
 
     /** The fallback when a drone link is down and the ground gave no detail. */
     const val DRONE_LINK_DEFAULT_DETAIL = "the edge cannot reach the drone"

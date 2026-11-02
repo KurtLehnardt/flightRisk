@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security config for FlightRisk.
+
+    Cleartext (http:// and ws://) is blocked for every platform HTTP stack
+    (OkHttp, HttpURLConnection, WebView) except to this device's own loopback
+    names. HTTPS trusts only the system certificate store: certificates the
+    user installed are not trusted for the app's own traffic.
+
+    The ground station dashboard and edge link are plain http:// and ws://
+    on the fleet's private network. This file cannot allow that by address
+    range: a domain-config entry names one host or one IP literal, and there
+    is no CIDR or prefix syntax. Allowing cleartext in base-config instead
+    would open it to every public host. So the ground clients in
+    com.flightrisk.app.ground connect over plain sockets, which this config
+    does not govern (Android documents that the cleartext flag is honoured
+    on a best-effort basis and not by the Socket API), and enforce the
+    private-range rule in code on the resolved address before connecting:
+    10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8,
+    ::1, fe80::/10 and fc00::/7 (LanAddressPolicy).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

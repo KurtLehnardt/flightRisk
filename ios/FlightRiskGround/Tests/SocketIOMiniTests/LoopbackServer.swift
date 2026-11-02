@@ -16,9 +16,9 @@ final class LoopbackServer: @unchecked Sendable {
     private var heads: [String] = []
     private var connections: [LoopbackConnection] = []
 
-    init(handler: @escaping Handler) throws {
+    init(host: NWEndpoint.Host = "127.0.0.1", handler: @escaping Handler) throws {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        parameters.requiredLocalEndpoint = .hostPort(host: host, port: .any)
         listener = try NWListener(using: parameters)
         self.handler = handler
     }

@@ -75,7 +75,9 @@ final class TextTests: XCTestCase {
     func testConnectionStrings() {
         XCTAssertEqual(GroundText.landAllSending, "LAND ALL sending\u{2026}")
         XCTAssertEqual(GroundText.landAllNoReplyYet, "LAND ALL: no reply from the ground yet. Check the connection.")
-        XCTAssertTrue(GroundText.landAllNotSent.hasPrefix("LAND ALL was not sent"))
-        XCTAssertTrue(GroundText.landAllNotSent.contains("Shift+L"))
+        XCTAssertEqual(
+            GroundText.landAllNotSent,
+            "LAND ALL was NOT sent: this phone is not connected to the ground. Land the drones now with their own controls, or press LAND ALL on the ground laptop."
+        )
     }
 }

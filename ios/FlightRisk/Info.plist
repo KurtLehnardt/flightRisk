@@ -20,10 +20,15 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>FlightRisk uses your camera to scan for people matching the target photo.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>FlightRisk connects to the Tello drone over your local WiFi network.</string>
+	<string>FlightRisk connects to the ground station address you enter in Settings, over your local network, to show its status and send commands.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>FlightRisk attaches GPS coordinates to match alerts so you can navigate to the location.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
