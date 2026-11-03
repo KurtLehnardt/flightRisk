@@ -17,7 +17,7 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.drone import coordinator as coordinator_module
 from flightrisk.drone.coordinator import FleetCoordinator
 from flightrisk.drone.lane_executor import LaneExecutor
-from flightrisk.drone.lane_steps import Cut, uncovered_segments
+from flightrisk.drone.lane_steps import Cut, replay_lanes, uncovered_segments
 from flightrisk.drone.obstacle_sensor import (
     CUT_OBSTACLE,
     CUT_PERSON,
@@ -110,6 +110,7 @@ def test_the_coordinator_has_no_private_copy_of_the_cut_rules():
     assert not hasattr(coordinator_module, "_apply_cut_deficit")
     assert not hasattr(coordinator_module, "_uncovered_segments")
     assert coordinator_module.uncovered_segments is uncovered_segments
+    assert coordinator_module.replay_lanes is replay_lanes
 
 
 @pytest.mark.parametrize("lanes, cuts, reasons", [
@@ -167,7 +168,12 @@ def test_a_cut_skips_the_following_lanes_in_the_same_direction():
 
 def test_a_forward_lane_after_a_forward_cut_is_never_lengthened_or_shortened():
     lanes = lanes_of(("forward", 400), ("right", 100), ("forward", 400))
-    assert ground_segments(lanes, [(0, 250)], CUT_OBSTACLE) == [(0, 0, 250, 0, 400, CUT_OBSTACLE)]
+    # Lane 2 is flown as forward 400 from y 250, so it ends at y 650, 150 cm
+    # short of its planned end: that part is uncovered as the cut's shadow.
+    assert ground_segments(lanes, [(0, 250)], CUT_OBSTACLE) == [
+        (0, 0, 250, 0, 400, CUT_OBSTACLE),
+        (2, 100, 650, 100, 800, SEGMENT_SKIPPED),
+    ]
 
 
 def test_a_cut_on_a_shortened_lane_reports_both_parts():
@@ -311,12 +317,17 @@ def test_the_ground_keeps_every_cut_although_telemetry_lists_the_last_eight():
         cuts.append((2 * k, 100))
         listed = cuts[-MAX_CUTS_LISTED:]
         cut_telemetry(edges["drone-1"], k + 1, listed, ",".join([CUT_OBSTACLE] * len(listed)), total=len(cuts))
-    entries = obstacle_entries(coord)
+    entries = [e for e in obstacle_entries(coord) if e["reason"] == CUT_OBSTACLE]
     assert [e["index"] for e in entries] == [2 * k for k in range(10)]
     assert [e["cut_seq"] for e in entries] == list(range(1, 11))
     assert all(e["distance_cm"] == 300 for e in entries)
     assert [e["lane_index"] for e in lane_blocked(events)] == [2 * k for k in range(10)]
-    assert coord.status()["drone-1"]["uncovered_cm"] == 3000
+    # Every forward lane after the first is flown from behind its planned
+    # start, so what it never reaches of its planned span is uncovered too:
+    # 300 cm of lane 2, then all 400 cm of each later forward lane.
+    shadows = [e for e in obstacle_entries(coord) if e["reason"] == SEGMENT_SKIPPED]
+    assert [(e["index"], e["distance_cm"]) for e in shadows] == [(2, 300)] + [(2 * k, 400) for k in range(2, 10)]
+    assert coord.status()["drone-1"]["uncovered_cm"] == 3000 + 300 + 8 * 400
 
 
 def test_cuts_no_message_listed_are_reported_missing(caplog):
@@ -326,7 +337,7 @@ def test_cuts_no_message_listed_are_reported_missing(caplog):
     with caplog.at_level(logging.WARNING, logger=coordinator_module.logger.name):
         cut_telemetry(edges["drone-1"], 10, cuts[-MAX_CUTS_LISTED:], total=10)
     # Only the eight listed cuts (numbers 3 to 10) are known; the first two are lost.
-    assert [e["cut_seq"] for e in obstacle_entries(coord)] == list(range(3, 11))
+    assert [e["cut_seq"] for e in obstacle_entries(coord) if e["reason"] == CUT_OBSTACLE] == list(range(3, 11))
     assert len(lane_blocked(events)) == MAX_CUTS_LISTED
     assert any("2 cuts that no telemetry listed" in r.getMessage() for r in caplog.records)
 
