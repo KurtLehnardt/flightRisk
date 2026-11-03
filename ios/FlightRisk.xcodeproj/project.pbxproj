@@ -48,7 +48,6 @@
 		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
 		8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */; };
 		90FC6509A85B004D8CE3666B /* CeilingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527451F7363858076AFD12CF /* CeilingView.swift */; };
-		91785B276FA44B045B246A82 /* TargetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38053A9FBEF419992A818002 /* TargetStore.swift */; };
 		92A4880AEFFA562E4467D3D0 /* DetectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */; };
 		96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFDA478D1331861625B42ED /* PersonDetector.swift */; };
 		994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */; };
@@ -125,7 +124,6 @@
 		338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSNetReIDMatcher.swift; sourceTree = "<group>"; };
 		35792841BED0D09966745935 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		37A07D66689A481E4C07F063 /* FlightRiskGround */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FlightRiskGround; path = FlightRiskGround; sourceTree = SOURCE_ROOT; };
-		38053A9FBEF419992A818002 /* TargetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetStore.swift; sourceTree = "<group>"; };
 		3C18B10FC35D8511EDDFC931 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		3E42D1E2974BEB9D652A07D9 /* GroundMatchAlertView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundMatchAlertView.swift; sourceTree = "<group>"; };
 		3F2F430D7789339A8B286F19 /* GroundViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundViewModel.swift; sourceTree = "<group>"; };
@@ -389,7 +387,6 @@
 				338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */,
 				6FFDA478D1331861625B42ED /* PersonDetector.swift */,
 				1719B00AAD50A040D415CFA2 /* PersonReID.swift */,
-				38053A9FBEF419992A818002 /* TargetStore.swift */,
 			);
 			path = Vision;
 			sourceTree = "<group>";
@@ -632,7 +629,6 @@
 				2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */,
 				D8C1FB13C942A48596579DB4 /* SettingsView.swift in Sources */,
 				0A3951ACE4CD960553699380 /* TargetPickerView.swift in Sources */,
-				91785B276FA44B045B246A82 /* TargetStore.swift in Sources */,
 				E950CA8523486990923C323D /* VideoTilesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -81,9 +81,13 @@ enum ReasoningReason {
 /// Persisted reasoning settings: the provider the user picked and the
 /// explicit cloud opt-in.
 ///
-/// Stored in `UserDefaults(suiteName: "flightrisk_config")`, the same suite
-/// as ``FlightRiskConfig``. The opt-in flag is the phone's equivalent of the
-/// ground's `FLIGHTRISK_ALLOW_CLOUD_LLM=1`.
+/// The provider choice is stored in `UserDefaults(suiteName: "flightrisk_config")`,
+/// the same suite as ``FlightRiskConfig``. The opt-in flag is the phone's
+/// equivalent of the ground's `FLIGHTRISK_ALLOW_CLOUD_LLM=1`. It is consent
+/// given on one phone, so it is kept in a ``CloudConsentStore`` file that
+/// device backups exclude; `UserDefaults` is included in backups and must not
+/// hold it. ``migrateLegacyValues(keyStore:)`` moves a value written by an
+/// earlier build out of `UserDefaults`.
 ///
 /// Rules:
 /// - Cloud is never the default. With nothing stored, the provider is Local
@@ -96,6 +100,8 @@ enum ReasoningReason {
 struct ReasoningSettings {
     static let suiteName = "flightrisk_config"
     static let providerKey = "flightrisk_reasoning_provider"
+    /// The `UserDefaults` key that earlier builds used for the opt-in. It is
+    /// read only by the migration and is removed once the value has moved.
     static let cloudOptInKey = "flightrisk_allow_cloud_llm"
     static let legacyKeysRemovedKey = "flightrisk_reasoning_legacy_keys_removed"
 
@@ -105,17 +111,16 @@ struct ReasoningSettings {
     static let cloudGateMayHaveClosed = Notification.Name("FlightRiskCloudGateMayHaveClosed")
 
     let defaults: UserDefaults
+    let consent: CloudConsentStore
 
-    init(defaults: UserDefaults? = nil) {
+    init(defaults: UserDefaults? = nil, consent: CloudConsentStore = .production) {
         self.defaults = defaults ?? UserDefaults(suiteName: Self.suiteName) ?? .standard
+        self.consent = consent
     }
 
-    /// True only when the user explicitly confirmed the cloud consent step.
-    var cloudOptIn: Bool {
-        // Only a stored Bool counts; a stray string such as "true" or "YES"
-        // does not opt the user in.
-        (defaults.object(forKey: Self.cloudOptInKey) as? Bool) == true
-    }
+    /// True only when the user explicitly confirmed the cloud consent step on
+    /// this phone. A new or restored phone has no consent file, so this is false.
+    var cloudOptIn: Bool { consent.isGranted }
 
     /// The provider the user explicitly chose, or nil when nothing valid is
     /// stored. A stored cloud choice counts only while the opt-in is on.
@@ -158,7 +163,12 @@ struct ReasoningSettings {
     /// what is sent. Turning the opt-in off also clears a stored cloud
     /// choice, so the next resolution falls back to local or off.
     func setCloudOptIn(_ enabled: Bool) {
-        defaults.set(enabled, forKey: Self.cloudOptInKey)
+        // If the consent file cannot be written the opt-in stays off, so a
+        // failure never leaves cloud use on without a recorded consent.
+        consent.setGranted(enabled)
+        // An explicit decision supersedes any legacy value still waiting in
+        // UserDefaults, so a deferred migration can never turn consent back on.
+        defaults.removeObject(forKey: Self.cloudOptInKey)
         if !enabled,
            let raw = defaults.string(forKey: Self.providerKey),
            ReasoningProvider(storedValue: raw)?.isCloud == true {
@@ -195,6 +205,52 @@ struct ReasoningSettings {
     static func normalizedKey(_ input: String) -> String? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: Opt-in migration
+
+    enum OptInMigration: Equatable {
+        /// Nothing was left in `UserDefaults`, or it has been dealt with.
+        case settled
+        /// A legacy opt-in is still in `UserDefaults`; try again next launch.
+        case deferred
+    }
+
+    /// Move an opt-in that an earlier build stored in `UserDefaults` (which
+    /// device backups include) into the consent file (which they exclude).
+    ///
+    /// - A stored value that is not the Bool `true` was never an opt-in and is
+    ///   just removed.
+    /// - `true` is carried over only when a Claude key is saved on this
+    ///   device. The key is `ThisDeviceOnly`, so it is absent on a phone
+    ///   restored from a backup; there the stale flag is dropped and cloud use
+    ///   stays off until the user confirms the consent dialog again.
+    /// - The `UserDefaults` value is removed only after the consent file has
+    ///   been written and read back as granted. If the write fails, or the key
+    ///   cannot be read yet because the phone is locked, nothing is removed and
+    ///   the migration runs again on the next launch. Until then
+    ///   ``cloudOptIn`` is false.
+    @discardableResult
+    func migrateLegacyOptIn(keyStore: ReasoningKeyStore?) -> OptInMigration {
+        guard let stored = defaults.object(forKey: Self.cloudOptInKey) else { return .settled }
+        guard (stored as? Bool) == true else {
+            defaults.removeObject(forKey: Self.cloudOptInKey)
+            return .settled
+        }
+        if !consent.isGranted {
+            guard let keyStore else { return .deferred }
+            switch keyStore.lookupClaudeApiKey() {
+            case .unreadable:
+                return .deferred
+            case .missing:
+                break  // nothing to carry over; the user must opt in again
+            case .found:
+                consent.setGranted(true)
+                guard consent.isGranted else { return .deferred }
+            }
+        }
+        defaults.removeObject(forKey: Self.cloudOptInKey)
+        return .settled
     }
 
     // MARK: Consent decisions
@@ -238,9 +294,11 @@ struct ReasoningSettings {
 
     /// Clean up values written by earlier builds.
     ///
-    /// Removes a stored provider that is unknown (the removed Gemini and
-    /// OpenAI entries) or that is a cloud provider without the opt-in flag.
-    /// It never sets the opt-in flag and never selects a cloud provider.
+    /// Moves a cloud opt-in left in `UserDefaults` into the consent file (see
+    /// ``migrateLegacyOptIn(keyStore:)``), then removes a stored provider that
+    /// is unknown (the removed Gemini and OpenAI entries) or that is a cloud
+    /// provider without the opt-in flag. It never sets the opt-in on its own
+    /// and never selects a cloud provider.
     func migrateLegacyValues(keyStore: ReasoningKeyStore? = nil) {
         // Earlier builds offered Gemini and OpenAI with no backend behind
         // them. Delete any keys saved for them, once.
@@ -248,6 +306,10 @@ struct ReasoningSettings {
             keyStore.deleteLegacyProviderKeys()
             defaults.set(true, forKey: Self.legacyKeysRemovedKey)
         }
+        // While an opt-in is waiting to move (for example the phone is
+        // locked), the provider choice must not be judged against an opt-in
+        // that has not arrived yet.
+        if migrateLegacyOptIn(keyStore: keyStore) == .deferred { return }
         guard let raw = defaults.string(forKey: Self.providerKey) else { return }
         guard let provider = ReasoningProvider(storedValue: raw) else {
             defaults.removeObject(forKey: Self.providerKey)
@@ -258,6 +320,76 @@ struct ReasoningSettings {
         } else if raw != provider.rawValue {
             defaults.set(provider.rawValue, forKey: Self.providerKey)
         }
+    }
+}
+
+// MARK: - Consent store
+
+/// The cloud opt-in, kept in a small file that device backups exclude.
+///
+/// Why a file and not the Keychain: the flag is not a secret, and a plain file
+/// in Application Support marked `isExcludedFromBackup` is the simplest
+/// location that a backup and restore does not carry to another phone. A
+/// Keychain item with a `ThisDeviceOnly` class would also work, but it adds
+/// query and error handling code for no gain here. A restored or new phone has
+/// no file, so cloud use defaults to off.
+///
+/// The file holds the text `granted` while the user has opted in and does not
+/// exist otherwise. Any other content, or an unreadable file, counts as not
+/// granted.
+struct CloudConsentStore: Sendable {
+    let fileURL: URL
+
+    private static let grantedMarker = Data("granted".utf8)
+
+    /// `Application Support/FlightRisk/cloud_consent`.
+    static let production: CloudConsentStore = {
+        let base = (try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        )) ?? FileManager.default.temporaryDirectory
+        return CloudConsentStore(fileURL: base.appendingPathComponent("FlightRisk", isDirectory: true)
+            .appendingPathComponent("cloud_consent"))
+    }()
+
+    var isGranted: Bool {
+        (try? Data(contentsOf: fileURL)) == Self.grantedMarker
+    }
+
+    /// Record the user's answer. Returns true when the stored state now
+    /// matches `granted`. On failure to grant, nothing is granted.
+    @discardableResult
+    func setGranted(_ granted: Bool) -> Bool {
+        let fm = FileManager.default
+        if !granted {
+            if fm.fileExists(atPath: fileURL.path) {
+                do { try fm.removeItem(at: fileURL) } catch {
+                    // Could not delete: overwrite so the content no longer reads as granted.
+                    try? Data("revoked".utf8).write(to: fileURL, options: .atomic)
+                }
+            }
+            return !isGranted
+        }
+        do {
+            let directory = fileURL.deletingLastPathComponent()
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            var directoryURL = directory
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try directoryURL.setResourceValues(values)
+            try Self.grantedMarker.write(to: fileURL, options: .atomic)
+            var fileCopy = fileURL
+            try fileCopy.setResourceValues(values)
+        } catch {
+            // Never leave a granted file that is not excluded from backup.
+            try? fm.removeItem(at: fileURL)
+            return false
+        }
+        return isGranted
+    }
+
+    /// True when the consent file exists and backups exclude it.
+    var isExcludedFromBackup: Bool {
+        (try? fileURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup) == true
     }
 }
 
