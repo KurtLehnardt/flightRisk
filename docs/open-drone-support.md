@@ -124,9 +124,9 @@ The `ONBOARD_AVOIDANCE` capability appears only after the drone has connected an
 
 `no obstacle avoidance: <problems> (configure the autopilot's avoidance, use a camera source for stepped sensing, or set FLIGHTRISK_OBSTACLE_SENSING=off)`
 
-For an ArduCopter whose link has no `yaw_to`, a camera source is not a working remedy (it would cut most lanes), so the detail names only the autopilot's avoidance and the override:
+For an ArduCopter whose link has no `yaw_to`, a camera source is not a working remedy: a camera edge cuts every lane the vehicle is not already facing, whatever avoidance the autopilot has (see below). So the detail names only the autopilot's avoidance, which this edge then checks, and the override, which relies on that avoidance without checking it:
 
-`no obstacle avoidance: <problems> (configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off; stepped camera sensing cannot turn an ArduCopter in place yet)`
+`no obstacle avoidance: <problems> (configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane this ArduCopter does not already face)`
 
 PX4 keeps the first text above.
 
@@ -134,7 +134,7 @@ This reuses `drone_unreachable` on the wire, like the failsafe parameters. The s
 
 With onboard avoidance, lanes are flown as before and the edge does not sense for the autopilot. A move that misses its deadline while the vehicle has stayed within 0.5 m of one spot for `MavlinkFleetOptions.stationary_s` (3.0 s by default, untuned), still in the edge's own flight mode, is not an error: the drone returns `STOPPED_SHORT` with the measured pose, and the executor cuts the lane there with reason `autopilot` and flies on. Without the capability, a missed deadline still raises and lands the drone. The cut is reported to the ground, but a segment cut for `autopilot` is not offered to another drone.
 
-An ArduCopter told `stepped` sensing by an edge with a camera source is not refused when its link has no `yaw_to`, but the edge logs `edge_obstacle_stepped_cannot_yaw` (WARNING) once, because every lane the vehicle is not already facing is cut with `sensor_stale` and never flown blind, and `sensor_down` then ends the remaining lanes. On such a drone use the autopilot's avoidance or the override until `yaw_to` exists. The lane executor also clears a step only while `measured_heading_deg()` is within 10 degrees of the commanded heading (`docs/obstacle-sensing.md`, "Facing the step").
+An ArduCopter told `stepped` sensing by an edge with a camera source is not refused when its link has no `yaw_to`, but the edge logs `edge_obstacle_stepped_cannot_yaw` (WARNING) once, because every lane the vehicle is not already facing is cut with `sensor_stale` and never flown blind, and `sensor_down` then ends the remaining lanes. Configuring the autopilot's avoidance does not change that, because an edge with a camera source always builds the stepped sensor. Until a link has `yaw_to`, the only way to fly those lanes is to set `FLIGHTRISK_OBSTACLE_SENSING=off` and rely on the autopilot's own avoidance (`OA_TYPE` plus a proximity source), which the edge does not check in that mode. The warning's detail says so: "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance the autopilot has; to fly those lanes, set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own avoidance (OA_TYPE plus a proximity source), which the edge does not check in that mode". The lane executor also clears a step only while `measured_heading_deg()` is within 10 degrees of the commanded heading (`docs/obstacle-sensing.md`, "Facing the step").
 
 None of this has flown: the parameter names and values come from the ArduPilot and PX4 documentation, not from an aircraft, and how long a real ArduCopter holds before BendyRuler gives up on a target decides whether the stationary window is long enough (hardware item H9).
 

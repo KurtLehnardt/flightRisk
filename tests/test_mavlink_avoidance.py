@@ -20,7 +20,9 @@ from flightrisk.drone.autopilot import (
 )
 from flightrisk.drone.controller import Capability, CommandOutcome, command_result
 from flightrisk.drone.mavlink_fleet import (
+    NO_AVOIDANCE_CANNOT_YAW_REMEDY,
     SENSING_NONE,
+    STEPPED_CANNOT_YAW_DETAIL,
     MavlinkFleetDrone,
     MavlinkFleetOptions,
 )
@@ -307,3 +309,45 @@ def test_unknown_sensing_mode_is_refused(make_drone):
     with pytest.raises(ValueError, match="sensing mode"):
         drone.set_obstacle_sensing("sideways")
     drone.set_obstacle_sensing(None)
+
+
+# ---------------------------------------------------------------------------
+# The remedy texts of an ArduCopter whose link cannot turn it in place (R2-N4)
+# ---------------------------------------------------------------------------
+
+#: The way to fly the lanes of an ArduCopter camera edge until a link has ``yaw_to``.
+OFF_OVERRIDE = (
+    "set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own avoidance "
+    "(OA_TYPE plus a proximity source), which the edge does not check in that mode"
+)
+
+
+def test_the_cannot_yaw_warning_names_only_the_off_override_as_the_way_to_fly_the_lanes():
+    """A camera source always builds the stepped sensor, so configuring the autopilot's avoidance changes nothing."""
+    assert STEPPED_CANNOT_YAW_DETAIL == (
+        "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), "
+        "so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance "
+        "the autopilot has; to fly those lanes, " + OFF_OVERRIDE
+    )
+    assert "configure the autopilot's avoidance" not in STEPPED_CANNOT_YAW_DETAIL
+
+
+def test_the_cannot_yaw_preflight_remedy_offers_avoidance_or_the_override_and_no_camera():
+    assert NO_AVOIDANCE_CANNOT_YAW_REMEDY == (
+        "configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set "
+        "FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane "
+        "this ArduCopter does not already face"
+    )
+    assert "camera source" not in NO_AVOIDANCE_CANNOT_YAW_REMEDY
+
+
+def test_an_ardupilot_without_yaw_or_avoidance_shows_the_whole_remedy_in_its_preflight(make_drone):
+    """The fixture's link has no ``yaw_to``; the remedy must survive the detail's length cap with every problem listed."""
+    drone, vehicle = make_drone(avoidance={"OA_TYPE": 0, "PRX1_TYPE": 0, "OA_MARGIN_MAX": 0.5, "OA_BR_LOOKAHEAD": 1.0})
+    drone.set_obstacle_sensing(SENSING_NONE)
+    status = wait_for(lambda: (s := drone.link_status()).reason == "preflight" and "OA_TYPE=0" in (s.detail or "") and s)
+    assert status, drone.link_status()
+    assert "no obstacle avoidance: " in status.detail and NO_AVOIDANCE_CANNOT_YAW_REMEDY + ")" in status.detail
+    result = drone.takeoff()
+    assert result.outcome is CommandOutcome.REJECTED and NO_AVOIDANCE_CANNOT_YAW_REMEDY in result.detail
+    assert vehicle.commands == []
