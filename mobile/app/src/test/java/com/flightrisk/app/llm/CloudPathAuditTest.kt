@@ -25,6 +25,8 @@ class CloudPathAuditTest {
             "Model download from storage.googleapis.com when the user taps Download; sends no photo, crop, description or location",
         "com/flightrisk/app/ground/RawWebSocket.kt" to "The user's own ground station (plain http/ws on the local network)",
         "com/flightrisk/app/ground/SocketIoPort.kt" to "The user's own ground station (plain http/ws on the local network)",
+        "com/flightrisk/app/ground/TlsSockets.kt" to
+            "TLS over the user's own ground station socket (wss/https, platform trust store, host name checked)",
         "com/flightrisk/app/ground/DashboardRestClient.kt" to "The user's own ground station (plain http on the local network)",
         "com/flightrisk/app/transport/EdgeSocketPort.kt" to
             "The user's own ground station edge port (plain ws on the local network), only while the opt-in link is on",

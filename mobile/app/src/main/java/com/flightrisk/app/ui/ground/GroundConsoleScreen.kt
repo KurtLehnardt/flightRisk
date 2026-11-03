@@ -159,6 +159,9 @@ private fun GroundConsoleColumn(state: GroundUiState, actions: GroundActions, ma
             item(key = "slot-mission-cards") { MissionCardsSlot(state, actions) }
             // U9/U8 plan canvas (and video tiles): state.snapshot.fleetPlan, client frames.
             item(key = "slot-plan-canvas") { PlanCanvasSlot(state) }
+            // Video tiles and match alerts: read only. They sit below the drone cards, so they never move a Land button.
+            if (state.videoTiles.isNotEmpty() || state.videoOffAtGround) item(key = "slot-video") { VideoTilesSection(state) }
+            if (state.alerts.rows.isNotEmpty()) item(key = "slot-alerts") { GroundAlertsCard(state.alerts) }
 
             item(key = "connection") {
                 ConnectionCard(

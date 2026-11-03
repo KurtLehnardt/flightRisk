@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Opens text-frame connections to a dashboard's Socket.IO endpoint
- * (`ws://HOST:PORT/socket.io/?EIO=4&transport=websocket`). Each frame is one
+ * (`ws://HOST:PORT/socket.io/?EIO=4&transport=websocket`, or `wss://` for a secure endpoint). Each frame is one
  * Engine.IO packet as text; [GroundConsoleClient] speaks Engine.IO 4 and
  * Socket.IO 5 over it with the contract module's `SocketIoFrames` codec.
  *
@@ -104,13 +104,16 @@ class WebSocketSocketIoPort(
     private val resolver: HostResolver = HostResolver.SYSTEM,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val guard: IoGuard = IoGuard.NONE,
+    /** Tests only: the production default is the platform's own factory and verifier. */
+    private val tlsFactory: () -> javax.net.ssl.SSLSocketFactory = { TlsParams.defaultSocketFactory() },
+    private val tlsVerifier: javax.net.ssl.HostnameVerifier? = TlsParams.platformHostnameVerifier(),
 ) : SocketIoPort {
 
     override suspend fun open(endpoint: GroundEndpoint, secrets: List<String>): SocketIoConnection {
         val socket = Socket()
         val ws = cancellableSocketIo(socket, ioDispatcher) {
             guard.beforeBlockingIo("resolve")
-            val address = LanAddressPolicy.resolve(endpoint.host, resolver)
+            val address = resolveTarget(endpoint, resolver)
             RawWebSocket.connect(
                 address = address,
                 port = endpoint.port,
@@ -122,6 +125,7 @@ class WebSocketSocketIoPort(
                 secrets = secrets,
                 guard = guard,
                 socket = socket,
+                tls = if (endpoint.secure) TlsParams(endpoint.host, tlsFactory(), tlsVerifier) else null,
             )
         }
         return Connection(ws, socket, ioDispatcher)

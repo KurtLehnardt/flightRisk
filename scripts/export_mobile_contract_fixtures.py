@@ -966,6 +966,40 @@ def build_frame_and_alert() -> dict[str, dict]:
     }
 
 
+def build_match_alert_resolved() -> dict:
+    """The 'match_alert_resolved' event the ground sends when the operator answers an alert."""
+    from flightrisk.dashboard import alert_latch as alert_latch_module
+    from flightrisk.dashboard import recovery
+
+    class NoRecovery:
+        """Stands in for the flight sequence so building a fixture never starts one."""
+
+        def start(self, *args: Any, **kwargs: Any) -> bool:
+            return False
+
+    cases = {}
+    for action, notes in (
+        ("dismiss", "The operator dismissed the alert on the laptop: not a match, searching resumes. state is the "
+                    "alert latch snapshot after the answer."),
+        ("confirm", "The operator confirmed the alert on the laptop: search stopped. state is the alert latch "
+                    "snapshot after the answer."),
+    ):
+        with clean_app_state(), seeded_uuid4():
+            latch = alert_latch_module.MatchAlertLatch()
+            sio = FakeSocketIO()
+            alert_id = latch.try_open(["track-8_7"])
+            latch.attach(alert_id, {"alert_id": alert_id, "track_id": "8_7"})
+            with mock.patch.object(recovery, "alert_latch", latch), \
+                    mock.patch.object(recovery, "confirm_recovery", NoRecovery()):
+                recovery.handle_alert_response(alert_id, action, sio)
+            cases[action] = case("match_alert_resolved", SERVER_TO_CLIENT, sio.last("match_alert_resolved"), notes)
+    return document(
+        "The 'match_alert_resolved' event, sent to every client when the operator answers a match alert on the "
+        "laptop. A phone never answers an alert; it only learns that the ground's alert was answered.",
+        ["flightrisk.dashboard.recovery.handle_alert_response"], cases,
+    )
+
+
 # ---------------------------------------------------------------------------
 # detection_profiles, ceiling_settings, reasoning_provider
 # ---------------------------------------------------------------------------
@@ -1602,6 +1636,7 @@ UNKNOWN_KEY_SOURCES = {
     "fleet_detection": ("fleet_detection.json", "new_detection"),
     "frame": ("frame.json", "edge_video_with_match"),
     "match_alert": ("match_alert.json", "edge_match"),
+    "match_alert_resolved": ("match_alert_resolved.json", "dismiss"),
     "detection_profiles": ("detection_profiles.json", "refused"),
     "ceiling_settings": ("ceiling_settings.json", "edge_refused"),
     "reasoning_provider": ("reasoning_provider.json", "local_gemma_cloud_blocked"),
@@ -1646,6 +1681,7 @@ def build_all() -> dict[str, dict]:
         files["status.json"] = build_status()
         files.update(build_fleet_files(_fleet_scenarios()))
         files.update(build_frame_and_alert())
+        files["match_alert_resolved.json"] = build_match_alert_resolved()
         files["detection_profiles.json"] = build_detection_profiles()
         files["ceiling_settings.json"] = build_ceiling_settings()
         files["reasoning_provider.json"] = build_reasoning_provider()

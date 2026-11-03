@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.lang.reflect.Modifier
 import java.net.InetAddress
@@ -123,20 +124,114 @@ class EndpointAndAddressTest {
     }
 
     @Test
+    fun `IPv4 mapped IPv6 addresses are judged by the IPv4 part`() {
+        fun mapped(a: Int, b: Int, c: Int, d: Int): InetAddress =
+            InetAddress.getByAddress(
+                byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, -1, a.toByte(), b.toByte(), c.toByte(), d.toByte()),
+            )
+        assertTrue(LanAddressPolicy.isAllowed(mapped(192, 168, 1, 5)))
+        assertTrue(LanAddressPolicy.isAllowed(mapped(10, 0, 0, 1)))
+        assertTrue(LanAddressPolicy.isAllowed(mapped(127, 0, 0, 1)))
+        assertFalse(LanAddressPolicy.isAllowed(mapped(8, 8, 8, 8)))
+        assertFalse(LanAddressPolicy.isAllowed(mapped(100, 64, 0, 1)))
+        assertFalse(LanAddressPolicy.isAllowed(mapped(172, 32, 0, 1)))
+        assertFalse(LanAddressPolicy.isAllowed(ip("::ffff:8.8.8.8")))
+        assertTrue(LanAddressPolicy.isAllowed(ip("::ffff:192.168.1.5")))
+    }
+
+    @Test
+    fun `IPv6 ranges follow fc00 7 and fe80 10 exactly`() {
+        for (a in listOf("fc00::", "fdff:ffff::1", "fe80::", "febf:ffff::1", "::1")) assertTrue(a, LanAddressPolicy.isAllowed(ip(a)))
+        for (a in listOf("fb00::1", "fe00::1", "fec0::1", "ff02::1", "2001:db8::1", "2606:4700::1111", "::2", "64:ff9b::808:808")) {
+            assertFalse(a, LanAddressPolicy.isAllowed(ip(a)))
+        }
+    }
+
+    @Test
+    fun `localhost and dot local names are allowed only when every answer is private`() {
+        val localhostBoth = HostResolver { listOf(ip("127.0.0.1"), ip("::1")) }
+        assertEquals(ip("127.0.0.1"), LanAddressPolicy.resolve("localhost", localhostBoth))
+        // A .local name that also publishes a global IPv6 address is refused: the stricter rule both apps follow.
+        val localWithGlobal = HostResolver { listOf(ip("192.168.1.20"), ip("2001:db8::20")) }
+        try {
+            LanAddressPolicy.resolve("ground.local", localWithGlobal)
+            fail("a .local name with a public answer must be refused")
+        } catch (e: AddressNotAllowedException) {
+            assertTrue(e.message!!.contains("2001:db8"))
+        }
+        // The order of the answers does not matter.
+        try {
+            LanAddressPolicy.resolve("ground.local", HostResolver { listOf(ip("2001:db8::20"), ip("192.168.1.20")) })
+            fail("a .local name with a public answer must be refused")
+        } catch (_: AddressNotAllowedException) {
+        }
+        val localOnly = HostResolver { listOf(ip("fd12:3456::20"), ip("192.168.1.20")) }
+        assertEquals(ip("fd12:3456::20"), LanAddressPolicy.resolve("ground.local", localOnly))
+        // A name that is really a public host pretending to be local is refused too.
+        try {
+            LanAddressPolicy.resolve("localhost", HostResolver { listOf(ip("127.0.0.1"), ip("8.8.8.8")) })
+            fail("localhost with a public answer must be refused")
+        } catch (_: AddressNotAllowedException) {
+        }
+    }
+
+    @Test
+    fun `https and wss addresses are secure endpoints on any host with the TLS default port`() {
+        val secure = GroundEndpoint.of("ground.example.org", 443, secure = true)!!
+        assertEquals(secure, GroundEndpoint.parse("https://ground.example.org"))
+        assertEquals(secure, GroundEndpoint.parse("wss://ground.example.org/"))
+        assertEquals(GroundEndpoint.of("ground.example.org", 8443, secure = true), GroundEndpoint.parse("https://ground.example.org:8443"))
+        assertEquals(GroundEndpoint.of("8.8.8.8", 443, secure = true), GroundEndpoint.parse("https://8.8.8.8"))
+        assertTrue(secure.secure)
+        assertFalse(GroundEndpoint.parse("http://192.168.1.20")!!.secure)
+        // The secure flag is part of the identity and survives the settings round trip.
+        assertFalse(secure == GroundEndpoint.of("ground.example.org", 443))
+        assertEquals("https://ground.example.org:443", secure.savedText)
+        assertEquals(secure, GroundEndpoint.parse(secure.savedText))
+        assertEquals("192.168.1.20:5555", GroundEndpoint.parse("192.168.1.20")!!.savedText)
+        assertEquals("https://ground.example.org:443", secure.httpBase)
+        // Everything else about the address is still checked.
+        assertNull(GroundEndpoint.parse("https://ground.example.org/path"))
+        assertNull(GroundEndpoint.parse("https://user@ground.example.org"))
+        assertNull(GroundEndpoint.parse("https://[fe80::1%wlan0]"))
+    }
+
+    @Test
+    fun `a secure endpoint reaches a public address and a plain one still does not`() {
+        val publicAnswer = HostResolver { listOf(ip("8.8.8.8")) }
+        assertEquals(ip("8.8.8.8"), resolveTarget(GroundEndpoint.of("ground.example.org", 443, secure = true)!!, publicAnswer))
+        try {
+            resolveTarget(GroundEndpoint.of("ground.example.org", 5555)!!, publicAnswer)
+            fail("a plain endpoint must not reach a public address")
+        } catch (_: AddressNotAllowedException) {
+        }
+        assertFailsToResolve(GroundEndpoint.of("ground.example.org", 443, secure = true)!!)
+    }
+
+    private fun assertFailsToResolve(endpoint: GroundEndpoint) {
+        try {
+            resolveTarget(endpoint, HostResolver { emptyList() })
+            fail("an empty answer must not resolve")
+        } catch (_: java.io.IOException) {
+        }
+    }
+
+    @Test
     fun `endpoints parse what a user types and refuse the rest`() {
         assertEquals(GroundEndpoint.of("192.168.1.20", 5555), GroundEndpoint.parse("192.168.1.20"))
         assertEquals(GroundEndpoint.of("192.168.1.20", 8080), GroundEndpoint.parse("http://192.168.1.20:8080/"))
         assertEquals(GroundEndpoint.of("ground.local", 5555), GroundEndpoint.parse("ground.local"))
         assertEquals(GroundEndpoint.of("fe80::1", 5555), GroundEndpoint.parse("[fe80::1]:5555"))
         assertEquals("[fe80::1]:5555", GroundEndpoint.parse("[fe80::1]:5555")!!.hostHeader)
-        assertNull(GroundEndpoint.parse("https://192.168.1.20"))
+        assertNull(GroundEndpoint.parse("ftp://192.168.1.20"))
+        assertNull(GroundEndpoint.parse("ws://192.168.1.20"))
         assertNull(GroundEndpoint.parse("http://user@192.168.1.20"))
         assertNull(GroundEndpoint.parse("192.168.1.20/socket.io"))
         assertNull(GroundEndpoint.parse("192.168.1.20:0"))
         assertNull(GroundEndpoint.parse("192.168.1.20:70000"))
         assertNull(GroundEndpoint.parse("bad host"))
         assertNull(GroundEndpoint.parse(""))
-        assertTrue((GroundEndpoint.parseDetailed("https://192.168.1.20") as EndpointParseResult.Invalid).reason.contains("https"))
+        assertTrue((GroundEndpoint.parseDetailed("ftp://192.168.1.20") as EndpointParseResult.Invalid).reason.contains("https"))
         assertTrue((GroundEndpoint.parseDetailed("[fe80::1%wlan0]:5555") as EndpointParseResult.Invalid).reason.contains("zone"))
         assertTrue((GroundEndpoint.parseDetailed("192.168.1.20:99999") as EndpointParseResult.Invalid).reason.contains("port"))
         assertEquals(

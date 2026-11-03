@@ -23,15 +23,15 @@ A separate code-fix unit is about to change some of the behaviour below. This fi
 
 ## Wording and behaviour parity
 
-- **"was NOT changed" after a lost link.** After a detection profile selection is sent and the link then drops, both apps say the profile "was NOT changed", although the ground may have received the command. The text should say the result is unknown.
-- **`match_alert_resolved` is ignored.** The ground sends it when the operator answers an alert (`flightrisk/dashboard/recovery.py`). Neither phone handles it, so an iOS reminder row never ends. It needs a fixture, a decoder on both platforms and a row state.
-- **The Android Ground screen shows no video tiles and no match alerts.** The client already receives `frame` and `match_alert` events; the screen does not draw them.
-- **LAN policy parity.** iOS connects to the allowed answers of a host name and refuses it only when none is allowed. Android refuses a name when any answer is public. Android also refuses IPv6 zone ids and does not parse numeric spellings itself. One policy should be chosen and both apps should follow it.
-- **Score rounding.** Python rounds the combined match score to three decimals (`round`); the Swift and Kotlin scorers truncate (`Int(x * 1000) / 1000`). Scores can differ by 0.001 between the ground and a phone for the same inputs.
+- **"was NOT changed" after a lost link (Android done).** The Android Ground screen no longer says a profile "was NOT changed" when the command was sent and the link then dropped; it says the answer is unknown and to check the active profile, as the iOS app does. The wording of the other "NOT changed" and "NOT sent" texts is the same on both apps.
+- **`match_alert_resolved` (Android done).** The Android Ground screen decodes `match_alert_resolved` (fixture `match_alert_resolved.json`) and marks the alert row confirmed or dismissed on the laptop. The iOS app handles it in its own change.
+- **Android video tiles and match alerts (done).** The Android Ground screen draws one video tile per drone and a read-only match alerts card, with the same limits as the iOS app. Not verified on a physical device.
+- **LAN policy parity (Android done).** Android refuses a host name when any answer is public, and the contract says both apps follow that rule. Android also refuses IPv6 zone ids and does not parse numeric spellings itself.
+- **Score rounding (Android done).** The Kotlin scorer now rounds like Python and is tested against `match_score_vectors.json`.
 
 ## Ground link features
 
-- **`wss://` for the Android ground link.** Android supports only plain `http://` and `ws://`, and refuses `wss://` and `https://`. The iOS app accepts both.
+- **`wss://` for the Android ground link (done, unverified on a device).** Android accepts `wss://` and `https://` addresses for the Ground screen (TLS from the platform `SSLSocketFactory`, system trust store, host name check). It is tested against a local TLS server only; the phone-as-edge link is still plain `ws://`.
 - **Embeddings for phone-as-edge.** The Android matcher does not expose per-detection appearance embeddings, so `reid_embedding` is null and the ground cannot match phone detections to a search target. The mode is for testing and mapping only until this is done. Crops are also null by default.
 
 ## Tests and flakes

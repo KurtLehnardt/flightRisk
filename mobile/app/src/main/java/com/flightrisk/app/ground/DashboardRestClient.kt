@@ -58,6 +58,9 @@ class DashboardRestClient(
     private val resolver: HostResolver = HostResolver.SYSTEM,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val guard: IoGuard = IoGuard.NONE,
+    /** Tests only: the production default is the platform's own factory and verifier. */
+    private val tlsFactory: () -> javax.net.ssl.SSLSocketFactory = { TlsParams.defaultSocketFactory() },
+    private val tlsVerifier: javax.net.ssl.HostnameVerifier? = TlsParams.platformHostnameVerifier(),
 ) {
     private class Response(val status: Int, val contentType: String?, val body: ByteArray)
 
@@ -157,14 +160,22 @@ class DashboardRestClient(
     private fun getBlocking(socket: Socket, path: String, withKey: Boolean): Response {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000L
         guard.beforeBlockingIo("resolve")
-        val address = LanAddressPolicy.resolve(endpoint.host, resolver)
+        val address = resolveTarget(endpoint, resolver)
         guard.beforeBlockingIo("connect")
         socket.connect(InetSocketAddress(address, endpoint.port), timeoutMs)
-        run {
+        // `https://`: the same plain socket, secured with TLS under the same overall deadline.
+        val io: Socket = if (endpoint.secure) {
+            guard.beforeBlockingIo("handshake")
+            val leftMs = ((deadline - System.nanoTime()) / 1_000_000).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+            TlsSockets.wrap(socket, TlsParams(endpoint.host, tlsFactory(), tlsVerifier), endpoint.port, leftMs)
+        } else {
+            socket
+        }
+        io.use {
             val input = BufferedInputStream(
-                DeadlineInputStream(socket, socket.getInputStream(), guard).also { it.deadlineNanos = deadline },
+                DeadlineInputStream(io, io.getInputStream(), guard).also { it.deadlineNanos = deadline },
             )
-            val output = BufferedOutputStream(GuardedOutputStream(socket.getOutputStream(), guard))
+            val output = BufferedOutputStream(GuardedOutputStream(io.getOutputStream(), guard))
             val headers = mutableListOf(
                 "Host" to endpoint.hostHeader,
                 "Accept" to "application/json",

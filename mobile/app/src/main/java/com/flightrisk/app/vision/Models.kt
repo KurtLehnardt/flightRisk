@@ -73,12 +73,15 @@ data class TrackedDetection(
  * @property isMatch Whether the score exceeds the match threshold.
  * @property confidenceLevel "high", "medium", "low", or "none".
  * @property signalsUsed Number of signals that contributed.
+ * @property combinedScoreExact The combined score in double precision.
  */
 data class ScoredResult(
     val combinedScore: Float,
     val isMatch: Boolean,
     val confidenceLevel: String,
     val signalsUsed: Int,
+    /** The same score in double precision, as Python computes it. [combinedScore] is this value as a float. */
+    val combinedScoreExact: Double = combinedScore.toString().toDouble(),
 )
 
 /**

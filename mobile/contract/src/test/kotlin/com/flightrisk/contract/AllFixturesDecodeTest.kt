@@ -19,7 +19,7 @@ import org.junit.Test
 class AllFixturesDecodeTest {
     @Test
     fun fixtureDirectoryHoldsExactlyTheSpecifiedFiles() {
-        val present = Fixtures.dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }!!.map { it.name }.toSet()
+        val present = Fixtures.dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }!!.map { it.name }.toSet() - Fixtures.NOT_EVENT_FILES
         assertEquals(Fixtures.EXPECTED_FILES, present)
     }
 
@@ -35,7 +35,7 @@ class AllFixturesDecodeTest {
             }
         }
         assertEquals(total, decoded)
-        // 23 files; the count only guards against an empty or truncated directory.
+        // 24 files; the count only guards against an empty or truncated directory.
         assertTrue("expected well over 100 cases, got $total", total > 100)
     }
 

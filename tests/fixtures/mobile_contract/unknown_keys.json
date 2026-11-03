@@ -871,6 +871,26 @@
       "source_case": "edge_match",
       "source_file": "match_alert.json"
     },
+    "match_alert_resolved": {
+      "direction": "server_to_client",
+      "event": "match_alert_resolved",
+      "notes": "match_alert_resolved.json case 'dismiss' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
+      "payload": {
+        "action": "dismiss",
+        "alert_id": "00000000000040008000000000000001",
+        "ok": true,
+        "state": {
+          "alert_id": null,
+          "phase": "searching",
+          "renotify_count": 0,
+          "resolution": "dismissed",
+          "x_future_field": "ignore me"
+        },
+        "x_future_field": "ignore me"
+      },
+      "source_case": "dismiss",
+      "source_file": "match_alert_resolved.json"
+    },
     "reasoning_provider": {
       "direction": "server_to_client",
       "event": "reasoning_provider",

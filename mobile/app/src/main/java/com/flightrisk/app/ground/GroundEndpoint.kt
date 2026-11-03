@@ -13,6 +13,11 @@ class GroundEndpoint private constructor(
     /** The host as entered: a hostname, an IPv4 literal or an IPv6 literal without brackets. */
     val host: String,
     val port: Int,
+    /**
+     * True for `https://` and `wss://`: the link is encrypted with TLS and may reach any host. False for
+     * plain `http://` and `ws://`, which go only to the private ranges ([LanAddressPolicy]).
+     */
+    val secure: Boolean = false,
 ) {
     private val isIpv6Literal: Boolean get() = host.contains(':')
 
@@ -20,15 +25,24 @@ class GroundEndpoint private constructor(
     val hostHeader: String get() = (if (isIpv6Literal) "[$host]" else host) + ":" + port
 
     /** The dashboard page, for "open in the browser". */
-    val httpBase: String get() = "http://$hostHeader"
+    val httpBase: String get() = (if (secure) "https://" else "http://") + hostHeader
 
-    override fun equals(other: Any?): Boolean = other is GroundEndpoint && other.host == host && other.port == port
-    override fun hashCode(): Int = host.hashCode() * 31 + port
+    /**
+     * The text kept in the settings: `host:port` for a plain endpoint (as before) and `https://host:port` for
+     * a secure one, so the choice of TLS survives a restart. [parse] reads both.
+     */
+    val savedText: String get() = if (secure) httpBase else hostHeader
+
+    override fun equals(other: Any?): Boolean = other is GroundEndpoint && other.host == host && other.port == port && other.secure == secure
+    override fun hashCode(): Int = (host.hashCode() * 31 + port) * 31 + if (secure) 1 else 0
     override fun toString(): String = httpBase
 
     companion object {
         /** The dashboard's default port. */
         const val DEFAULT_PORT = 5555
+
+        /** The port of an `https://` or `wss://` address that names none. */
+        const val DEFAULT_SECURE_PORT = 443
 
         /** The Engine.IO 4 WebSocket path; the phone never uses long-polling. */
         const val SOCKET_IO_PATH = "/socket.io/?EIO=4&transport=websocket"
@@ -41,13 +55,13 @@ class GroundEndpoint private constructor(
          * plain hostname or IP literal or the port is out of range. No
          * lookup happens here.
          */
-        fun of(host: String, port: Int = DEFAULT_PORT): GroundEndpoint? {
+        fun of(host: String, port: Int = DEFAULT_PORT, secure: Boolean = false): GroundEndpoint? {
             if (port !in 1..65535) return null
             var h = host.trim()
             if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length - 1)
             if (h.isEmpty()) return null
             val valid = if (h.contains(':')) isIpv6Literal(h) else HOSTNAME.matches(h)
-            return if (valid) GroundEndpoint(h.removeSuffix(".").ifEmpty { return null }, port) else null
+            return if (valid) GroundEndpoint(h.removeSuffix(".").ifEmpty { return null }, port, secure) else null
         }
 
         /** A plain IPv6 literal: at most one `::`, at most eight groups of one to four hex digits. */
@@ -69,8 +83,9 @@ class GroundEndpoint private constructor(
 
         /**
          * Like [parse], with a reason the UI can show when the text is refused.
-         * Refused: any scheme but `http` (the dashboard serves plain HTTP on
-         * the local network; there is no TLS to use), a path, query, fragment
+         * `http://` (or no scheme) is plain and limited to private addresses;
+         * `https://` and `wss://` are encrypted with TLS and may name any host.
+         * Refused: any other scheme, a path, query, fragment
          * or user info, a port outside 1..65535, and an IPv6 zone id (`%`):
          * a link-local `fe80::` address needs one on Android, so link-local
          * IPv6 cannot be used; use the ground's IPv4 or a ULA address.
@@ -78,17 +93,14 @@ class GroundEndpoint private constructor(
         fun parseDetailed(text: String): EndpointParseResult {
             var t = text.trim()
             if (t.isEmpty()) return EndpointParseResult.Invalid("Enter the ground station's address.")
+            var secure = false
             val schemeEnd = t.indexOf("://")
             if (schemeEnd >= 0) {
                 val scheme = t.substring(0, schemeEnd).lowercase()
-                if (scheme != "http") {
-                    return EndpointParseResult.Invalid(
-                        if (scheme == "https" || scheme == "wss") {
-                            "The ground station serves plain http:// on the local network; https and wss are not supported."
-                        } else {
-                            "Only http:// addresses are supported."
-                        },
-                    )
+                when (scheme) {
+                    "http" -> Unit
+                    "https", "wss" -> secure = true
+                    else -> return EndpointParseResult.Invalid("Only http://, https:// and wss:// addresses are supported.")
                 }
                 t = t.substring(schemeEnd + 3)
             }
@@ -118,8 +130,8 @@ class GroundEndpoint private constructor(
             val port = hostAndPort.second?.let {
                 it.toIntOrNull()?.takeIf { p -> p in 1..65535 }
                     ?: return EndpointParseResult.Invalid("The port must be a number from 1 to 65535.")
-            } ?: DEFAULT_PORT
-            return of(hostAndPort.first, port)?.let { EndpointParseResult.Ok(it) }
+            } ?: if (secure) DEFAULT_SECURE_PORT else DEFAULT_PORT
+            return of(hostAndPort.first, port, secure)?.let { EndpointParseResult.Ok(it) }
                 ?: EndpointParseResult.Invalid("That is not a valid host name or IP address.")
         }
     }
@@ -175,6 +187,18 @@ fun interface HostResolver {
 class AddressNotAllowedException(message: String) : IOException(message)
 
 /**
+ * Where a connection to [endpoint] goes. A secure (`wss://`, `https://`) endpoint may reach any address: TLS
+ * protects the key and checks the certificate. A plain endpoint is checked by [LanAddressPolicy] first, so
+ * the key is never sent in clear text to a public address.
+ */
+internal fun resolveTarget(endpoint: GroundEndpoint, resolver: HostResolver): InetAddress =
+    if (endpoint.secure) {
+        resolver.resolve(endpoint.host).firstOrNull() ?: throw IOException("the host name did not resolve")
+    } else {
+        LanAddressPolicy.resolve(endpoint.host, resolver)
+    }
+
+/**
  * Cleartext goes only to private, link-local and loopback addresses
  * (docs/mobile-contract.md, "Cleartext on the local network").
  *
@@ -211,6 +235,9 @@ object LanAddressPolicy {
      * @throws IOException when the name does not resolve.
      */
     fun resolve(host: String, resolver: HostResolver): InetAddress {
+        // Every answer must be private: a name with one public answer is refused whatever the other answers are.
+        // An IPv4-mapped IPv6 address (::ffff:a.b.c.d) arrives from the resolver as an Inet4Address and is
+        // judged by its IPv4 part.
         val addresses = resolver.resolve(host)
         if (addresses.isEmpty()) throw IOException("the host name did not resolve")
         val refused = addresses.firstOrNull { !isAllowed(it) }

@@ -207,6 +207,41 @@ class ServerEventsTest {
     }
 
     @Test
+    fun matchAlertResolved() {
+        val dismissed = Fixtures.eventAs<MatchAlertResolved>("match_alert_resolved.json", "dismiss")
+        assertEquals("00000000000040008000000000000001", dismissed.alertId)
+        assertEquals(MatchAlertResolved.Action.DISMISS, dismissed.action)
+        assertEquals(true, dismissed.ok)
+        assertEquals("searching", dismissed.phase)
+        val confirmed = Fixtures.eventAs<MatchAlertResolved>("match_alert_resolved.json", "confirm")
+        assertEquals(MatchAlertResolved.Action.CONFIRM, confirmed.action)
+        assertEquals("resolved", confirmed.phase)
+    }
+
+    @Test
+    fun matchAlertResolvedToleratesHostilePayloads() {
+        // An unknown answer is kept as text, not guessed.
+        val unknown = ServerEvents.decode("match_alert_resolved", """{"alert_id":"a1","action":"escalate","ok":true}""")
+        assertEquals(MatchAlertResolved("a1", null, "escalate", true, null), unknown)
+        // Wrong types give nulls, never an exception.
+        val wrong = ServerEvents.decode(
+            "match_alert_resolved",
+            """{"alert_id":{"x":1},"action":7,"ok":"yes","state":"searching"}""",
+        ) as MatchAlertResolved
+        assertNull(wrong.alertId)
+        assertNull(wrong.action)
+        assertNull(wrong.ok)
+        assertNull(wrong.phase)
+        // A numeric id reads like the dashboard's own JavaScript would write it.
+        assertEquals("42", (ServerEvents.decode("match_alert_resolved", """{"alert_id":42,"action":"confirm"}""") as MatchAlertResolved).alertId)
+        // Not an object, or not JSON: reported by name, never thrown.
+        assertTrue(ServerEvents.decode("match_alert_resolved", JsonPrimitive("x")) is ServerEvent.Malformed)
+        assertTrue(ServerEvents.decode("match_alert_resolved", "[[[") is ServerEvent.Malformed)
+        assertTrue(ServerEvents.decode("match_alert_resolved", null as kotlinx.serialization.json.JsonElement?) is ServerEvent.Malformed)
+        assertTrue("match_alert_resolved" in ServerEvents.HANDLED)
+    }
+
+    @Test
     fun detectionProfiles() {
         val pending = Fixtures.eventAs<DetectionProfiles>("detection_profiles.json", "pending")
         assertTrue(pending.available)
