@@ -170,11 +170,13 @@ class EdgePublisherTest {
 
     @Test
     fun `an oversize frame is dropped and counted, and the next frame still goes out`() {
-        val h = EdgeHarness()
+        // Oversize face embeddings (face matching on) make a frame that nothing can shrink. Appearance
+        // embeddings cannot be used for this: the publisher sends null for one that is not 512 values.
+        val h = EdgeHarness(face = true)
         try {
             val c = connected(h)
             val huge = List(20_000) { 0.123456789 + it }
-            h.publisher.publish(testFrame(id = 1, detections = 50, reid = huge))
+            h.publisher.publish(testFrame(id = 1, detections = 50, face = huge))
             runBlocking { eventually("dropped") { h.publisher.stats().framesDroppedTooLarge == 1L } }
             assertEquals(0, h.publisher.stats().framesSent)
             assertEquals(listOf("auth"), c.sent.map(::typeOf))

@@ -28,6 +28,13 @@ data class WireDetection(
     init {
         require(bbox.size == 4) { "bbox must have four values, got ${bbox.size}" }
     }
+
+    /** Names only the sizes of the embeddings and the crop: they describe a person and must not reach a log. */
+    override fun toString(): String =
+        "WireDetection(bbox=$bbox, confidence=$confidence, reidEmbedding=${sizeOf(reidEmbedding)}, " +
+            "faceEmbedding=${sizeOf(faceEmbedding)}, crop=${crop?.let { "<${it.length} chars>" }})"
+
+    private fun sizeOf(values: List<Double>?): String? = values?.let { "<${it.size} values>" }
 }
 
 /** The legacy `detections` message a phone edge sends to the ground's edge link. */
@@ -40,7 +47,12 @@ data class DetectionsMessage(
     /** Base64 JPEG of the whole frame, or null. */
     val thumbnail: String?,
     val detections: List<WireDetection>,
-)
+) {
+    /** Leaves out the thumbnail, which can show people; the detections redact their own data. */
+    override fun toString(): String =
+        "DetectionsMessage(timestamp=$timestamp, frameId=$frameId, frameWidth=$frameWidth, frameHeight=$frameHeight, " +
+            "thumbnail=${thumbnail?.let { "<${it.length} chars>" }}, detections=$detections)"
+}
 
 /** Encodes and decodes the legacy `detections` message (docs/mobile-contract.md, "Phone as an edge"). */
 object DetectionsWire {

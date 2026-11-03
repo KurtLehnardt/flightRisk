@@ -99,6 +99,19 @@ class ReidEmbeddingTest {
     }
 
     @Test
+    fun toStringNamesSizesNotEmbeddingsOrPictures() {
+        val message = DetectionsWire.decode(payload())!!.copy(thumbnail = "QUJDREVGR0g=")
+        val withCrop = message.copy(detections = message.detections.map { it.copy(crop = "SklKS0xNTk8=", faceEmbedding = listOf(0.4242, 0.5353)) })
+        val text = withCrop.toString()
+        assertTrue(text, text.contains("reidEmbedding=<512 values>"))
+        assertTrue(text, text.contains("faceEmbedding=<2 values>"))
+        for (secret in fixtureVector().filter { kotlin.math.abs(it) > 1e-3 }.take(32).map { it.toString().take(8) } + listOf("0.4242", "QUJDREVG", "SklKS0xN")) {
+            assertTrue("$secret leaked", !text.contains(secret))
+        }
+        assertTrue(text, text.contains("bbox=[512.0, 200.0, 640.0, 560.0]"))
+    }
+
+    @Test
     fun decodingBoundsAndChecksEmbeddings() {
         fun withEmbedding(value: kotlinx.serialization.json.JsonElement): DetectionsMessage? {
             val det = payload()["detections"]!!.jsonArray[0].jsonObject.toMutableMap().apply { put("reid_embedding", value) }

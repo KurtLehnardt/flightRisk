@@ -25,6 +25,22 @@ class PublishedDetection(
     val cropJpeg: () -> ByteArray? = { null },
 )
 
+/** How the pipeline and a publisher pick the detections that get a crop or an embedding. */
+object DetectionSelection {
+    /**
+     * The indices of the [max] most confident detections among the first
+     * [maxDetections]. Ties keep the earlier detection. The pipeline and the
+     * publisher both call this, so they always pick the same detections.
+     */
+    fun mostConfident(confidences: List<Double>, maxDetections: Int, max: Int): Set<Int> {
+        val considered = minOf(maxDetections, confidences.size).coerceAtLeast(0)
+        return (0 until considered)
+            .sortedByDescending { confidences[it] }
+            .take(minOf(max, considered).coerceAtLeast(0))
+            .toSet()
+    }
+}
+
 /** The detections of one camera frame. */
 class PublishedFrame(
     val frameId: Long,
@@ -57,6 +73,14 @@ interface DetectionPublisher {
 
     /** How many appearance embeddings the next frame may carry (the most confident detections); 0 means none. */
     fun maxEmbeddings(): Int = 0
+
+    /**
+     * How many detections of a frame the publisher keeps (the first ones, in
+     * order). Crops and embeddings are chosen among these only, with
+     * [DetectionSelection.mostConfident], so nothing is prepared for a
+     * detection the publisher leaves out.
+     */
+    fun maxDetections(): Int = Int.MAX_VALUE
 
     /** Offers one frame. The publisher may drop it; it never queues without bound. */
     fun publish(frame: PublishedFrame)

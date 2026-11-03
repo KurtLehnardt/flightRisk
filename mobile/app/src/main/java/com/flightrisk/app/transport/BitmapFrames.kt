@@ -1,6 +1,7 @@
 package com.flightrisk.app.transport
 
 import android.graphics.Bitmap
+import com.flightrisk.app.pipeline.DetectionSelection
 import com.flightrisk.app.pipeline.PublishedDetection
 import com.flightrisk.app.pipeline.PublishedFrame
 import com.flightrisk.app.vision.Detection
@@ -47,9 +48,11 @@ object BitmapFrames {
         maxCrops: Int,
         maxEmbeddings: Int = 0,
         embeddingProvider: EmbeddingProvider<Bitmap> = NoEmbeddingProvider,
+        maxDetections: Int = Int.MAX_VALUE,
     ): PublishedFrame {
         val thumb = if (withThumbnail) scaledToFit(frame, THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT) else null
-        val cropOwners = detections.indices.sortedByDescending { detections[it].confidence }.take(maxCrops.coerceAtLeast(0)).toSet()
+        // The same choice the publisher makes, so no copy is made for a detection it leaves out.
+        val cropOwners = DetectionSelection.mostConfident(detections.map { it.confidence.toDouble() }, maxDetections, maxCrops)
         val embeddings = EdgeEmbeddings.lazyEmbeddings(
             detections = detections,
             confidence = { it.confidence.toDouble() },
@@ -57,6 +60,7 @@ object BitmapFrames {
             provider = embeddingProvider,
             prepare = { scaledToFit(it.crop, EMBEDDING_INPUT_MAX_SIDE, EMBEDDING_INPUT_MAX_SIDE) },
             release = ::recycleQuietly,
+            maxDetections = maxDetections,
         )
         return PublishedFrame(
             frameId = frameId,

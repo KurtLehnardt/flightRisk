@@ -185,6 +185,7 @@ class GroundLinkController(
         override fun wantsThumbnail(): Boolean = publisher?.wantsThumbnail() ?: false
         override fun maxCrops(): Int = publisher?.maxCrops() ?: 0
         override fun maxEmbeddings(): Int = publisher?.maxEmbeddings() ?: 0
+        override fun maxDetections(): Int = publisher?.maxDetections() ?: 0
 
         override fun publish(frame: PublishedFrame) {
             publisher?.publish(frame)

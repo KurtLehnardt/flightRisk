@@ -71,7 +71,7 @@ fun testFrame(
     timestamp: Double = 1_700_000_000.5,
     thumbCalls: AtomicInteger? = null,
     cropCalls: AtomicInteger? = null,
-    reid: List<Double>? = listOf(0.25, -0.5),
+    reid: List<Double>? = null,
     face: List<Double>? = null,
     crop: ByteArray = byteArrayOf(1, 2, 3),
 ): PublishedFrame =

@@ -11,11 +11,14 @@ import com.flightrisk.app.ground.SocketIoConnection
 import com.flightrisk.app.ground.SocketIoPort
 import com.flightrisk.app.ground.WebSocketClosedException
 import com.flightrisk.app.pipeline.DetectionPublisher
+import com.flightrisk.app.pipeline.DetectionSelection
+import com.flightrisk.app.pipeline.PublishedDetection
 import com.flightrisk.app.pipeline.PublishedFrame
 import com.flightrisk.contract.DetectionsMessage
 import com.flightrisk.contract.DetectionsWire
 import com.flightrisk.contract.EdgeAction
 import com.flightrisk.contract.EdgeLink
+import com.flightrisk.contract.ReidEmbedding
 import com.flightrisk.contract.WireDetection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -75,7 +78,7 @@ data class EdgeStats(
     val detectionsDropped: Long = 0,
     /** Crops removed to fit the 1 MiB limit. */
     val cropsDropped: Long = 0,
-    /** Appearance embeddings that went out. */
+    /** Appearance embeddings in messages that were written to the link. */
     val embeddingsSent: Long = 0,
     /** Appearance embeddings sent as null because the model failed or its vector was not valid. */
     val embeddingsRejected: Long = 0,
@@ -205,6 +208,8 @@ class EdgePublisher(
 
     override fun maxEmbeddings(): Int = config.maxEmbeddingsPerMessage.coerceAtLeast(0)
 
+    override fun maxDetections(): Int = config.maxDetectionsPerFrame.coerceAtLeast(0)
+
     /** Starts the connection loop. Does nothing while it already runs. */
     fun start() {
         synchronized(lock) {
@@ -247,15 +252,19 @@ class EdgePublisher(
         if (!channel.trySend(frame).isSuccess) busy.set(false)
     }
 
+    /** An encoded message and how many appearance embeddings it carries. */
+    private class Encoded(val json: String, val embeddings: Int)
+
     /** The encoded message, or null when the frame is dropped (and counted). Runs on the worker. */
-    private fun encode(frame: PublishedFrame): String? {
+    private fun encode(frame: PublishedFrame): Encoded? {
         val withVideo = streamVideo
         val faceOn = faceMatchingEnabled()
-        val capped = frame.detections.take(config.maxDetectionsPerFrame)
+        val capped = frame.detections.take(maxDetections())
         detectionsDropped.addAndGet((frame.detections.size - capped.size).toLong())
-        val byConfidence = capped.indices.sortedByDescending { capped[it].confidence }
-        val cropOwners: Set<Int> = if (config.sendCrops) byConfidence.take(config.maxCropsPerMessage).toSet() else emptySet()
-        val embeddingOwners: Set<Int> = byConfidence.take(maxEmbeddings()).toSet()
+        // The same choice BitmapFrames made when it prepared the crops and the model inputs.
+        val confidences = capped.map { it.confidence }
+        val cropOwners = DetectionSelection.mostConfident(confidences, capped.size, maxCrops())
+        val embeddingOwners = DetectionSelection.mostConfident(confidences, capped.size, maxEmbeddings())
         val message = DetectionsMessage(
             timestamp = frame.timestampSeconds,
             frameId = frame.frameId,
@@ -276,12 +285,8 @@ class EdgePublisher(
             is DetectionsWire.EncodeResult.Ok -> {
                 detectionsDropped.addAndGet(result.droppedDetections.toLong())
                 cropsDropped.addAndGet(result.droppedCrops.toLong())
-                // The encoder sends an embedding holding a value that is not finite as null.
-                val withReid = message.detections.mapNotNull { it.reidEmbedding }
-                val finite = withReid.count { e -> e.all { it.isFinite() } }
-                embeddingsSent.addAndGet(finite.toLong())
-                embeddingsRejected.addAndGet((withReid.size - finite).toLong())
-                result.json
+                // Every embedding left passed ReidEmbedding.problem, so the encoder kept it.
+                Encoded(result.json, message.detections.count { it.reidEmbedding != null })
             }
             is DetectionsWire.EncodeResult.TooLarge -> {
                 droppedTooLarge.incrementAndGet()
@@ -295,19 +300,31 @@ class EdgePublisher(
     }
 
     /**
-     * The detection's appearance embedding, computed here on the worker, or
-     * null. A model failure or an invalid vector is counted and sent as null;
-     * it never ends the session. The vector itself is never logged.
+     * The detection's appearance embedding, computed here on the worker and
+     * checked with [ReidEmbedding.problem], or null. A model failure (an
+     * exception, a native library that fails to link, or a model that runs
+     * out of memory) or an invalid vector is counted and sent as null; it
+     * never ends the worker or the session. The vector itself is never logged.
      */
-    private fun embeddingOf(d: com.flightrisk.app.pipeline.PublishedDetection): List<Double>? =
-        try {
+    private fun embeddingOf(d: PublishedDetection): List<Double>? {
+        val vector = try {
             d.reidEmbedding()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            null.also { embeddingsRejected.incrementAndGet() }
+        } catch (e: LinkageError) {
+            null.also { embeddingsRejected.incrementAndGet() }
+        } catch (e: OutOfMemoryError) {
+            // The model's buffers are unreachable once it has thrown; the frame goes without the vector.
+            null.also { embeddingsRejected.incrementAndGet() }
+        } ?: return null
+        if (ReidEmbedding.problem(vector) != null) {
             embeddingsRejected.incrementAndGet()
-            null
+            return null
         }
+        return vector
+    }
 
     private sealed interface Outcome {
         data object TokenRejected : Outcome
@@ -396,9 +413,11 @@ class EdgePublisher(
                 launch(config.encodeDispatcher) {
                     for (frame in frames) {
                         try {
-                            val message = encode(frame) ?: continue
+                            val encoded = encode(frame) ?: continue
+                            val message = encoded.json
                             if (!sendWithTimeout(connection, message)) throw IOException("sending a frame timed out")
                             sent.incrementAndGet()
+                            embeddingsSent.addAndGet(encoded.embeddings.toLong())
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {

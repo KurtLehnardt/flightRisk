@@ -619,6 +619,7 @@ class SearchPipeline(
                     maxCrops = publisher.maxCrops(),
                     maxEmbeddings = publisher.maxEmbeddings(),
                     embeddingProvider = edgeEmbeddingProvider,
+                    maxDetections = publisher.maxDetections(),
                 ),
             )
         } catch (e: Exception) {

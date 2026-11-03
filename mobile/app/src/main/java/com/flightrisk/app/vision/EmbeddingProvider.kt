@@ -1,5 +1,6 @@
 package com.flightrisk.app.vision
 
+import com.flightrisk.app.pipeline.DetectionSelection
 import com.flightrisk.contract.ReidEmbedding
 
 /**
@@ -54,8 +55,9 @@ object EdgeEmbeddings {
         provider !== NoEmbeddingProvider && provider.modelId == ReidEmbedding.MODEL_ID
 
     /**
-     * One lazy embedding per detection. Only the [max] most confident
-     * detections get one, and only when [provider] is [usable]: for those,
+     * One lazy embedding per detection. Only the [max] most confident of the
+     * first [maxDetections] detections ([DetectionSelection.mostConfident],
+     * the same choice the publisher makes) get one, and only when [provider] is [usable]: for those,
      * [prepare] runs now, on the caller's thread (it should make a small copy
      * of the crop), and the returned function later runs [provider] on that
      * copy, checks the result with [ReidEmbedding.toWire] and calls [release]
@@ -74,10 +76,11 @@ object EdgeEmbeddings {
         provider: EmbeddingProvider<T>,
         prepare: (D) -> T?,
         release: (T) -> Unit = {},
+        maxDetections: Int = Int.MAX_VALUE,
     ): List<() -> List<Double>?> {
         val none: () -> List<Double>? = { null }
         if (max <= 0 || detections.isEmpty() || !usable(provider)) return List(detections.size) { none }
-        val owners = detections.indices.sortedByDescending { confidence(detections[it]) }.take(max).toSet()
+        val owners = DetectionSelection.mostConfident(detections.map(confidence), maxDetections, max)
         return detections.mapIndexed { i, d ->
             if (i !in owners) return@mapIndexed none
             val input = prepare(d) ?: return@mapIndexed none
