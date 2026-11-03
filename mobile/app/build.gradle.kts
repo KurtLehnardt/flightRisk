@@ -42,6 +42,17 @@ android {
         compose = true
         buildConfig = true
     }
+
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
+}
+
+// Room writes each schema version to app/schemas (committed). The migration
+// tests read these files, and the androidTest assets include them so the
+// instrumented migration test can build an old database on a device.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -90,7 +101,7 @@ dependencies {
     // Encrypted SharedPreferences (API key storage)
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // Room (session persistence + target canon)
+    // Room (session persistence)
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
@@ -101,7 +112,15 @@ dependencies {
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // A desktop SQLite engine (already in the Gradle cache as a Room compiler
+    // dependency) to run the Room migration SQL in FlightRiskMigrationTest.
+    testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    // AndroidJUnitRunner (the testInstrumentationRunner above) and the
+    // androidx.test.filters size annotations used by PipelineE2ETest. It was
+    // already on the runtime classpath through espresso-core, but not on the
+    // compile classpath, so PipelineE2ETest did not compile.
+    androidTestImplementation("androidx.test:runner:1.5.0")
     // The BOM must be applied to this configuration too, or ui-test-junit4 has no version.
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.08.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
