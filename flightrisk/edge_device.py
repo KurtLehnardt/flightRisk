@@ -385,7 +385,8 @@ class _FrameFeedingSource:
     """Wraps a frame source and gives every frame it yields to the obstacle sensor's frame holder.
 
     Used for the MAVLink companion camera, which has no ``drone.on_frame`` hook. The holder gets its
-    own copy of each frame. Everything else (iteration, ``release``) is passed through.
+    own copy of each new frame object (``_copying_frame_feed``). Everything else (iteration,
+    ``release``) is passed through.
     """
 
     def __init__(self, source: Any, holder: LatestFrame):
@@ -413,7 +414,8 @@ class DecodedFramePoller:
     ``drone.on_frame``, only between two detections, so while a slow detection
     runs the holder gets nothing and a gate can find no fresh frame. This
     daemon thread reads the decoder's newest frame every ``interval_s`` and
-    gives the holder its own copy of each frame it has not given it before.
+    gives the holder its own copy of each frame object the holder has not
+    been given before.
 
     The decoder is djitellopy's ``BackgroundFrameRead`` on the controller's
     client (``drone.tello.background_frame_read``), which stores a new array
@@ -425,11 +427,19 @@ class DecodedFramePoller:
     * It never calls ``get_frame_read``, which would open a decoder. While the
       client has none (before the first ``get_frame``, or while a stream
       restart has dropped it), or the drone is not connected, it feeds nothing.
-    * A frame object it already fed is not fed again, so a stalled decoder
-      adds nothing and the sensor finds the view stale instead of judging an
-      old frame as new.
+    * It offers each frame to the holder through ``LatestFrame.offer``, the
+      same check the frame loop's ``on_frame`` feed (``_copying_frame_feed``)
+      goes through. The holder keeps one record of the last source frame
+      object for both feeds and refuses that object, whichever feed brings it
+      again. While the decoder is stalled neither feed adds anything, even
+      though ``get_frame`` keeps handing the stalled frame to ``on_frame``
+      until its frozen-frame recovery starts, so the sensor finds the view
+      stale instead of judging a frame from before the last move or turn.
     * A decoder in queue mode is left alone, because reading its ``frame``
       would take frames from its queue.
+
+    The black frame that a restarted decoder starts on is a new object, so it
+    is fed; the sensor refuses it as blank (``obstacle_camera.blank_frame``).
 
     A drone without such a client (the fake controllers) gets no poller; see
     ``for_drone``.
@@ -445,10 +455,9 @@ class DecodedFramePoller:
     ):
         self._drone = drone
         self._client = getattr(drone, "tello", None)
-        self._feed = _copying_frame_feed(holder)
+        self._holder = holder
         self._interval_s = interval_s
         self._log = log
-        self._last: Any = None
         self._error_logged = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=name, daemon=True)
@@ -472,7 +481,7 @@ class DecodedFramePoller:
             self._thread.join(timeout)
 
     def poll_once(self) -> bool:
-        """Feed the decoder's newest frame if it is new; True when one was fed. Never raises."""
+        """Feed the decoder's newest frame if the holder has not had it; True when one was fed. Never raises."""
         try:
             state = getattr(self._drone, "state", None)
             if not getattr(state, "is_connected", False):
@@ -481,12 +490,10 @@ class DecodedFramePoller:
             if reader is None or getattr(reader, "with_queue", False):
                 return False
             frame = reader.frame
-            if frame is None or frame is self._last:
+            if frame is None:
                 return False
-            # Holding the last frame keeps its identity from being reused by a new array.
-            self._last = frame
-            self._feed(frame)
-            return True
+            # The holder refuses a frame object that either feed already gave it.
+            return self._holder.offer(frame, _copy_frame)
         except Exception as exc:  # noqa: BLE001 - the frame loop still feeds the holder
             if not self._error_logged and self._log is not None:
                 self._error_logged = True
@@ -1633,12 +1640,25 @@ def _obstacle_turn(environ: Any) -> bool:
     raise SystemExit(f"edge_device: {ENV_OBSTACLE_TURN}={raw!r} must be 0 or 1. Refusing to start.")
 
 
+def _copy_frame(frame: Any) -> Any:
+    """The holder's own copy of a frame, so later changes to the source array cannot reach it."""
+    copy = getattr(frame, "copy", None)
+    return copy() if callable(copy) else frame
+
+
 def _copying_frame_feed(holder: LatestFrame) -> Callable[[Any], None]:
-    """A frame callback that gives the holder its own copy, because a controller may reuse its frame buffer."""
+    """A frame callback that gives the holder its own copy of each frame object it has not had before.
+
+    The copy keeps the holder's frame safe from anything that changes the source array later. The
+    holder compares the source object itself, before copying, with the last one that any of its
+    feeds offered (``LatestFrame.offer``). This feed and ``DecodedFramePoller`` therefore share one
+    record: when ``TelloController.get_frame`` hands the same array to ``on_frame`` on every poll
+    of a stalled decoder, the holder keeps the frame's first arrival time and the gate finds the
+    view stale.
+    """
 
     def _feed(frame: Any) -> None:
-        copy = getattr(frame, "copy", None)
-        holder.update(copy() if callable(copy) else frame)
+        holder.offer(frame, _copy_frame)
 
     return _feed
 
@@ -1657,7 +1677,8 @@ def _build_obstacle_wiring(
 
     * ``FLIGHTRISK_OBSTACLE_SENSING=off`` flies unsensed, loudly: a ``NullSensor``.
     * ``tello``: a ``ForwardCameraSensor`` on a ``LatestFrame`` that ``drone.on_frame`` feeds with every
-      frame, independent of the detector's frame stride. When the sensor cannot be built (torch, the
+      new frame object, independent of the detector's frame stride (a stalled decoder's frame is not fed
+      again; see ``_copying_frame_feed``). When the sensor cannot be built (torch, the
       MiDaS weights, the first inference) the error is passed to the executor, which refuses to take off.
     * ``fake``: a ``FakeObstacleSensor``, blocked from ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` along the
       plan-frame y axis when that is set and never otherwise. It loads no model.

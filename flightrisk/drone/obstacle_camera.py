@@ -16,13 +16,16 @@ hovers (design ``.claude/build/obstacle/design.md``, section 2):
   since ``after + settle`` (a frame stride makes that likely), the cue is
   ``unknown``: it neither blocks nor clears and the depth cue decides.
 
-Every failure to look (no fresh frame, a model that takes too long, an
-exception, a depth map the guard reports as degenerate or a score that is not
-finite) is an ``unavailable`` result and never ``clear``. Inference runs on
-one reusable helper thread that ``sense`` joins with a timeout, so a hung model
-never blocks the caller and no thread is created per call. While a timed-out
-inference is still running, later calls report ``timeout`` at once instead of
-queueing behind it.
+Every failure to look (no fresh frame, a blank frame, a model that takes too
+long, an exception, a depth map the guard reports as degenerate or a score that
+is not finite) is an ``unavailable`` result and never ``clear``. A blank frame
+is one whose pixels all have the same value, such as the black frame a
+restarted video decoder starts on; it shows nothing, so it is reported like a
+missing frame (``stale``, cause ``blank frame``) without running the model.
+Inference runs on one reusable helper thread that ``sense`` joins with a
+timeout, so a hung model never blocks the caller and no thread is created per
+call. While a timed-out inference is still running, later calls report
+``timeout`` at once instead of queueing behind it.
 
 ``sense(after, timeout_s)`` spends at most ``timeout_s`` in all: the wait for a
 fresh frame, the inference and the wait for a fresh person result share that
@@ -47,6 +50,7 @@ from flightrisk.drone.obstacle_sensor import (
     ACTION_PERSON_UNKNOWN,
     ACTION_STALE,
     ACTION_TIMEOUT,
+    CAUSE_BLANK_FRAME,
     CUE_DEPTH,
     CUE_PERSON,
     EVENT_PERSON_CUE_DOWN,
@@ -82,6 +86,34 @@ ACTION_UNAVAILABLE = "unavailable"
 
 #: Size of the blank frame that warms the model at construction (the Tello's).
 _WARMUP_FRAME_SHAPE = (720, 960, 3)
+#: ``blank_frame`` samples at most this many rows and this many columns.
+_BLANK_SAMPLE_PER_AXIS = 64
+
+
+def blank_frame(frame: Any) -> bool:
+    """Whether every sampled pixel of ``frame`` has the same value, so the frame shows nothing.
+
+    A restarted video decoder starts on such a frame (djitellopy's is all
+    black). The check reads a strided grid of at most
+    ``_BLANK_SAMPLE_PER_AXIS`` rows and columns, so it costs a few thousand
+    comparisons whatever the frame size. A pixel's value is all of its
+    channels, so a frame of one colour is blank even when its channels differ.
+    A frame with no pixels is blank. A real camera view has sensor noise, so
+    it is not blank; a view the sample happens to call blank is refused,
+    which fails closed. Raises ``ValueError`` for something that is not an
+    image with rows and columns.
+    """
+    pixels = np.asarray(frame)
+    if pixels.ndim < 2:
+        raise ValueError(f"a camera frame needs rows and columns, got shape {pixels.shape}")
+    if pixels.size == 0:
+        return True
+    rows, cols = pixels.shape[0], pixels.shape[1]
+    step_rows = -(-rows // _BLANK_SAMPLE_PER_AXIS)
+    step_cols = -(-cols // _BLANK_SAMPLE_PER_AXIS)
+    sample = pixels[::step_rows, ::step_cols]
+    flat = sample.reshape(sample.shape[0] * sample.shape[1], -1)
+    return bool(np.all(flat.min(axis=0) == flat.max(axis=0)))
 
 
 class _InferenceWorker:
@@ -275,6 +307,19 @@ class ForwardCameraSensor:
             return timed_out(False)
 
         frame = timed.frame
+        try:
+            blank = blank_frame(frame)
+        except Exception as exc:  # noqa: BLE001 - a frame that cannot be checked is a failure to look
+            return self._failed(REASON_ERROR, latency(), exc)
+        if blank:
+            # Nothing to look at (a restarted decoder's black frame): the same as no fresh frame.
+            self._note_person_cue(PERSON_CUE_UNKNOWN)
+            return self._finish(
+                SenseResult.make_unavailable(
+                    REASON_STALE, latency_ms=latency(), detail={"cause": CAUSE_BLANK_FRAME},
+                ),
+                None, ACTION_STALE,
+            )
         job = self._worker.submit(lambda: self._guard.check_path(frame))
         if job is None or not job.done.wait(max(0.0, remaining())):
             return timed_out(job is None)

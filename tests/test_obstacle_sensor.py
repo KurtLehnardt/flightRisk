@@ -209,3 +209,87 @@ class TestLatestFrame:
         start = time.monotonic()
         assert holder.wait_for(after=start, settle_s=0.0, wait_s=0.1) is None
         assert time.monotonic() - start < 3.0
+
+
+class TestLatestFrameOffer:
+    """``offer`` stamps each source frame object once, whichever feed brings it (review R2-B1)."""
+
+    def test_the_same_object_is_never_stamped_again(self):
+        clock = FakeClock(100.0)
+        holder = LatestFrame(clock)
+        frame = object()
+        assert holder.offer(frame) is True
+        clock.advance(5.0)
+        assert holder.offer(frame) is False
+        assert holder(frame) is None and holder.frames_seen == 1
+        latest = holder.latest()
+        assert latest.frame is frame and latest.arrived_at == 100.0
+        assert holder.wait_for(after=104.0, settle_s=0.3, wait_s=0) is None
+
+    def test_a_new_object_is_stamped_even_when_it_equals_the_last(self):
+        clock = FakeClock(100.0)
+        holder = LatestFrame(clock)
+        assert holder.offer([1, 2, 3]) is True
+        clock.advance(0.5)
+        assert holder.offer([1, 2, 3]) is True
+        assert holder.latest().arrived_at == 100.5 and holder.frames_seen == 2
+
+    def test_the_check_runs_on_the_source_before_the_copy(self):
+        holder = LatestFrame(FakeClock(100.0))
+        copies = []
+
+        def copy(source):
+            copies.append(source)
+            return ("copy of", source)
+
+        source = object()
+        assert holder.offer(source, copy) is True
+        assert holder.offer(source, copy) is False
+        assert holder.offer(holder.latest().frame, copy) is True  # the stored copy is not the source
+        assert copies == [source, ("copy of", source)]
+        assert holder.latest().frame == ("copy of", ("copy of", source))
+
+    def test_feeds_share_one_record(self):
+        holder = LatestFrame(FakeClock(100.0))
+        first, second = object(), object()
+        assert holder.offer(first, lambda f: ("copy", f)) is True
+        assert holder(first) is None  # another feed, no copy: still refused
+        assert holder.offer(second) is True
+        assert holder.offer(first) is True  # an older object offered again after another is new again
+        assert holder.frames_seen == 3
+
+    def test_a_freed_frame_never_hides_a_new_one(self):
+        # The last source is held, so a new array can never reuse its id and be taken for it.
+        holder = LatestFrame(FakeClock(100.0))
+        fed = [holder.offer(bytearray(64), bytes) for _ in range(500)]
+        assert all(fed) and holder.frames_seen == 500
+
+    def test_concurrent_feeds_store_one_object_once(self):
+        holder = LatestFrame(FakeClock(100.0))
+        frame = object()
+        start = threading.Barrier(8)
+        results: list[bool] = []
+        lock = threading.Lock()
+
+        def feed():
+            start.wait(5)
+            stored = holder.offer(frame, lambda f: ("copy", f))
+            with lock:
+                results.append(stored)
+
+        threads = [threading.Thread(target=feed) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        assert sorted(results) == [False] * 7 + [True]
+        assert holder.frames_seen == 1
+
+    def test_update_still_stores_unconditionally(self):
+        clock = FakeClock(100.0)
+        holder = LatestFrame(clock)
+        frame = object()
+        holder.update(frame)
+        clock.advance(1.0)
+        holder.update(frame)
+        assert holder.latest().arrived_at == 101.0 and holder.frames_seen == 2

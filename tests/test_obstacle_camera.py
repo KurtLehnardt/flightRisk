@@ -15,12 +15,17 @@ import pytest
 import torch
 
 from flightrisk.drone import obstacle_camera
-from flightrisk.drone.obstacle_camera import ForwardCameraSensor, close_person_in_lane
+from flightrisk.drone.obstacle_camera import (
+    ForwardCameraSensor,
+    blank_frame,
+    close_person_in_lane,
+)
 from flightrisk.drone.obstacle_sensor import (
     ACTION_PERSON,
     ACTION_PERSON_UNKNOWN,
     ACTION_STALE,
     ACTION_TIMEOUT,
+    CAUSE_BLANK_FRAME,
     CUE_DEPTH,
     CUE_PERSON,
     EVENT_PERSON_CUE_DOWN,
@@ -79,10 +84,17 @@ def _runner(detections=(), at=None):
 CLOSE_CENTRE = _det(380, 100, 580, 600)  # 500 of 720 px tall, centred
 
 
+def _view(height=FRAME_H, width=FRAME_W):
+    """A camera frame with something in it; a frame whose pixels are all the same is refused as blank."""
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[:, : width // 2] = 80
+    return frame
+
+
 @pytest.fixture
 def frames():
     holder = LatestFrame()
-    holder.update(np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8))
+    holder.update(_view())
     return holder
 
 
@@ -172,7 +184,7 @@ class TestDepthCue:
 
     def test_frame_older_than_settle_is_stale(self, checks):
         holder = LatestFrame()
-        holder.update(np.zeros((8, 8, 3), dtype=np.uint8))
+        holder.update(_view(8, 8))
         sensor = _sensor(holder, _runner(), settle_s=0.3)
         # The frame arrived just now, so it is not newer than after + 0.3.
         result = sensor.sense(time.monotonic())
@@ -188,12 +200,103 @@ class TestDepthCue:
         holder = LatestFrame()
         sensor = _sensor(holder, _runner(), frame_wait_s=2.0)
         after = time.monotonic()
-        timer = threading.Timer(0.1, lambda: holder.update(np.zeros((8, 8, 3), dtype=np.uint8)))
+        timer = threading.Timer(0.1, lambda: holder.update(_view(8, 8)))
         timer.start()
         try:
             assert sensor.sense(after).clear
         finally:
             timer.join()
+
+
+class TestBlankFrame:
+    """A frame whose pixels all have the same value shows nothing and is never judged (review R2-N3)."""
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            np.zeros((300, 400, 3), np.uint8),  # djitellopy's first frame
+            np.zeros((FRAME_H, FRAME_W, 3), np.uint8),
+            np.full((FRAME_H, FRAME_W, 3), 255, np.uint8),
+            np.full((FRAME_H, FRAME_W, 3), (0, 135, 0), np.uint8),  # one colour, channels differ
+            np.full((FRAME_H, FRAME_W), 17, np.uint8),  # grey
+            np.zeros((0, 0, 3), np.uint8),
+        ],
+        ids=["decoder_start", "black", "white", "one_colour", "grey", "empty"],
+    )
+    def test_blank_frames(self, frame):
+        assert blank_frame(frame) is True
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            _view(),
+            _view(8, 8),
+            np.random.default_rng(1).integers(0, 255, (FRAME_H, FRAME_W, 3), dtype=np.uint8),
+            np.full((FRAME_H, FRAME_W), 17, np.uint8) + np.eye(FRAME_H, FRAME_W, dtype=np.uint8),
+        ],
+        ids=["halves", "small", "noise", "grey_with_a_diagonal"],
+    )
+    def test_frames_with_content_are_not_blank(self, frame):
+        assert blank_frame(frame) is False
+
+    def test_one_channel_that_varies_is_enough(self):
+        frame = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
+        frame[FRAME_H // 2:, :, 2] = 1
+        assert blank_frame(frame) is False
+
+    def test_the_check_reads_only_a_small_sample(self):
+        frame = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
+        # A bright pixel between the sample points is not seen: the frame still counts as blank (fail closed).
+        frame[1, 1] = 255
+        assert blank_frame(frame) is True
+        frame[0, 0] = 255
+        assert blank_frame(frame) is False
+
+    @pytest.mark.parametrize("frame", ["late", np.zeros(5, np.uint8)], ids=["text", "one_row"])
+    def test_something_that_is_not_an_image_is_an_error(self, frame):
+        with pytest.raises(ValueError):
+            blank_frame(frame)
+
+    def test_a_blank_frame_is_stale_and_never_judged(self, checks):
+        holder = LatestFrame()
+        holder.update(np.zeros((300, 400, 3), np.uint8))
+        guard = FakeGuard()
+        sensor = _sensor(holder, _runner([CLOSE_CENTRE]), guard)
+        result = sensor.sense(_after())
+        assert result.unavailable and result.reason == REASON_STALE
+        assert result.detail == {"cause": CAUSE_BLANK_FRAME}
+        assert result.person_cue == PERSON_CUE_UNKNOWN
+        assert guard.calls == 0
+        assert checks[-1][0] is None and checks[-1][1]["action"] == ACTION_STALE
+        assert sensor.status()["obstacle_sensor_ok"] is False
+        _close(sensor)
+
+    def test_a_one_colour_frame_is_refused_too(self):
+        holder = LatestFrame()
+        holder.update(np.full((FRAME_H, FRAME_W, 3), (0, 135, 0), np.uint8))
+        guard = FakeGuard()
+        result = _sensor(holder, None, guard).sense(_after())
+        assert result.unavailable and result.detail["cause"] == CAUSE_BLANK_FRAME
+        assert guard.calls == 0
+
+    def test_a_frame_that_is_not_an_image_is_an_error(self):
+        holder = LatestFrame()
+        holder.update("not a frame")
+        guard = FakeGuard()
+        result = _sensor(holder, None, guard).sense(_after())
+        assert result.unavailable and result.reason == REASON_ERROR
+        assert guard.calls == 0
+
+    def test_the_next_real_frame_is_judged(self):
+        holder = LatestFrame()
+        holder.update(np.zeros((300, 400, 3), np.uint8))
+        guard = FakeGuard()
+        sensor = _sensor(holder, None, guard)
+        assert sensor.sense(_after()).unavailable
+        holder.update(_view())
+        assert sensor.sense(_after()).clear
+        assert guard.calls == 1
+        _close(sensor)
 
 
 class TestPersonGeometry:
@@ -258,7 +361,7 @@ class TestPersonCue:
         after = time.monotonic()
         runner = _runner([CLOSE_CENTRE], at=after + 0.1)
         sensor = _sensor(frames, runner, settle_s=0.3, frame_wait_s=0.0)
-        frames.update(np.zeros((8, 8, 3), dtype=np.uint8))
+        frames.update(_view(8, 8))
         frames._latest = type(frames._latest)(frames._latest.frame, after + 1.0)
         assert sensor.sense(after).person_cue == PERSON_CUE_UNKNOWN
 
