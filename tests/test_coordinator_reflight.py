@@ -721,6 +721,59 @@ def test_a_receiver_whose_sensor_ends_its_lanes_before_the_segment_fails_it():
     assert failed["receiver"] == "drone-2" and "obstacle sensor down" in failed["detail"]
 
 
+LANDED = "drone-2 landed before it finished the re-flight"
+
+
+def test_a_receiver_that_lands_on_the_appended_lanes_fails_the_reflight_and_lists_the_unflown_part():
+    """Probe: drone-2 flies the reversed leg (its lane 7), then lands on its lane 8 without a cut."""
+    fleet = released()
+    fleet.tel("drone-2", lane_index=7)
+    assert {s["status"] for s in fleet.segments()} == {"flying"}
+    fleet.tel("drone-2", lane_index=8, is_flying=False)
+    # The reversed leg was flown and counts; the shadow on its lane 9 was not.
+    assert [(s["index"], ends(s), s["reason"], s["status"], s["receiver"]) for s in fleet.segments()] == [
+        (2, (100, 250, 100, 400), LANDED, "failed", "drone-2")]
+    (failed,) = fleet.reflight_events("reflight_failed")
+    assert failed["receiver"] == "drone-2" and failed["detail"].endswith(f"not re-flown: {LANDED}")
+    assert [ends(lane) for lane in failed["lanes"]] == [(100, 250, 100, 400)]
+    status = fleet.coord.status()
+    assert status["drone-2"]["reflights"] == {"offered": 1, "reflown": 0, "blocked_again": 0}
+    assert status["drone-1"]["uncovered_cm"] == 150
+    # Later telemetry and the loss check declaring drone-2 lost change nothing, and nothing is handed on.
+    fleet.tel("drone-2", lane_index=8, is_flying=False)
+    fleet.coord.on_drone_lost("drone-2", wait_s=0)
+    assert [e["event"] for e in fleet.reflight_events()] == [
+        "reflight_offered", "reflight_accepted", "reflight_failed"]
+    assert {(s["index"], s["reason"]) for s in fleet.segments()} == {(2, LANDED)}
+    assert len(fleet.assigns("drone-1")) == 1
+
+
+def test_a_receiver_that_lands_before_the_appended_lanes_lists_every_segment_whole():
+    fleet = released()
+    fleet.tel("drone-2", lane_index=5, is_flying=False)  # on the transit
+    assert [(s["index"], ends(s), s["status"], s["reason"]) for s in fleet.segments()] == [
+        (0, (0, 250, 0, 400), "failed", LANDED), (2, (100, 250, 100, 400), "failed", LANDED)]
+    (failed,) = fleet.reflight_events("reflight_failed")
+    assert [lane["distance_cm"] for lane in failed["lanes"]] == [150, 150]
+
+
+def test_a_receiver_that_lands_without_a_lane_index_counts_nothing_as_flown():
+    fleet = released()
+    fleet.edges["drone-2"].telemetry(is_flying=False, battery=80, obstacle_sensing="stepped",
+                                     obstacle_sensor_ok=True, obstacle_state="clear")
+    assert {(s["index"], s["status"], s["reason"]) for s in fleet.segments()} == {
+        (0, "failed", LANDED), (2, "failed", LANDED)}
+
+
+def test_a_receiver_that_lands_after_the_appended_lanes_has_re_flown_them():
+    fleet = released()
+    fleet.tel("drone-2", lane_index=8)
+    fleet.done("drone-2", lane_index=APPENDED_END, lanes_total=APPENDED_END, is_flying=False)
+    assert fleet.segments() == [] and fleet.reflight_events("reflight_failed") == []
+    (done,) = fleet.reflight_events("reflight_done")
+    assert done["receiver"] == "drone-2"
+
+
 # ---------------------------------------------------------------------------
 # Lost drones
 # ---------------------------------------------------------------------------

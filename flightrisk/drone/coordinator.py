@@ -378,10 +378,13 @@ class _Chunk:
     cutter_lanes: int = 0
     crowded: str | None = None
     # Why the chunk waits for a receiver that may take it later: one that
-    # senses obstacles and has not finished its own lanes (both kinds), or,
-    # for a re-flight, one without fresh telemetry or taking off (review
-    # N7). Shown as the waiting segment's ``detail`` and in the ``retask``
-    # event's ``awaiting`` lanes.
+    # senses obstacles and has not finished its own lanes, has no fresh
+    # telemetry or is not flying yet (both kinds, see
+    # ``_own_lanes_left_locked``), or, for a re-flight, one without fresh
+    # telemetry or taking off (review N7). Shown as the waiting segment's
+    # ``detail``, in the ``retask`` event's ``awaiting`` lanes and, for a
+    # lost drone's lanes, as the ``reason`` of their ``waiting`` entries in
+    # ``current_plan()["uncovered"]``.
     held: str | None = None
     # Re-flight only. Where ``appended`` starts in the receiver's lanes (set
     # with the offer), the drone that accepted it (kept when the chunk fails
@@ -394,9 +397,15 @@ class _Chunk:
     # Re-flight only. True once the receiver flew the appended lanes, or
     # some of them, and the chunk ended without re-flying every segment
     # (``blocked_again``, or ``failed`` because the receiver's sensor went
-    # down on them or it flew them off the planned path): what it left
-    # unsearched is listed instead of the whole segments.
+    # down on them, it flew them off the planned path or it landed before
+    # it finished them): what it left unsearched is listed instead of the
+    # whole segments.
     flown_rest: bool = False
+    # Re-flight only. The receiver's ``lane_index`` when its telemetry showed
+    # it on the ground before it had flown the appended lanes (the chunk then
+    # failed): the lanes from there on were not flown, so the legs on them
+    # are listed whole.
+    landed_at: int | None = None
 
     @property
     def start(self) -> tuple[int, int]:
@@ -508,6 +517,10 @@ class _DroneState:
     # edge ends the deficit of its earlier cuts there, so the replay of the
     # drone's lanes restarts its deficit at each of them (``lane_steps``).
     retask_starts: list[int] = field(default_factory=list)
+    # True once the drone's telemetry has said ``is_flying: true`` since the
+    # current plan was installed. A drone that reports it is not flying after
+    # that has landed, and one that never flew may still be taking off.
+    seen_flying: bool = False
 
 
 def _number(value: Any) -> float | None:
@@ -755,7 +768,12 @@ class FleetCoordinator:
         drone's id, the plan's unseen areas, and every segment a lane cut
         left unsearched (``kind`` ``segment``, see
         ``_obstacle_uncovered_locked``), with its re-flight ``status`` when
-        it is offered to another drone.
+        it is offered to another drone. A re-tasked lane that waits for a
+        drone that senses obstacles (``held``, see
+        ``_own_lanes_left_locked``) is listed in the same shape with
+        ``status`` ``waiting`` and the waiting text as its ``reason``; a
+        fleet without obstacle fields never has one, so its list is
+        unchanged.
         """
         with self._lock:
             if self._plan is None:
@@ -770,6 +788,12 @@ class FleetCoordinator:
                 for retask in self._retasks
                 for chunk in retask.chunks
                 if chunk.status == "failed"
+                for entry in chunk.lane_entries()
+            ] + [
+                dict(entry, drone_id=chunk.lost_id, reason=chunk.held, status="waiting")
+                for retask in self._retasks
+                for chunk in retask.chunks
+                if chunk.status == "queued" and chunk.held
                 for entry in chunk.lane_entries()
             ] + [dict(area) for area in self._plan.uncovered_areas]
             out["uncovered"] += self._obstacle_uncovered_locked()
@@ -983,6 +1007,7 @@ class FleetCoordinator:
                 state.nack_reason = None
                 state.executed_at_ground_s = None
                 state.retask_starts = []
+                state.seen_flying = False
                 self._reset_obstacles_locked(state)
                 self._clear_ack(state)
                 messages[zone.drone_id] = self._assign_message(zone.drone_id, state)
@@ -1230,6 +1255,8 @@ class FleetCoordinator:
                 state = self._drones[drone_id]
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
+                if msg.get("is_flying") is True:
+                    state.seen_flying = True
                 events.extend(self._note_cuts_locked(drone_id, state, state.telemetry))
                 # A re-flight this drone flies may have ended, or one of its
                 # own cuts may now be offered (design section 3.4).
@@ -1735,8 +1762,9 @@ class FleetCoordinator:
         has a ``status`` (see ``_reflight_fields``). A segment under the
         minimum move has status and reason ``too_short``. A re-flown segment
         is left out. A segment the receiver flew only in part (blocked again,
-        its sensor down on it, or flown off the planned path) is replaced by
-        what the receiver left unsearched of it (``_reflight_rest_locked``).
+        its sensor down on it, flown off the planned path, or the receiver
+        landed before it finished the re-flight) is replaced by what the
+        receiver left unsearched of it (``_reflight_rest_locked``).
         The receiver's own replay of the lanes a re-flight appended to it
         (the transit included) is not listed: those lanes re-fly the cutting
         drone's segments, whose entries say what became of them.
@@ -1892,7 +1920,11 @@ class FleetCoordinator:
         A drone that reports obstacle sensing is offered lanes only once it
         has finished its own (``_own_lanes_left_locked``): a later cut of its
         own would move where it flies the appended lanes. Until then a chunk
-        it would take waits, and the ``retask`` event says why.
+        it would take waits, the ``retask`` event says why, and
+        ``current_plan()["uncovered"]`` lists its lanes as ``waiting`` with
+        that reason. Such a drone that landed before it finished its own
+        lanes never takes the chunk (``_unfit_receiver_locked``), so a chunk
+        that only lost, landed or unplanned drones could take fails at once.
 
         An ``ack`` makes the offered lanes covered. A ``nack`` (or a failed
         send) withdraws the offer, and the chunk is offered to another
@@ -1990,8 +2022,12 @@ class FleetCoordinator:
         A drone that flies sensed steps and reports in its last telemetry
         that its obstacle sensor is not ok flies no step (review N6). A drone
         whose lanes a ``sensor_down`` cut ended never flies a lane appended
-        after it either (``lane_steps``). Telemetry without the obstacle
-        fields changes nothing.
+        after it either (``lane_steps``). A drone that reports obstacle
+        sensing and whose fresh telemetry shows it on the ground with lanes
+        of its own left, after it had flown in this plan, has landed: it
+        never finishes its own lanes, so it never takes appended lanes
+        (``_own_lanes_left_locked``; review R2-N2). Telemetry without the
+        obstacle fields changes nothing.
         """
         state = self._drones[rid]
         telemetry = state.telemetry or {}
@@ -1999,7 +2035,29 @@ class FleetCoordinator:
             return "reports its obstacle sensor is not ok"
         if any(cut.reason == CUT_SENSOR_DOWN for cut in state.obstacle_cuts.values()):
             return "ended its lanes (obstacle sensor down)"
+        if (
+            telemetry.get(TELEMETRY_SENSING) is not None
+            and self._fresh_locked(state)
+            and state.seen_flying
+            and telemetry.get("is_flying") is False
+            and telemetry.get("state") != "taking_off"
+            and not self._own_lanes_done_locked(state)
+        ):
+            return "landed before it finished its own lanes"
         return None
+
+    def _fresh_locked(self, state: _DroneState) -> bool:
+        """True when the drone's last telemetry is no older than ``TELEMETRY_FRESH_S``."""
+        return state.telemetry_at is not None and self._clock() - state.telemetry_at <= TELEMETRY_FRESH_S
+
+    @staticmethod
+    def _own_lanes_done_locked(state: _DroneState) -> bool:
+        """True when the drone's last telemetry shows it past every lane: ``lanes_total`` and every lane the ground gave it."""
+        telemetry = state.telemetry or {}
+        lane_index, lanes_total = telemetry.get("lane_index"), telemetry.get("lanes_total")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (lane_index, lanes_total)):
+            return False
+        return lane_index >= lanes_total and lane_index >= len(state.lanes)
 
     def _own_lanes_left_locked(self, rid: str) -> str | None:
         """Why *rid* may not be given appended lanes yet: it senses obstacles and has lanes of its own left.
@@ -2012,18 +2070,33 @@ class FleetCoordinator:
         has finished its own lanes (``lane_index`` at or past ``lanes_total``
         and past every lane the ground gave it); its cuts are then all known
         and its replayed position is where it is. Until then the chunk waits
-        with this text. A drone without the obstacle fields is not held back,
-        as before. Returns None when *rid* may take lanes now.
+        with a text that says why (review R2-N2):
+
+        * ``waiting for <rid>, which has no fresh telemetry`` while its last
+          telemetry is older than ``TELEMETRY_FRESH_S``. It may report again;
+          if it is declared lost instead, it is no longer a receiver.
+        * ``waiting for <rid>, which is taking off`` or ``waiting for <rid>,
+          which is not flying`` while its fresh telemetry shows it on the
+          ground with lanes left before it has flown in this plan.
+        * ``waiting for <rid> to finish its own lanes`` while it flies them.
+
+        A drone that landed with lanes of its own left never takes the chunk
+        and is left out before this check (``_unfit_receiver_locked``). A
+        drone without the obstacle fields is not held back, as before.
+        Returns None when *rid* may take lanes now.
         """
         state = self._drones[rid]
         telemetry = state.telemetry or {}
         if telemetry.get(TELEMETRY_SENSING) is None:
             return None
-        fresh = state.telemetry_at is not None and self._clock() - state.telemetry_at <= TELEMETRY_FRESH_S
-        lane_index, lanes_total = telemetry.get("lane_index"), telemetry.get("lanes_total")
-        whole = all(isinstance(v, int) and not isinstance(v, bool) for v in (lane_index, lanes_total))
-        if fresh and whole and lane_index >= lanes_total and lane_index >= len(state.lanes):
+        if not self._fresh_locked(state):
+            return f"waiting for {rid}, which has no fresh telemetry"
+        if self._own_lanes_done_locked(state):
             return None
+        if telemetry.get("is_flying") is False:
+            if telemetry.get("state") == "taking_off":
+                return f"waiting for {rid}, which is taking off"
+            return f"waiting for {rid}, which is not flying"
         return f"waiting for {rid} to finish its own lanes"
 
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
@@ -2102,10 +2175,12 @@ class FleetCoordinator:
         lanes, by ``_offer_reflight_locked``.
 
         A drone that cannot fly appended lanes because of its obstacle
-        sensing (``_unfit_receiver_locked``) is never offered any, and one
+        sensing, or that senses obstacles and landed before it finished its
+        own lanes (``_unfit_receiver_locked``), is never offered any, and one
         that senses obstacles is offered them only once it has finished its
         own lanes (``_own_lanes_left_locked``): until then a chunk it would
-        take waits, with that reason in ``held``. The transit to a chunk
+        take waits, with the reason (no fresh telemetry, not flying yet, or
+        lanes of its own left) in ``held``. The transit to a chunk
         starts where the receiver will actually be after its lanes
         (``_actual_path_locked``), and the fence and the separation are
         checked on the path it will actually fly.
@@ -2490,7 +2565,9 @@ class FleetCoordinator:
         Every segment the re-flight would have flown after that lane is
         reported whole, because the receiver reached it off the planned path,
         if at all; a cut on the transit to the segments therefore leaves
-        every segment whole.
+        every segment whole. A receiver that landed before it finished the
+        appended lanes (``landed_at``) did not fly the lane it was on nor any
+        after it, so every segment of those lanes is reported whole too.
 
         Each entry is listed under the cutting drone with the cutting
         drone's lane index, the chunk's reason (``blocked again by
@@ -2511,7 +2588,8 @@ class FleetCoordinator:
                 continue
             seg = chunk.segments[leg]
             lane = first + k
-            if k > blocked_at or lane + 1 >= len(path):
+            landed = chunk.landed_at is not None and lane >= chunk.landed_at
+            if k > blocked_at or landed or lane + 1 >= len(path):
                 pieces = [seg]
             else:
                 pieces = leg_rest(seg, path[lane], path[lane + 1])
@@ -2791,8 +2869,13 @@ class FleetCoordinator:
         receiver's replayed path searched every segment
         (``_reflight_rest_locked`` leaves nothing), and otherwise ``failed``
         with what it flew off the planned path, for example after a cut on
-        its own lanes moved where it flew them from. A ``lane_index`` at or
-        past their start makes it ``flying``. Returns True when a re-flight
+        its own lanes moved where it flew them from. Telemetry that shows the
+        receiver not flying before that (it landed, for example on its
+        battery gate, without a cut) fails it with ``<receiver> landed before
+        it finished the re-flight``, and only what the receiver left
+        unsearched stays listed: the legs of every appended lane from its
+        ``lane_index`` on are listed whole (``landed_at``). A ``lane_index``
+        at or past their start makes it ``flying``. Returns True when a re-flight
         changed, when *drone_id* has a waiting re-flight of its own cuts that
         this telemetry may release or let through, or when a re-flight is
         held for a receiver that may now take it.
@@ -2833,6 +2916,13 @@ class FleetCoordinator:
                 else:
                     chunk.status = "reflown"
                     logger.info("%s re-flew %s's cut %s", drone_id, chunk.lost_id, chunk.cut_seq)
+            elif telemetry.get("is_flying") is False:
+                # On the ground with appended lanes left and no cut on them:
+                # it will not fly them, so the chunk would stay flying (or
+                # acked) for ever. Without a lane index nothing counts as flown.
+                chunk.landed_at = lane_index if lane_index is not None else first
+                chunk.flown_rest = True
+                self._fail_reflight_locked(chunk, f"{drone_id} landed before it finished the re-flight")
             elif lane_index is not None and lane_index >= first:
                 chunk.status = "flying"
             wanted = wanted or chunk.status != before

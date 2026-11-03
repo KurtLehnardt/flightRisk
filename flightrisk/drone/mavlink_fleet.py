@@ -58,7 +58,11 @@ vehicle does not face (it is cut ``sensor_stale``), so stepped sensing on
 such an ArduCopter flies only the lanes it already faces: it is not refused,
 but logged once as ``EVENT_STEPPED_CANNOT_YAW``, and the preflight problem of
 such an ArduCopter without avoidance names only the autopilot's avoidance
-and the ``off`` override as remedies. None of this has flown either.
+and the ``off`` override as remedies. Configuring the autopilot's avoidance
+does not stop the cuts of an edge with a camera source, which always builds
+the stepped sensor: on such an edge only the ``off`` override flies those
+lanes, relying on the autopilot's own avoidance, which the edge does not
+check in that mode. None of this has flown either.
 
 Watchdogs
 ---------
@@ -220,18 +224,27 @@ _NEEDS_AVOIDANCE_MODES = frozenset({SENSING_NONE, "autopilot"})
 _STATIONARY_RADIUS_M = 0.5
 #: Logged once when stepped sensing is told to an ArduCopter whose link cannot
 #: turn it in place (no ``yaw_to``): the edge flies, but cuts every lane the
-#: vehicle is not already facing.
+#: vehicle is not already facing. Configuring the autopilot's avoidance does
+#: not change that, because an edge with a camera source always builds the
+#: stepped sensor (``edge_device``); the only way to fly those lanes is the
+#: ``off`` override, which relies on the autopilot's own avoidance unchecked.
 EVENT_STEPPED_CANNOT_YAW = "edge_obstacle_stepped_cannot_yaw"
 STEPPED_CANNOT_YAW_DETAIL = (
     "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), "
-    "so every lane it is not already facing will be cut (sensor_stale), never flown blind; configure the "
-    "autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off"
+    "so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance "
+    "the autopilot has; to fly those lanes, set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own "
+    "avoidance (OA_TYPE plus a proximity source), which the edge does not check in that mode"
 )
 #: The remedies the preflight names for an ArduCopter without avoidance whose
-#: link cannot turn it in place (a camera source would cut its lanes).
+#: link cannot turn it in place. The edge has no camera sensor here, so the
+#: autopilot's avoidance, once configured, is checked and lets it fly; the
+#: ``off`` override relies on that avoidance without the check. A camera is
+#: not offered: a camera edge cuts every lane such a vehicle does not already
+#: face. Kept short, because the preflight detail is cut at ``_DETAIL_MAX``.
 NO_AVOIDANCE_CANNOT_YAW_REMEDY = (
     "configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set "
-    "FLIGHTRISK_OBSTACLE_SENSING=off; stepped camera sensing cannot turn an ArduCopter in place yet"
+    "FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane "
+    "this ArduCopter does not already face"
 )
 
 
