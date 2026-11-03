@@ -45,6 +45,19 @@ problem for a drone with neither. Nothing here has flown: how long a real
 ArduCopter holds before BendyRuler gives up on a target, and what it does
 then, decide whether the stationary window below is long enough.
 
+Stepped sensing through a forward companion camera needs the vehicle to face
+each move. ``measured_heading_deg()`` gives the lane executor the heading the
+autopilot measures in the plan frame, and the executor clears a step only
+while it is within 10 degrees of the commanded heading. ``rotate`` waits for
+that heading: PX4 turns to a reposition's yaw; ArduCopter ignores that yaw,
+so it is turned in place with the link's optional ``yaw_to`` command
+(``MAV_CMD_CONDITION_YAW``, see ``autopilot.AutopilotLink``). A link without
+``yaw_to`` cannot turn an ArduCopter in place, so its ``rotate`` only turns
+the plan frame, as before; the executor then never clears a step the
+vehicle does not face (it is cut ``sensor_stale``), so stepped sensing on
+such an ArduCopter flies only the lanes it already faces. None of this has
+flown either.
+
 Watchdogs
 ---------
 * Every move and takeoff has a deadline (twice the expected time plus a
@@ -571,6 +584,22 @@ class MavlinkFleetDrone:
         pose_heading = heading if yaw is None else (yaw - frame.heading_deg) % 360.0
         return RelativePose(x_m * 100.0, y_m * 100.0, pose_heading)
 
+    def measured_heading_deg(self) -> float | None:
+        """The heading the autopilot measures, in the plan frame (degrees clockwise from its "ahead"), or None.
+
+        None before the first takeoff (no plan frame yet) and while the
+        heading or the link is stale. Unlike ``measured_pose()`` it never
+        falls back to the commanded heading, so the lane executor can tell
+        whether the vehicle, and a forward companion camera, faces the step
+        it is about to clear. Not verified on a real autopilot.
+        """
+        st = self._autopilot_state()
+        with self._lock:
+            frame = self._frame
+        if frame is None or not _number(st.heading_deg) or not self._fresh(st, "heading"):
+            return None
+        return (float(st.heading_deg) - frame.heading_deg) % 360.0
+
     def geo_position(self) -> tuple[float, float] | None:
         """Latitude and longitude in degrees, or None."""
         st = self._autopilot_state()
@@ -849,7 +878,20 @@ class MavlinkFleetDrone:
         return self._fly_to(target, "move", 2 * expected_s + self.options.move_timeout_margin_s, distance_cm / 100.0)
 
     def rotate(self, degrees: int) -> CommandResult:
-        """Yaw by *degrees* (clockwise positive) over the commanded position; returns once turned."""
+        """Yaw by *degrees* (clockwise positive) over the commanded position; returns once turned.
+
+        PX4 turns to the yaw of a reposition at the commanded position and
+        this waits until the measured heading is within 10 degrees of it
+        (a deadline raises, as for a move). An ArduCopter is turned in place
+        with the link's ``yaw_to`` and waited for the same way, but a
+        heading not reached by the deadline returns ``NOT_EXECUTED``
+        (``heading not reached``) and leaves the commanded heading as it
+        was: the lane executor then treats the drone as not facing its step
+        and cuts the lane instead of clearing it. An ArduCopter link without
+        ``yaw_to`` only turns the plan frame (see the module docstring).
+        ``rotate(0)`` turns to the commanded heading. Not flown on real
+        hardware.
+        """
         if not _number(degrees):
             return CommandResult("rotate", CommandOutcome.REJECTED, f"invalid rotation {degrees!r}")
         refusal = self._command_refusal()
@@ -858,19 +900,67 @@ class MavlinkFleetDrone:
         with self._lock:
             target = _Target(**vars(self._target))
         target.heading_deg = (target.heading_deg + degrees) % 360.0
+        timeout = abs(degrees) / self.options.yaw_rate_dps * 2 + self.options.move_timeout_margin_s
         if self.link.state().autopilot == ARDUPILOT:
+            if self._can_yaw_in_place():
+                return self._yaw_in_place(target, timeout)
             # ArduCopter ignores the yaw of a reposition (MAV_CMD_DO_REPOSITION)
             # and, in GUIDED, turns to face its direction of travel
-            # (WP_YAW_BEHAVIOR). The rotation therefore turns the plan frame's
-            # "forward" for the next moves without waiting for a heading the
-            # autopilot will never hold.
+            # (WP_YAW_BEHAVIOR). Without a yaw command the rotation therefore
+            # turns the plan frame's "forward" for the next moves without
+            # waiting for a heading the autopilot will never hold. The lane
+            # executor's gate does not clear a step until the measured
+            # heading faces it.
             with self._lock:
                 if self._interrupt.is_set():
                     return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, "interrupted by a landing")
                 self._target = target
             return CommandResult("rotate", CommandOutcome.OK, "plan heading turned; ArduCopter faces its travel")
-        timeout = abs(degrees) / self.options.yaw_rate_dps * 2 + self.options.move_timeout_margin_s
         return self._fly_to(target, "rotate", timeout, 0.0, check_heading=True)
+
+    def _can_yaw_in_place(self) -> bool:
+        """True when the link can turn the vehicle in place (it has ``yaw_to``)."""
+        return callable(getattr(self.link, "yaw_to", None))
+
+    def _yaw_in_place(self, target: _Target, timeout_s: float) -> CommandResult:
+        """Turn an ArduCopter in place to *target*'s heading with ``yaw_to`` and wait until it measures it.
+
+        OK once the measured heading is within ``_HEADING_TOLERANCE_DEG`` of
+        the target heading; only then does the commanded heading change. A
+        heading not reached by *timeout_s* returns ``NOT_EXECUTED`` with
+        ``heading not reached`` (the autopilot keeps its yaw target; the next
+        turn or reposition replaces it). A landing or external control ends
+        the wait (``NOT_EXECUTED``). The command itself raises when the
+        autopilot refuses it, like a refused reposition. Not flown on a real
+        ArduCopter.
+        """
+        with self._lock:
+            frame = self._frame
+        if frame is None:
+            return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, "not flying")
+        self.link.yaw_to((frame.heading_deg + target.heading_deg) % 360.0)
+        deadline = self._clock() + timeout_s
+        while True:
+            if self._interrupt.is_set():
+                detail = "external control" if self._external_latched() else "interrupted by a landing"
+                return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, detail)
+            heading = self.measured_heading_deg()
+            if heading is not None and _angle_error(heading, target.heading_deg) <= _HEADING_TOLERANCE_DEG:
+                with self._lock:
+                    if self._interrupt.is_set():
+                        continue
+                    self._target = target
+                return CommandResult("rotate")
+            if self._clock() >= deadline:
+                measured = "unknown" if heading is None else f"{heading:.0f}"
+                logger.warning("[%s] heading %.0f deg not reached within %.0f s (measured %s deg)",
+                               self.name, target.heading_deg, timeout_s, measured)
+                return CommandResult(
+                    "rotate", CommandOutcome.NOT_EXECUTED,
+                    f"heading not reached: wanted {target.heading_deg:.0f} deg in the plan frame, measured "
+                    f"{measured} deg after {timeout_s:.0f} s",
+                )
+            self._interrupt.wait(_POLL_S)
 
     def hover(self) -> CommandResult:
         """Hold the commanded position (the autopilot already holds it between moves)."""
@@ -1104,6 +1194,11 @@ class MavlinkFleetDrone:
 
 def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _angle_error(a_deg: float, b_deg: float) -> float:
+    """The smallest angle between two headings, 0 to 180 degrees."""
+    return abs((a_deg - b_deg + 180.0) % 360.0 - 180.0)
 
 
 def _offset_m(lat0: float, lon0: float, lat: float, lon: float) -> tuple[float, float]:

@@ -126,6 +126,14 @@ class AutopilotLink(Protocol):
 
     Implementations are thread-safe: the edge sends a land from one thread
     while another waits for a position target to be reached.
+
+    Optional, not part of the protocol check: ``yaw_to(yaw_deg: float) ->
+    None`` turns the vehicle in place to the compass heading *yaw_deg*
+    (``MAV_CMD_CONDITION_YAW``, absolute, holding position) and returns once
+    the autopilot accepted it. ArduCopter ignores the yaw of a reposition, so
+    ``MavlinkFleetDrone`` needs it to turn an ArduCopter to face each move
+    for stepped obstacle sensing. No link implements it yet, and it has not
+    been verified on an autopilot.
     """
 
     address: str
