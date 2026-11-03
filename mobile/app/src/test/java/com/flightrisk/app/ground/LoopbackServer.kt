@@ -139,6 +139,29 @@ fun readClientText(input: InputStream): String {
 }
 
 /**
+ * Reads and discards whatever the client still sends (for example its close
+ * frame) until the client closes the connection. Returns true when the end of
+ * the stream or a reset is seen, and false when nothing ends it within
+ * [timeoutMs].
+ */
+fun awaitPeerClose(socket: Socket, timeoutMs: Int): Boolean {
+    socket.soTimeout = timeoutMs
+    val input = socket.getInputStream()
+    val sink = ByteArray(4096)
+    return try {
+        while (input.read(sink) >= 0) {
+            // Discard the client's close frame and anything before it.
+        }
+        true
+    } catch (_: java.net.SocketTimeoutException) {
+        false
+    } catch (_: IOException) {
+        // A reset also means that the client closed the connection.
+        true
+    }
+}
+
+/**
  * Sends the header of a text message of [declaredBytes] and then streams
  * filler until the peer stops reading. Returns how many payload bytes were
  * written before the write failed.

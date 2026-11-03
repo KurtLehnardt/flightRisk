@@ -87,7 +87,8 @@ The debug APK is written to `app/build/outputs/apk/debug/`. `./gradlew :contract
 - **The camera, JPEG compression of the thumbnail and battery and thermal cost** of the edge mode.
 - **Appearance embeddings.** No embedding model runs in the app; the embedding path was tested on the JVM with a deterministic test provider and the Python ground's fixture, not with a real model or bitmaps.
 - **A real call to Anthropic** was never made; the request shape was checked against a stub.
-- **Compose UI tests have never been run.** `app/src/androidTest/.../GroundConsoleScreenTest.kt` compiles in isolation but was not executed. **`app/src/androidTest/.../PipelineE2ETest.kt` does not compile on `main`** (`./gradlew :app:compileDebugAndroidTestKotlin` fails with unresolved references to `androidx.test.filters` and `SmallTest`/`MediumTest`, because the dependency is not declared). This is a known follow-up; the JVM tests and `assembleDebug` are not affected.
+- **No instrumented test has been run, including the Compose UI tests.** All androidTest sources (`GroundConsoleScreenTest`, `PipelineE2ETest`, `FlightRiskMigrationInstrumentedTest`) compile (`./gradlew --offline :app:compileDebugAndroidTestKotlin`), but the androidTest APK could not be built offline because three espresso-core dependency jars were not in the Gradle cache; see `docs/mobile-followups.md`.
+- **The Room migration** from database version 1 to 2 (which drops the unused `target_versions` table) was run on the JVM against a desktop SQLite engine, not through Room on Android. The schema files Room exports are in `app/schemas`, and a version bump needs a migration: the database has no destructive fallback.
 - **The on-device Gemma inference** path (MediaPipe, a new session per call) was compiled, not run.
 
 ## Key dependencies
