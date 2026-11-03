@@ -119,6 +119,25 @@ from flightrisk.drone.lane_executor import (
     MANUAL_CONTROL_TYPES,
     LaneExecutor,
 )
+from flightrisk.drone.obstacle_sensor import (
+    ENV_FAKE_OBSTACLE_Y_CM,
+    ENV_OBSTACLE_MIN_SAFE_DEPTH,
+    ENV_OBSTACLE_PERSON_FRACTION,
+    ENV_OBSTACLE_SENSING,
+    ENV_OBSTACLE_STEP_CM,
+    ENV_OBSTACLE_TURN,
+    OBSTACLE_MIN_SAFE_DEPTH,
+    OBSTACLE_PERSON_FRACTION,
+    OBSTACLE_STEP_CM,
+    OBSTACLE_STEP_MAX_CM,
+    OBSTACLE_STEP_MIN_CM,
+    SENSING_ENV_OFF,
+    SENSING_ENV_REQUIRED,
+    BlockedZone,
+    FakeObstacleSensor,
+    LatestFrame,
+    NullSensor,
+)
 from flightrisk.drone.safety import (
     CEILING_CM_ENV,
     CEILING_MARGIN_CM_ENV,
@@ -1347,6 +1366,161 @@ def _build_mavlink_drone(args: argparse.Namespace, log: StructuredLogger) -> Any
     return MavlinkFleetDrone(args.drone_id, MavsdkAutopilotLink(address, autopilot=autopilot), options)
 
 
+class ObstacleWiring:
+    """What the edge hands to ``LaneExecutor`` for obstacle sensing (design section 4).
+
+    ``sensor`` and ``sensor_error`` are mutually exclusive, and both are None for
+    a drone whose autopilot avoids obstacles by itself. ``holder`` is the frame
+    holder that ``drone.on_frame`` feeds, or None when no camera sensor is used.
+    """
+
+    def __init__(
+        self,
+        sensor: Any = None,
+        sensor_error: str | None = None,
+        step_cm: int = OBSTACLE_STEP_CM,
+        turn: bool = True,
+        holder: LatestFrame | None = None,
+    ):
+        self.sensor = sensor
+        self.sensor_error = sensor_error
+        self.step_cm = step_cm
+        self.turn = turn
+        self.holder = holder
+
+    def executor_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``LaneExecutor``; empty when the executor should fly as before."""
+        kwargs: dict[str, Any] = {}
+        if self.sensor is not None:
+            kwargs["obstacle_sensor"] = self.sensor
+        if self.sensor_error is not None:
+            kwargs["obstacle_sensor_error"] = self.sensor_error
+        if self.sensor is not None or self.sensor_error is not None:
+            kwargs["obstacle_step_cm"] = self.step_cm
+            kwargs["obstacle_turn"] = self.turn
+        return kwargs
+
+
+def _obstacle_sensing_mode(environ: Any = None) -> str:
+    """``FLIGHTRISK_OBSTACLE_SENSING``: ``required`` (the default) or ``off``; anything else refuses to start."""
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_OBSTACLE_SENSING) or "").strip().lower()
+    if not raw:
+        return SENSING_ENV_REQUIRED
+    if raw not in (SENSING_ENV_REQUIRED, SENSING_ENV_OFF):
+        raise SystemExit(
+            f"edge_device: {ENV_OBSTACLE_SENSING}={raw!r} is not valid; use "
+            f"{SENSING_ENV_REQUIRED!r} (the default) or {SENSING_ENV_OFF!r}. Refusing to start."
+        )
+    return raw
+
+
+def _obstacle_number(name: str, default: float, lo: float, hi: float, environ: Any, integer: bool = False) -> Any:
+    """A numeric obstacle knob from the environment, in ``lo..hi``; a bad value refuses to start."""
+    raw = (environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw) if integer else float(raw)
+        ok = lo <= value <= hi and value == value
+    except ValueError:
+        ok = False
+    if not ok:
+        raise SystemExit(f"edge_device: {name}={raw!r} must be a number from {lo:g} to {hi:g}. Refusing to start.")
+    return value
+
+
+def _obstacle_turn(environ: Any) -> bool:
+    """``FLIGHTRISK_OBSTACLE_TURN``: 1 (the default) turns nose first; 0 is the bring-up kill switch."""
+    raw = (environ.get(ENV_OBSTACLE_TURN) or "").strip().lower()
+    if raw in ("", "1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise SystemExit(f"edge_device: {ENV_OBSTACLE_TURN}={raw!r} must be 0 or 1. Refusing to start.")
+
+
+def _copying_frame_feed(holder: LatestFrame) -> Callable[[Any], None]:
+    """A frame callback that gives the holder its own copy, because a controller may reuse its frame buffer."""
+
+    def _feed(frame: Any) -> None:
+        copy = getattr(frame, "copy", None)
+        holder.update(copy() if callable(copy) else frame)
+
+    return _feed
+
+
+def _build_obstacle_wiring(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    drone: Any,
+    runner: Any,
+    envelope: SafetyEnvelope,
+    environ: Any = None,
+) -> ObstacleWiring:
+    """Build the obstacle sensor for this drone kind and environment (design sections 3.2, 4, 5 and 7.1).
+
+    Call it after the drone is built and before ``drone.connect()``.
+
+    * ``FLIGHTRISK_OBSTACLE_SENSING=off`` flies unsensed, loudly: a ``NullSensor``.
+    * ``tello``: a ``ForwardCameraSensor`` on a ``LatestFrame`` that ``drone.on_frame`` feeds with every
+      frame, independent of the detector's frame stride. When the sensor cannot be built (torch, the
+      MiDaS weights, the first inference) the error is passed to the executor, which refuses to take off.
+    * ``fake``: a ``FakeObstacleSensor``, blocked from ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` along the
+      plan-frame y axis when that is set and never otherwise. It loads no model.
+    * ``mavlink``: no sensor. The autopilot's own avoidance is checked at preflight (the drone declares
+      ``ONBOARD_AVOIDANCE`` after its parameter read) and ``off`` is the only override.
+    """
+    env = os.environ if environ is None else environ
+    kind = _drone_kind(args)
+    drone_id = getattr(args, "drone_id", None)
+    mode = _obstacle_sensing_mode(env)
+    turn = _obstacle_turn(env)
+    if mode == SENSING_ENV_OFF:
+        log.warning(
+            "edge_obstacle_sensing_off", drone_id=drone_id,
+            detail=f"{ENV_OBSTACLE_SENSING}=off: this drone flies its lanes with NO obstacle sensing",
+        )
+        return ObstacleWiring(sensor=NullSensor(), turn=turn)
+    if kind == "mavlink":
+        log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
+        return ObstacleWiring(turn=turn)
+
+    step_cm = _obstacle_number(
+        ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_CM, OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM, env, integer=True,
+    )
+    if kind == "fake":
+        y_raw = (env.get(ENV_FAKE_OBSTACLE_Y_CM) or "").strip()
+        zones: list[BlockedZone] = []
+        if y_raw:
+            y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, 0.0, -100000.0, 100000.0, env)
+            zones.append(BlockedZone(heading_deg=0.0, y_min=y_cm))
+            log.info("edge_obstacle_fake", drone_id=drone_id, blocked_from_y_cm=y_cm)
+        return ObstacleWiring(
+            sensor=FakeObstacleSensor(envelope.pose_snapshot, zones), step_cm=step_cm, turn=turn,
+        )
+
+    min_safe_depth = _obstacle_number(ENV_OBSTACLE_MIN_SAFE_DEPTH, OBSTACLE_MIN_SAFE_DEPTH, 0.0, 1.0, env)
+    person_fraction = _obstacle_number(ENV_OBSTACLE_PERSON_FRACTION, OBSTACLE_PERSON_FRACTION, 0.0, 1.0, env)
+    holder = LatestFrame(time.monotonic)
+    try:
+        on_frame = getattr(drone, "on_frame", None)
+        if not callable(on_frame):
+            raise RuntimeError("the drone provides no on_frame hook for the camera sensor")
+        from flightrisk.drone import obstacle_camera
+
+        on_frame(_copying_frame_feed(holder))
+        sensor = obstacle_camera.ForwardCameraSensor(
+            holder, runner, drone_id=drone_id, min_safe_depth=min_safe_depth, person_fraction=person_fraction,
+            clock=time.monotonic,
+        )
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
+        return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder)
+    return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder)
+
+
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
     """Construct the drone controller for a flying source."""
     if _drone_kind(args) == "mavlink":
@@ -1524,10 +1698,13 @@ def _run_flight_edge(
         # checked against the live geofence, ceiling and slot.
         bind_envelope(envelope)
 
+    obstacle = _build_obstacle_wiring(args, log, drone, runner, envelope)
+
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
     flight = LaneExecutor(
         drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
+        **obstacle.executor_kwargs(),
     )
     bind_executor = getattr(transport, "bind_executor", None)
     if callable(bind_executor):
