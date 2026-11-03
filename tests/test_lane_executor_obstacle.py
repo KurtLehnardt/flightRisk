@@ -30,6 +30,7 @@ import pytest
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.controller import Capability, CommandOutcome, CommandResult
 from flightrisk.drone.lane_executor import LaneExecutor
+from flightrisk.drone.lane_flight import EVENT_SENSOR_PROBE
 from flightrisk.drone.lane_steps import Cut, uncovered_segments
 from flightrisk.drone.obstacle_sensor import (
     CUT_AUTOPILOT,
@@ -614,7 +615,12 @@ def test_a_sensor_down_for_10_s_ends_the_lanes_through_on_complete(rigs):
     start(rig, LANES, on_complete="land")
     assert wait_for(lambda: ("land",) in rig.timeline and not rig.executor.is_busy), rig.timeline
     # Third attempt: down 12 s (>= 10): no sensor_stale cut, the lanes end.
-    assert len(sensor.calls) == 3
+    assert len(events(rig, EVENT_OBSTACLE_GATE)) == 3
+    # The landing then probes the sensor once (review 177 N5); it still
+    # cannot look, so it stays reported down.
+    assert wait_for(lambda: events(rig, EVENT_SENSOR_PROBE)), rig.log.names()
+    assert len(sensor.calls) == 4
+    assert events(rig, EVENT_SENSOR_PROBE)[0]["recovered"] is False
     assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_DOWN)]
     assert lane_moves(rig) == []
     assert len(events(rig, EVENT_LANES_ENDED_SENSOR_DOWN)) == 1
@@ -787,10 +793,13 @@ def test_manual_takeover_with_a_rotated_heading_resumes_through_the_gate(rigs):
     send(rig.executor, fp.make_resume_search(cmd_id="m4", fence=FENCE))
     assert answered(rig, "m4")["type"] == "ack"
     assert wait_for(lambda: finished(rig))
-    # The way back restores the hold heading (-30); lane 1 then continues
-    # through a gate at heading 90 and lane 2 turns to 180.
-    assert rotations(rig) == [90, 30, -30, 90]
-    assert rig.sensor.calls[gates_before].heading_deg == 90.0
+    # The way back is sensed (review 177 N2): it turns to face its back move
+    # (heading 270, +150) and its left move (heading 0, +90) and flies each
+    # after a clear gate; lane 1 then turns back to 90 and continues through
+    # a gate, and lane 2 turns to 180.
+    assert rotations(rig) == [90, 30, 150, 90, 90, 90]
+    headings = [call.heading_deg for call in rig.sensor.calls[gates_before:]]
+    assert headings == [270.0, 0.0, 90.0] + [180.0] * 4
     pose = assert_invariants(rig)
     assert pose.heading_deg == 180.0 and pose.y_cm == pytest.approx(0.0)
 
