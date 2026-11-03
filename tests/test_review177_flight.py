@@ -31,7 +31,7 @@ import time
 import pytest
 
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.autopilot import ARDUPILOT
+from flightrisk.drone.autopilot import ARDUPILOT, PX4
 from flightrisk.drone.controller import CommandOutcome, CommandResult, command_result
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.lane_flight import (
@@ -40,7 +40,14 @@ from flightrisk.drone.lane_flight import (
     HEADING_TOLERANCE_DEG,
 )
 from flightrisk.drone.lane_steps import Cut
-from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone, MavlinkFleetOptions
+from flightrisk.drone.mavlink_fleet import (
+    EVENT_STEPPED_CANNOT_YAW,
+    NO_AVOIDANCE_CANNOT_YAW_REMEDY,
+    SENSING_NONE,
+    STEPPED_CANNOT_YAW_DETAIL,
+    MavlinkFleetDrone,
+    MavlinkFleetOptions,
+)
 from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
 from flightrisk.drone.obstacle_sensor import (
     CUT_OBSTACLE,
@@ -303,15 +310,16 @@ class YawingLink(MavsdkAutopilotLink):
 def make_mav(monkeypatch):
     built = []
 
-    def _make(vehicle=None, *, yawing=True, turns=True, **options):
+    def _make(vehicle=None, *, yawing=True, turns=True, connect=True, event_log=None, **options):
         vehicle = vehicle or SimVehicle(ARDUPILOT, time_scale=20.0)
         install(monkeypatch, vehicle)
         address = "tcpout://127.0.0.1:1"
         link = YawingLink(address, vehicle, turns=turns) if yawing else MavsdkAutopilotLink(address)
-        drone = MavlinkFleetDrone("drone-1", link, MavlinkFleetOptions(**options))
+        drone = MavlinkFleetDrone("drone-1", link, MavlinkFleetOptions(**options), event_log=event_log)
         drone.bind_slot_source(lambda: 1500.0)
-        assert drone.connect() is True
         built.append(drone)
+        if connect:
+            assert drone.connect() is True
         return drone, vehicle
 
     yield _make
@@ -389,6 +397,79 @@ def test_measured_heading_is_none_without_a_frame_or_with_stale_telemetry(make_m
         assert wait_for(lambda: drone.measured_heading_deg() is None)
     finally:
         vehicle.restore_link()
+
+
+def preflight_detail(drone, needle):
+    """The preflight detail once it mentions *needle* (the parameters are read in the background)."""
+    status = wait_for(lambda: needle in (drone.link_status().detail or "")) and drone.link_status()
+    assert status and status.reason == "preflight", drone.link_status()
+    return status.detail
+
+
+def test_an_ardupilot_that_cannot_yaw_is_not_told_to_use_a_camera(make_mav):
+    """B1 follow-up: a camera source would cut every lane this ArduCopter does not already face."""
+    drone, _ = make_mav(yawing=False)
+    drone.set_obstacle_sensing(SENSING_NONE)
+    detail = preflight_detail(drone, "no obstacle avoidance")
+    assert NO_AVOIDANCE_CANNOT_YAW_REMEDY in detail and "camera source" not in detail
+    assert "OA_TYPE" in detail and "FLIGHTRISK_OBSTACLE_SENSING=off" in detail
+    result = drone.takeoff()
+    assert result.outcome is CommandOutcome.REJECTED and NO_AVOIDANCE_CANNOT_YAW_REMEDY in result.detail
+
+
+@pytest.mark.parametrize("autopilot,yawing", [(ARDUPILOT, True), (PX4, False)])
+def test_a_drone_that_can_face_its_moves_keeps_the_camera_option(make_mav, autopilot, yawing):
+    drone, _ = make_mav(SimVehicle(autopilot, time_scale=20.0), yawing=yawing)
+    drone.set_obstacle_sensing(SENSING_NONE)
+    detail = preflight_detail(drone, "no obstacle avoidance")
+    assert "(configure the autopilot's avoidance, use a camera source for stepped sensing, " \
+           "or set FLIGHTRISK_OBSTACLE_SENSING=off)" in detail
+    assert NO_AVOIDANCE_CANNOT_YAW_REMEDY not in detail
+
+
+def cannot_yaw_events(log):
+    return [fields for _, event, fields in log.events if event == EVENT_STEPPED_CANNOT_YAW]
+
+
+def test_stepped_sensing_on_an_ardupilot_that_cannot_yaw_warns_once_and_still_flies(make_mav):
+    log = QuietLogger()
+    drone, vehicle = make_mav(yawing=False, event_log=log)
+    assert wait_for(lambda: drone.link_status().ok), drone.link_status()
+    drone.set_obstacle_sensing(SENSING_STEPPED)
+    warnings = cannot_yaw_events(log)
+    assert len(warnings) == 1
+    assert warnings[0]["detail"] == STEPPED_CANNOT_YAW_DETAIL and warnings[0]["autopilot"] == ARDUPILOT
+    assert [level for level, event, _ in log.events if event == EVENT_STEPPED_CANNOT_YAW] == ["warning"]
+    drone.refresh_params()  # later parameter reads do not repeat it
+    assert len(cannot_yaw_events(log)) == 1
+    # Not refused: the edge flies, and the gate cuts the lanes it does not face.
+    assert drone.link_status().ok, drone.link_status()
+    airborne(drone, vehicle)
+
+
+def test_the_cannot_yaw_warning_waits_for_the_autopilot_type(make_mav):
+    log = QuietLogger()
+    drone, _ = make_mav(yawing=False, connect=False, event_log=log)
+    drone.set_obstacle_sensing(SENSING_STEPPED)  # before connect: the autopilot type is not known yet
+    assert cannot_yaw_events(log) == []
+    assert drone.connect() is True
+    assert wait_for(lambda: cannot_yaw_events(log)), log.names()
+    assert len(cannot_yaw_events(log)) == 1
+
+
+@pytest.mark.parametrize("autopilot,yawing,mode", [
+    (ARDUPILOT, True, SENSING_STEPPED),
+    (PX4, False, SENSING_STEPPED),
+    (ARDUPILOT, False, "forward_only"),
+    (ARDUPILOT, False, "off"),
+])
+def test_no_cannot_yaw_warning_when_the_drone_can_face_its_moves_or_never_turns(make_mav, autopilot, yawing, mode):
+    log = QuietLogger()
+    drone, _ = make_mav(SimVehicle(autopilot, time_scale=20.0), yawing=yawing, event_log=log)
+    assert wait_for(lambda: drone.link_status().ok), drone.link_status()
+    drone.set_obstacle_sensing(mode)
+    drone.refresh_params()
+    assert cannot_yaw_events(log) == []
 
 
 class FacingRecorder(FakeObstacleSensor):

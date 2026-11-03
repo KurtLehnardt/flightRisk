@@ -55,8 +55,10 @@ so it is turned in place with the link's optional ``yaw_to`` command
 ``yaw_to`` cannot turn an ArduCopter in place, so its ``rotate`` only turns
 the plan frame, as before; the executor then never clears a step the
 vehicle does not face (it is cut ``sensor_stale``), so stepped sensing on
-such an ArduCopter flies only the lanes it already faces. None of this has
-flown either.
+such an ArduCopter flies only the lanes it already faces: it is not refused,
+but logged once as ``EVENT_STEPPED_CANNOT_YAW``, and the preflight problem of
+such an ArduCopter without avoidance names only the autopilot's avoidance
+and the ``off`` override as remedies. None of this has flown either.
 
 Watchdogs
 ---------
@@ -155,7 +157,7 @@ from flightrisk.drone.controller import (
     DroneState,
 )
 from flightrisk.drone.geo import EARTH_RADIUS_M, offset_latlon
-from flightrisk.drone.obstacle_sensor import SENSING_MODES
+from flightrisk.drone.obstacle_sensor import SENSING_MODES, SENSING_STEPPED
 from flightrisk.drone.safety import FIELD_LIMITS, RelativePose
 from flightrisk.drone.snapshot import (
     DEGREE,
@@ -170,8 +172,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AUTOMATIC_LAND_REASONS",
+    "EVENT_STEPPED_CANNOT_YAW",
     "FAILSAFE_ACTIONS",
     "FAILSAFE_REASONS",
+    "NO_AVOIDANCE_CANNOT_YAW_REMEDY",
+    "STEPPED_CANNOT_YAW_DETAIL",
     "MavlinkFleetDrone",
     "MavlinkFleetOptions",
 ]
@@ -213,6 +218,21 @@ SENSING_NONE = "none"
 _NEEDS_AVOIDANCE_MODES = frozenset({SENSING_NONE, "autopilot"})
 #: A vehicle that stays within this radius counts as not moving.
 _STATIONARY_RADIUS_M = 0.5
+#: Logged once when stepped sensing is told to an ArduCopter whose link cannot
+#: turn it in place (no ``yaw_to``): the edge flies, but cuts every lane the
+#: vehicle is not already facing.
+EVENT_STEPPED_CANNOT_YAW = "edge_obstacle_stepped_cannot_yaw"
+STEPPED_CANNOT_YAW_DETAIL = (
+    "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), "
+    "so every lane it is not already facing will be cut (sensor_stale), never flown blind; configure the "
+    "autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off"
+)
+#: The remedies the preflight names for an ArduCopter without avoidance whose
+#: link cannot turn it in place (a camera source would cut its lanes).
+NO_AVOIDANCE_CANNOT_YAW_REMEDY = (
+    "configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set "
+    "FLIGHTRISK_OBSTACLE_SENSING=off; stepped camera sensing cannot turn an ArduCopter in place yet"
+)
 
 
 @dataclass(frozen=True)
@@ -330,9 +350,13 @@ class MavlinkFleetDrone:
         options: MavlinkFleetOptions | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        event_log: Any = None,
     ):
         self.name = name
         self.link = link
+        # Where the drone's own structured events go (a StructuredLogger);
+        # one is made on first use when none is given.
+        self._event_log = event_log
         self.host = getattr(link, "address", "mavlink")
         self.options = options if options is not None else MavlinkFleetOptions()
         self.capabilities = DroneCapabilities(
@@ -370,6 +394,8 @@ class MavlinkFleetDrone:
         self._avoidance = _AvoidanceCheck()
         # What the edge says about obstacle sensing (None: not told, today's behaviour).
         self._sensing_mode: str | None = None
+        # True once EVENT_STEPPED_CANNOT_YAW was logged for the mode in force.
+        self._cannot_yaw_warned = False
         self._param_stop = threading.Event()
         self._param_thread: threading.Thread | None = None
         self._slot_cm: Callable[[], float | None] | None = None
@@ -395,11 +421,46 @@ class MavlinkFleetDrone:
         drone needs no avoidance. With ``"none"`` or ``"autopilot"`` it does:
         until ``avoidance_status()`` is empty, ``link_status()`` reports
         ``preflight`` with the avoidance problems and a takeoff is refused.
+
+        ``"stepped"`` on an ArduCopter whose link cannot turn it in place
+        (no ``yaw_to``) is not refused, but logged once, loudly, as
+        ``EVENT_STEPPED_CANNOT_YAW``: every lane the vehicle is not already
+        facing will be cut. When the autopilot type is not known yet, the
+        warning follows the first parameter read that knows it.
         """
         if mode is not None and mode != SENSING_NONE and mode not in SENSING_MODES:
             raise ValueError(f"unknown obstacle sensing mode {mode!r}")
         with self._lock:
             self._sensing_mode = mode
+            self._cannot_yaw_warned = False
+        try:
+            autopilot = self.link.state().autopilot
+        except Exception:  # noqa: BLE001 - not known yet; the next parameter read tells
+            autopilot = None
+        self._warn_if_stepped_cannot_yaw(autopilot)
+
+    def _cannot_yaw(self, autopilot: str | None) -> bool:
+        """True for an ArduCopter whose link cannot turn it in place (no ``yaw_to``)."""
+        return autopilot == ARDUPILOT and not self._can_yaw_in_place()
+
+    def _warn_if_stepped_cannot_yaw(self, autopilot: str | None) -> None:
+        """Log ``EVENT_STEPPED_CANNOT_YAW`` once when stepped sensing is told to an ArduCopter that cannot turn in place."""
+        with self._lock:
+            due = self._sensing_mode == SENSING_STEPPED and not self._cannot_yaw_warned and self._cannot_yaw(autopilot)
+            if due:
+                self._cannot_yaw_warned = True
+        if not due:
+            return
+        try:
+            log = self._event_log
+            if log is None:
+                from flightrisk.observability import StructuredLogger
+
+                log = self._event_log = StructuredLogger(component="mavlink-fleet")
+            log.warning(EVENT_STEPPED_CANNOT_YAW, drone_id=self.name, autopilot=autopilot,
+                        detail=STEPPED_CANNOT_YAW_DETAIL)
+        except Exception as exc:  # noqa: BLE001 - a warning must never stop the edge
+            logger.warning("[%s] %s: %s (%r)", self.name, EVENT_STEPPED_CANNOT_YAW, STEPPED_CANNOT_YAW_DETAIL, exc)
 
     def avoidance_status(self) -> list[str]:
         """Why the autopilot does not avoid obstacles on the edge's lanes (empty: it does).
@@ -668,7 +729,7 @@ class MavlinkFleetDrone:
         """Why a takeoff would be refused now (empty when ready). See the module docstring."""
         st = self._autopilot_state() if state is None else state
         params = self._param_problems() if self.options.require_failsafes else []
-        params = params + self._sensing_problems()
+        params = params + self._sensing_problems(st.autopilot)
         return preflight_problems(
             st,
             stale_after_s=self.options.stale_after_s,
@@ -676,8 +737,14 @@ class MavlinkFleetDrone:
             param_problems=params,
         )
 
-    def _sensing_problems(self) -> list[str]:
-        """The start-gate problem of a drone with neither onboard avoidance nor a stepped sensor (see ``set_obstacle_sensing``)."""
+    def _sensing_problems(self, autopilot: str | None = None) -> list[str]:
+        """The start-gate problem of a drone with neither onboard avoidance nor a stepped sensor (see ``set_obstacle_sensing``).
+
+        The remedies it names are the ones that work for *autopilot*: a
+        camera source for stepped sensing is not offered for an ArduCopter
+        whose link cannot turn it in place, because that setup cuts every
+        lane the vehicle is not already facing.
+        """
         with self._lock:
             mode = self._sensing_mode
         if mode not in _NEEDS_AVOIDANCE_MODES:
@@ -685,6 +752,8 @@ class MavlinkFleetDrone:
         found = self.avoidance_status()
         if not found:
             return []
+        if self._cannot_yaw(autopilot):
+            return ["no obstacle avoidance: " + "; ".join(found) + " (" + NO_AVOIDANCE_CANNOT_YAW_REMEDY + ")"]
         return [
             "no obstacle avoidance: " + "; ".join(found)
             + " (configure the autopilot's avoidance, use a camera source for stepped sensing, "
@@ -737,6 +806,7 @@ class MavlinkFleetDrone:
         with self._lock:
             self._params = _ParamCheck(values=values, autopilot=autopilot, checked_at=self._clock())
         self._refresh_avoidance(autopilot)
+        self._warn_if_stepped_cannot_yaw(autopilot)
         found = self._param_problems()
         if found:
             logger.warning("[%s] autopilot failsafes not ready: %s", self.name, "; ".join(found))
