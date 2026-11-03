@@ -151,6 +151,82 @@ const socket = io();
         return { text: '', cls: '' };
     }
 
+    // BEGIN obstacle-display
+    // Text and badges for the per-lane obstacle sensing (docs/obstacle-sensing.md). These helpers only choose
+    // text and classes from the telemetry and event fields, and cope with any of them being absent.
+    function roundMs(v) { return Math.round(v * 10) / 10; }
+    // The SENSE badge of a drone card, or null when the drone reported no obstacle sensing mode.
+    function senseBadge(d) {
+        const mode = d && d.obstacle_sensing;
+        if (!mode) return null;
+        if (mode === 'off') return { text: 'SENSE OFF', cls: 'held', title: 'This drone flies its lanes without obstacle sensing.' };
+        if (mode === 'autopilot') return { text: 'SENSE AUTOPILOT', cls: '', title: 'The autopilot avoids obstacles on its own.' };
+        const label = mode === 'forward_only' ? 'SENSE forward only' : 'SENSE';
+        if (d.obstacle_sensor_ok === false || d.obstacle_state === 'unavailable') {
+            return { text: label + ' STALE', cls: 'held', title: 'The obstacle sensor is not answering.' };
+        }
+        const ms = typeof d.obstacle_latency_ms === 'number' ? ' ' + roundMs(d.obstacle_latency_ms) + ' ms' : '';
+        const cls = mode === 'forward_only' ? 'held' : '';
+        return { text: label + ' ok' + ms, cls: cls, title: mode === 'forward_only'
+            ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.' };
+    }
+    function obstacleStopBadge(d) {
+        return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
+    }
+    function laneBlockedText(ev) {
+        const lane = ev.lane_index !== undefined && ev.lane_index !== null ? 'lane ' + ev.lane_index : 'a lane';
+        const at = ' stopped at (' + fmt(ev.x_cm) + ', ' + fmt(ev.y_cm) + ') cm';
+        const left = typeof ev.unflown_cm === 'number' ? ', ' + fmt(ev.unflown_cm) + ' cm not searched' : '';
+        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left;
+    }
+    // One plain sentence for the re-flight status of an uncovered segment, or '' for a segment with none.
+    function reflightSentence(e) {
+        const rx = e.receiver || 'another drone';
+        switch (e.status) {
+            case 'waiting':
+                if (!e.waiting_for) return 'waiting for a free drone to re-fly it' + (e.detail ? ' (' + e.detail + ')' : '');
+                return 'waiting for ' + e.waiting_for + ' to finish its lanes' + (e.detail ? ' (' + e.detail + ')' : '');
+            case 'offered': return 'offered to ' + rx;
+            case 'acked': return rx + ' will re-fly it after its lanes';
+            case 'flying': return rx + ' is re-flying it';
+            case 'blocked_again': return 'blocked again by ' + rx + ', not offered again';
+            case 'failed': return 'not re-flown: ' + (e.reason || 'no drone can take it');
+            case 'too_short': return 'too short to re-fly';
+            default: return '';
+        }
+    }
+    // Segments with these statuses are still waiting for a re-flight; the others are final until the plan changes.
+    const REFLIGHT_AWAITING = ['waiting', 'offered', 'acked', 'flying'];
+    const REFLIGHT_SETTLED = ['blocked_again', 'failed', 'too_short'];
+    // The banner for one of the five reflight_* events: a fixed sentence, then the coordinator's detail.
+    function reflightBannerText(kind, ev) {
+        const cutter = ev.drone_id || 'a drone';
+        const rx = ev.receiver || 'another drone';
+        const lead = {
+            reflight_offered: 'cut lanes offered to ' + rx,
+            reflight_accepted: rx + ' accepted the cut lanes and will re-fly them after its own',
+            reflight_done: rx + ' re-flew the cut lanes',
+            reflight_blocked: rx + ' was blocked again; the rest stays unsearched',
+            reflight_failed: 'the cut lanes will not be re-flown',
+        }[kind];
+        if (!lead) return null;
+        return 'RE-FLIGHT ' + cutter + ': ' + lead + (ev.detail ? ' (' + ev.detail + ')' : '');
+    }
+    // The warning for the Start confirmation: drones that fly their lanes without full obstacle sensing.
+    function unsensedWarning(infos, ids) {
+        const off = [], fwd = [];
+        (ids && ids.length ? ids : Object.keys(infos || {})).sort().forEach((id) => {
+            const mode = ((infos || {})[id] || {}).obstacle_sensing;
+            if (mode === 'off') off.push(id);
+            else if (mode === 'forward_only') fwd.push(id);
+        });
+        let text = '';
+        if (off.length) text += 'WARNING: ' + off.join(', ') + (off.length === 1 ? ' flies' : ' fly') + ' with obstacle sensing OFF and will not stop for obstacles.\n\n';
+        if (fwd.length) text += 'WARNING: ' + fwd.join(', ') + (fwd.length === 1 ? ' senses' : ' sense') + ' obstacles on forward lanes only; its other lanes fly unsensed.\n\n';
+        return text;
+    }
+    // END obstacle-display
+
     function renderDroneStatus() {
         const box = $('drone-status');
         clear(box);
@@ -179,6 +255,12 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
+            [senseBadge(d), obstacleStopBadge(d)].forEach((b) => {
+                if (!b) return;
+                const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
+                node.title = b.title;
+                card.appendChild(node);
+            });
             box.appendChild(card);
         });
     }
@@ -240,6 +322,7 @@ const socket = io();
         updateMapLock();
         renderDroneStatus();
         renderTimingTable();
+        if (Array.isArray(data.uncovered)) applyUncovered(data.uncovered);
     });
 
     socket.on('fleet_telemetry', (data) => {
@@ -1404,23 +1487,57 @@ const socket = io();
             else uncoveredLanes[key] = Object.assign({}, l, { lost_id: lostId, status: status });
         });
     }
-    // Lanes of a lost drone that no drone took. Possible coverage gaps of the plan itself (uncovered entries of
-    // kind "area") are not listed here: the plan editor reports them neutrally on the map and in the plan card.
+    // Obstacle segments (uncovered entries of kind "segment") are kept under their own keys, so a plan refresh
+    // replaces them without touching the re-tasked lanes above.
+    function markSegments(entries) {
+        Object.keys(uncoveredLanes).forEach((k) => { if (k.indexOf('seg:') === 0) delete uncoveredLanes[k]; });
+        (entries || []).forEach((u) => {
+            if (!u || u.kind !== 'segment') return;
+            const key = 'seg:' + u.drone_id + ':' + u.index + ':' + (u.cut_seq === undefined || u.cut_seq === null ? '' : u.cut_seq) + ':' + u.x_cm + ':' + u.y_cm;
+            uncoveredLanes[key] = Object.assign({}, u, { lost_id: u.drone_id, seg: true });
+        });
+    }
+    function isAwaiting(e) { return e.seg ? REFLIGHT_AWAITING.indexOf(e.status) !== -1 : e.status !== 'uncovered'; }
+    // Lanes of a lost drone that no drone took, and the segments an obstacle cut. Possible coverage gaps of the plan
+    // itself (uncovered entries of kind "area") are not listed here: the plan editor reports them neutrally on the
+    // map and in the plan card.
     function renderUncovered() {
         const box = $('fleet-uncovered');
         const keys = Object.keys(uncoveredLanes);
         clear(box);
         box.hidden = !keys.length;
         if (!keys.length) return;
-        const failed = keys.filter((k) => uncoveredLanes[k].status === 'uncovered').length;
+        const awaiting = keys.filter((k) => isAwaiting(uncoveredLanes[k])).length;
+        const failed = keys.length - awaiting;
         box.appendChild(el('div', 'uncovered-head', 'NOT SEARCHED: ' + failed + ' lane' + (failed === 1 ? '' : 's')
-            + ' uncovered, ' + (keys.length - failed) + ' awaiting a drone'));
+            + ' uncovered, ' + awaiting + ' awaiting a drone'));
         keys.forEach((k) => {
             const e = uncoveredLanes[k];
             const where = '(' + fmt(e.x_cm) + ', ' + fmt(e.y_cm) + ') to (' + fmt(e.end_x_cm) + ', ' + fmt(e.end_y_cm) + ') cm';
-            const why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
+            let why;
+            if (e.seg) {
+                const sentence = reflightSentence(e);
+                // A settled segment's reason is the re-flight outcome, which the sentence already says.
+                const cut = REFLIGHT_SETTLED.indexOf(e.status) !== -1 ? '' : (e.reason || 'obstacle');
+                why = cut && sentence ? cut + '; ' + sentence : (cut || sentence || 'not searched');
+            } else {
+                why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
+            }
             box.appendChild(el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why));
         });
+    }
+    // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
+    // the box and to the map; re-tasked lanes of a lost drone are kept as they are.
+    let lastSegmentsJson = '';
+    function applyUncovered(list, force) {
+        const segments = (list || []).filter((u) => u && u.kind === 'segment');
+        // fleet_status repeats the list every monitor tick; redraw only when it changed (or after a new plan).
+        const json = JSON.stringify(segments);
+        if (!force && json === lastSegmentsJson) return;
+        lastSegmentsJson = json;
+        markSegments(segments);
+        if (mapPlan && mapPlan.setUncoveredSegments) mapPlan.setUncoveredSegments(segments);
+        renderUncovered();
     }
     socket.on('fleet_event', (ev) => {
         if (!ev) return;
@@ -1430,6 +1547,14 @@ const socket = io();
             markLanes(ev.drone_id, ev.lanes, 'uncovered');
             renderUncovered();
             showFleetBanner('RETASK FAILED: ' + (ev.detail || ev.drone_id || ''));
+            return;
+        }
+        if (kind === 'lane_blocked') {
+            showFleetBanner(laneBlockedText(ev), 15000);
+            return;
+        }
+        if (kind && kind.indexOf('reflight_') === 0 && reflightBannerText(kind, ev)) {
+            showFleetBanner(reflightBannerText(kind, ev), 15000);
             return;
         }
         if (kind === 'retask') {
@@ -1517,7 +1642,8 @@ const socket = io();
             ? 'WARNING: a detection profile switch is still pending for ' + pendingProfiles.join(', ')
                 + '. Once flying, the edge refuses it and keeps its current profile.\n\n'
             : '';
-        if (!window.confirm(profileWarning + takeoffInstructions() + who + ' will take off. Each drone flies its lanes and keeps its geofence '
+        const planIds = Object.keys(((lastPlan && lastPlan.zones) || []).reduce((acc, z) => { if (z && z.drone_id) acc[z.drone_id] = true; return acc; }, {}));
+        if (!window.confirm(profileWarning + unsensedWarning(droneInfo, planIds) + takeoffInstructions() + who + ' will take off. Each drone flies its lanes and keeps its geofence '
             + 'around the spot it takes off from, so every drone must be on its marked start spot, '
             + 'nose into the area. Start the search?')) return;
         showFleetError('');
@@ -1534,8 +1660,8 @@ const socket = io();
         // Start is allowed only while the map shows exactly the plan the server holds.
         const inSync = mapPlan ? mapPlan.onFleetPlan(plan || {}) : true;
         uncoveredLanes = {};
-        ((plan && plan.uncovered) || []).forEach((u) => { if (u && u.kind !== 'area') markLanes(u.drone_id, [u], 'uncovered'); });
-        renderUncovered();
+        ((plan && plan.uncovered) || []).forEach((u) => { if (u && u.kind !== 'area' && u.kind !== 'segment') markLanes(u.drone_id, [u], 'uncovered'); });
+        applyUncovered((plan && plan.uncovered) || [], true);
         const ids = {};
         ((plan && plan.zones) || []).forEach((z) => { if (z && z.drone_id) ids[z.drone_id] = true; });
         fleetPlanDroneCount = Object.keys(ids).length || Object.keys(lastStatus).length;

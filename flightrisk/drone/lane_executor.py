@@ -44,6 +44,25 @@ The monitor (``flightrisk.drone.lane_monitor``) runs every 50 ms: link-loss
 and battery landings, land retries, the end-of-lanes hover timeout and
 telemetry.
 
+Obstacle sensing (``LaneExecutor(obstacle_sensor=..., obstacle_step_cm=...)``,
+design ``.claude/build/obstacle/design.md`` sections 3 and 4): with a sensor
+every lane is flown in sensed steps of at most ``obstacle_step_cm``; the
+drone turns to face each move first, and the sensor must report the view
+clear before each step is sent. A blocked view cuts the lane (the drone
+stops, never lands for it, skips the rest of the lane and of any following
+lane in the same direction, and keeps later lanes on the planned grid). A
+sensor that cannot look is retried, then cuts the lane, and a sensor down
+for ``OBSTACLE_SENSOR_DOWN_S`` within a plan ends that plan's lanes through
+its own ``on_complete``. A drone that measures its own heading
+(``measured_heading_deg()``) has a step cleared only while it faces the
+commanded heading. The way back of a ``resume_search`` is flown the same
+way, but a gate on it that does not clear cuts nothing: the drone is put
+back under manual control with its hold point kept (``lane_manual``).
+Without a sensor (the default) lanes are flown exactly as before.
+``obstacle_status()`` holds the telemetry fields; the flight half is
+``flightrisk.drone.lane_flight`` and the arithmetic
+``flightrisk.drone.lane_steps``.
+
 Fail-safe rules: any unexpected exception while flying a sequence or running
 the monitor lands the drone. Takeoff is refused while the drone controller
 reports that it cannot reach the drone (``link_status()``: no Tello state
@@ -65,7 +84,12 @@ from collections.abc import Callable
 from typing import Any
 
 from flightrisk.drone.command_cache import CommandCache
-from flightrisk.drone.controller import DroneLinkStatus, command_result
+from flightrisk.drone.controller import (
+    Capability,
+    DroneLinkStatus,
+    capabilities_of,
+    command_result,
+)
 from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
     COMMAND_TYPES,
@@ -74,7 +98,11 @@ from flightrisk.drone.lane_commands import (
     FleetCommandMixin,
     PermissiveAuthority,
 )
-from flightrisk.drone.lane_flight import FlightSequenceMixin, MoveNotExecutedError
+from flightrisk.drone.lane_flight import (
+    OBSTACLE_RETRY_PAUSE_S,
+    FlightSequenceMixin,
+    MoveNotExecutedError,
+)
 from flightrisk.drone.lane_manual import (
     MANUAL_CONTROL_TYPES,
     ManualControlMixin,
@@ -87,7 +115,34 @@ from flightrisk.drone.lane_plan import (
     parse_lanes,
     split_lane_moves,
 )
-from flightrisk.drone.safety import SafetyEnvelope, is_finite_number
+from flightrisk.drone.lane_steps import (
+    Cut,
+    UncoveredSegment,
+    encode_cuts,
+    uncovered_segments,
+)
+from flightrisk.drone.obstacle_sensor import (
+    OBSTACLE_SENSE_TIMEOUT_S,
+    OBSTACLE_SENSOR_DOWN_S,
+    OBSTACLE_STEP_CM,
+    SENSING_AUTOPILOT,
+    SENSING_FORWARD_ONLY,
+    SENSING_OFF,
+    SENSING_STEPPED,
+    SENSOR_UNAVAILABLE_DETAIL,
+    START_REFUSED_REASON,
+    TELEMETRY_CUT_REASONS,
+    TELEMETRY_CUTS,
+    TELEMETRY_CUTS_TOTAL,
+    TELEMETRY_LATENCY_MS,
+    TELEMETRY_SENSING,
+    TELEMETRY_SENSOR_OK,
+    TELEMETRY_SEQ,
+    TELEMETRY_STATE,
+    NullSensor,
+    ObstacleSensor,
+)
+from flightrisk.drone.safety import ROOM_LIMITS, SafetyEnvelope, is_finite_number
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
     MAX_TEXT_LEN,
@@ -157,6 +212,9 @@ _START_NACK_REASONS = {
     "landing": "landing",
     "geofence": "geofence",
     "drone_unreachable": "drone_unreachable",
+    # Stepped obstacle sensing is required and no sensor could be built: the
+    # start is refused like a dead drone link (design section 4).
+    START_REFUSED_REASON: "drone_unreachable",
 }
 
 
@@ -189,7 +247,38 @@ class LaneExecutor(
         fleet_v2: bool = False,
         command_cache_size: int | None = None,
         manual_deadman_s: float = MANUAL_DEADMAN_S,
+        obstacle_sensor: ObstacleSensor | None = None,
+        obstacle_step_cm: int = OBSTACLE_STEP_CM,
+        obstacle_turn: bool = True,
+        obstacle_sensor_error: str | None = None,
+        obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
+        obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
     ):
+        """Bind the executor to *drone* inside *envelope*.
+
+        Obstacle sensing (all optional; the defaults fly lanes exactly as
+        before, unsensed):
+
+        * *obstacle_sensor*: an ``ObstacleSensor``. Every lane is then flown
+          in sensed steps. A ``NullSensor`` is the explicit
+          ``FLIGHTRISK_OBSTACLE_SENSING=off`` override: lanes are flown as
+          without a sensor, and telemetry says ``off``.
+        * *obstacle_step_cm*: the longest sensed step (the envelope's
+          longest move caps it).
+        * *obstacle_turn*: False is ``FLIGHTRISK_OBSTACLE_TURN=0``: the drone
+          does not turn to face its moves, only ``forward`` steps are sensed
+          and telemetry says ``forward_only``.
+        * *obstacle_sensor_error*: sensing is required but no sensor could
+          be built (the text says why). Telemetry reports the sensor not ok,
+          ``start_at`` and ``takeoff`` are refused with ``drone_unreachable``
+          and the detail ``obstacle sensor unavailable: <error>``, and no
+          lane step is ever cleared. Landing is never gated.
+        * *obstacle_sense_timeout_s*: passed to each ``sense`` call; the
+          executor also abandons a call that has not returned shortly
+          after it (a hung sensor never holds up the flight thread).
+        * *obstacle_retry_pause_s*: hover between attempts at a gate whose
+          sensor could not look.
+        """
         self.drone = drone
         self.envelope = envelope
         self.drone_id = str(drone_id)
@@ -317,6 +406,67 @@ class LaneExecutor(
         # unreachable; written and read on the flight sequence thread.
         self._unreachable_detail: str | None = None
 
+        # Obstacle sensing (``lane_flight``, ``lane_steps``). The sensor and
+        # its settings are fixed for the executor's life.
+        if obstacle_sensor_error is not None and obstacle_sensor is not None:
+            raise ValueError("give either obstacle_sensor or obstacle_sensor_error, not both")
+        min_move_cm = getattr(envelope, "limits", ROOM_LIMITS).min_move_cm
+        if not is_finite_number(obstacle_step_cm) or obstacle_step_cm < min_move_cm:
+            raise ValueError(f"obstacle_step_cm must be at least {min_move_cm:g}")
+        self._obstacle_off = isinstance(obstacle_sensor, NullSensor)
+        self._obstacle_sensor = None if self._obstacle_off else obstacle_sensor
+        self._obstacle_sensor_error = (
+            None if obstacle_sensor_error is None
+            else "".join(ch for ch in str(obstacle_sensor_error) if ch.isprintable()) or "unknown error"
+        )
+        self.obstacle_step_cm = int(obstacle_step_cm)
+        self._obstacle_turn = bool(obstacle_turn)
+        self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
+        self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
+        # Cuts of the current plan in the order they happened (all of them;
+        # telemetry lists the last MAX_CUTS_LISTED). Kept across a re-task
+        # that continues the plan, cleared when another plan is accepted.
+        self._cuts: list[Cut] = []
+        # Increments on every cut and never decreases while the edge runs,
+        # so the ground can tell a new cut from a new plan.
+        self._obstacle_seq = 0
+        # The last gate's outcome (OBSTACLE_STATE_*) and its latency, for
+        # telemetry; None before the first gate of the plan.
+        self._obstacle_state: str | None = None
+        self._obstacle_latency_ms: float | None = None
+        # Edge clock time of the first of the current run of gates whose
+        # sensor could not look, or None while the sensor works. It describes
+        # the sensor (``obstacle_sensor_ok``). A landing and a new plan that
+        # does not continue the current one have the sensor probed once; a
+        # view clears it (``lane_flight``).
+        self._sensor_down_since: float | None = None
+        # The same run counted within the current plan only: it decides when
+        # the plan's lanes are ended with ``sensor_down``, and restarts when a
+        # plan that does not continue the current one is accepted, so a new
+        # plan gets its own OBSTACLE_SENSOR_DOWN_S (``lane_flight``).
+        self._plan_down_since: float | None = None
+        # Sense calls in flight (gates, abandoned ones included, and the
+        # probe); the probe starts only when there is none. ``_probe_wanted``
+        # is why a probe waits for them (or None), ``_probe_running`` is True
+        # while its call runs, and ``_probe_idle`` is set while it is False
+        # (a gate waits on it rather than call a sensor the probe holds).
+        self._sense_inflight = 0
+        self._probe_wanted: str | None = None
+        self._probe_running = False
+        self._probe_idle = threading.Event()
+        self._probe_idle.set()
+        # The step (with its plan generation) the running sequence already
+        # asked to turn to its commanded heading (``lane_flight._face``).
+        self._realigned: Any = None
+        # The sensor error last logged, so each change is logged once.
+        self._sensor_error_logged: str | None = None
+        # Edge clock time at which the last move, turn or takeoff ended:
+        # the view a gate judges must be newer than this plus the settle time.
+        self._last_motion_end_s = 0.0
+        # Set by ``_command_move`` when the autopilot stopped a lane move
+        # short (``STOPPED_SHORT``): the centimetres flown and the detail.
+        self._short_stop: tuple[int, str] | None = None
+
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
@@ -399,6 +549,125 @@ class LaneExecutor(
                 "plan_valid": self._plan_valid,
                 "epoch": epoch,
             }
+
+    # ------------------------------------------------------------------
+    # Obstacle sensing state (telemetry fields of design section 6)
+    # ------------------------------------------------------------------
+
+    @property
+    def obstacle_sensing(self) -> str | None:
+        """The obstacle sensing mode in force, or None when the edge has none.
+
+        ``stepped`` (a sensor, or a required sensor that could not be built),
+        ``forward_only`` (the same with turning disabled), ``off`` (the
+        explicit override, a ``NullSensor``), ``autopilot`` (no sensor and a
+        drone that declares ``ONBOARD_AVOIDANCE``) or None (no sensor at all,
+        lanes flown as before).
+        """
+        if self._obstacle_sensor is not None or self._obstacle_sensor_error is not None:
+            return SENSING_STEPPED if self._obstacle_turn else SENSING_FORWARD_ONLY
+        if self._obstacle_off:
+            return SENSING_OFF
+        if capabilities_of(self.drone).supports(Capability.ONBOARD_AVOIDANCE):
+            return SENSING_AUTOPILOT
+        return None
+
+    @property
+    def obstacle_cuts(self) -> list[Cut]:
+        """Every cut of the current plan, oldest first (telemetry lists only the last eight)."""
+        with self._lock:
+            return list(self._cuts)
+
+    def obstacle_segments(self) -> list[UncoveredSegment]:
+        """The parts of the current plan nobody looked at, derived exactly as the ground derives them.
+
+        Relative to where the drone started the first lane of the plan
+        (``lane_steps.uncovered_segments`` of the plan's lanes and cuts).
+        """
+        with self._lock:
+            lanes, cuts = list(self._lanes), list(self._cuts)
+        return uncovered_segments(lanes, cuts, getattr(self.envelope, "limits", ROOM_LIMITS).min_move_cm)
+
+    def obstacle_status(self) -> dict[str, Any]:
+        """The obstacle telemetry fields (design section 6), keyed by their wire names.
+
+        ``lane_monitor.telemetry()`` merges this dict into every telemetry
+        message. It is empty for an edge without obstacle sensing that never
+        cut a lane, so its telemetry is unchanged. Otherwise:
+
+        * ``obstacle_sensing``: ``obstacle_sensing`` above (left out when None);
+        * ``obstacle_sensor_ok``: False when no sensor could be built, for the
+          ``off`` override, and while the sensor has been unable to look for
+          ``OBSTACLE_SENSOR_DOWN_S`` or longer; True otherwise (``autopilot``:
+          always True). The run of failures ends at the next view, a gate's
+          or the probe's that a landing or a new plan that does not continue
+          the current one starts, so a sensor that works again is ok again;
+        * ``obstacle_state`` and ``obstacle_latency_ms``: the last gate's
+          outcome (``clear``, ``blocked`` or ``unavailable``) and how long
+          its sense call took; left out before the first gate of the plan;
+        * ``obstacle_seq``: increments on every cut and never decreases while
+          the edge runs (a new plan does not reset it);
+        * ``obstacle_cuts``: ``[lane, flown_cm, ...]`` for the last eight cuts
+          of the plan, ``obstacle_cuts_total`` their count over the whole
+          plan, and ``obstacle_cut_reasons`` the listed cuts' reasons, comma
+          separated.
+
+        The cut fields are sticky for the plan: a re-task that continues the
+        plan keeps them, another accepted plan clears them. A landing keeps
+        them until then, so the ground always sees the last cut. Never
+        raises; reads no drone state but the capabilities.
+        """
+        mode = self.obstacle_sensing
+        with self._lock:
+            cuts = list(self._cuts)
+            seq = self._obstacle_seq
+            state = self._obstacle_state
+            latency = self._obstacle_latency_ms
+            down_since = self._sensor_down_since
+        if mode is None and not cuts and not seq:
+            return {}
+        status: dict[str, Any] = {}
+        if mode is not None:
+            status[TELEMETRY_SENSING] = mode
+            if mode == SENSING_AUTOPILOT:
+                ok = True
+            elif mode == SENSING_OFF or self._obstacle_sensor_error is not None:
+                ok = False
+            else:
+                ok = down_since is None or self._clock() - down_since < OBSTACLE_SENSOR_DOWN_S
+            status[TELEMETRY_SENSOR_OK] = ok
+        if state is not None:
+            status[TELEMETRY_STATE] = state
+        if latency is not None:
+            status[TELEMETRY_LATENCY_MS] = latency
+        flat, reasons = encode_cuts(cuts)
+        status[TELEMETRY_SEQ] = seq
+        status[TELEMETRY_CUTS] = flat
+        status[TELEMETRY_CUTS_TOTAL] = len(cuts)
+        status[TELEMETRY_CUT_REASONS] = reasons
+        return status
+
+    def _obstacle_unavailable_detail(self) -> str:
+        """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""
+        text = f"{SENSOR_UNAVAILABLE_DETAIL} {self._obstacle_sensor_error or 'unknown error'}"
+        return text[:MAX_TEXT_LEN]
+
+    def _reset_obstacle_plan_locked(self) -> None:
+        """Forget the cuts and the gate state of the plan being replaced. Caller holds ``_lock``.
+
+        ``obstacle_seq`` and the sensor's down timer are kept: they describe
+        the edge and its sensor, not the plan, so a sensor that is really
+        down stays reported down. While that timer runs the sensor is probed
+        once (``_request_sensor_probe_locked``), so a sensor that works again
+        is reported ok before the new plan is started. The plan's own down
+        timer restarts: failures before this plan never end it with
+        ``sensor_down``, and it gets its own ``OBSTACLE_SENSOR_DOWN_S``.
+        """
+        self._cuts = []
+        self._obstacle_state = None
+        self._obstacle_latency_ms = None
+        self._plan_down_since = None
+        self._request_sensor_probe_locked("new_plan")
 
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
@@ -580,7 +849,11 @@ class LaneExecutor(
         A start that would take off is refused with ``drone_unreachable``
         (``detail`` naming the problem, for example ``Tello unreachable (no
         state for 12 s)``) while the drone controller reports its link down;
-        the link is checked again right before the takeoff.
+        the link is checked again right before the takeoff. A start is also
+        refused with ``drone_unreachable`` (``detail: obstacle sensor
+        unavailable: <error>``, logged as ``edge_start_refused`` with reason
+        ``obstacle_sensor``) when obstacle sensing is required and no sensor
+        could be built.
         """
         t_ground = msg.get("t_ground_s")
         if not is_finite_number(t_ground):
@@ -617,6 +890,10 @@ class LaneExecutor(
                 # The start would take off into a dead drone link. Checked
                 # again right before the takeoff (``_do_takeoff``).
                 refusal = "drone_unreachable"
+            elif self._obstacle_sensor_error is not None:
+                # Sensing is required and there is no sensor: no lane step
+                # could ever be cleared, so the start is refused outright.
+                refusal = START_REFUSED_REASON
             else:
                 t_edge = float(t_ground) + offset
                 lead = t_edge - self._clock()
@@ -632,6 +909,8 @@ class LaneExecutor(
             if refusal == "drone_unreachable" and link is not None:
                 fields.update(link_reason=link.reason, drone_link_age_s=link.age_s)
                 return self._refuse_start(msg, refusal, detail=link.detail or "drone unreachable", **fields)
+            if refusal == START_REFUSED_REASON:
+                return self._refuse_start(msg, refusal, detail=self._obstacle_unavailable_detail())
             return self._refuse_start(msg, refusal, **fields)
         self._log.info(
             "edge_start_scheduled",
@@ -792,6 +1071,9 @@ class LaneExecutor(
             if owner:
                 with self._lock:
                     self._land_inflight = False
+                    # The drone lands: ask a sensor that was down whether it
+                    # can look again (never blocks, never raises).
+                    self._request_sensor_probe_locked("landing")
 
     def _drone_land(self, reason: str, retry: bool = False) -> Any:
         """Call the controller's landing for *reason*.

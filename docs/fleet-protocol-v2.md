@@ -27,6 +27,7 @@ requests.
 - Command ids and idempotency
 - Acks and nacks
 - Drone link preflight (takeoff only)
+- Obstacle sensing: telemetry fields and cut events
 - Compatibility with v1 peers
 - Caps and strictness
 - Privacy
@@ -128,7 +129,7 @@ limit), not the 64 KiB fleet limit (see "Caps and strictness").
 |---|---|---|
 | `hello` | v2 | `role` `edge` (optional, the only allowed value), `drone_id`, `node_id`, `proto`, `epoch_seen` (0 when no leader has been obeyed yet), `plan_id` (or null), `lane_index` (or null), `is_flying`, `battery` (0 to 100, or null) |
 | `pong` | v1 | `t1`, `t2`, `t3` |
-| `telemetry` | v1 | all v1 fields, plus **`epoch`** (the edge's `epoch_seen`), **`plan_id`** (or null), **`state`** (`idle`, `taking_off`, `hovering`, `flying_lanes`, `holding` or `landing`) and **`plan_valid`**, all four required in v2. Optional on every version (`TELEMETRY_DRONE_LINK_FIELDS`, see "Drone link preflight"): `drone_link_ok` (boolean), `drone_link_age_s` (seconds since the drone last sent state, non-negative, or null) and `drone_link_detail` (printable text up to 200 characters, or null) |
+| `telemetry` | v1 | all v1 fields, plus **`epoch`** (the edge's `epoch_seen`), **`plan_id`** (or null), **`state`** (`idle`, `taking_off`, `hovering`, `flying_lanes`, `holding` or `landing`) and **`plan_valid`**, all four required in v2. Optional on every version (`TELEMETRY_DRONE_LINK_FIELDS`, see "Drone link preflight"): `drone_link_ok` (boolean), `drone_link_age_s` (seconds since the drone last sent state, non-negative, or null) and `drone_link_detail` (printable text up to 200 characters, or null). Optional on every version (see "Obstacle sensing: telemetry fields and cut events"): `obstacle_sensing`, `obstacle_sensor_ok`, `obstacle_state`, `obstacle_latency_ms`, `obstacle_seq`, `obstacle_cuts`, `obstacle_cuts_total` and `obstacle_cut_reasons` |
 | `ack` | v1 | `for`, `drone_id`, **`cmd_id`** (required in v2 except for a landing that carried none), **`result`** (`ok`, required in v2), optional **`epoch_seen`**, **`plan_id`**, **`detail`**. An ack for `start_at` still needs `executed_at_ground_s`; an ack for `assign_lanes` still needs `battery` and `lanes_total` |
 | `nack` | v1 | `for`, `drone_id`, `reason`, **`cmd_id`** (required in v2), optional **`epoch_seen`**, **`plan_id`**, **`detail`** (printable text up to 200 characters). A nack for `assign_lanes` still needs `lanes_total` |
 
@@ -408,6 +409,38 @@ its drone, and says so.
 - **Not verified on hardware.** The thresholds and the incident replay are
   covered by tests on the wire-level Tello fake
   (`tests/test_edge_takeoff_preflight.py`), not on a real Tello.
+
+## Obstacle sensing: telemetry fields and cut events
+
+Per-lane obstacle sensing (`docs/obstacle-sensing.md`) adds no message type, no nack reason and no protocol version. An edge that senses reports its state in extra optional telemetry fields, which every ground version accepts and ignores if it does not know them, as with the drone link fields. The privacy screen limits a list to `MAX_NUMBERS_PER_LIST` (16) numbers, so the cuts travel as a flat list and the ground works out the segments itself.
+
+All fields are optional, are sticky for the current plan, and are sent only by an edge that has a sensing mode (the fake and Tello edges, and a MAVLink edge once it has told its drone the mode):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `obstacle_sensing` | `stepped`, `forward_only`, `autopilot` or `off` | The mode in force. `forward_only` means nose-first turns are switched off, so only forward moves are sensed. `autopilot` means the autopilot's own avoidance. `off` is the operator override |
+| `obstacle_sensor_ok` | boolean | The sensor can be used now. False when it was never built, in the `off` override, or when it has been unable to look for 10 seconds or more; always true for `autopilot`. It recovers: when the drone lands, and when it accepts a new plan that does not continue the current one, the edge makes one probe sense call, and a view clears the down timer and turns this back to true (`edge_obstacle_sensor_probe`). A failed probe leaves it false |
+| `obstacle_state` | `clear`, `blocked` or `unavailable` | The outcome of the last check. `blocked` stays until the next lane starts |
+| `obstacle_latency_ms` | number | The duration of the last sense call |
+| `obstacle_seq` | integer | Counts cuts, for the life of the edge process. A lower number than before means the edge restarted. The ground ignores a value above 2^31 (`MAX_OBSTACLE_SEQ`) with a warning, and walks only the cuts that are listed or already known, never the range between two counts |
+| `obstacle_cuts` | list of at most 16 numbers | `[lane, flown_cm, lane, flown_cm, ...]`, the last 8 cuts of the plan |
+| `obstacle_cuts_total` | integer | The number of cuts in the plan, so that a truncated list is visible |
+| `obstacle_cut_reasons` | string, at most 200 characters | The reasons of the listed cuts, comma separated: `obstacle`, `person`, `sensor_stale`, `sensor_down`, `autopilot` |
+
+The cut fields are kept through a landing and through a re-task that continues the plan. They are cleared only when the edge accepts a plan that does not continue the old one.
+
+**Ground side.** `FleetCoordinator` replays the listed cuts with the same pure function the edge uses (`flightrisk/drone/lane_steps.py`), so both sides derive the same uncovered segments from the lanes and the cuts alone.
+
+- **`lane_blocked`.** For every increase of `obstacle_seq` the ground emits one `fleet_event` with `event: "lane_blocked"` and `drone_id`, `lane_index`, `x_cm` and `y_cm` (where the drone stopped), `unflown_cm` (everything the cut left unsearched), `reason` and a `detail` sentence. The coordinates are absolute, on the shared grid from the zone origin.
+- **`current_plan()["uncovered"]`** (carried in `fleet_plan`, and in `fleet_status` while cuts exist) gains entries with `kind: "segment"`: `index`, `direction`, `distance_cm`, `x_cm`, `y_cm`, `end_x_cm`, `end_y_cm`, `drone_id`, `reason` (`obstacle`, `person`, `sensor_stale`, `sensor_down`, `autopilot`, or `skipped` for a stretch a later lane did not fly because of the cut) and `cut_seq`. The ground reports a stretch as `skipped` whenever the replay shows the drone never reaches it, including the part of a displaced lane, or of a lane that is a lane or more behind, that the drone ends short of, so `uncovered_cm` is honest rather than optimistic. `cut_seq` is the ground's own number of the cut. It equals the edge's `obstacle_seq` until the edge restarts: after a restart the ground continues the numbering from the old cuts (so a reused edge count never names a cut it already knows), and `cut_seq` no longer equals `obstacle_seq`. A segment that is being re-flown also carries a `status`: `waiting` (with `waiting_for`, the cutting drone, while that drone is still flying or too close, and a `detail`; a `detail` also says when it waits for a receiver that has no fresh telemetry or is taking off, as `<id> has no fresh telemetry` or `<id> is taking off`, and it is checked again on any telemetry), `offered` (with `receiver`), `acked` (accepted, not yet reached), `flying`, `blocked_again` (with `receiver`; the reason is `blocked again by <receiver>`), `failed` (the `reason` says why, and `receiver` is set if it was accepted) or `too_short` (under 20 cm, never offered). A re-flown segment is removed from the list.
+- **`status()`** carries `obstacle_sensing`, `obstacle_sensor_ok`, `obstacle_state`, `obstacle_latency_ms`, `uncovered_cm` and `reflights` (`offered`, `reflown` and `blocked_again` counts) for drones that report obstacle fields only.
+- **`start()`** refuses a drone whose fresh telemetry (the last 2 seconds) says `obstacle_sensor_ok: false`, in any mode except `off` and `autopilot` (so `forward_only` is refused too), with the edge's text, like the drone link gate. It warns, and does not refuse, for `off`. The edge's own refusal is `nack{reason: drone_unreachable, detail: "obstacle sensor unavailable: <why>"}` for `start_at` and `takeoff` on a v2 link, and `edge_start_refused` with `reason=obstacle_sensor` on every link. Landing is never gated.
+
+**A re-flight is an ordinary re-task.** The ground offers a cut segment once to another drone with the existing re-task machinery. The receiver gets a normal `assign_lanes` whose lanes are its previous lanes unchanged, then a transit, then the segment lanes, flown reversed (the far end toward the cut). Nothing about it is new on the wire, and the receiver flies the appended lanes with its own sensing and cut policy at its own altitude slot, so a mixed-version fleet is unaffected. The transit starts where the receiver actually ends its own lanes (the ground replays the receiver's lanes with its cuts), and the separation, cutting-drone and geofence checks use that path. At the first appended lane the cuts' deficit and any same-direction run end (the shared re-task start rule in `lane_steps.py`), so both sides still derive the same segments. The offer waits until the cutting drone has finished its lanes (its `lane_index` is at least `lanes_total`, it has landed, or it is lost). A receiver that reports obstacle sensing receives appended lanes (a re-flight, or the lanes of a lost drone) only once it has finished its own lanes (its `lane_index` is at least `lanes_total`). No lost-drone or re-flight lanes go to a `stepped` drone whose `obstacle_sensor_ok` is false, or to a drone whose own lanes a `sensor_down` cut ended. Reasons that are offered are `obstacle`, `person` and `sensor_stale`; `sensor_down`, `autopilot` and a lone `skipped` segment are only reported. At most 4 cuts of a drone are offered per plan.
+
+The ground announces each change of a re-flight with a `fleet_event` whose `event` is `reflight_offered`, `reflight_accepted`, `reflight_done`, `reflight_blocked` or `reflight_failed`. Each carries `drone_id` (the cutting drone), `receiver`, `cut_seq`, `lanes` (the segments, in the `lane_entries()` shape of the `retask` event) and a `detail` sentence. Waiting and flying are not announced. A segment is `reflown` only when the receiver's replayed path covers every leg of it; otherwise the re-flight fails with `<receiver> flew it off the planned path, <n> cm not searched` and only the parts not searched stay listed. The other new failure reasons are `<receiver> ended its lanes on it (obstacle sensor down)`, `<receiver> ended its lanes before it (obstacle sensor down)` and `<id>'s edge restarted, so its cuts are no longer known` (the cutting drone's edge restarted while the re-flight waited). When the cutting drone is lost, only a segment on a lane re-tasked whole is `superseded`; the cut's own segment is still offered, and the position of a lost cutting drone no longer holds the offer. An older ground ignores all of this and shows the cut only through the telemetry.
+
+- **Not verified on hardware.** Everything above is covered by tests with fake drones and a fake sensor. No Tello or MAVLink drone has flown these messages.
 
 ## Compatibility with v1 peers
 

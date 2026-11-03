@@ -31,10 +31,46 @@ target and the autopilot's own failsafes (battery, RC loss, geofence, and on
 PX4 data-link loss) bring it down. The cost is a stop at the end of every
 move; long lanes keep that rare (moves up to 50 m).
 
+Onboard obstacle avoidance
+--------------------------
+The edge sends no obstacle data to the autopilot and runs no avoidance of
+its own on this path. ``refresh_params`` reads the autopilot's avoidance
+parameters with the failsafe ones (``autopilot.avoidance_problems``) and
+adds ``Capability.ONBOARD_AVOIDANCE`` to ``capabilities`` only when there is
+no problem (ArduCopter with path planning and a proximity source; PX4 never).
+``avoidance_status()`` returns the problems. A drone without it needs a
+stepped sensor or sensing switched off: the edge says which through
+``set_obstacle_sensing``, and ``link_status`` then reports a ``preflight``
+problem for a drone with neither. Nothing here has flown: how long a real
+ArduCopter holds before BendyRuler gives up on a target, and what it does
+then, decide whether the stationary window below is long enough.
+
+Stepped sensing through a forward companion camera needs the vehicle to face
+each move. ``measured_heading_deg()`` gives the lane executor the heading the
+autopilot measures in the plan frame, and the executor clears a step only
+while it is within 10 degrees of the commanded heading. ``rotate`` waits for
+that heading: PX4 turns to a reposition's yaw; ArduCopter ignores that yaw,
+so it is turned in place with the link's optional ``yaw_to`` command
+(``MAV_CMD_CONDITION_YAW``, see ``autopilot.AutopilotLink``). A link without
+``yaw_to`` cannot turn an ArduCopter in place, so its ``rotate`` only turns
+the plan frame, as before; the executor then never clears a step the
+vehicle does not face (it is cut ``sensor_stale``), so stepped sensing on
+such an ArduCopter flies only the lanes it already faces: it is not refused,
+but logged once as ``EVENT_STEPPED_CANNOT_YAW``, and the preflight problem of
+such an ArduCopter without avoidance names only the autopilot's avoidance
+and the ``off`` override as remedies. Configuring the autopilot's avoidance
+does not stop the cuts of an edge with a camera source, which always builds
+the stepped sensor: on such an edge only the ``off`` override flies those
+lanes, relying on the autopilot's own avoidance, which the edge does not
+check in that mode. None of this has flown either.
+
 Watchdogs
 ---------
 * Every move and takeoff has a deadline (twice the expected time plus a
   margin). A target not reached in time raises, and the executor lands.
+  Exception: a drone with onboard obstacle avoidance (see below) whose move
+  misses its deadline while the vehicle sits still, in the edge's own mode,
+  returns ``STOPPED_SHORT`` instead, and the executor cuts the lane there.
 * A landing interrupts any move or takeoff that is waiting (``land`` never
   waits for a move).
 * The plan frame is set at each takeoff from the ground: the origin is the
@@ -104,12 +140,14 @@ import numpy as np
 
 from flightrisk.drone.autopilot import (
     ARDUPILOT,
+    AVOIDANCE_PARAMS,
     DEFAULT_MIN_SATELLITES,
     DEFAULT_SYSID,
     FAILSAFE_PARAMS,
     AutopilotLink,
     AutopilotState,
     autonomous_modes,
+    avoidance_problems,
     failsafe_problems,
     preflight_problems,
     rtl_altitude_cm,
@@ -123,6 +161,7 @@ from flightrisk.drone.controller import (
     DroneState,
 )
 from flightrisk.drone.geo import EARTH_RADIUS_M, offset_latlon
+from flightrisk.drone.obstacle_sensor import SENSING_MODES, SENSING_STEPPED
 from flightrisk.drone.safety import FIELD_LIMITS, RelativePose
 from flightrisk.drone.snapshot import (
     DEGREE,
@@ -137,8 +176,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AUTOMATIC_LAND_REASONS",
+    "EVENT_STEPPED_CANNOT_YAW",
     "FAILSAFE_ACTIONS",
     "FAILSAFE_REASONS",
+    "NO_AVOIDANCE_CANNOT_YAW_REMEDY",
+    "STEPPED_CANNOT_YAW_DETAIL",
     "MavlinkFleetDrone",
     "MavlinkFleetOptions",
 ]
@@ -173,6 +215,37 @@ _HEADING_TOLERANCE_DEG = 10.0
 _DETAIL_MAX = 600
 #: Takeoff height range (metres): above ground effect, below any sensible slot.
 _TAKEOFF_ALT_RANGE_M = (2.0, 20.0)
+#: ``set_obstacle_sensing`` value for "the edge has no stepped sensor and sensing is not off".
+SENSING_NONE = "none"
+#: Modes after which the drone needs onboard avoidance (the others have a
+#: stepped sensor, or the operator switched sensing off).
+_NEEDS_AVOIDANCE_MODES = frozenset({SENSING_NONE, "autopilot"})
+#: A vehicle that stays within this radius counts as not moving.
+_STATIONARY_RADIUS_M = 0.5
+#: Logged once when stepped sensing is told to an ArduCopter whose link cannot
+#: turn it in place (no ``yaw_to``): the edge flies, but cuts every lane the
+#: vehicle is not already facing. Configuring the autopilot's avoidance does
+#: not change that, because an edge with a camera source always builds the
+#: stepped sensor (``edge_device``); the only way to fly those lanes is the
+#: ``off`` override, which relies on the autopilot's own avoidance unchecked.
+EVENT_STEPPED_CANNOT_YAW = "edge_obstacle_stepped_cannot_yaw"
+STEPPED_CANNOT_YAW_DETAIL = (
+    "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), "
+    "so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance "
+    "the autopilot has; to fly those lanes, set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own "
+    "avoidance (OA_TYPE plus a proximity source), which the edge does not check in that mode"
+)
+#: The remedies the preflight names for an ArduCopter without avoidance whose
+#: link cannot turn it in place. The edge has no camera sensor here, so the
+#: autopilot's avoidance, once configured, is checked and lets it fly; the
+#: ``off`` override relies on that avoidance without the check. A camera is
+#: not offered: a camera edge cuts every lane such a vehicle does not already
+#: face. Kept short, because the preflight detail is cut at ``_DETAIL_MAX``.
+NO_AVOIDANCE_CANNOT_YAW_REMEDY = (
+    "configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set "
+    "FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane "
+    "this ArduCopter does not already face"
+)
 
 
 @dataclass(frozen=True)
@@ -214,12 +287,16 @@ class MavlinkFleetOptions:
     #: A return to launch the autopilot has not entered within this many
     #: seconds (refused, or no position for it) is replaced by a landing.
     rtl_accept_s: float = 5.0
+    #: A move that misses its deadline returns STOPPED_SHORT (with onboard
+    #: avoidance) only when the vehicle has stayed within half a metre for
+    #: this many seconds. Not tuned on a real aircraft.
+    stationary_s: float = 3.0
 
     def __post_init__(self) -> None:
         if self.failsafe_action not in FAILSAFE_ACTIONS:
             raise ValueError(f"failsafe_action must be one of {FAILSAFE_ACTIONS}, got {self.failsafe_action!r}")
         for name in ("takeoff_alt_m", "speed_mps", "stale_after_s", "takeoff_timeout_s", "arrival_radius_m",
-                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s", "rtl_accept_s"):
+                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s", "rtl_accept_s", "stationary_s"):
             value = getattr(self, name)
             if not (isinstance(value, (int, float)) and math.isfinite(value) and value > 0):
                 raise ValueError(f"{name} must be a positive number, got {value!r}")
@@ -263,6 +340,15 @@ class _ParamCheck:
     checked_at: float | None = None
 
 
+@dataclass
+class _AvoidanceCheck:
+    """The avoidance parameters as last read (``checked_at`` None: not read yet)."""
+
+    values: dict[str, float | None] = field(default_factory=dict)
+    autopilot: str | None = None
+    checked_at: float | None = None
+
+
 def _clean(text: str) -> str:
     return "".join(ch for ch in text if ch.isprintable())[:_DETAIL_MAX]
 
@@ -277,9 +363,13 @@ class MavlinkFleetDrone:
         options: MavlinkFleetOptions | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        event_log: Any = None,
     ):
         self.name = name
         self.link = link
+        # Where the drone's own structured events go (a StructuredLogger);
+        # one is made on first use when none is given.
+        self._event_log = event_log
         self.host = getattr(link, "address", "mavlink")
         self.options = options if options is not None else MavlinkFleetOptions()
         self.capabilities = DroneCapabilities(
@@ -314,6 +404,11 @@ class MavlinkFleetDrone:
         # Whether the autopilot took the requested cruise speed (None: not tried).
         self._speed_set: bool | None = None
         self._params = _ParamCheck()
+        self._avoidance = _AvoidanceCheck()
+        # What the edge says about obstacle sensing (None: not told, today's behaviour).
+        self._sensing_mode: str | None = None
+        # True once EVENT_STEPPED_CANNOT_YAW was logged for the mode in force.
+        self._cannot_yaw_warned = False
         self._param_stop = threading.Event()
         self._param_thread: threading.Thread | None = None
         self._slot_cm: Callable[[], float | None] | None = None
@@ -327,6 +422,72 @@ class MavlinkFleetDrone:
     def bind_slot_source(self, slot_cm: Callable[[], float | None]) -> None:
         """Give the drone its current altitude slot (for the return-altitude check)."""
         self._slot_cm = slot_cm
+
+    def set_obstacle_sensing(self, mode: str | None) -> None:
+        """Tell the drone how the edge senses obstacles for it (call once at startup, before the first takeoff).
+
+        *mode* is one of ``obstacle_sensor.SENSING_MODES``, ``SENSING_NONE``
+        (``"none"``: the edge has no stepped sensor and sensing is not
+        switched off), or None (not told; the default, which keeps today's
+        behaviour). With ``"stepped"`` or ``"forward_only"`` (the edge senses
+        with a companion camera) or ``"off"`` (the operator's override) the
+        drone needs no avoidance. With ``"none"`` or ``"autopilot"`` it does:
+        until ``avoidance_status()`` is empty, ``link_status()`` reports
+        ``preflight`` with the avoidance problems and a takeoff is refused.
+
+        ``"stepped"`` on an ArduCopter whose link cannot turn it in place
+        (no ``yaw_to``) is not refused, but logged once, loudly, as
+        ``EVENT_STEPPED_CANNOT_YAW``: every lane the vehicle is not already
+        facing will be cut. When the autopilot type is not known yet, the
+        warning follows the first parameter read that knows it.
+        """
+        if mode is not None and mode != SENSING_NONE and mode not in SENSING_MODES:
+            raise ValueError(f"unknown obstacle sensing mode {mode!r}")
+        with self._lock:
+            self._sensing_mode = mode
+            self._cannot_yaw_warned = False
+        try:
+            autopilot = self.link.state().autopilot
+        except Exception:  # noqa: BLE001 - not known yet; the next parameter read tells
+            autopilot = None
+        self._warn_if_stepped_cannot_yaw(autopilot)
+
+    def _cannot_yaw(self, autopilot: str | None) -> bool:
+        """True for an ArduCopter whose link cannot turn it in place (no ``yaw_to``)."""
+        return autopilot == ARDUPILOT and not self._can_yaw_in_place()
+
+    def _warn_if_stepped_cannot_yaw(self, autopilot: str | None) -> None:
+        """Log ``EVENT_STEPPED_CANNOT_YAW`` once when stepped sensing is told to an ArduCopter that cannot turn in place."""
+        with self._lock:
+            due = self._sensing_mode == SENSING_STEPPED and not self._cannot_yaw_warned and self._cannot_yaw(autopilot)
+            if due:
+                self._cannot_yaw_warned = True
+        if not due:
+            return
+        try:
+            log = self._event_log
+            if log is None:
+                from flightrisk.observability import StructuredLogger
+
+                log = self._event_log = StructuredLogger(component="mavlink-fleet")
+            log.warning(EVENT_STEPPED_CANNOT_YAW, drone_id=self.name, autopilot=autopilot,
+                        detail=STEPPED_CANNOT_YAW_DETAIL)
+        except Exception as exc:  # noqa: BLE001 - a warning must never stop the edge
+            logger.warning("[%s] %s: %s (%r)", self.name, EVENT_STEPPED_CANNOT_YAW, STEPPED_CANNOT_YAW_DETAIL, exc)
+
+    def avoidance_status(self) -> list[str]:
+        """Why the autopilot does not avoid obstacles on the edge's lanes (empty: it does).
+
+        Answers from the parameters as last read by ``refresh_params``; before
+        the first read it reports that they are not read yet. Matches
+        ``Capability.ONBOARD_AVOIDANCE``: the capability is present exactly
+        when this list is empty.
+        """
+        with self._lock:
+            check = self._avoidance
+        if check.checked_at is None:
+            return ["avoidance parameters not read yet"]
+        return avoidance_problems(check.values, check.autopilot)
 
     def bind_envelope(self, envelope: Any) -> None:
         """Check the autopilot's fence, altitude fence and return altitude against this live envelope.
@@ -497,6 +658,22 @@ class MavlinkFleetDrone:
         pose_heading = heading if yaw is None else (yaw - frame.heading_deg) % 360.0
         return RelativePose(x_m * 100.0, y_m * 100.0, pose_heading)
 
+    def measured_heading_deg(self) -> float | None:
+        """The heading the autopilot measures, in the plan frame (degrees clockwise from its "ahead"), or None.
+
+        None before the first takeoff (no plan frame yet) and while the
+        heading or the link is stale. Unlike ``measured_pose()`` it never
+        falls back to the commanded heading, so the lane executor can tell
+        whether the vehicle, and a forward companion camera, faces the step
+        it is about to clear. Not verified on a real autopilot.
+        """
+        st = self._autopilot_state()
+        with self._lock:
+            frame = self._frame
+        if frame is None or not _number(st.heading_deg) or not self._fresh(st, "heading"):
+            return None
+        return (float(st.heading_deg) - frame.heading_deg) % 360.0
+
     def geo_position(self) -> tuple[float, float] | None:
         """Latitude and longitude in degrees, or None."""
         st = self._autopilot_state()
@@ -565,12 +742,36 @@ class MavlinkFleetDrone:
         """Why a takeoff would be refused now (empty when ready). See the module docstring."""
         st = self._autopilot_state() if state is None else state
         params = self._param_problems() if self.options.require_failsafes else []
+        params = params + self._sensing_problems(st.autopilot)
         return preflight_problems(
             st,
             stale_after_s=self.options.stale_after_s,
             min_satellites=self.options.min_satellites,
             param_problems=params,
         )
+
+    def _sensing_problems(self, autopilot: str | None = None) -> list[str]:
+        """The start-gate problem of a drone with neither onboard avoidance nor a stepped sensor (see ``set_obstacle_sensing``).
+
+        The remedies it names are the ones that work for *autopilot*: a
+        camera source for stepped sensing is not offered for an ArduCopter
+        whose link cannot turn it in place, because that setup cuts every
+        lane the vehicle is not already facing.
+        """
+        with self._lock:
+            mode = self._sensing_mode
+        if mode not in _NEEDS_AVOIDANCE_MODES:
+            return []
+        found = self.avoidance_status()
+        if not found:
+            return []
+        if self._cannot_yaw(autopilot):
+            return ["no obstacle avoidance: " + "; ".join(found) + " (" + NO_AVOIDANCE_CANNOT_YAW_REMEDY + ")"]
+        return [
+            "no obstacle avoidance: " + "; ".join(found)
+            + " (configure the autopilot's avoidance, use a camera source for stepped sensing, "
+            "or set FLIGHTRISK_OBSTACLE_SENSING=off)"
+        ]
 
     def _param_problems(self) -> list[str]:
         """The failsafe checks on the parameters as last read, against the live envelope."""
@@ -617,10 +818,29 @@ class MavlinkFleetDrone:
         values = {name: self.link.get_param(name) for name in names}
         with self._lock:
             self._params = _ParamCheck(values=values, autopilot=autopilot, checked_at=self._clock())
+        self._refresh_avoidance(autopilot)
+        self._warn_if_stepped_cannot_yaw(autopilot)
         found = self._param_problems()
         if found:
             logger.warning("[%s] autopilot failsafes not ready: %s", self.name, "; ".join(found))
         return found
+
+    def _refresh_avoidance(self, autopilot: str | None) -> None:
+        """Read the avoidance parameters and set or clear ``Capability.ONBOARD_AVOIDANCE`` to match."""
+        names = AVOIDANCE_PARAMS.get(autopilot or "", ())
+        values = {name: self.link.get_param(name) for name in names}
+        with self._lock:
+            self._avoidance = _AvoidanceCheck(values=values, autopilot=autopilot, checked_at=self._clock())
+        problems = self.avoidance_status()
+        with self._lock:
+            features = set(self.capabilities.features)
+            if problems:
+                features.discard(Capability.ONBOARD_AVOIDANCE)
+            else:
+                features.add(Capability.ONBOARD_AVOIDANCE)
+            self.capabilities.features = frozenset(features)
+        if problems:
+            logger.info("[%s] no onboard obstacle avoidance: %s", self.name, "; ".join(problems))
 
     # ------------------------------------------------------------------
     # Flight commands
@@ -741,7 +961,20 @@ class MavlinkFleetDrone:
         return self._fly_to(target, "move", 2 * expected_s + self.options.move_timeout_margin_s, distance_cm / 100.0)
 
     def rotate(self, degrees: int) -> CommandResult:
-        """Yaw by *degrees* (clockwise positive) over the commanded position; returns once turned."""
+        """Yaw by *degrees* (clockwise positive) over the commanded position; returns once turned.
+
+        PX4 turns to the yaw of a reposition at the commanded position and
+        this waits until the measured heading is within 10 degrees of it
+        (a deadline raises, as for a move). An ArduCopter is turned in place
+        with the link's ``yaw_to`` and waited for the same way, but a
+        heading not reached by the deadline returns ``NOT_EXECUTED``
+        (``heading not reached``) and leaves the commanded heading as it
+        was: the lane executor then treats the drone as not facing its step
+        and cuts the lane instead of clearing it. An ArduCopter link without
+        ``yaw_to`` only turns the plan frame (see the module docstring).
+        ``rotate(0)`` turns to the commanded heading. Not flown on real
+        hardware.
+        """
         if not _number(degrees):
             return CommandResult("rotate", CommandOutcome.REJECTED, f"invalid rotation {degrees!r}")
         refusal = self._command_refusal()
@@ -750,19 +983,67 @@ class MavlinkFleetDrone:
         with self._lock:
             target = _Target(**vars(self._target))
         target.heading_deg = (target.heading_deg + degrees) % 360.0
+        timeout = abs(degrees) / self.options.yaw_rate_dps * 2 + self.options.move_timeout_margin_s
         if self.link.state().autopilot == ARDUPILOT:
+            if self._can_yaw_in_place():
+                return self._yaw_in_place(target, timeout)
             # ArduCopter ignores the yaw of a reposition (MAV_CMD_DO_REPOSITION)
             # and, in GUIDED, turns to face its direction of travel
-            # (WP_YAW_BEHAVIOR). The rotation therefore turns the plan frame's
-            # "forward" for the next moves without waiting for a heading the
-            # autopilot will never hold.
+            # (WP_YAW_BEHAVIOR). Without a yaw command the rotation therefore
+            # turns the plan frame's "forward" for the next moves without
+            # waiting for a heading the autopilot will never hold. The lane
+            # executor's gate does not clear a step until the measured
+            # heading faces it.
             with self._lock:
                 if self._interrupt.is_set():
                     return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, "interrupted by a landing")
                 self._target = target
             return CommandResult("rotate", CommandOutcome.OK, "plan heading turned; ArduCopter faces its travel")
-        timeout = abs(degrees) / self.options.yaw_rate_dps * 2 + self.options.move_timeout_margin_s
         return self._fly_to(target, "rotate", timeout, 0.0, check_heading=True)
+
+    def _can_yaw_in_place(self) -> bool:
+        """True when the link can turn the vehicle in place (it has ``yaw_to``)."""
+        return callable(getattr(self.link, "yaw_to", None))
+
+    def _yaw_in_place(self, target: _Target, timeout_s: float) -> CommandResult:
+        """Turn an ArduCopter in place to *target*'s heading with ``yaw_to`` and wait until it measures it.
+
+        OK once the measured heading is within ``_HEADING_TOLERANCE_DEG`` of
+        the target heading; only then does the commanded heading change. A
+        heading not reached by *timeout_s* returns ``NOT_EXECUTED`` with
+        ``heading not reached`` (the autopilot keeps its yaw target; the next
+        turn or reposition replaces it). A landing or external control ends
+        the wait (``NOT_EXECUTED``). The command itself raises when the
+        autopilot refuses it, like a refused reposition. Not flown on a real
+        ArduCopter.
+        """
+        with self._lock:
+            frame = self._frame
+        if frame is None:
+            return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, "not flying")
+        self.link.yaw_to((frame.heading_deg + target.heading_deg) % 360.0)
+        deadline = self._clock() + timeout_s
+        while True:
+            if self._interrupt.is_set():
+                detail = "external control" if self._external_latched() else "interrupted by a landing"
+                return CommandResult("rotate", CommandOutcome.NOT_EXECUTED, detail)
+            heading = self.measured_heading_deg()
+            if heading is not None and _angle_error(heading, target.heading_deg) <= _HEADING_TOLERANCE_DEG:
+                with self._lock:
+                    if self._interrupt.is_set():
+                        continue
+                    self._target = target
+                return CommandResult("rotate")
+            if self._clock() >= deadline:
+                measured = "unknown" if heading is None else f"{heading:.0f}"
+                logger.warning("[%s] heading %.0f deg not reached within %.0f s (measured %s deg)",
+                               self.name, target.heading_deg, timeout_s, measured)
+                return CommandResult(
+                    "rotate", CommandOutcome.NOT_EXECUTED,
+                    f"heading not reached: wanted {target.heading_deg:.0f} deg in the plan frame, measured "
+                    f"{measured} deg after {timeout_s:.0f} s",
+                )
+            self._interrupt.wait(_POLL_S)
 
     def hover(self) -> CommandResult:
         """Hold the commanded position (the autopilot already holds it between moves)."""
@@ -818,12 +1099,23 @@ class MavlinkFleetDrone:
     ) -> CommandResult:
         self._send_target(target)
         radius = min(self.options.arrival_radius_m, max(0.3, distance_m / 3.0))
-        deadline = self._clock() + timeout_s
+        started = self._clock()
+        deadline = started + timeout_s
+        # Where the vehicle last was and since when: it is stationary once it
+        # has stayed within _STATIONARY_RADIUS_M of this spot for stationary_s.
+        anchor: tuple[float, float] | None = None
+        anchor_at = started
         while True:
             if self._interrupt.is_set():
                 external = self._external_latched()
                 detail = "external control" if external else "interrupted by a landing"
                 return CommandResult(command, CommandOutcome.NOT_EXECUTED, detail)
+            if command == "move":
+                pose = self.measured_pose()
+                if pose is not None:
+                    here = (pose.x_cm, pose.y_cm)
+                    if anchor is None or math.hypot(here[0] - anchor[0], here[1] - anchor[1]) > _STATIONARY_RADIUS_M * 100:
+                        anchor, anchor_at = here, self._clock()
             if self._arrived(target, radius, check_heading):
                 with self._lock:
                     if self._interrupt.is_set():
@@ -831,8 +1123,45 @@ class MavlinkFleetDrone:
                     self._target = target
                 return CommandResult(command)
             if self._clock() >= deadline:
+                if command == "move" and self._clock() - anchor_at >= self.options.stationary_s:
+                    stopped = self._stopped_short(target)
+                    if stopped is not None:
+                        return stopped
                 raise TimeoutError(f"{command} target not reached within {timeout_s:.0f} s")
             self._interrupt.wait(_POLL_S)
+
+    def _stopped_short(self, target: _Target) -> CommandResult | None:
+        """``STOPPED_SHORT`` at the measured pose, or None when the deadline must raise as before.
+
+        Only for a drone with onboard avoidance, still in the edge's own flight
+        mode with no external control: the autopilot is holding the vehicle
+        back, not someone else flying it. The commanded target moves to the
+        measured spot and is re-sent so the vehicle holds there instead of
+        creeping on when the obstacle moves. Not flown: the real autopilot's
+        timing under path planning is unknown.
+        """
+        if not self.capabilities.supports(Capability.ONBOARD_AVOIDANCE):
+            return None
+        st = self._autopilot_state()
+        pose = self.measured_pose()
+        if pose is None or not _number(st.rel_alt_m) or self._external_latched() is not None:
+            return None
+        if st.flight_mode not in autonomous_modes(st.autopilot):
+            return None
+        held = _Target(pose.x_cm, pose.y_cm, st.rel_alt_m * 100.0, target.heading_deg)
+        with self._lock:
+            if self._interrupt.is_set():
+                return None
+            self._target = held
+        try:
+            self._send_target(held)
+        except Exception as exc:  # noqa: BLE001 - the vehicle is stopped by the autopilot already; report it
+            logger.warning("[%s] could not re-send a hold at the stopped position: %r", self.name, exc)
+        logger.warning("[%s] move stopped short at x=%.0f y=%.0f cm (onboard avoidance)", self.name, pose.x_cm, pose.y_cm)
+        return CommandResult(
+            "move", CommandOutcome.STOPPED_SHORT,
+            f"stopped short at x={pose.x_cm:.0f} cm, y={pose.y_cm:.0f} cm in the plan frame (onboard avoidance)",
+        )
 
     def _arrived(self, target: _Target, radius_m: float, check_heading: bool) -> bool:
         st = self._autopilot_state()
@@ -948,6 +1277,11 @@ class MavlinkFleetDrone:
 
 def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _angle_error(a_deg: float, b_deg: float) -> float:
+    """The smallest angle between two headings, 0 to 180 degrees."""
+    return abs((a_deg - b_deg + 180.0) % 360.0 - 180.0)
 
 
 def _offset_m(lat0: float, lon0: float, lat: float, lon: float) -> tuple[float, float]:

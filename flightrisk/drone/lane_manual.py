@@ -50,7 +50,22 @@
   plan that would leave the geofence is refused (``nack geofence``) and the
   drone stays under manual control. The return is autonomous flight: a new
   ``manual_hold`` stops it before its next move and keeps the original hold
-  point.
+  point. A protocol v2 ``hold`` or a link-loss hold also stops it before its
+  next move; when ``resume`` (or the link coming back) launches the plan
+  again, the rest of the way back is flown first, from where the drone is
+  then (``_finish_return``), so the plan is only ever continued from the
+  hold point. With stepped obstacle sensing the way back is sensed like a
+  lane: the drone turns to face each of its moves (not with
+  ``FLIGHTRISK_OBSTACLE_TURN=0``, which gates only forward steps) and flies
+  it in sensed steps, each after a fresh clear view. A step that is not
+  cleared (blocked, or a sensor that cannot look) cuts nothing and ends the
+  way back: the drone is put back under manual control, hovering, with the
+  hold point and the plan progress kept, exactly as a ``manual_hold`` during
+  the return leaves it (``edge_resume_search_blocked``, with the reason).
+  Nothing flies it on its own until a later ``resume_search`` reaches the
+  hold point: the operator can steer around the obstacle by hand and resume
+  again. A second ``manual_hold`` keeps that hold point, and a ``nudge`` is
+  refused as always under manual control.
 * **Dead-man.** With no manual command for ``MANUAL_DEADMAN_S`` (1.5 s) the
   drone is reported ``held``: it hovers in place, because every manual step
   ends in a hover and nothing else moves it. The next manual command makes
@@ -702,24 +717,30 @@ class ManualControlMixin:
         self.envelope.record_rotation(degrees)
         return not self._abort.is_set()
 
-    def _run_return(self, cmd: dict[str, Any], payload: tuple[RelativePose, list[tuple[str, int]]]) -> None:
-        """Fly back to the hold point, then continue the plan (the ``resume_search`` sequence)."""
+    def _run_return(self, cmd: dict[str, Any] | None, payload: tuple[RelativePose, list[tuple[str, int]]]) -> None:
+        """Fly back to the hold point, then continue the plan (the ``resume_search`` sequence).
+
+        With stepped obstacle sensing the way back is flown in sensed steps
+        (``lane_flight._fly_return_sensed``): nose first, a fresh view before
+        every step. A way back that a gate stops ends there, under manual
+        control with the hold point kept (``_end_blocked_return``). Without
+        sensing (no sensor, or the ``off`` override) it is flown as before.
+        *cmd* is the ``resume_search`` (None when ``_finish_return`` flies
+        the rest of a way back that a hold stopped).
+        """
         target, path = payload
         # Altitude first: the way back is flown in the drone's own slot.
         if not self._climb_to_slot():
             return
-        for direction, amount in path:
-            if direction == "rotate":
-                if not self._command_rotate(amount):
-                    return
-                continue
-            if not self.envelope.check_move(direction, amount):
-                pose = self.envelope.pose_snapshot()
-                self._log.error("edge_geofence_refused", drone_id=self.drone_id, direction=direction,
-                                distance_cm=amount, x_cm=_round(pose.x_cm), y_cm=_round(pose.y_cm), source="return")
-                self.land_now("geofence")
+        if self._lane_step_cm() is None:
+            if not self._fly_return_unsensed(path):
                 return
-            if not self._command_move(direction, amount, record=True):
+        else:
+            outcome, why = self._fly_return_sensed(path)
+            if outcome == "blocked" and why is not None:
+                self._end_blocked_return(target, *why)
+                return
+            if outcome != "done":
                 return
         with self._lock:
             if not self._is_active():
@@ -729,3 +750,116 @@ class ManualControlMixin:
         self._log.info("edge_resume_search_returned", drone_id=self.drone_id, target_x_cm=_round(target.x_cm),
                        target_y_cm=_round(target.y_cm), lane_index=self.lane_index, **pose)
         self._fly_plan()
+
+    def _fly_return_unsensed(self, path: list[tuple[str, int]]) -> bool:
+        """Fly the way back without obstacle sensing; False if the sequence must stop."""
+        for direction, amount in path:
+            if direction == "rotate":
+                if not self._command_rotate(amount):
+                    return False
+                continue
+            if not self.envelope.check_move(direction, amount):
+                pose = self.envelope.pose_snapshot()
+                self._log.error("edge_geofence_refused", drone_id=self.drone_id, direction=direction,
+                                distance_cm=amount, x_cm=_round(pose.x_cm), y_cm=_round(pose.y_cm), source="return")
+                self.land_now("geofence")
+                return False
+            if not self._command_move(direction, amount, record=True):
+                return False
+        return True
+
+    def _hold_short_of_return_locked(self) -> None:
+        """Put the drone back under manual control where its way back stopped, hold point kept. Caller holds ``_lock``.
+
+        This is the state a ``manual_hold`` during the return leaves:
+        hovering and held, with the hold point the return flew to
+        (``_resume_target``, which ``_capture_hold_point_locked`` moves into
+        the hold point, as for an interrupted return) and the plan progress
+        unchanged. It is called by the return sequence while it still holds
+        the slot, before any other sequence could move the drone. Nothing
+        flies the drone on its own from here: no lane, re-task, ``resume``
+        or ``nudge`` (``lane_commands`` refuses them under manual control),
+        until a later ``resume_search`` flies back to the hold point.
+        """
+        manual = self._manual
+        if manual is None:
+            now = self._clock()
+            manual = self._manual = ManualState(since_s=now, last_cmd_s=now)
+        if not self._held:
+            self._parked = self._resume_kind_locked(False)
+        self._held = True
+        self._hover_since = None
+        if self._resume_target is not None or manual.capture_pending:
+            self._capture_hold_point_locked()
+
+    def _end_blocked_return(self, target: RelativePose, reason: str, result: Any) -> None:
+        """End a way back that a gate stopped: the drone hovers under manual control, its hold point kept.
+
+        *reason* is what the gate would have cut a lane for (``obstacle``,
+        ``person``, ``sensor_stale`` or ``sensor_down``) and *result* the
+        gate's ``SenseResult``. Nothing is cut and the plan's progress is
+        unchanged: the drone is not where the plan continues, so a cut could
+        not record where it really stopped, and the lanes are only ever flown
+        from the hold point. The drone goes back under manual control
+        (``_hold_short_of_return_locked``); the operator can steer around the
+        obstacle by hand and send ``resume_search`` again.
+        """
+        with self._lock:
+            if not self._is_active() or self._abort.is_set():
+                return
+            self._hold_short_of_return_locked()
+            lane_index = self.lane_index
+        detail = getattr(result, "detail", None)
+        self._log.warning(
+            "edge_resume_search_blocked",
+            drone_id=self.drone_id,
+            reason=reason,
+            sensor_reason=getattr(result, "reason", None) or None,
+            cause=detail.get("cause") if isinstance(detail, dict) else None,
+            target_x_cm=_round(target.x_cm),
+            target_y_cm=_round(target.y_cm),
+            lane_index=lane_index,
+            control_mode=self.control_mode,
+            **self._pose_fields(),
+        )
+
+    def _finish_return(self) -> bool:
+        """Fly the rest of an unfinished way back, then the plan; False when no way back is pending.
+
+        Called by ``lane_flight._fly_plan`` before it flies anything. A
+        ``resume_search`` way back that a protocol v2 ``hold`` or a link-loss
+        hold stopped short of the hold point leaves ``_resume_target`` set,
+        and ``resume`` (or the ground link coming back) then launches the
+        plan again. The plan continues from the hold point only, so the way
+        back is flown first, from where the drone is now (``_run_return``,
+        which flies the plan once it got there). When no way back inside the
+        geofence exists, the drone is put back under manual control with its
+        hold point kept, as after a blocked way back
+        (``edge_resume_search_blocked`` with reason ``geofence``).
+        """
+        with self._lock:
+            target = self._resume_target
+            if target is None or not self._is_active() or self._abort.is_set():
+                return False
+            path = self._return_path_locked(target)
+            if path is None:
+                self._hold_short_of_return_locked()
+            else:
+                self._phase = "returning"
+            lane_index = self.lane_index
+        if path is None:
+            self._log.warning(
+                "edge_resume_search_blocked",
+                drone_id=self.drone_id,
+                reason="geofence",
+                sensor_reason=None,
+                cause=None,
+                target_x_cm=_round(target.x_cm),
+                target_y_cm=_round(target.y_cm),
+                lane_index=lane_index,
+                control_mode=self.control_mode,
+                **self._pose_fields(),
+            )
+            return True
+        self._run_return(None, (target, path))
+        return True

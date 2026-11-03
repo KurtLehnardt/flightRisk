@@ -106,7 +106,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
+import re
 import signal
 import sys
 import threading
@@ -118,6 +120,33 @@ from flightrisk.drone.lane_executor import (
     CONTROL_TYPES,
     MANUAL_CONTROL_TYPES,
     LaneExecutor,
+)
+from flightrisk.drone.obstacle_sensor import (
+    ENV_FAKE_OBSTACLE_Y_CM,
+    ENV_OBSTACLE_MIN_SAFE_DEPTH,
+    ENV_OBSTACLE_PERSON_FRACTION,
+    ENV_OBSTACLE_SENSING,
+    ENV_OBSTACLE_STEP_CM,
+    ENV_OBSTACLE_TURN,
+    EVENT_SETTING_NON_DEFAULT,
+    OBSTACLE_MIN_SAFE_DEPTH,
+    OBSTACLE_MIN_SAFE_DEPTH_RANGE,
+    OBSTACLE_PERSON_FRACTION,
+    OBSTACLE_PERSON_FRACTION_RANGE,
+    OBSTACLE_STEP_CM,
+    OBSTACLE_STEP_FIELD_CM,
+    OBSTACLE_STEP_MAX_CM,
+    OBSTACLE_STEP_MIN_CM,
+    SENSING_ENV_OFF,
+    SENSING_AUTOPILOT,
+    SENSING_ENV_REQUIRED,
+    SENSING_FORWARD_ONLY,
+    SENSING_OFF,
+    SENSING_STEPPED,
+    BlockedZone,
+    FakeObstacleSensor,
+    LatestFrame,
+    NullSensor,
 )
 from flightrisk.drone.safety import (
     CEILING_CM_ENV,
@@ -191,6 +220,9 @@ _FIELD_ENV = {
     "ceiling_margin_m": "FLIGHTRISK_FIELD_CEILING_MARGIN_M",
 }
 _FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
+_FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
+# A stride above this leaves the video tile and the search nearly blind (30 is one frame a second at 30 fps).
+MAX_FRAME_STRIDE = 30
 
 
 class _Default(str):
@@ -254,6 +286,27 @@ class CV2FrameSource:
             self._cap = None
 
 
+def _check_frame_stride(value: Any) -> int:
+    """Return *value* as a frame stride, a whole number from 1 to ``MAX_FRAME_STRIDE``.
+
+    A string must be plain ASCII digits (so ``1_0`` and non-ASCII digits are refused).
+    Raises ``ValueError`` otherwise.
+    """
+    message = f"frame stride must be a whole number from 1 to {MAX_FRAME_STRIDE}, got {value!r}"
+    if isinstance(value, bool):
+        raise ValueError(message)
+    if isinstance(value, str):
+        text = value.strip()
+        if not (text.isascii() and text.isdigit()):
+            raise ValueError(message)
+        value = int(text)
+    if not isinstance(value, int):
+        raise ValueError(message)
+    if not 1 <= value <= MAX_FRAME_STRIDE:
+        raise ValueError(message)
+    return value
+
+
 class DroneFrameSource:
     """Iterable over a drone controller's video frames.
 
@@ -262,30 +315,194 @@ class DroneFrameSource:
     stopping, because losing video must not end the edge loop while the
     drone is flying. Iteration stops only when ``stop_event`` is set. The
     drone itself is disconnected by ``main()``, so ``release()`` does nothing.
+
+    With ``frame_stride`` N greater than 1 the consumer is given a fresh frame
+    only once per N frame times, or once per N processing times when handling a
+    frame is slower than a frame: when a frame is handed out, the time the
+    consumer takes to come back for the next one (``busy``) is measured, and
+    frames are then dropped until ``N * max(busy, min_interval_s)`` has passed
+    since the previous one was handed out. Detection, ReID and encoding therefore
+    run at about 1/N of the rate they would at stride 1, even on a machine where
+    they are slower than the frame rate. A plain count of every Nth frame would
+    not do that, because after a slow detection the newest frame is already many
+    frames ahead and the next ones would be taken at once.
+
+    Dropped frames are still read at the normal polling rate. Polling at the full
+    rate keeps the newest frame available and keeps the frozen-stream recovery
+    working, which counts identical polls; the video itself is decoded on the
+    drone controller's own thread. The default, 1, hands out every frame as
+    before. ``clock`` and ``wait`` (``wait(seconds)`` returns true when
+    stopped) can be injected so tests do not depend on real time.
     """
 
-    def __init__(self, drone: Any, stop_event: threading.Event | None = None, min_interval_s: float = 1 / 30):
+    def __init__(
+        self,
+        drone: Any,
+        stop_event: threading.Event | None = None,
+        min_interval_s: float = 1 / 30,
+        frame_stride: int = 1,
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[float], bool] | None = None,
+    ):
         self._drone = drone
         self._stop = stop_event if stop_event is not None else threading.Event()
         self._min_interval_s = min_interval_s
+        self._frame_stride = _check_frame_stride(frame_stride)
+        self._clock = clock
+        self._wait = wait if wait is not None else self._stop.wait
         self._next_at = 0.0
+        self._yielded_at: float | None = None
 
     def __iter__(self) -> "DroneFrameSource":
         return self
 
     def __next__(self):
+        ready_at = None
+        if self._frame_stride > 1 and self._yielded_at is not None:
+            busy = self._clock() - self._yielded_at
+            cycle = self._frame_stride * max(busy, self._min_interval_s)
+            # Half a frame of slack so that clock rounding cannot cost a whole extra frame.
+            ready_at = self._yielded_at + cycle - self._min_interval_s / 2
         while not self._stop.is_set():
-            wait = self._next_at - time.monotonic()
-            if wait > 0 and self._stop.wait(wait):
+            wait = self._next_at - self._clock()
+            if wait > 0 and self._wait(wait):
                 break
-            self._next_at = time.monotonic() + self._min_interval_s
+            self._next_at = self._clock() + self._min_interval_s
             frame = self._drone.get_frame()
-            if frame is not None:
-                return frame
+            if frame is None:
+                continue
+            if ready_at is not None and self._clock() < ready_at:
+                continue
+            self._yielded_at = self._clock()
+            return frame
         raise StopIteration
 
     def release(self) -> None:
         pass
+
+
+class _FrameFeedingSource:
+    """Wraps a frame source and gives every frame it yields to the obstacle sensor's frame holder.
+
+    Used for the MAVLink companion camera, which has no ``drone.on_frame`` hook. The holder gets its
+    own copy of each new frame object (``_copying_frame_feed``). Everything else (iteration,
+    ``release``) is passed through.
+    """
+
+    def __init__(self, source: Any, holder: LatestFrame):
+        self._source = source
+        self._feed = _copying_frame_feed(holder)
+
+    def __iter__(self) -> "_FrameFeedingSource":
+        return self
+
+    def __next__(self):
+        frame = next(self._source)
+        self._feed(frame)
+        return frame
+
+    def release(self) -> None:
+        release = getattr(self._source, "release", None)
+        if callable(release):
+            release()
+
+
+class DecodedFramePoller:
+    """Feeds the obstacle sensor's frame holder from the Tello's video decoder, independent of detection.
+
+    The frame loop calls ``drone.get_frame()``, which feeds the holder through
+    ``drone.on_frame``, only between two detections, so while a slow detection
+    runs the holder gets nothing and a gate can find no fresh frame. This
+    daemon thread reads the decoder's newest frame every ``interval_s`` and
+    gives the holder its own copy of each frame object the holder has not
+    been given before.
+
+    The decoder is djitellopy's ``BackgroundFrameRead`` on the controller's
+    client (``drone.tello.background_frame_read``), which stores a new array
+    for every frame it decodes. The poller only reads it:
+
+    * It never calls ``get_frame``, so the frozen-frame counter and the stream
+      recovery in ``TelloController.get_frame`` see exactly the polls they saw
+      before, and the ``on_frame`` callbacks still fire once per poll.
+    * It never calls ``get_frame_read``, which would open a decoder. While the
+      client has none (before the first ``get_frame``, or while a stream
+      restart has dropped it), or the drone is not connected, it feeds nothing.
+    * It offers each frame to the holder through ``LatestFrame.offer``, the
+      same check the frame loop's ``on_frame`` feed (``_copying_frame_feed``)
+      goes through. The holder keeps one record of the last source frame
+      object for both feeds and refuses that object, whichever feed brings it
+      again. While the decoder is stalled neither feed adds anything, even
+      though ``get_frame`` keeps handing the stalled frame to ``on_frame``
+      until its frozen-frame recovery starts, so the sensor finds the view
+      stale instead of judging a frame from before the last move or turn.
+    * A decoder in queue mode is left alone, because reading its ``frame``
+      would take frames from its queue.
+
+    The black frame that a restarted decoder starts on is a new object, so it
+    is fed; the sensor refuses it as blank (``obstacle_camera.blank_frame``).
+
+    A drone without such a client (the fake controllers) gets no poller; see
+    ``for_drone``.
+    """
+
+    def __init__(
+        self,
+        drone: Any,
+        holder: LatestFrame,
+        interval_s: float = 1 / 30,
+        log: StructuredLogger | None = None,
+        name: str = "obstacle-frames",
+    ):
+        self._drone = drone
+        self._client = getattr(drone, "tello", None)
+        self._holder = holder
+        self._interval_s = interval_s
+        self._log = log
+        self._error_logged = False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+
+    @classmethod
+    def for_drone(
+        cls, drone: Any, holder: LatestFrame | None, log: StructuredLogger | None = None,
+    ) -> "DecodedFramePoller | None":
+        """A poller for a drone with a djitellopy client, or None when there is nothing to poll."""
+        if holder is None or getattr(drone, "tello", None) is None:
+            return None
+        name = f"{getattr(drone, 'name', None) or 'drone'}-obstacle-frames"
+        return cls(drone, holder, log=log, name=name)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self, timeout: float = 1.0) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
+    def poll_once(self) -> bool:
+        """Feed the decoder's newest frame if the holder has not had it; True when one was fed. Never raises."""
+        try:
+            state = getattr(self._drone, "state", None)
+            if not getattr(state, "is_connected", False):
+                return False
+            reader = getattr(self._client, "background_frame_read", None)
+            if reader is None or getattr(reader, "with_queue", False):
+                return False
+            frame = reader.frame
+            if frame is None:
+                return False
+            # The holder refuses a frame object that either feed already gave it.
+            return self._holder.offer(frame, _copy_frame)
+        except Exception as exc:  # noqa: BLE001 - the frame loop still feeds the holder
+            if not self._error_logged and self._log is not None:
+                self._error_logged = True
+                self._log.warning("edge_obstacle_frame_poller_error", error=repr(exc)[:200])
+            return False
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_s):
+            self.poll_once()
 
 
 class ResilientCaptureSource:
@@ -824,6 +1041,37 @@ def _resolve_appearance_only(args: argparse.Namespace, environ: Any = None) -> b
     return _drone_kind(args) is not None
 
 
+def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
+    """The detection frame stride: ``--frame-stride``, else ``FLIGHTRISK_EDGE_FRAME_STRIDE``, else 1.
+
+    Raises ``ValueError`` with an operator-facing message when the
+    environment variable is not a whole number from 1 to ``MAX_FRAME_STRIDE``. A stride above
+    1 is only supported for the ``tello`` and ``fake`` sources; any other
+    source raises ``ValueError`` rather than silently ignoring it.
+    """
+    env = os.environ if environ is None else environ
+    flag = getattr(args, "frame_stride", None)
+    if flag is not None:
+        stride = flag
+    else:
+        raw = (env.get(_FRAME_STRIDE_ENV_VAR) or "").strip()
+        if not raw:
+            return 1
+        try:
+            stride = _check_frame_stride(raw)
+        except ValueError as exc:
+            raise ValueError(f"{_FRAME_STRIDE_ENV_VAR}: {exc}") from None
+    if stride > 1 and _drone_kind(args) not in ("tello", "fake"):
+        origin = (
+            f"{_FRAME_STRIDE_ENV_VAR}={stride} is set, but a frame stride above 1"
+            if flag is None
+            else "a frame stride above 1"
+        )
+        remedy = f" Unset {_FRAME_STRIDE_ENV_VAR} to run this source." if flag is None else ""
+        raise ValueError(f"{origin} only applies to --source tello and --source fake.{remedy}")
+    return stride
+
+
 def _drone_kind(args: argparse.Namespace) -> str | None:
     """The drone this edge flies (``tello``, ``fake`` or ``mavlink``), or None for a camera or file edge.
 
@@ -1014,6 +1262,15 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _parse_frame_stride(raw: str) -> int:
+    """Parse ``--frame-stride``: a whole number from 1 to ``MAX_FRAME_STRIDE``."""
+    try:
+        return _check_frame_stride(raw)
+    except ValueError as exc:
+        # argparse already names the flag in front of this message.
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _parse_alt_slot(raw: str) -> float:
     """Parse ``--alt-slot`` as centimetres.
 
@@ -1139,6 +1396,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "be above the ceiling limit, FLIGHTRISK_CEILING_CM minus FLIGHTRISK_CEILING_MARGIN_CM "
              "(200 - 60 = 140 cm by default), or the edge refuses to start",
     )
+    parser.add_argument(
+        "--frame-stride", type=_parse_frame_stride, default=None, metavar="N",
+        help="Run detection on only every Nth video frame (1 to " + str(MAX_FRAME_STRIDE) + "; default $"
+             + _FRAME_STRIDE_ENV_VAR + ", else 1, every frame). Frames are dropped for N times the longer of "
+             "the frame time and the time the last frame took to process, so detection, ReID and encoding "
+             "run at about 1/N of the rate even when they are slower than the video. Dropped frames are "
+             "still polled at the full rate so the newest frame stays available and frozen-stream recovery "
+             "keeps working. Applies to --source tello and fake. With --stream-video the thumbnails are "
+             "sent only for the processed frames",
+    )
     face = parser.add_mutually_exclusive_group()
     face.add_argument(
         "--appearance-only", dest="appearance_only", action="store_true",
@@ -1231,6 +1498,282 @@ def _build_mavlink_drone(args: argparse.Namespace, log: StructuredLogger) -> Any
              failsafe_action=options.failsafe_action, frame_heading_deg=options.frame_heading_deg,
              speed_mps=options.speed_mps)
     return MavlinkFleetDrone(args.drone_id, MavsdkAutopilotLink(address, autopilot=autopilot), options)
+
+
+class ObstacleWiring:
+    """What the edge hands to ``LaneExecutor`` for obstacle sensing (design section 4).
+
+    ``sensor`` and ``sensor_error`` are mutually exclusive, and both are None for
+    a drone whose autopilot avoids obstacles by itself. ``holder`` is the frame
+    holder that ``drone.on_frame`` feeds, or None when no camera sensor is used.
+    """
+
+    def __init__(
+        self,
+        sensor: Any = None,
+        sensor_error: str | None = None,
+        step_cm: int = OBSTACLE_STEP_CM,
+        turn: bool = True,
+        holder: LatestFrame | None = None,
+    ):
+        self.sensor = sensor
+        self.sensor_error = sensor_error
+        self.step_cm = step_cm
+        self.turn = turn
+        self.holder = holder
+
+    def executor_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``LaneExecutor``; empty when the executor should fly as before."""
+        kwargs: dict[str, Any] = {}
+        if self.sensor is not None:
+            kwargs["obstacle_sensor"] = self.sensor
+        if self.sensor_error is not None:
+            kwargs["obstacle_sensor_error"] = self.sensor_error
+        if self.sensor is not None or self.sensor_error is not None:
+            kwargs["obstacle_step_cm"] = self.step_cm
+            kwargs["obstacle_turn"] = self.turn
+        return kwargs
+
+
+def _obstacle_sensing_mode(environ: Any = None) -> str:
+    """``FLIGHTRISK_OBSTACLE_SENSING``: ``required`` (the default) or ``off``; anything else refuses to start."""
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_OBSTACLE_SENSING) or "").strip().lower()
+    if not raw:
+        return SENSING_ENV_REQUIRED
+    if raw not in (SENSING_ENV_REQUIRED, SENSING_ENV_OFF):
+        raise SystemExit(
+            f"edge_device: {ENV_OBSTACLE_SENSING}={raw!r} is not valid; use "
+            f"{SENSING_ENV_REQUIRED!r} (the default) or {SENSING_ENV_OFF!r}. Refusing to start."
+        )
+    return raw
+
+
+# Plain ASCII numbers only: ``int()`` and ``float()`` would also take ``5_0``,
+# non-ASCII digits, ``nan`` and ``inf``.
+_ASCII_INT_RE = re.compile(r"[0-9]+")
+_ASCII_FLOAT_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _obstacle_number(name: str, default: Any, lo: float, hi: float, environ: Any, integer: bool = False) -> Any:
+    """A numeric obstacle knob from the environment, in ``lo..hi``; a bad value refuses to start.
+
+    An integer is ASCII digits only; a decimal is an ASCII decimal number (an
+    optional sign and exponent), so ``5_0``, non-ASCII digits, ``nan`` and
+    ``inf`` are refused.
+    """
+    raw = (environ.get(name) or "").strip()
+    if not raw:
+        return default
+    value: Any = None
+    if (_ASCII_INT_RE if integer else _ASCII_FLOAT_RE).fullmatch(raw):
+        try:
+            value = int(raw) if integer else float(raw)
+        except (ValueError, OverflowError):
+            value = None
+    if value is None or not math.isfinite(value) or not lo <= value <= hi:
+        kind = "a whole number" if integer else "a number"
+        raise SystemExit(f"edge_device: {name}={raw!r} must be {kind} from {lo:g} to {hi:g}. Refusing to start.")
+    return value
+
+
+class ObstacleSettings:
+    """Every obstacle setting of the environment, parsed and validated (design section 3.2).
+
+    ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
+    ``_PERSON_FRACTION`` and ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
+    whatever the mode, the drone kind or the video source, so a malformed value
+    refuses to start even when the edge would not use it (under ``off``, on the
+    fake drone, or on a MAVLink edge without a camera). The step's range and
+    default depend on the drone kind: the field profile (the envelope's move
+    limits, default 500 cm) on a MAVLink edge, the room profile (20 to 100 cm,
+    default 50) otherwise. ``non_default`` lists ``(variable, value, default)``
+    for every setting that differs from its default.
+    """
+
+    def __init__(self, kind: str | None, envelope: SafetyEnvelope, environ: Any):
+        self.mode = _obstacle_sensing_mode(environ)
+        self.turn = _obstacle_turn(environ)
+        if kind == "mavlink":
+            step_default = OBSTACLE_STEP_FIELD_CM
+            step_lo, step_hi = envelope.limits.min_move_cm, envelope.limits.max_move_cm
+        else:
+            step_default = OBSTACLE_STEP_CM
+            step_lo, step_hi = OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM
+        self.step_cm = _obstacle_number(ENV_OBSTACLE_STEP_CM, step_default, step_lo, step_hi, environ, integer=True)
+        self.min_safe_depth = _obstacle_number(
+            ENV_OBSTACLE_MIN_SAFE_DEPTH, OBSTACLE_MIN_SAFE_DEPTH, *OBSTACLE_MIN_SAFE_DEPTH_RANGE, environ,
+        )
+        self.person_fraction = _obstacle_number(
+            ENV_OBSTACLE_PERSON_FRACTION, OBSTACLE_PERSON_FRACTION, *OBSTACLE_PERSON_FRACTION_RANGE, environ,
+        )
+        self.fake_obstacle_y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, None, -100000.0, 100000.0, environ)
+        self.non_default: list[tuple[str, Any, Any]] = [
+            (name, value, default)
+            for name, value, default in (
+                (ENV_OBSTACLE_SENSING, self.mode, SENSING_ENV_REQUIRED),
+                (ENV_OBSTACLE_TURN, self.turn, True),
+                (ENV_OBSTACLE_STEP_CM, self.step_cm, step_default),
+                (ENV_OBSTACLE_MIN_SAFE_DEPTH, self.min_safe_depth, OBSTACLE_MIN_SAFE_DEPTH),
+                (ENV_OBSTACLE_PERSON_FRACTION, self.person_fraction, OBSTACLE_PERSON_FRACTION),
+                (ENV_FAKE_OBSTACLE_Y_CM, self.fake_obstacle_y_cm, None),
+            )
+            if value != default
+        ]
+
+    def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
+        """Log every setting that is not its default once, at warning level, by name and value."""
+        for name, value, default in self.non_default:
+            log.warning(
+                EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
+                detail=f"{name}={value!r} is not the default ({default!r})",
+            )
+
+
+def _obstacle_turn(environ: Any) -> bool:
+    """``FLIGHTRISK_OBSTACLE_TURN``: 1 (the default) turns nose first; 0 is the bring-up kill switch."""
+    raw = (environ.get(ENV_OBSTACLE_TURN) or "").strip().lower()
+    if raw in ("", "1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise SystemExit(f"edge_device: {ENV_OBSTACLE_TURN}={raw!r} must be 0 or 1. Refusing to start.")
+
+
+def _copy_frame(frame: Any) -> Any:
+    """The holder's own copy of a frame, so later changes to the source array cannot reach it."""
+    copy = getattr(frame, "copy", None)
+    return copy() if callable(copy) else frame
+
+
+def _copying_frame_feed(holder: LatestFrame) -> Callable[[Any], None]:
+    """A frame callback that gives the holder its own copy of each frame object it has not had before.
+
+    The copy keeps the holder's frame safe from anything that changes the source array later. The
+    holder compares the source object itself, before copying, with the last one that any of its
+    feeds offered (``LatestFrame.offer``). This feed and ``DecodedFramePoller`` therefore share one
+    record: when ``TelloController.get_frame`` hands the same array to ``on_frame`` on every poll
+    of a stalled decoder, the holder keeps the frame's first arrival time and the gate finds the
+    view stale.
+    """
+
+    def _feed(frame: Any) -> None:
+        holder.offer(frame, _copy_frame)
+
+    return _feed
+
+
+def _build_obstacle_wiring(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    drone: Any,
+    runner: Any,
+    envelope: SafetyEnvelope,
+    environ: Any = None,
+) -> ObstacleWiring:
+    """Build the obstacle sensor for this drone kind and environment (design sections 3.2, 4, 5 and 7.1).
+
+    Call it after the drone is built and before ``drone.connect()``.
+
+    * ``FLIGHTRISK_OBSTACLE_SENSING=off`` flies unsensed, loudly: a ``NullSensor``.
+    * ``tello``: a ``ForwardCameraSensor`` on a ``LatestFrame`` that ``drone.on_frame`` feeds with every
+      new frame object, independent of the detector's frame stride (a stalled decoder's frame is not fed
+      again; see ``_copying_frame_feed``). When the sensor cannot be built (torch, the
+      MiDaS weights, the first inference) the error is passed to the executor, which refuses to take off.
+    * ``fake``: a ``FakeObstacleSensor``, blocked from ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` along the
+      plan-frame y axis when that is set and never otherwise. It loads no model.
+    * ``mavlink``: with ``--source camera`` or ``url``, the same camera sensor in steps of 500 cm (the field
+      profile), fed from the capture source; with another source no sensor, and the drone's own preflight
+      needs the autopilot's avoidance (see ``_tell_mavlink_drone``). ``off`` is the override.
+    """
+    env = os.environ if environ is None else environ
+    kind = _drone_kind(args)
+    drone_id = getattr(args, "drone_id", None)
+    settings = ObstacleSettings(kind, envelope, env)
+    settings.warn_non_default(log, drone_id)
+    mode, turn, step_cm = settings.mode, settings.turn, settings.step_cm
+    if mode == SENSING_ENV_OFF:
+        log.warning(
+            "edge_obstacle_sensing_off", drone_id=drone_id,
+            detail=f"{ENV_OBSTACLE_SENSING}=off: this drone flies its lanes with NO obstacle sensing",
+        )
+        return ObstacleWiring(sensor=NullSensor(), turn=turn)
+    if kind == "mavlink" and getattr(args, "source", None) not in ("camera", "url"):
+        # No companion camera to look through: the autopilot's own avoidance or the override.
+        log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
+        return ObstacleWiring(turn=turn)
+    if kind == "fake":
+        y_cm = settings.fake_obstacle_y_cm
+        zones: list[BlockedZone] = []
+        if y_cm is not None:
+            zones.append(BlockedZone(heading_deg=0.0, y_min=y_cm))
+            log.info("edge_obstacle_fake", drone_id=drone_id, blocked_from_y_cm=y_cm)
+        return ObstacleWiring(
+            sensor=FakeObstacleSensor(envelope.pose_snapshot, zones), step_cm=step_cm, turn=turn,
+        )
+
+    min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
+    holder = LatestFrame(time.monotonic)
+    try:
+        if kind != "mavlink":
+            # A MAVLink edge feeds the holder from its capture source instead (``_flight_frame_source``).
+            on_frame = getattr(drone, "on_frame", None)
+            if not callable(on_frame):
+                raise RuntimeError("the drone provides no on_frame hook for the camera sensor")
+            on_frame(_copying_frame_feed(holder))
+        from flightrisk.drone import obstacle_camera
+
+        sensor = obstacle_camera.ForwardCameraSensor(
+            holder, runner, drone_id=drone_id, min_safe_depth=min_safe_depth, person_fraction=person_fraction,
+            clock=time.monotonic,
+        )
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
+        return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder)
+    return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder)
+
+
+def _obstacle_frame_poller(
+    kind: str | None, drone: Any, wiring: ObstacleWiring, log: StructuredLogger | None = None,
+) -> DecodedFramePoller | None:
+    """The poller that feeds a camera sensor's holder straight from the drone's video decoder, or None.
+
+    Only a drone flown through its own video (not the MAVLink capture source) with a working camera sensor
+    and a djitellopy client to read gets one, so a slow detection in the frame loop cannot starve the
+    holder. The caller starts and stops it.
+    """
+    if kind == "mavlink" or wiring.sensor is None or isinstance(wiring.sensor, NullSensor):
+        return None
+    return DecodedFramePoller.for_drone(drone, wiring.holder, log)
+
+
+def _tell_mavlink_drone(drone: Any, wiring: ObstacleWiring) -> str | None:
+    """Tell a ``MavlinkFleetDrone`` how this edge senses obstacles; call after ``connect()``, before any takeoff.
+
+    ``off`` for the override, ``stepped`` (or ``forward_only``) when the edge has a camera sensor, or
+    failed to build one and so refuses to fly. With no sensor the drone needs the autopilot's avoidance:
+    ``autopilot`` when ``ONBOARD_AVOIDANCE`` is declared now, otherwise ``none``. Both make the drone's
+    preflight refuse a takeoff until ``avoidance_status()`` is empty, so the capability, which can still
+    appear after the first parameter read and drop later, is checked by the drone and the executor and not
+    decided here for good. Returns the mode, or None when the drone does not take one.
+    """
+    setter = getattr(drone, "set_obstacle_sensing", None)
+    if not callable(setter):
+        return None
+    from flightrisk.drone.controller import Capability, capabilities_of
+    from flightrisk.drone.mavlink_fleet import SENSING_NONE
+
+    if isinstance(wiring.sensor, NullSensor):
+        mode = SENSING_OFF
+    elif wiring.sensor is not None or wiring.sensor_error is not None:
+        mode = SENSING_STEPPED if wiring.turn else SENSING_FORWARD_ONLY
+    elif capabilities_of(drone).supports(Capability.ONBOARD_AVOIDANCE):
+        mode = SENSING_AUTOPILOT
+    else:
+        mode = SENSING_NONE
+    setter(mode)
+    return mode
 
 
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
@@ -1410,10 +1953,13 @@ def _run_flight_edge(
         # checked against the live geofence, ceiling and slot.
         bind_envelope(envelope)
 
+    obstacle = _build_obstacle_wiring(args, log, drone, runner, envelope)
+
     token = os.environ.get(_TOKEN_ENV_VAR)
     transport = _build_transport(args, runner, token)
     flight = LaneExecutor(
         drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
+        **obstacle.executor_kwargs(),
     )
     bind_executor = getattr(transport, "bind_executor", None)
     if callable(bind_executor):
@@ -1425,9 +1971,16 @@ def _run_flight_edge(
     if not drone.connect():
         log.error("edge_drone_connect_failed", drone_id=args.drone_id)
         raise SystemExit(1)
+    if kind == "mavlink":
+        mode = _tell_mavlink_drone(drone, obstacle)
+        log.info("edge_obstacle_sensing", drone_id=args.drone_id, mode=mode)
 
     previous_sigint = None
+    frame_poller = _obstacle_frame_poller(kind, drone, obstacle, log)
     try:
+        if frame_poller is not None:
+            frame_poller.start()
+            log.info("edge_obstacle_frame_poller", drone_id=args.drone_id)
         flight.start()
         _wire_emergency_callback(transport, flight)
         start_local_land_key(flight, sys.stdin, log)
@@ -1451,11 +2004,13 @@ def _run_flight_edge(
             reconnect_max_delay_s=_FLEET_RECONNECT_MAX_DELAY_S,
             auth_backoff_max_s=AUTH_BACKOFF_MAX_S,
             appearance_only=runner.appearance_only,
+            frame_stride=getattr(args, "frame_stride", None) or 1,
         )
         transport.connect()
         run_edge_device(
             _flight_frame_source(args, drone, stop_event, log,
-                                 on_camera_status=lambda ok: setattr(runner, "camera_ok", ok)),
+                                 on_camera_status=lambda ok: setattr(runner, "camera_ok", ok),
+                                 obstacle_holder=obstacle.holder),
             transport,
             runner,
             logger=log,
@@ -1468,6 +2023,8 @@ def _run_flight_edge(
             flight.shutdown()
         except Exception as exc:
             log.error("edge_flight_shutdown_error", error=repr(exc))
+        if frame_poller is not None:
+            frame_poller.stop()
         try:
             transport.disconnect()
         except Exception:
@@ -1495,11 +2052,18 @@ def _flight_frame_source(
     stop_event: threading.Event,
     log: StructuredLogger,
     on_camera_status: Callable[[bool], None] | None = None,
+    obstacle_holder: LatestFrame | None = None,
 ):
-    """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL."""
+    """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL.
+
+    For a companion camera, ``obstacle_holder`` (the obstacle sensor's frame holder) is fed every frame read.
+    """
     if _drone_kind(args) != "mavlink":
         # The fake drone only yields blank frames, so a low rate saves CPU.
-        return DroneFrameSource(drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30)
+        return DroneFrameSource(
+            drone, stop_event, min_interval_s=0.2 if args.source == "fake" else 1 / 30,
+            frame_stride=getattr(args, "frame_stride", None) or 1,
+        )
 
     def _open():
         import cv2  # lazy: keep module import light for tests
@@ -1512,7 +2076,8 @@ def _flight_frame_source(
 
     log.info("edge_frames_capture", source=args.source, camera_index=args.camera_index if args.source == "camera"
              else None)
-    return ResilientCaptureSource(_open, stop_event, log=log, on_status=on_camera_status)
+    source = ResilientCaptureSource(_open, stop_event, log=log, on_status=on_camera_status)
+    return _FrameFeedingSource(source, obstacle_holder) if obstacle_holder is not None else source
 
 
 def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -1620,6 +2185,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(f"{ENV_NODE_ID} must be an identifier such as mac or win-1, got {env_node_id!r}")
     try:
         _resolve_appearance_only(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        args.frame_stride = _resolve_frame_stride(args)
     except ValueError as exc:
         parser.error(str(exc))
     try:
