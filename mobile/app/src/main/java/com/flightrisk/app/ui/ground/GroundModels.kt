@@ -205,6 +205,12 @@ data class GroundUiState(
     val planIsCurrent: Boolean = false,
     /** The result of the last detection profile selection, or null. */
     val profileFeedback: ProfileFeedback? = null,
+    /** One tile per drone with a recent video frame, in natural id order. Read only. */
+    val videoTiles: List<VideoTileModel> = emptyList(),
+    /** True when the ground said it is not streaming video and the state is live: the Video section says so. */
+    val videoOffAtGround: Boolean = false,
+    /** Match alerts the ground reported, newest first. Read only: the operator answers on the laptop. */
+    val alerts: GroundAlertsUi = GroundAlertsUi.EMPTY,
 )
 
 /** The visible result of one detection profile selection on the profiles card. */

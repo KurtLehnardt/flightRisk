@@ -54,6 +54,9 @@ extension GroundText {
 /// command or a lookup depends on (the keys of `fleet_status`, the drone id of a manual reply)
 /// keep their real value; the places that show them cut them with `GroundText.shortId`.
 enum GroundIngest {
+    /// The longest `alert_id` the phone keeps an answer for (the ground's are 32 characters).
+    static let maxAlertIdLength = 128
+
     static func sanitized(_ event: GroundProtocol.GroundEvent) -> GroundProtocol.GroundEvent {
         switch event {
         case var .fleetStatus(payload):
@@ -75,6 +78,11 @@ enum GroundIngest {
         case var .matchAlertReminder(alert):
             alert.snapshot = nil
             return .matchAlertReminder(alert)
+        case var .matchAlertResolved(answer):
+            // An id longer than any real one is dropped, so it can neither match nor fill memory.
+            if let id = answer.alertId, id.count > GroundIngest.maxAlertIdLength { answer.alertId = nil }
+            if case let .unknown(raw)? = answer.action { answer.action = .unknown(GroundText.shorten(raw, max: 40)) }
+            return .matchAlertResolved(answer)
         case let .manualAck(reply):
             return .manualAck(sanitized(reply))
         case let .manualResult(reply):

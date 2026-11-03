@@ -187,6 +187,9 @@ class MissionCardsViewModelTest {
         drop(c)
         eventually("failure") { ui.profileFeedback?.isFailure == true }
         assertTrue(ui.profileFeedback!!.text.contains("the connection was lost before the ground answered"))
+        // The command was sent and may have reached the ground, so it must not claim the profile was not changed.
+        assertFalse(ui.profileFeedback!!.text.contains("NOT changed"))
+        assertEquals("Profile change: " + MissionFormat.WHY_LINK_LOST, ui.profileFeedback!!.text)
         vm.dismissProfileFeedback()
         assertNull(ui.profileFeedback)
     }

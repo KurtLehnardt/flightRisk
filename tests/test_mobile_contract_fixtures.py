@@ -54,7 +54,7 @@ REQUIRED_CASES = {
     "fleet_plan.json": {"two_drones", "map_plan_lost_zone_uncovered"},
     "fleet_detection.json": {"new_detection"},
     "frame.json": {"edge_video_with_match", "edge_detections_only"},
-    "match_alert.json": {"edge_match", "reminder_on_connect"},
+    "match_alert.json": {"edge_match", "reminder_on_connect", "resolved_dismiss", "resolved_confirm"},
     "detection_profiles.json": {"pending", "fallback", "refused", "unsupported", "standby_controls_disabled", "no_board"},
     "ceiling_settings.json": {
         "on_ground_in_sync", "edge_pending", "edge_refused", "slot_above_limit", "locked_in_flight", "unavailable",
@@ -75,7 +75,8 @@ REQUIRED_CASES = {
         "emergency_land_all",
     },
     "edge_edge_to_ground.json": {
-        "detections_appearance_only", "detections_with_face", "detections_no_video", "telemetry_v1",
+        "detections_appearance_only", "detections_with_face", "detections_no_video", "detections_reid_embedding",
+        "telemetry_v1",
         "telemetry_v2_drone_link_down", "ack_assign_lanes", "nack_assign_lanes_geofence", "nack_v2_drone_unreachable",
         "profile_ack_fallback", "profile_nack_in_flight", "ceiling_ack", "ceiling_nack", "manual_ack", "manual_nack",
         "pong",
@@ -85,6 +86,7 @@ REQUIRED_CASES = {
         "manual_command", "control_modes", "hold_reasons", "edge_states",
     },
     "client_emits.json": set(),  # checked by test_client_emit_allow_list
+    "match_score_vectors.json": set(),  # checked by tests/test_match_score_vectors.py
     "unknown_keys.json": set(),  # checked by test_unknown_key_variants_differ_only_by_the_unknown_key
 }
 
@@ -225,6 +227,45 @@ def test_edge_link_samples_validate_and_fit_the_message_cap():
     assert phone["type"] == "detections"
     assert "drone_id" not in phone and "detection_profile" not in phone
     assert all("face_embedding" not in det for det in phone["detections"])
+
+
+def test_reid_embedding_sample_matches_the_ground_model_and_is_scored():
+    """A phone edge sends appearance embeddings in exactly this form (docs/mobile-contract.md, "Phone as an edge")."""
+    import math
+
+    import numpy as np
+
+    from flightrisk.config import VisionConfig
+    from flightrisk.edge import EdgeRunner
+    from flightrisk.ground import GroundStation
+    from flightrisk.vision import reid_spec as rs
+
+    doc = _load(FIXTURES / "edge_edge_to_ground.json")
+    spec = doc["_meta"]["reid_embedding"]
+    assert spec == {
+        "library": rs.REID_LIBRARY, "model": rs.REID_DEFAULT_MODEL, "pretrained": rs.REID_PRETRAINED,
+        "dimension": rs.REID_EMBEDDING_DIM, "dtype": "float32", "l2_normalized": True,
+        "input_size": rs.REID_INPUT_SIZE,
+        "resize": "shortest side to input_size (bicubic), then center crop input_size x input_size",
+        "mean": list(rs.REID_MEAN), "std": list(rs.REID_STD),
+    }
+    assert VisionConfig().reid_model == rs.REID_DEFAULT_MODEL
+
+    payload = doc["cases"]["detections_reid_embedding"]["payload"]
+    vector = payload["detections"][0]["reid_embedding"]
+    assert len(vector) == spec["dimension"] == 512
+    assert all(isinstance(v, float) and math.isfinite(v) for v in vector)
+    assert all(float(np.float32(v)) == v for v in vector), "every value is a float32 value"
+    assert abs(math.sqrt(math.fsum(v * v for v in vector)) - 1.0) < 1e-6
+    assert payload["detections"][1]["reid_embedding"] is None
+    assert set(payload["detections"][0]) == {"bbox", "confidence", "reid_embedding", "crop"}
+
+    scored = GroundStation(target_reid_embedding=vector).process_message(EdgeRunner.from_dict(payload))
+    assert scored[0]["reid_score"] == pytest.approx(1.0, abs=1e-5)
+    assert scored[1]["reid_score"] == 0.0
+    # A vector from another model of a different length is not comparable and scores 0, never an error.
+    short = dict(payload, detections=[dict(payload["detections"][0], reid_embedding=vector[:256])])
+    assert GroundStation(target_reid_embedding=vector).process_message(EdgeRunner.from_dict(short))[0]["reid_score"] == 0.0
 
 
 def test_nack_reasons_are_the_protocol_constants():

@@ -106,7 +106,12 @@ internal class GuardedOutputStream(private val raw: OutputStream, private val gu
 }
 
 /**
- * A minimal RFC 6455 WebSocket client for plain `ws://` on the local network.
+ * A minimal RFC 6455 WebSocket client for plain `ws://` on the local network and for `wss://` to any host.
+ *
+ * `wss://` runs the same protocol over TLS from the platform's [javax.net.ssl.SSLSocketFactory]: the
+ * default trust store, TLS 1.2 or 1.3, and a check that the certificate matches the host name ([TlsParams]).
+ * It is the only way to reach a host outside the private ranges. Plain `ws://` still goes only to an
+ * address [LanAddressPolicy] has checked.
  *
  * It exists instead of OkHttp's WebSocket for two reasons. First, OkHttp's
  * reader assembles every message in memory before handing it over and has no
@@ -127,6 +132,8 @@ internal class GuardedOutputStream(private val raw: OutputStream, private val gu
  */
 class RawWebSocket private constructor(
     private val socket: Socket,
+    /** The plain TCP socket under [socket] (the same object for `ws://`). Closing it ends all IO without writing. */
+    private val rawSocket: Socket,
     private val input: DataInputStream,
     private val output: BufferedOutputStream,
     private val maxMessageBytes: Long,
@@ -224,6 +231,20 @@ class RawWebSocket private constructor(
         } catch (_: RuntimeException) {
         } finally {
             abort()
+            closeTlsLayer()
+        }
+    }
+
+    /**
+     * Releases the TLS socket after the raw socket is shut. Its own close may try to write an alert, which
+     * fails harmlessly on a closed socket but is blocking IO, so only [close] (an IO thread) calls it.
+     */
+    private fun closeTlsLayer() {
+        if (socket === rawSocket) return
+        try {
+            socket.close()
+        } catch (_: IOException) {
+        } catch (_: RuntimeException) {
         }
     }
 
@@ -235,7 +256,7 @@ class RawWebSocket private constructor(
     fun abort() {
         closed = true
         try {
-            socket.close()
+            rawSocket.close()
         } catch (_: IOException) {
         } catch (_: RuntimeException) {
         }
@@ -320,6 +341,8 @@ class RawWebSocket private constructor(
          * @param readTimeoutMs the read timeout after the upgrade (0 = none);
          *   the caller's ping watchdog is the main dead-link detector.
          * @param secrets values to redact from a server's close reason.
+         * @param tls null for plain `ws://`; for `wss://`, the TLS settings. The handshake is part of the
+         *   same overall deadline.
          */
         fun connect(
             address: InetAddress,
@@ -332,16 +355,23 @@ class RawWebSocket private constructor(
             secrets: List<String> = emptyList(),
             guard: IoGuard = IoGuard.NONE,
             socket: Socket = Socket(),
+            tls: TlsParams? = null,
         ): RawWebSocket {
             require(maxMessageBytes in 1..Int.MAX_VALUE.toLong()) { "maxMessageBytes out of range" }
+            var io: Socket = socket
             try {
                 val deadline = System.nanoTime() + timeoutMs * 1_000_000L
                 socket.tcpNoDelay = true
                 guard.beforeBlockingIo("connect")
                 socket.connect(InetSocketAddress(address, port), timeoutMs)
-                val timed = DeadlineInputStream(socket, socket.getInputStream(), guard).also { it.deadlineNanos = deadline }
+                if (tls != null) {
+                    guard.beforeBlockingIo("handshake")
+                    val leftMs = ((deadline - System.nanoTime()) / 1_000_000).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+                    io = TlsSockets.wrap(socket, tls, port, leftMs)
+                }
+                val timed = DeadlineInputStream(io, io.getInputStream(), guard).also { it.deadlineNanos = deadline }
                 val input = DataInputStream(BufferedInputStream(timed, 16 * 1024))
-                val output = BufferedOutputStream(GuardedOutputStream(socket.getOutputStream(), guard), 16 * 1024)
+                val output = BufferedOutputStream(GuardedOutputStream(io.getOutputStream(), guard), 16 * 1024)
                 val keyBytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
                 val key = Base64.getEncoder().encodeToString(keyBytes)
                 MiniHttp.writeRequest(
@@ -378,11 +408,17 @@ class RawWebSocket private constructor(
                 }
                 timed.deadlineNanos = 0
                 timed.idleTimeoutMs = readTimeoutMs
-                return RawWebSocket(socket, input, output, maxMessageBytes, secrets)
+                return RawWebSocket(io, socket, input, output, maxMessageBytes, secrets)
             } catch (e: Throwable) {
                 try {
                     socket.close()
                 } catch (_: IOException) {
+                }
+                if (io !== socket) {
+                    try {
+                        io.close()
+                    } catch (_: IOException) {
+                    }
                 }
                 throw e
             }

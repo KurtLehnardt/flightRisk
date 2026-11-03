@@ -373,6 +373,36 @@ class GroundLinkControllerTest {
     }
 
     @Test
+    fun `the pipeline is asked for embeddings, crops and the camera view only through a running link`() {
+        val h = Harness()
+        try {
+            val p = h.controller.detectionPublisher
+            // Off: nothing is asked for, even with a search running and the app in view.
+            h.controller.setForeground(true)
+            p.onSearchStarted()
+            assertEquals(0, p.maxEmbeddings())
+            assertEquals(0, p.maxCrops())
+            assertFalse(p.wantsThumbnail())
+
+            h.controller.enable("192.168.1.20", ok("192.168.1.20"))
+            val c = runBlocking { h.port.connection(0) }
+            runBlocking { eventually("connected") { h.state.status == EdgeLinkStatus.Connected } }
+            assertEquals(EdgePublisherConfig().maxEmbeddingsPerMessage, p.maxEmbeddings())
+            assertEquals("crops stay off", 0, p.maxCrops())
+            assertFalse(p.wantsThumbnail())
+            c.server("{\"type\":\"stream_video\",\"enabled\":true}")
+            runBlocking { eventually("camera view asked for") { p.wantsThumbnail() } }
+
+            // Turned off: back to nothing.
+            h.controller.disable()
+            assertEquals(0, p.maxEmbeddings())
+            assertFalse(p.wantsThumbnail())
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
     fun `the consent file is excluded from backup and device transfer`() {
         fun excludes(name: String): Map<String, Set<String>> {
             val file = listOf("src/main/res/xml", "app/src/main/res/xml").map { java.io.File(it, name) }.first { it.isFile }

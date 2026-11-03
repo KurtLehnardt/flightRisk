@@ -1,9 +1,13 @@
 package com.flightrisk.app.transport
 
 import android.graphics.Bitmap
+import com.flightrisk.app.pipeline.DetectionSelection
 import com.flightrisk.app.pipeline.PublishedDetection
 import com.flightrisk.app.pipeline.PublishedFrame
 import com.flightrisk.app.vision.Detection
+import com.flightrisk.app.vision.EdgeEmbeddings
+import com.flightrisk.app.vision.EmbeddingProvider
+import com.flightrisk.app.vision.NoEmbeddingProvider
 import java.io.ByteArrayOutputStream
 
 /**
@@ -11,10 +15,13 @@ import java.io.ByteArrayOutputStream
  * place the app compresses images for the ground station link.
  *
  * The pipeline thread only makes small scaled copies of what the publisher
- * asked for (the whole-view thumbnail when the ground asked for video, and
- * crops for the most confident people when crops are on); the JPEG
- * compression runs later, in the lambdas, on the publisher's worker. The
- * camera frame itself is not used after [publishedFrame] returns.
+ * asked for (the whole-view thumbnail when the ground asked for video, crops
+ * for the most confident people when crops are on, and inputs for the
+ * appearance model when the app has one the ground can compare); the JPEG
+ * compression and the model run later, in the lambdas, on the publisher's
+ * worker. The camera frame and the detection crops themselves are not used
+ * after [publishedFrame] returns, and no lambda recycles them: every copy is
+ * a new bitmap.
  *
  * The wire format (JSON keys, base64, the size limit) lives only in the
  * contract module's `DetectionsWire`.
@@ -29,6 +36,9 @@ object BitmapFrames {
     const val CROP_MAX_SIDE = 160
     const val CROP_QUALITY = 70
 
+    /** The longest side of the copy handed to the appearance model, which resizes it to 224 pixels anyway. */
+    const val EMBEDDING_INPUT_MAX_SIDE = 512
+
     fun publishedFrame(
         frame: Bitmap,
         detections: List<Detection>,
@@ -36,9 +46,22 @@ object BitmapFrames {
         timestampSeconds: Double,
         withThumbnail: Boolean,
         maxCrops: Int,
+        maxEmbeddings: Int = 0,
+        embeddingProvider: EmbeddingProvider<Bitmap> = NoEmbeddingProvider,
+        maxDetections: Int = Int.MAX_VALUE,
     ): PublishedFrame {
         val thumb = if (withThumbnail) scaledToFit(frame, THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT) else null
-        val cropOwners = detections.indices.sortedByDescending { detections[it].confidence }.take(maxCrops.coerceAtLeast(0)).toSet()
+        // The same choice the publisher makes, so no copy is made for a detection it leaves out.
+        val cropOwners = DetectionSelection.mostConfident(detections.map { it.confidence.toDouble() }, maxDetections, maxCrops)
+        val embeddings = EdgeEmbeddings.lazyEmbeddings(
+            detections = detections,
+            confidence = { it.confidence.toDouble() },
+            max = maxEmbeddings,
+            provider = embeddingProvider,
+            prepare = { scaledToFit(it.crop, EMBEDDING_INPUT_MAX_SIDE, EMBEDDING_INPUT_MAX_SIDE) },
+            release = ::recycleQuietly,
+            maxDetections = maxDetections,
+        )
         return PublishedFrame(
             frameId = frameId,
             timestampSeconds = timestampSeconds,
@@ -50,13 +73,19 @@ object BitmapFrames {
                 PublishedDetection(
                     bbox = d.bbox.map { it.toDouble() },
                     confidence = d.confidence.toDouble(),
+                    reidEmbedding = embeddings[i],
                     cropJpeg = { crop?.let { compress(it, CROP_QUALITY) } },
                 )
             },
         )
     }
 
-    /** A copy no larger than the limits, keeping the aspect ratio, or null if it cannot be made. */
+    /**
+     * A new bitmap no larger than the limits, keeping the aspect ratio, or null
+     * if it cannot be made. It is never [source] itself (`createScaledBitmap`
+     * returns the source when no scaling is needed), because the caller
+     * recycles it while the pipeline may still use the source.
+     */
     private fun scaledToFit(source: Bitmap, maxWidth: Int, maxHeight: Int): Bitmap? =
         try {
             if (source.width <= 0 || source.height <= 0) {
@@ -65,11 +94,19 @@ object BitmapFrames {
                 val scale = minOf(1.0, maxWidth.toDouble() / source.width, maxHeight.toDouble() / source.height)
                 val w = maxOf(1, (source.width * scale).toInt())
                 val h = maxOf(1, (source.height * scale).toInt())
-                Bitmap.createScaledBitmap(source, w, h, true)
+                val scaled = Bitmap.createScaledBitmap(source, w, h, true)
+                if (scaled === source) source.copy(source.config ?: Bitmap.Config.ARGB_8888, false) else scaled
             }
         } catch (_: RuntimeException) {
             null
         }
+
+    private fun recycleQuietly(bitmap: Bitmap) {
+        try {
+            bitmap.recycle()
+        } catch (_: RuntimeException) {
+        }
+    }
 
     private fun compress(bitmap: Bitmap, quality: Int): ByteArray? =
         try {

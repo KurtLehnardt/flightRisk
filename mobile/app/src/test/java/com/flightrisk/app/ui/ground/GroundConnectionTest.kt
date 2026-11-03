@@ -51,11 +51,11 @@ class GroundConnectionTest {
 
     @Test
     fun `an address is validated with the endpoint parser and the reason is shown`() = harnessTest(address = null, key = null, enabled = false) {
-        onMain { vm.saveAddress("https://192.168.1.20:5555") }
-        assertTrue(ui.connection.addressError!!.contains("https and wss are not supported"))
+        onMain { vm.saveAddress("ftp://192.168.1.20:5555") }
+        assertTrue(ui.connection.addressError!!.contains("Only http://, https:// and wss://"))
         assertNull(settings.address)
-        onMain { vm.saveAddress("wss://host") }
-        assertTrue(ui.connection.addressError!!.contains("https and wss are not supported"))
+        onMain { vm.saveAddress("ws://host") }
+        assertTrue(ui.connection.addressError!!.contains("Only http://, https:// and wss://"))
         onMain { vm.saveAddress("") }
         assertEquals("Enter the ground station's address.", ui.connection.addressError)
         onMain { vm.saveAddress("host/path") }

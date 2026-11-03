@@ -355,7 +355,7 @@ final class ProfilesCeilingViewStateTests: XCTestCase {
     }
 
     func testControlsNoteWordingWhenTheGroundDidNotSay() throws {
-        XCTAssertEqual(MissionFormat.controlsOffNote, "The ground has not enabled detection profile changes.")
+        XCTAssertEqual(MissionFormat.controlsOffNote, "The ground has detection profile changes turned off.")
     }
 
     @MainActor

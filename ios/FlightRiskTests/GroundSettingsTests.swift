@@ -52,7 +52,7 @@ final class GroundSettingsTests: XCTestCase {
                 XCTFail("\(text) should be refused")
                 continue
             }
-            XCTAssertTrue(error.message.contains("cleartext is only allowed to local network addresses; use wss:// or https:// for this address"), text)
+            XCTAssertTrue(error.message.contains("cleartext is only allowed to local network addresses; a .local or router name that also has a public (global IPv6) address is refused, so enter the ground's numeric local IPv4 address (for example 192.168.1.20)"), text)
         }
         XCTAssertNoThrow(try GroundAddress.validate("wss://8.8.8.8").get())
         let harness = GroundHarness()
@@ -69,7 +69,7 @@ final class GroundSettingsTests: XCTestCase {
         harness.defaults.set(true, forKey: GroundConnectionSettings.enabledKey)
         _ = harness.makeViewModel().saveKey(GroundHarness.testKey)
         let vm = harness.makeViewModel()
-        let reason = "cleartext is only allowed to local network addresses; use wss:// or https:// for this address"
+        let reason = "cleartext is only allowed to local network addresses; a .local or router name that also has a public (global IPv6) address is refused, so enter the ground's numeric local IPv4 address (for example 192.168.1.20)"
         guard case let .addressRefused(shown) = vm.linkStatus else { return XCTFail("status was \(vm.linkStatus)") }
         XCTAssertEqual(shown, reason)
         XCTAssertTrue(vm.linkStatus.text.contains(reason))

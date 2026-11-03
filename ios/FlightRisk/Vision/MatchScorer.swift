@@ -2,7 +2,9 @@ import Foundation
 
 /// Multi-signal weighted confidence scorer.
 ///
-/// Port of Android `MatchScorer.kt` / Python `flightrisk/vision/scorer.py`.
+/// Port of Android `MatchScorer.kt` / Python `flightrisk/vision/scorer.py`. Arithmetic is in Double, like Python,
+/// and the combined score is rounded like Python; `tests/fixtures/mobile_contract/match_score_vectors.json`
+/// holds the cases all three implementations must reproduce.
 /// Combines ReID body similarity, face recognition, and LLM reasoning into
 /// a single weighted confidence score. Dynamic weight redistribution when
 /// signals are missing ensures available signals always normalize to 1.0.
@@ -20,28 +22,28 @@ struct MatchScorer {
     // MARK: - Default weights
 
     /// Weight for full-body ReID similarity.
-    private(set) var reidWeight: Float = 0.35
+    private(set) var reidWeight: Double = 0.35
     /// Weight for face recognition score.
-    private(set) var faceWeight: Float = 0.40
+    private(set) var faceWeight: Double = 0.40
     /// Weight for LLM reasoning confidence.
-    private(set) var reasoningWeight: Float = 0.25
+    private(set) var reasoningWeight: Double = 0.25
     /// Combined score threshold for a positive match.
-    private(set) var matchThreshold: Float = 0.45
+    private(set) var matchThreshold: Double = 0.45
 
     // MARK: - Signal registry
 
     /// Signal registry: name -> weight. Built-in signals are seeded here
     /// so they flow through the same weighting/redistribution logic as
     /// anything added via ``registerSignal(name:weight:)``.
-    private var signals: [String: Float]
+    private var signals: [String: Double]
 
     // MARK: - Init
 
     init(
-        reidWeight: Float = 0.35,
-        faceWeight: Float = 0.40,
-        reasoningWeight: Float = 0.25,
-        matchThreshold: Float = 0.45
+        reidWeight: Double = 0.35,
+        faceWeight: Double = 0.40,
+        reasoningWeight: Double = 0.25,
+        matchThreshold: Double = 0.45
     ) {
         self.reidWeight = reidWeight
         self.faceWeight = faceWeight
@@ -65,7 +67,7 @@ struct MatchScorer {
     /// scorer is shared across concurrent code paths.
     ///
     /// - Precondition: `name` must not collide with a built-in signal.
-    mutating func registerSignal(name: String, weight: Float) {
+    mutating func registerSignal(name: String, weight: Double) {
         precondition(
             !Self.builtinSignals.contains(name),
             "Cannot override built-in signal '\(name)'"
@@ -83,15 +85,15 @@ struct MatchScorer {
     ///     ``registerSignal(name:weight:)``, as name -> score (0-1) pairs.
     /// - Returns: ``ScoredResult`` with the combined score and metadata.
     func score(
-        reidScore: Float = 0.0,
-        faceScore: Float = 0.0,
+        reidScore: Double = 0.0,
+        faceScore: Double = 0.0,
         reasoningResult: ReasoningResult? = nil,
-        extraSignalScores: [String: Float] = [:]
+        extraSignalScores: [String: Double] = [:]
     ) -> ScoredResult {
         let reasoningScore = Self.reasoningToScore(result: reasoningResult)
 
         // Assemble raw scores for every signal supplied this call.
-        var rawScores: [String: Float] = [
+        var rawScores: [String: Double] = [
             "reid": reidScore,
             "face": faceScore,
         ]
@@ -117,13 +119,13 @@ struct MatchScorer {
 
         // Every floating-point accumulation below walks the signals in this
         // fixed order. Dictionary iteration order is randomized per process,
-        // and Float addition is not associative, so iterating a dictionary
+        // and Double addition is not associative, so iterating a dictionary
         // directly made the rounded score vary between runs.
         let orderedNames = Self.canonicalOrder(of: rawScores.keys)
 
         // Compute active weights (redistribute when a signal is missing)
-        var activeWeights: [String: Float] = [:]
-        var totalWeight: Float = 0
+        var activeWeights: [String: Double] = [:]
+        var totalWeight: Double = 0
         for name in orderedNames {
             let value = rawScores[name]!
             if value > 0 {
@@ -144,7 +146,7 @@ struct MatchScorer {
         }
 
         // Normalize weights to sum to 1.0 (redistribute missing signal weight)
-        var normWeights: [String: Float] = [:]
+        var normWeights: [String: Double] = [:]
         for name in orderedNames {
             if let w = activeWeights[name] {
                 normWeights[name] = w / totalWeight
@@ -152,14 +154,14 @@ struct MatchScorer {
         }
 
         // Weighted sum, accumulated in canonical signal order.
-        var combined: Float = 0
+        var combined: Double = 0
         for name in orderedNames {
             if let w = normWeights[name] {
                 combined += rawScores[name]! * w
             }
         }
-        // Round to 3 decimal places
-        combined = Float(Int(combined * 1000)) / 1000.0
+        // Round to 3 decimal places exactly as Python's round(x, 3) does.
+        combined = Self.roundToThreePlaces(combined)
 
         // Count only signals with meaningfully positive scores for confidence
         // level checks. Dampened "no match" reasoning (scores < 0.3) should
@@ -183,6 +185,23 @@ struct MatchScorer {
             confidenceLevel: confidenceLevel,
             signalsUsed: activeWeights.count  // total for transparency
         )
+    }
+
+    /// A Float setting (the config stores Float) as the Double with the same decimal spelling, so
+    /// 0.35 as a Float becomes the Double 0.35 that Python's config holds, not 0.3499999940395355.
+    static func decimal(_ value: Float) -> Double {
+        Double("\(value)") ?? Double(value)
+    }
+
+    /// Python's `round(x, 3)`: the exact binary value, rounded to the nearest thousandth with ties to
+    /// even, keeping the sign of zero. NaN and the infinities come back unchanged. Truncating
+    /// (`Int(x * 1000) / 1000`) is wrong: it differs from Python for most inputs.
+    ///
+    /// `String(format:)` formats the exact value of the double, as Python's `round` does, so the two
+    /// agree on every input, including values such as 0.0625 that sit exactly on a tie.
+    static func roundToThreePlaces(_ x: Double) -> Double {
+        guard x.isFinite else { return x }
+        return Double(String(format: "%.3f", x)) ?? x
     }
 
     /// Fixed signal order used for all floating-point accumulation: the
@@ -220,11 +239,11 @@ struct MatchScorer {
     /// A "no match" returns a dampened score (not zero) to avoid
     /// vetoing reliable signals when the LLM misjudges low-quality
     /// drone footage.
-    static func reasoningToScore(result: ReasoningResult?) -> Float {
+    static func reasoningToScore(result: ReasoningResult?) -> Double {
         guard let result = result else { return 0.0 }
 
         let confidence = result.confidence.lowercased()
-        let score: Float
+        let score: Double
         if result.isMatch {
             switch confidence {
             case "high": score = 0.90
@@ -241,6 +260,6 @@ struct MatchScorer {
             }
         }
 
-        return score * result.confidenceDiscount
+        return score * Double(result.confidenceDiscount)
     }
 }

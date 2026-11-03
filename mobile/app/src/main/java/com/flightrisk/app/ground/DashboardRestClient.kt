@@ -2,6 +2,8 @@ package com.flightrisk.app.ground
 
 import com.flightrisk.contract.parseJsonOrNull
 import kotlinx.coroutines.CancellationException
+import java.io.IOException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonObject
@@ -33,6 +35,9 @@ sealed interface HealthProbeResult {
 
     /** The ground could not be reached. */
     data class Unreachable(val detail: String) : HealthProbeResult
+
+    /** The secure connection failed: the TLS handshake, the certificate or its host name. Nothing was sent. */
+    data class SecureConnectionFailed(val detail: String) : HealthProbeResult
 }
 
 /** The few `/api/status` fields the phone shows. */
@@ -58,6 +63,9 @@ class DashboardRestClient(
     private val resolver: HostResolver = HostResolver.SYSTEM,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val guard: IoGuard = IoGuard.NONE,
+    /** Tests only: the production default is the platform's own factory and verifier. */
+    private val tlsFactory: () -> javax.net.ssl.SSLSocketFactory = { TlsParams.defaultSocketFactory() },
+    private val tlsVerifier: javax.net.ssl.HostnameVerifier? = TlsParams.platformHostnameVerifier(),
 ) {
     private class Response(val status: Int, val contentType: String?, val body: ByteArray)
 
@@ -143,6 +151,7 @@ class DashboardRestClient(
         return when (e) {
             is AddressNotAllowedException -> HealthProbeResult.AddressNotAllowed(detail)
             is MessageTooLargeException -> HealthProbeResult.UnexpectedBody(path, "the answer is larger than $maxBodyBytes bytes")
+            is javax.net.ssl.SSLException -> HealthProbeResult.SecureConnectionFailed(detail)
             is ProtocolViolationException, is Error -> HealthProbeResult.UnexpectedBody(path, detail)
             else -> HealthProbeResult.Unreachable(detail)
         }
@@ -150,21 +159,40 @@ class DashboardRestClient(
 
     /** One GET under one overall deadline of [timeoutMs] for connect, request and the whole answer. */
     private suspend fun get(path: String, withKey: Boolean): Response {
-        val socket = Socket()
-        return cancellableSocketIo(socket, ioDispatcher) { socket.use { getBlocking(it, path, withKey) } }
+        val addresses = withContext(ioDispatcher) {
+            guard.beforeBlockingIo("resolve")
+            resolveTargets(endpoint, resolver)
+        }
+        var failure: IOException? = null
+        for (address in addresses) {
+            val socket = Socket()
+            try {
+                return cancellableSocketIo(socket, ioDispatcher) { socket.use { getBlocking(it, address, path, withKey) } }
+            } catch (e: IOException) {
+                failure = e
+                if (!shouldTryNextAddress(e)) throw e
+            }
+        }
+        throw failure ?: IOException("the host name did not resolve")
     }
 
-    private fun getBlocking(socket: Socket, path: String, withKey: Boolean): Response {
+    private fun getBlocking(socket: Socket, address: java.net.InetAddress, path: String, withKey: Boolean): Response {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000L
-        guard.beforeBlockingIo("resolve")
-        val address = LanAddressPolicy.resolve(endpoint.host, resolver)
         guard.beforeBlockingIo("connect")
         socket.connect(InetSocketAddress(address, endpoint.port), timeoutMs)
-        run {
+        // `https://`: the same plain socket, secured with TLS under the same overall deadline.
+        val io: Socket = if (endpoint.secure) {
+            guard.beforeBlockingIo("handshake")
+            val leftMs = ((deadline - System.nanoTime()) / 1_000_000).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+            TlsSockets.wrap(socket, TlsParams(endpoint.host, tlsFactory(), tlsVerifier), endpoint.port, leftMs)
+        } else {
+            socket
+        }
+        io.use {
             val input = BufferedInputStream(
-                DeadlineInputStream(socket, socket.getInputStream(), guard).also { it.deadlineNanos = deadline },
+                DeadlineInputStream(io, io.getInputStream(), guard).also { it.deadlineNanos = deadline },
             )
-            val output = BufferedOutputStream(GuardedOutputStream(socket.getOutputStream(), guard))
+            val output = BufferedOutputStream(GuardedOutputStream(io.getOutputStream(), guard))
             val headers = mutableListOf(
                 "Host" to endpoint.hostHeader,
                 "Accept" to "application/json",

@@ -12,6 +12,7 @@ import cv2
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
+from flightrisk.vision.reid_spec import REID_PRETRAINED
 
 try:
     import torch
@@ -46,7 +47,7 @@ class PersonReID:
 
         # Use CLIP ViT-B/16 — produces 512-d embeddings in CLIP space
         model, _, preprocess = open_clip.create_model_and_transforms(
-            cfg.reid_model, pretrained="laion2b_s34b_b88k"
+            cfg.reid_model, pretrained=REID_PRETRAINED
         )
         self.model = model.to(self.device).eval()
         self.preprocess = preprocess

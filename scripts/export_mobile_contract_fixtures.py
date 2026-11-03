@@ -882,8 +882,22 @@ def build_profile_switch_pending() -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_alert(recovery_module, latch, sio, alert_id: str, action: str) -> Any:
+    """Answer the outstanding alert through the real ``handle_alert_response`` and return the emitted event.
+
+    The confirm recovery sequence (which would land the fleet) is replaced by a stub; the handler, the latch and
+    the ``match_alert_resolved`` emit are the real code.
+    """
+    with mock.patch.object(recovery_module, "alert_latch", latch), \
+            mock.patch.object(recovery_module.confirm_recovery, "start", return_value=True):
+        body, status = recovery_module.handle_alert_response(alert_id, action, sio)
+    assert status == 200 and body["ok"] is True, (status, body)
+    return sio.last("match_alert_resolved")
+
+
 def build_frame_and_alert() -> dict[str, dict]:
     from flightrisk.dashboard import alert_latch as alert_latch_module
+    from flightrisk.dashboard import recovery as recovery_module
     from flightrisk.dashboard.state import app_state
     from flightrisk.edge import Detection, DetectionMessage
     from flightrisk.vision.scorer import MatchScorer
@@ -941,6 +955,25 @@ def build_frame_and_alert() -> dict[str, dict]:
                 "Sent on connect (and periodically) while an alert waits for the operator: the same payload "
                 "with renotify true and renotify_count.",
             )
+            alerts["resolved_dismiss"] = case(
+                "match_alert_resolved", SERVER_TO_CLIENT,
+                _resolve_alert(recovery_module, latch, sio, pending["alert_id"], "dismiss"),
+                "Sent to every client when the operator dismisses the outstanding alert on the laptop. A phone "
+                "marks the alert with this alert_id as answered; it never sends match_alert_response.",
+            )
+            confirm_latch = alert_latch_module.MatchAlertLatch()
+            confirm_sio = FakeSocketIO()
+            with mock.patch.object(app_module, "alert_latch", confirm_latch):
+                app_state.ground_station = Station(results)
+                app_state.stream_video = True
+                app_module._edge_process_and_emit(confirm_sio, message)
+                confirm_id = confirm_latch.pending_alert()["alert_id"]
+                alerts["resolved_confirm"] = case(
+                    "match_alert_resolved", SERVER_TO_CLIENT,
+                    _resolve_alert(recovery_module, confirm_latch, confirm_sio, confirm_id, "confirm"),
+                    "Sent to every client when the operator confirms the outstanding alert on the laptop. The "
+                    "confirm recovery sequence is stubbed while this fixture is built; nothing flies.",
+                )
             app_state.stream_video = False
             stripped = DetectionMessage(
                 timestamp=1000.5, frame_id=43, thumbnail_jpeg=None, frame_width=960, frame_height=720,
@@ -960,8 +993,10 @@ def build_frame_and_alert() -> dict[str, dict]:
         ),
         "match_alert.json": document(
             "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the "
-            "laptop (match_alert_response is not in the phone's allow-list).",
-            ["flightrisk.dashboard.app._emit_edge_alert", "MatchAlertLatch.pending_alert"], alerts,
+            "laptop (match_alert_response is not in the phone's allow-list). 'match_alert_resolved' tells every client "
+            "that the operator answered one.",
+            ["flightrisk.dashboard.app._emit_edge_alert", "MatchAlertLatch.pending_alert",
+             "flightrisk.dashboard.recovery.handle_alert_response"], alerts,
         ),
     }
 
@@ -1367,9 +1402,49 @@ class _RecordingWebSocket:
         self.sent.append(text)
 
 
+def reid_embedding_spec() -> dict:
+    """The appearance embedding the ground compares (``flightrisk/vision/reid_spec.py``)."""
+    from flightrisk.config import VisionConfig
+    from flightrisk.vision import reid_spec as rs
+
+    if VisionConfig().reid_model != rs.REID_DEFAULT_MODEL:
+        raise AssertionError("config.vision.reid_model and reid_spec.REID_DEFAULT_MODEL disagree")
+    return {
+        "library": rs.REID_LIBRARY,
+        "model": rs.REID_DEFAULT_MODEL,
+        "pretrained": rs.REID_PRETRAINED,
+        "dimension": rs.REID_EMBEDDING_DIM,
+        "dtype": "float32",
+        "l2_normalized": True,
+        "input_size": rs.REID_INPUT_SIZE,
+        "resize": "shortest side to input_size (bicubic), then center crop input_size x input_size",
+        "mean": list(rs.REID_MEAN),
+        "std": list(rs.REID_STD),
+    }
+
+
+def reid_embedding_sample() -> list[float]:
+    """A deterministic stand-in for one ``PersonReID.extract_embedding(crop).tolist()``.
+
+    ``REID_EMBEDDING_DIM`` float32 values with unit L2 norm. The values are
+    made with exactly rounded arithmetic (integer steps, ``math.fsum`` and a
+    single float32 rounding), so every machine writes the same digits.
+    """
+    import math
+
+    import numpy as np
+
+    from flightrisk.vision.reid_spec import REID_EMBEDDING_DIM
+
+    raw = [((i * 37) % 101 - 50) / 50.0 for i in range(REID_EMBEDDING_DIM)]
+    norm = math.sqrt(math.fsum(v * v for v in raw))
+    return np.asarray([v / norm for v in raw], dtype=np.float32).tolist()
+
+
 def build_edge_link() -> dict[str, dict]:
     from flightrisk import fleet_protocol as fp
     from flightrisk.edge import Detection, DetectionMessage, EdgeRunner
+    from flightrisk.ground import GroundStation
     from flightrisk.transport import GroundTransport
 
     ground = GroundTransport(host="127.0.0.1", port=0)
@@ -1411,10 +1486,25 @@ def build_edge_link() -> dict[str, dict]:
     detections_face = with_face.to_dict(phone_message)
     phone_message.thumbnail_jpeg = None
     detections_no_video = appearance_only.to_dict(phone_message)
-    for msg in (detections_ao, detections_face, detections_no_video):
+    # A full-length appearance embedding, as a phone with the ground's ReID
+    # model would send it: the most confident detection carries one, the
+    # other was not given one (beyond the phone's per-message cap) and is null.
+    reid_vector = reid_embedding_sample()
+    reid_message = DetectionMessage(
+        timestamp=1761735600.75, frame_id=18, thumbnail_jpeg=None, frame_width=1280, frame_height=720,
+        detections=[Detection(bbox=(512, 200, 640, 560), confidence=0.74, reid_embedding=reid_vector),
+                    Detection(bbox=(100, 120, 150, 230), confidence=0.41)],
+    )
+    detections_reid = appearance_only.to_dict(reid_message)
+    for msg in (detections_ao, detections_face, detections_no_video, detections_reid):
         fp.validate_edge_to_ground(msg, proto=1)
         if len(json.dumps(msg).encode()) > fp.LEGACY_MAX_BYTES:
             raise AssertionError("a detections sample exceeds the 1 MiB cap")
+    # The ground scores the full-length sample against a target embedding: the
+    # same vector as target gives a ReID score of 1, the null one gives 0.
+    scored = GroundStation(target_reid_embedding=reid_vector).process_message(EdgeRunner.from_dict(detections_reid))
+    if abs(scored[0]["reid_score"] - 1.0) > 1e-5 or scored[1]["reid_score"] != 0.0:
+        raise AssertionError(f"the ground did not score the ReID sample as expected: {scored}")
 
     v2 = fp.TelemetryV2(epoch=7, plan_id="p-1", state="flying_lanes", plan_valid=True)
     telemetry_v2 = fp.make_telemetry("drone-2", 71, 130, True, 40.0, 220.5, 0.0, 3, 9, 0.12, 1000.0, v2=v2)
@@ -1434,6 +1524,13 @@ def build_edge_link() -> dict[str, dict]:
         "detections_no_video": case(
             None, EDGE_TO_GROUND, detections_no_video,
             "After stream_video false: thumbnail is null; crops and embeddings still go.",
+        ),
+        "detections_reid_embedding": case(
+            None, EDGE_TO_GROUND, detections_reid,
+            "A full-length appearance embedding in the form _meta.reid_embedding describes (512 float32 values, "
+            "unit L2 norm, from open_clip ViT-B-16 laion2b_s34b_b88k). The values are a deterministic stand-in, "
+            "not a real model output. The ground scores this sample: with the same vector as target its ReID "
+            "score is 1. A detection without an embedding carries null.",
         ),
         "telemetry_v1": case(None, EDGE_TO_GROUND, _telemetry("drone-1", battery=82, height_cm=100, is_flying=True,
                                                                rel_x_cm=35.5, rel_y_cm=120.0, lane_index=2,
@@ -1510,8 +1607,9 @@ def build_edge_link() -> dict[str, dict]:
             "Edge link, edge to ground: the 'detections' samples a phone edge sends, and the fleet-edge replies "
             "for reference (a phone never sends those).",
             ["EdgeRunner.to_dict", "flightrisk.fleet_protocol builders",
-             "flightrisk.fleet_protocol.validate_edge_to_ground"],
-            e2g, **common,
+             "flightrisk.fleet_protocol.validate_edge_to_ground", "GroundStation.process_message",
+             "flightrisk.vision.reid_spec"],
+            e2g, **common, reid_embedding=reid_embedding_spec(),
         ),
     }
 
@@ -1634,6 +1732,115 @@ def build_unknown_keys(files: Mapping[str, dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# match_score_vectors: the one table all three scorers must reproduce
+# ---------------------------------------------------------------------------
+
+
+def _vector_number(value: float) -> Any:
+    """JSON cannot carry NaN or infinity; the vectors spell them ``"nan"``, ``"inf"`` and ``"-inf"``."""
+    import math
+
+    if math.isnan(value):
+        return "nan"
+    if math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    return value
+
+
+def _vector_input(value: Any) -> float:
+    return float(value) if isinstance(value, str) else value
+
+
+def build_match_score_vectors() -> dict:
+    """Inputs and the Python ``MatchScorer.score`` results for them (rounding, boundaries, odd floats).
+
+    Python ``round(x, 3)`` rounds the exact binary value half to even; the phones must match it.
+    Only the reid, face and registered extra signals are used: the table does not cover reasoning.
+    """
+    import random
+
+    from flightrisk.vision.scorer import MatchScorer
+
+    default = {"reid_weight": 0.35, "face_weight": 0.4, "reasoning_weight": 0.25, "match_threshold": 0.45}
+    vectors: dict[str, tuple[dict, dict, dict]] = {}
+
+    def add(name: str, signals: dict, scorer: dict | None = None, extra_weights: dict | None = None) -> None:
+        vectors[name] = (dict(default, **(scorer or {})), signals, extra_weights or {})
+
+    # A single signal normalises to weight 1, so combined is the raw value rounded to 3 places.
+    for raw in (0.0004, 0.0005, 0.0006, 0.0015, 0.0025, 0.0035, 0.1235, 0.2345, 0.2355, 0.3335, 0.4495, 0.4499999,
+                0.45, 0.4505, 0.4995, 0.5, 0.5005, 0.6445, 0.6455, 0.6495, 0.6505, 0.8625, 0.9995, 0.99949999999,
+                0.9996, 1.0, 1.0005, 1.5, 2.675):
+        add(f"single_reid_{raw!r}".replace(".", "_"), {"reid": raw})
+    add("single_face_half_even_tie", {"face": 0.0625})
+    add("single_face_half_even_tie_odd", {"face": 0.1875})
+    add("two_signals_default_weights", {"reid": 0.86, "face": 0.71})
+    add("two_signals_unequal", {"reid": 0.3, "face": 0.9})
+    add("two_signals_near_tie", {"reid": 0.4999, "face": 0.5001})
+    add("threshold_exactly", {"reid": 0.45, "face": 0.45})
+    add("just_below_threshold_rounds_up", {"reid": 0.4496})
+    add("just_below_threshold_rounds_down", {"reid": 0.4494})
+    add("custom_weights", {"reid": 0.7, "face": 0.2},
+        {"reid_weight": 0.5, "face_weight": 0.3, "reasoning_weight": 0.2, "match_threshold": 0.6})
+    add("extra_signal", {"reid": 0.62, "face": 0.58, "thermal": 0.41}, extra_weights={"thermal": 0.15})
+    add("extra_signal_only", {"thermal": 0.0005}, extra_weights={"thermal": 0.15})
+    # Values that are not positive carry no weight, as in Python (`value > 0`).
+    add("all_zero", {"reid": 0.0, "face": 0.0})
+    add("negative_zero", {"reid": -0.0, "face": -0.0})
+    add("negative_zero_with_face", {"reid": -0.0, "face": 0.5})
+    add("negative_scores", {"reid": -0.5, "face": 0.75})
+    add("nan_reid", {"reid": "nan", "face": 0.6})
+    add("nan_only", {"reid": "nan"})
+    add("inf_reid", {"reid": "inf", "face": 0.6})
+    add("inf_only", {"reid": "inf"})
+    add("negative_inf", {"reid": "-inf", "face": 0.6})
+    add("tiny_positive", {"reid": 1e-300})
+    add("huge_positive", {"reid": 1e300})
+    add("denormal", {"reid": 5e-324, "face": 5e-324})
+    add("zero_weight_signal", {"reid": 0.8, "face": 0.9}, {"face_weight": 0.0})
+    add("opposite_weights_negative_result", {"reid": 0.0001, "face": 0.0001},
+        {"reid_weight": 1.0, "face_weight": -0.9999})
+    # A small negative total rounds to negative zero in Python (round(-0.0001, 3) is -0.0).
+    add("negative_zero_result", {"reid": 0.0001, "face": 0.000100015},
+        {"reid_weight": 1.0, "face_weight": -0.9999})
+    rng = random.Random(20261102)
+    for index in range(40):
+        signals = {"reid": round(rng.random(), 4), "face": round(rng.random(), 4)}
+        if index % 4 == 0:
+            signals["thermal"] = round(rng.random(), 4)
+        add(f"seeded_{index:02d}", signals, extra_weights={"thermal": 0.15} if "thermal" in signals else None)
+
+    cases = {}
+    for name, (scorer_args, signals, extra_weights) in vectors.items():
+        scorer = MatchScorer(**scorer_args)
+        for extra, weight in extra_weights.items():
+            scorer.register_signal(extra, weight)
+        named = {k: _vector_input(v) for k, v in signals.items()}
+        reid = named.pop("reid", 0.0)
+        face = named.pop("face", 0.0)
+        result = scorer.score(reid_score=reid, face_score=face, **named)
+        payload = {
+            "scorer": scorer_args,
+            "extra_signal_weights": extra_weights,
+            "signals": signals,
+            "expected": {
+                "combined_score": _vector_number(result["combined_score"]),
+                "is_match": result["is_match"],
+                "signals_used": result.get("signals_used", 0),
+                "confidence_level": result["confidence_level"],
+            },
+        }
+        cases[name] = case(None, "reference", payload, "Python MatchScorer.score result for these inputs.")
+    return document(
+        "Inputs and the results of the Python MatchScorer.score, which the Swift and Kotlin scorers must reproduce "
+        "exactly, including the rounding of combined_score to three places (Python rounds the exact binary value, "
+        "ties to even; truncation is wrong). NaN and infinity are spelled 'nan', 'inf' and '-inf' because JSON "
+        "has no such numbers. signals holds reid, face and registered extra signals; reasoning is not covered.",
+        ["flightrisk.vision.scorer.MatchScorer.score"], cases,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1653,6 +1860,7 @@ def build_all() -> dict[str, dict]:
         files.update(build_edge_link())
         files["nack_reasons.json"] = build_nack_reasons()
         files["client_emits.json"] = build_client_emits()
+        files["match_score_vectors.json"] = build_match_score_vectors()
     files["unknown_keys.json"] = build_unknown_keys(files)
     return files
 
