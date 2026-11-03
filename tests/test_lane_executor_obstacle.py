@@ -982,6 +982,8 @@ def test_an_autopilot_stopped_short_cuts_the_lane_at_its_measured_position(rigs)
     status = rig.executor.obstacle_status()
     assert status[TELEMETRY_SENSING] == "autopilot" and status[TELEMETRY_SENSOR_OK] is True
     assert status[TELEMETRY_CUTS] == [0, 250] and status[TELEMETRY_CUT_REASONS] == "autopilot"
+    # No gate ran, so there is no gate outcome to report.
+    assert TELEMETRY_STATE not in status and TELEMETRY_LATENCY_MS not in status
     assert events(rig, EVENT_OBSTACLE_STOP)[0]["cue"] == "autopilot"
     assert ("land",) not in rig.timeline
 

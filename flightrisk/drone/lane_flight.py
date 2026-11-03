@@ -994,9 +994,12 @@ class FlightSequenceMixin:
         cut = Cut(lane_index, int(flown), reason)
         self._cuts.append(cut)
         self._obstacle_seq += 1
-        self._obstacle_state = OBSTACLE_STATE_UNAVAILABLE if reason in (CUT_SENSOR_STALE, CUT_SENSOR_DOWN) else (
-            OBSTACLE_STATE_BLOCKED
-        )
+        if result is not None:
+            # ``obstacle_state`` is the last gate's outcome; a cut that no
+            # gate made (an autopilot's STOPPED_SHORT) leaves it alone.
+            self._obstacle_state = (
+                OBSTACLE_STATE_UNAVAILABLE if reason in (CUT_SENSOR_STALE, CUT_SENSOR_DOWN) else OBSTACLE_STATE_BLOCKED
+            )
         limits = getattr(self.envelope, "limits", ROOM_LIMITS)
         replay = replay_lanes(self._lanes, self._cuts, limits.min_move_cm)
         tail: list[tuple[int, int, str, int]] = []
