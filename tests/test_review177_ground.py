@@ -580,3 +580,150 @@ def test_rule_a_receiver_that_cuts_its_own_last_lane_before_finishing_is_planned
     assert done["drone_id"] == "drone-1" and done["receiver"] == "drone-2"
     assert fleet.segments("drone-1") == []
 
+
+
+# ---------------------------------------------------------------------------
+# R2-N2: a lost drone's lanes never wait for a receiver that cannot finish
+# ---------------------------------------------------------------------------
+
+LANDED_DRONE_2 = "drone-2 landed before it finished its own lanes"
+
+
+def lost_entries(fleet):
+    """The re-tasked lanes in ``current_plan()["uncovered"]`` (no ``kind``)."""
+    return [u for u in fleet.coord.current_plan()["uncovered"] if "kind" not in u]
+
+
+def failed_events(fleet):
+    return [p for name, p in fleet.events if name == "fleet_event" and p.get("event") == "retask_failed"]
+
+
+def test_r2n2_waiting_lanes_are_listed_in_the_plan_with_their_reason_until_they_are_offered():
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert [(u["index"], u["drone_id"], u["status"], u["reason"]) for u in lost_entries(fleet)] == [
+        (k, "drone-1", "waiting", WAIT_DRONE_2) for k in (1, 2, 3)]
+    # The entry keeps the shape of a failed lane: the lane's ends on the shared grid.
+    assert lost_entries(fleet)[0]["x_cm"] == 0 and lost_entries(fleet)[0]["end_x_cm"] == 100
+    fleet.done("drone-2")
+    assert len(fleet.assigns("drone-2")) == 2
+    assert lost_entries(fleet) == [] and failed_events(fleet) == []
+
+
+def test_r2n2_a_receiver_that_lands_mid_zone_fails_the_waiting_lanes_with_that_reason():
+    """Probe: drone-2, the only receiver, lands (battery, operator) before it finishes its own lanes."""
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert {u["status"] for u in lost_entries(fleet)} == {"waiting"}
+    fleet.tel("drone-2", lane_index=2, is_flying=False)
+    assert len(fleet.assigns("drone-2")) == 1
+    assert [(u["index"], u["reason"]) for u in lost_entries(fleet)] == [(k, LANDED_DRONE_2) for k in (1, 2, 3)]
+    assert all("status" not in u for u in lost_entries(fleet))
+    (failed,) = failed_events(fleet)
+    assert failed["detail"] == f"3 lanes of drone-1 uncovered: {LANDED_DRONE_2}"
+    assert [lane["index"] for lane in failed["lanes"]] == [1, 2, 3]
+    with fleet.coord._lock:
+        assert [(c.status, c.held) for r in fleet.coord._retasks for c in r.chunks] == [("failed", None)]
+    # Later telemetry changes nothing: the lanes are never offered and not reported twice.
+    for _ in range(3):
+        fleet.tel("drone-2", lane_index=2, is_flying=False)
+    assert len(fleet.assigns("drone-2")) == 1 and len(failed_events(fleet)) == 1
+
+
+def test_r2n2_a_silent_receiver_makes_the_lanes_wait_with_that_reason_and_its_loss_fails_them():
+    """Probe: drone-2 is silent when drone-1 is lost; the loss check declares it lost later."""
+    silent = "waiting for drone-2, which has no fresh telemetry"
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.clock.advance(30.0)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    (waiting,) = retask_events(fleet)
+    assert waiting["detail"].endswith(f"3 lanes awaiting a free drone ({silent})")
+    assert {(u["status"], u["reason"]) for u in lost_entries(fleet)} == {("waiting", silent)}
+    fleet.coord.on_drone_lost("drone-2", wait_s=0)
+    reasons = {(u["drone_id"], u["reason"]) for u in lost_entries(fleet)}
+    assert ("drone-1", "no drone left to take them") in reasons
+    assert all("status" not in u for u in lost_entries(fleet))
+    assert any(e["drone_id"] == "drone-1" for e in failed_events(fleet))
+
+
+def test_r2n2_a_silent_receiver_that_reports_again_is_waited_for_as_before():
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.clock.advance(30.0)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    fleet.tel("drone-2", lane_index=2)
+    assert {(u["status"], u["reason"]) for u in lost_entries(fleet)} == {("waiting", WAIT_DRONE_2)}
+    fleet.done("drone-2")
+    assert len(fleet.assigns("drone-2")) == 2 and failed_events(fleet) == []
+
+
+def test_r2n2_a_receiver_not_flying_yet_is_waited_for_with_that_reason():
+    fleet = Fleet()
+    fleet.tel("drone-2", is_flying=False, state="idle")
+    fleet.tel("drone-1", lane_index=1)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert {u["reason"] for u in lost_entries(fleet)} == {"waiting for drone-2, which is not flying"}
+    fleet.tel("drone-2", is_flying=False, state="taking_off")
+    assert {u["reason"] for u in lost_entries(fleet)} == {"waiting for drone-2, which is taking off"}
+    fleet.tel("drone-2", lane_index=1)
+    assert {u["reason"] for u in lost_entries(fleet)} == {WAIT_DRONE_2}
+    fleet.done("drone-2")
+    assert len(fleet.assigns("drone-2")) == 2 and failed_events(fleet) == []
+
+
+def test_r2n2_lanes_wait_for_another_receiver_when_one_has_landed():
+    fleet = Fleet(3, retask_separation=False, origins={"drone-3": 700})
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-3", lane_index=1)
+    fleet.tel("drone-2", lane_index=2, is_flying=False)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert {(u["status"], u["reason"]) for u in lost_entries(fleet)} == {
+        ("waiting", "waiting for drone-3 to finish its own lanes")}
+    fleet.done("drone-3")
+    assert len(fleet.assigns("drone-3")) == 2 and len(fleet.assigns("drone-2")) == 1
+    assert lost_entries(fleet) == [] and failed_events(fleet) == []
+
+
+def test_r2n2_a_receiver_that_landed_after_its_own_lanes_is_still_offered_them():
+    """Unchanged: finished is finished, as before the fix."""
+    fleet = Fleet()
+    fleet.done("drone-2")
+    fleet.done("drone-2", is_flying=False)
+    fleet.tel("drone-1", lane_index=1)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert len(fleet.assigns("drone-2")) == 2 and failed_events(fleet) == []
+
+
+def test_r2n2_a_fleet_without_obstacle_fields_still_offers_a_landed_drone_the_lanes_at_once():
+    fleet = Fleet()
+    fleet.edges["drone-2"].telemetry(is_flying=True, lane_index=1, lanes_total=len(LANES))
+    fleet.edges["drone-2"].telemetry(is_flying=False, lane_index=2, lanes_total=len(LANES))
+    fleet.edges["drone-1"].telemetry(is_flying=True, lane_index=1, lanes_total=len(LANES))
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert fleet.assigns("drone-2")[-1]["lanes"] == list(LANES) + TRANSIT + list(LANES[1:])
+    assert fleet.coord.current_plan()["uncovered"] == []
+    (event,) = retask_events(fleet)
+    assert event["to"] == {"drone-2": len(TRANSIT) + 3} and "awaiting" not in event
+
+
+def test_r2n2_a_fleet_without_obstacle_fields_lists_no_waiting_lanes_while_an_offer_is_deferred():
+    """Only a hold of a drone that senses obstacles adds ``waiting`` entries; a deferred refusal adds none."""
+    fleet = Fleet(edge_kwargs={"drone-2": {"auto_ack": False}})
+    fleet.edges["drone-2"].telemetry(is_flying=True, lane_index=1, lanes_total=len(LANES))
+    fleet.edges["drone-1"].telemetry(is_flying=True, lane_index=1, lanes_total=len(LANES))
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    offer = fleet.assigns("drone-2")[-1]
+    assert len(fleet.assigns("drone-2")) == 2
+    fleet.edges["drone-2"].reply({"type": "nack", "for": "assign_lanes", "drone_id": "drone-2",
+                                  "reason": "busy", "lanes_total": len(offer["lanes"])})
+    with fleet.coord._lock:
+        assert [(c.status, c.held) for r in fleet.coord._retasks for c in r.chunks] == [("queued", None)]
+    assert fleet.coord.current_plan()["uncovered"] == []
