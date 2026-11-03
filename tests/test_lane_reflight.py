@@ -13,6 +13,7 @@ import pytest
 from flightrisk.drone import coordinator as coordinator_module
 from flightrisk.drone import lane_reflight
 from flightrisk.drone.lane_reflight import (
+    leg_rest,
     plan_reflight,
     reflight_lanes,
     split_too_short,
@@ -232,3 +233,48 @@ def test_the_coordinator_transits_with_this_function():
 def test_transit_moves_forward_or_back_first_in_tello_sized_moves(start, end, moves):
     assert transit(start, end) == moves
     assert walk(start, moves)[-1] == end
+
+
+# ---------------------------------------------------------------------------
+# What a flown leg leaves of a segment (review 177, B3 c)
+# ---------------------------------------------------------------------------
+
+
+def ends_of(pieces):
+    return [((p.x_cm, p.y_cm), (p.end_x_cm, p.end_y_cm), p.length_cm) for p in pieces]
+
+
+SEGMENT = seg(0, "forward", (0, 250), (0, 400))
+
+
+def test_a_leg_flown_over_the_whole_segment_leaves_nothing():
+    assert leg_rest(SEGMENT, (0, 400), (0, 250)) == []
+    assert leg_rest(SEGMENT, (0, 200), (0, 450)) == []
+
+
+def test_a_leg_stopped_short_leaves_the_rest_next_to_where_it_stopped():
+    # Flown back from (0, 400) and stopped at (0, 350).
+    (rest,) = leg_rest(SEGMENT, (0, 400), (0, 350))
+    assert ends_of([rest]) == [((0, 350), (0, 250), 100)]
+    assert (rest.lane_index, rest.direction, rest.reason, rest.cut) == (0, "forward", CUT_OBSTACLE, 0)
+
+
+def test_a_leg_over_the_middle_leaves_both_ends():
+    assert ends_of(leg_rest(SEGMENT, (0, 300), (0, 350))) == [((0, 300), (0, 250), 50), ((0, 350), (0, 400), 50)]
+
+
+@pytest.mark.parametrize("flown_from, flown_to", [
+    ((100, 250), (100, 400)),   # beside the segment
+    ((0, 100), (0, 250)),       # before it, touching its end only
+    ((0, 300), (0, 300)),       # no move at all
+    ((-50, 300), (50, 300)),    # across it
+])
+def test_a_leg_that_does_not_run_along_the_segment_leaves_it_whole(flown_from, flown_to):
+    assert leg_rest(SEGMENT, flown_from, flown_to) == [SEGMENT]
+
+
+def test_sideways_segments_are_judged_the_same_way():
+    across = seg(1, "right", (50, 400), (100, 400), SEGMENT_SKIPPED)
+    assert ends_of(leg_rest(across, (100, 400), (70, 400))) == [((70, 400), (50, 400), 20)]
+    assert leg_rest(across, (40, 400), (120, 400)) == []
+

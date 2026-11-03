@@ -8,7 +8,9 @@ wire form of the cuts.
 """
 from __future__ import annotations
 
+import copy
 import itertools
+import pickle
 
 import pytest
 
@@ -16,6 +18,7 @@ from flightrisk.drone import lane_executor, lane_plan
 from flightrisk.drone.lane_steps import (
     PLAN_HEADINGS,
     Cut,
+    RetaskLane,
     UncoveredSegment,
     apply_cut_deficit,
     decode_cuts,
@@ -247,7 +250,13 @@ def test_a_cut_does_not_lengthen_a_later_lane_in_the_cut_direction():
     assert replay.targets == (300, 100, 300)
     assert replay.position == (100, 400)
     assert replay.deficit == (0, -200)
-    assert [seg(s) for s in replay.segments] == [(0, (0, 100), (0, 300), CUT_OBSTACLE)]
+    # Lane 2 is planned from y 300 to 600 but flown from y 100 to 400, so the
+    # 200 cm it never reaches are uncovered, as the shadow of the cut on lane 0.
+    assert [seg(s) for s in replay.segments] == [
+        (0, (0, 100), (0, 300), CUT_OBSTACLE),
+        (2, (100, 400), (100, 600), SEGMENT_SKIPPED),
+    ]
+    assert replay.segments[1].cut == 0 and replay.segments[1].length_cm == 200
 
 
 def test_a_cut_at_the_first_step_leaves_the_whole_lane_uncovered():
@@ -358,6 +367,141 @@ def test_segment_as_dict():
         "lane_index": 0, "direction": "forward", "x_cm": 0, "y_cm": 250, "end_x_cm": 0, "end_y_cm": 400,
         "length_cm": 150, "reason": "obstacle", "cut": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Honest coverage within one plan (review 177, B3 a)
+# ---------------------------------------------------------------------------
+
+
+def test_a_last_lane_flown_from_behind_reports_the_part_it_never_reaches():
+    """Probe 3 of the review: the last lane ends 50 cm short, and that is reported."""
+    lanes = [("forward", 400), ("right", 100), ("back", 300), ("right", 100), ("forward", 300)]
+    replay = replay_lanes(lanes, [(0, 50)])
+    # The flight rule is unchanged: lane 2 would fly back 300 - 350 cm, so it
+    # is skipped, and lane 4 is flown at its planned 300 cm, never longer.
+    assert replay.targets == (400, 100, 0, 100, 300)
+    assert replay.position == (200, 350)
+    assert [seg(s) for s in replay.segments] == [
+        (0, (0, 50), (0, 400), CUT_OBSTACLE),
+        (2, (100, 100), (100, 400), SEGMENT_SKIPPED),
+        # Planned from y 100 to 400, flown from y 50 to 350.
+        (4, (200, 350), (200, 400), SEGMENT_SKIPPED),
+    ]
+    assert [s.cut for s in replay.segments] == [0, 0, 0]
+
+
+def test_a_lane_a_whole_lane_or_more_behind_is_uncovered_on_its_planned_span_only():
+    lanes = [("forward", 400), ("right", 50), ("forward", 100)]
+    replay = replay_lanes(lanes, [(0, 100)])
+    # 300 cm behind a 100 cm lane: it is flown from y 100 to 200 and never
+    # reaches its planned span, y 400 to 500, which is all uncovered.
+    assert replay.targets == (400, 50, 100)
+    assert [seg(s) for s in replay.segments][1:] == [(2, (50, 400), (50, 500), SEGMENT_SKIPPED)]
+
+
+def test_a_cut_on_a_lane_flown_from_behind_keeps_the_unreached_part_as_the_earlier_cuts_shadow():
+    lanes = [("forward", 400), ("right", 100), ("forward", 400)]
+    replay = replay_lanes(lanes, [(0, 250), (2, 100, CUT_PERSON)])
+    assert [(s.lane_index, s.reason, s.cut, s.length_cm) for s in replay.segments] == [
+        (0, CUT_OBSTACLE, 0, 150),
+        (2, CUT_PERSON, 1, 300),
+        (2, SEGMENT_SKIPPED, 0, 150),
+    ]
+
+
+def test_the_replay_path_is_where_the_drone_actually_flies_and_planned_where_the_lanes_are():
+    replay = replay_lanes(DEMO, [(0, 250)])
+    assert replay.path == ((0, 0), (0, 250), (100, 250), (100, 0), (200, 0), (200, 400))
+    assert replay.planned == tuple(planned_end(DEMO[:k]) for k in range(len(DEMO) + 1))
+    # Without cuts both are the planned path.
+    assert replay_lanes(DEMO).path == replay_lanes(DEMO).planned == replay.planned
+
+
+# ---------------------------------------------------------------------------
+# Re-task starts (review 177, B3 b)
+# ---------------------------------------------------------------------------
+
+#: drone-2 of the review's probe 1: the demo plan with its last lane cut at
+#: 100 cm, then the lanes the ground appends to re-fly drone-1's cut, planned
+#: from where drone-2 actually is, (200, 100): the transit forward 300 and
+#: left 550, then back 150, right 100 and forward 150.
+PROBE_1 = DEMO + [("forward", 300), ("left", 275), ("left", 275), ("back", 150), ("right", 100), ("forward", 150)]
+
+
+def test_a_retask_lane_is_a_plain_pair_with_a_mark():
+    lane = RetaskLane(("forward", 300))
+    assert lane == ("forward", 300) and hash(lane) == hash(("forward", 300))
+    direction, distance = lane
+    assert (direction, distance) == ("forward", 300) and len(lane) == 2
+    assert lane.retask_start is True and not hasattr(("forward", 300), "retask_start")
+    assert RetaskLane({"direction": "left", "distance_cm": 99.6}) == ("left", 100)
+    for clone in (copy.deepcopy(lane), pickle.loads(pickle.dumps(lane))):
+        assert clone == lane and clone.retask_start is True
+    with pytest.raises(ValueError):
+        RetaskLane(("up", 50))
+
+
+def test_the_old_cuts_deficit_ends_at_a_retask_start():
+    replay = replay_lanes(PROBE_1, [(4, 100)], retask_starts=[5])
+    # The appended lanes are flown as planned from (200, 100): nothing of
+    # them is shortened, skipped or moved, and nothing of them is uncovered.
+    assert replay.targets == tuple(cm for _, cm in PROBE_1[:4]) + (400,) + tuple(cm for _, cm in PROBE_1[5:])
+    assert [seg(s) for s in replay.segments] == [(4, (200, 100), (200, 400), CUT_OBSTACLE)]
+    assert replay.path[5:] == ((200, 100), (200, 400), (-75, 400), (-350, 400), (-350, 250), (-250, 250), (-250, 400))
+    assert replay.position == (-250, 400) and replay.deficit == (0, 0)
+    assert replay.planned[5] == (200, 100)
+    # Without the start the forward transit would be taken for the rest of the
+    # cut's same-direction run and the reversed leg flown as nothing.
+    assert replay_lanes(PROBE_1, [(4, 100)]).targets[5] == 0
+    assert replay_lanes(PROBE_1, [(4, 100)]).targets[8] == 0
+
+
+def test_a_retask_lane_marks_the_same_start_as_retask_starts():
+    marked = list(PROBE_1)
+    marked[5] = RetaskLane(marked[5])
+    for cuts in ([(4, 100)], [(0, 250), (4, 100)], [(4, 100), (8, 50)], [(0, 250), (2, 20, CUT_SENSOR_DOWN)]):
+        assert replay_lanes(marked, cuts) == replay_lanes(PROBE_1, cuts, retask_starts=[5])
+        assert lane_targets(marked, cuts) == lane_targets(PROBE_1, cuts, retask_starts=(5,))
+        assert uncovered_segments(marked, cuts) == uncovered_segments(PROBE_1, cuts, retask_starts=(5,))
+    # A start at lane 0 or outside the list changes nothing.
+    assert replay_lanes(DEMO, [(0, 250)], retask_starts=[0, 9]) == replay_lanes(DEMO, [(0, 250)])
+
+
+def test_a_cut_after_a_retask_start_makes_its_own_deficit():
+    # drone-2 stops 50 cm into the reversed leg (lane 8, back 150).
+    replay = replay_lanes(PROBE_1, [(4, 100), (8, 50)], retask_starts=[5])
+    assert replay.targets[8:] == (150, 100, 50)
+    assert [seg(s) for s in replay.segments] == [
+        (4, (200, 100), (200, 400), CUT_OBSTACLE),
+        (8, (-350, 350), (-350, 250), CUT_OBSTACLE),
+        # 100 cm ahead of the plan on y: the last leg is shortened by it.
+        (10, (-250, 350), (-250, 250), SEGMENT_SKIPPED),
+    ]
+    assert [s.cut for s in replay.segments] == [0, 1, 1]
+
+
+def test_a_sensor_down_before_a_retask_start_reports_the_appended_lanes_where_they_were_planned():
+    lanes = DEMO + [("left", 200), ("back", 300)]
+    # The re-task was accepted before the sensor went down 100 cm into lane
+    # 4, so the ground planned the appended lanes from where lane 4 would
+    # have ended, (200, 400). They are never flown, and are reported where
+    # they were planned.
+    replay = replay_lanes(lanes, [(4, 100, CUT_SENSOR_DOWN)], retask_starts=[5])
+    assert replay.targets[4:] == (400, 0, 0)
+    assert [seg(s) for s in replay.segments] == [
+        (4, (200, 100), (200, 400), CUT_SENSOR_DOWN),
+        (5, (200, 400), (0, 400), CUT_SENSOR_DOWN),
+        (6, (0, 400), (0, 100), CUT_SENSOR_DOWN),
+    ]
+    assert replay.position == (200, 100)
+    assert replay.path[-3:] == ((200, 100), (200, 100), (200, 100))
+
+
+def test_a_same_direction_run_never_runs_into_appended_lanes():
+    lanes = [("forward", 400), ("forward", 300), ("right", 100)]
+    assert lane_targets(lanes, [(0, 100)]) == [400, 0, 100]
+    assert lane_targets(lanes, [(0, 100)], retask_starts=[1]) == [400, 300, 100]
 
 
 # ---------------------------------------------------------------------------

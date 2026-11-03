@@ -41,11 +41,27 @@ The cut rules (design section 3.3) as the replay applies them:
   the gap (``apply_cut_deficit``); its first part is uncovered with reason
   ``skipped``. A later lane that would widen the gap is flown at its planned
   length, so the drone never flies past a lane's planned end and never back
-  into a cut.
+  into a cut. Flown from behind its planned start, such a lane ends short of
+  its planned end, and the part it does not reach is uncovered with reason
+  ``skipped`` too. What the replay counts as covered is only what is flown.
 * A cut with reason ``sensor_down`` ends the plan: every later lane, appended
   ones included, is uncovered with that reason and flown as nothing. Those
   lanes are reported where they are planned (the drone's position minus its
   deficit), because no deficit rule moves a lane that is never flown.
+* A re-task that continues the plan (the ground appends lanes for a lost
+  drone or for a re-flight) plans the appended lanes from where the drone
+  actually is when it reaches them. So at the first appended lane, a
+  *re-task start*, the deficit and any same-direction run end: the old cuts
+  never shorten or skip an appended lane, and the appended lanes are flown
+  as planned from the drone's actual position. The ground passes the
+  indexes of its re-task starts as ``retask_starts``; the edge keeps its
+  first appended lane as a ``RetaskLane``, which marks the same index. Both
+  sides then replay with this one rule and agree exactly.
+
+Segments, like the replay's positions, lie on the line the drone actually
+flies: a lane flown beside its planned line (after a sideways cut) is
+reported beside it, as before. ``LaneReplay.planned`` holds where each lane
+is planned on both axes.
 """
 from __future__ import annotations
 
@@ -68,6 +84,7 @@ __all__ = [
     "PLAN_HEADINGS",
     "Cut",
     "LaneReplay",
+    "RetaskLane",
     "UncoveredSegment",
     "apply_cut_deficit",
     "decode_cuts",
@@ -260,12 +277,45 @@ class LaneReplay:
     all); a cut lane's target is the length it was being flown as when it
     was cut. ``position`` is where the drone ends and ``deficit`` its actual
     minus planned position, both after the last lane.
+
+    ``path`` is where the drone actually is before each lane and after the
+    last one (``len(lanes) + 1`` points): lane ``i`` is flown from
+    ``path[i]`` to ``path[i + 1]``, which for a cut lane is the point where
+    it stopped and for a lane not flown is the same point. ``planned`` is
+    where each lane is planned to start, on both axes, and where the plan
+    ends (also ``len(lanes) + 1`` points): the start of the lane list plus
+    the planned lanes, except that from a re-task start on the lanes are
+    planned from where the drone actually is there.
     """
 
     targets: tuple[int, ...]
     segments: tuple[UncoveredSegment, ...]
     position: tuple[int, int]
     deficit: tuple[int, int]
+    path: tuple[tuple[int, int], ...] = ()
+    planned: tuple[tuple[int, int], ...] = ()
+
+
+class RetaskLane(tuple):
+    """A ``(direction, distance_cm)`` lane that is the first of the lanes a continuing re-task appended.
+
+    The edge keeps that lane of its plan in this form (``lane_plan``), so
+    every replay of its lanes, wherever it is made, sees the re-task start
+    and ends the deficit and any same-direction run there (see the module
+    docstring). It compares, hashes and unpacks exactly like the plain pair,
+    so code that reads lanes as pairs is unaffected. The ground, whose lanes
+    are ``assign_lanes`` mappings, passes the same indexes to
+    ``replay_lanes`` as ``retask_starts`` instead.
+    """
+
+    __slots__ = ()
+
+    #: Read by ``replay_lanes``; a plain pair or mapping has no such attribute.
+    retask_start = True
+
+    def __new__(cls, lane: Any) -> RetaskLane:
+        direction, distance = _lane_pair(lane)
+        return super().__new__(cls, (direction, distance))
 
 
 def _lane_pair(lane: Any) -> tuple[str, int]:
@@ -288,19 +338,28 @@ def _as_cut(cut: Any) -> Cut:
 
 
 def replay_lanes(
-    lanes: Sequence[Any], cuts: Iterable[Any] = (), min_move_cm: float = MIN_MOVE_CM
+    lanes: Sequence[Any],
+    cuts: Iterable[Any] = (),
+    min_move_cm: float = MIN_MOVE_CM,
+    *,
+    retask_starts: Iterable[int] = (),
 ) -> LaneReplay:
     """Replay a lane plan with its cuts (see the module docstring for the rules).
 
-    *lanes* are ``(direction, distance_cm)`` pairs or ``assign_lanes`` lane
-    mappings. *cuts* are ``Cut`` objects or ``(lane_index, flown_cm[,
-    reason])`` tuples in the order they happened; a missing reason is
-    ``obstacle``. Only the first cut of a lane counts, and a cut of a lane
-    that was not flown (skipped, or after a ``sensor_down``) or outside the
-    lane list is ignored, so a replay of a truncated or repeated list never
-    raises. Every lane not cut is assumed flown to its target.
+    *lanes* are ``(direction, distance_cm)`` pairs, ``RetaskLane`` objects
+    or ``assign_lanes`` lane mappings. *cuts* are ``Cut`` objects or
+    ``(lane_index, flown_cm[, reason])`` tuples in the order they happened;
+    a missing reason is ``obstacle``. Only the first cut of a lane counts,
+    and a cut of a lane that was not flown (skipped, or after a
+    ``sensor_down``) or outside the lane list is ignored, so a replay of a
+    truncated or repeated list never raises. Every lane not cut is assumed
+    flown to its target. *retask_starts* are the indexes of lanes that start
+    lanes a continuing re-task appended, besides the lanes given as
+    ``RetaskLane``; an index of 0 or outside the list changes nothing.
     """
     plan = [_lane_pair(lane) for lane in lanes]
+    starts = {int(index) for index in retask_starts}
+    starts.update(index for index, lane in enumerate(lanes) if getattr(lane, "retask_start", False) is True)
     first_cut: dict[int, tuple[int, Cut]] = {}
     for index, raw in enumerate(cuts):
         cut = _as_cut(raw)
@@ -314,10 +373,14 @@ def replay_lanes(
     axis_cut: list[int] = [-1, -1]
     targets: list[int] = []
     segments: list[UncoveredSegment] = []
+    path: list[tuple[int, int]] = [(0, 0)]
+    planned_at: list[tuple[int, int]] = []
     # An active same-direction run after a cut: (direction, cursor, reason, cut index).
     run: tuple[str, tuple[int, int], str, int] | None = None
-    # After a sensor_down cut: (planned position, cut index).
-    ended: tuple[tuple[int, int], int] | None = None
+    # After a sensor_down cut: (cut index, position, deficit) of the flight
+    # the plan would have been without that cut. The drone no longer moves;
+    # this only places the later lanes where they are planned.
+    ended: tuple[int, tuple[int, int], tuple[int, int]] | None = None
 
     def segment(lane_index: int, direction: str, start: tuple[int, int], end: tuple[int, int],
                 reason: str, cut_index: int) -> None:
@@ -330,13 +393,25 @@ def replay_lanes(
     for lane_index, (direction, planned) in enumerate(plan):
         ux, uy = _UNIT[direction]
         axis, sign = _axis(direction)
+        if lane_index in starts and lane_index > 0:
+            # The ground planned the lanes from here on from where the drone
+            # is: no earlier cut shortens, skips or displaces them.
+            if ended is None:
+                deficit, run, axis_cut = (0, 0), None, [-1, -1]
+            else:
+                ended = (ended[0], ended[1], (0, 0))
         if ended is not None:
-            cursor, cut_index = ended
-            end = (cursor[0] + ux * planned, cursor[1] + uy * planned)
-            segment(lane_index, direction, cursor, end, CUT_SENSOR_DOWN, cut_index)
-            ended = (end, cut_index)
+            cut_index, (vx, vy), vdeficit = ended
+            start = (vx - vdeficit[0], vy - vdeficit[1])
+            planned_at.append(start)
+            end = (start[0] + ux * planned, start[1] + uy * planned)
+            segment(lane_index, direction, start, end, CUT_SENSOR_DOWN, cut_index)
+            would_fly, vdeficit = apply_cut_deficit(direction, planned, vdeficit, min_move_cm)
+            ended = (cut_index, (vx + ux * would_fly, vy + uy * would_fly), vdeficit)
             targets.append(0)
+            path.append((x, y))
             continue
+        planned_at.append((x - deficit[0], y - deficit[1]))
         if run is not None:
             run_direction, cursor, reason, cut_index = run
             if direction == run_direction:
@@ -346,9 +421,12 @@ def replay_lanes(
                 gap = deficit[axis] - sign * planned
                 deficit = (gap, deficit[1]) if axis == 0 else (deficit[0], gap)
                 targets.append(0)
+                path.append((x, y))
                 continue
             run = None
         ahead = sign * deficit[axis]
+        # The cut that left the gap on this axis, before this lane's own cut changes it.
+        shadow_of = axis_cut[axis]
         target, deficit = apply_cut_deficit(direction, planned, deficit, min_move_cm)
         if target < planned:
             # The planned lane starts `ahead` cm behind the drone; the part of
@@ -356,43 +434,75 @@ def replay_lanes(
             skipped = planned - target
             start = (x + ux * (skipped - ahead), y + uy * (skipped - ahead))
             planned_start = (x - ux * ahead, y - uy * ahead)
-            segment(lane_index, direction, start, planned_start, SEGMENT_SKIPPED, axis_cut[axis])
+            segment(lane_index, direction, start, planned_start, SEGMENT_SKIPPED, shadow_of)
         targets.append(target)
+        # Where flying the target ends, and where the planned lane ends on the
+        # line the drone flies. A lane flown at its planned length from behind
+        # its planned start (ahead < 0) stops short of its planned end: what
+        # it does not reach of the planned lane (all of it, when the drone is
+        # a whole lane or more behind) is uncovered.
+        reach = (x + ux * target, y + uy * target)
+        planned_end = (x + ux * (planned - ahead), y + uy * (planned - ahead))
+        short_of_end = target > 0 and ahead < 0
+        unreached = (x + ux * max(target, -ahead), y + uy * max(target, -ahead))
         entry = first_cut.get(lane_index)
         if entry is None or target <= 0:
-            x, y = x + ux * target, y + uy * target
+            if short_of_end:
+                segment(lane_index, direction, unreached, planned_end, SEGMENT_SKIPPED, shadow_of)
+            x, y = reach
+            path.append((x, y))
             continue
         cut_index, cut = entry
         flown = max(0, min(cut.flown_cm, target))
         stop = (x + ux * flown, y + uy * flown)
-        end = (x + ux * target, y + uy * target)
-        segment(lane_index, direction, stop, end, cut.reason, cut_index)
+        segment(lane_index, direction, stop, reach, cut.reason, cut_index)
+        if short_of_end:
+            segment(lane_index, direction, unreached, planned_end, SEGMENT_SKIPPED, shadow_of)
+        flown_deficit = deficit
         gap = deficit[axis] + sign * (flown - target)
         deficit = (gap, deficit[1]) if axis == 0 else (deficit[0], gap)
         axis_cut[axis] = cut_index
         x, y = stop
+        path.append(stop)
         if cut.reason == CUT_SENSOR_DOWN:
-            # The later lanes start where the plan puts them: the drone's
-            # position minus its deficit (the cut lane's planned end).
-            ended = ((stop[0] - deficit[0], stop[1] - deficit[1]), cut_index)
+            # The later lanes start where the plan puts them: where the lane
+            # would have ended, minus the deficit it would have left (the cut
+            # lane's planned end).
+            ended = (cut_index, reach, flown_deficit)
         else:
-            run = (direction, end, cut.reason, cut_index)
-    return LaneReplay(tuple(targets), tuple(segments), (x, y), deficit)
+            # The rest of the run lies beyond the cut lane's planned end.
+            run = (direction, planned_end, cut.reason, cut_index)
+    if ended is not None:
+        planned_at.append((ended[1][0] - ended[2][0], ended[1][1] - ended[2][1]))
+    else:
+        planned_at.append((x - deficit[0], y - deficit[1]))
+    return LaneReplay(tuple(targets), tuple(segments), (x, y), deficit, tuple(path), tuple(planned_at))
 
 
-def lane_targets(lanes: Sequence[Any], cuts: Iterable[Any] = (), min_move_cm: float = MIN_MOVE_CM) -> list[int]:
+def lane_targets(
+    lanes: Sequence[Any],
+    cuts: Iterable[Any] = (),
+    min_move_cm: float = MIN_MOVE_CM,
+    *,
+    retask_starts: Iterable[int] = (),
+) -> list[int]:
     """What each lane is flown as under the cut rules (0 for a lane that is not flown)."""
-    return list(replay_lanes(lanes, cuts, min_move_cm).targets)
+    return list(replay_lanes(lanes, cuts, min_move_cm, retask_starts=retask_starts).targets)
 
 
-def uncovered_segments(lanes: Sequence[Any], cuts: Iterable[Any] = (), min_move_cm: float = MIN_MOVE_CM
-                       ) -> list[UncoveredSegment]:
+def uncovered_segments(
+    lanes: Sequence[Any],
+    cuts: Iterable[Any] = (),
+    min_move_cm: float = MIN_MOVE_CM,
+    *,
+    retask_starts: Iterable[int] = (),
+) -> list[UncoveredSegment]:
     """The parts of the plan nobody looked at, in lane order (see ``replay_lanes``).
 
     The edge and the ground both derive the segments with this function from
     the same lanes and cuts, so they always agree.
     """
-    return list(replay_lanes(lanes, cuts, min_move_cm).segments)
+    return list(replay_lanes(lanes, cuts, min_move_cm, retask_starts=retask_starts).segments)
 
 
 # ---------------------------------------------------------------------------

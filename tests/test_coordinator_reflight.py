@@ -176,11 +176,16 @@ def test_a_cut_queues_a_reflight_and_nothing_is_sent_while_the_cutter_has_lanes(
     assert len(fleet.assigns("drone-2")) == 1 and fleet.reflight_events() == []
 
 
-def test_the_cutter_finishing_releases_the_offer_after_the_receivers_remaining_lanes():
+def test_the_cutter_finishing_releases_the_offer_once_the_receiver_has_finished_its_own_lanes():
     fleet = Fleet()
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
     fleet.tel("drone-2", lane_index=1)  # still flying its own zone
     fleet.done("drone-1")
+    # A sensing receiver takes appended lanes only once its own are done.
+    assert len(fleet.assigns("drone-2")) == 1 and fleet.reflight_events() == []
+    assert {(s["status"], s["waiting_for"], s["detail"]) for s in fleet.segments()} == {
+        ("waiting", None, "waiting for drone-2 to finish its own lanes")}
+    fleet.done("drone-2")
     offer = fleet.assigns("drone-2")[-1]
     fp.validate_message(offer)
     # Its own lanes unchanged, then the transit, then the reversed segment and the shadow.
@@ -458,15 +463,22 @@ def test_an_ineligible_drone_never_receives_a_segment(fields, why):
     assert failed["detail"].endswith(f"not re-flown: no drone can re-fly it: {why}")
 
 
-def test_stale_receiver_telemetry_excludes_it():
+def test_stale_receiver_telemetry_makes_the_chunk_wait_instead_of_failing():
+    # Review N7: a gap in the receiver's telemetry is only for now.
     fleet = Fleet()
     fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
     fleet.clock.advance(coordinator_module.TELEMETRY_FRESH_S + 0.5)
     fleet.done("drone-1")
     assert len(fleet.assigns("drone-2")) == 1
-    (failed,) = fleet.reflight_events()
-    assert "drone-2 has no fresh telemetry" in failed["detail"]
+    assert fleet.reflight_events() == []
+    segments = fleet.segments()
+    assert {(s["status"], s["waiting_for"], s["detail"]) for s in segments} == {
+        ("waiting", None, "drone-2 has no fresh telemetry")}
+    # drone-2's next telemetry message lets the offer out.
+    fleet.done("drone-2")
+    assert fleet.assigns("drone-2")[-1]["lanes"] == list(LANES) + TRANSIT + REFLIGHT
+    assert [e["event"] for e in fleet.reflight_events()] == ["reflight_offered", "reflight_accepted"]
 
 
 def test_a_drone_held_for_manual_control_is_not_a_receiver():
@@ -568,14 +580,19 @@ def test_a_later_cut_reshapes_a_waiting_cuts_shadows():
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
     with fleet.coord._lock:
         (first,) = fleet.coord._reflights
-    # 150 cm short on the forward axis: the back lane is predicted shortened by 150 cm.
+    # 150 cm short on the forward axis: lane 2 (forward 400) is predicted to
+    # end 150 cm short of its planned end, and the back lane is predicted
+    # shortened by 150 cm.
     assert [(s.lane_index, s.reason, s.length_cm) for s in first.segments] == [
-        (0, CUT_OBSTACLE, 150), (4, SEGMENT_SKIPPED, 150)]
-    # Lane 2 is then cut 100 cm in: 450 cm short, the back lane is skipped whole, for the second cut.
+        (0, CUT_OBSTACLE, 150), (2, SEGMENT_SKIPPED, 150), (4, SEGMENT_SKIPPED, 150)]
+    # Lane 2 is then cut 100 cm in: 450 cm short, the back lane is skipped
+    # whole, for the second cut. The 150 cm lane 2 would never have reached
+    # stay the first cut's shadow.
     fleet.cut("drone-1", [(0, 250), (2, 100)], "obstacle,obstacle", lane_index=4)
     with fleet.coord._lock:
         first, second = fleet.coord._reflights
-    assert [(s.lane_index, s.reason, s.length_cm) for s in first.segments] == [(0, CUT_OBSTACLE, 150)]
+    assert [(s.lane_index, s.reason, s.length_cm) for s in first.segments] == [
+        (0, CUT_OBSTACLE, 150), (2, SEGMENT_SKIPPED, 150)]
     assert [(s.lane_index, s.reason, s.length_cm) for s in second.segments] == [
         (2, CUT_OBSTACLE, 300), (4, SEGMENT_SKIPPED, 400)]
 
@@ -736,7 +753,9 @@ def test_the_receiver_lost_while_re_flying_leaves_nothing_to_re_task():
 
 def test_lanes_after_a_re_flight_are_still_re_tasked_when_the_receiver_is_lost():
     fleet = released(3, retask_separation=False, origins={"drone-3": 700})
-    # drone-3 is lost first and some of its lanes go to drone-2, after the re-flight.
+    # drone-2 finishes the re-flight; drone-3 is lost and some of its lanes
+    # go to drone-2, after the re-flight.
+    fleet.done("drone-2", lane_index=APPENDED_END, lanes_total=APPENDED_END)
     fleet.tel("drone-3", lane_index=0)
     fleet.coord.on_drone_lost("drone-3", wait_s=0)
     lanes = fleet.coord.lanes("drone-2")
@@ -748,19 +767,40 @@ def test_lanes_after_a_re_flight_are_still_re_tasked_when_the_receiver_is_lost()
     assert indexes == [2, 3] + list(range(APPENDED_END, len(lanes)))
 
 
-def test_the_cutting_drone_lost_later_supersedes_a_shadow_on_a_lane_re_tasked_whole():
+def test_the_cutting_drone_lost_later_supersedes_only_the_shadow_on_a_lane_re_tasked_whole():
+    # Review N8: the shadow on lane 2 is flown with the lanes re-tasked whole;
+    # the cut's own segment on lane 0 is not, so it is still offered.
     fleet = Fleet()
     fleet.done("drone-2")
     # drone-1 cut lane 0 and is lost on lane 1: lanes 1 to 3, with the shadow on lane 2, are re-tasked whole.
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=1, rel_x_cm=50, rel_y_cm=250)
     fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert fleet.reflight_events("reflight_failed") == []
+    assert any(name == "fleet_event" and p.get("event") == "retask" for name, p in fleet.events)
+    # One assign_lanes: drone-1's lanes 1 to 3 from their planned start
+    # (0, 400) to (200, 0), the transit back to (0, 400), then the reversed
+    # segment of lane 0 alone.
+    offer = fleet.assigns("drone-2")[-1]
+    assert offer["lanes"][len(LANES):] == TRANSIT + list(LANES[1:]) + [
+        {"direction": "forward", "distance_cm": 400},
+        {"direction": "left", "distance_cm": 200},
+        {"direction": "back", "distance_cm": 150},
+    ]
+    offered, accepted = fleet.reflight_events()
+    assert offered["event"] == "reflight_offered" and accepted["event"] == "reflight_accepted"
+    assert [(lane["index"], ends(lane)) for lane in accepted["lanes"]] == [(0, (0, 250, 0, 400))]
+    assert {(s["index"], s["status"]) for s in fleet.segments()} == {(0, "acked")}
+
+
+def test_a_lost_cutter_whose_segments_are_all_re_tasked_whole_fails_superseded():
+    fleet = Fleet()
+    fleet.done("drone-2")
+    # drone-1's last report still shows it on lane 0, the lane it cut: every lane is re-tasked whole.
+    fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=0, rel_x_cm=0, rel_y_cm=250)
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
     (failed,) = fleet.reflight_events("reflight_failed")
     assert failed["detail"].endswith("superseded") and failed["receiver"] is None
-    offers = fleet.assigns("drone-2")
-    # Only the lost drone's whole lanes went out, never a re-flight.
-    assert all(offer["lanes"][-3:] != REFLIGHT for offer in offers)
-    assert any(name == "fleet_event" and p.get("event") == "retask" for name, p in fleet.events)
-    assert {(s["index"], s["status"], s["reason"]) for s in fleet.segments()} == {(0, "failed", "superseded")}
+    assert all(offer["lanes"][-3:] != REFLIGHT for offer in fleet.assigns("drone-2"))
 
 
 def test_the_cutting_drone_lost_after_its_segments_releases_the_offer():
