@@ -12,6 +12,13 @@
 * N11: every obstacle setting is parsed and validated whatever the mode, drone
   kind or source; integers are ASCII digits; the thresholds cannot switch the
   sensor off; non-default values are logged and reported.
+* R2-B1 (round 2): while the Tello's decoder is stalled, ``get_frame`` hands
+  the same array to ``on_frame`` on every poll. The holder never stamps that
+  object again through either feed (the ``on_frame`` copy feed and
+  ``DecodedFramePoller`` share one record), so a gate after a turn finds the
+  view stale and never clears on the view from before the turn.
+* R2-N3 (round 2): a frame whose pixels are all the same (the black frame a
+  restarted decoder starts on) is refused before inference as ``stale``.
 
 MiDaS is never loaded (``torch.hub.load`` is mocked or the guard is a fake),
 no network is used and no drone is contacted.
@@ -29,6 +36,7 @@ import torch
 from flightrisk.drone import obstacle_camera
 from flightrisk.drone.obstacle_camera import ForwardCameraSensor
 from flightrisk.drone.obstacle_sensor import (
+    CAUSE_BLANK_FRAME,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
@@ -55,6 +63,7 @@ from flightrisk.edge_device import (
     ObstacleWiring,
     _build_obstacle_wiring,
     _build_parser,
+    _copying_frame_feed,
     _field_envelope,
     _obstacle_frame_poller,
 )
@@ -112,9 +121,16 @@ def _clear_scene():
     return depth
 
 
+def _view(height=FRAME_H, width=FRAME_W):
+    """A camera frame with something in it; a frame whose pixels are all the same is refused as blank."""
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[:, : width // 2] = 80
+    return frame
+
+
 def _holder_with_frame():
     holder = LatestFrame()
-    holder.update(np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8))
+    holder.update(_view())
     return holder
 
 
@@ -330,7 +346,7 @@ class _SlowFrames:
         self.clock.advance(spent)
         if spent < self.arrive_after_s:
             return None
-        return TimedFrame(np.zeros((8, 8, 3), np.uint8), self.clock())
+        return TimedFrame(_view(8, 8), self.clock())
 
 
 class _SlowGuard:
@@ -653,6 +669,209 @@ class TestDecodedFramePoller:
         assert _obstacle_frame_poller("tello", drone, ObstacleWiring(sensor=sensor)) is None  # no holder
         fake = FakeTelloController(name="drone-1")
         assert _obstacle_frame_poller("tello", fake, ObstacleWiring(sensor=sensor, holder=holder)) is None
+
+
+# ---------------------------------------------------------------------------
+# R2-B1 and R2-N3: a stalled decoder's frame is never fresh, a blank frame is refused
+# ---------------------------------------------------------------------------
+
+#: The marker pixel value of the view before the turn (clear) and after it (a close wall).
+PRE_TURN, POST_TURN = 1, 2
+
+
+def _marked_view(marker, height=300, width=400):
+    """A textured frame whose top-left pixel says which view it is."""
+    frame = _view(height, width)
+    frame[0, 0, 0] = marker
+    return frame
+
+
+class _MarkerGuard:
+    """Clear only for the pre-turn view; any other view is a close wall. Records the views it judged."""
+
+    def __init__(self):
+        self.judged: list[int] = []
+
+    def check_path(self, frame):
+        marker = int(frame[0, 0, 0])
+        self.judged.append(marker)
+        return _valid_check(safe=marker == PRE_TURN, depth=0.1 if marker == PRE_TURN else 0.9)
+
+
+class _StalledTello:
+    """A real ``TelloController`` (djitellopy on a fake wire) whose decoder the test controls.
+
+    Both feeds of the edge are wired to one holder on an injected clock: the
+    frame loop's ``on_frame`` copy feed (``_copying_frame_feed``) and the
+    decoder poller. ``get_frame`` is the controller's own, frozen-frame counter
+    included.
+    """
+
+    def __init__(self, tello_on_wire, first_frame):
+        self.clock = FakeClock(100.0)
+        self.ctrl, _wire = tello_on_wire()
+        self.ctrl.state.is_connected = True
+        self.reader = _Reader(first_frame)
+        self.ctrl.tello.background_frame_read = self.reader
+        self.holder = LatestFrame(self.clock)
+        self.ctrl.on_frame(_copying_frame_feed(self.holder))
+        self.poller = DecodedFramePoller(self.ctrl, self.holder)
+        self.guard = _MarkerGuard()
+        # frame_wait_s=0 looks once: the injected clock does not move while the sensor waits.
+        self.sensor = ForwardCameraSensor(
+            self.holder, None, guard=self.guard, warm=False, clock=self.clock,
+            settle_s=0.3, frame_wait_s=0.0, detection_wait_s=0.0,
+        )
+
+    def feed(self, order):
+        """Run the feeds once each, in *order* (``loop`` is a frame-loop ``get_frame``, ``poller`` a poll)."""
+        for which in order:
+            if which == "loop":
+                assert self.ctrl.get_frame() is not None
+            else:
+                self.poller.poll_once()
+
+    def close(self):
+        self.sensor.close()
+        self.ctrl.state.is_connected = False
+        self.ctrl.tello.background_frame_read = None
+
+
+@pytest.fixture
+def stalled_tello(tello_on_wire):
+    made = []
+
+    def _make(first_frame=None):
+        drone = _StalledTello(tello_on_wire, _marked_view(PRE_TURN) if first_frame is None else first_frame)
+        made.append(drone)
+        return drone
+
+    yield _make
+    for drone in made:
+        drone.close()
+
+
+FEED_ORDERS = {
+    "loop_then_poller": ("loop", "poller"),
+    "poller_then_loop": ("poller", "loop"),
+    "loop_only": ("loop",),
+    "poller_only": ("poller",),
+}
+
+
+class TestStalledDecoder:
+    @pytest.mark.parametrize("before", list(FEED_ORDERS), ids=list(FEED_ORDERS))
+    @pytest.mark.parametrize("stalled_polls", [1, 5])
+    def test_a_frame_from_before_the_turn_never_clears_the_gate_after_it(self, stalled_tello, before, stalled_polls):
+        # The critic's probe: the drone sees a clear view, turns to face a wall, and the decoder stalls.
+        drone = stalled_tello()
+        drone.feed(FEED_ORDERS[before])
+        assert drone.holder.frames_seen == 1
+        turn_end = drone.clock()
+        drone.clock.advance(0.35)  # past the settle time
+        for _ in range(stalled_polls):
+            # The decoder holds the pre-turn array; the frame loop hands it to on_frame again.
+            drone.feed(("poller", "loop"))
+        result = drone.sensor.sense(turn_end, 2.0)
+        assert not result.clear
+        assert result.unavailable and result.reason == REASON_STALE
+        assert drone.guard.judged == []  # the pre-turn view was never judged after the turn
+        # The frozen-frame recovery still counts every identical poll after the first.
+        loop_polls = FEED_ORDERS[before].count("loop") + stalled_polls
+        assert drone.ctrl._frozen_count == loop_polls - 1
+
+    @pytest.mark.parametrize("first", ["loop", "poller"])
+    def test_a_frozen_frame_never_refreshes_the_holder_through_either_feed(self, stalled_tello, first):
+        drone = stalled_tello()
+        drone.feed((first,))
+        stamped = drone.holder.latest()
+        assert stamped.arrived_at == 100.0
+        for _ in range(4):
+            drone.clock.advance(0.1)
+            drone.feed(("loop", "poller", "loop"))
+        assert drone.poller.poll_once() is False
+        assert drone.holder.latest() is stamped
+        assert drone.holder.frames_seen == 1
+
+    @pytest.mark.parametrize("first", ["loop", "poller"])
+    def test_a_new_frame_object_still_updates_the_holder(self, stalled_tello, first):
+        drone = stalled_tello()
+        drone.feed(("loop", "poller"))
+        turn_end = drone.clock()
+        drone.clock.advance(0.35)
+        drone.feed(("loop", "poller"))
+        # The decoder delivers the first view after the turn, as a new array.
+        post_turn = _marked_view(POST_TURN)
+        drone.reader.frame = post_turn
+        drone.feed((first,))
+        latest = drone.holder.latest()
+        assert latest.arrived_at == pytest.approx(100.35)
+        assert latest.frame is not post_turn and int(latest.frame[0, 0, 0]) == POST_TURN
+        assert drone.holder.frames_seen == 2
+        drone.clock.advance(0.1)
+        drone.feed(("poller", "loop"))  # the other feed then sees the same object
+        assert drone.holder.latest() is latest and drone.holder.frames_seen == 2
+        result = drone.sensor.sense(turn_end, 2.0)
+        assert result.blocked and result.cue == CUE_DEPTH
+        assert drone.guard.judged == [POST_TURN]
+
+    def test_the_same_pixels_in_a_new_array_are_a_new_frame(self, stalled_tello):
+        # Identity, not content, decides: a still scene still gives new frames.
+        drone = stalled_tello()
+        drone.feed(("loop",))
+        drone.clock.advance(0.5)
+        drone.reader.frame = drone.reader.frame.copy()
+        drone.feed(("poller", "loop"))
+        assert drone.holder.frames_seen == 2
+        assert drone.holder.latest().arrived_at == pytest.approx(100.5)
+
+    def test_both_feeds_leave_the_frozen_frame_counter_alone(self, tello_on_wire):
+        def frozen_counts(with_poller):
+            ctrl, _wire = tello_on_wire()
+            ctrl.state.is_connected = True
+            ctrl.tello.background_frame_read = _Reader(_view(40, 40))
+            clock = FakeClock(100.0)
+            holder = LatestFrame(clock)
+            ctrl.on_frame(_copying_frame_feed(holder))
+            poller = DecodedFramePoller(ctrl, holder)
+            counts = []
+            for _ in range(6):
+                clock.advance(0.1)
+                if with_poller:
+                    poller.poll_once()
+                assert ctrl.get_frame() is not None
+                counts.append(ctrl._frozen_count)
+            ctrl.state.is_connected = False
+            ctrl.tello.background_frame_read = None
+            return counts, holder.frames_seen, holder.latest().arrived_at
+
+        without = frozen_counts(False)
+        with_ = frozen_counts(True)
+        assert with_[0] == without[0] == [0, 1, 2, 3, 4, 5]
+        assert with_[1] == without[1] == 1  # the frozen frame is fed once, by whichever feed saw it first
+        assert with_[2] == without[2] == pytest.approx(100.1)  # and keeps its first arrival time
+
+    def test_the_restarted_decoders_blank_frame_is_refused(self, stalled_tello):
+        drone = stalled_tello()
+        drone.feed(("loop", "poller"))
+        turn_end = drone.clock()
+        drone.clock.advance(0.35)
+        # A stream restart: a new decoder starts on djitellopy's black frame, a new object.
+        drone.reader = _Reader(np.zeros((300, 400, 3), np.uint8))
+        drone.ctrl.tello.background_frame_read = drone.reader
+        drone.feed(("poller", "loop"))
+        assert drone.holder.frames_seen == 2
+        assert drone.holder.latest().arrived_at == pytest.approx(100.35)
+        result = drone.sensor.sense(turn_end, 2.0)
+        assert result.unavailable and result.reason == REASON_STALE
+        assert result.detail["cause"] == CAUSE_BLANK_FRAME
+        assert drone.guard.judged == []
+        # The first real frame after the restart is judged.
+        drone.clock.advance(0.05)
+        drone.reader.frame = _marked_view(POST_TURN)
+        drone.feed(("loop", "poller"))
+        assert drone.sensor.sense(turn_end, 2.0).blocked
+        assert drone.guard.judged == [POST_TURN]
 
 
 # ---------------------------------------------------------------------------

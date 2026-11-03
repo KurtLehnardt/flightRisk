@@ -35,9 +35,11 @@ from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.drone.tello import FakeTelloController
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_device import (
+    DecodedFramePoller,
     DroneFrameSource,
     _build_obstacle_wiring,
     _build_parser,
+    _copying_frame_feed,
     _FrameFeedingSource,
     _tell_mavlink_drone,
     run_edge_device,
@@ -229,6 +231,86 @@ def test_holder_sees_every_frame_whatever_the_stride(stride):
     )
     yielded = sum(1 for _ in source)
     assert wiring.holder.frames_seen == 12
+    if stride == 1:
+        assert yielded == 12
+    else:
+        assert yielded < 12
+
+
+class _DecoderReader:
+    """Stands in for djitellopy's ``BackgroundFrameRead``: ``frame`` is the decoder's newest array."""
+
+    with_queue = False
+
+    def __init__(self):
+        self.frame = None
+        self.decoded = 0
+
+    def decode(self):
+        self.decoded += 1
+        frame = np.zeros((40, 40, 3), np.uint8)
+        frame[:, :20] = 80
+        frame[0, 0, 0] = self.decoded % 256
+        self.frame = frame
+
+    def stop(self):
+        """djitellopy's ``end()`` stops the reader when the client goes away."""
+
+
+@pytest.mark.parametrize("stride", [1, 2, 3])
+def test_both_feeds_give_the_holder_every_new_decoded_frame_once_whatever_the_stride(stride, tello_on_wire):
+    # A real TelloController: the frame loop's on_frame copy feed and the decoder poller share one holder.
+    ctrl, _wire = tello_on_wire()
+    ctrl.state.is_connected = True
+    reader = _DecoderReader()
+    ctrl.tello.background_frame_read = reader
+    holder = LatestFrame()
+    ctrl.on_frame(_copying_frame_feed(holder))
+    poller = DecodedFramePoller(ctrl, holder)
+    stop = threading.Event()
+
+    class Clock:
+        t = 0.0
+
+        def now(self):
+            return self.t
+
+        def wait(self, seconds):
+            self.t += seconds
+            return False
+
+    clock = Clock()
+    reads = {"n": 0}
+    stored: list[int] = []
+    real_get_frame = ctrl.get_frame
+
+    def polled():
+        # The decoder decodes a new frame before most polls and stalls before every third one;
+        # the poller reads it between the frame loop's polls.
+        reads["n"] += 1
+        if reads["n"] > 12:
+            stop.set()
+            return None
+        if reads["n"] % 3:
+            reader.decode()
+        poller.poll_once()
+        frame = real_get_frame()
+        poller.poll_once()
+        stored.append(int(holder.latest().frame[0, 0, 0]))
+        return frame
+
+    ctrl.get_frame = polled
+    try:
+        source = DroneFrameSource(
+            ctrl, stop, min_interval_s=1 / 30, frame_stride=stride, clock=clock.now, wait=clock.wait
+        )
+        yielded = sum(1 for _ in source)
+    finally:
+        ctrl.state.is_connected = False
+        ctrl.tello.background_frame_read = None
+    assert reader.decoded == 8  # 8 of the 12 polls find a new frame; 4 find the decoder stalled
+    assert holder.frames_seen == 8  # every new decoded frame once, none of the stalled ones again
+    assert stored == sorted(stored) and len(set(stored)) == 8
     if stride == 1:
         assert yielded == 12
     else:

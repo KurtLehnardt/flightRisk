@@ -15,6 +15,8 @@ The module holds:
   deterministic tests and the fake fleet demo).
 * ``LatestFrame``, the holder of the newest camera frame with its arrival
   time, so a sensor can insist on a frame that arrived after the drone settled.
+  It never stamps the same source frame object twice, so a stalled video
+  decoder cannot pass an old frame off as a new one.
 * Constants for every knob, cut reason, telemetry field and event name.
 
 A sensor is evaluated while the drone hovers, so a slow sensor costs mission
@@ -118,6 +120,10 @@ PERSON_CUE_UNKNOWN = "unknown"
 REASON_STALE = "stale"
 REASON_TIMEOUT = "timeout"
 REASON_ERROR = "error"
+#: ``SenseResult.detail["cause"]`` of a ``stale`` result whose fresh frame had
+#: every pixel the same (for example the black frame a restarted video decoder
+#: starts on). Such a frame shows nothing, so there was no view to judge.
+CAUSE_BLANK_FRAME = "blank frame"
 
 #: ``flightrisk_obstacle_checks`` actions added by the fleet path (the existing
 #: ones are written by ``obs_events.obstacle_check``).
@@ -447,14 +453,23 @@ class TimedFrame:
     arrived_at: float
 
 
+#: The source object of a holder that has not been offered a frame yet.
+_NO_SOURCE = object()
+
+
 class LatestFrame:
     """Holds the newest camera frame and when it arrived.
 
-    Register the holder itself as the drone's frame callback
-    (``drone.on_frame(holder)``): it is fed for every frame the controller
-    returns, independent of any frame stride the detector uses. ``clock`` is
-    the monotonic clock that stamps arrivals (``time.monotonic`` by default);
-    the executor's ``after`` stamps must come from the same clock.
+    Every feed of the holder (the drone's frame callback, a decoder poller, a
+    capture source) goes through ``offer``. It is fed for every new frame
+    object the controller hands over, independent of any frame stride the
+    detector uses, and never for the same object twice: a stalled video
+    decoder keeps handing over the frame it last decoded, and that frame must
+    not be stamped again as if it had just arrived. The holder itself can be
+    registered as the drone's frame callback (``drone.on_frame(holder)``),
+    which offers each frame without a copy. ``clock`` is the monotonic clock
+    that stamps arrivals (``time.monotonic`` by default); the executor's
+    ``after`` stamps must come from the same clock.
 
     ``wait_for`` waits in real time on a condition but measures the deadline on
     ``clock``. A test that injects a clock which never advances must use
@@ -469,12 +484,45 @@ class LatestFrame:
         self._cond = threading.Condition()
         self._latest: TimedFrame | None = None
         self._count = 0
+        # The last source object any feed offered. Holding the reference keeps
+        # the object alive, so ``is`` can never match a new object that reuses
+        # its id; ``id()`` alone could.
+        self._source: Any = _NO_SOURCE
 
     def __call__(self, frame: Any) -> None:
-        self.update(frame)
+        self.offer(frame)
+
+    def offer(self, source: Any, copy: Callable[[Any], Any] | None = None) -> bool:
+        """Store ``source`` as the newest frame unless it is the source object offered last.
+
+        The check runs on ``source`` itself, before ``copy`` is called, and
+        compares it with ``is`` against the last source object that any feed
+        of this holder offered, so every feed shares the one record: a frame
+        the frame loop already handed over is not stamped again when a poller
+        reads it, and the other way round. A new object is stored (as
+        ``copy(source)`` when ``copy`` is given) and stamped with the current
+        time. Returns True when the frame was stored.
+
+        A controller that reused one buffer object for every frame would
+        therefore feed the holder only once, and the sensor would report the
+        view as stale: it fails closed. djitellopy's decoder, the fake
+        controllers and OpenCV's ``read`` all return a new array per frame.
+        """
+        with self._cond:
+            if source is self._source:
+                return False
+            self._source = source
+            frame = source if copy is None else copy(source)
+            self._latest = TimedFrame(frame, self._clock())
+            self._count += 1
+            self._cond.notify_all()
+            return True
 
     def update(self, frame: Any) -> None:
-        """Store ``frame`` as the newest, stamped with the current time."""
+        """Store ``frame`` as the newest, stamped with the current time, whatever it is.
+
+        This bypasses the check of ``offer``; the feeds use ``offer``.
+        """
         with self._cond:
             self._latest = TimedFrame(frame, self._clock())
             self._count += 1
