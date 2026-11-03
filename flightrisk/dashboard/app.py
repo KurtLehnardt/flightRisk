@@ -688,6 +688,8 @@ class FleetSupervisor:
     _edit_version: int = 0
     # The map plan the drones hold (None for a plan made without the map).
     _map_spec = None
+    # The last status carried obstacle segments, so the next one without any sends an empty list once.
+    _segments_shown: bool = False
     # Manual takeover; None only for a supervisor built without __init__.
     manual: ManualControl | None = None
 
@@ -873,11 +875,16 @@ class FleetSupervisor:
         controlled = None if self.manual is None else self.manual.controlled
         payload = {"drones": drones, "net": self.net, "synced": self.synced, "manual_controlled": controlled}
         plan = self.coordinator.current_plan()
-        if plan is not None:
-            # The obstacle segments of the mission with their re-flight status. ``fleet_plan`` is sent only when a
-            # plan is made (sending it again would reset a browser's Start button), so the segments, which change
-            # while the drones fly, ride in the status that is sent every monitor tick.
-            payload["uncovered"] = [dict(u) for u in plan.get("uncovered", []) if u.get("kind") == "segment"]
+        segments = [] if plan is None else [dict(u) for u in plan.get("uncovered", []) if u.get("kind") == "segment"]
+        # The obstacle segments of the mission with their re-flight status. ``fleet_plan`` is sent only when a plan
+        # is made (sending it again would reset a browser's Start button), so the segments, which change while the
+        # drones fly, ride in the status that is sent every monitor tick. The key is left out while there are none
+        # and have been none, so the payload of a mission without cuts is unchanged for the mobile apps
+        # (docs/mobile-contract); one empty list follows the last segment so a browser clears its box.
+        with self._lock:
+            if segments or self._segments_shown:
+                payload["uncovered"] = segments
+            self._segments_shown = bool(segments)
         return payload
 
     def emit_status(self) -> None:

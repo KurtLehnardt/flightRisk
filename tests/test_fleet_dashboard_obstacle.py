@@ -93,13 +93,23 @@ def test_a_cut_sends_lane_blocked_then_a_status_with_the_segments():
     assert follow["drones"]["drone-1"]["obstacle_state"] == "blocked"
 
 
-def test_the_status_has_no_segments_before_a_cut_and_never_the_area_entries():
+def test_the_status_has_no_uncovered_key_before_a_cut_and_never_the_area_entries():
     supervisor, _, _, _ = _started_supervisor()
-    assert supervisor.status_payload()["uncovered"] == []
+    assert "uncovered" not in supervisor.status_payload()
     _cut(supervisor)
     payload = supervisor.status_payload()
     assert payload["uncovered"] and all(u["kind"] == "segment" for u in payload["uncovered"])
     json.dumps(payload)
+
+
+def test_one_empty_list_follows_the_last_segment_so_the_browser_clears_its_box():
+    supervisor, _, _, _ = _started_supervisor()
+    _cut(supervisor)
+    assert supervisor.status_payload()["uncovered"]
+    real = supervisor.coordinator.current_plan
+    supervisor.coordinator.current_plan = lambda: {**real(), "uncovered": []}
+    assert supervisor.status_payload()["uncovered"] == []
+    assert "uncovered" not in supervisor.status_payload()
 
 
 def test_the_status_of_a_supervisor_without_a_plan_has_no_uncovered_key():
