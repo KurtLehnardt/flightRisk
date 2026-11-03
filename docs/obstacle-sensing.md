@@ -162,7 +162,7 @@ The default depth threshold, 0.35, is the old single-drone guard's value. It has
 - **Monocular depth is a weak sensor.** It misses thin stems and wires, glass, and plants whose leaves sit below the middle row. It can stop for a far flat wall or a textureless floor. The person cue catches only a person who is large in the frame, not one who is lying down or far away.
 - **CPU.** The design estimates 5 to 10 percent of the ZBook for two drones, and a drop of about 0.3 detections per second per drone. This is unmeasured until H4.
 - **Re-flights wait for the cutting drone.** A drone that hovers near the segment keeps the offer queued until it is landed. The receiver may hover, waiting, until then; the battery gate lands at 15 percent regardless.
-- **Mobile apps.** A cut adds an optional `uncovered` key to `fleet_status` and `segment` entries to the plan. Whether the current iOS and Android apps skip them cleanly has not been checked (`docs/mobile-contract.md`).
+- **Mobile apps.** A cut adds an optional `uncovered` key to `fleet_status` and `segment` entries to the plan. The iOS and Android apps skip segments cleanly (they count segments as entries not drawn in `PlanGeometry.swift` and `PlanGeometry.kt` respectively) and ignore the new `fleet_status.uncovered` list and the per-drone `obstacle_*`, `uncovered_cm` and `reflights` keys.
 - **The `edge_obstacle_*` events are not counted in `flightrisk_flight_safety_events`.** They are logged by name. The counts come from `flightrisk_obstacle_checks`.
 
 ## Where the code is
