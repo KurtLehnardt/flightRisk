@@ -115,6 +115,13 @@ final class LanAddressPolicyTests: XCTestCase {
         }
     }
 
+    func testTheRefusalTextDoesNotSuggestEncryptedSchemes() {
+        let text = GroundAddressRefusal.cleartextMessage
+        XCTAssertTrue(text.hasPrefix("cleartext is only allowed to local network addresses"))
+        XCTAssertFalse(text.contains("wss://") || text.contains("https://"))
+        XCTAssertTrue(text.contains("numeric local IPv4 address"))
+    }
+
     func testAnEncryptedNameIsNeverRefusedForItsAnswers() throws {
         let resolver: GroundHostResolver = { _ in [self.address("8.8.8.8"), self.address("10.0.0.5")] }
         XCTAssertEqual(try LanAddressPolicy.checkedAddresses(host: "ground.example", cleartext: false, resolver: resolver).count, 2)
@@ -526,7 +533,8 @@ final class LanAddressPolicyTests: XCTestCase {
         for text in texts {
             XCTAssertFalse(text.contains("test-key"), text)
         }
-        XCTAssertTrue(texts.contains { $0.contains("wss:// or https://") })
+        XCTAssertTrue(texts.contains { $0.contains("numeric local IPv4 address") })
+        XCTAssertFalse(texts.contains { $0.contains("wss://") }, "the ground speaks plain ws, so the refusal must not suggest wss")
     }
 }
 

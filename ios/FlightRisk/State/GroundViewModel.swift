@@ -1501,20 +1501,21 @@ final class GroundViewModel {
 
     // MARK: Private: answers
 
-    /// Each ack answers the oldest outstanding LAND ALL. While a newer tap still waits, an
-    /// earlier tap's result is shown as a detail (and as a banner when it is not a success),
-    /// and the newer tap keeps its own "sending" and "no reply yet" states.
-    /// Record that the operator answered an alert. Read only: nothing is sent, and an event without
-    /// an alert id or with `ok` false changes nothing.
+    /// Record that the operator answered an alert. Read only: nothing is sent. The event needs
+    /// `ok` true and an alert id; anything else changes nothing. The first answer for an id wins,
+    /// as the ground accepts only one.
     private func applyAlertAnswer(_ answer: MatchAlertResolved) {
-        guard answer.ok != false, let id = answer.alertId, !id.isEmpty else { return }
-        if alertAnswers[id] == nil { alertAnswerOrder.append(id) }
+        guard answer.ok == true, let id = answer.alertId, !id.isEmpty, alertAnswers[id] == nil else { return }
+        alertAnswerOrder.append(id)
         alertAnswers[id] = answer.action ?? .unknown("")
         while alertAnswerOrder.count > Self.maxMatchAlerts {
             alertAnswers[alertAnswerOrder.removeFirst()] = nil
         }
     }
 
+    /// Each ack answers the oldest outstanding LAND ALL. While a newer tap still waits, an
+    /// earlier tap's result is shown as a detail (and as a banner when it is not a success),
+    /// and the newer tap keeps its own "sending" and "no reply yet" states.
     private func applyLandAllAck(_ ack: LandAllAck, at: Date) {
         let phase: GroundCommandFeedback.Phase
         let text: String

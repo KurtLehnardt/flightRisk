@@ -241,6 +241,32 @@ final class GroundAlertViewModelTests: XCTestCase {
         XCTAssertNil(state.rows[0].answer)
     }
 
+    func testTheFirstAnswerWinsAndOkMustBeTrue() async throws {
+        let t = await harness.connect()
+        let id = "00000000000040008000000000000001"
+        t.push(GroundTestFrames.event("match_alert_resolved", #"{"alert_id":"\#(id)","action":"dismiss"}"#))
+        await harness.settle()
+        XCTAssertTrue(vm.alertAnswers.isEmpty, "a missing ok is not an answer")
+        await harness.push(t, "match_alert_resolved", #"{"ok":true,"alert_id":"\#(id)","action":"dismiss"}"#) { self.vm.alertAnswers.count == 1 }
+        t.push(GroundTestFrames.event("match_alert_resolved", #"{"ok":true,"alert_id":"\#(id)","action":"confirm"}"#))
+        await harness.settle()
+        XCTAssertEqual(vm.alertAnswers[id], .dismiss, "a later answer does not change the first")
+    }
+
+    func testOverlongIdsAreIgnoredAndUnknownActionsAreCut() async throws {
+        let t = await harness.connect()
+        let longId = String(repeating: "a", count: 129)
+        t.push(GroundTestFrames.event("match_alert_resolved", #"{"ok":true,"alert_id":"\#(longId)","action":"confirm"}"#))
+        await harness.settle()
+        XCTAssertTrue(vm.alertAnswers.isEmpty)
+        let rawAction = String(repeating: "x", count: 500)
+        await harness.push(t, "match_alert_resolved", #"{"ok":true,"alert_id":"a-1","action":"\#(rawAction)"}"#) { self.vm.alertAnswers.count == 1 }
+        guard case let .unknown(shown)? = vm.alertAnswers["a-1"] else { return XCTFail("expected an unknown action") }
+        XCTAssertLessThan(shown.count, 100)
+        let ok = String(repeating: "b", count: 128)
+        await harness.push(t, "match_alert_resolved", #"{"ok":true,"alert_id":"\#(ok)","action":"dismiss"}"#) { self.vm.alertAnswers.count == 2 }
+    }
+
     func testAnswersAreForgottenOnReset() async throws {
         let t = await harness.connect()
         await harness.push(t, "match_alert_resolved", try ContractFixtures.payloadJSON("match_alert.json", "resolved_dismiss")) { self.vm.alertAnswers.count == 1 }

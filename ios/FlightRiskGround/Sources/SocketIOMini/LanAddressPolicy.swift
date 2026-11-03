@@ -96,7 +96,7 @@ public struct GroundAddressRefusal: Error, Equatable, Sendable, CustomStringConv
     }
 
     /// The sentence shown when the address is not local.
-    public static let cleartextMessage = "cleartext is only allowed to local network addresses; use wss:// or https:// for this address"
+    public static let cleartextMessage = "cleartext is only allowed to local network addresses; a .local or router name that also has a public (global IPv6) address is refused, so enter the ground's numeric local IPv4 address (for example 192.168.1.20)"
 
     /// The refusal for a resolved `address`.
     static func cleartext(address: GroundResolvedAddress) -> GroundAddressRefusal {

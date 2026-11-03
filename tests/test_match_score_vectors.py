@@ -1,7 +1,7 @@
 """The shared match score vectors must be reproduced by the Python scorer.
 
-``tests/fixtures/mobile_contract/match_score_vectors.json`` is read by the iOS and Android scorer tests as
-well. Python is the reference: its ``round(x, 3)`` rounds the exact binary value, ties to even, and the phones
+``tests/fixtures/mobile_contract/match_score_vectors.json`` is also read by the iOS scorer tests
+(``MatchScoreVectorTests``); the Android scorer tests are meant to read it too. Python is the reference: its ``round(x, 3)`` rounds the exact binary value, ties to even, and the phones
 must give the same numbers. If this test fails, the vectors or the Python scorer changed, and both apps need
 to be rechecked.
 """
