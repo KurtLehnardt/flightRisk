@@ -180,6 +180,12 @@ class GroundLinkController(
     /** What the pipeline publishes to. It follows this controller's current publisher. */
     val detectionPublisher: DetectionPublisher = object : DetectionPublisher {
         override fun wantsFrame(): Boolean = publisher?.wantsFrame() ?: false
+
+        // Without a publisher (link off, no consent, app not in view) nothing is asked for.
+        override fun wantsThumbnail(): Boolean = publisher?.wantsThumbnail() ?: false
+        override fun maxCrops(): Int = publisher?.maxCrops() ?: 0
+        override fun maxEmbeddings(): Int = publisher?.maxEmbeddings() ?: 0
+
         override fun publish(frame: PublishedFrame) {
             publisher?.publish(frame)
         }

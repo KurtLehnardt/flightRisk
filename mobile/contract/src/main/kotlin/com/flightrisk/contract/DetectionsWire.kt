@@ -56,6 +56,12 @@ object DetectionsWire {
     /** The keys of a detection without face matching. */
     val DETECTION_KEYS: Set<String> = setOf("bbox", "confidence", "reid_embedding", "crop")
 
+    /**
+     * The longest embedding [decode] accepts; a longer one decodes as null.
+     * Real embeddings are much shorter ([ReidEmbedding.DIMENSION] values).
+     */
+    const val MAX_EMBEDDING_VALUES = 4096
+
     /** Keys a phone edge never sends: it flies nothing and its detector is not a registered profile. */
     val NEVER_SENT_KEYS: Set<String> = setOf("drone_id", "detection_profile", "face_model")
 
@@ -213,6 +219,10 @@ object DetectionsWire {
      * Decodes a `detections` message the way `EdgeRunner.from_dict` reads it.
      * Returns null when it is not a `detections` message or lacks a required
      * field (`timestamp`, `frame_id`, or a detection's `bbox` or `confidence`).
+     * An embedding that is not an array of finite numbers, or that has more
+     * than [MAX_EMBEDDING_VALUES] values, decodes as null rather than as a
+     * shorter vector. Use [ReidEmbedding.problem] to check that a decoded
+     * appearance embedding is one the ground can compare.
      */
     fun decode(o: JsonObject): DetectionsMessage? {
         if (o.str("type") != TYPE) return null
@@ -226,8 +236,8 @@ object DetectionsWire {
             detections += WireDetection(
                 bbox = bbox,
                 confidence = confidence,
-                reidEmbedding = d.numbers("reid_embedding"),
-                faceEmbedding = d.numbers("face_embedding"),
+                reidEmbedding = embedding(d["reid_embedding"]),
+                faceEmbedding = embedding(d["face_embedding"]),
                 crop = d.str("crop")?.takeIf { it.isNotEmpty() },
             )
         }
@@ -239,6 +249,14 @@ object DetectionsWire {
             thumbnail = o.str("thumbnail")?.takeIf { it.isNotEmpty() },
             detections = detections,
         )
+    }
+
+    /** Every element a finite number and at most [MAX_EMBEDDING_VALUES] of them, or null. */
+    private fun embedding(element: JsonElement?): List<Double>? {
+        val array = element.asArray() ?: return null
+        if (array.size > MAX_EMBEDDING_VALUES) return null
+        val values = array.map { it.numberValue() ?: return null }
+        return values
     }
 
     /** Decodes a `detections` message from JSON text, or returns null. */

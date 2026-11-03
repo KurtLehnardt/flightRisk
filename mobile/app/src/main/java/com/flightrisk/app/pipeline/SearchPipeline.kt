@@ -21,6 +21,8 @@ import com.flightrisk.app.vision.HeightRatioMatcher
 import com.flightrisk.app.transport.BitmapFrames
 import com.flightrisk.app.vision.InsightFaceMatcher
 import com.flightrisk.app.vision.MatchScorer
+import com.flightrisk.app.vision.EmbeddingProvider
+import com.flightrisk.app.vision.NoEmbeddingProvider
 import com.flightrisk.app.vision.OSNetReIDMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -464,6 +466,15 @@ class SearchPipeline(
     /** A running frame number for [detectionPublisher]; one per processed frame. */
     private var publishFrameId = 0L
 
+    /**
+     * Makes the appearance embeddings [detectionPublisher] sends to a ground
+     * station. The default makes none: the app has no model the ground can
+     * compare yet (see `EmbeddingProvider`), so every `reid_embedding` is null.
+     * Embeddings are made only for frames the publisher accepts, on its worker.
+     */
+    @Volatile
+    var edgeEmbeddingProvider: EmbeddingProvider<Bitmap> = NoEmbeddingProvider
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -606,6 +617,8 @@ class SearchPipeline(
                     timestampSeconds = System.currentTimeMillis() / 1000.0,
                     withThumbnail = publisher.wantsThumbnail(),
                     maxCrops = publisher.maxCrops(),
+                    maxEmbeddings = publisher.maxEmbeddings(),
+                    embeddingProvider = edgeEmbeddingProvider,
                 ),
             )
         } catch (e: Exception) {

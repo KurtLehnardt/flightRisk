@@ -75,6 +75,10 @@ data class EdgeStats(
     val detectionsDropped: Long = 0,
     /** Crops removed to fit the 1 MiB limit. */
     val cropsDropped: Long = 0,
+    /** Appearance embeddings that went out. */
+    val embeddingsSent: Long = 0,
+    /** Appearance embeddings sent as null because the model failed or its vector was not valid. */
+    val embeddingsRejected: Long = 0,
 )
 
 /** Limits and timings of an [EdgePublisher]. */
@@ -95,6 +99,12 @@ data class EdgePublisherConfig(
     val sendCrops: Boolean = false,
     /** With [sendCrops] on, crops go only to the most confident detections. */
     val maxCropsPerMessage: Int = 8,
+    /**
+     * Appearance embeddings go only to this many of the most confident
+     * detections per message. They exist only when the app has a model the
+     * ground can compare (none ships yet, so every `reid_embedding` is null).
+     */
+    val maxEmbeddingsPerMessage: Int = 8,
     /** Once the ground has sent heartbeats, silence for this long ends the session (3 x its 1 s interval). */
     val heartbeatDeadlineMs: Long = 3_000,
     /** Where frames are compressed and encoded: never on the pipeline's frame loop. */
@@ -122,6 +132,11 @@ data class EdgePublisherConfig(
  *   bounded exponential backoff that restarts only after a stable link.
  * - Thumbnails are sent only after the ground sends `stream_video` with
  *   `enabled: true`; the default is detections only.
+ * - Appearance embeddings are computed on the worker, for at most
+ *   [EdgePublisherConfig.maxEmbeddingsPerMessage] of the most confident
+ *   detections, and only exist when the app has a model the ground can
+ *   compare (`EmbeddingProvider`). They are held only for the message being
+ *   written and are never logged; a model failure sends null.
  *
  * Everything runs in [scope]; [start] and [stop] never block.
  */
@@ -162,6 +177,8 @@ class EdgePublisher(
     private val droppedInvalid = AtomicLong()
     private val detectionsDropped = AtomicLong()
     private val cropsDropped = AtomicLong()
+    private val embeddingsSent = AtomicLong()
+    private val embeddingsRejected = AtomicLong()
 
     /** A snapshot of the counters. */
     fun stats(): EdgeStats = EdgeStats(
@@ -172,6 +189,8 @@ class EdgePublisher(
         framesDroppedInvalid = droppedInvalid.get(),
         detectionsDropped = detectionsDropped.get(),
         cropsDropped = cropsDropped.get(),
+        embeddingsSent = embeddingsSent.get(),
+        embeddingsRejected = embeddingsRejected.get(),
     )
 
     /** True while thumbnails are on (the ground sent `stream_video` enabled). */
@@ -183,6 +202,8 @@ class EdgePublisher(
     override fun wantsThumbnail(): Boolean = streamVideo
 
     override fun maxCrops(): Int = if (config.sendCrops) config.maxCropsPerMessage else 0
+
+    override fun maxEmbeddings(): Int = config.maxEmbeddingsPerMessage.coerceAtLeast(0)
 
     /** Starts the connection loop. Does nothing while it already runs. */
     fun start() {
@@ -232,11 +253,9 @@ class EdgePublisher(
         val faceOn = faceMatchingEnabled()
         val capped = frame.detections.take(config.maxDetectionsPerFrame)
         detectionsDropped.addAndGet((frame.detections.size - capped.size).toLong())
-        val cropOwners: Set<Int> = if (config.sendCrops) {
-            capped.indices.sortedByDescending { capped[it].confidence }.take(config.maxCropsPerMessage).toSet()
-        } else {
-            emptySet()
-        }
+        val byConfidence = capped.indices.sortedByDescending { capped[it].confidence }
+        val cropOwners: Set<Int> = if (config.sendCrops) byConfidence.take(config.maxCropsPerMessage).toSet() else emptySet()
+        val embeddingOwners: Set<Int> = byConfidence.take(maxEmbeddings()).toSet()
         val message = DetectionsMessage(
             timestamp = frame.timestampSeconds,
             frameId = frame.frameId,
@@ -247,7 +266,7 @@ class EdgePublisher(
                 WireDetection(
                     bbox = d.bbox,
                     confidence = d.confidence,
-                    reidEmbedding = d.reidEmbedding,
+                    reidEmbedding = if (i in embeddingOwners) embeddingOf(d) else null,
                     faceEmbedding = if (faceOn) d.faceEmbedding else null,
                     crop = if (i in cropOwners) d.cropJpeg()?.let(DetectionsWire::base64Jpeg) else null,
                 )
@@ -257,6 +276,11 @@ class EdgePublisher(
             is DetectionsWire.EncodeResult.Ok -> {
                 detectionsDropped.addAndGet(result.droppedDetections.toLong())
                 cropsDropped.addAndGet(result.droppedCrops.toLong())
+                // The encoder sends an embedding holding a value that is not finite as null.
+                val withReid = message.detections.mapNotNull { it.reidEmbedding }
+                val finite = withReid.count { e -> e.all { it.isFinite() } }
+                embeddingsSent.addAndGet(finite.toLong())
+                embeddingsRejected.addAndGet((withReid.size - finite).toLong())
                 result.json
             }
             is DetectionsWire.EncodeResult.TooLarge -> {
@@ -269,6 +293,21 @@ class EdgePublisher(
             }
         }
     }
+
+    /**
+     * The detection's appearance embedding, computed here on the worker, or
+     * null. A model failure or an invalid vector is counted and sent as null;
+     * it never ends the session. The vector itself is never logged.
+     */
+    private fun embeddingOf(d: com.flightrisk.app.pipeline.PublishedDetection): List<Double>? =
+        try {
+            d.reidEmbedding()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            embeddingsRejected.incrementAndGet()
+            null
+        }
 
     private sealed interface Outcome {
         data object TokenRejected : Outcome

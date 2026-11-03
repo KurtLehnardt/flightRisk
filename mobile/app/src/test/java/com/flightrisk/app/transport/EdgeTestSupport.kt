@@ -88,7 +88,7 @@ fun testFrame(
             PublishedDetection(
                 bbox = listOf(10.0 + i, 20.0, 110.0 + i, 220.0),
                 confidence = 0.9,
-                reidEmbedding = reid,
+                reidEmbedding = { reid },
                 faceEmbedding = face,
                 cropJpeg = {
                     cropCalls?.incrementAndGet()

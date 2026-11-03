@@ -1367,9 +1367,49 @@ class _RecordingWebSocket:
         self.sent.append(text)
 
 
+def reid_embedding_spec() -> dict:
+    """The appearance embedding the ground compares (``flightrisk/vision/reid_spec.py``)."""
+    from flightrisk.config import VisionConfig
+    from flightrisk.vision import reid_spec as rs
+
+    if VisionConfig().reid_model != rs.REID_DEFAULT_MODEL:
+        raise AssertionError("config.vision.reid_model and reid_spec.REID_DEFAULT_MODEL disagree")
+    return {
+        "library": rs.REID_LIBRARY,
+        "model": rs.REID_DEFAULT_MODEL,
+        "pretrained": rs.REID_PRETRAINED,
+        "dimension": rs.REID_EMBEDDING_DIM,
+        "dtype": "float32",
+        "l2_normalized": True,
+        "input_size": rs.REID_INPUT_SIZE,
+        "resize": "shortest side to input_size (bicubic), then center crop input_size x input_size",
+        "mean": list(rs.REID_MEAN),
+        "std": list(rs.REID_STD),
+    }
+
+
+def reid_embedding_sample() -> list[float]:
+    """A deterministic stand-in for one ``PersonReID.extract_embedding(crop).tolist()``.
+
+    ``REID_EMBEDDING_DIM`` float32 values with unit L2 norm. The values are
+    made with exactly rounded arithmetic (integer steps, ``math.fsum`` and a
+    single float32 rounding), so every machine writes the same digits.
+    """
+    import math
+
+    import numpy as np
+
+    from flightrisk.vision.reid_spec import REID_EMBEDDING_DIM
+
+    raw = [((i * 37) % 101 - 50) / 50.0 for i in range(REID_EMBEDDING_DIM)]
+    norm = math.sqrt(math.fsum(v * v for v in raw))
+    return np.asarray([v / norm for v in raw], dtype=np.float32).tolist()
+
+
 def build_edge_link() -> dict[str, dict]:
     from flightrisk import fleet_protocol as fp
     from flightrisk.edge import Detection, DetectionMessage, EdgeRunner
+    from flightrisk.ground import GroundStation
     from flightrisk.transport import GroundTransport
 
     ground = GroundTransport(host="127.0.0.1", port=0)
@@ -1411,10 +1451,25 @@ def build_edge_link() -> dict[str, dict]:
     detections_face = with_face.to_dict(phone_message)
     phone_message.thumbnail_jpeg = None
     detections_no_video = appearance_only.to_dict(phone_message)
-    for msg in (detections_ao, detections_face, detections_no_video):
+    # A full-length appearance embedding, as a phone with the ground's ReID
+    # model would send it: the most confident detection carries one, the
+    # other was not given one (beyond the phone's per-message cap) and is null.
+    reid_vector = reid_embedding_sample()
+    reid_message = DetectionMessage(
+        timestamp=1761735600.75, frame_id=18, thumbnail_jpeg=None, frame_width=1280, frame_height=720,
+        detections=[Detection(bbox=(512, 200, 640, 560), confidence=0.74, reid_embedding=reid_vector),
+                    Detection(bbox=(100, 120, 150, 230), confidence=0.41)],
+    )
+    detections_reid = appearance_only.to_dict(reid_message)
+    for msg in (detections_ao, detections_face, detections_no_video, detections_reid):
         fp.validate_edge_to_ground(msg, proto=1)
         if len(json.dumps(msg).encode()) > fp.LEGACY_MAX_BYTES:
             raise AssertionError("a detections sample exceeds the 1 MiB cap")
+    # The ground scores the full-length sample against a target embedding: the
+    # same vector as target gives a ReID score of 1, the null one gives 0.
+    scored = GroundStation(target_reid_embedding=reid_vector).process_message(EdgeRunner.from_dict(detections_reid))
+    if abs(scored[0]["reid_score"] - 1.0) > 1e-5 or scored[1]["reid_score"] != 0.0:
+        raise AssertionError(f"the ground did not score the ReID sample as expected: {scored}")
 
     v2 = fp.TelemetryV2(epoch=7, plan_id="p-1", state="flying_lanes", plan_valid=True)
     telemetry_v2 = fp.make_telemetry("drone-2", 71, 130, True, 40.0, 220.5, 0.0, 3, 9, 0.12, 1000.0, v2=v2)
@@ -1434,6 +1489,13 @@ def build_edge_link() -> dict[str, dict]:
         "detections_no_video": case(
             None, EDGE_TO_GROUND, detections_no_video,
             "After stream_video false: thumbnail is null; crops and embeddings still go.",
+        ),
+        "detections_reid_embedding": case(
+            None, EDGE_TO_GROUND, detections_reid,
+            "A full-length appearance embedding in the form _meta.reid_embedding describes (512 float32 values, "
+            "unit L2 norm, from open_clip ViT-B-16 laion2b_s34b_b88k). The values are a deterministic stand-in, "
+            "not a real model output. The ground scores this sample: with the same vector as target its ReID "
+            "score is 1. A detection without an embedding carries null.",
         ),
         "telemetry_v1": case(None, EDGE_TO_GROUND, _telemetry("drone-1", battery=82, height_cm=100, is_flying=True,
                                                                rel_x_cm=35.5, rel_y_cm=120.0, lane_index=2,
@@ -1510,8 +1572,9 @@ def build_edge_link() -> dict[str, dict]:
             "Edge link, edge to ground: the 'detections' samples a phone edge sends, and the fleet-edge replies "
             "for reference (a phone never sends those).",
             ["EdgeRunner.to_dict", "flightrisk.fleet_protocol builders",
-             "flightrisk.fleet_protocol.validate_edge_to_ground"],
-            e2g, **common,
+             "flightrisk.fleet_protocol.validate_edge_to_ground", "GroundStation.process_message",
+             "flightrisk.vision.reid_spec"],
+            e2g, **common, reid_embedding=reid_embedding_spec(),
         ),
     }
 
