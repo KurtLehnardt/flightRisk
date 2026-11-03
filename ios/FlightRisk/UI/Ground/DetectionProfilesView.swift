@@ -69,7 +69,7 @@ enum MissionFormat {
     static let maxDrones = 64
     static let notConnectedNote = "Not connected to the ground: profile changes are off."
     static let notLiveNote = "Not live: profile changes are off until the ground sends a fresh status."
-    static let controlsOffNote = "The ground has not enabled detection profile changes."
+    static let controlsOffNote = "The ground has detection profile changes turned off."
     static let unsupportedEdge = "This edge does not report detection profiles (older edge); it keeps its own model."
     static let detectorFailing = "DETECTOR FAILING: the edge cannot process frames. "
     /// Shown on the read-only cards while the state is not live.

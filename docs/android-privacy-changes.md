@@ -32,4 +32,4 @@ This note describes what the Android privacy change altered, so the privacy docu
 ## Not changed
 
 - `canon/TargetCanon.kt` and the `target_versions` table remain. `FlightRiskDatabase` lists `TargetVersionEntity` as an entity, so removing the table changes the Room schema and needs a database version bump (the database uses `fallbackToDestructiveMigration`, so a bump would erase existing saved sessions). That is a decision for a separate change.
-- iOS is unchanged. Open iOS follow-ups: the cloud opt-in carried by device backup, and the unused `TargetStore.swift`.
+- iOS was unchanged in this change. The iOS follow-ups (the cloud opt-in carried by device backup, and the unused `TargetStore.swift`) were done in a separate iOS change; see `docs/ios-ground-client.md`.

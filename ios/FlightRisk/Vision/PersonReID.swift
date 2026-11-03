@@ -87,7 +87,7 @@ final class PersonReID {
         return true
     }
 
-    /// Set the target embedding directly (e.g. restored from TargetStore).
+    /// Set the target embedding directly (for example one computed elsewhere).
     ///
     /// - Parameter embedding: Pre-computed L2-normalized CLIP embedding.
     func setTargetEmbedding(_ embedding: [Float]) {
@@ -144,8 +144,7 @@ final class PersonReID {
     /// Extract the raw appearance embedding for a person crop.
     ///
     /// Unlike `compare`, this does not require a target to be set.
-    /// Used by callers that need the raw feature vector (e.g. for
-    /// TargetStore persistence).
+    /// Used by callers that need the raw feature vector.
     ///
     /// - Parameter crop: CGImage of a detected person.
     /// - Returns: L2-normalized 512-d embedding, or nil if extraction fails.

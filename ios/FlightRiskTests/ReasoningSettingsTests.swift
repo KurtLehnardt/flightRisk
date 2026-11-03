@@ -12,18 +12,22 @@ final class ReasoningSettingsTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
     private var settings: ReasoningSettings!
+    private var consent: CloudConsentStore!
 
     override func setUp() {
         super.setUp()
         suiteName = "ReasoningSettingsTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        settings = ReasoningSettings(defaults: defaults)
+        consent = CloudConsentStore.makeTemporary()
+        settings = ReasoningSettings(defaults: defaults, consent: consent)
     }
 
     override func tearDown() {
         defaults.removePersistentDomain(forName: suiteName)
+        consent.removeTemporaryDirectory()
         defaults = nil
         settings = nil
+        consent = nil
         super.tearDown()
     }
 
@@ -66,7 +70,7 @@ final class ReasoningSettingsTests: XCTestCase {
 
         settings.setCloudOptIn(true)
         XCTAssertTrue(settings.select(.cloudClaude))
-        let reread = ReasoningSettings(defaults: defaults)
+        let reread = ReasoningSettings(defaults: defaults, consent: consent)
         XCTAssertTrue(reread.cloudOptIn)
         XCTAssertEqual(reread.storedProvider, .cloudClaude)
     }
@@ -420,15 +424,132 @@ extension ReasoningSettingsTests {
         XCTAssertEqual(settings.storedProvider, .off)
     }
 
-    // Opt-in flag parsing (NIT 9)
+    // Cloud opt-in lives outside UserDefaults, so backups do not carry it
 
-    func testOnlyAStoredBoolCountsAsOptIn() {
-        for value in ["true", "YES", "1"] {
-            defaults.set(value, forKey: ReasoningSettings.cloudOptInKey)
-            XCTAssertFalse(settings.cloudOptIn, "String \(value) must not opt in")
-        }
-        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+    func testOptInIsStoredInABackupExcludedFileNotInUserDefaults() {
+        XCTAssertFalse(settings.cloudOptIn, "A new or restored phone starts with cloud off")
+        settings.setCloudOptIn(true)
         XCTAssertTrue(settings.cloudOptIn)
+        XCTAssertTrue(consent.isExcludedFromBackup)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: consent.fileURL.path))
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+        settings.setCloudOptIn(false)
+        XCTAssertFalse(settings.cloudOptIn)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: consent.fileURL.path))
+    }
+
+    func testAnOptInValueInUserDefaultsAloneNeverOptsIn() {
+        // What a restored backup looks like: the defaults carry the flag, the consent file does not.
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        XCTAssertFalse(settings.cloudOptIn)
+        defaults.set("true", forKey: ReasoningSettings.cloudOptInKey)
+        XCTAssertFalse(settings.cloudOptIn)
+    }
+
+    func testOnlyTheGrantedMarkerCountsAsOptIn() throws {
+        try FileManager.default.createDirectory(
+            at: consent.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for text in ["true", "yes", "1", "", "revoked", "granted\n"] {
+            try Data(text.utf8).write(to: consent.fileURL)
+            XCTAssertFalse(settings.cloudOptIn, "Content \(text.debugDescription) must not opt in")
+        }
+        try Data("granted".utf8).write(to: consent.fileURL)
+        XCTAssertTrue(settings.cloudOptIn)
+    }
+
+    func testFailureToWriteTheConsentFileLeavesOptInOff() throws {
+        // The parent path is a regular file, so the directory cannot be created.
+        let blocker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("consent-blocker-\(UUID().uuidString)")
+        try Data("x".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        let broken = CloudConsentStore(fileURL: blocker.appendingPathComponent("dir/cloud_consent"))
+        let failing = ReasoningSettings(defaults: defaults, consent: broken)
+        failing.confirmCloudConsent(selectCloud: true)
+        XCTAssertFalse(failing.cloudOptIn)
+        XCTAssertNil(failing.storedProvider, "Cloud must not be selected without a recorded opt-in")
+    }
+
+    func testMigrationMovesALegacyOptInAndRemovesTheDefaultsKey() {
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        defaults.set("cloud_claude", forKey: ReasoningSettings.providerKey)
+        XCTAssertFalse(settings.cloudOptIn)
+        settings.migrateLegacyValues(keyStore: FakeKeyStore(key: "test-key"))
+        XCTAssertTrue(settings.cloudOptIn)
+        XCTAssertTrue(consent.isExcludedFromBackup)
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+        XCTAssertEqual(settings.storedProvider, .cloudClaude, "An opted-in user keeps the cloud choice")
+        // A second run changes nothing.
+        settings.migrateLegacyValues(keyStore: FakeKeyStore(key: "test-key"))
+        XCTAssertTrue(settings.cloudOptIn)
+    }
+
+    func testMigrationNeverRemovesTheDefaultsKeyWhenTheWriteFails() throws {
+        let blocker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("consent-blocker-\(UUID().uuidString)")
+        try Data("x".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        let broken = ReasoningSettings(
+            defaults: defaults, consent: CloudConsentStore(fileURL: blocker.appendingPathComponent("dir/cloud_consent")))
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        defaults.set("cloud_claude", forKey: ReasoningSettings.providerKey)
+        broken.migrateLegacyValues(keyStore: FakeKeyStore(key: "test-key"))
+        XCTAssertFalse(broken.cloudOptIn)
+        XCTAssertEqual(defaults.object(forKey: ReasoningSettings.cloudOptInKey) as? Bool, true,
+                       "The value must stay until it has really moved")
+        XCTAssertNotNil(defaults.string(forKey: ReasoningSettings.providerKey),
+                        "The provider is not judged against an opt-in that has not moved yet")
+        XCTAssertEqual(broken.migrateLegacyOptIn(keyStore: FakeKeyStore(key: "test-key")), .deferred)
+    }
+
+    func testMigrationWaitsWhileTheKeychainIsLocked() {
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        defaults.set("cloud_claude", forKey: ReasoningSettings.providerKey)
+        let store = FakeKeyStore(key: nil)
+        store.lookup = .unreadable
+        settings.migrateLegacyValues(keyStore: store)
+        XCTAssertEqual(defaults.object(forKey: ReasoningSettings.cloudOptInKey) as? Bool, true)
+        XCTAssertEqual(defaults.string(forKey: ReasoningSettings.providerKey), "cloud_claude")
+        XCTAssertFalse(settings.cloudOptIn)
+        store.lookup = .found("test-key")
+        settings.migrateLegacyValues(keyStore: store)
+        XCTAssertTrue(settings.cloudOptIn)
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+    }
+
+    func testMigrationOnAPhoneWithoutTheKeyDropsTheStaleFlagAndStaysOff() {
+        // A restored phone: the backup carried the flag and the provider, but the ThisDeviceOnly key is gone.
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        defaults.set("cloud_claude", forKey: ReasoningSettings.providerKey)
+        settings.migrateLegacyValues(keyStore: FakeKeyStore(key: nil))
+        XCTAssertFalse(settings.cloudOptIn)
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.providerKey))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: consent.fileURL.path))
+    }
+
+    func testMigrationWithoutAKeyStoreMovesNothing() {
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        settings.migrateLegacyValues()
+        XCTAssertFalse(settings.cloudOptIn)
+        XCTAssertEqual(defaults.object(forKey: ReasoningSettings.cloudOptInKey) as? Bool, true)
+    }
+
+    func testMigrationRemovesAFalseOrMalformedLegacyValue() {
+        for value in [false as Any, "true", "YES"] {
+            defaults.set(value, forKey: ReasoningSettings.cloudOptInKey)
+            settings.migrateLegacyValues(keyStore: FakeKeyStore(key: "test-key"))
+            XCTAssertFalse(settings.cloudOptIn, "\(value) must not opt in")
+            XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+        }
+    }
+
+    func testMigrationDoesNotOverwriteAnExistingConsentWhenTheKeyIsGone() {
+        settings.setCloudOptIn(true)
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        settings.migrateLegacyValues(keyStore: FakeKeyStore(key: nil))
+        XCTAssertTrue(settings.cloudOptIn)
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
     }
 
     // Key trimming (NIT 10)
@@ -499,12 +620,14 @@ final class CloudClaudeGateTests: XCTestCase {
     private var defaults: UserDefaults!
     private var settings: ReasoningSettings!
     private var store: FakeKeyStore!
+    private var consent: CloudConsentStore!
 
     override func setUp() {
         super.setUp()
         suiteName = "CloudClaudeGateTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
-        settings = ReasoningSettings(defaults: defaults)
+        consent = CloudConsentStore.makeTemporary()
+        settings = ReasoningSettings(defaults: defaults, consent: consent)
         store = FakeKeyStore(key: "test-key")
         settings.confirmCloudConsent(selectCloud: true)
         StubURLProtocol.reset()
@@ -513,6 +636,7 @@ final class CloudClaudeGateTests: XCTestCase {
     override func tearDown() {
         StubURLProtocol.reset()
         defaults.removePersistentDomain(forName: suiteName)
+        consent.removeTemporaryDirectory()
         super.tearDown()
     }
 
@@ -590,7 +714,10 @@ final class CloudClaudeGateTests: XCTestCase {
     ) async {
         StubURLProtocol.mode = .hang
         let started = expectation(description: "request started")
+        let stopped = expectation(description: "request stopped")
+        stopped.assertForOverFulfill = false
         StubURLProtocol.onStart = { started.fulfill() }
+        StubURLProtocol.onStop = { stopped.fulfill() }
         let backend = makeBackend(timeout: 20)
         let call = Task { await self.analyze(backend) }
         await fulfillment(of: [started], timeout: 5)
@@ -601,6 +728,10 @@ final class CloudClaudeGateTests: XCTestCase {
         XCTAssertEqual(result.confidence, "unavailable", file: file, line: line)
         XCTAssertLessThan(Date().timeIntervalSince(begin), 5, "Cancelled, not timed out", file: file, line: line)
         XCTAssertEqual(StubURLProtocol.requests.count, 1, file: file, line: line)
+        // URLSession may report the cancellation to the caller before it calls
+        // `stopLoading` on the protocol, so wait for that call explicitly
+        // instead of reading the counter right away.
+        await fulfillment(of: [stopped], timeout: 5)
         XCTAssertGreaterThanOrEqual(StubURLProtocol.stopCount, 1, file: file, line: line)
     }
 
@@ -633,6 +764,19 @@ final class CloudClaudeGateTests: XCTestCase {
 
 // MARK: - Test doubles
 
+extension CloudConsentStore {
+    /// A store in a fresh temporary directory, so tests never touch the app's real consent file.
+    static func makeTemporary() -> CloudConsentStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cloud-consent-tests-\(UUID().uuidString)", isDirectory: true)
+        return CloudConsentStore(fileURL: dir.appendingPathComponent("cloud_consent"))
+    }
+
+    func removeTemporaryDirectory() {
+        try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+    }
+}
+
 final class CallCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var calls = 0
@@ -649,6 +793,7 @@ final class StubURLProtocol: URLProtocol {
     private static var _requests: [URLRequest] = []
     private static var _stopCount = 0
     private static var _onStart: (() -> Void)?
+    private static var _onStop: (() -> Void)?
 
     static var mode: Mode {
         get { lock.withLock { _mode } }
@@ -660,6 +805,10 @@ final class StubURLProtocol: URLProtocol {
         get { lock.withLock { _onStart } }
         set { lock.withLock { _onStart = newValue } }
     }
+    static var onStop: (() -> Void)? {
+        get { lock.withLock { _onStop } }
+        set { lock.withLock { _onStop = newValue } }
+    }
 
     static func reset() {
         lock.withLock {
@@ -667,6 +816,7 @@ final class StubURLProtocol: URLProtocol {
             _requests = []
             _stopCount = 0
             _onStart = nil
+            _onStop = nil
         }
     }
 
@@ -688,7 +838,11 @@ final class StubURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {
-        Self.lock.withLock { Self._stopCount += 1 }
+        let onStop = Self.lock.withLock { () -> (() -> Void)? in
+            Self._stopCount += 1
+            return Self._onStop
+        }
+        onStop?()
     }
 }
 
