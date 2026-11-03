@@ -510,6 +510,12 @@ LAND_ALL_TIMEOUT_S = 2.0
 #: reached any drone, so LAND ALL always answers.
 LAND_ALL_PATHS_DEADLINE_S = 35.0
 
+#: ``fleet_event`` kinds after which the browsers get a fresh ``fleet_status`` at once, because the obstacle
+#: segments it carries changed: the obstacle cut and the five re-flight transitions.
+OBSTACLE_PLAN_EVENTS = frozenset({
+    "lane_blocked", "reflight_offered", "reflight_accepted", "reflight_done", "reflight_blocked", "reflight_failed",
+})
+
 #: Interval of the fleet monitor, which refreshes ``fleet_status`` and
 #: checks for lost drones.
 FLEET_MONITOR_INTERVAL_S = 0.5
@@ -839,6 +845,13 @@ class FleetSupervisor:
             with self._lock:
                 self._landed_all = True
         self._emit(name, payload)
+        if name == "fleet_event" and payload.get("event") in OBSTACLE_PLAN_EVENTS:
+            # A cut or a re-flight changed the plan's uncovered segments; send them in a fleet_status right
+            # after the event instead of waiting for the next monitor tick.
+            try:
+                self.emit_status()
+            except Exception:
+                log.warning("fleet status after %s failed", payload.get("event"), exc_info=True)
 
     def status_payload(self) -> dict:
         """The ``fleet_status`` event: per-drone telemetry, clock offset, RTT and skew."""
@@ -858,7 +871,14 @@ class FleetSupervisor:
             if self.manual is not None:
                 info.update(self.manual.drone_status(drone_id))
         controlled = None if self.manual is None else self.manual.controlled
-        return {"drones": drones, "net": self.net, "synced": self.synced, "manual_controlled": controlled}
+        payload = {"drones": drones, "net": self.net, "synced": self.synced, "manual_controlled": controlled}
+        plan = self.coordinator.current_plan()
+        if plan is not None:
+            # The obstacle segments of the mission with their re-flight status. ``fleet_plan`` is sent only when a
+            # plan is made (sending it again would reset a browser's Start button), so the segments, which change
+            # while the drones fly, ride in the status that is sent every monitor tick.
+            payload["uncovered"] = [dict(u) for u in plan.get("uncovered", []) if u.get("kind") == "segment"]
+        return payload
 
     def emit_status(self) -> None:
         self._emit("fleet_status", self.status_payload())
