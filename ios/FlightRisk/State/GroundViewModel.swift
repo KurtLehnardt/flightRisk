@@ -518,6 +518,11 @@ final class GroundViewModel {
     // END mission cards
     /// At most `maxMatchAlerts`, oldest dropped first.
     private(set) var matchAlerts: [MatchAlert] = []
+    /// How the operator answered an alert on the laptop (`match_alert_resolved`), by the ground's
+    /// alert id. An answer is final: a later reminder or alert event for the same id does not undo
+    /// it. At most `maxMatchAlerts` ids are kept, oldest dropped first.
+    private(set) var alertAnswers: [String: MatchAlertAction] = [:]
+    private var alertAnswerOrder: [String] = []
     private(set) var streamVideoEnabled: Bool?
 
     // Settings, mirrored for the views.
@@ -1176,6 +1181,8 @@ final class GroundViewModel {
                 matchAlerts.append(a)
                 if matchAlerts.count > Self.maxMatchAlerts { matchAlerts.removeFirst(matchAlerts.count - Self.maxMatchAlerts) }
             }
+        case let .matchAlertResolved(r):
+            applyAlertAnswer(r)
         case let .detectionProfiles(p):
             detectionProfiles = p
             onProfilesFromGround()
@@ -1321,6 +1328,8 @@ final class GroundViewModel {
         reasoningProvider = nil
         profileFeedback = nil
         matchAlerts = []
+        alertAnswers = [:]
+        alertAnswerOrder = []
         streamVideoEnabled = nil
         landFeedback = [:]
         resumeFeedback = [:]
@@ -1495,6 +1504,17 @@ final class GroundViewModel {
     /// Each ack answers the oldest outstanding LAND ALL. While a newer tap still waits, an
     /// earlier tap's result is shown as a detail (and as a banner when it is not a success),
     /// and the newer tap keeps its own "sending" and "no reply yet" states.
+    /// Record that the operator answered an alert. Read only: nothing is sent, and an event without
+    /// an alert id or with `ok` false changes nothing.
+    private func applyAlertAnswer(_ answer: MatchAlertResolved) {
+        guard answer.ok != false, let id = answer.alertId, !id.isEmpty else { return }
+        if alertAnswers[id] == nil { alertAnswerOrder.append(id) }
+        alertAnswers[id] = answer.action ?? .unknown("")
+        while alertAnswerOrder.count > Self.maxMatchAlerts {
+            alertAnswers[alertAnswerOrder.removeFirst()] = nil
+        }
+    }
+
     private func applyLandAllAck(_ ack: LandAllAck, at: Date) {
         let phase: GroundCommandFeedback.Phase
         let text: String

@@ -54,7 +54,7 @@ REQUIRED_CASES = {
     "fleet_plan.json": {"two_drones", "map_plan_lost_zone_uncovered"},
     "fleet_detection.json": {"new_detection"},
     "frame.json": {"edge_video_with_match", "edge_detections_only"},
-    "match_alert.json": {"edge_match", "reminder_on_connect"},
+    "match_alert.json": {"edge_match", "reminder_on_connect", "resolved_dismiss", "resolved_confirm"},
     "detection_profiles.json": {"pending", "fallback", "refused", "unsupported", "standby_controls_disabled", "no_board"},
     "ceiling_settings.json": {
         "on_ground_in_sync", "edge_pending", "edge_refused", "slot_above_limit", "locked_in_flight", "unavailable",
@@ -85,6 +85,7 @@ REQUIRED_CASES = {
         "manual_command", "control_modes", "hold_reasons", "edge_states",
     },
     "client_emits.json": set(),  # checked by test_client_emit_allow_list
+    "match_score_vectors.json": set(),  # checked by tests/test_match_score_vectors.py
     "unknown_keys.json": set(),  # checked by test_unknown_key_variants_differ_only_by_the_unknown_key
 }
 

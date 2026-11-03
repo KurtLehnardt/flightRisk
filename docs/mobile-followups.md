@@ -24,10 +24,10 @@ A separate code-fix unit is about to change some of the behaviour below. This fi
 ## Wording and behaviour parity
 
 - **"was NOT changed" after a lost link.** After a detection profile selection is sent and the link then drops, both apps say the profile "was NOT changed", although the ground may have received the command. The text should say the result is unknown.
-- **`match_alert_resolved` is ignored.** The ground sends it when the operator answers an alert (`flightrisk/dashboard/recovery.py`). Neither phone handles it, so an iOS reminder row never ends. It needs a fixture, a decoder on both platforms and a row state.
+- **`match_alert_resolved` on Android.** The iOS app records the answer and updates the alert row. The Android Ground screen keeps no alert list, so it does nothing with the event; it needs a decoder and a row state when the screen gets alerts.
 - **The Android Ground screen shows no video tiles and no match alerts.** The client already receives `frame` and `match_alert` events; the screen does not draw them.
-- **LAN policy parity.** iOS connects to the allowed answers of a host name and refuses it only when none is allowed. Android refuses a name when any answer is public. Android also refuses IPv6 zone ids and does not parse numeric spellings itself. One policy should be chosen and both apps should follow it.
-- **Score rounding.** Python rounds the combined match score to three decimals (`round`); the Swift and Kotlin scorers truncate (`Int(x * 1000) / 1000`). Scores can differ by 0.001 between the ground and a phone for the same inputs.
+- **LAN policy parity (remaining differences).** Both apps now refuse a host name when any answer is public. Android still refuses IPv6 zone ids and does not parse numeric spellings itself, so the numeric spelling rule is enforced by the parser on iOS only.
+- **Score rounding (iOS done, Android to follow).** Python rounds the combined match score to three decimals (`round`, which rounds the exact binary value and sends ties to even). The iOS scorer now does the same in `Double` arithmetic and is tested against `tests/fixtures/mobile_contract/match_score_vectors.json`, which `tests/test_match_score_vectors.py` also checks against the Python scorer. The Kotlin scorer must be tested against the same file. Two other differences remain and are not covered by the vectors: the phones count a reasoning "no match" differently from Python when they decide the confidence level, and the phones have no per-profile weight scale.
 
 ## Ground link features
 

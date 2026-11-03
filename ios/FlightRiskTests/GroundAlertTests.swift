@@ -190,6 +190,64 @@ final class GroundAlertViewModelTests: XCTestCase {
         XCTAssertNotNil(MissionFormat.reasoningCard(vm.reasoningProvider, isStale: vm.isStateStale)?.notLiveNote)
     }
 
+    func testResolvedEventMarksTheAlertAnsweredAndEndsTheReminder() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        await harness.push(t, "match_alert_reminder", try ContractFixtures.payloadJSON("match_alert.json", "reminder_on_connect")) { self.vm.matchAlerts.first?.renotify == true }
+        let before = GroundAlertsState(alerts: vm.matchAlerts, isStale: false, answers: vm.alertAnswers)
+        XCTAssertTrue(before.rows[0].isReminder)
+        XCTAssertNil(before.rows[0].answer)
+        let sentBefore = t.sent.count
+        await harness.push(t, "match_alert_resolved", try ContractFixtures.payloadJSON("match_alert.json", "resolved_dismiss")) { !self.vm.alertAnswers.isEmpty }
+        await harness.settle()
+        XCTAssertEqual(vm.alertAnswers["00000000000040008000000000000001"], .dismiss)
+        XCTAssertEqual(vm.matchAlerts.count, 1, "the row stays so the operator can see how it ended")
+        let after = GroundAlertsState(alerts: vm.matchAlerts, isStale: false, answers: vm.alertAnswers)
+        XCTAssertFalse(after.rows[0].isReminder, "an answered alert no longer reads as waiting")
+        XCTAssertEqual(after.rows[0].answer, .dismiss)
+        XCTAssertTrue(after.rows[0].accessibilitySummary.contains("dismissed"))
+        XCTAssertFalse(after.rows[0].accessibilitySummary.contains("Reminder at"))
+        XCTAssertEqual(t.sent.count, sentBefore, "an answer reported by the ground sends nothing")
+        // A late reminder for the same alert does not undo the answer.
+        await harness.push(t, "match_alert_reminder", try ContractFixtures.payloadJSON("match_alert.json", "reminder_on_connect")) { true }
+        await harness.settle()
+        let late = GroundAlertsState(alerts: vm.matchAlerts, isStale: false, answers: vm.alertAnswers)
+        XCTAssertFalse(late.rows[0].isReminder)
+        XCTAssertEqual(late.rows[0].answer, .dismiss)
+    }
+
+    func testConfirmAnswerAndAnswerArrivingBeforeTheAlert() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert_resolved", try ContractFixtures.payloadJSON("match_alert.json", "resolved_confirm")) { self.vm.alertAnswers.count == 1 }
+        XCTAssertEqual(vm.alertAnswers["00000000000040008000000000000002"], .confirm)
+        XCTAssertTrue(vm.matchAlerts.isEmpty, "an answer never invents an alert row")
+        XCTAssertEqual(GroundAlertsState.answerTag(.confirm), "Answered on the laptop: confirmed.")
+        XCTAssertEqual(GroundAlertsState.answerTag(.dismiss), "Answered on the laptop: dismissed.")
+        XCTAssertEqual(GroundAlertsState.answerTag(.unknown("x")), "Answered on the laptop.")
+    }
+
+    func testHostileOrIncompleteResolvedEventsChangeNothing() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        for body in [#"{"ok":true,"action":"confirm"}"#, #"{"ok":true,"alert_id":"","action":"confirm"}"#,
+                     #"{"ok":false,"alert_id":"00000000000040008000000000000001","action":"confirm"}"#,
+                     #"{"ok":true,"alert_id":9,"action":"confirm"}"#] {
+            t.push(GroundTestFrames.event("match_alert_resolved", body))
+        }
+        t.push(GroundTestFrames.event("match_alert_resolved", "[1]"))
+        await harness.settle()
+        XCTAssertTrue(vm.alertAnswers.isEmpty)
+        let state = GroundAlertsState(alerts: vm.matchAlerts, isStale: false, answers: vm.alertAnswers)
+        XCTAssertNil(state.rows[0].answer)
+    }
+
+    func testAnswersAreForgottenOnReset() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert_resolved", try ContractFixtures.payloadJSON("match_alert.json", "resolved_dismiss")) { self.vm.alertAnswers.count == 1 }
+        XCTAssertNil(vm.saveAddress("ws://192.168.1.77:5555"), "a different ground")
+        XCTAssertTrue(vm.alertAnswers.isEmpty)
+    }
+
     func testTheSnapshotIsNotKept() async throws {
         let t = await harness.connect()
         await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }

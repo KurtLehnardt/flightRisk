@@ -77,24 +77,47 @@ final class LanAddressPolicyTests: XCTestCase {
 
     // MARK: - Names
 
-    func testACleartextNameKeepsOnlyItsAllowedAddressesIPv4First() throws {
-        // A dual-stack .local name: link-local v6, global v6, private v4.
-        let dual: GroundHostResolver = { _ in [self.address("fe80::1"), self.address("2601:1:2::3"), self.address("192.168.1.20")] }
+    func testACleartextNameWithOnlyAllowedAnswersKeepsAllOfThemIPv4First() throws {
+        // A dual-stack .local name: link-local v6, unique local v6, private v4, in a mixed order.
+        let dual: GroundHostResolver = { _ in [self.address("fe80::1"), self.address("fd12::5"), self.address("192.168.1.20"), self.address("10.0.0.5")] }
         let kept = try LanAddressPolicy.checkedAddresses(host: "ground.local", cleartext: true, resolver: dual)
-        XCTAssertEqual(kept, [address("192.168.1.20"), address("fe80::1")])
-        // A public address among private ones is never connected to.
-        let mixed: GroundHostResolver = { _ in [self.address("8.8.8.8"), self.address("10.0.0.5")] }
-        XCTAssertEqual(try LanAddressPolicy.checkedAddresses(host: "ground.lan", cleartext: true, resolver: mixed), [address("10.0.0.5")])
-        // Only public answers: refused.
-        let publicOnly: GroundHostResolver = { _ in [self.address("8.8.8.8"), self.address("2001:4860:4860::8888")] }
-        XCTAssertThrowsError(try LanAddressPolicy.checkedAddresses(host: "ground.example", cleartext: true, resolver: publicOnly)) { error in
-            let refusal = error as? GroundAddressRefusal
-            XCTAssertTrue(refusal?.reason.contains("only allowed to local network addresses") == true)
-            XCTAssertTrue(refusal?.reason.contains("8.8.8.8") == true)
-        }
+        XCTAssertEqual(kept, [address("192.168.1.20"), address("10.0.0.5"), address("fe80::1"), address("fd12::5")])
         // localhost: [::1, 127.0.0.1] is tried as 127.0.0.1 first.
         let localhost: GroundHostResolver = { _ in [self.address("::1"), self.address("127.0.0.1")] }
         XCTAssertEqual(try LanAddressPolicy.checkedAddresses(host: "localhost", cleartext: true, resolver: localhost), [address("127.0.0.1"), address("::1")])
+        // An IPv4-mapped answer is judged by its IPv4 part.
+        let mapped: GroundHostResolver = { _ in [self.address("::ffff:192.168.1.20")] }
+        XCTAssertEqual(try LanAddressPolicy.checkedAddresses(host: "ground.local", cleartext: true, resolver: mapped), [address("::ffff:192.168.1.20")])
+    }
+
+    /// The shared rule (docs/mobile-contract.md): a name is refused when ANY answer is public, wherever
+    /// that answer sits in the list and whatever the private answers are. The Android app does the same.
+    func testACleartextNameIsRefusedWhenAnyAnswerIsPublic() {
+        let cases: [(name: String, host: String, answers: [String], refused: String)] = [
+            ("public IPv6 next to private v4 and link-local v6", "ground.local", ["fe80::1", "2601:1:2::3", "192.168.1.20"], "2601:1:2::3"),
+            ("public IPv4 first", "ground.lan", ["8.8.8.8", "10.0.0.5"], "8.8.8.8"),
+            ("public IPv4 last", "ground.lan", ["10.0.0.5", "8.8.8.8"], "8.8.8.8"),
+            ("only public answers", "ground.example", ["8.8.8.8", "2001:4860:4860::8888"], "8.8.8.8"),
+            ("mapped public IPv4", "ground.local", ["192.168.1.20", "::ffff:8.8.8.8"], "::ffff:8.8.8.8"),
+            ("carrier-grade NAT answer", "ground.local", ["192.168.1.20", "100.64.0.1"], "100.64.0.1"),
+            ("unspecified IPv6 answer", "localhost", ["127.0.0.1", "::"], "::"),
+            ("multicast answer", "ground.local", ["10.0.0.5", "ff02::1"], "ff02::1"),
+            ("site-local fec0 answer", "ground.local", ["10.0.0.5", "fec0::1"], "fec0::1"),
+            ("localhost with a public alias", "localhost", ["::1", "127.0.0.1", "93.184.216.34"], "93.184.216.34"),
+        ]
+        for c in cases {
+            let resolver: GroundHostResolver = { _ in c.answers.map { self.address($0) } }
+            XCTAssertThrowsError(try LanAddressPolicy.checkedAddresses(host: c.host, cleartext: true, resolver: resolver), c.name) { error in
+                let refusal = error as? GroundAddressRefusal
+                XCTAssertTrue(refusal?.reason.contains("only allowed to local network addresses") == true, c.name)
+                XCTAssertTrue(refusal?.reason.contains(self.address(c.refused).description) == true, "\(c.name): \(refusal?.reason ?? "")")
+            }
+        }
+    }
+
+    func testAnEncryptedNameIsNeverRefusedForItsAnswers() throws {
+        let resolver: GroundHostResolver = { _ in [self.address("8.8.8.8"), self.address("10.0.0.5")] }
+        XCTAssertEqual(try LanAddressPolicy.checkedAddresses(host: "ground.example", cleartext: false, resolver: resolver).count, 2)
     }
 
     func testAnEmptyAnswerAndAResolverFailureAreReadableLookupErrors() {
@@ -153,12 +176,15 @@ final class LanAddressPolicyTests: XCTestCase {
         XCTAssertEqual(target.hostHeader, "ground.example:5555", "the original name is the Host header")
     }
 
-    func testEveryAllowedAddressBecomesAnAttemptAndIPv6KeepsItsBrackets() throws {
+    func testEveryAnswerBecomesAnAttemptAndIPv6KeepsItsBrackets() throws {
         let url = URL(string: "ws://ground.local:5555/x")!
         let target = try GroundConnectPlanner.plan(url: url, resolver: { _ in
-            [self.address("fd00::7"), self.address("8.8.8.8"), self.address("192.168.1.20")]
+            [self.address("fd00::7"), self.address("10.0.0.9"), self.address("192.168.1.20")]
         })
-        XCTAssertEqual(target.attempts.map(\.absoluteString), ["ws://192.168.1.20:5555/x", "ws://[fd00::7]:5555/x"])
+        XCTAssertEqual(target.attempts.map(\.absoluteString), ["ws://10.0.0.9:5555/x", "ws://192.168.1.20:5555/x", "ws://[fd00::7]:5555/x"])
+        XCTAssertThrowsError(try GroundConnectPlanner.plan(url: url, resolver: { _ in
+            [self.address("fd00::7"), self.address("8.8.8.8"), self.address("192.168.1.20")]
+        }), "a public answer refuses the whole name")
         let v6 = try GroundConnectPlanner.plan(url: URL(string: "ws://[fd00::1]:5600/x")!, resolver: { _ in [] })
         XCTAssertEqual(v6.hostHeader, "[fd00::1]:5600", "an IPv6 Host header is bracketed")
     }
@@ -225,14 +251,24 @@ final class LanAddressPolicyTests: XCTestCase {
         XCTAssertEqual(http.requests.count, 0)
     }
 
-    func testTheProbeUsesOnlyTheAllowedAnswersOfADualStackName() async throws {
+    func testTheProbeSendsNothingWhenADualStackNamePublishesAPublicAnswer() async throws {
         let http = FakeHTTP()
         okResponses(http)
         let result = await (try probe("ws://ground.local:5555", resolver: { _ in
             [self.address("2601:1:2::3"), self.address("192.168.1.20")]
         }, http: http)).run()
+        guard case .addressNotAllowed = result else { return XCTFail("expected a refusal, got \(result)") }
+        XCTAssertEqual(http.requests.count, 0, "no request, so the key was never sent")
+    }
+
+    func testTheProbeUsesTheCheckedPrivateAnswersOfADualStackName() async throws {
+        let http = FakeHTTP()
+        okResponses(http)
+        let result = await (try probe("ws://ground.local:5555", resolver: { _ in
+            [self.address("fe80::1"), self.address("192.168.1.20")]
+        }, http: http)).run()
         XCTAssertEqual(result, .ok(version: "1.0"))
-        XCTAssertTrue(http.requests.allSatisfy { $0.url.host == "192.168.1.20" }, "never the public address")
+        XCTAssertTrue(http.requests.allSatisfy { $0.url.host == "192.168.1.20" }, "IPv4 first, never the name")
         XCTAssertTrue(http.requests.allSatisfy { $0.headers["Host"] == "ground.local:5555" })
     }
 
@@ -379,9 +415,9 @@ final class LanAddressPolicyTests: XCTestCase {
         let port = try await server.start()
         defer { server.stop() }
         let calls = CallCounter()
-        // The public answer is skipped; the second lookup would be public, but there is none.
+        // The first lookup is allowed; a second lookup would be public, but there is none.
         let resolver: GroundHostResolver = { _ in
-            calls.increment() == 1 ? [self.address("8.8.8.8"), self.address("127.0.0.1")] : [self.address("8.8.8.8")]
+            calls.increment() == 1 ? [self.address("127.0.0.1")] : [self.address("8.8.8.8")]
         }
         let t = transport(socketURL("ground.example", port), resolver: resolver)
         try await t.connect()

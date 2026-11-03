@@ -434,6 +434,19 @@ public struct MatchAlert: Codable, Equatable, Sendable {
     }
 }
 
+/// `match_alert_resolved`: the operator answered an alert on the laptop. `alertId` names the alert and
+/// `action` is `confirm` or `dismiss`. The `state` snapshot the ground adds is not read by the phone.
+public struct MatchAlertResolved: Codable, Equatable, Sendable {
+    @Lenient public var ok: Bool?
+    @Lenient public var alertId: String?
+    @Lenient public var action: MatchAlertAction?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, action
+        case alertId = "alert_id"
+    }
+}
+
 // MARK: - detection_profiles
 
 public struct DetectionProfile: Codable, Equatable, Sendable {

@@ -131,9 +131,9 @@ final class FlightRiskConfigTests: XCTestCase {
     func testVisionConfigMatchesScorerDefaults() {
         let config = FlightRiskConfig()
         let scorer = MatchScorer()
-        XCTAssertEqual(config.vision.scorerReidWeight, scorer.reidWeight)
-        XCTAssertEqual(config.vision.scorerFaceWeight, scorer.faceWeight)
-        XCTAssertEqual(config.vision.scorerReasoningWeight, scorer.reasoningWeight)
-        XCTAssertEqual(config.vision.scorerMatchThreshold, scorer.matchThreshold)
+        XCTAssertEqual(MatchScorer.decimal(config.vision.scorerReidWeight), scorer.reidWeight)
+        XCTAssertEqual(MatchScorer.decimal(config.vision.scorerFaceWeight), scorer.faceWeight)
+        XCTAssertEqual(MatchScorer.decimal(config.vision.scorerReasoningWeight), scorer.reasoningWeight)
+        XCTAssertEqual(MatchScorer.decimal(config.vision.scorerMatchThreshold), scorer.matchThreshold)
     }
 }

@@ -112,12 +112,12 @@ public struct GroundAddressRefusal: Error, Equatable, Sendable, CustomStringConv
 /// "Cleartext on the local network"). The Android app enforces the same
 /// ranges.
 ///
-/// For a cleartext host NAME the rule is: connect only to the allowed answers,
-/// and refuse only when none of the answers is allowed. A dual-stack `.local`
-/// or router name often publishes a global IPv6 address next to its private
-/// ones; that public answer is simply never connected to, because every socket
-/// goes to an address that was checked (never to the name). The Android policy
-/// is stricter and refuses a name when ANY answer is public.
+/// For a cleartext host NAME the rule is: refuse the name when ANY of its
+/// answers is not allowed (for example a global IPv6 address that a dual-stack
+/// `.local` or router name publishes next to its private ones), and otherwise
+/// connect to the answers, which are all allowed. The Android app applies the
+/// same rule. Every socket goes to an address that was checked, never to the
+/// name, so a second lookup cannot swap in another one.
 ///
 /// Allowed: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `::1`, `fc00::/7`,
 /// `fe80::/10`, and an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) whose IPv4
@@ -200,8 +200,8 @@ public enum LanAddressPolicy {
     /// first, then IPv6, each group in the resolver's order.
     ///
     /// - A numeric literal needs no lookup. For cleartext it must be allowed.
-    /// - A name is resolved once. For cleartext only the allowed answers are kept
-    ///   and the name is refused when none is allowed.
+    /// - A name is resolved once. For cleartext the name is refused when ANY
+    ///   answer is not allowed, so every address returned is allowed.
     /// - For an encrypted connection (`cleartext == false`) nothing is refused.
     public static func checkedAddresses(host: String, cleartext: Bool, resolver: GroundHostResolver) throws -> [GroundResolvedAddress] {
         let host = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
@@ -218,9 +218,10 @@ public enum LanAddressPolicy {
             }
         }
         guard !answers.isEmpty else { throw GroundLookupError.notFound(host: host) }
-        let usable = cleartext ? answers.filter(isAllowed) : answers
-        guard !usable.isEmpty else { throw GroundAddressRefusal.cleartext(address: answers[0]) }
-        return usable.filter { !$0.isIPv6 } + usable.filter(\.isIPv6)
+        if cleartext, let refused = answers.first(where: { !isAllowed($0) }) {
+            throw GroundAddressRefusal.cleartext(address: refused)
+        }
+        return answers.filter { !$0.isIPv6 } + answers.filter(\.isIPv6)
     }
 
     /// The early check for a typed address: a cleartext numeric literal that is
