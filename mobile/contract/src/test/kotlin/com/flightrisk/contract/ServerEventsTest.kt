@@ -208,12 +208,12 @@ class ServerEventsTest {
 
     @Test
     fun matchAlertResolved() {
-        val dismissed = Fixtures.eventAs<MatchAlertResolved>("match_alert_resolved.json", "dismiss")
+        val dismissed = Fixtures.eventAs<MatchAlertResolved>("match_alert.json", "resolved_dismiss")
         assertEquals("00000000000040008000000000000001", dismissed.alertId)
         assertEquals(MatchAlertResolved.Action.DISMISS, dismissed.action)
         assertEquals(true, dismissed.ok)
         assertEquals("searching", dismissed.phase)
-        val confirmed = Fixtures.eventAs<MatchAlertResolved>("match_alert_resolved.json", "confirm")
+        val confirmed = Fixtures.eventAs<MatchAlertResolved>("match_alert.json", "resolved_confirm")
         assertEquals(MatchAlertResolved.Action.CONFIRM, confirmed.action)
         assertEquals("resolved", confirmed.phase)
     }

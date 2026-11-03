@@ -89,10 +89,13 @@ object VideoTileLogic {
     /** Longest base64 text decoded: the client already discards frames over 1 MiB, this is the same bound. */
     const val MAX_BASE64_CHARS = 1024 * 1024
 
-    /** Images with more source pixels than this are refused (the edge sends 320x180). */
-    const val MAX_SOURCE_PIXELS = 16_000_000
+    /** Images with more source pixels than this are refused (the edge sends 320x180; 4 MP is about 2000 x 2000). */
+    const val MAX_SOURCE_PIXELS = 4_000_000
 
-    /** Upper bound on the decoded long edge, whatever the tile asks for. */
+    /** The most pixels a decoded bitmap may have (about 4 MB as RGB_565), whatever the tile asks for. */
+    const val MAX_DECODED_PIXELS = 2_000_000
+
+    /** Upper bound on the long edge a tile may ask for. Subsampling is by powers of two, so the decoded edge can be up to twice the request. */
     const val MAX_DECODE_EDGE = 2048
 
     /** The least decoded long edge asked for. */
@@ -271,15 +274,19 @@ object VideoTileLogic {
 
     /**
      * The power-of-two subsampling for a decode that keeps the long edge at least [targetEdge] (never
-     * upscaling), so the full-size bitmap is never held. The target is bounded by [MAX_DECODE_EDGE].
+     * upscaling) and the decoded area at most [MAX_DECODED_PIXELS], so the full-size bitmap is never held.
+     * The area limit wins over the target. The target is bounded by [MAX_DECODE_EDGE].
      */
     fun sampleSize(width: Int, height: Int, targetEdge: Int): Int {
         val target = targetEdge.coerceIn(1, MAX_DECODE_EDGE)
         var sample = 1
-        var longEdge = max(width, height)
-        while (longEdge / 2 >= target) {
+        var w = max(width, 1)
+        var h = max(height, 1)
+        while (max(w, h) / 2 >= target || w.toLong() * h > MAX_DECODED_PIXELS) {
             sample *= 2
-            longEdge /= 2
+            w = max(w / 2, 1)
+            h = max(h / 2, 1)
+            if (sample >= 1 shl 14) break
         }
         return sample
     }

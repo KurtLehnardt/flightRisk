@@ -1103,6 +1103,8 @@ class GroundConsoleViewModel(
             is HealthProbeResult.UnexpectedStatus -> "The address answered with HTTP ${result.status}; it may not be a FlightRisk ground station."
             is HealthProbeResult.UnexpectedBody -> "Not a FlightRisk ground station response: ${GroundText.shorten(result.detail)}."
             is HealthProbeResult.AddressNotAllowed -> "Address refused: ${GroundText.shorten(result.detail)}"
+            is HealthProbeResult.SecureConnectionFailed ->
+                "The secure connection failed: ${GroundText.shorten(result.detail)}. The ground's certificate may be missing, expired, self-signed or issued for another name."
             is HealthProbeResult.Unreachable -> "Unreachable: ${GroundText.shorten(result.detail)}. Check the address and that the phone is on the ground's network."
         }
     }

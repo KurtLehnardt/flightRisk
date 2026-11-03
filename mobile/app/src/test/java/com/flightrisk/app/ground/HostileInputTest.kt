@@ -48,7 +48,7 @@ class JsonGuardTest {
 
     @Test
     fun `every contract fixture passes the guard`() {
-        for (file in ContractFixtures.dir.listFiles()!!.filter { it.name.endsWith(".json") && it.name != "match_score_vectors.json" }) {
+        for (file in ContractFixtures.dir.listFiles()!!.filter { it.name.endsWith(".json") }) {
             for ((name, case) in ContractFixtures.cases(file.name)) {
                 val payload = case["payload"] ?: continue
                 assertNull("${file.name}/$name", JsonGuard.check(payload.toString()))

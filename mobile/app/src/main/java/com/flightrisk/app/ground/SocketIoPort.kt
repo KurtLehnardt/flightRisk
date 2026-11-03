@@ -110,10 +110,25 @@ class WebSocketSocketIoPort(
 ) : SocketIoPort {
 
     override suspend fun open(endpoint: GroundEndpoint, secrets: List<String>): SocketIoConnection {
-        val socket = Socket()
-        val ws = cancellableSocketIo(socket, ioDispatcher) {
+        val addresses = withContext(ioDispatcher) {
             guard.beforeBlockingIo("resolve")
-            val address = resolveTarget(endpoint, resolver)
+            resolveTargets(endpoint, resolver)
+        }
+        var failure: IOException? = null
+        for (address in addresses) {
+            val socket = Socket()
+            try {
+                return connectTo(endpoint, address, socket, secrets)
+            } catch (e: IOException) {
+                failure = e
+                if (!shouldTryNextAddress(e)) throw e
+            }
+        }
+        throw failure ?: IOException("the host name did not resolve")
+    }
+
+    private suspend fun connectTo(endpoint: GroundEndpoint, address: java.net.InetAddress, socket: Socket, secrets: List<String>): SocketIoConnection {
+        val ws = cancellableSocketIo(socket, ioDispatcher) {
             RawWebSocket.connect(
                 address = address,
                 port = endpoint.port,

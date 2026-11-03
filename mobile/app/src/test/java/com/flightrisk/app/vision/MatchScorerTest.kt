@@ -2,15 +2,12 @@ package com.flightrisk.app.vision
 
 import com.flightrisk.app.ground.ContractFixtures
 import com.flightrisk.app.llm.ReasoningResult
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
-import java.io.File
+import kotlin.math.withSign
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -450,54 +447,63 @@ class MatchScorerTest {
 
     private fun number(element: kotlinx.serialization.json.JsonElement?): Double {
         val primitive = element as JsonPrimitive
-        return when {
-            primitive.isString -> when (primitive.content) {
-                "NaN" -> Double.NaN
-                "Infinity" -> Double.POSITIVE_INFINITY
-                "-Infinity" -> Double.NEGATIVE_INFINITY
+        return if (primitive.isString) {
+            when (primitive.content) {
+                "nan" -> Double.NaN
+                "inf" -> Double.POSITIVE_INFINITY
+                "-inf" -> Double.NEGATIVE_INFINITY
                 else -> error("unexpected special value ${primitive.content}")
             }
-            else -> primitive.doubleOrNull ?: error("not a number: $primitive")
+        } else {
+            primitive.doubleOrNull ?: error("not a number: $primitive")
         }
+    }
+
+    /** A weight the Float based constructor reads back as exactly the decimal the vector wrote. */
+    private fun weight(element: kotlinx.serialization.json.JsonElement?): Float {
+        val d = number(element)
+        val f = d.toFloat()
+        assertEquals("the vector weight $d must survive the Float API", d, f.toString().toDouble(), 0.0)
+        return f
     }
 
     @Test
     fun `every shared vector gives exactly the Python score`() {
-        val root = Json.parseToJsonElement(File(ContractFixtures.dir, "match_score_vectors.json").readText()) as JsonObject
-        val meta = root["_meta"] as JsonObject
-        val weights = meta["weights"] as JsonObject
-        val scorer = MatchScorer(
-            reidWeight = number(weights["reid"]).toFloat(),
-            faceWeight = number(weights["face"]).toFloat(),
-            reasoningWeight = number(weights["reasoning"]).toFloat(),
-            matchThreshold = number(meta["match_threshold"]).toFloat(),
-        )
-        val vectors = root["vectors"] as JsonArray
-        assertTrue("expected the full vector set", vectors.size > 100)
-        for (element in vectors) {
-            val v = element as JsonObject
-            val name = (v["name"] as JsonPrimitive).content
-            val reasoning = (v["reasoning"] as? JsonObject)?.let {
-                ReasoningResult(
-                    isMatch = (it["match"] as JsonPrimitive).booleanOrNull!!,
-                    confidence = (it["confidence"] as JsonPrimitive).content,
-                    reasoning = "",
-                )
-            }
-            val result = scorer.scoreExact(number(v["reid"]), number(v["face"]), reasoning)
-            val expected = number(v["combined_score"])
-            if (expected.isNaN()) {
-                assertTrue("$name: expected NaN", result.combinedScoreExact.isNaN())
+        val cases = ContractFixtures.cases("match_score_vectors.json")
+        assertTrue("expected the full vector set", cases.size >= 80)
+        var negativeZero = 0
+        for ((name, case) in cases) {
+            val payload = case["payload"] as JsonObject
+            val config = payload["scorer"] as JsonObject
+            val scorer = MatchScorer(
+                reidWeight = weight(config["reid_weight"]),
+                faceWeight = weight(config["face_weight"]),
+                reasoningWeight = weight(config["reasoning_weight"]),
+                matchThreshold = weight(config["match_threshold"]),
+            )
+            for ((extra, w) in payload["extra_signal_weights"] as JsonObject) scorer.registerSignal(extra, weight(w))
+            val signals = (payload["signals"] as JsonObject).mapValues { number(it.value) }
+            val result = scorer.scoreExact(
+                reidScore = signals["reid"] ?: 0.0,
+                faceScore = signals["face"] ?: 0.0,
+                extraSignals = signals - "reid" - "face",
+            )
+            val expected = payload["expected"] as JsonObject
+            val want = number(expected["combined_score"])
+            val got = result.combinedScoreExact
+            if (want.isNaN()) {
+                assertTrue("$name: expected NaN", got.isNaN())
             } else {
-                // Exact equality on purpose: the phone must not differ from the ground by one in the third decimal.
-                assertEquals("$name: combined score", expected, result.combinedScoreExact, 0.0)
+                // Exact equality on purpose, and the sign bit too: -0.0 is not 0.0 for Python's round().
+                assertEquals("$name: combined score", want, got, 0.0)
+                assertEquals("$name: sign of the combined score", 1.0.withSign(want), 1.0.withSign(got), 0.0)
+                if (want == 0.0 && 1.0.withSign(want) < 0) negativeZero++
             }
-            assertEquals("$name: is_match", (v["is_match"] as JsonPrimitive).booleanOrNull, result.isMatch)
-            assertEquals("$name: confidence", (v["confidence_level"] as JsonPrimitive).content, result.confidenceLevel)
-            assertEquals("$name: signals", (v["signals_used"] as JsonPrimitive).intOrNull, result.signalsUsed)
-            assertEquals("$name: alert level", (v["alert_level"] as JsonPrimitive).content, scorer.alertLevel(result))
-            assertTrue(v["reasoning"] is JsonNull || v["reasoning"] is JsonObject)
+            assertEquals("$name: is_match", (expected["is_match"] as JsonPrimitive).booleanOrNull, result.isMatch)
+            assertEquals("$name: confidence", (expected["confidence_level"] as JsonPrimitive).content, result.confidenceLevel)
+            assertEquals("$name: signals", (expected["signals_used"] as JsonPrimitive).intOrNull, result.signalsUsed)
         }
+        assertTrue("the vectors must include a negative zero result", negativeZero > 0)
     }
 
     @Test

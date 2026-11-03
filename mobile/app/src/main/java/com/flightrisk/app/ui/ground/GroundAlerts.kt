@@ -90,8 +90,7 @@ class GroundAlertsLog {
             reasoning = received.reasoning?.let { GroundText.shorten(it) },
             alertId = received.alertId?.let { GroundText.shortId(it) },
         )
-        val id = alert.alertId?.let { GroundText.shortId(it) }?.takeIf { it.isNotEmpty() }
-        val key = id ?: "n${anonymous++}"
+        val key = received.alertId?.takeIf { it.isNotEmpty() && it.length <= MAX_ID_CHARS } ?: "n${anonymous++}"
         val existing = entries[key]
         if (existing != null) {
             existing.alert = alert
@@ -104,12 +103,14 @@ class GroundAlertsLog {
 
     /**
      * Records `match_alert_resolved`. Only an alert this phone has already shown is marked; an answer for an
-     * alert the phone never saw is ignored. `ok: false` is not an answer.
+     * alert the phone never saw is ignored, as is an event without `ok` true, one without an `alert_id` or with one
+     * longer than [MAX_ID_CHARS]. The first answer for an alert wins.
      */
     fun onResolved(resolved: MatchAlertResolved) {
-        if (resolved.ok == false) return
-        val id = resolved.alertId?.let { GroundText.shortId(it) }?.takeIf { it.isNotEmpty() } ?: return
+        if (resolved.ok != true) return
+        val id = resolved.alertId?.takeIf { it.isNotEmpty() && it.length <= MAX_ID_CHARS } ?: return
         val entry = entries[id] ?: return
+        if (entry.answered) return
         entry.answered = true
         entry.answer = resolved.action
     }
@@ -143,7 +144,7 @@ class GroundAlertsLog {
             else -> AlertStatus.EARLIER
         }
         return GroundAlertRow(
-            id = key,
+            id = GroundText.shortId(key),
             levelText = level(a.alertLevel),
             trackText = track,
             timeText = time,
@@ -158,6 +159,9 @@ class GroundAlertsLog {
 
     companion object {
         const val MAX_ALERTS = 100
+
+        /** An alert id longer than this is not used as a key (the iOS app ignores such an answer too). */
+        const val MAX_ID_CHARS = 128
         const val NOTE = "Reported by the ground. Answer match alerts on the laptop."
 
         const val WAITING_TEXT = "Waiting for an answer on the laptop."

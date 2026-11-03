@@ -143,22 +143,24 @@ class GroundVideoAlertsTest {
         val c = connectWithFleet()
         c.fixture("match_alert.json", "edge_match")
         eventually("alert shown") { ui.alerts.rows.isNotEmpty() }
-        c.fixture("match_alert_resolved.json", "dismiss")
+        c.fixture("match_alert.json", "resolved_dismiss")
         eventually("dismissed") { ui.alerts.rows.single().status == AlertStatus.DISMISSED }
         assertEquals(GroundAlertsLog.DISMISSED_TEXT, ui.alerts.rows.single().statusText)
         c.fixture("match_alert.json", "reminder_on_connect")
         eventually("reminder merged") { ui.alerts.rows.single().isReminder }
         // A late reminder does not bring a dismissed alert back.
         assertEquals(AlertStatus.DISMISSED, ui.alerts.rows.single().status)
-        c.fixture("match_alert_resolved.json", "confirm")
-        eventually("confirmed") { ui.alerts.rows.single().status == AlertStatus.CONFIRMED }
+        // The first answer wins: a second answer for the same alert changes nothing.
+        c.event("match_alert_resolved", """{"ok":true,"alert_id":"00000000000040008000000000000001","action":"confirm"}""")
+        c.fixture("match_alert.json", "reminder_on_connect")
+        assertEquals(AlertStatus.DISMISSED, ui.alerts.rows.single().status)
         c.assertNothingForbiddenSent()
     }
 
     @Test
     fun `an answer for an alert this phone never saw adds nothing`() = harnessTest {
         val c = connectWithFleet()
-        c.fixture("match_alert_resolved.json", "confirm")
+        c.fixture("match_alert.json", "resolved_dismiss")
         c.fixture("match_alert.json", "edge_match")
         eventually("alert shown") { ui.alerts.rows.isNotEmpty() }
         assertEquals(AlertStatus.WAITING, ui.alerts.rows.single().status)

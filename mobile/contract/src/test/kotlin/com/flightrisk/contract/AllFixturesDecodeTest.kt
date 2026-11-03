@@ -19,7 +19,7 @@ import org.junit.Test
 class AllFixturesDecodeTest {
     @Test
     fun fixtureDirectoryHoldsExactlyTheSpecifiedFiles() {
-        val present = Fixtures.dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }!!.map { it.name }.toSet() - Fixtures.NOT_EVENT_FILES
+        val present = Fixtures.dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }!!.map { it.name }.toSet()
         assertEquals(Fixtures.EXPECTED_FILES, present)
     }
 
@@ -48,6 +48,11 @@ class AllFixturesDecodeTest {
                 val parsed = SocketIoFrames.parse(frame)
                 assertNotNull("$label: frame did not parse", parsed)
                 assertEquals(label, (case["engineio_type"] as JsonPrimitive).content, parsed!!.type.name)
+            }
+            "match_score_vectors.json" -> {
+                // Not an event: the scorer tests read these. Check the shape both apps rely on.
+                val p = payload as JsonObject
+                for (key in listOf("scorer", "signals", "extra_signal_weights", "expected")) assertNotNull("$label: $key", p[key])
             }
             "client_emits.json" -> {
                 val event = (case["event"] as JsonPrimitive).content

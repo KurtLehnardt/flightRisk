@@ -53,12 +53,14 @@ class GroundAlertsLogTest {
     }
 
     @Test
-    fun `an answer marks the row and ok false is not an answer`() {
+    fun `an answer marks the row, only ok true is an answer, and the first answer wins`() {
         val log = GroundAlertsLog().apply { onSessionStarted() }
         log.onAlert(alert("a1"))
         log.onAlert(alert("a2"))
         log.onResolved(resolved("a1", MatchAlertResolved.Action.CONFIRM))
         log.onResolved(resolved("a2", MatchAlertResolved.Action.DISMISS, ok = false))
+        log.onResolved(resolved("a2", MatchAlertResolved.Action.DISMISS, ok = null))
+        log.onResolved(resolved("a1", MatchAlertResolved.Action.DISMISS))
         val byId = log.ui(false).rows.associateBy { it.id }
         assertEquals(AlertStatus.CONFIRMED, byId.getValue("a1").status)
         assertEquals(GroundAlertsLog.CONFIRMED_TEXT, byId.getValue("a1").statusText)
@@ -72,6 +74,7 @@ class GroundAlertsLogTest {
         val log = GroundAlertsLog().apply { onSessionStarted() }
         log.onAlert(alert("a1"))
         log.onResolved(resolved("zzz"))
+        log.onResolved(resolved("x".repeat(129)))
         log.onResolved(resolved(null))
         log.onResolved(resolved(""))
         assertEquals(AlertStatus.WAITING, log.ui(false).rows.single().status)

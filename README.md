@@ -156,7 +156,7 @@ Full description: [mobile/README.md](mobile/README.md).
 2. The app has three modes: standalone detector, ground console (Ground tab), and an optional phone-as-edge mode that is off by default and sends boxes and scores to your ground station after a disclosure (the app can send the whole camera view only when the ground asks for video).
 3. Settings → AI reasoning: Local model (Gemma 2 2B through MediaPipe, about 1.4 GB downloaded from Google storage when you tap Download), None, or Cloud Claude. Cloud reasoning is off by default and needs an explicit opt-in, a saved key and Cloud Claude selected.
 
-The Android app also still contains the direct Tello (UDP) flight stack. The Ground tab can land drones, resume a held drone and pick detection profiles; it shows no video tiles and no match alerts yet.
+The Android app also still contains the direct Tello (UDP) flight stack. The Ground tab can land drones, resume a held drone and pick detection profiles, and it shows per-drone video tiles and read-only match alerts that the ground sends while the phone is connected (nothing is stored; the phone never starts or stops video and never answers an alert). It accepts plain `ws://` and `http://` only for allowed private-network addresses, and `wss://` and `https://` for any host with the platform trust store and host name verification.
 
 ### iOS
 

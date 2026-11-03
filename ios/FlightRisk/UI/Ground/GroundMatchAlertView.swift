@@ -17,8 +17,10 @@ struct GroundAlertRow: Equatable, Identifiable {
     /// "Score 86% (ReID 86%, face 0%)".
     let scoreText: String
     let reasonText: String?
-    /// True for a `match_alert_reminder`: the alert still waits for the operator.
+    /// True for a `match_alert_reminder` that the ground has not since reported as answered.
     let isReminder: Bool
+    /// How the operator answered on the laptop, or nil while the ground has not said it was answered.
+    let answer: MatchAlertAction?
 
     var accessibilitySummary: String {
         var parts = [levelText]
@@ -27,6 +29,7 @@ struct GroundAlertRow: Equatable, Identifiable {
         parts.append(scoreText)
         if let reasonText { parts.append(reasonText) }
         if isReminder { parts.append(GroundAlertsState.reminderTag(time: timeText)) }
+        if let answer { parts.append(GroundAlertsState.answerTag(answer)) }
         return parts.joined(separator: ", ")
     }
 }
@@ -34,20 +37,30 @@ struct GroundAlertRow: Equatable, Identifiable {
 struct GroundAlertsState: Equatable {
     static let maxAlerts = 100
     static let note = "Reported by the ground. Answer match alerts on the laptop."
-    /// The ground sends a reminder while an alert waits and a separate event when it is resolved;
-    /// the phone ignores the latter, so the tag says what the ground said, and when.
+    /// The ground sends a reminder while an alert waits and a separate event when the operator
+    /// answers it. The reminder tag says what the ground said, and when; the answer tag replaces it
+    /// once the ground reports the answer.
     static func reminderTag(time: String) -> String {
         "Reminder at \(time): the ground said this alert was waiting for the operator."
+    }
+
+    static func answerTag(_ answer: MatchAlertAction) -> String {
+        switch answer {
+        case .confirm: return "Answered on the laptop: confirmed."
+        case .dismiss: return "Answered on the laptop: dismissed."
+        case .unknown: return "Answered on the laptop."
+        }
     }
 
     let rows: [GroundAlertRow]
     let notLiveNote: String?
 
     /// Newest first, at most `maxAlerts`. `alerts` is oldest first, as the view model keeps it.
-    init(alerts: [MatchAlert], isStale: Bool) {
+    /// `answers` holds the operator's answers by alert id (`GroundViewModel.alertAnswers`).
+    init(alerts: [MatchAlert], isStale: Bool, answers: [String: MatchAlertAction] = [:]) {
         var out: [GroundAlertRow] = []
         for (offset, alert) in alerts.suffix(Self.maxAlerts).reversed().enumerated() {
-            out.append(Self.row(alert, fallbackID: "alert-\(offset)"))
+            out.append(Self.row(alert, fallbackID: "alert-\(offset)", answer: alert.alertId.flatMap { answers[$0] }))
         }
         rows = out
         notLiveNote = MissionFormat.notLiveNote(isStale: isStale)
@@ -67,7 +80,7 @@ struct GroundAlertsState: Equatable {
         return "\(Int((min(max(v, 0), 1) * 100).rounded()))%"
     }
 
-    static func row(_ a: MatchAlert, fallbackID: String) -> GroundAlertRow {
+    static func row(_ a: MatchAlert, fallbackID: String, answer: MatchAlertAction? = nil) -> GroundAlertRow {
         let id = a.alertId.map { GroundText.shortId($0) }.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackID
         let track = a.trackId.flatMap { $0.isEmpty ? nil : "Track " + GroundText.shortId($0) }
         let time = a.time.flatMap { $0.isEmpty ? nil : GroundText.shorten($0, max: 40) } ?? "--"
@@ -79,7 +92,8 @@ struct GroundAlertsState: Equatable {
             timeText: time,
             scoreText: "Score \(percent(a.score)) (ReID \(percent(a.reidScore)), face \(percent(a.faceScore)))",
             reasonText: reason,
-            isReminder: a.renotify == true
+            isReminder: a.renotify == true && answer == nil,
+            answer: answer
         )
     }
 }
@@ -88,7 +102,7 @@ struct GroundMatchAlertView: View {
     let viewModel: GroundViewModel
 
     var body: some View {
-        let state = GroundAlertsState(alerts: viewModel.matchAlerts, isStale: viewModel.isStateStale)
+        let state = GroundAlertsState(alerts: viewModel.matchAlerts, isStale: viewModel.isStateStale, answers: viewModel.alertAnswers)
         // Nothing to show until the ground reports an alert: no empty card in the tab.
         if !state.rows.isEmpty {
             MissionCardFrame(title: "Match alerts", identifier: "ground.alerts", notLiveNote: state.notLiveNote) {
@@ -120,6 +134,11 @@ struct GroundMatchAlertView: View {
                                 .font(.footnote)
                                 .foregroundStyle(MissionPalette.color(MissionPalette.text))
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let answer = row.answer {
+                            Text(GroundAlertsState.answerTag(answer))
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(MissionPalette.color(MissionPalette.secondaryText))
                         }
                         if row.isReminder {
                             Text(GroundAlertsState.reminderTag(time: row.timeText))

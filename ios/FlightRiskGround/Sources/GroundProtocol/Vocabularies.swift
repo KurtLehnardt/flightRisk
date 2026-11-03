@@ -202,6 +202,28 @@ public enum AlertLevel: WireEnum {
     }
 }
 
+/// How the operator answered a match alert (`match_alert_resolved.action`).
+public enum MatchAlertAction: WireEnum {
+    case confirm, dismiss
+    case unknown(String)
+
+    public static let knownWireValues = ["confirm", "dismiss"]
+    public init(wire: String) {
+        switch wire {
+        case "confirm": self = .confirm
+        case "dismiss": self = .dismiss
+        default: self = .unknown(wire)
+        }
+    }
+    public var wire: String {
+        switch self {
+        case .confirm: return "confirm"
+        case .dismiss: return "dismiss"
+        case .unknown(let s): return s
+        }
+    }
+}
+
 /// Direction of a plan lane.
 public enum LaneDirection: WireEnum {
     case forward, back, left, right

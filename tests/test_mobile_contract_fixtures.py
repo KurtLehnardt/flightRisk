@@ -54,8 +54,7 @@ REQUIRED_CASES = {
     "fleet_plan.json": {"two_drones", "map_plan_lost_zone_uncovered"},
     "fleet_detection.json": {"new_detection"},
     "frame.json": {"edge_video_with_match", "edge_detections_only"},
-    "match_alert.json": {"edge_match", "reminder_on_connect"},
-    "match_alert_resolved.json": {"confirm", "dismiss"},
+    "match_alert.json": {"edge_match", "reminder_on_connect", "resolved_dismiss", "resolved_confirm"},
     "detection_profiles.json": {"pending", "fallback", "refused", "unsupported", "standby_controls_disabled", "no_board"},
     "ceiling_settings.json": {
         "on_ground_in_sync", "edge_pending", "edge_refused", "slot_above_limit", "locked_in_flight", "unavailable",
@@ -86,6 +85,7 @@ REQUIRED_CASES = {
         "manual_command", "control_modes", "hold_reasons", "edge_states",
     },
     "client_emits.json": set(),  # checked by test_client_emit_allow_list
+    "match_score_vectors.json": set(),  # checked by tests/test_match_score_vectors.py
     "unknown_keys.json": set(),  # checked by test_unknown_key_variants_differ_only_by_the_unknown_key
 }
 
@@ -117,13 +117,8 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-#: Hand-curated vector files that live next to the fixtures but are not produced by the exporter script;
-#: ``tests/test_match_score_vectors.py`` checks them against the Python scorer.
-NOT_GENERATED = {"match_score_vectors.json"}
-
-
 def _committed() -> dict[str, dict]:
-    return {path.name: _load(path) for path in sorted(FIXTURES.glob("*.json")) if path.name not in NOT_GENERATED}
+    return {path.name: _load(path) for path in sorted(FIXTURES.glob("*.json"))}
 
 
 def _without_commit(doc: dict) -> dict:

@@ -3,8 +3,9 @@ package com.flightrisk.app.ui.ground
 import android.content.Context
 
 /**
- * The non-secret Ground connection settings: the ground address (`host:port`
- * as [com.flightrisk.app.ground.GroundEndpoint.hostHeader] writes it) and
+ * The non-secret Ground connection settings: the ground address as
+ * [com.flightrisk.app.ground.GroundEndpoint.savedText] writes it (`host:port`,
+ * or `https://host:port` for a secure address) and
  * whether the link is switched on. The dashboard API key is never kept here;
  * it lives only in [com.flightrisk.app.ground.SecretStore].
  */

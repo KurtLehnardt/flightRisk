@@ -1,2315 +1,2196 @@
 {
   "_meta": {
-    "description": "Match scorer vectors computed by flightrisk.vision.scorer.MatchScorer. Weights reid 0.35, face 0.40, reasoning 0.25 and match threshold 0.45. The Python scorer rounds with round(x, 3) (round half to even on the exact binary value); the Kotlin and Swift scorers must produce exactly these combined scores.",
-    "encoding": "NaN, Infinity and -Infinity are written as the strings \"NaN\", \"Infinity\" and \"-Infinity\" because JSON has no such numbers.",
+    "description": "Inputs and the results of the Python MatchScorer.score, which the Swift and Kotlin scorers must reproduce exactly, including the rounding of combined_score to three places (Python rounds the exact binary value, ties to even; truncation is wrong). NaN and infinity are spelled 'nan', 'inf' and '-inf' because JSON has no such numbers. signals holds reid, face and registered extra signals; reasoning is not covered.",
     "file": "match_score_vectors.json",
-    "match_threshold": 0.45,
-    "regenerate": "Run the generator described in tests/test_match_score_vectors.py (the test recomputes every vector from the Python scorer and fails on any difference).",
-    "weights": {
-      "face": 0.4,
-      "reasoning": 0.25,
-      "reid": 0.35
-    }
+    "generated_at_commit": "7d2518eee73329d3c5e754c0f0d18e8bc7dcfd4c",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.vision.scorer.MatchScorer.score"
+    ],
+    "spec": "docs/mobile-contract.md"
   },
-  "vectors": [
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.001,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.0005",
-      "reasoning": null,
-      "reid": 0.0005,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.001,
-      "confidence_level": "low",
-      "face": 0.0005,
-      "is_match": false,
-      "name": "face_only_0.0005",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.002,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.0015",
-      "reasoning": null,
-      "reid": 0.0015,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.002,
-      "confidence_level": "low",
-      "face": 0.0015,
-      "is_match": false,
-      "name": "face_only_0.0015",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.003,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.0025",
-      "reasoning": null,
-      "reid": 0.0025,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.003,
-      "confidence_level": "low",
-      "face": 0.0025,
-      "is_match": false,
-      "name": "face_only_0.0025",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.004,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.0035",
-      "reasoning": null,
-      "reid": 0.0035,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.004,
-      "confidence_level": "low",
-      "face": 0.0035,
-      "is_match": false,
-      "name": "face_only_0.0035",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.062,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.0625",
-      "reasoning": null,
-      "reid": 0.0625,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.062,
-      "confidence_level": "low",
-      "face": 0.0625,
-      "is_match": false,
-      "name": "face_only_0.0625",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.123,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.1235",
-      "reasoning": null,
-      "reid": 0.1235,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.123,
-      "confidence_level": "low",
-      "face": 0.1235,
-      "is_match": false,
-      "name": "face_only_0.1235",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.188,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.1875",
-      "reasoning": null,
-      "reid": 0.1875,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.188,
-      "confidence_level": "low",
-      "face": 0.1875,
-      "is_match": false,
-      "name": "face_only_0.1875",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.312,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.3125",
-      "reasoning": null,
-      "reid": 0.3125,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.312,
-      "confidence_level": "low",
-      "face": 0.3125,
-      "is_match": false,
-      "name": "face_only_0.3125",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.4,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.3995",
-      "reasoning": null,
-      "reid": 0.3995,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.4,
-      "confidence_level": "medium",
-      "face": 0.3995,
-      "is_match": false,
-      "name": "face_only_0.3995",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.438,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reid_only_0.4375",
-      "reasoning": null,
-      "reid": 0.4375,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.438,
-      "confidence_level": "medium",
-      "face": 0.4375,
-      "is_match": false,
-      "name": "face_only_0.4375",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.45,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.4495",
-      "reasoning": null,
-      "reid": 0.4495,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.45,
-      "confidence_level": "medium",
-      "face": 0.4495,
-      "is_match": true,
-      "name": "face_only_0.4495",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.451,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.4505",
-      "reasoning": null,
-      "reid": 0.4505,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.451,
-      "confidence_level": "medium",
-      "face": 0.4505,
-      "is_match": true,
-      "name": "face_only_0.4505",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.5,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.5",
-      "reasoning": null,
-      "reid": 0.5,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.5,
-      "confidence_level": "medium",
-      "face": 0.5,
-      "is_match": true,
-      "name": "face_only_0.5",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.562,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.5625",
-      "reasoning": null,
-      "reid": 0.5625,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.562,
-      "confidence_level": "medium",
-      "face": 0.5625,
-      "is_match": true,
-      "name": "face_only_0.5625",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.625,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.6245",
-      "reasoning": null,
-      "reid": 0.6245,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.625,
-      "confidence_level": "medium",
-      "face": 0.6245,
-      "is_match": true,
-      "name": "face_only_0.6245",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.625,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.6255",
-      "reasoning": null,
-      "reid": 0.6255,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.625,
-      "confidence_level": "medium",
-      "face": 0.6255,
-      "is_match": true,
-      "name": "face_only_0.6255",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.649,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.6495",
-      "reasoning": null,
-      "reid": 0.6495,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.649,
-      "confidence_level": "medium",
-      "face": 0.6495,
-      "is_match": true,
-      "name": "face_only_0.6495",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.65,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.6505",
-      "reasoning": null,
-      "reid": 0.6505,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.65,
-      "confidence_level": "medium",
-      "face": 0.6505,
-      "is_match": true,
-      "name": "face_only_0.6505",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.688,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.6875",
-      "reasoning": null,
-      "reid": 0.6875,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.688,
-      "confidence_level": "medium",
-      "face": 0.6875,
-      "is_match": true,
-      "name": "face_only_0.6875",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.812,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.8125",
-      "reasoning": null,
-      "reid": 0.8125,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.812,
-      "confidence_level": "medium",
-      "face": 0.8125,
-      "is_match": true,
-      "name": "face_only_0.8125",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.938,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.9375",
-      "reasoning": null,
-      "reid": 0.9375,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.938,
-      "confidence_level": "medium",
-      "face": 0.9375,
-      "is_match": true,
-      "name": "face_only_0.9375",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 1.0,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_0.9995",
-      "reasoning": null,
-      "reid": 0.9995,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 1.0,
-      "confidence_level": "medium",
-      "face": 0.9995,
-      "is_match": true,
-      "name": "face_only_0.9995",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 1.0,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reid_only_1.0",
-      "reasoning": null,
-      "reid": 1.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 1.0,
-      "confidence_level": "medium",
-      "face": 1.0,
-      "is_match": true,
-      "name": "face_only_1.0",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": -1.0,
-      "is_match": false,
-      "name": "negative_scores",
-      "reasoning": null,
-      "reid": -0.5,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": 0.0,
-      "is_match": false,
-      "name": "all_zero",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "tiny_positive",
-      "reasoning": null,
-      "reid": 1e-09,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 1.767,
-      "confidence_level": "high",
-      "face": 2.0,
-      "is_match": true,
-      "name": "above_one",
-      "reasoning": null,
-      "reid": 1.5,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.71,
-      "confidence_level": "high",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_True_high",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_False_high",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_True_medium",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_False_medium",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.585,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_True_low",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_False_low",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.61,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_True_weird",
-      "reasoning": {
-        "confidence": "weird",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_False_weird",
-      "reasoning": {
-        "confidence": "weird",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.61,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_True_empty",
-      "reasoning": {
-        "confidence": "",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.647,
-      "confidence_level": "medium",
-      "face": 0.6,
-      "is_match": true,
-      "name": "reasoning_False_empty",
-      "reasoning": {
-        "confidence": "",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.9,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reasoning_only_match_high",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": 0.0,
-      "is_match": false,
-      "name": "reasoning_only_no_match",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.667,
-      "confidence_level": "high",
-      "face": 0.0,
-      "is_match": true,
-      "name": "reasoning_upper_case",
-      "reasoning": {
-        "confidence": "HIGH",
-        "match": true
-      },
-      "reid": 0.5,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.7,
-      "confidence_level": "medium",
-      "face": 0.7,
-      "is_match": true,
-      "name": "nan_reid",
-      "reasoning": null,
-      "reid": "NaN",
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": "NaN",
-      "is_match": false,
-      "name": "nan_both",
-      "reasoning": null,
-      "reid": "NaN",
-      "signals_used": 0
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": "Infinity",
-      "confidence_level": "high",
-      "face": 0.7,
-      "is_match": true,
-      "name": "inf_reid",
-      "reasoning": null,
-      "reid": "Infinity",
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": "Infinity",
-      "confidence_level": "high",
-      "face": "Infinity",
-      "is_match": true,
-      "name": "inf_both",
-      "reasoning": null,
-      "reid": "Infinity",
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.4,
-      "confidence_level": "medium",
-      "face": 0.4,
-      "is_match": false,
-      "name": "neg_inf_reid",
-      "reasoning": null,
-      "reid": "-Infinity",
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.159,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_000",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.159,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.769,
-      "confidence_level": "high",
-      "face": 0.8991,
-      "is_match": true,
-      "name": "random_001",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.62,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.498,
-      "confidence_level": "medium",
-      "face": 0.5463,
-      "is_match": true,
-      "name": "random_002",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.442,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.526,
-      "confidence_level": "medium",
-      "face": 0.5263,
-      "is_match": true,
-      "name": "random_003",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.934,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_004",
-      "reasoning": null,
-      "reid": 0.934,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.678,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_005",
-      "reasoning": null,
-      "reid": 0.678,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.218,
-      "confidence_level": "low",
-      "face": 0.1582,
-      "is_match": false,
-      "name": "random_006",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.2864,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.887,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_007",
-      "reasoning": null,
-      "reid": 0.887,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.646,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_008",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.821,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.176,
-      "confidence_level": "low",
-      "face": 0.094,
-      "is_match": false,
-      "name": "random_009",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.27,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.46,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_010",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.502,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.464,
-      "confidence_level": "medium",
-      "face": 0.71,
-      "is_match": true,
-      "name": "random_011",
-      "reasoning": null,
-      "reid": 0.182,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.13,
-      "confidence_level": "low",
-      "face": 0.1304,
-      "is_match": false,
-      "name": "random_012",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.503,
-      "confidence_level": "medium",
-      "face": 0.4327,
-      "is_match": true,
-      "name": "random_013",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.657,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.996,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_014",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.9955,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.489,
-      "confidence_level": "medium",
-      "face": 0.196,
-      "is_match": true,
-      "name": "random_015",
-      "reasoning": null,
-      "reid": 0.823,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.932,
-      "confidence_level": "medium",
-      "face": 0.9322,
-      "is_match": true,
-      "name": "random_016",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.801,
-      "confidence_level": "high",
-      "face": 0.82,
-      "is_match": true,
-      "name": "random_017",
-      "reasoning": null,
-      "reid": 0.78,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.496,
-      "confidence_level": "medium",
-      "face": 0.2079,
-      "is_match": true,
-      "name": "random_018",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.826,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.775,
-      "confidence_level": "medium",
-      "face": 0.7753,
-      "is_match": true,
-      "name": "random_019",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.842,
-      "confidence_level": "high",
-      "face": 0.879,
-      "is_match": true,
-      "name": "random_020",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.8,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.495,
-      "confidence_level": "medium",
-      "face": 0.2,
-      "is_match": true,
-      "name": "random_021",
-      "reasoning": null,
-      "reid": 0.8327,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.653,
-      "confidence_level": "high",
-      "face": 0.9217,
-      "is_match": true,
-      "name": "random_022",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.346,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.473,
-      "confidence_level": "medium",
-      "face": 0.556,
-      "is_match": true,
-      "name": "random_023",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.43,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.764,
-      "confidence_level": "high",
-      "face": 0.9665,
-      "is_match": true,
-      "name": "random_024",
-      "reasoning": null,
-      "reid": 0.5316,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.497,
-      "confidence_level": "medium",
-      "face": 0.3994,
-      "is_match": true,
-      "name": "random_025",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.5,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.483,
-      "confidence_level": "medium",
-      "face": 0.29,
-      "is_match": true,
-      "name": "random_026",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.703,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.63,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_027",
-      "reasoning": null,
-      "reid": 0.63,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.9,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_028",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.439,
-      "confidence_level": "medium",
-      "face": 0.189,
-      "is_match": false,
-      "name": "random_029",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.575,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.815,
-      "confidence_level": "high",
-      "face": 0.9732,
-      "is_match": true,
-      "name": "random_030",
-      "reasoning": null,
-      "reid": 0.6334,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.332,
-      "confidence_level": "low",
-      "face": 0.37,
-      "is_match": false,
-      "name": "random_031",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.24,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.287,
-      "confidence_level": "low",
-      "face": 0.344,
-      "is_match": false,
-      "name": "random_032",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.2215,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.23,
-      "confidence_level": "low",
-      "face": 0.377,
-      "is_match": false,
-      "name": "random_033",
-      "reasoning": null,
-      "reid": 0.061,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_034",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.5,
-      "confidence_level": "medium",
-      "face": 0.4997,
-      "is_match": true,
-      "name": "random_035",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.89,
-      "confidence_level": "medium",
-      "face": 0.89,
-      "is_match": true,
-      "name": "random_036",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_037",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.143,
-      "confidence_level": "low",
-      "face": 0.143,
-      "is_match": false,
-      "name": "random_038",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.203,
-      "confidence_level": "low",
-      "face": 0.2034,
-      "is_match": false,
-      "name": "random_039",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.0,
-      "confidence_level": "none",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_040",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 0
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.5,
-      "confidence_level": "medium",
-      "face": 0.4585,
-      "is_match": true,
-      "name": "random_041",
-      "reasoning": null,
-      "reid": 0.548,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.499,
-      "confidence_level": "medium",
-      "face": 0.23,
-      "is_match": true,
-      "name": "random_042",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.7,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.599,
-      "confidence_level": "medium",
-      "face": 0.4478,
-      "is_match": true,
-      "name": "random_043",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.771,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.17,
-      "confidence_level": "low",
-      "face": 0.0187,
-      "is_match": false,
-      "name": "random_044",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.343,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.48,
-      "confidence_level": "medium",
-      "face": 0.29,
-      "is_match": true,
-      "name": "random_045",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.697,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.96,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_046",
-      "reasoning": null,
-      "reid": 0.96,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.753,
-      "confidence_level": "high",
-      "face": 0.965,
-      "is_match": true,
-      "name": "random_047",
-      "reasoning": null,
-      "reid": 0.511,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.276,
-      "confidence_level": "low",
-      "face": 0.4317,
-      "is_match": false,
-      "name": "random_048",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.098,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.867,
-      "confidence_level": "medium",
-      "face": 0.867,
-      "is_match": true,
-      "name": "random_049",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.245,
-      "confidence_level": "low",
-      "face": 0.406,
-      "is_match": false,
-      "name": "random_050",
-      "reasoning": null,
-      "reid": 0.06,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.26,
-      "confidence_level": "low",
-      "face": 0.017,
-      "is_match": false,
-      "name": "random_051",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.0,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.767,
-      "confidence_level": "high",
-      "face": 0.8637,
-      "is_match": true,
-      "name": "random_052",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.657,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.733,
-      "confidence_level": "high",
-      "face": 0.9639,
-      "is_match": true,
-      "name": "random_053",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.47,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.57,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_054",
-      "reasoning": null,
-      "reid": 0.57,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.724,
-      "confidence_level": "high",
-      "face": 0.81,
-      "is_match": true,
-      "name": "random_055",
-      "reasoning": null,
-      "reid": 0.625,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.299,
-      "confidence_level": "low",
-      "face": 0.299,
-      "is_match": false,
-      "name": "random_056",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.128,
-      "confidence_level": "low",
-      "face": 0.0081,
-      "is_match": false,
-      "name": "random_057",
-      "reasoning": null,
-      "reid": 0.266,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.029,
-      "confidence_level": "low",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_058",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.029,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.596,
-      "confidence_level": "medium",
-      "face": 0.995,
-      "is_match": true,
-      "name": "random_059",
-      "reasoning": null,
-      "reid": 0.14,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.59,
-      "confidence_level": "medium",
-      "face": 0.59,
-      "is_match": true,
-      "name": "random_060",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.481,
-      "confidence_level": "medium",
-      "face": 0.4582,
-      "is_match": true,
-      "name": "random_061",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.565,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.625,
-      "confidence_level": "medium",
-      "face": 0.5324,
-      "is_match": true,
-      "name": "random_062",
-      "reasoning": null,
-      "reid": 0.73,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.515,
-      "confidence_level": "medium",
-      "face": 0.931,
-      "is_match": true,
-      "name": "random_063",
-      "reasoning": null,
-      "reid": 0.04,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.418,
-      "confidence_level": "medium",
-      "face": 0.224,
-      "is_match": false,
-      "name": "random_064",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.64,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.525,
-      "confidence_level": "medium",
-      "face": 0.41,
-      "is_match": true,
-      "name": "random_065",
-      "reasoning": null,
-      "reid": 0.6575,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.266,
-      "confidence_level": "low",
-      "face": 0.0684,
-      "is_match": false,
-      "name": "random_066",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.3973,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.533,
-      "confidence_level": "medium",
-      "face": 0.3,
-      "is_match": true,
-      "name": "random_067",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.5383,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.334,
-      "confidence_level": "low",
-      "face": 0.04,
-      "is_match": false,
-      "name": "random_068",
-      "reasoning": null,
-      "reid": 0.67,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.3,
-      "confidence_level": "low",
-      "face": 0.104,
-      "is_match": false,
-      "name": "random_069",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.524,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.016,
-      "confidence_level": "low",
-      "face": 0.016,
-      "is_match": false,
-      "name": "random_070",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.444,
-      "confidence_level": "medium",
-      "face": 0.431,
-      "is_match": false,
-      "name": "random_071",
-      "reasoning": null,
-      "reid": 0.4596,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.641,
-      "confidence_level": "medium",
-      "face": 0.8,
-      "is_match": true,
-      "name": "random_072",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.46,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.402,
-      "confidence_level": "medium",
-      "face": 0.1583,
-      "is_match": false,
-      "name": "random_073",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.68,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.345,
-      "confidence_level": "low",
-      "face": 0.345,
-      "is_match": false,
-      "name": "random_074",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.537,
-      "confidence_level": "medium",
-      "face": 0.65,
-      "is_match": true,
-      "name": "random_075",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.327,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.56,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_076",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.5603,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.209,
-      "confidence_level": "low",
-      "face": 0.104,
-      "is_match": false,
-      "name": "random_077",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.33,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.533,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_078",
-      "reasoning": null,
-      "reid": 0.5333,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.605,
-      "confidence_level": "medium",
-      "face": 0.757,
-      "is_match": true,
-      "name": "random_079",
-      "reasoning": null,
-      "reid": 0.4311,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.529,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_080",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.2641,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.567,
-      "confidence_level": "medium",
-      "face": 0.8,
-      "is_match": true,
-      "name": "random_081",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.3,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.411,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": false,
-      "name": "random_082",
-      "reasoning": null,
-      "reid": 0.411,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.558,
-      "confidence_level": "medium",
-      "face": 0.3518,
-      "is_match": true,
-      "name": "random_083",
-      "reasoning": null,
-      "reid": 0.7947,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.883,
-      "confidence_level": "high",
-      "face": 0.826,
-      "is_match": true,
-      "name": "random_084",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.9473,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.517,
-      "confidence_level": "medium",
-      "face": 0.79,
-      "is_match": true,
-      "name": "random_085",
-      "reasoning": null,
-      "reid": 0.2047,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.297,
-      "confidence_level": "low",
-      "face": 0.08,
-      "is_match": false,
-      "name": "random_086",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.115,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.635,
-      "confidence_level": "medium",
-      "face": 0.3936,
-      "is_match": true,
-      "name": "random_087",
-      "reasoning": null,
-      "reid": 0.91,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.374,
-      "confidence_level": "low",
-      "face": 0.3738,
-      "is_match": false,
-      "name": "random_088",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.322,
-      "confidence_level": "low",
-      "face": 0.0772,
-      "is_match": false,
-      "name": "random_089",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.6013,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.095,
-      "confidence_level": "low",
-      "face": 0.14,
-      "is_match": false,
-      "name": "random_090",
-      "reasoning": null,
-      "reid": 0.0428,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.295,
-      "confidence_level": "low",
-      "face": 0.23,
-      "is_match": false,
-      "name": "random_091",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.0,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.712,
-      "confidence_level": "high",
-      "face": 0.765,
-      "is_match": true,
-      "name": "random_092",
-      "reasoning": {
-        "confidence": "low",
-        "match": true
-      },
-      "reid": 0.8729,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.09,
-      "confidence_level": "low",
-      "face": 0.09,
-      "is_match": false,
-      "name": "random_093",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.76,
-      "confidence_level": "high",
-      "face": 0.7555,
-      "is_match": true,
-      "name": "random_094",
-      "reasoning": null,
-      "reid": 0.766,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.486,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_095",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.368,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.565,
-      "confidence_level": "medium",
-      "face": 0.18,
-      "is_match": true,
-      "name": "random_096",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.7643,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.591,
-      "confidence_level": "medium",
-      "face": 0.697,
-      "is_match": true,
-      "name": "random_097",
-      "reasoning": null,
-      "reid": 0.47,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.541,
-      "confidence_level": "medium",
-      "face": 0.63,
-      "is_match": true,
-      "name": "random_098",
-      "reasoning": null,
-      "reid": 0.44,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.672,
-      "confidence_level": "high",
-      "face": 0.53,
-      "is_match": true,
-      "name": "random_099",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.0,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.717,
-      "confidence_level": "high",
-      "face": 0.731,
-      "is_match": true,
-      "name": "random_100",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.7,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.983,
-      "confidence_level": "medium",
-      "face": 0.0,
-      "is_match": true,
-      "name": "random_101",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.9831,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.492,
-      "confidence_level": "medium",
-      "face": 0.6695,
-      "is_match": true,
-      "name": "random_102",
-      "reasoning": null,
-      "reid": 0.29,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.412,
-      "confidence_level": "medium",
-      "face": 0.7294,
-      "is_match": false,
-      "name": "random_103",
-      "reasoning": null,
-      "reid": 0.05,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.925,
-      "confidence_level": "high",
-      "face": 0.923,
-      "is_match": true,
-      "name": "random_104",
-      "reasoning": null,
-      "reid": 0.927,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.365,
-      "confidence_level": "medium",
-      "face": 0.51,
-      "is_match": false,
-      "name": "random_105",
-      "reasoning": null,
-      "reid": 0.2,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.504,
-      "confidence_level": "medium",
-      "face": 0.58,
-      "is_match": true,
-      "name": "random_106",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.3119,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.32,
-      "confidence_level": "low",
-      "face": 0.32,
-      "is_match": false,
-      "name": "random_107",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.331,
-      "confidence_level": "low",
-      "face": 0.3441,
-      "is_match": false,
-      "name": "random_108",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.3169,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.681,
-      "confidence_level": "high",
-      "face": 0.703,
-      "is_match": true,
-      "name": "random_109",
-      "reasoning": null,
-      "reid": 0.655,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.927,
-      "confidence_level": "high",
-      "face": 0.91,
-      "is_match": true,
-      "name": "random_110",
-      "reasoning": {
-        "confidence": "high",
-        "match": true
-      },
-      "reid": 0.966,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.563,
-      "confidence_level": "medium",
-      "face": 0.4333,
-      "is_match": true,
-      "name": "random_111",
-      "reasoning": {
-        "confidence": "medium",
-        "match": true
-      },
-      "reid": 0.6479,
-      "signals_used": 3
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.479,
-      "confidence_level": "medium",
-      "face": 0.4789,
-      "is_match": true,
-      "name": "random_112",
-      "reasoning": null,
-      "reid": 0.0,
-      "signals_used": 1
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.502,
-      "confidence_level": "medium",
-      "face": 0.4379,
-      "is_match": true,
-      "name": "random_113",
-      "reasoning": {
-        "confidence": "high",
-        "match": false
-      },
-      "reid": 0.5752,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.538,
-      "confidence_level": "medium",
-      "face": 0.6592,
-      "is_match": true,
-      "name": "random_114",
-      "reasoning": {
-        "confidence": "low",
-        "match": false
-      },
-      "reid": 0.4,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "confirmed_match",
-      "combined_score": 0.707,
-      "confidence_level": "high",
-      "face": 0.55,
-      "is_match": true,
-      "name": "random_115",
-      "reasoning": {
-        "confidence": "medium",
-        "match": false
-      },
-      "reid": 0.886,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.417,
-      "confidence_level": "medium",
-      "face": 0.5894,
-      "is_match": false,
-      "name": "random_116",
-      "reasoning": null,
-      "reid": 0.2202,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "weak_signal",
-      "combined_score": 0.331,
-      "confidence_level": "low",
-      "face": 0.219,
-      "is_match": false,
-      "name": "random_117",
-      "reasoning": null,
-      "reid": 0.46,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "possible_match",
-      "combined_score": 0.583,
-      "confidence_level": "medium",
-      "face": 0.296,
-      "is_match": true,
-      "name": "random_118",
-      "reasoning": null,
-      "reid": 0.911,
-      "signals_used": 2
-    },
-    {
-      "alert_level": "no_match",
-      "combined_score": 0.099,
-      "confidence_level": "low",
-      "face": 0.08,
-      "is_match": false,
-      "name": "random_119",
-      "reasoning": null,
-      "reid": 0.1215,
-      "signals_used": 2
+  "cases": {
+    "all_zero": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0,
+          "reid": 0.0
+        }
+      }
+    },
+    "custom_weights": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.512,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.3,
+          "match_threshold": 0.6,
+          "reasoning_weight": 0.2,
+          "reid_weight": 0.5
+        },
+        "signals": {
+          "face": 0.2,
+          "reid": 0.7
+        }
+      }
+    },
+    "denormal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 5e-324,
+          "reid": 5e-324
+        }
+      }
+    },
+    "extra_signal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.567,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.58,
+          "reid": 0.62,
+          "thermal": 0.41
+        }
+      }
+    },
+    "extra_signal_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "thermal": 0.0005
+        }
+      }
+    },
+    "huge_positive": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1e+300,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1e+300
+        }
+      }
+    },
+    "inf_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": "inf",
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": "inf"
+        }
+      }
+    },
+    "inf_reid": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": "inf",
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "inf"
+        }
+      }
+    },
+    "just_below_threshold_rounds_down": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.449,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4494
+        }
+      }
+    },
+    "just_below_threshold_rounds_up": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4496
+        }
+      }
+    },
+    "nan_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": "nan"
+        }
+      }
+    },
+    "nan_reid": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.6,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "nan"
+        }
+      }
+    },
+    "negative_inf": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.6,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "-inf"
+        }
+      }
+    },
+    "negative_scores": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.75,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.75,
+          "reid": -0.5
+        }
+      }
+    },
+    "negative_zero": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": -0.0,
+          "reid": -0.0
+        }
+      }
+    },
+    "negative_zero_result": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": -0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": -0.9999,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 1.0
+        },
+        "signals": {
+          "face": 0.000100015,
+          "reid": 0.0001
+        }
+      }
+    },
+    "negative_zero_with_face": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5,
+          "reid": -0.0
+        }
+      }
+    },
+    "opposite_weights_negative_result": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": -0.9999,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 1.0
+        },
+        "signals": {
+          "face": 0.0001,
+          "reid": 0.0001
+        }
+      }
+    },
+    "seeded_00": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.721,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.985,
+          "reid": 0.5665,
+          "thermal": 0.3772
+        }
+      }
+    },
+    "seeded_01": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.364,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1216,
+          "reid": 0.6409
+        }
+      }
+    },
+    "seeded_02": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.468,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8389,
+          "reid": 0.0447
+        }
+      }
+    },
+    "seeded_03": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.594,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9365,
+          "reid": 0.203
+        }
+      }
+    },
+    "seeded_04": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.824,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6169,
+          "reid": 0.9954,
+          "thermal": 0.9773
+        }
+      }
+    },
+    "seeded_05": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.851,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8991,
+          "reid": 0.7957
+        }
+      }
+    },
+    "seeded_06": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.655,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7036,
+          "reid": 0.5984
+        }
+      }
+    },
+    "seeded_07": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.616,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7989,
+          "reid": 0.4075
+        }
+      }
+    },
+    "seeded_08": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.678,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8018,
+          "reid": 0.5924,
+          "thermal": 0.5463
+        }
+      }
+    },
+    "seeded_09": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.495,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0552,
+          "reid": 0.997
+        }
+      }
+    },
+    "seeded_10": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.507,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8754,
+          "reid": 0.0863
+        }
+      }
+    },
+    "seeded_11": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.447,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7727,
+          "reid": 0.0737
+        }
+      }
+    },
+    "seeded_12": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.655,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9908,
+          "reid": 0.5425,
+          "thermal": 0.02
+        }
+      }
+    },
+    "seeded_13": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.47,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5673,
+          "reid": 0.3593
+        }
+      }
+    },
+    "seeded_14": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.484,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8463,
+          "reid": 0.0698
+        }
+      }
+    },
+    "seeded_15": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.657,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6004,
+          "reid": 0.721
+        }
+      }
+    },
+    "seeded_16": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.229,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2234,
+          "reid": 0.1194,
+          "thermal": 0.5023
+        }
+      }
+    },
+    "seeded_17": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.423,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0991,
+          "reid": 0.7923
+        }
+      }
+    },
+    "seeded_18": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.691,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5217,
+          "reid": 0.885
+        }
+      }
+    },
+    "seeded_19": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.27,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1243,
+          "reid": 0.4363
+        }
+      }
+    },
+    "seeded_20": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.53,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5691,
+          "reid": 0.6446,
+          "thermal": 0.1582
+        }
+      }
+    },
+    "seeded_21": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.509,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3223,
+          "reid": 0.7223
+        }
+      }
+    },
+    "seeded_22": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.433,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7073,
+          "reid": 0.1194
+        }
+      }
+    },
+    "seeded_23": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.273,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4921,
+          "reid": 0.0231
+        }
+      }
+    },
+    "seeded_24": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.752,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7153,
+          "reid": 0.9695,
+          "thermal": 0.3429
+        }
+      }
+    },
+    "seeded_25": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.615,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4349,
+          "reid": 0.8208
+        }
+      }
+    },
+    "seeded_26": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.311,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2296,
+          "reid": 0.4048
+        }
+      }
+    },
+    "seeded_27": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.341,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2728,
+          "reid": 0.4189
+        }
+      }
+    },
+    "seeded_28": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.162,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3007,
+          "reid": 0.0036,
+          "thermal": 0.163
+        }
+      }
+    },
+    "seeded_29": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.413,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1477,
+          "reid": 0.7156
+        }
+      }
+    },
+    "seeded_30": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.681,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4585,
+          "reid": 0.9346
+        }
+      }
+    },
+    "seeded_31": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4974,
+          "reid": 0.5025
+        }
+      }
+    },
+    "seeded_32": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.44,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0919,
+          "reid": 0.7667,
+          "thermal": 0.6082
+        }
+      }
+    },
+    "seeded_33": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.487,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1822,
+          "reid": 0.8359
+        }
+      }
+    },
+    "seeded_34": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.567,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7706,
+          "reid": 0.3346
+        }
+      }
+    },
+    "seeded_35": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.471,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7213,
+          "reid": 0.1857
+        }
+      }
+    },
+    "seeded_36": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.427,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.372,
+          "reid": 0.3817,
+          "thermal": 0.6806
+        }
+      }
+    },
+    "seeded_37": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.527,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7311,
+          "reid": 0.2946
+        }
+      }
+    },
+    "seeded_38": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.498,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4703,
+          "reid": 0.5292
+        }
+      }
+    },
+    "seeded_39": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.493,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3492,
+          "reid": 0.6569
+        }
+      }
+    },
+    "single_face_half_even_tie": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.062,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0625
+        }
+      }
+    },
+    "single_face_half_even_tie_odd": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.188,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1875
+        }
+      }
+    },
+    "single_reid_0_0004": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0004
+        }
+      }
+    },
+    "single_reid_0_0005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0005
+        }
+      }
+    },
+    "single_reid_0_0006": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0006
+        }
+      }
+    },
+    "single_reid_0_0015": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.002,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0015
+        }
+      }
+    },
+    "single_reid_0_0025": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.003,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0025
+        }
+      }
+    },
+    "single_reid_0_0035": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.004,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0035
+        }
+      }
+    },
+    "single_reid_0_1235": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.123,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.1235
+        }
+      }
+    },
+    "single_reid_0_2345": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.234,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.2345
+        }
+      }
+    },
+    "single_reid_0_2355": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.235,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.2355
+        }
+      }
+    },
+    "single_reid_0_3335": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.334,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.3335
+        }
+      }
+    },
+    "single_reid_0_4495": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4495
+        }
+      }
+    },
+    "single_reid_0_4499999": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4499999
+        }
+      }
+    },
+    "single_reid_0_45": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.45
+        }
+      }
+    },
+    "single_reid_0_4505": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.451,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4505
+        }
+      }
+    },
+    "single_reid_0_4995": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.499,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4995
+        }
+      }
+    },
+    "single_reid_0_5": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.5
+        }
+      }
+    },
+    "single_reid_0_5005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.5005
+        }
+      }
+    },
+    "single_reid_0_6445": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.644,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6445
+        }
+      }
+    },
+    "single_reid_0_6455": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.645,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6455
+        }
+      }
+    },
+    "single_reid_0_6495": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.649,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6495
+        }
+      }
+    },
+    "single_reid_0_6505": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.65,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6505
+        }
+      }
+    },
+    "single_reid_0_8625": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.863,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.8625
+        }
+      }
+    },
+    "single_reid_0_99949999999": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.999,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.99949999999
+        }
+      }
+    },
+    "single_reid_0_9995": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.9995
+        }
+      }
+    },
+    "single_reid_0_9996": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.9996
+        }
+      }
+    },
+    "single_reid_1_0": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.0
+        }
+      }
+    },
+    "single_reid_1_0005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.0005
+        }
+      }
+    },
+    "single_reid_1_5": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.5
+        }
+      }
+    },
+    "single_reid_2_675": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 2.675,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 2.675
+        }
+      }
+    },
+    "threshold_exactly": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.45,
+          "reid": 0.45
+        }
+      }
+    },
+    "tiny_positive": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1e-300
+        }
+      }
+    },
+    "two_signals_default_weights": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.78,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.71,
+          "reid": 0.86
+        }
+      }
+    },
+    "two_signals_near_tie": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5001,
+          "reid": 0.4999
+        }
+      }
+    },
+    "two_signals_unequal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.62,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9,
+          "reid": 0.3
+        }
+      }
+    },
+    "zero_weight_signal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.8,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.0,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9,
+          "reid": 0.8
+        }
+      }
     }
-  ]
+  }
 }

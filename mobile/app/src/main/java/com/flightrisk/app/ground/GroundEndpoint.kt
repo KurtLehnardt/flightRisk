@@ -187,16 +187,24 @@ fun interface HostResolver {
 class AddressNotAllowedException(message: String) : IOException(message)
 
 /**
- * Where a connection to [endpoint] goes. A secure (`wss://`, `https://`) endpoint may reach any address: TLS
+ * Where a connection to [endpoint] goes (the addresses to try, in order). A secure (`wss://`, `https://`) endpoint may reach any address: TLS
  * protects the key and checks the certificate. A plain endpoint is checked by [LanAddressPolicy] first, so
  * the key is never sent in clear text to a public address.
  */
-internal fun resolveTarget(endpoint: GroundEndpoint, resolver: HostResolver): InetAddress =
+internal fun resolveTargets(endpoint: GroundEndpoint, resolver: HostResolver): List<InetAddress> =
     if (endpoint.secure) {
-        resolver.resolve(endpoint.host).firstOrNull() ?: throw IOException("the host name did not resolve")
+        // A secure host may have several addresses (IPv4 and IPv6, or several servers): the caller tries each in turn.
+        resolver.resolve(endpoint.host).distinct().take(MAX_SECURE_ADDRESSES).ifEmpty { throw IOException("the host name did not resolve") }
     } else {
-        LanAddressPolicy.resolve(endpoint.host, resolver)
+        listOf(LanAddressPolicy.resolve(endpoint.host, resolver))
     }
+
+/** The most addresses of a secure host that are tried. */
+internal const val MAX_SECURE_ADDRESSES = 4
+
+/** A connection failure worth trying the next address for. A TLS failure (a certificate or protocol error) is not. */
+internal fun shouldTryNextAddress(e: IOException): Boolean =
+    e is java.net.SocketException || e is java.net.SocketTimeoutException
 
 /**
  * Cleartext goes only to private, link-local and loopback addresses

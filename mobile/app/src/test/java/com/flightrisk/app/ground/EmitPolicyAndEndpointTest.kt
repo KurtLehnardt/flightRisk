@@ -199,18 +199,33 @@ class EndpointAndAddressTest {
     @Test
     fun `a secure endpoint reaches a public address and a plain one still does not`() {
         val publicAnswer = HostResolver { listOf(ip("8.8.8.8")) }
-        assertEquals(ip("8.8.8.8"), resolveTarget(GroundEndpoint.of("ground.example.org", 443, secure = true)!!, publicAnswer))
+        assertEquals(listOf(ip("8.8.8.8")), resolveTargets(GroundEndpoint.of("ground.example.org", 443, secure = true)!!, publicAnswer))
         try {
-            resolveTarget(GroundEndpoint.of("ground.example.org", 5555)!!, publicAnswer)
+            resolveTargets(GroundEndpoint.of("ground.example.org", 5555)!!, publicAnswer)
             fail("a plain endpoint must not reach a public address")
         } catch (_: AddressNotAllowedException) {
         }
         assertFailsToResolve(GroundEndpoint.of("ground.example.org", 443, secure = true)!!)
     }
 
+    @Test
+    fun `a secure host with several answers keeps them in order and a plain one stays strict`() {
+        val answers = HostResolver { listOf(ip("2001:db8::1"), ip("8.8.8.8"), ip("2001:db8::1"), ip("8.8.4.4")) }
+        val secure = GroundEndpoint.of("ground.example.org", 443, secure = true)!!
+        assertEquals(listOf(ip("2001:db8::1"), ip("8.8.8.8"), ip("8.8.4.4")), resolveTargets(secure, answers))
+        val many = HostResolver { (1..20).map { ip("8.8.8.$it") } }
+        assertEquals(MAX_SECURE_ADDRESSES, resolveTargets(secure, many).size)
+        // Only a connection failure moves to the next address; a TLS failure or a protocol error does not.
+        assertTrue(shouldTryNextAddress(java.net.ConnectException()))
+        assertTrue(shouldTryNextAddress(java.net.SocketTimeoutException()))
+        assertFalse(shouldTryNextAddress(javax.net.ssl.SSLHandshakeException("x")))
+        assertFalse(shouldTryNextAddress(ProtocolViolationException("x")))
+        assertFalse(shouldTryNextAddress(HandshakeRejectedException(403)))
+    }
+
     private fun assertFailsToResolve(endpoint: GroundEndpoint) {
         try {
-            resolveTarget(endpoint, HostResolver { emptyList() })
+            resolveTargets(endpoint, HostResolver { emptyList() })
             fail("an empty answer must not resolve")
         } catch (_: java.io.IOException) {
         }

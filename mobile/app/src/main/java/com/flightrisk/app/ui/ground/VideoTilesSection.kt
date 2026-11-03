@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
@@ -73,7 +74,7 @@ fun VideoTilesSection(state: GroundUiState) {
             for (row in tiles.chunked(columns)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     for (tile in row) {
-                        Box(modifier = Modifier.weight(1f)) { VideoTile(tile) }
+                        key(tile.id) { Box(modifier = Modifier.weight(1f)) { VideoTile(tile) } }
                     }
                     // An odd last row keeps its tile at the same width as the others.
                     repeat(columns - row.size) { Box(modifier = Modifier.weight(1f)) }

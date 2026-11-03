@@ -1,6 +1,7 @@
 package com.flightrisk.app.vision
 
 import com.flightrisk.app.llm.ReasoningResult
+import kotlin.math.withSign
 
 /**
  * Multi-signal weighted confidence scorer.
@@ -44,7 +45,9 @@ class MatchScorer(
             if (value.isNaN() || value.isInfinite()) {
                 value
             } else {
-                java.math.BigDecimal(value).setScale(3, java.math.RoundingMode.HALF_EVEN).toDouble()
+                // A result that rounds to zero keeps the sign of the input, as Python's round() does (-0.0004 gives -0.0).
+                val rounded = java.math.BigDecimal(value).setScale(3, java.math.RoundingMode.HALF_EVEN).toDouble()
+                if (rounded == 0.0) 0.0.withSign(value) else rounded
             }
     }
 

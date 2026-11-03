@@ -30,7 +30,7 @@ struct TrackedDetection {
 /// Combined match score from `MatchScorer`.
 struct ScoredResult {
     /// Weighted score 0-1.
-    let combinedScore: Float
+    let combinedScore: Double
     /// Whether the score exceeds the match threshold.
     let isMatch: Bool
     /// "high", "medium", "low", or "none".

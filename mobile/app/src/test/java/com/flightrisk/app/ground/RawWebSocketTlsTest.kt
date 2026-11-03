@@ -221,6 +221,37 @@ class RawWebSocketTlsTest {
     }
 
     @Test
+    fun `a secure endpoint tries the next address when the first refuses the connection`() = runBlocking {
+        tlsServer { s ->
+            acceptUpgrade(readRequestHead(s.getInputStream()), s.getOutputStream())
+            writeServerText(s.getOutputStream(), "2")
+            runCatching { readClientFrame(s.getInputStream()) }
+        }.use { server ->
+            val endpoint = GroundEndpoint.of("localhost", server.port, secure = true)!!
+            // The server listens on 127.0.0.1 only, so ::1 refuses (or is unreachable) and the next answer is used.
+            val answers = listOf(InetAddress.getByName("::1"), loopback)
+            val port = WebSocketSocketIoPort(resolver = { answers }, tlsFactory = { trusting() }, tlsVerifier = null)
+            val connection = port.open(endpoint, emptyList())
+            assertEquals("2", connection.receive())
+            connection.closeGracefully()
+        }
+    }
+
+    @Test
+    fun `a certificate failure does not move on to the next address`() = runBlocking {
+        val accepted = java.util.concurrent.atomic.AtomicInteger()
+        tlsServer { s -> accepted.incrementAndGet(); runCatching { s.getInputStream().read() } }.use { server ->
+            val endpoint = GroundEndpoint.of("localhost", server.port, secure = true)!!
+            val port = WebSocketSocketIoPort(resolver = { listOf(loopback, loopback.let { InetAddress.getByName("127.0.0.1") }) })
+            try {
+                port.open(endpoint, emptyList())
+                fail("the default trust store must refuse the certificate")
+            } catch (_: SSLException) {
+            }
+        }
+    }
+
+    @Test
     fun `the socket port with the platform defaults refuses the test certificate`() = runBlocking {
         tlsServer { s -> runCatching { s.getInputStream().read() } }.use { server ->
             val endpoint = GroundEndpoint.of("localhost", server.port, secure = true)!!
@@ -281,7 +312,7 @@ class RawWebSocketTlsTest {
             val endpoint = GroundEndpoint.of("localhost", server.port, secure = true)!!
             val client = DashboardRestClient(endpoint, DashboardApiKey.of(TEST_KEY), resolver = { listOf(loopback) })
             val result = client.probe()
-            assertTrue(result.toString(), result is HealthProbeResult.Unreachable)
+            assertTrue(result.toString(), result is HealthProbeResult.SecureConnectionFailed)
             assertFalse(result.toString().contains(TEST_KEY))
             Thread.sleep(100)
             assertTrue("no request may reach a server whose certificate was refused", heads.isEmpty())

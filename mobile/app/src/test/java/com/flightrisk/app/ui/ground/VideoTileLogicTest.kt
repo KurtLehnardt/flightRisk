@@ -184,14 +184,21 @@ class VideoTileLogicTest {
     @Test
     fun `source size and subsampling are bounded`() {
         assertTrue(VideoTileLogic.sourceSizeAllowed(320, 180))
-        assertTrue(VideoTileLogic.sourceSizeAllowed(4000, 4000))
+        assertTrue(VideoTileLogic.sourceSizeAllowed(2000, 2000))
+        assertFalse(VideoTileLogic.sourceSizeAllowed(2001, 2000))
         assertFalse(VideoTileLogic.sourceSizeAllowed(5000, 5000))
         assertFalse(VideoTileLogic.sourceSizeAllowed(0, 100))
         assertFalse(VideoTileLogic.sourceSizeAllowed(Int.MAX_VALUE, Int.MAX_VALUE))
         assertEquals(1, VideoTileLogic.sampleSize(320, 180, 600))
-        assertEquals(4, VideoTileLogic.sampleSize(4000, 3000, 900))
-        // Never below the target: 4000/4 = 1000 >= 900 but 4000/8 = 500 < 900.
-        assertTrue(4000 / VideoTileLogic.sampleSize(4000, 3000, 900) >= 900)
+        assertEquals(2, VideoTileLogic.sampleSize(2000, 1500, 900))
+        // Never below the target while the area allows: 1920/2 = 960 >= 900 but 1920/4 = 480 < 900.
+        assertTrue(1920 / VideoTileLogic.sampleSize(1920, 1080, 900) >= 900)
         assertEquals(1, VideoTileLogic.sampleSize(100, 100, 100_000))
+        // The decoded area is capped directly, even when the tile asks for the full edge.
+        for ((w, h) in listOf(2000 to 2000, 4000 to 1000, 1999 to 2000, 3000 to 1333)) {
+            val s = VideoTileLogic.sampleSize(w, h, VideoTileLogic.MAX_DECODE_EDGE)
+            assertTrue("$w x $h at 1/$s", (w / s).toLong() * (h / s) <= VideoTileLogic.MAX_DECODED_PIXELS)
+        }
+        assertEquals(2, VideoTileLogic.sampleSize(2000, 2000, 2000))
     }
 }
