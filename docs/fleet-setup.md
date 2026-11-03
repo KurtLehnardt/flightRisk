@@ -470,6 +470,8 @@ An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_C
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 
+Each Tello edge senses obstacles before every 50 cm step of a lane, using the MiDaS_small depth model. The weights are downloaded into the `torch.hub` cache the first time, so start each edge once while the laptop is online. If the sensor cannot be built, the edge refuses to take off and the drone card shows `obstacle sensor unavailable: <why>`. Settings and the `FLIGHTRISK_OBSTACLE_SENSING=off` override are in [Obstacle sensing](obstacle-sensing.md).
+
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
 ## Cutting edge CPU load: run detection on every Nth frame (optional)
@@ -483,6 +485,7 @@ Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel 
 - Dropped frames are still polled at the full rate. That keeps the newest frame available and keeps the frozen-stream recovery working, which counts identical polls. The video is decoded on its own thread, so polling does not hold the decoder up, and the polling costs almost no CPU.
 - With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
 - Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). The detector's busy time fell the same way, from 100 percent to 50, 34.5, 20 and 10 percent. A person is therefore seen N times less often. A stride of 2 was flown on 28 October.
+- The stride does not affect the obstacle sensor's camera frames. The sensor keeps its own copy of the newest frame, fed by the drone's frame callback at the full frame rate, so the depth check always sees a fresh frame whatever the stride. The person cue is different: it uses the detections, so it needs a detection result that is newer than the drone's last stop. The sensor waits up to 1 second for one. With a high stride, or a slow detector, that result may not arrive in time. The person cue then reports `unknown` for that step, which neither blocks nor clears the step, and the depth cue alone decides it. Five unknown results in a row log `edge_obstacle_person_cue_down` once. A stride of 1 to 3 is fine for this; see `docs/obstacle-sensing.md`.
 - The launcher window has no field for it. The launcher passes its environment through to the edges, so set `FLIGHTRISK_EDGE_FRAME_STRIDE` before starting it, or use the flag when starting an edge by hand.
 
 ```
