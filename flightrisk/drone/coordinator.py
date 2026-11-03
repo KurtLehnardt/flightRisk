@@ -1089,7 +1089,7 @@ class FleetCoordinator:
                 events.extend(self._note_cuts_locked(drone_id, state, state.telemetry))
                 if self._release_deferred_locked(drone_id, state.telemetry):
                     messages = self._dispatch_locked()
-                    events = self._settle_and_collect_locked()
+                    events.extend(self._settle_and_collect_locked())
             self._emit_all(events)
             self._send_offers(messages)
         elif msg_type == "detections":

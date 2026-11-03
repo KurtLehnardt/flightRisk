@@ -412,6 +412,25 @@ def test_a_continuing_re_task_keeps_the_cuts_and_replays_appended_lanes():
     assert [e["lane_index"] for e in lane_blocked(events)] == [0, 6]
 
 
+def test_a_cut_reported_with_a_released_re_task_is_still_announced():
+    from tests.test_retask_refusal import TransientEdge, fleet_events
+    from tests.test_retask_refusal import make_fleet as make_retask_fleet
+
+    edges = {f"drone-{i}": TransientEdge(f"drone-{i}") for i in (1, 2, 3)}
+    coord, events = make_retask_fleet(edges, area=(900, 400))
+    coord.plan()
+    edges["drone-1"].refuse = edges["drone-2"].refuse = "busy"
+    coord.on_drone_lost("drone-3")
+    edges["drone-1"].refuse = edges["drone-2"].refuse = None
+    # One telemetry message both ends drone-1's busy refusal and reports its first cut.
+    coord.handle_message("drone-1", {
+        "type": "telemetry", "drone_id": "drone-1", "state": "hovering", "is_flying": True,
+        "obstacle_seq": 1, "obstacle_cuts": [0, 50], "obstacle_cuts_total": 1, "obstacle_cut_reasons": "obstacle",
+    })
+    assert any(set(p["to"]) == {"drone-1"} for p in fleet_events(events, "retask"))
+    assert [e["lane_index"] for e in lane_blocked(events)] == [0]
+
+
 def test_malformed_cut_fields_are_dropped_without_raising():
     coord, edges, _, events = cut_fleet()
     edges["drone-1"].telemetry(is_flying=True, obstacle_seq=1, obstacle_cuts=["x", "y", 7],
