@@ -110,6 +110,15 @@ class EdgeRunner:
         # False while frames fail to process (set by the edge device's frame
         # loop); flying edges report it in telemetry as ``detector_ok``.
         self.detector_ok = True
+        # The newest detection result, for the obstacle sensor's person cue:
+        # ``last_detections`` is a ``(detections, frame_width, frame_height)``
+        # tuple and ``last_detections_at`` the ``time.monotonic()`` stamp of
+        # when it was produced (the message timestamp is wall-clock and not
+        # comparable with the sensor's monotonic stamps). Both are ``None``
+        # until a frame has been run through a detector. The detections are
+        # stored first, so a reader that sees a new stamp sees its detections.
+        self.last_detections: tuple[list[Detection], int, int] | None = None
+        self.last_detections_at: float | None = None
         self._detector_lock = threading.Lock()
 
     @property
@@ -211,6 +220,8 @@ class EdgeRunner:
 
             msg.detections.append(detection)
 
+        self.last_detections = (list(msg.detections), msg.frame_width, msg.frame_height)
+        self.last_detections_at = time.monotonic()
         return msg
 
     def _stamp_pose(self, msg: DetectionMessage) -> None:
