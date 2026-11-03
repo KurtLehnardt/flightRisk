@@ -1,8 +1,11 @@
-"""Obstacle telemetry on the edge and its handling on the ground (design sections 3.3, 6 and 7.3).
+"""Obstacle telemetry on the edge and its handling on the ground (design sections 3.3, 4, 6 and 7.3).
 
-The executor side is covered by a stub accessor on a real ``LaneExecutor``;
-the ground side drives ``FleetCoordinator`` with the fake edges of
-``tests/test_coordinator.py``. No drone, network or real time is involved.
+The ground replays a drone's cuts with ``lane_steps.uncovered_segments``,
+the function the edge's executor uses, so both derive the same segments.
+The ground side drives ``FleetCoordinator`` with the fake edges of
+``tests/test_coordinator.py``; one test flies the demo plan into a wall on a
+real ``LaneExecutor`` and feeds its telemetry to the coordinator. No drone,
+network or real time is involved.
 """
 from __future__ import annotations
 
@@ -12,12 +15,9 @@ import pytest
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone import coordinator as coordinator_module
-from flightrisk.drone.coordinator import (
-    FleetCoordinator,
-    _apply_cut_deficit,
-    _uncovered_segments,
-)
+from flightrisk.drone.coordinator import FleetCoordinator
 from flightrisk.drone.lane_executor import LaneExecutor
+from flightrisk.drone.lane_steps import Cut, uncovered_segments
 from flightrisk.drone.obstacle_sensor import (
     CUT_OBSTACLE,
     CUT_PERSON,
@@ -27,11 +27,22 @@ from flightrisk.drone.obstacle_sensor import (
     SEGMENT_SKIPPED,
     SENSOR_UNAVAILABLE_DETAIL,
     TELEMETRY_FIELDS,
+    BlockedZone,
+    FakeObstacleSensor,
 )
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.drone.tello import FakeTelloController
 from tests.lane_executor_support import FakeClock as ExecutorClock
-from tests.lane_executor_support import QuietLogger, of_type
+from tests.lane_executor_support import (
+    QuietLogger,
+    SteppedTello,
+    assign,
+    of_type,
+    reply_for,
+    send,
+    start_at,
+    wait_for,
+)
 from tests.test_coordinator import make_fleet
 
 # The demo plan of design section 3.3.
@@ -44,71 +55,110 @@ DEMO_LANES = [
 ]
 
 
-def seg_tuple(seg):
-    return (seg["lane_index"], seg["x_cm"], seg["y_cm"], seg["end_x_cm"], seg["end_y_cm"], seg["reason"])
+def lanes_of(*pairs):
+    return [{"direction": d, "distance_cm": cm} for d, cm in pairs]
 
 
 # ---------------------------------------------------------------------------
-# apply_cut_deficit and uncovered_segments (the local copy of the lane_steps pair)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def test_deficit_is_absorbed_by_the_next_lane_the_other_way():
-    # A forward cut of 150 leaves the drone 150 cm short; a back lane rejoins the grid.
-    assert _apply_cut_deficit("back", 400, -150) == (250, 0)
-    # Another forward lane would widen the gap: it is flown as planned and the deficit stays.
-    assert _apply_cut_deficit("forward", 400, -150) == (400, -150)
-    # No deficit, no change; a lane is never lengthened.
-    assert _apply_cut_deficit("back", 400, 0) == (400, 0)
-    assert _apply_cut_deficit("forward", 400, 150) == (250, 0)
+def cut_fleet(n=2, lanes=DEMO_LANES):
+    """A planned fleet whose drones fly *lanes* from their zone origins."""
+    coord, edges, clock, events = make_fleet(n=n)
+    coord.plan()
+    for state in coord._drones.values():
+        state.lanes = [dict(lane) for lane in lanes]
+    return coord, edges, clock, events
 
 
-def test_deficit_larger_than_the_lane_leaves_a_remainder():
-    assert _apply_cut_deficit("back", 100, -150) == (0, -50)
+def cut_telemetry(edge, seq, cuts, reasons="", total=None, **extra):
+    """Telemetry listing *cuts* as the edge does: the last eight, numbered up to *seq*."""
+    flat = [v for pair in cuts for v in pair]
+    edge.telemetry(is_flying=True, obstacle_seq=seq, obstacle_cuts=flat,
+                   obstacle_cuts_total=len(cuts) if total is None else total,
+                   obstacle_cut_reasons=reasons, **extra)
 
 
-def test_a_lane_shortened_below_the_minimum_move_is_skipped():
-    flown, deficit = _apply_cut_deficit("back", 400, -390)
-    assert flown == 0
-    assert deficit == 10  # the drone did not move, so the plan is 10 cm ahead of it
+def lane_blocked(events):
+    return [p for name, p in events if name == "fleet_event" and p.get("event") == "lane_blocked"]
 
 
-def test_sideways_lanes_do_not_touch_the_forward_deficit():
-    assert _apply_cut_deficit("right", 100, 0) == (100, 0)
-    assert _apply_cut_deficit("left", 100, 40) == (100, 40)  # a deficit of the other sign never shortens
-    assert _apply_cut_deficit("left", 100, -40) == (60, 0)
+def obstacle_entries(coord, drone_id="drone-1"):
+    return [u for u in coord.current_plan()["uncovered"] if u.get("kind") == "segment" and u["drone_id"] == drone_id]
+
+
+def seg_tuple(entry):
+    return (entry["index"], entry["x_cm"], entry["y_cm"], entry["end_x_cm"], entry["end_y_cm"], entry["reason"])
+
+
+def ground_segments(lanes, cuts, reasons=""):
+    """Segments the coordinator derives for drone-1 (whose zone origin is 0, 0) from one telemetry message."""
+    coord, edges, _, _ = cut_fleet(n=1, lanes=lanes)
+    assert coord._drones["drone-1"].zone.origin == (0, 0)
+    cut_telemetry(edges["drone-1"], len(cuts), cuts, reasons)
+    return [seg_tuple(e) for e in obstacle_entries(coord)]
+
+
+# ---------------------------------------------------------------------------
+# The ground's replay is lane_steps'
+# ---------------------------------------------------------------------------
+
+
+def test_the_coordinator_has_no_private_copy_of_the_cut_rules():
+    assert not hasattr(coordinator_module, "_apply_cut_deficit")
+    assert not hasattr(coordinator_module, "_uncovered_segments")
+    assert coordinator_module.uncovered_segments is uncovered_segments
+
+
+@pytest.mark.parametrize("lanes, cuts, reasons", [
+    (DEMO_LANES, [(0, 250)], "obstacle"),
+    (DEMO_LANES, [(0, 250), (2, 100)], "obstacle,person"),
+    (DEMO_LANES, [(0, 10)], "sensor_stale"),
+    (DEMO_LANES, [(0, 250), (1, 50)], "obstacle,sensor_down"),
+    (lanes_of(("forward", 500), ("forward", 400), ("right", 100), ("back", 900)), [(0, 300)], "person"),
+    (lanes_of(("right", 300), ("forward", 100), ("left", 300)), [(0, 120)], "autopilot"),
+])
+def test_ground_segments_are_lane_steps_segments(lanes, cuts, reasons):
+    expected = [
+        (s.lane_index, s.x_cm, s.y_cm, s.end_x_cm, s.end_y_cm, s.reason)
+        for s in uncovered_segments(lanes, [Cut(lane, flown, reason)
+                                            for (lane, flown), reason in zip(cuts, reasons.split(","))])
+    ]
+    assert expected
+    assert ground_segments(lanes, cuts, reasons) == expected
 
 
 def test_worked_example_of_the_design():
-    segments = _uncovered_segments(DEMO_LANES, [(0, 250)])
-    assert [seg_tuple(s) for s in segments] == [
+    coord, edges, _, _ = cut_fleet(n=1)
+    cut_telemetry(edges["drone-1"], 1, [(0, 250)], CUT_OBSTACLE)
+    entries = obstacle_entries(coord)
+    assert [seg_tuple(e) for e in entries] == [
         (0, 0, 250, 0, 400, CUT_OBSTACLE),
         (2, 100, 250, 100, 400, SEGMENT_SKIPPED),
     ]
-    assert [s["unflown_cm"] for s in segments] == [150, 150]
-    assert [s["cut"] for s in segments] == [True, False]
+    assert [e["distance_cm"] for e in entries] == [150, 150]
+    # Both segments belong to the cut numbered 1, which groups them for the re-flight.
+    assert [e["cut_seq"] for e in entries] == [1, 1]
 
 
 def test_no_cuts_no_segments():
-    assert _uncovered_segments(DEMO_LANES, []) == []
+    coord, edges, _, _ = cut_fleet(n=1)
+    cut_telemetry(edges["drone-1"], 0, [])
+    assert obstacle_entries(coord) == []
 
 
 def test_cut_reason_is_carried_to_the_segment():
-    (segment, _) = _uncovered_segments(DEMO_LANES, [(0, 250)], [CUT_PERSON])
-    assert segment["reason"] == CUT_PERSON
+    assert ground_segments(DEMO_LANES, [(0, 250)], CUT_PERSON)[0][-1] == CUT_PERSON
 
 
 def test_a_cut_skips_the_following_lanes_in_the_same_direction():
     # A 900 cm displacement is split into 500 + 400 forward, then the lane across.
-    lanes = [
-        {"direction": "forward", "distance_cm": 500},
-        {"direction": "forward", "distance_cm": 400},
-        {"direction": "right", "distance_cm": 100},
-        {"direction": "back", "distance_cm": 900},
-    ]
-    segments = _uncovered_segments(lanes, [(0, 300)])
-    assert [seg_tuple(s) for s in segments] == [
+    lanes = lanes_of(("forward", 500), ("forward", 400), ("right", 100), ("back", 900))
+    assert ground_segments(lanes, [(0, 300)], CUT_OBSTACLE) == [
         (0, 0, 300, 0, 500, CUT_OBSTACLE),
+        # The run after the cut takes the cut's reason (design 3.3, step 3), not ``skipped``.
         (1, 0, 500, 0, 900, CUT_OBSTACLE),
         # The 600 cm deficit shortens the back lane, which starts at (100, 900).
         (3, 100, 300, 100, 900, SEGMENT_SKIPPED),
@@ -116,19 +166,13 @@ def test_a_cut_skips_the_following_lanes_in_the_same_direction():
 
 
 def test_a_forward_lane_after_a_forward_cut_is_never_lengthened_or_shortened():
-    lanes = [
-        {"direction": "forward", "distance_cm": 400},
-        {"direction": "right", "distance_cm": 100},
-        {"direction": "forward", "distance_cm": 400},
-    ]
-    segments = _uncovered_segments(lanes, [(0, 250)])
-    assert [seg_tuple(s) for s in segments] == [(0, 0, 250, 0, 400, CUT_OBSTACLE)]
+    lanes = lanes_of(("forward", 400), ("right", 100), ("forward", 400))
+    assert ground_segments(lanes, [(0, 250)], CUT_OBSTACLE) == [(0, 0, 250, 0, 400, CUT_OBSTACLE)]
 
 
 def test_a_cut_on_a_shortened_lane_reports_both_parts():
     # Lane 0 cut at 250; lane 2 flown as back 250 and cut after 100 cm.
-    segments = _uncovered_segments(DEMO_LANES, [(0, 250), (2, 100)])
-    assert [seg_tuple(s) for s in segments] == [
+    assert ground_segments(DEMO_LANES, [(0, 250), (2, 100)], "obstacle,obstacle") == [
         (0, 0, 250, 0, 400, CUT_OBSTACLE),
         (2, 100, 250, 100, 400, SEGMENT_SKIPPED),
         # It rejoined the lane at (100, 250), flew 100 cm to (100, 150) and stopped.
@@ -138,41 +182,48 @@ def test_a_cut_on_a_shortened_lane_reports_both_parts():
     ]
 
 
+def test_a_lane_skipped_below_the_minimum_move_keeps_the_true_deficit():
+    # Cut 390 cm short: the back lane would fly 10 cm, so it is skipped, and the
+    # drone is then 10 cm ahead of the plan (+10, not zero), so the last forward
+    # lane is shortened by 10 cm instead of ending 10 cm past its planned end.
+    assert ground_segments(DEMO_LANES, [(0, 10)], CUT_OBSTACLE) == [
+        (0, 0, 10, 0, 400, CUT_OBSTACLE),
+        (2, 100, 0, 100, 400, SEGMENT_SKIPPED),
+        (4, 200, 10, 200, 0, SEGMENT_SKIPPED),
+    ]
+
+
 def test_a_sensor_down_cut_ends_the_plan():
-    segments = _uncovered_segments(DEMO_LANES, [(2, 100)], [CUT_SENSOR_DOWN])
-    assert [seg_tuple(s) for s in segments] == [
+    assert ground_segments(DEMO_LANES, [(2, 100)], CUT_SENSOR_DOWN) == [
         (2, 100, 300, 100, 0, CUT_SENSOR_DOWN),
         (3, 100, 0, 200, 0, CUT_SENSOR_DOWN),
         (4, 200, 0, 200, 400, CUT_SENSOR_DOWN),
     ]
 
 
+def test_sensor_down_after_a_cut_keeps_the_remaining_lanes_inside_the_zone():
+    segments = ground_segments(DEMO_LANES, [(0, 250), (1, 50)], f"{CUT_OBSTACLE},{CUT_SENSOR_DOWN}")
+    assert segments == [
+        (0, 0, 250, 0, 400, CUT_OBSTACLE),
+        (1, 50, 250, 100, 250, CUT_SENSOR_DOWN),
+        (2, 100, 400, 100, 0, CUT_SENSOR_DOWN),
+        (3, 100, 0, 200, 0, CUT_SENSOR_DOWN),
+        (4, 200, 0, 200, 400, CUT_SENSOR_DOWN),
+    ]
+    for _, x0, y0, x1, y1, _ in segments:
+        assert 0 <= min(y0, y1) and max(y0, y1) <= 400
+
+
 def test_cut_outside_the_lane_list_is_ignored():
-    assert _uncovered_segments(DEMO_LANES, [(9, 10)]) == []
+    coord, edges, _, events = cut_fleet(n=1)
+    cut_telemetry(edges["drone-1"], 1, [(9, 10)])
+    assert obstacle_entries(coord) == []
+    assert lane_blocked(events) == []
 
 
 # ---------------------------------------------------------------------------
-# Coordinator
+# Cuts in telemetry: numbering, events and plans
 # ---------------------------------------------------------------------------
-
-
-def cut_fleet(n=2):
-    """A planned and acked fleet whose drones fly the demo lanes."""
-    coord, edges, clock, events = make_fleet(n=n)
-    coord.plan()
-    for state in coord._drones.values():
-        state.lanes = [dict(lane) for lane in DEMO_LANES]
-    return coord, edges, clock, events
-
-
-def cut_telemetry(edge, seq, cuts, reasons="", **extra):
-    flat = [v for pair in cuts for v in pair]
-    edge.telemetry(is_flying=True, obstacle_seq=seq, obstacle_cuts=flat, obstacle_cuts_total=len(cuts),
-                   obstacle_cut_reasons=reasons, **extra)
-
-
-def lane_blocked(events):
-    return [p for name, p in events if name == "fleet_event" and p.get("event") == "lane_blocked"]
 
 
 def test_cuts_become_segments_in_current_plan_with_drone_id_and_reason():
@@ -186,6 +237,8 @@ def test_cuts_become_segments_in_current_plan_with_drone_id_and_reason():
     first = uncovered[0]
     assert (first["x_cm"], first["y_cm"], first["end_x_cm"], first["end_y_cm"]) == (0, 250, 0, 400)
     assert first["kind"] == "segment" and first["direction"] == "forward"
+    assert set(first) == {"kind", "index", "direction", "distance_cm", "x_cm", "y_cm", "end_x_cm", "end_y_cm",
+                          "drone_id", "reason", "cut_seq"}
 
 
 def test_segments_use_absolute_coordinates_from_the_zone_origin():
@@ -222,7 +275,7 @@ def test_one_lane_blocked_event_per_seq_increase():
     cut_telemetry(edge, 2, [(0, 250), (4, 100)], f"{CUT_OBSTACLE},{CUT_SENSOR_STALE}")
     new = lane_blocked(events)[1:]
     # The first cut leaves a deficit of -150 that a forward lane never absorbs, so lane 4 is flown at its
-    # planned length and a cut after 100 cm leaves 300 cm of it.
+    # planned length from y 0 and a cut after 100 cm leaves 300 cm of it.
     assert [(e["lane_index"], e["reason"], e["y_cm"], e["unflown_cm"]) for e in new] == [
         (4, CUT_SENSOR_STALE, 100, 300)
     ]
@@ -232,6 +285,50 @@ def test_two_cuts_between_telemetry_messages_give_two_events():
     coord, edges, _, events = cut_fleet()
     cut_telemetry(edges["drone-1"], 2, [(0, 250), (2, 100)], f"{CUT_OBSTACLE},{CUT_PERSON}")
     assert [(e["lane_index"], e["reason"]) for e in lane_blocked(events)] == [(0, CUT_OBSTACLE), (2, CUT_PERSON)]
+
+
+def test_the_event_counts_a_same_direction_run_and_the_lanes_a_sensor_down_ends():
+    lanes = lanes_of(("forward", 500), ("forward", 400), ("right", 100), ("back", 900))
+    coord, edges, _, events = cut_fleet(n=1, lanes=lanes)
+    cut_telemetry(edges["drone-1"], 1, [(0, 300)])
+    (event,) = lane_blocked(events)
+    # 200 cm of lane 0 and all 400 cm of lane 1; the shadow on lane 3 is not part of the stop.
+    assert (event["x_cm"], event["y_cm"], event["unflown_cm"]) == (0, 300, 600)
+
+    coord, edges, _, events = cut_fleet(n=1)
+    cut_telemetry(edges["drone-1"], 1, [(2, 100)], CUT_SENSOR_DOWN)
+    (event,) = lane_blocked(events)
+    assert (event["lane_index"], event["x_cm"], event["y_cm"]) == (2, 100, 300)
+    assert event["unflown_cm"] == 300 + 100 + 400
+    assert event["reason"] == CUT_SENSOR_DOWN
+
+
+def test_the_ground_keeps_every_cut_although_telemetry_lists_the_last_eight():
+    lanes = lanes_of(*[("forward", 400), ("right", 50)] * 10)
+    coord, edges, _, events = cut_fleet(n=1, lanes=lanes)
+    cuts = []
+    for k in range(10):
+        cuts.append((2 * k, 100))
+        listed = cuts[-MAX_CUTS_LISTED:]
+        cut_telemetry(edges["drone-1"], k + 1, listed, ",".join([CUT_OBSTACLE] * len(listed)), total=len(cuts))
+    entries = obstacle_entries(coord)
+    assert [e["index"] for e in entries] == [2 * k for k in range(10)]
+    assert [e["cut_seq"] for e in entries] == list(range(1, 11))
+    assert all(e["distance_cm"] == 300 for e in entries)
+    assert [e["lane_index"] for e in lane_blocked(events)] == [2 * k for k in range(10)]
+    assert coord.status()["drone-1"]["uncovered_cm"] == 3000
+
+
+def test_cuts_no_message_listed_are_reported_missing(caplog):
+    lanes = lanes_of(*[("forward", 400), ("right", 50)] * 10)
+    coord, edges, _, events = cut_fleet(n=1, lanes=lanes)
+    cuts = [(2 * k, 100) for k in range(10)]
+    with caplog.at_level(logging.WARNING, logger=coordinator_module.logger.name):
+        cut_telemetry(edges["drone-1"], 10, cuts[-MAX_CUTS_LISTED:], total=10)
+    # Only the eight listed cuts (numbers 3 to 10) are known; the first two are lost.
+    assert [e["cut_seq"] for e in obstacle_entries(coord)] == list(range(3, 11))
+    assert len(lane_blocked(events)) == MAX_CUTS_LISTED
+    assert any("2 cuts that no telemetry listed" in r.getMessage() for r in caplog.records)
 
 
 def test_telemetry_without_obstacle_fields_changes_nothing():
@@ -251,40 +348,90 @@ def test_sticky_cuts_survive_telemetry_without_the_fields():
     edges["drone-1"].telemetry(is_flying=True)
     assert len(coord.current_plan()["uncovered"]) == 2
     assert len(lane_blocked(events)) == 1
+    assert coord.status()["drone-1"]["uncovered_cm"] == 300
 
 
-def test_a_lower_seq_means_a_new_plan_and_starts_again():
-    coord, edges, _, events = cut_fleet()
+def test_the_count_carries_across_plans_and_old_cuts_are_ignored():
+    coord, edges, clock, events = cut_fleet()
     edge = edges["drone-1"]
     cut_telemetry(edge, 1, [(0, 250)])
-    cut_telemetry(edge, 0, [])  # the edge accepted a new plan
-    assert coord.current_plan()["uncovered"] == []
+    cut_telemetry(edge, 2, [(0, 250), (2, 100)])
+    assert len(obstacle_entries(coord)) == 4
+    clock.advance(5.0)  # the flying report is stale, so planning is allowed
+    coord.plan()
+    for state in coord._drones.values():
+        state.lanes = [dict(lane) for lane in DEMO_LANES]
+    assert obstacle_entries(coord) == []
+    # The old plan's telemetry arrives once more before the edge accepts the new plan.
+    cut_telemetry(edge, 2, [(0, 250), (2, 100)])
+    assert obstacle_entries(coord) == [] and len(lane_blocked(events)) == 2
+    # The edge accepted the plan: its count stays at 2 and the plan has no cuts.
+    cut_telemetry(edge, 2, [])
+    assert obstacle_entries(coord) == []
+    # The new plan's first cut is cut number 3.
+    cut_telemetry(edge, 3, [(4, 100)], CUT_PERSON)
+    assert [(e["index"], e["reason"], e["cut_seq"]) for e in obstacle_entries(coord)] == [(4, CUT_PERSON, 3)]
+    assert [e["lane_index"] for e in lane_blocked(events)] == [0, 2, 4]
+
+
+def test_a_plan_the_edge_left_without_the_ground_drops_its_cuts():
+    # obstacle_cuts_total counts only the edge's current plan, so older cuts are dropped.
+    coord, edges, _, _ = cut_fleet(n=1)
+    cut_telemetry(edges["drone-1"], 1, [(0, 250)])
+    assert obstacle_entries(coord)
+    cut_telemetry(edges["drone-1"], 1, [], total=0)
+    assert obstacle_entries(coord) == []
+
+
+def test_a_lower_count_means_the_edge_restarted(caplog):
+    coord, edges, _, events = cut_fleet(n=1)
+    edge = edges["drone-1"]
+    cut_telemetry(edge, 3, [(0, 250)], total=1)
+    with caplog.at_level(logging.WARNING, logger=coordinator_module.logger.name):
+        cut_telemetry(edge, 0, [])
+    assert obstacle_entries(coord) == []
+    assert any("restarted" in r.getMessage() for r in caplog.records)
     cut_telemetry(edge, 1, [(2, 100)])
     assert [e["lane_index"] for e in lane_blocked(events)] == [0, 2]
 
 
-def test_planning_again_clears_the_segments_and_ignores_stale_telemetry():
-    coord, edges, clock, events = cut_fleet()
-    cut_telemetry(edges["drone-1"], 1, [(0, 250)])
-    assert coord.current_plan()["uncovered"]
-    clock.advance(5.0)  # the flying report is stale, so planning is allowed
-    coord.plan()
-    assert coord.current_plan()["uncovered"] == []
-    for state in coord._drones.values():
-        state.lanes = [dict(lane) for lane in DEMO_LANES]
-    # The old plan's telemetry arrives once more before the edge accepts the new plan.
-    cut_telemetry(edges["drone-1"], 1, [(0, 250)])
-    assert len(lane_blocked(events)) == 1
+def test_a_continuing_re_task_keeps_the_cuts_and_replays_appended_lanes():
+    coord, edges, _, events = cut_fleet(n=1)
+    edge = edges["drone-1"]
+    cut_telemetry(edge, 1, [(0, 250)])
+    # A re-task appends lanes (the coordinator keeps the previous lanes as the prefix).
+    state = coord._drones["drone-1"]
+    state.lanes = state.lanes + lanes_of(("right", 100), ("back", 400))
+    cut_telemetry(edge, 1, [(0, 250)])
+    assert [e["index"] for e in obstacle_entries(coord)] == [0, 2]
+    # A cut on an appended lane indexes the whole lane list.
+    cut_telemetry(edge, 2, [(0, 250), (6, 100)], "obstacle,person")
+    assert [(e["index"], e["reason"]) for e in obstacle_entries(coord)] == [
+        (0, CUT_OBSTACLE), (2, SEGMENT_SKIPPED), (6, CUT_PERSON),
+    ]
+    assert [e["lane_index"] for e in lane_blocked(events)] == [0, 6]
 
 
 def test_malformed_cut_fields_are_dropped_without_raising():
     coord, edges, _, events = cut_fleet()
-    edges["drone-1"].telemetry(is_flying=True, obstacle_seq=1, obstacle_cuts=[0, "x", -1, 5, 7],
+    edges["drone-1"].telemetry(is_flying=True, obstacle_seq=1, obstacle_cuts=["x", "y", 7],
                                obstacle_cut_reasons=17)
     assert coord.current_plan()["uncovered"] == []
     assert lane_blocked(events) == []
     edges["drone-1"].telemetry(is_flying=True, obstacle_seq="many", obstacle_cuts="no")
+    edges["drone-1"].telemetry(is_flying=True, obstacle_seq=1.5, obstacle_cuts=[0, 250])
+    edges["drone-1"].telemetry(is_flying=True, obstacle_seq=-1, obstacle_cuts=[0, 250])
     assert coord.current_plan()["uncovered"] == []
+    assert lane_blocked(events) == []
+
+
+def test_a_malformed_pair_does_not_shift_the_numbers_of_the_others():
+    coord, edges, _, events = cut_fleet(n=1)
+    edges["drone-1"].telemetry(is_flying=True, obstacle_seq=3, obstacle_cuts=[0, 250, "x", 5, 2, 100],
+                               obstacle_cuts_total=3, obstacle_cut_reasons="obstacle,obstacle,person")
+    assert [(e["index"], e["reason"], e["cut_seq"]) for e in obstacle_entries(coord) if e["reason"] != "skipped"] \
+        == [(0, CUT_OBSTACLE, 1), (2, CUT_PERSON, 3)]
+    assert [e["lane_index"] for e in lane_blocked(events)] == [0, 2]
 
 
 def test_status_carries_the_obstacle_fields_per_drone():
@@ -307,7 +454,8 @@ def test_the_re_flight_seam_gets_the_new_cuts_once():
 
     class Seamed(FleetCoordinator):
         def _on_new_cuts_locked(self, drone_id, state, new_cuts):
-            seen.append((drone_id, list(new_cuts), len(state.obstacle_segments)))
+            numbers, segments = self._obstacle_replay_locked(state)
+            seen.append((drone_id, list(new_cuts), numbers, [(s.lane_index, s.cut) for s in segments]))
 
     coord, edges, clock, _ = make_fleet(n=1)
     coord = Seamed(dict(coord._links), area_cm=(400, 400), strip_cm=50, clock=clock)
@@ -316,7 +464,51 @@ def test_the_re_flight_seam_gets_the_new_cuts_once():
     edge = edges["drone-1"]
     cut_telemetry(edge, 1, [(0, 250)], CUT_OBSTACLE)
     cut_telemetry(edge, 1, [(0, 250)], CUT_OBSTACLE)
-    assert seen == [("drone-1", [(0, 250.0, CUT_OBSTACLE)], 2)]
+    cut_telemetry(edge, 2, [(0, 250), (2, 100)], "obstacle,person")
+    assert seen == [
+        ("drone-1", [(1, Cut(0, 250, CUT_OBSTACLE))], [1], [(0, 0), (2, 0)]),
+        ("drone-1", [(2, Cut(2, 100, CUT_PERSON))], [1, 2], [(0, 0), (2, 0), (2, 1), (4, 1)]),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# A real edge's telemetry on the ground
+# ---------------------------------------------------------------------------
+
+
+def test_a_real_executor_cut_reaches_the_ground_as_the_same_segments():
+    """Fly the demo plan into a wall at y 250 on a real executor and hand its telemetry to the coordinator."""
+    clock = ExecutorClock()
+    drone = SteppedTello(auto=True, name="drone-1", battery=90)
+    drone.connect()
+    envelope = SafetyEnvelope(alt_slot_cm=100, geofence_cm=500, clock=clock)
+    sensor = FakeObstacleSensor(envelope.pose_snapshot, [BlockedZone(heading_deg=0.0, y_min=250, x_max=50)])
+    sent: list[dict] = []
+    executor = LaneExecutor(drone, envelope, "drone-1", send=sent.append, clock=clock, logger=QuietLogger(),
+                            fleet_v2=True, obstacle_sensor=sensor, obstacle_retry_pause_s=0.0)
+    try:
+        executor.handle_clock({"type": "clock", "offset_s": 0.0})
+        send(executor, assign(lanes=DEMO_LANES, plan_id="p-1", plan_seq=1, cmd_id="a-1"))
+        assert reply_for(sent, "a-1")["type"] == "ack"
+        t_ground = clock() + 0.5
+        send(executor, start_at(t_ground, plan_id="p-1", cmd_id="s-1"))
+        clock.set(t_ground)
+        assert wait_for(lambda: not executor.is_busy and executor.lane_index >= executor.lanes_total)
+        telemetry = executor.telemetry()
+        edge_segments = executor.obstacle_segments()
+    finally:
+        executor.shutdown(timeout=2.0)
+    assert telemetry["obstacle_seq"] == 1 and telemetry["obstacle_cuts"] == [0, 250]
+
+    coord, edges, _, events = cut_fleet(n=1)
+    edges["drone-1"].reply(telemetry)
+    entries = obstacle_entries(coord)
+    assert [seg_tuple(e) for e in entries] == [
+        (s.lane_index, s.x_cm, s.y_cm, s.end_x_cm, s.end_y_cm, s.reason) for s in edge_segments
+    ]
+    assert [e["distance_cm"] for e in entries] == [s.length_cm for s in edge_segments]
+    (event,) = lane_blocked(events)
+    assert (event["lane_index"], event["x_cm"], event["y_cm"], event["unflown_cm"]) == (0, 0, 250, 150)
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +627,7 @@ def test_the_longest_reason_string_is_accepted():
 
 
 class StubExecutor(LaneExecutor):
-    """A real executor with the optional obstacle accessor, as the stepped executor will have."""
+    """A real executor whose obstacle accessor returns what the test sets."""
 
     status = None
     error: Exception | None = None
@@ -461,14 +653,31 @@ def telemetry_of(executor):
     return executor.telemetry()
 
 
-def test_telemetry_is_unchanged_without_an_accessor():
+def test_telemetry_is_unchanged_for_an_executor_without_a_sensor():
     executor, _, _ = make_executor(LaneExecutor)
     try:
+        # The executor's own accessor (t01) is what the monitor reads.
+        assert executor.obstacle_status() == {}
         msg = telemetry_of(executor)
         assert not any(key in msg for key in TELEMETRY_FIELDS)
-        assert not hasattr(executor, "obstacle_status")
     finally:
         executor.shutdown(timeout=2.0)
+
+
+class NoAccessorExecutor(LaneExecutor):
+    """An executor whose class provides no obstacle accessor."""
+
+    obstacle_status = None
+
+
+def test_telemetry_is_unchanged_without_an_accessor():
+    plain, _, _ = make_executor(LaneExecutor)
+    bare, _, _ = make_executor(NoAccessorExecutor)
+    try:
+        assert set(telemetry_of(bare)) == set(telemetry_of(plain))
+    finally:
+        plain.shutdown(timeout=2.0)
+        bare.shutdown(timeout=2.0)
 
 
 @pytest.mark.parametrize("status", [None, {}])

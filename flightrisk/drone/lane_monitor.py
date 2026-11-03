@@ -371,9 +371,11 @@ class MonitorMixin:
     def _obstacle_telemetry(self) -> dict[str, Any]:
         """The optional obstacle fields (design section 6), or nothing.
 
-        The executor provides them through an optional ``obstacle_status()``
-        accessor. Without the accessor, or when it returns nothing, no field is
-        added and the telemetry is exactly what it was before obstacle sensing.
+        ``LaneExecutor.obstacle_status()`` provides them; it returns nothing
+        for an edge that does not sense and never cut a lane. Without the
+        accessor (a mixin user that has none), or when it returns nothing, no
+        field is added and the telemetry is exactly what it was before
+        obstacle sensing.
         Only the contract's field names pass, so a stray key never reaches the
         wire. A failing accessor must not break telemetry, so it adds nothing.
         """
