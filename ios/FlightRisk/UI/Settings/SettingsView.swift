@@ -380,8 +380,9 @@ struct SettingsView: View {
 
     private func confirmCloudOptIn() {
         reasoningSettings.confirmCloudConsent(selectCloud: consentSelectsCloud)
-        cloudOptIn = true
-        if consentSelectsCloud {
+        // Show what was stored: if the consent file could not be written, the opt-in is still off.
+        cloudOptIn = reasoningSettings.cloudOptIn
+        if consentSelectsCloud, reasoningSettings.storedProvider == .cloudClaude {
             reasoningProvider = .cloudClaude
         }
         consentSelectsCloud = false
@@ -391,7 +392,7 @@ struct SettingsView: View {
     /// The opt-in was already turned off and saved by ``ReasoningSettings``,
     /// which also told the cloud backend to cancel requests in flight.
     private func didDisableCloudReasoning() {
-        cloudOptIn = false
+        cloudOptIn = reasoningSettings.cloudOptIn
         apiKeyInput = ""
         if reasoningProvider.isCloud {
             let localReady = reasoningStatus.unavailable[.localGemma] == nil

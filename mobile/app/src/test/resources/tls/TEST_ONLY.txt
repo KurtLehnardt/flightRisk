@@ -1,0 +1,13 @@
+TEST ONLY. NOT A REAL CREDENTIAL.
+
+test-only-localhost.p12 is a throwaway self-signed certificate and key pair for "localhost" and 127.0.0.1,
+generated with keytool for the JVM unit tests of the wss:// client (RawWebSocketTlsTest). Its password is
+"test-only-password". It protects nothing: the key is public in this repository, it was never used for
+anything else, and no app code trusts it. Only the tests build a trust manager from it, to prove that the
+default trust store refuses it and that a client which is told to trust exactly this certificate connects.
+Do not install it, do not trust it anywhere, and do not reuse it.
+
+Regenerate (the tests do not depend on the exact bytes):
+keytool -genkeypair -alias flightrisk-test-only -keyalg RSA -keysize 2048 -validity 36500 -storetype PKCS12 \
+  -keystore test-only-localhost.p12 -storepass test-only-password -keypass test-only-password \
+  -dname "CN=localhost, OU=TEST ONLY DO NOT TRUST, O=FlightRisk unit tests" -ext "san=dns:localhost,ip:127.0.0.1"

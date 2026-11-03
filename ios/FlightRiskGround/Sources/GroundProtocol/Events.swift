@@ -10,6 +10,7 @@ public enum GroundEvent: Equatable, Sendable {
     case frame(FramePayload)
     case matchAlert(MatchAlert)
     case matchAlertReminder(MatchAlert)
+    case matchAlertResolved(MatchAlertResolved)
     case detectionProfiles(DetectionProfilesPayload)
     case ceilingSettings(CeilingSettingsPayload)
     case reasoningProvider(ReasoningProviderPayload)
@@ -29,7 +30,7 @@ public enum GroundEvent: Equatable, Sendable {
     /// Every event name this build decodes.
     public static let handledEventNames: [String] = [
         "status", "fleet_status", "fleet_event", "fleet_plan", "fleet_detection", "frame",
-        "match_alert", "match_alert_reminder", "detection_profiles", "ceiling_settings",
+        "match_alert", "match_alert_reminder", "match_alert_resolved", "detection_profiles", "ceiling_settings",
         "reasoning_provider", "manual_status", "manual_ack", "manual_result", "land_all_ack",
         "command_ack", "stream_video_state", "error", "warning",
     ]
@@ -49,6 +50,7 @@ public enum GroundEvent: Equatable, Sendable {
         case "frame": return make(FramePayload.self, GroundEvent.frame)
         case "match_alert": return make(MatchAlert.self, GroundEvent.matchAlert)
         case "match_alert_reminder": return make(MatchAlert.self, GroundEvent.matchAlertReminder)
+        case "match_alert_resolved": return make(MatchAlertResolved.self, GroundEvent.matchAlertResolved)
         case "detection_profiles": return make(DetectionProfilesPayload.self, GroundEvent.detectionProfiles)
         case "ceiling_settings": return make(CeilingSettingsPayload.self, GroundEvent.ceilingSettings)
         case "reasoning_provider": return make(ReasoningProviderPayload.self, GroundEvent.reasoningProvider)

@@ -49,4 +49,4 @@ A later change (branch `fix/android-tests-and-schema`) removed the unused target
 
 ## Not changed
 
-- iOS is unchanged. Open iOS follow-ups: the cloud opt-in carried by device backup, and the unused `TargetStore.swift`.
+- iOS was unchanged in this change. The iOS follow-ups (the cloud opt-in carried by device backup, and the unused `TargetStore.swift`) were done in a separate iOS change; see `docs/ios-ground-client.md`.

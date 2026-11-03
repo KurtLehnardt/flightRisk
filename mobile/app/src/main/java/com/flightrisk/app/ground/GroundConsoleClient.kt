@@ -127,6 +127,17 @@ class GroundConsoleClient(
      */
     val frames: StateFlow<Map<String, Frame>> = _frames.asStateFlow()
 
+    /**
+     * The map [frames] publishes. It compares by identity, so a frame equal to the one before it (a still
+     * scene, or the same detections again) is still a new value for the flow: a data class map would be
+     * treated as unchanged and the screen would think the video had stopped.
+     */
+    private class FrameSnapshot(private val delegate: Map<String, Frame>) : Map<String, Frame> by delegate {
+        override fun equals(other: Any?): Boolean = this === other
+        override fun hashCode(): Int = System.identityHashCode(this)
+        override fun toString(): String = "FrameSnapshot(${delegate.keys})"
+    }
+
     private class Queued(val event: GroundEvent, val size: Long)
 
     private val channel = Channel<Queued>(Channel.UNLIMITED)
@@ -606,7 +617,7 @@ class GroundConsoleClient(
             next.remove(key)
             next[key] = frame
             while (next.size > config.maxVideoDrones) next.remove(next.keys.first())
-            next
+            FrameSnapshot(next)
         }
     }
 

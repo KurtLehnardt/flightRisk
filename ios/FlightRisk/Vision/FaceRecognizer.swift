@@ -80,7 +80,7 @@ final class FaceRecognizer {
         return true
     }
 
-    /// Set the target embedding directly (e.g. restored from TargetStore).
+    /// Set the target embedding directly (for example one computed elsewhere).
     ///
     /// - Parameter embedding: Pre-computed 512-d L2-normalized face embedding.
     func setTargetEmbedding(_ embedding: [Float]) {
@@ -135,8 +135,6 @@ final class FaceRecognizer {
     }
 
     /// Extract the raw face embedding for a person crop.
-    ///
-    /// Used by ``TargetStore`` for persistence.
     ///
     /// - Parameter crop: Image of a detected person.
     /// - Returns: Normalized 512-d face embedding, or nil if no face found.

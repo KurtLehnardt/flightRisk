@@ -27,6 +27,7 @@ object ServerEvents {
     const val FRAME = "frame"
     const val MATCH_ALERT = "match_alert"
     const val MATCH_ALERT_REMINDER = "match_alert_reminder"
+    const val MATCH_ALERT_RESOLVED = "match_alert_resolved"
     const val DETECTION_PROFILES = "detection_profiles"
     const val CEILING_SETTINGS = "ceiling_settings"
     const val REASONING_PROVIDER = "reasoning_provider"
@@ -42,7 +43,7 @@ object ServerEvents {
     /** Every event name this module decodes. */
     val HANDLED: Set<String> = setOf(
         STATUS, FLEET_STATUS, FLEET_EVENT, FLEET_PLAN, FLEET_DETECTION, FRAME, MATCH_ALERT,
-        MATCH_ALERT_REMINDER, DETECTION_PROFILES, CEILING_SETTINGS, REASONING_PROVIDER, MANUAL_STATUS,
+        MATCH_ALERT_REMINDER, MATCH_ALERT_RESOLVED, DETECTION_PROFILES, CEILING_SETTINGS, REASONING_PROVIDER, MANUAL_STATUS,
         MANUAL_ACK, MANUAL_RESULT, LAND_ALL_ACK, COMMAND_ACK, STREAM_VIDEO_STATE, ERROR, WARNING,
     )
 
@@ -71,6 +72,7 @@ object ServerEvents {
         FRAME -> Frame.fromJson(o)
         MATCH_ALERT -> MatchAlert.fromJson(o, isReminder = false)
         MATCH_ALERT_REMINDER -> MatchAlert.fromJson(o, isReminder = true)
+        MATCH_ALERT_RESOLVED -> MatchAlertResolved.fromJson(o)
         DETECTION_PROFILES -> DetectionProfiles.fromJson(o)
         CEILING_SETTINGS -> CeilingSettings.fromJson(o)
         REASONING_PROVIDER -> ReasoningProvider.fromJson(o)
