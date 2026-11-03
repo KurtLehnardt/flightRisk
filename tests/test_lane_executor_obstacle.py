@@ -700,19 +700,19 @@ def test_a_hold_between_attempts_stops_without_a_cut(rigs):
     assert at(assert_invariants(rig)) == (100.0, 0.0, 180.0)
 
 
-def test_retask_after_a_cut_shortens_the_appended_lane_and_reports_its_cuts(rigs):
+def test_retask_after_a_cut_flies_the_appended_lane_as_planned_and_reports_its_cuts(rigs):
     rig = rigs([WALL_AT_250, BlockedZone(heading_deg=180.0, y_max=100, x_min=50)])
     fly(rig, lanes_of(("forward", 400), ("right", 100)))
     assert rig.executor.obstacle_cuts == [Cut(0, 250, CUT_OBSTACLE)]
     assert at(rig.executor.envelope.pose_snapshot()) == (100.0, 250.0, 90.0)
     # The ground appends a lane (a re-task that continues the plan).
-    lanes = lanes_of(("forward", 400), ("right", 100), ("back", 400))
+    lanes = lanes_of(("forward", 400), ("right", 100), ("back", 250))
     send(rig.executor, assign(lanes=lanes, plan_id="p-2", plan_seq=2, cmd_id="a-p-2"))
     assert answered(rig, "a-p-2")["type"] == "ack"
     assert wait_for(lambda: finished(rig))
-    # The appended back lane is shortened to 250 cm by the cut's deficit,
-    # then blocked at y 100: the cut carries the lane's index in the
-    # current lane list.
+    # The ground plans the appended back lane from where the drone is,
+    # (100, 250), so no old cut shortens it; it is blocked at y 100: the cut
+    # carries the lane's index in the current lane list.
     assert rig.executor.obstacle_cuts == [Cut(0, 250, CUT_OBSTACLE), Cut(2, 150, CUT_OBSTACLE)]
     status = rig.executor.obstacle_status()
     assert status[TELEMETRY_CUTS] == [0, 250, 2, 150] and status[TELEMETRY_SEQ] == 2
@@ -720,7 +720,6 @@ def test_retask_after_a_cut_shortens_the_appended_lane_and_reports_its_cuts(rigs
     assert [(s.lane_index, (s.x_cm, s.y_cm), (s.end_x_cm, s.end_y_cm), s.reason)
             for s in rig.executor.obstacle_segments()] == [
         (0, (0, 250), (0, 400), CUT_OBSTACLE),
-        (2, (100, 250), (100, 400), SEGMENT_SKIPPED),
         (2, (100, 100), (100, 0), CUT_OBSTACLE),
     ]
     assert at(assert_invariants(rig)) == (100.0, 100.0, 180.0)
@@ -753,12 +752,12 @@ def test_nudge_after_a_cut_then_retask(rigs):
     assert answered(rig, "n1")["type"] == "ack"
     assert wait_for(lambda: not rig.executor.is_busy)
     assert at(rig.executor.envelope.pose_snapshot()) == (-50.0, 250.0, 0.0)
-    send(rig.executor, assign(lanes=lanes_of(("forward", 400), ("right", 100), ("back", 400)),
+    send(rig.executor, assign(lanes=lanes_of(("forward", 400), ("right", 100), ("back", 250)),
                               plan_id="p-2", plan_seq=2, cmd_id="a-p-2"))
     assert answered(rig, "a-p-2")["type"] == "ack"
     assert wait_for(lambda: finished(rig))
-    # The nudge offsets the rest of the plan (as always); the back lane is
-    # still shortened by the cut.
+    # The nudge offsets the rest of the plan (as always); the appended lanes,
+    # planned from where the drone is, are flown as planned.
     assert at(assert_invariants(rig)) == (50.0, 0.0, 180.0)
 
 
