@@ -52,13 +52,15 @@ clear before each step is sent. A blocked view cuts the lane (the drone
 stops, never lands for it, skips the rest of the lane and of any following
 lane in the same direction, and keeps later lanes on the planned grid). A
 sensor that cannot look is retried, then cuts the lane, and a sensor down
-for ``OBSTACLE_SENSOR_DOWN_S`` ends the lanes through the plan's own
-``on_complete``. A drone that measures its own heading
+for ``OBSTACLE_SENSOR_DOWN_S`` within a plan ends that plan's lanes through
+its own ``on_complete``. A drone that measures its own heading
 (``measured_heading_deg()``) has a step cleared only while it faces the
 commanded heading. The way back of a ``resume_search`` is flown the same
-way (``lane_manual``). Without a sensor (the default) lanes are flown
-exactly as before. ``obstacle_status()`` holds the telemetry fields; the
-flight half is ``flightrisk.drone.lane_flight`` and the arithmetic
+way, but a gate on it that does not clear cuts nothing: the drone is put
+back under manual control with its hold point kept (``lane_manual``).
+Without a sensor (the default) lanes are flown exactly as before.
+``obstacle_status()`` holds the telemetry fields; the flight half is
+``flightrisk.drone.lane_flight`` and the arithmetic
 ``flightrisk.drone.lane_steps``.
 
 Fail-safe rules: any unexpected exception while flying a sequence or running
@@ -433,17 +435,26 @@ class LaneExecutor(
         self._obstacle_state: str | None = None
         self._obstacle_latency_ms: float | None = None
         # Edge clock time of the first of the current run of gates whose
-        # sensor could not look, or None while the sensor works. A landing
-        # and a new plan that does not continue the current one have the
-        # sensor probed once; a view clears it (``lane_flight``).
+        # sensor could not look, or None while the sensor works. It describes
+        # the sensor (``obstacle_sensor_ok``). A landing and a new plan that
+        # does not continue the current one have the sensor probed once; a
+        # view clears it (``lane_flight``).
         self._sensor_down_since: float | None = None
+        # The same run counted within the current plan only: it decides when
+        # the plan's lanes are ended with ``sensor_down``, and restarts when a
+        # plan that does not continue the current one is accepted, so a new
+        # plan gets its own OBSTACLE_SENSOR_DOWN_S (``lane_flight``).
+        self._plan_down_since: float | None = None
         # Sense calls in flight (gates, abandoned ones included, and the
         # probe); the probe starts only when there is none. ``_probe_wanted``
         # is why a probe waits for them (or None), ``_probe_running`` is True
-        # while its call runs.
+        # while its call runs, and ``_probe_idle`` is set while it is False
+        # (a gate waits on it rather than call a sensor the probe holds).
         self._sense_inflight = 0
         self._probe_wanted: str | None = None
         self._probe_running = False
+        self._probe_idle = threading.Event()
+        self._probe_idle.set()
         # The step (with its plan generation) the running sequence already
         # asked to turn to its commanded heading (``lane_flight._face``).
         self._realigned: Any = None
@@ -645,13 +656,17 @@ class LaneExecutor(
         """Forget the cuts and the gate state of the plan being replaced. Caller holds ``_lock``.
 
         ``obstacle_seq`` and the sensor's down timer are kept: they describe
-        the edge and its sensor, not the plan. While that timer runs the
-        sensor is probed once (``_request_sensor_probe_locked``), so a sensor
-        that works again is reported ok before the new plan is started.
+        the edge and its sensor, not the plan, so a sensor that is really
+        down stays reported down. While that timer runs the sensor is probed
+        once (``_request_sensor_probe_locked``), so a sensor that works again
+        is reported ok before the new plan is started. The plan's own down
+        timer restarts: failures before this plan never end it with
+        ``sensor_down``, and it gets its own ``OBSTACLE_SENSOR_DOWN_S``.
         """
         self._cuts = []
         self._obstacle_state = None
         self._obstacle_latency_ms = None
+        self._plan_down_since = None
         self._request_sensor_probe_locked("new_plan")
 
     def _worker_alive(self) -> bool:
