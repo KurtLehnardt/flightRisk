@@ -28,9 +28,30 @@ class ObstacleGuard:
     small part of the region still moves. The chosen statistic drives the
     decision, the action and the confidence, and is reported as
     ``center_depth``; the result also carries ``center_p90`` and ``center_stat``.
+
+    A depth map the guard cannot judge is reported, never passed off as a
+    clear view: every result carries ``degenerate`` and ``degenerate_reason``.
+    A map with a NaN or an infinite value anywhere (``"non_finite"``), a
+    uniform map (``"uniform"``), a map whose 95th percentile is not positive,
+    so there is no scale to normalise by (``"no_scale"``, for example all zero
+    or all negative), and a map whose scores come out non-finite
+    (``"non_finite_score"``) are degenerate. A degenerate result is never
+    ``safe``; its ``action`` is ``"unavailable"``, so a caller that reacts to
+    ``go_left``, ``go_right`` or ``reverse`` does not move, and its depths and
+    confidence are 0.0. The one exception keeps its old answer: a uniform map
+    of high inverse depth is still ``reverse`` with depths of 1.0, flagged
+    degenerate. A valid map gives the same numbers and decision as before,
+    with ``degenerate`` False and an empty reason.
     """
 
     CENTER_STATS = ("mean", "p90")
+    #: ``action`` of a degenerate result.
+    ACTION_UNAVAILABLE = "unavailable"
+    #: ``degenerate_reason`` values.
+    DEGENERATE_NON_FINITE = "non_finite"
+    DEGENERATE_UNIFORM = "uniform"
+    DEGENERATE_NO_SCALE = "no_scale"
+    DEGENERATE_NON_FINITE_SCORE = "non_finite_score"
 
     def __init__(
         self,
@@ -77,7 +98,8 @@ class ObstacleGuard:
 
         Returns:
             Dict with keys: safe, center_depth, left_depth, right_depth,
-            action, confidence.
+            action, confidence, center_p90, center_stat, degenerate and
+            degenerate_reason (see the class docstring).
         """
         now = time.time()
 
@@ -115,57 +137,58 @@ class ObstacleGuard:
         # MiDaS outputs inverse depth (higher = closer)
         depth_map = prediction.squeeze().cpu().numpy()
 
+        # A NaN or an infinite value anywhere (for example a half-precision
+        # overflow) makes every statistic below meaningless, and NaN compares
+        # false with every threshold, which would read as "nothing close".
+        if not np.isfinite(depth_map).all():
+            return self._degenerate(self.DEGENERATE_NON_FINITE), depth_map
+
         d_min = depth_map.min()
         d_max = depth_map.max()
 
-        # Special case: uniform depth (no variation in scene)
+        # Special case: uniform depth (no variation in scene). A real view
+        # never gives a uniform map, so it is degenerate whatever its level.
         if d_max - d_min < 1e-6:
-            if d_max < 1e-6:
-                result = {
-                    "safe": True, "center_depth": 0.0, "left_depth": 0.0,
-                    "right_depth": 0.0, "action": "clear", "confidence": 1.0,
-                    "center_p90": 0.0, "center_stat": self.center_stat,
-                }
-            elif d_max > 1.0:
-                # High uniform inverse depth = everything close (flat wall)
+            if d_max > 1.0:
+                # High uniform inverse depth = everything close (flat wall).
+                # It already stops the drone, so it keeps its old answer.
                 result = {
                     "safe": False, "center_depth": 1.0, "left_depth": 1.0,
                     "right_depth": 1.0, "action": "reverse", "confidence": 0.5,
                     "center_p90": 1.0, "center_stat": self.center_stat,
+                    "degenerate": True, "degenerate_reason": self.DEGENERATE_UNIFORM,
                 }
-            else:
-                # Low uniform inverse depth = everything far away
-                result = {
-                    "safe": True, "center_depth": 0.0, "left_depth": 0.0,
-                    "right_depth": 0.0, "action": "clear", "confidence": 0.8,
-                    "center_p90": 0.0, "center_stat": self.center_stat,
-                }
-            return result, depth_map
+                return result, depth_map
+            return self._degenerate(self.DEGENERATE_UNIFORM), depth_map
 
-        # Use 95th percentile as reference scale (avoids outlier sensitivity)
+        # Use 95th percentile as reference scale (avoids outlier sensitivity).
+        # Without a positive scale (all zero, all negative) the map cannot be
+        # normalised and says nothing about what is close.
         p95 = np.percentile(depth_map, 95)
-        if p95 > 1e-6:
+        if not p95 > 1e-6:
+            return self._degenerate(self.DEGENERATE_NO_SCALE), depth_map
+        # A huge value over a tiny scale can overflow; the scores are checked below.
+        with np.errstate(over="ignore", invalid="ignore"):
             depth_norm = depth_map / p95
-        else:
-            # Near-zero output everywhere — nothing close
-            depth_norm = np.zeros_like(depth_map)
 
-        # Divide into 3x3 grid, focus on middle row
-        h, w = depth_norm.shape
-        row_start = h // 3
-        row_end = 2 * h // 3
-        col_third = w // 3
+            # Divide into 3x3 grid, focus on middle row
+            h, w = depth_norm.shape
+            row_start = h // 3
+            row_end = 2 * h // 3
+            col_third = w // 3
 
-        middle_row = depth_norm[row_start:row_end, :]
-        left_region = middle_row[:, :col_third]
-        center_region = middle_row[:, col_third:2 * col_third]
-        right_region = middle_row[:, 2 * col_third:]
+            middle_row = depth_norm[row_start:row_end, :]
+            left_region = middle_row[:, :col_third]
+            center_region = middle_row[:, col_third:2 * col_third]
+            right_region = middle_row[:, 2 * col_third:]
 
-        left_depth = float(np.mean(left_region))
-        center_mean = float(np.mean(center_region))
-        center_p90 = float(np.percentile(center_region, 90))
-        center_depth = center_p90 if self.center_stat == "p90" else center_mean
-        right_depth = float(np.mean(right_region))
+            left_depth = float(np.mean(left_region))
+            center_mean = float(np.mean(center_region))
+            center_p90 = float(np.percentile(center_region, 90))
+            center_depth = center_p90 if self.center_stat == "p90" else center_mean
+            right_depth = float(np.mean(right_region))
+        if not all(np.isfinite(v) for v in (left_depth, center_mean, center_p90, right_depth)):
+            return self._degenerate(self.DEGENERATE_NON_FINITE_SCORE), depth_map
 
         # Determine if center is blocked
         center_blocked = center_depth > self.min_safe_depth
@@ -207,7 +230,18 @@ class ObstacleGuard:
             "confidence": round(confidence, 3),
             "center_p90": center_p90,
             "center_stat": self.center_stat,
+            "degenerate": False,
+            "degenerate_reason": "",
         }, depth_map
+
+    def _degenerate(self, reason: str) -> dict:
+        """The result for a depth map that cannot be judged: never safe, and no move suggested."""
+        return {
+            "safe": False, "center_depth": 0.0, "left_depth": 0.0,
+            "right_depth": 0.0, "action": self.ACTION_UNAVAILABLE, "confidence": 0.0,
+            "center_p90": 0.0, "center_stat": self.center_stat,
+            "degenerate": True, "degenerate_reason": reason,
+        }
 
     def get_depth_visualization(self, frame: np.ndarray) -> np.ndarray:
         """Return a colorized depth map with safety overlays.

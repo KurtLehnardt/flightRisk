@@ -17,15 +17,22 @@ hovers (design ``.claude/build/obstacle/design.md``, section 2):
   ``unknown``: it neither blocks nor clears and the depth cue decides.
 
 Every failure to look (no fresh frame, a model that takes too long, an
-exception) is an ``unavailable`` result and never ``clear``. Inference runs on
+exception, a depth map the guard reports as degenerate or a score that is not
+finite) is an ``unavailable`` result and never ``clear``. Inference runs on
 one reusable helper thread that ``sense`` joins with a timeout, so a hung model
 never blocks the caller and no thread is created per call. While a timed-out
 inference is still running, later calls report ``timeout`` at once instead of
 queueing behind it.
+
+``sense(after, timeout_s)`` spends at most ``timeout_s`` in all: the wait for a
+fresh frame, the inference and the wait for a fresh person result share that
+one budget, so the executor, which abandons a call shortly after
+``timeout_s``, never gives up on a call that was still within its time.
 """
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
 import time
@@ -171,8 +178,15 @@ class ForwardCameraSensor:
     the MiDaS weights or the first inference fail, so the caller can report
     the sensor as missing before the drone connects.
 
-    ``timeout_s`` of ``sense`` bounds the inference only; waiting for a fresh
-    frame is bounded separately by ``frame_wait_s``.
+    ``timeout_s`` of ``sense`` is the budget of the whole call. The wait for a
+    fresh frame takes at most ``frame_wait_s`` counted from ``after + settle_s``
+    (or from the call, when that is later) and never more than the budget; the
+    inference gets what is left and times out when it runs out; the wait for a
+    fresh person result (``detection_wait_s``) gets only what is left after
+    that, and a cue still without a fresh result when the budget is spent is
+    ``unknown``. A detection result already there is still read, because that
+    costs no time and can only add a ``blocked``: the person cue never clears
+    a step.
     """
 
     def __init__(
@@ -227,12 +241,27 @@ class ForwardCameraSensor:
 
     def sense(self, after: float, timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S) -> SenseResult:
         started = self._clock()
+        budget_end = started + max(0.0, float(timeout_s))
 
         def latency() -> float:
             return round((self._clock() - started) * 1000.0, 1)
 
+        def remaining() -> float:
+            return budget_end - self._clock()
+
+        def timed_out(worker_busy: bool) -> SenseResult:
+            return self._finish(
+                SenseResult.make_unavailable(
+                    REASON_TIMEOUT, latency_ms=latency(),
+                    detail={"worker_busy": worker_busy, "timeout_s": timeout_s},
+                ),
+                None, ACTION_TIMEOUT,
+            )
+
         try:
-            timed = self._frames.wait_for(after, self.settle_s, self.frame_wait_s)
+            timed = self._frames.wait_for(
+                after, self.settle_s, self.frame_wait_s, limit_s=max(0.0, remaining()),
+            )
         except Exception as exc:
             return self._failed(REASON_ERROR, latency(), exc)
         if timed is None:
@@ -241,27 +270,30 @@ class ForwardCameraSensor:
                 SenseResult.make_unavailable(REASON_STALE, latency_ms=latency()),
                 None, ACTION_STALE,
             )
+        if remaining() <= 0:
+            # The frame came at the very end of the budget: there is no time left to judge it.
+            return timed_out(False)
 
         frame = timed.frame
         job = self._worker.submit(lambda: self._guard.check_path(frame))
-        if job is None or not job.done.wait(timeout_s):
-            return self._finish(
-                SenseResult.make_unavailable(
-                    REASON_TIMEOUT, latency_ms=latency(),
-                    detail={"worker_busy": job is None, "timeout_s": timeout_s},
-                ),
-                None, ACTION_TIMEOUT,
-            )
+        if job is None or not job.done.wait(max(0.0, remaining())):
+            return timed_out(job is None)
         if job.error is not None:
             return self._failed(REASON_ERROR, latency(), job.error)
+        if remaining() < 0:
+            return timed_out(False)
         check = job.result
         try:
             depth_blocked = not bool(check["safe"])
             depth_score = float(check["center_depth"])
+            problem = self._unusable_check(check, depth_score)
         except Exception as exc:
             return self._failed(REASON_ERROR, latency(), exc)
+        if problem is not None:
+            detail = {"degenerate": check.get("degenerate_reason")} if check.get("degenerate") else None
+            return self._failed(REASON_ERROR, latency(), problem, detail=detail)
 
-        person = self._person_cue(after, wait=not depth_blocked)
+        person = self._person_cue(after, wait=not depth_blocked, budget_end=budget_end)
         self._note_person_cue(person)
         detail = {
             "depth_action": check.get("action"),
@@ -281,7 +313,31 @@ class ForwardCameraSensor:
             action = ACTION_PERSON_UNKNOWN if person == PERSON_CUE_UNKNOWN else None
         return self._finish(result, check, action)
 
+    @staticmethod
+    def _unusable_check(check: dict, depth_score: float) -> str | None:
+        """Why the guard's result cannot be trusted, or None when it can.
+
+        A result the guard flags as degenerate (a NaN or infinite value in the
+        map, a uniform map, no positive scale) and a score that is not finite
+        are failures to look, whatever ``safe`` says.
+        """
+        if check.get("degenerate"):
+            return f"degenerate depth map: {check.get('degenerate_reason') or 'unspecified'}"
+        if not math.isfinite(depth_score):
+            return f"depth score is not finite: {depth_score!r}"
+        for key in ("center_p90", "left_depth", "right_depth"):
+            value = check.get(key)
+            if value is not None and not math.isfinite(float(value)):
+                return f"{key} is not finite: {value!r}"
+        return None
+
     def status(self) -> dict[str, Any]:
+        """A JSON friendly summary for telemetry and logs.
+
+        ``non_default_thresholds`` names each threshold that differs from its
+        default (``OBSTACLE_MIN_SAFE_DEPTH``, ``OBSTACLE_PERSON_FRACTION``) with
+        its value, and is empty when both are the defaults.
+        """
         with self._lock:
             state = self._last_state
             latency = self._last_latency_ms
@@ -293,6 +349,7 @@ class ForwardCameraSensor:
             "center_stat": "p90",
             "min_safe_depth": self.min_safe_depth,
             "person_fraction": self.person_fraction,
+            "non_default_thresholds": self.non_default_thresholds(),
             "frames_seen": self._frames.frames_seen,
             "worker_busy": self._worker.busy,
             "person_cue_down": self._unknown_streak >= OBSTACLE_PERSON_CUE_DOWN_AFTER,
@@ -302,18 +359,35 @@ class ForwardCameraSensor:
             TELEMETRY_SENSOR_OK: state != OBSTACLE_STATE_UNAVAILABLE,
         }
 
+    def non_default_thresholds(self) -> dict[str, float]:
+        """The thresholds that differ from their defaults, by name."""
+        changed: dict[str, float] = {}
+        if self.min_safe_depth != OBSTACLE_MIN_SAFE_DEPTH:
+            changed["min_safe_depth"] = self.min_safe_depth
+        if self.person_fraction != OBSTACLE_PERSON_FRACTION:
+            changed["person_fraction"] = self.person_fraction
+        return changed
+
     def close(self) -> None:
         """Stop the helper thread. A hung inference keeps its daemon thread."""
         self._worker.stop()
 
     # -- person cue ---------------------------------------------------------
 
-    def _person_cue(self, after: float, wait: bool) -> str:
+    def _person_cue(self, after: float, wait: bool, budget_end: float | None = None) -> str:
+        """The person cue for a view after ``after + settle_s``.
+
+        Waits up to ``detection_wait_s`` (none when ``wait`` is false) for a
+        detection result whose frame was obtained at or after that time, and
+        never past ``budget_end``. Without such a result the cue is ``unknown``.
+        """
         runner = self._runner
         if runner is None:
             return PERSON_CUE_UNKNOWN
         threshold = after + self.settle_s
         deadline = self._clock() + (self.detection_wait_s if wait else 0.0)
+        if budget_end is not None:
+            deadline = min(deadline, budget_end)
         while True:
             # The stamp is read before the detections: the runner stores the
             # detections first, so a fresh stamp has fresh detections.
@@ -326,9 +400,10 @@ class ForwardCameraSensor:
                 if close_person_in_lane(detections, width, height, self.person_fraction):
                     return PERSON_CUE_BLOCKED
                 return PERSON_CUE_CLEAR
-            if self._clock() >= deadline:
+            now = self._clock()
+            if now >= deadline:
                 return PERSON_CUE_UNKNOWN
-            self._sleep(0.02)
+            self._sleep(min(0.02, deadline - now))
 
     def _note_person_cue(self, person: str) -> None:
         if person != PERSON_CUE_UNKNOWN:
@@ -347,8 +422,17 @@ class ForwardCameraSensor:
 
     # -- bookkeeping --------------------------------------------------------
 
-    def _failed(self, reason: str, latency_ms: float, exc: BaseException) -> SenseResult:
-        key = f"{type(exc).__name__}: {exc}"
+    def _failed(
+        self, reason: str, latency_ms: float, error: BaseException | str, detail: dict[str, Any] | None = None,
+    ) -> SenseResult:
+        """An ``unavailable`` result for a failure; the error is logged once per change.
+
+        ``error`` is the exception, or a text for a result that came back but
+        cannot be used (a degenerate depth map). ``detail`` adds to the
+        result's ``detail``, which always holds ``error``.
+        """
+        exc = error if isinstance(error, BaseException) else None
+        key = f"{type(exc).__name__}: {exc}" if exc is not None else str(error)
         if key != self._last_error_key:
             self._last_error_key = key
             log_event(
@@ -358,7 +442,7 @@ class ForwardCameraSensor:
                 error=key, exc_info=exc,
             )
         return self._finish(
-            SenseResult.make_unavailable(reason, latency_ms=latency_ms, detail={"error": key}),
+            SenseResult.make_unavailable(reason, latency_ms=latency_ms, detail={**(detail or {}), "error": key}),
             None, ACTION_UNAVAILABLE, error=True,
         )
 

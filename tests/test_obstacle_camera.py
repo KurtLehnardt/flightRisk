@@ -109,6 +109,12 @@ def _after():
     return time.monotonic() - 1.0
 
 
+def _close(sensor):
+    """Close the sensor and wait for its helper thread to end, so a later thread count is not racing it."""
+    sensor.close()
+    sensor._worker._thread.join(5.0)
+
+
 class TestConstruction:
     def test_satisfies_the_protocol(self, frames):
         assert isinstance(_sensor(frames), ObstacleSensor)
@@ -116,7 +122,10 @@ class TestConstruction:
     def test_default_guard_uses_p90_and_no_cache(self, frames, monkeypatch):
         class Model(torch.nn.Module):
             def forward(self, x):
-                return torch.ones(1, 256, 256) * 0.1
+                # A valid clear view; a uniform map would be degenerate (unavailable).
+                depth = torch.ones(1, 256, 256) * 0.1
+                depth[0, 0:85, :] = 0.9
+                return depth
 
         class Transforms:
             small_transform = staticmethod(lambda img: torch.zeros(1, 3, 256, 256))
@@ -336,7 +345,7 @@ class TestTimeoutAndThreads:
             assert sensor.status()["worker_busy"] is True
         finally:
             guard.gate.set()
-        sensor.close()
+        _close(sensor)
 
     def test_busy_worker_times_out_at_once_and_adds_no_thread(self, frames):
         guard = FakeGuard()
@@ -355,7 +364,7 @@ class TestTimeoutAndThreads:
             assert guard.calls == 1
         finally:
             guard.gate.set()
-        sensor.close()
+        _close(sensor)
 
     def test_recovers_after_the_hung_call_finishes(self, frames):
         guard = FakeGuard()
@@ -367,7 +376,7 @@ class TestTimeoutAndThreads:
         while sensor.status()["worker_busy"] and time.monotonic() < deadline:
             time.sleep(0.01)
         assert sensor.sense(_after()).clear
-        sensor.close()
+        _close(sensor)
 
     def test_no_thread_per_call(self, frames):
         sensor = _sensor(frames, _runner())
@@ -376,7 +385,7 @@ class TestTimeoutAndThreads:
         for _ in range(25):
             assert sensor.sense(_after()).clear
         assert threading.active_count() == threads
-        sensor.close()
+        _close(sensor)
 
 
 class TestErrors:
