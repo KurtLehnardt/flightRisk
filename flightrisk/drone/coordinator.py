@@ -70,7 +70,8 @@ from flightrisk.drone.obstacle_sensor import (
     SENSOR_UNAVAILABLE_DETAIL,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_CUTS,
-        TELEMETRY_LATENCY_MS,
+    TELEMETRY_FIELDS,
+    TELEMETRY_LATENCY_MS,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
     TELEMETRY_SEQ,
@@ -120,6 +121,9 @@ _DIRECTION_VECTORS = {
     "right": (1, 0),
     "left": (-1, 0),
 }
+
+# The telemetry fields ``status()`` copies for a drone that reports obstacle sensing.
+_STATUS_OBSTACLE_KEYS = (TELEMETRY_SENSING, TELEMETRY_SENSOR_OK, TELEMETRY_STATE, TELEMETRY_LATENCY_MS)
 
 _PASSTHROUGH_DETECTION_KEYS = ("thumbnail", "lat", "lon")
 
@@ -786,13 +790,14 @@ class FleetCoordinator:
                     "lost": state.lost,
                     "drone_link_ok": telemetry.get("drone_link_ok"),
                     "drone_link_detail": telemetry.get("drone_link_detail"),
-                    "obstacle_sensing": telemetry.get(TELEMETRY_SENSING),
-                    "obstacle_sensor_ok": telemetry.get(TELEMETRY_SENSOR_OK),
-                    "obstacle_state": telemetry.get(TELEMETRY_STATE),
-                    "obstacle_latency_ms": telemetry.get(TELEMETRY_LATENCY_MS),
-                    "uncovered_cm": sum(seg["unflown_cm"] for seg in state.obstacle_segments),
-                    "reflights": self._reflight_counts_locked(drone_id),
                 }
+                if any(key in telemetry for key in TELEMETRY_FIELDS):
+                    # Only for a drone that reports obstacle sensing, so the
+                    # status of a fleet without it (and the mobile contract
+                    # fixtures built from it) is unchanged.
+                    entry.update({key: telemetry.get(key) for key in _STATUS_OBSTACLE_KEYS})
+                    entry["uncovered_cm"] = sum(seg["unflown_cm"] for seg in state.obstacle_segments)
+                    entry["reflights"] = self._reflight_counts_locked(drone_id)
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:

@@ -48,7 +48,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from flightrisk.drone.obstacle_sensor import TELEMETRY_FIELDS as OBSTACLE_TELEMETRY_FIELDS
+from flightrisk.drone.obstacle_sensor import (
+    TELEMETRY_FIELDS as OBSTACLE_TELEMETRY_FIELDS,
+)
 
 __all__ = ["MonitorMixin"]
 

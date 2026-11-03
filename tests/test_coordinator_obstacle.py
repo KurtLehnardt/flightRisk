@@ -12,7 +12,11 @@ import pytest
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone import coordinator as coordinator_module
-from flightrisk.drone.coordinator import FleetCoordinator, _apply_cut_deficit, _uncovered_segments
+from flightrisk.drone.coordinator import (
+    FleetCoordinator,
+    _apply_cut_deficit,
+    _uncovered_segments,
+)
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.obstacle_sensor import (
     CUT_OBSTACLE,
@@ -235,9 +239,10 @@ def test_telemetry_without_obstacle_fields_changes_nothing():
     edges["drone-1"].telemetry(is_flying=True)
     assert coord.current_plan()["uncovered"] == []
     assert lane_blocked(events) == []
+    # Status of a drone that does not report obstacle sensing is exactly what it was.
     entry = coord.status()["drone-1"]
-    assert entry["obstacle_sensing"] is None and entry["obstacle_sensor_ok"] is None
-    assert entry["uncovered_cm"] == 0
+    assert not any(k.startswith("obstacle_") for k in entry)
+    assert "uncovered_cm" not in entry and "reflights" not in entry
 
 
 def test_sticky_cuts_survive_telemetry_without_the_fields():
@@ -279,7 +284,7 @@ def test_malformed_cut_fields_are_dropped_without_raising():
     assert coord.current_plan()["uncovered"] == []
     assert lane_blocked(events) == []
     edges["drone-1"].telemetry(is_flying=True, obstacle_seq="many", obstacle_cuts="no")
-    assert coord.status()["drone-1"]["uncovered_cm"] == 0
+    assert coord.current_plan()["uncovered"] == []
 
 
 def test_status_carries_the_obstacle_fields_per_drone():
