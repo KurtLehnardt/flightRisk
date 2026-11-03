@@ -21,11 +21,28 @@ class ObstacleGuard:
     Divides the depth map into a 3x3 grid and checks the middle row
     (left, center, right) for obstacles. If the center column's mean
     inverse depth exceeds min_safe_depth, the path is blocked.
+
+    ``center_stat`` chooses the statistic that scores the centre region:
+    ``"mean"`` (the default, what the dashboard's single-drone search uses) or
+    ``"p90"``, the 90th percentile, which a thin plant stem covering only a
+    small part of the region still moves. The chosen statistic drives the
+    decision, the action and the confidence, and is reported as
+    ``center_depth``; the result also carries ``center_p90`` and ``center_stat``.
     """
 
-    def __init__(self, min_safe_depth: float = 0.35, check_interval: float = 0.5):
+    CENTER_STATS = ("mean", "p90")
+
+    def __init__(
+        self,
+        min_safe_depth: float = 0.35,
+        check_interval: float = 0.5,
+        center_stat: str = "mean",
+    ):
+        if center_stat not in self.CENTER_STATS:
+            raise ValueError(f"center_stat must be one of {self.CENTER_STATS}, got {center_stat!r}")
         self.min_safe_depth = min_safe_depth
         self.check_interval = check_interval
+        self.center_stat = center_stat
 
         # Select device: MPS > CPU (no CUDA on Tello laptop)
         if torch.backends.mps.is_available():
@@ -107,18 +124,21 @@ class ObstacleGuard:
                 result = {
                     "safe": True, "center_depth": 0.0, "left_depth": 0.0,
                     "right_depth": 0.0, "action": "clear", "confidence": 1.0,
+                    "center_p90": 0.0, "center_stat": self.center_stat,
                 }
             elif d_max > 1.0:
                 # High uniform inverse depth = everything close (flat wall)
                 result = {
                     "safe": False, "center_depth": 1.0, "left_depth": 1.0,
                     "right_depth": 1.0, "action": "reverse", "confidence": 0.5,
+                    "center_p90": 1.0, "center_stat": self.center_stat,
                 }
             else:
                 # Low uniform inverse depth = everything far away
                 result = {
                     "safe": True, "center_depth": 0.0, "left_depth": 0.0,
                     "right_depth": 0.0, "action": "clear", "confidence": 0.8,
+                    "center_p90": 0.0, "center_stat": self.center_stat,
                 }
             return result, depth_map
 
@@ -142,7 +162,9 @@ class ObstacleGuard:
         right_region = middle_row[:, 2 * col_third:]
 
         left_depth = float(np.mean(left_region))
-        center_depth = float(np.mean(center_region))
+        center_mean = float(np.mean(center_region))
+        center_p90 = float(np.percentile(center_region, 90))
+        center_depth = center_p90 if self.center_stat == "p90" else center_mean
         right_depth = float(np.mean(right_region))
 
         # Determine if center is blocked
@@ -183,6 +205,8 @@ class ObstacleGuard:
             "right_depth": right_depth,
             "action": action,
             "confidence": round(confidence, 3),
+            "center_p90": center_p90,
+            "center_stat": self.center_stat,
         }, depth_map
 
     def get_depth_visualization(self, frame: np.ndarray) -> np.ndarray:
