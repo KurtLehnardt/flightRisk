@@ -192,6 +192,8 @@ _FIELD_ENV = {
 }
 _FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
 _FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
+# A stride above this leaves the video tile and the search nearly blind (30 is one frame a second at 30 fps).
+MAX_FRAME_STRIDE = 30
 
 
 class _Default(str):
@@ -256,18 +258,23 @@ class CV2FrameSource:
 
 
 def _check_frame_stride(value: Any) -> int:
-    """Return *value* as a frame stride, an integer of at least 1. Raises ``ValueError`` otherwise."""
+    """Return *value* as a frame stride, a whole number from 1 to ``MAX_FRAME_STRIDE``.
+
+    A string must be plain ASCII digits (so ``1_0`` and non-ASCII digits are refused).
+    Raises ``ValueError`` otherwise.
+    """
+    message = f"frame stride must be a whole number from 1 to {MAX_FRAME_STRIDE}, got {value!r}"
     if isinstance(value, bool):
-        raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}")
+        raise ValueError(message)
     if isinstance(value, str):
-        try:
-            value = int(value.strip())
-        except ValueError:
-            raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}") from None
+        text = value.strip()
+        if not (text.isascii() and text.isdigit()):
+            raise ValueError(message)
+        value = int(text)
     if not isinstance(value, int):
-        raise ValueError(f"frame stride must be a whole number of at least 1, got {value!r}")
-    if value < 1:
-        raise ValueError(f"frame stride must be at least 1, got {value}")
+        raise ValueError(message)
+    if not 1 <= value <= MAX_FRAME_STRIDE:
+        raise ValueError(message)
     return value
 
 
@@ -280,11 +287,23 @@ class DroneFrameSource:
     drone is flying. Iteration stops only when ``stop_event`` is set. The
     drone itself is disconnected by ``main()``, so ``release()`` does nothing.
 
-    With ``frame_stride`` N greater than 1 only every Nth frame is yielded (the
-    1st, the N+1th and so on), so detection runs on those frames alone. Every
-    frame is still read from the drone, because the video stream must be
-    drained, but the skipped ones are dropped here and cost no detection,
-    ReID or encoding work. The default, 1, yields every frame.
+    With ``frame_stride`` N greater than 1 the consumer is given a fresh frame
+    only once per N frame times, or once per N processing times when handling a
+    frame is slower than a frame: when a frame is handed out, the time the
+    consumer takes to come back for the next one (``busy``) is measured, and
+    frames are then dropped until ``N * max(busy, min_interval_s)`` has passed
+    since the previous one was handed out. Detection, ReID and encoding therefore
+    run at about 1/N of the rate they would at stride 1, even on a machine where
+    they are slower than the frame rate. A plain count of every Nth frame would
+    not do that, because after a slow detection the newest frame is already many
+    frames ahead and the next ones would be taken at once.
+
+    Dropped frames are still read at the normal polling rate. Polling at the full
+    rate keeps the newest frame available and keeps the frozen-stream recovery
+    working, which counts identical polls; the video itself is decoded on the
+    drone controller's own thread. The default, 1, hands out every frame as
+    before. ``clock`` and ``wait`` (``wait(seconds)`` returns true when
+    stopped) can be injected so tests do not depend on real time.
     """
 
     def __init__(
@@ -293,29 +312,40 @@ class DroneFrameSource:
         stop_event: threading.Event | None = None,
         min_interval_s: float = 1 / 30,
         frame_stride: int = 1,
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[float], bool] | None = None,
     ):
         self._drone = drone
         self._stop = stop_event if stop_event is not None else threading.Event()
         self._min_interval_s = min_interval_s
         self._frame_stride = _check_frame_stride(frame_stride)
-        self._frames_read = 0
+        self._clock = clock
+        self._wait = wait if wait is not None else self._stop.wait
         self._next_at = 0.0
+        self._yielded_at: float | None = None
 
     def __iter__(self) -> "DroneFrameSource":
         return self
 
     def __next__(self):
+        ready_at = None
+        if self._frame_stride > 1 and self._yielded_at is not None:
+            busy = self._clock() - self._yielded_at
+            cycle = self._frame_stride * max(busy, self._min_interval_s)
+            # Half a frame of slack so that clock rounding cannot cost a whole extra frame.
+            ready_at = self._yielded_at + cycle - self._min_interval_s / 2
         while not self._stop.is_set():
-            wait = self._next_at - time.monotonic()
-            if wait > 0 and self._stop.wait(wait):
+            wait = self._next_at - self._clock()
+            if wait > 0 and self._wait(wait):
                 break
-            self._next_at = time.monotonic() + self._min_interval_s
+            self._next_at = self._clock() + self._min_interval_s
             frame = self._drone.get_frame()
             if frame is None:
                 continue
-            self._frames_read += 1
-            if (self._frames_read - 1) % self._frame_stride == 0:
-                return frame
+            if ready_at is not None and self._clock() < ready_at:
+                continue
+            self._yielded_at = self._clock()
+            return frame
         raise StopIteration
 
     def release(self) -> None:
@@ -862,7 +892,7 @@ def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
     """The detection frame stride: ``--frame-stride``, else ``FLIGHTRISK_EDGE_FRAME_STRIDE``, else 1.
 
     Raises ``ValueError`` with an operator-facing message when the
-    environment variable is not a whole number of at least 1. A stride above
+    environment variable is not a whole number from 1 to ``MAX_FRAME_STRIDE``. A stride above
     1 is only supported for the ``tello`` and ``fake`` sources; any other
     source raises ``ValueError`` rather than silently ignoring it.
     """
@@ -879,7 +909,13 @@ def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
         except ValueError as exc:
             raise ValueError(f"{_FRAME_STRIDE_ENV_VAR}: {exc}") from None
     if stride > 1 and _drone_kind(args) not in ("tello", "fake"):
-        raise ValueError("a frame stride above 1 only applies to --source tello and --source fake")
+        origin = (
+            f"{_FRAME_STRIDE_ENV_VAR}={stride} is set, but a frame stride above 1"
+            if flag is None
+            else "a frame stride above 1"
+        )
+        remedy = f" Unset {_FRAME_STRIDE_ENV_VAR} to run this source." if flag is None else ""
+        raise ValueError(f"{origin} only applies to --source tello and --source fake.{remedy}")
     return stride
 
 
@@ -1074,11 +1110,12 @@ def _parse_drone_id(raw: str) -> str:
 
 
 def _parse_frame_stride(raw: str) -> int:
-    """Parse ``--frame-stride``: a whole number of at least 1."""
+    """Parse ``--frame-stride``: a whole number from 1 to ``MAX_FRAME_STRIDE``."""
     try:
         return _check_frame_stride(raw)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"--frame-stride: {exc}") from exc
+        # argparse already names the flag in front of this message.
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _parse_alt_slot(raw: str) -> float:
@@ -1208,10 +1245,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--frame-stride", type=_parse_frame_stride, default=None, metavar="N",
-        help="Run detection on only every Nth video frame (default $" + _FRAME_STRIDE_ENV_VAR + ", else 1, "
-             "every frame). Frames are still read so the drone's video stream is drained, but skipped frames "
-             "cost no detection, ReID or encoding work, which cuts CPU use. Applies to --source tello and "
-             "fake. With --stream-video the thumbnails are sent only for the processed frames",
+        help="Run detection on only every Nth video frame (1 to " + str(MAX_FRAME_STRIDE) + "; default $"
+             + _FRAME_STRIDE_ENV_VAR + ", else 1, every frame). Frames are dropped for N times the longer of "
+             "the frame time and the time the last frame took to process, so detection, ReID and encoding "
+             "run at about 1/N of the rate even when they are slower than the video. Dropped frames are "
+             "still polled at the full rate so the newest frame stays available and frozen-stream recovery "
+             "keeps working. Applies to --source tello and fake. With --stream-video the thumbnails are "
+             "sent only for the processed frames",
     )
     face = parser.add_mutually_exclusive_group()
     face.add_argument(
