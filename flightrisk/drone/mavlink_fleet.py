@@ -31,10 +31,27 @@ target and the autopilot's own failsafes (battery, RC loss, geofence, and on
 PX4 data-link loss) bring it down. The cost is a stop at the end of every
 move; long lanes keep that rare (moves up to 50 m).
 
+Onboard obstacle avoidance
+--------------------------
+The edge sends no obstacle data to the autopilot and runs no avoidance of
+its own on this path. ``refresh_params`` reads the autopilot's avoidance
+parameters with the failsafe ones (``autopilot.avoidance_problems``) and
+adds ``Capability.ONBOARD_AVOIDANCE`` to ``capabilities`` only when there is
+no problem (ArduCopter with path planning and a proximity source; PX4 never).
+``avoidance_status()`` returns the problems. A drone without it needs a
+stepped sensor or sensing switched off: the edge says which through
+``set_obstacle_sensing``, and ``link_status`` then reports a ``preflight``
+problem for a drone with neither. Nothing here has flown: how long a real
+ArduCopter holds before BendyRuler gives up on a target, and what it does
+then, decide whether the stationary window below is long enough.
+
 Watchdogs
 ---------
 * Every move and takeoff has a deadline (twice the expected time plus a
   margin). A target not reached in time raises, and the executor lands.
+  Exception: a drone with onboard obstacle avoidance (see below) whose move
+  misses its deadline while the vehicle sits still, in the edge's own mode,
+  returns ``STOPPED_SHORT`` instead, and the executor cuts the lane there.
 * A landing interrupts any move or takeoff that is waiting (``land`` never
   waits for a move).
 * The plan frame is set at each takeoff from the ground: the origin is the
@@ -104,12 +121,14 @@ import numpy as np
 
 from flightrisk.drone.autopilot import (
     ARDUPILOT,
+    AVOIDANCE_PARAMS,
     DEFAULT_MIN_SATELLITES,
     DEFAULT_SYSID,
     FAILSAFE_PARAMS,
     AutopilotLink,
     AutopilotState,
     autonomous_modes,
+    avoidance_problems,
     failsafe_problems,
     preflight_problems,
     rtl_altitude_cm,
@@ -123,6 +142,7 @@ from flightrisk.drone.controller import (
     DroneState,
 )
 from flightrisk.drone.geo import EARTH_RADIUS_M, offset_latlon
+from flightrisk.drone.obstacle_sensor import SENSING_MODES
 from flightrisk.drone.safety import FIELD_LIMITS, RelativePose
 from flightrisk.drone.snapshot import (
     DEGREE,
@@ -173,6 +193,13 @@ _HEADING_TOLERANCE_DEG = 10.0
 _DETAIL_MAX = 600
 #: Takeoff height range (metres): above ground effect, below any sensible slot.
 _TAKEOFF_ALT_RANGE_M = (2.0, 20.0)
+#: ``set_obstacle_sensing`` value for "the edge has no stepped sensor and sensing is not off".
+SENSING_NONE = "none"
+#: Modes after which the drone needs onboard avoidance (the others have a
+#: stepped sensor, or the operator switched sensing off).
+_NEEDS_AVOIDANCE_MODES = frozenset({SENSING_NONE, "autopilot"})
+#: A vehicle that stays within this radius counts as not moving.
+_STATIONARY_RADIUS_M = 0.5
 
 
 @dataclass(frozen=True)
@@ -214,12 +241,16 @@ class MavlinkFleetOptions:
     #: A return to launch the autopilot has not entered within this many
     #: seconds (refused, or no position for it) is replaced by a landing.
     rtl_accept_s: float = 5.0
+    #: A move that misses its deadline returns STOPPED_SHORT (with onboard
+    #: avoidance) only when the vehicle has stayed within half a metre for
+    #: this many seconds. Not tuned on a real aircraft.
+    stationary_s: float = 3.0
 
     def __post_init__(self) -> None:
         if self.failsafe_action not in FAILSAFE_ACTIONS:
             raise ValueError(f"failsafe_action must be one of {FAILSAFE_ACTIONS}, got {self.failsafe_action!r}")
         for name in ("takeoff_alt_m", "speed_mps", "stale_after_s", "takeoff_timeout_s", "arrival_radius_m",
-                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s", "rtl_accept_s"):
+                     "arrival_alt_m", "move_timeout_margin_s", "yaw_rate_dps", "param_refresh_s", "rtl_accept_s", "stationary_s"):
             value = getattr(self, name)
             if not (isinstance(value, (int, float)) and math.isfinite(value) and value > 0):
                 raise ValueError(f"{name} must be a positive number, got {value!r}")
@@ -257,6 +288,15 @@ class _Target:
 @dataclass
 class _ParamCheck:
     """The failsafe parameters as last read; the checks run on them against the live envelope."""
+
+    values: dict[str, float | None] = field(default_factory=dict)
+    autopilot: str | None = None
+    checked_at: float | None = None
+
+
+@dataclass
+class _AvoidanceCheck:
+    """The avoidance parameters as last read (``checked_at`` None: not read yet)."""
 
     values: dict[str, float | None] = field(default_factory=dict)
     autopilot: str | None = None
@@ -314,6 +354,9 @@ class MavlinkFleetDrone:
         # Whether the autopilot took the requested cruise speed (None: not tried).
         self._speed_set: bool | None = None
         self._params = _ParamCheck()
+        self._avoidance = _AvoidanceCheck()
+        # What the edge says about obstacle sensing (None: not told, today's behaviour).
+        self._sensing_mode: str | None = None
         self._param_stop = threading.Event()
         self._param_thread: threading.Thread | None = None
         self._slot_cm: Callable[[], float | None] | None = None
@@ -327,6 +370,37 @@ class MavlinkFleetDrone:
     def bind_slot_source(self, slot_cm: Callable[[], float | None]) -> None:
         """Give the drone its current altitude slot (for the return-altitude check)."""
         self._slot_cm = slot_cm
+
+    def set_obstacle_sensing(self, mode: str | None) -> None:
+        """Tell the drone how the edge senses obstacles for it (call once at startup, before the first takeoff).
+
+        *mode* is one of ``obstacle_sensor.SENSING_MODES``, ``SENSING_NONE``
+        (``"none"``: the edge has no stepped sensor and sensing is not
+        switched off), or None (not told; the default, which keeps today's
+        behaviour). With ``"stepped"`` or ``"forward_only"`` (the edge senses
+        with a companion camera) or ``"off"`` (the operator's override) the
+        drone needs no avoidance. With ``"none"`` or ``"autopilot"`` it does:
+        until ``avoidance_status()`` is empty, ``link_status()`` reports
+        ``preflight`` with the avoidance problems and a takeoff is refused.
+        """
+        if mode is not None and mode != SENSING_NONE and mode not in SENSING_MODES:
+            raise ValueError(f"unknown obstacle sensing mode {mode!r}")
+        with self._lock:
+            self._sensing_mode = mode
+
+    def avoidance_status(self) -> list[str]:
+        """Why the autopilot does not avoid obstacles on the edge's lanes (empty: it does).
+
+        Answers from the parameters as last read by ``refresh_params``; before
+        the first read it reports that they are not read yet. Matches
+        ``Capability.ONBOARD_AVOIDANCE``: the capability is present exactly
+        when this list is empty.
+        """
+        with self._lock:
+            check = self._avoidance
+        if check.checked_at is None:
+            return ["avoidance parameters not read yet"]
+        return avoidance_problems(check.values, check.autopilot)
 
     def bind_envelope(self, envelope: Any) -> None:
         """Check the autopilot's fence, altitude fence and return altitude against this live envelope.
@@ -565,12 +639,28 @@ class MavlinkFleetDrone:
         """Why a takeoff would be refused now (empty when ready). See the module docstring."""
         st = self._autopilot_state() if state is None else state
         params = self._param_problems() if self.options.require_failsafes else []
+        params = params + self._sensing_problems()
         return preflight_problems(
             st,
             stale_after_s=self.options.stale_after_s,
             min_satellites=self.options.min_satellites,
             param_problems=params,
         )
+
+    def _sensing_problems(self) -> list[str]:
+        """The start-gate problem of a drone with neither onboard avoidance nor a stepped sensor (see ``set_obstacle_sensing``)."""
+        with self._lock:
+            mode = self._sensing_mode
+        if mode not in _NEEDS_AVOIDANCE_MODES:
+            return []
+        found = self.avoidance_status()
+        if not found:
+            return []
+        return [
+            "no obstacle avoidance: " + "; ".join(found)
+            + " (configure the autopilot's avoidance, use a camera source for stepped sensing, "
+            "or set FLIGHTRISK_OBSTACLE_SENSING=off)"
+        ]
 
     def _param_problems(self) -> list[str]:
         """The failsafe checks on the parameters as last read, against the live envelope."""
@@ -617,10 +707,28 @@ class MavlinkFleetDrone:
         values = {name: self.link.get_param(name) for name in names}
         with self._lock:
             self._params = _ParamCheck(values=values, autopilot=autopilot, checked_at=self._clock())
+        self._refresh_avoidance(autopilot)
         found = self._param_problems()
         if found:
             logger.warning("[%s] autopilot failsafes not ready: %s", self.name, "; ".join(found))
         return found
+
+    def _refresh_avoidance(self, autopilot: str | None) -> None:
+        """Read the avoidance parameters and set or clear ``Capability.ONBOARD_AVOIDANCE`` to match."""
+        names = AVOIDANCE_PARAMS.get(autopilot or "", ())
+        values = {name: self.link.get_param(name) for name in names}
+        with self._lock:
+            self._avoidance = _AvoidanceCheck(values=values, autopilot=autopilot, checked_at=self._clock())
+        problems = self.avoidance_status()
+        with self._lock:
+            features = set(self.capabilities.features)
+            if problems:
+                features.discard(Capability.ONBOARD_AVOIDANCE)
+            else:
+                features.add(Capability.ONBOARD_AVOIDANCE)
+            self.capabilities.features = frozenset(features)
+        if problems:
+            logger.info("[%s] no onboard obstacle avoidance: %s", self.name, "; ".join(problems))
 
     # ------------------------------------------------------------------
     # Flight commands
@@ -818,12 +926,23 @@ class MavlinkFleetDrone:
     ) -> CommandResult:
         self._send_target(target)
         radius = min(self.options.arrival_radius_m, max(0.3, distance_m / 3.0))
-        deadline = self._clock() + timeout_s
+        started = self._clock()
+        deadline = started + timeout_s
+        # Where the vehicle last was and since when: it is stationary once it
+        # has stayed within _STATIONARY_RADIUS_M of this spot for stationary_s.
+        anchor: tuple[float, float] | None = None
+        anchor_at = started
         while True:
             if self._interrupt.is_set():
                 external = self._external_latched()
                 detail = "external control" if external else "interrupted by a landing"
                 return CommandResult(command, CommandOutcome.NOT_EXECUTED, detail)
+            if command == "move":
+                pose = self.measured_pose()
+                if pose is not None:
+                    here = (pose.x_cm, pose.y_cm)
+                    if anchor is None or math.hypot(here[0] - anchor[0], here[1] - anchor[1]) > _STATIONARY_RADIUS_M * 100:
+                        anchor, anchor_at = here, self._clock()
             if self._arrived(target, radius, check_heading):
                 with self._lock:
                     if self._interrupt.is_set():
@@ -831,8 +950,45 @@ class MavlinkFleetDrone:
                     self._target = target
                 return CommandResult(command)
             if self._clock() >= deadline:
+                if command == "move" and self._clock() - anchor_at >= self.options.stationary_s:
+                    stopped = self._stopped_short(target)
+                    if stopped is not None:
+                        return stopped
                 raise TimeoutError(f"{command} target not reached within {timeout_s:.0f} s")
             self._interrupt.wait(_POLL_S)
+
+    def _stopped_short(self, target: _Target) -> CommandResult | None:
+        """``STOPPED_SHORT`` at the measured pose, or None when the deadline must raise as before.
+
+        Only for a drone with onboard avoidance, still in the edge's own flight
+        mode with no external control: the autopilot is holding the vehicle
+        back, not someone else flying it. The commanded target moves to the
+        measured spot and is re-sent so the vehicle holds there instead of
+        creeping on when the obstacle moves. Not flown: the real autopilot's
+        timing under path planning is unknown.
+        """
+        if not self.capabilities.supports(Capability.ONBOARD_AVOIDANCE):
+            return None
+        st = self._autopilot_state()
+        pose = self.measured_pose()
+        if pose is None or not _number(st.rel_alt_m) or self._external_latched() is not None:
+            return None
+        if st.flight_mode not in autonomous_modes(st.autopilot):
+            return None
+        held = _Target(pose.x_cm, pose.y_cm, st.rel_alt_m * 100.0, target.heading_deg)
+        with self._lock:
+            if self._interrupt.is_set():
+                return None
+            self._target = held
+        try:
+            self._send_target(held)
+        except Exception as exc:  # noqa: BLE001 - the vehicle is stopped by the autopilot already; report it
+            logger.warning("[%s] could not re-send a hold at the stopped position: %r", self.name, exc)
+        logger.warning("[%s] move stopped short at x=%.0f y=%.0f cm (onboard avoidance)", self.name, pose.x_cm, pose.y_cm)
+        return CommandResult(
+            "move", CommandOutcome.STOPPED_SHORT,
+            f"stopped short at x={pose.x_cm:.0f} cm, y={pose.y_cm:.0f} cm in the plan frame (onboard avoidance)",
+        )
 
     def _arrived(self, target: _Target, radius_m: float, check_heading: bool) -> bool:
         st = self._autopilot_state()
