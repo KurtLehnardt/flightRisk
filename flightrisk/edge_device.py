@@ -106,7 +106,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
+import re
 import signal
 import sys
 import threading
@@ -126,8 +128,11 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_SENSING,
     ENV_OBSTACLE_STEP_CM,
     ENV_OBSTACLE_TURN,
+    EVENT_SETTING_NON_DEFAULT,
     OBSTACLE_MIN_SAFE_DEPTH,
+    OBSTACLE_MIN_SAFE_DEPTH_RANGE,
     OBSTACLE_PERSON_FRACTION,
+    OBSTACLE_PERSON_FRACTION_RANGE,
     OBSTACLE_STEP_CM,
     OBSTACLE_STEP_FIELD_CM,
     OBSTACLE_STEP_MAX_CM,
@@ -399,6 +404,98 @@ class _FrameFeedingSource:
         release = getattr(self._source, "release", None)
         if callable(release):
             release()
+
+
+class DecodedFramePoller:
+    """Feeds the obstacle sensor's frame holder from the Tello's video decoder, independent of detection.
+
+    The frame loop calls ``drone.get_frame()``, which feeds the holder through
+    ``drone.on_frame``, only between two detections, so while a slow detection
+    runs the holder gets nothing and a gate can find no fresh frame. This
+    daemon thread reads the decoder's newest frame every ``interval_s`` and
+    gives the holder its own copy of each frame it has not given it before.
+
+    The decoder is djitellopy's ``BackgroundFrameRead`` on the controller's
+    client (``drone.tello.background_frame_read``), which stores a new array
+    for every frame it decodes. The poller only reads it:
+
+    * It never calls ``get_frame``, so the frozen-frame counter and the stream
+      recovery in ``TelloController.get_frame`` see exactly the polls they saw
+      before, and the ``on_frame`` callbacks still fire once per poll.
+    * It never calls ``get_frame_read``, which would open a decoder. While the
+      client has none (before the first ``get_frame``, or while a stream
+      restart has dropped it), or the drone is not connected, it feeds nothing.
+    * A frame object it already fed is not fed again, so a stalled decoder
+      adds nothing and the sensor finds the view stale instead of judging an
+      old frame as new.
+    * A decoder in queue mode is left alone, because reading its ``frame``
+      would take frames from its queue.
+
+    A drone without such a client (the fake controllers) gets no poller; see
+    ``for_drone``.
+    """
+
+    def __init__(
+        self,
+        drone: Any,
+        holder: LatestFrame,
+        interval_s: float = 1 / 30,
+        log: StructuredLogger | None = None,
+        name: str = "obstacle-frames",
+    ):
+        self._drone = drone
+        self._client = getattr(drone, "tello", None)
+        self._feed = _copying_frame_feed(holder)
+        self._interval_s = interval_s
+        self._log = log
+        self._last: Any = None
+        self._error_logged = False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+
+    @classmethod
+    def for_drone(
+        cls, drone: Any, holder: LatestFrame | None, log: StructuredLogger | None = None,
+    ) -> "DecodedFramePoller | None":
+        """A poller for a drone with a djitellopy client, or None when there is nothing to poll."""
+        if holder is None or getattr(drone, "tello", None) is None:
+            return None
+        name = f"{getattr(drone, 'name', None) or 'drone'}-obstacle-frames"
+        return cls(drone, holder, log=log, name=name)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self, timeout: float = 1.0) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
+    def poll_once(self) -> bool:
+        """Feed the decoder's newest frame if it is new; True when one was fed. Never raises."""
+        try:
+            state = getattr(self._drone, "state", None)
+            if not getattr(state, "is_connected", False):
+                return False
+            reader = getattr(self._client, "background_frame_read", None)
+            if reader is None or getattr(reader, "with_queue", False):
+                return False
+            frame = reader.frame
+            if frame is None or frame is self._last:
+                return False
+            # Holding the last frame keeps its identity from being reused by a new array.
+            self._last = frame
+            self._feed(frame)
+            return True
+        except Exception as exc:  # noqa: BLE001 - the frame loop still feeds the holder
+            if not self._error_logged and self._log is not None:
+                self._error_logged = True
+                self._log.warning("edge_obstacle_frame_poller_error", error=repr(exc)[:200])
+            return False
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_s):
+            self.poll_once()
 
 
 class ResilientCaptureSource:
@@ -1445,19 +1542,85 @@ def _obstacle_sensing_mode(environ: Any = None) -> str:
     return raw
 
 
-def _obstacle_number(name: str, default: float, lo: float, hi: float, environ: Any, integer: bool = False) -> Any:
-    """A numeric obstacle knob from the environment, in ``lo..hi``; a bad value refuses to start."""
+# Plain ASCII numbers only: ``int()`` and ``float()`` would also take ``5_0``,
+# non-ASCII digits, ``nan`` and ``inf``.
+_ASCII_INT_RE = re.compile(r"[0-9]+")
+_ASCII_FLOAT_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _obstacle_number(name: str, default: Any, lo: float, hi: float, environ: Any, integer: bool = False) -> Any:
+    """A numeric obstacle knob from the environment, in ``lo..hi``; a bad value refuses to start.
+
+    An integer is ASCII digits only; a decimal is an ASCII decimal number (an
+    optional sign and exponent), so ``5_0``, non-ASCII digits, ``nan`` and
+    ``inf`` are refused.
+    """
     raw = (environ.get(name) or "").strip()
     if not raw:
         return default
-    try:
-        value = int(raw) if integer else float(raw)
-        ok = lo <= value <= hi and value == value
-    except ValueError:
-        ok = False
-    if not ok:
-        raise SystemExit(f"edge_device: {name}={raw!r} must be a number from {lo:g} to {hi:g}. Refusing to start.")
+    value: Any = None
+    if (_ASCII_INT_RE if integer else _ASCII_FLOAT_RE).fullmatch(raw):
+        try:
+            value = int(raw) if integer else float(raw)
+        except (ValueError, OverflowError):
+            value = None
+    if value is None or not math.isfinite(value) or not lo <= value <= hi:
+        kind = "a whole number" if integer else "a number"
+        raise SystemExit(f"edge_device: {name}={raw!r} must be {kind} from {lo:g} to {hi:g}. Refusing to start.")
     return value
+
+
+class ObstacleSettings:
+    """Every obstacle setting of the environment, parsed and validated (design section 3.2).
+
+    ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
+    ``_PERSON_FRACTION`` and ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
+    whatever the mode, the drone kind or the video source, so a malformed value
+    refuses to start even when the edge would not use it (under ``off``, on the
+    fake drone, or on a MAVLink edge without a camera). The step's range and
+    default depend on the drone kind: the field profile (the envelope's move
+    limits, default 500 cm) on a MAVLink edge, the room profile (20 to 100 cm,
+    default 50) otherwise. ``non_default`` lists ``(variable, value, default)``
+    for every setting that differs from its default.
+    """
+
+    def __init__(self, kind: str | None, envelope: SafetyEnvelope, environ: Any):
+        self.mode = _obstacle_sensing_mode(environ)
+        self.turn = _obstacle_turn(environ)
+        if kind == "mavlink":
+            step_default = OBSTACLE_STEP_FIELD_CM
+            step_lo, step_hi = envelope.limits.min_move_cm, envelope.limits.max_move_cm
+        else:
+            step_default = OBSTACLE_STEP_CM
+            step_lo, step_hi = OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM
+        self.step_cm = _obstacle_number(ENV_OBSTACLE_STEP_CM, step_default, step_lo, step_hi, environ, integer=True)
+        self.min_safe_depth = _obstacle_number(
+            ENV_OBSTACLE_MIN_SAFE_DEPTH, OBSTACLE_MIN_SAFE_DEPTH, *OBSTACLE_MIN_SAFE_DEPTH_RANGE, environ,
+        )
+        self.person_fraction = _obstacle_number(
+            ENV_OBSTACLE_PERSON_FRACTION, OBSTACLE_PERSON_FRACTION, *OBSTACLE_PERSON_FRACTION_RANGE, environ,
+        )
+        self.fake_obstacle_y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, None, -100000.0, 100000.0, environ)
+        self.non_default: list[tuple[str, Any, Any]] = [
+            (name, value, default)
+            for name, value, default in (
+                (ENV_OBSTACLE_SENSING, self.mode, SENSING_ENV_REQUIRED),
+                (ENV_OBSTACLE_TURN, self.turn, True),
+                (ENV_OBSTACLE_STEP_CM, self.step_cm, step_default),
+                (ENV_OBSTACLE_MIN_SAFE_DEPTH, self.min_safe_depth, OBSTACLE_MIN_SAFE_DEPTH),
+                (ENV_OBSTACLE_PERSON_FRACTION, self.person_fraction, OBSTACLE_PERSON_FRACTION),
+                (ENV_FAKE_OBSTACLE_Y_CM, self.fake_obstacle_y_cm, None),
+            )
+            if value != default
+        ]
+
+    def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
+        """Log every setting that is not its default once, at warning level, by name and value."""
+        for name, value, default in self.non_default:
+            log.warning(
+                EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
+                detail=f"{name}={value!r} is not the default ({default!r})",
+            )
 
 
 def _obstacle_turn(environ: Any) -> bool:
@@ -1505,40 +1668,30 @@ def _build_obstacle_wiring(
     env = os.environ if environ is None else environ
     kind = _drone_kind(args)
     drone_id = getattr(args, "drone_id", None)
-    mode = _obstacle_sensing_mode(env)
-    turn = _obstacle_turn(env)
+    settings = ObstacleSettings(kind, envelope, env)
+    settings.warn_non_default(log, drone_id)
+    mode, turn, step_cm = settings.mode, settings.turn, settings.step_cm
     if mode == SENSING_ENV_OFF:
         log.warning(
             "edge_obstacle_sensing_off", drone_id=drone_id,
             detail=f"{ENV_OBSTACLE_SENSING}=off: this drone flies its lanes with NO obstacle sensing",
         )
         return ObstacleWiring(sensor=NullSensor(), turn=turn)
-    if kind == "mavlink":
-        if getattr(args, "source", None) not in ("camera", "url"):
-            # No companion camera to look through: the autopilot's own avoidance or the override.
-            log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
-            return ObstacleWiring(turn=turn)
-        step_cm = _obstacle_number(
-            ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_FIELD_CM, envelope.limits.min_move_cm, envelope.limits.max_move_cm,
-            env, integer=True,
-        )
-    else:
-        step_cm = _obstacle_number(
-            ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_CM, OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM, env, integer=True,
-        )
+    if kind == "mavlink" and getattr(args, "source", None) not in ("camera", "url"):
+        # No companion camera to look through: the autopilot's own avoidance or the override.
+        log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
+        return ObstacleWiring(turn=turn)
     if kind == "fake":
-        y_raw = (env.get(ENV_FAKE_OBSTACLE_Y_CM) or "").strip()
+        y_cm = settings.fake_obstacle_y_cm
         zones: list[BlockedZone] = []
-        if y_raw:
-            y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, 0.0, -100000.0, 100000.0, env)
+        if y_cm is not None:
             zones.append(BlockedZone(heading_deg=0.0, y_min=y_cm))
             log.info("edge_obstacle_fake", drone_id=drone_id, blocked_from_y_cm=y_cm)
         return ObstacleWiring(
             sensor=FakeObstacleSensor(envelope.pose_snapshot, zones), step_cm=step_cm, turn=turn,
         )
 
-    min_safe_depth = _obstacle_number(ENV_OBSTACLE_MIN_SAFE_DEPTH, OBSTACLE_MIN_SAFE_DEPTH, 0.0, 1.0, env)
-    person_fraction = _obstacle_number(ENV_OBSTACLE_PERSON_FRACTION, OBSTACLE_PERSON_FRACTION, 0.0, 1.0, env)
+    min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
     holder = LatestFrame(time.monotonic)
     try:
         if kind != "mavlink":
@@ -1558,6 +1711,20 @@ def _build_obstacle_wiring(
         log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
         return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder)
     return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder)
+
+
+def _obstacle_frame_poller(
+    kind: str | None, drone: Any, wiring: ObstacleWiring, log: StructuredLogger | None = None,
+) -> DecodedFramePoller | None:
+    """The poller that feeds a camera sensor's holder straight from the drone's video decoder, or None.
+
+    Only a drone flown through its own video (not the MAVLink capture source) with a working camera sensor
+    and a djitellopy client to read gets one, so a slow detection in the frame loop cannot starve the
+    holder. The caller starts and stops it.
+    """
+    if kind == "mavlink" or wiring.sensor is None or isinstance(wiring.sensor, NullSensor):
+        return None
+    return DecodedFramePoller.for_drone(drone, wiring.holder, log)
 
 
 def _tell_mavlink_drone(drone: Any, wiring: ObstacleWiring) -> str | None:
@@ -1788,7 +1955,11 @@ def _run_flight_edge(
         log.info("edge_obstacle_sensing", drone_id=args.drone_id, mode=mode)
 
     previous_sigint = None
+    frame_poller = _obstacle_frame_poller(kind, drone, obstacle, log)
     try:
+        if frame_poller is not None:
+            frame_poller.start()
+            log.info("edge_obstacle_frame_poller", drone_id=args.drone_id)
         flight.start()
         _wire_emergency_callback(transport, flight)
         start_local_land_key(flight, sys.stdin, log)
@@ -1831,6 +2002,8 @@ def _run_flight_edge(
             flight.shutdown()
         except Exception as exc:
             log.error("edge_flight_shutdown_error", error=repr(exc))
+        if frame_poller is not None:
+            frame_poller.stop()
         try:
             transport.disconnect()
         except Exception:

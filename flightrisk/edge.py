@@ -113,10 +113,13 @@ class EdgeRunner:
         # The newest detection result, for the obstacle sensor's person cue:
         # ``last_detections`` is a ``(detections, frame_width, frame_height)``
         # tuple and ``last_detections_at`` the ``time.monotonic()`` stamp of
-        # when it was produced (the message timestamp is wall-clock and not
-        # comparable with the sensor's monotonic stamps). Both are ``None``
-        # until a frame has been run through a detector. The detections are
-        # stored first, so a reader that sees a new stamp sees its detections.
+        # when its frame was obtained, taken before processing starts, so a
+        # result is judged by the age of the view it describes and not by when
+        # the slow detector finished with it (the message timestamp is
+        # wall-clock and not comparable with the sensor's monotonic stamps).
+        # Both are ``None`` until a frame has been run through a detector. The
+        # detections are stored first, so a reader that sees a new stamp sees
+        # its detections.
         self.last_detections: tuple[list[Detection], int, int] | None = None
         self.last_detections_at: float | None = None
         self._detector_lock = threading.Lock()
@@ -148,6 +151,9 @@ class EdgeRunner:
 
         Returns a DetectionMessage with detections, embeddings, and crops.
         """
+        # The frame loop calls this as soon as it has the frame, so this is
+        # when the frame was obtained; it stamps ``last_detections_at``.
+        obtained_at = time.monotonic()
         self._frame_id += 1
         # Detector and profile name are read together, so a profile switch
         # never labels a frame with the wrong profile.
@@ -221,7 +227,7 @@ class EdgeRunner:
             msg.detections.append(detection)
 
         self.last_detections = (list(msg.detections), msg.frame_width, msg.frame_height)
-        self.last_detections_at = time.monotonic()
+        self.last_detections_at = obtained_at
         return msg
 
     def _stamp_pose(self, msg: DetectionMessage) -> None:

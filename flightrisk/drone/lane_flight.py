@@ -39,7 +39,19 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    than the end of the last move or turn plus the settle time (and newer
    than the gate itself). The call runs on a helper thread that is abandoned
    if it hangs. Only ``clear`` lets the step be claimed and sent; nothing is
-   sent after any other result.
+   sent after any other result. A drone that measures its own heading in
+   the plan frame (``measured_heading_deg()``, an autopilot's compass) must
+   also face the commanded heading within ``HEADING_TOLERANCE_DEG``, before
+   and after the look: otherwise the gate's result is ``unavailable``
+   (reason ``stale``, cause ``heading not reached``), so the camera never
+   clears a step it did not face. Such a drone that already has the
+   commanded heading in its pose but measures another one (lane 0 when an
+   autopilot's plan frame is not its takeoff yaw) is asked once per step to
+   turn to it (``rotate(0)``); a turn it reports as not executed while it
+   still measures a heading is a turn that did not finish, and cuts the lane
+   with ``sensor_stale`` instead of landing. A drone without that
+   measurement (the Tello, whose ``cw``/``ccw`` reply arrives once the turn
+   is flown) is gated exactly as before.
 3. **The cut policy.** ``blocked`` cuts the lane where the drone hovers: the
    rest of the lane and of every following lane in the same direction is
    removed from the plan, the cut ``(lane, flown_cm, reason)`` is recorded
@@ -51,7 +63,15 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    ``obstacle_retry_pause_s`` between attempts, and then cuts the lane with
    reason ``sensor_stale``. Once it has been unable to look for
    ``OBSTACLE_SENSOR_DOWN_S``, the remaining lanes are ended with reason
-   ``sensor_down`` and the plan's ``on_complete`` runs.
+   ``sensor_down`` and the plan's ``on_complete`` runs. The sensor's down
+   timer is looked at again when the drone lands and when a plan that does
+   not continue the current one is accepted: one probe ``sense`` call, and a
+   view (``clear`` or ``blocked``) clears the timer, so
+   ``obstacle_sensor_ok`` describes the sensor as it is now.
+
+The way back of a ``resume_search`` (``lane_manual``) is flown through the
+same turns and gates in sensed steps (``_fly_return_sensed``); a gate that
+does not clear cuts the lane the search resumes with and ends the way back.
 
 A hold, a manual takeover, a link-loss hold or a landing that arrives during
 a gate stops the sequence before its next step exactly as before: the gate
@@ -64,8 +84,10 @@ lane with reason ``autopilot``.
 from __future__ import annotations
 
 import inspect
+import math
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from flightrisk.drone.controller import CommandOutcome, command_result
@@ -96,6 +118,7 @@ from flightrisk.drone.obstacle_sensor import (
     OBSTACLE_STATE_CLEAR,
     OBSTACLE_STATE_UNAVAILABLE,
     REASON_ERROR,
+    REASON_STALE,
     REASON_TIMEOUT,
     START_REFUSED_REASON,
     STATE_BLOCKED,
@@ -104,20 +127,40 @@ from flightrisk.drone.obstacle_sensor import (
 )
 from flightrisk.drone.safety import ROOM_LIMITS, CeilingError
 
-__all__ = ["OBSTACLE_RETRY_PAUSE_S", "FlightSequenceMixin", "MoveNotExecutedError"]
+__all__ = [
+    "EVENT_SENSOR_PROBE",
+    "HEADING_NOT_REACHED",
+    "HEADING_TOLERANCE_DEG",
+    "OBSTACLE_RETRY_PAUSE_S",
+    "FlightSequenceMixin",
+    "MoveNotExecutedError",
+]
 
 #: Seconds the drone hovers between two attempts at a gate whose sensor
 #: could not look, so a sensor that fails at once still takes about as long
 #: as a stale one (``OBSTACLE_SENSE_RETRIES`` attempts, about 3 s in all).
 OBSTACLE_RETRY_PAUSE_S = 0.5
+#: A drone that measures its heading (``measured_heading_deg()``) may have a
+#: step cleared only while that heading is within this many degrees of the
+#: commanded heading, so its forward camera looks where the step goes.
+HEADING_TOLERANCE_DEG = 10.0
+#: ``SenseResult.detail["cause"]`` of a gate that did not judge a view
+#: because the drone did not face the commanded heading (an ``unavailable``
+#: result with reason ``stale``), and of a turn that did not finish.
+HEADING_NOT_REACHED = "heading not reached"
+#: Logged once per probe of a sensor whose down timer runs (on a landing, or
+#: when a plan that does not continue the current one is accepted).
+EVENT_SENSOR_PROBE = "edge_obstacle_sensor_probe"
 # How much longer than its own timeout a sense call may run before the
 # executor abandons its helper thread and treats the gate as timed out.
 _SENSE_JOIN_GRACE_S = 0.5
-# Verdicts of a step's preparation (turn and gate) in ``_fly_plan``.
+# Verdicts of a step's preparation (turn and gate) in ``_fly_plan`` and the
+# sensed way back of ``resume_search`` (``lane_manual``).
 _GO = "go"  # fly the step now
 _AGAIN = "again"  # look at the plan again (after a turn, a cut, a re-task)
 _STOP = "stop"  # the sequence ends (landing, hold)
 _RETRY = "retry"  # ask the sensor again (inside the gate only)
+_CUT = "cut"  # the gate or a turn that did not finish cut the lane
 _OBSTACLE_STATES = {
     STATE_CLEAR: OBSTACLE_STATE_CLEAR,
     STATE_BLOCKED: OBSTACLE_STATE_BLOCKED,
@@ -177,6 +220,9 @@ class FlightSequenceMixin:
         if hook is not None:
             hook()
         self._cancel = None
+        # A new sequence may ask the drone once more to turn to its commanded
+        # heading before a step it already asked for (``_face``).
+        self._realigned = None
         self._worker = threading.Thread(
             target=self._run_sequence,
             args=(kind, t_edge, offset_s, cmd, nudge, payload),
@@ -730,30 +776,84 @@ class FlightSequenceMixin:
         """Turn to face *step* if needed, then gate it: ``_GO``, ``_AGAIN`` or ``_STOP``.
 
         A turn returns ``_AGAIN`` so the loop reads the plan again (a hold or
-        a re-task may have arrived meanwhile) before the gate. With turning
-        disabled only ``forward`` steps are gated; the others are flown
-        unsensed.
+        a re-task may have arrived meanwhile) before the gate; so does a cut.
+        With turning disabled only ``forward`` steps are gated; the others
+        are flown unsensed.
         """
         direction = step[2]
+        current = self._plan_step_check(step, gen)
+        cut_target = self._plan_step_target(step)
         if self._turns_to_face():
-            delta = shortest_rotation(self.envelope.pose_snapshot().heading_deg, plan_heading(direction))
-            if delta:
-                return _AGAIN if self._turn(delta, step) else _STOP
+            verdict = self._face(plan_heading(direction), step, (gen, step), current, cut_target)
+            if verdict is not None:
+                return _AGAIN if verdict == _CUT else verdict
         elif direction != "forward":
             return _GO
-        return self._gate(step, gen)
+        verdict = self._look(step, current, cut_target)
+        return _AGAIN if verdict == _CUT else verdict
 
-    def _turn(self, degrees: int, step: tuple[int, int, str, int]) -> bool:
-        """Turn *degrees* to face *step* (claimed like a move); False if the sequence must stop."""
+    def _plan_step_check(self, step: tuple[int, int, str, int], gen: int) -> Callable[[], bool]:
+        """A check, run under ``_lock``, that *step* is still the next move of the plan it was read from."""
+        return lambda: self._step_current_locked(step, gen)
+
+    @staticmethod
+    def _plan_step_target(step: tuple[int, int, str, int]) -> Callable[[], tuple[int, int, str, int] | None]:
+        """The step a cut at a plan step's gate applies to: that step."""
+        return lambda: step
+
+    def _face(
+        self,
+        heading: float,
+        step: tuple[int, int, str, int],
+        key: Any,
+        current: Callable[[], bool],
+        cut_target: Callable[[], tuple[int, int, str, int] | None],
+    ) -> str | None:
+        """Turn to plan *heading* before a sensed step: None once the drone faces it, else ``_AGAIN``, ``_CUT`` or ``_STOP``.
+
+        The turn is the shortest rotation from the commanded (dead-reckoned)
+        heading. When no turn is due but the drone measures a heading more
+        than ``HEADING_TOLERANCE_DEG`` away from the commanded one, it is
+        asked once per step (*key*) and sequence to turn to the commanded
+        heading (``rotate(0)``): an autopilot whose plan frame is not its
+        takeoff yaw faces lane 0 that way, and one that did not finish an
+        earlier turn finishes it. A drone that does not measure its heading
+        is never asked.
+        """
+        delta = shortest_rotation(self.envelope.pose_snapshot().heading_deg, heading)
+        if not delta:
+            if self._realigned == key or self._heading_off() is None:
+                return None
+            self._realigned = key
+        return self._turn(delta, step, current, cut_target)
+
+    def _turn(
+        self,
+        degrees: int,
+        step: tuple[int, int, str, int],
+        current: Callable[[], bool],
+        cut_target: Callable[[], tuple[int, int, str, int] | None],
+    ) -> str:
+        """Turn *degrees* to face *step* (claimed like a move): ``_AGAIN``, ``_CUT`` or ``_STOP``.
+
+        A turn the drone reports as not executed while it still measures a
+        heading has not finished: the drone does not face the step, so the
+        lane is cut with ``sensor_stale`` (``sensor_down`` once the sensor's
+        down timer has run out), never cleared and never landed for. Any
+        other failed turn raises as before, and the executor lands.
+        """
         before = self.envelope.pose_snapshot().heading_deg
         yaw_before = self._measured_yaw()
+        outcome: Any = _STOP
         try:
-            return self._command_rotate(degrees)
+            outcome = self._rotate_for_step(degrees)
         finally:
             after = self.envelope.pose_snapshot().heading_deg
-            if after != before:
+            if after != before or (degrees == 0 and outcome == _AGAIN):
                 # The yaw the drone itself reports, before and after, shows
                 # how far the dead-reckoned heading drifts (hardware item H3).
+                # A turn of 0 degrees is a drone that measures its heading
+                # asked to turn to the commanded one.
                 self._log.info(
                     EVENT_OBSTACLE_TURN,
                     drone_id=self.drone_id,
@@ -765,6 +865,64 @@ class FlightSequenceMixin:
                     yaw_before_deg=yaw_before,
                     yaw_after_deg=self._measured_yaw(),
                 )
+        if isinstance(outcome, str):
+            return outcome
+        # A turn that did not finish (``outcome`` is its result).
+        off = self._heading_off() or {"cause": HEADING_NOT_REACHED}
+        result = SenseResult.make_unavailable(
+            REASON_STALE, detail={**off, "turn_degrees": degrees, "turn_detail": str(outcome.detail)[:120]}
+        )
+        now = self._clock()
+        pose = self.envelope.pose_snapshot()
+        with self._lock:
+            self._note_sense_locked(result, 0.0, now)
+            if not current():
+                verdict = _AGAIN
+            else:
+                verdict = _CUT
+                target = cut_target()
+                if target is not None:
+                    down = now - self._sensor_down_since >= OBSTACLE_SENSOR_DOWN_S
+                    self._cut_lane_locked(target, CUT_SENSOR_DOWN if down else CUT_SENSOR_STALE, result=result)
+        self._log.warning(
+            EVENT_SENSE_STALE,
+            drone_id=self.drone_id,
+            lane_index=step[0],
+            attempt=0,
+            cause=HEADING_NOT_REACHED,
+            turn_degrees=degrees,
+            turn_detail=result.detail["turn_detail"] or None,
+            measured_heading_deg=result.detail.get("measured_heading_deg"),
+            commanded_heading_deg=result.detail.get("commanded_heading_deg"),
+            heading_deg=round(pose.heading_deg, 1),
+        )
+        return verdict
+
+    def _rotate_for_step(self, degrees: int) -> str | Any:
+        """Claim and send one turn before a sensed step: ``_AGAIN``, ``_STOP``, or the result of a turn that did not finish.
+
+        A turn the controller executed is recorded in the dead-reckoned pose.
+        One it reports ``NOT_EXECUTED`` while the drone still measures a
+        heading (an autopilot that did not reach the heading by its
+        deadline) is returned for ``_turn`` to cut the lane; every other
+        failure raises ``MoveNotExecutedError``, as a failed move does.
+        """
+        if not self._claim_move():
+            return _STOP
+        try:
+            result = command_result(self.drone.rotate(degrees), "rotate")
+        finally:
+            self._end_move()
+        if result.ok:
+            self.envelope.record_rotation(degrees)
+            return _STOP if self._abort.is_set() else _AGAIN
+        if self._abort.is_set():
+            return _STOP
+        if result.outcome is CommandOutcome.NOT_EXECUTED and self._measured_heading()[1] is not None:
+            return result
+        raise MoveNotExecutedError(
+            f"rotate {degrees} degrees was not executed by the drone controller ({result.outcome.value})"
+        )
 
     def _measured_yaw(self) -> float | None:
         """The yaw the drone reports (``snapshot().yaw_deg``), or None. Never raises."""
@@ -777,6 +935,50 @@ class FlightSequenceMixin:
         except Exception:  # noqa: BLE001 - a log field only
             return None
 
+    def _measured_heading(self) -> tuple[bool, float | None]:
+        """``(measures, heading)``: whether the drone measures its plan-frame heading, and the heading now.
+
+        A drone measures it when it has ``measured_heading_deg()`` (the
+        MAVLink fleet drone, from the autopilot's compass in the plan frame).
+        Its heading is None while it cannot tell (stale telemetry, before the
+        first takeoff, or a probe that raised). ``measured_pose()`` is not
+        used for this: it falls back to the commanded heading. Never raises.
+        """
+        probe = getattr(self.drone, "measured_heading_deg", None)
+        if not callable(probe):
+            return False, None
+        try:
+            value = probe()
+        except Exception:  # noqa: BLE001 - an unreadable heading is not a heading
+            return True, None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return True, None
+        return True, float(value) % 360.0
+
+    def _heading_off(self) -> dict[str, Any] | None:
+        """Why the drone does not face its commanded heading, as a ``SenseResult`` detail, or None when it does.
+
+        None for a drone that does not measure its heading (the Tello: its
+        turn reply arrives once the turn is flown). For one that does, the
+        measured heading must be within ``HEADING_TOLERANCE_DEG`` of the
+        dead-reckoned (commanded) heading; an unknown heading does not face
+        anything.
+        """
+        measures, measured = self._measured_heading()
+        if not measures:
+            return None
+        commanded = self.envelope.pose_snapshot().heading_deg % 360.0
+        if measured is not None:
+            error = abs((measured - commanded + 180.0) % 360.0 - 180.0)
+            if error <= HEADING_TOLERANCE_DEG:
+                return None
+        return {
+            "cause": HEADING_NOT_REACHED,
+            "measured_heading_deg": None if measured is None else round(measured, 1),
+            "commanded_heading_deg": round(commanded, 1),
+            "tolerance_deg": HEADING_TOLERANCE_DEG,
+        }
+
     def _step_current_locked(self, step: tuple[int, int, str, int], gen: int) -> bool:
         """True if *step* is still the next move of the plan it was read from. Caller holds ``_lock``."""
         return (
@@ -785,17 +987,29 @@ class FlightSequenceMixin:
             and self._moves[self._step] == step
         )
 
-    def _gate(self, step: tuple[int, int, str, int], gen: int) -> str:
-        """Ask the sensor whether *step* may be flown: ``_GO``, ``_AGAIN`` (after a cut) or ``_STOP``.
+    def _look(
+        self,
+        step: tuple[int, int, str, int],
+        current: Callable[[], bool],
+        cut_target: Callable[[], tuple[int, int, str, int] | None],
+        source: str | None = None,
+    ) -> str:
+        """The sense gate before *step*: ``_GO``, ``_CUT``, ``_AGAIN`` or ``_STOP``.
 
-        Only a ``clear`` result for the step that is still next returns
-        ``_GO``. ``blocked`` cuts the lane. A result that is not a view
-        (``unavailable``, or an exception) is retried after a short hover,
-        up to ``OBSTACLE_SENSE_RETRIES`` attempts, then cuts the lane with
-        ``sensor_stale``; once the sensor has been unable to look for
+        Only a ``clear`` view, taken while the drone faced its commanded
+        heading (``_sense_facing``), for a step that is still *current*,
+        returns ``_GO``. ``blocked`` cuts the lane ``cut_target()`` names
+        (``_CUT``). A result that is not a view (``unavailable``, or an
+        exception) is retried after a short hover, up to
+        ``OBSTACLE_SENSE_RETRIES`` attempts, then cuts with ``sensor_stale``;
+        once the sensor has been unable to look for
         ``OBSTACLE_SENSOR_DOWN_S``, the remaining lanes are ended with
-        ``sensor_down``. A hold, manual control or a link-loss hold between
-        attempts hands back to the loop, which stops for it.
+        ``sensor_down``. When ``cut_target()`` is None (no lane is left to
+        cut) those outcomes still return ``_CUT`` and cut nothing. A step
+        that is no longer *current* (a re-task replaced it while the sensor
+        looked) returns ``_AGAIN``; so does a hold, manual control or a
+        link-loss hold between attempts, and the caller stops for it.
+        *source* (for example ``return``) is added to the gate's log.
         """
         attempt = 0
         while True:
@@ -804,39 +1018,60 @@ class FlightSequenceMixin:
             # A view newer than the end of the last move or turn plus the
             # settle time, and never older than the gate itself.
             after = max(self._last_motion_end_s, started - OBSTACLE_SETTLE_S)
-            result, latency_ms = self._sense_once(after)
+            result, latency_ms = self._sense_facing(after)
             now = self._clock()
             if self._abort.is_set():
                 return _STOP
             pose = self.envelope.pose_snapshot()
             with self._lock:
                 self._note_sense_locked(result, latency_ms, started)
-                if not self._step_current_locked(step, gen):
+                verdict, reason = _RETRY, None
+                if not current():
                     # A re-task replaced the step while the sensor looked.
                     verdict = _AGAIN
                 elif result.clear:
                     verdict = _GO
                 elif result.blocked:
-                    self._cut_lane_locked(step, result.cut_reason, result=result)
-                    verdict = _AGAIN
+                    reason = result.cut_reason
                 elif now - self._sensor_down_since >= OBSTACLE_SENSOR_DOWN_S:
-                    self._cut_lane_locked(step, CUT_SENSOR_DOWN, result=result)
-                    verdict = _AGAIN
+                    reason = CUT_SENSOR_DOWN
                 elif attempt >= OBSTACLE_SENSE_RETRIES:
-                    self._cut_lane_locked(step, CUT_SENSOR_STALE, result=result)
-                    verdict = _AGAIN
-                else:
-                    verdict = _RETRY
+                    reason = CUT_SENSOR_STALE
+                if reason is not None:
+                    verdict = _CUT
+                    target = cut_target()
+                    if target is not None:
+                        self._cut_lane_locked(target, reason, result=result)
                 stopping = (
                     self._held or self._manual is not None or self._link_holding or not self._is_active()
                 )
-            self._log_gate(step, attempt, result, latency_ms, pose)
+            self._log_gate(step, attempt, result, latency_ms, pose, source)
             if verdict != _RETRY:
                 return verdict
             if stopping:
                 return _AGAIN
             if self._abort.wait(self.obstacle_retry_pause_s):
                 return _STOP
+
+    def _sense_facing(self, after: float) -> tuple[SenseResult, float]:
+        """One look, valid only while the drone faces its commanded heading. Never raises.
+
+        A drone that measures its heading and does not face the commanded
+        one is not asked to look: the result is ``unavailable`` (reason
+        ``stale``, cause ``heading not reached``). The heading is read again
+        after a ``clear`` view, which counts only if the drone still faced
+        it: the view arrived between the two readings. Drones that do not
+        measure their heading get the sensor's answer unchanged.
+        """
+        off = self._heading_off()
+        if off is not None:
+            return SenseResult.make_unavailable(REASON_STALE, detail=off), 0.0
+        result, latency_ms = self._sense_once(after)
+        if result.clear:
+            off = self._heading_off()
+            if off is not None:
+                return SenseResult.make_unavailable(REASON_STALE, latency_ms=latency_ms, detail=off), latency_ms
+        return result, latency_ms
 
     def _sense_once(self, after: float) -> tuple[SenseResult, float]:
         """One sense call on a helper thread: ``(result, latency_ms)``. Never raises.
@@ -847,6 +1082,12 @@ class FlightSequenceMixin:
         daemon thread is left to finish) and becomes ``timeout``, so a hung
         sensor never holds up the flight thread. Without a sensor (it could
         not be built) every call is ``error``.
+
+        Each call gets a fresh daemon thread rather than one reused helper.
+        That is safe: a thread costs well under a millisecond against a gate
+        of 0.3 s or more, a call that is still running is never reused, and
+        an abandoned call writes its late answer into its own ``box`` that
+        no later gate reads, so it can never clear another step.
         """
         sensor = self._obstacle_sensor
         if sensor is None:
@@ -862,9 +1103,17 @@ class FlightSequenceMixin:
                 box["error"] = exc
             finally:
                 done.set()
+                self._sense_call_ended()
 
         began = time.monotonic()
-        threading.Thread(target=run, daemon=True, name=f"{self.drone_id}-sense").start()
+        with self._lock:
+            self._sense_inflight += 1
+        try:
+            threading.Thread(target=run, daemon=True, name=f"{self.drone_id}-sense").start()
+        except Exception as exc:  # noqa: BLE001 - no thread, no look
+            self._sense_call_ended()
+            failed = SenseResult.make_unavailable(REASON_ERROR, detail={"error": f"{type(exc).__name__}: {exc}"[:120]})
+            return failed, 0.0
         finished = done.wait(timeout_s + _SENSE_JOIN_GRACE_S)
         measured_ms = (time.monotonic() - began) * 1000.0
         if not finished:
@@ -882,6 +1131,93 @@ class FlightSequenceMixin:
         latency = result.latency_ms if result.latency_ms and result.latency_ms > 0 else measured_ms
         return result, float(latency)
 
+    # ------------------------------------------------------------------
+    # The sensor's down timer: a probe after a landing or a new plan
+    # ------------------------------------------------------------------
+
+    def _sense_call_ended(self) -> None:
+        """A sense call (a gate's or the probe's) returned: start a probe that waited for it."""
+        with self._lock:
+            self._sense_inflight = max(0, self._sense_inflight - 1)
+            why = self._probe_wanted
+            if why is not None and self._sense_inflight == 0:
+                self._probe_wanted = None
+                self._start_probe_locked(why)
+
+    def _request_sensor_probe_locked(self, why: str) -> None:
+        """Ask the sensor once whether it can look again, if its down timer runs. Caller holds ``_lock``.
+
+        Called when the drone lands and when a plan that does not continue
+        the current one is accepted. Nothing happens while the sensor works
+        (no timer), without a sensor, or while a probe is already pending.
+        The probe waits until no other sense call is in flight (a hung call
+        keeps it waiting, and the sensor stays reported down); it never
+        blocks the caller and never raises.
+        """
+        if (
+            self._obstacle_sensor is None
+            or self._sensor_down_since is None
+            or self._closed
+            or self._probe_running
+            or self._probe_wanted is not None
+        ):
+            return
+        if self._sense_inflight:
+            self._probe_wanted = why
+            return
+        self._start_probe_locked(why)
+
+    def _start_probe_locked(self, why: str) -> None:
+        """Start the probe's sense call on its own daemon thread. Caller holds ``_lock``."""
+        sensor = self._obstacle_sensor
+        since = self._sensor_down_since
+        if sensor is None or since is None or self._closed:
+            return
+        self._probe_running = True
+        self._sense_inflight += 1
+        try:
+            threading.Thread(
+                target=self._run_probe, args=(sensor, since, why), daemon=True, name=f"{self.drone_id}-sense-probe"
+            ).start()
+        except Exception as exc:  # noqa: BLE001 - no probe; the timer stays as it is
+            self._probe_running = False
+            self._sense_inflight = max(0, self._sense_inflight - 1)
+            self._log.warning(EVENT_SENSOR_PROBE, drone_id=self.drone_id, why=why, state=None,
+                              recovered=False, error=f"{type(exc).__name__}: {exc}"[:120])
+
+    def _run_probe(self, sensor: Any, since: float, why: str) -> None:
+        """The probe: one sense call; a view clears the down timer it was started for."""
+        result: Any = None
+        error = None
+        recovered = False
+        try:
+            try:
+                result = sensor.sense(self._clock(), self.obstacle_sense_timeout_s)
+            except Exception as exc:  # noqa: BLE001 - the sensor still cannot look
+                error = f"{type(exc).__name__}: {exc}"[:120]
+            looked = isinstance(result, SenseResult) and not result.unavailable
+            with self._lock:
+                self._probe_running = False
+                # Only the run of failures the probe was started for is
+                # cleared; a gate that failed or looked since decides alone.
+                recovered = looked and self._sensor_down_since == since
+                if recovered:
+                    self._sensor_down_since = None
+            seen = result if isinstance(result, SenseResult) else None
+            self._log.info(
+                EVENT_SENSOR_PROBE,
+                drone_id=self.drone_id,
+                why=why,
+                state=None if seen is None else seen.state,
+                reason=None if seen is None else (seen.reason or None),
+                recovered=recovered,
+                error=error,
+            )
+        finally:
+            with self._lock:
+                self._probe_running = False
+            self._sense_call_ended()
+
     def _note_sense_locked(self, result: SenseResult, latency_ms: float, started: float) -> None:
         """Record a gate's outcome for telemetry and the sensor's down timer. Caller holds ``_lock``."""
         self._obstacle_state = _OBSTACLE_STATES.get(result.state, OBSTACLE_STATE_UNAVAILABLE)
@@ -893,10 +1229,17 @@ class FlightSequenceMixin:
             self._sensor_down_since = None
 
     def _log_gate(
-        self, step: tuple[int, int, str, int], attempt: int, result: SenseResult, latency_ms: float, pose: Any
+        self,
+        step: tuple[int, int, str, int],
+        attempt: int,
+        result: SenseResult,
+        latency_ms: float,
+        pose: Any,
+        source: str | None = None,
     ) -> None:
         """Log one gate (``edge_obstacle_gate``) and, for a sensor that could not look, why."""
         lane_index = step[0]
+        extra = {} if source is None else {"source": source}
         self._log.info(
             EVENT_OBSTACLE_GATE,
             drone_id=self.drone_id,
@@ -912,6 +1255,7 @@ class FlightSequenceMixin:
             x_cm=round(pose.x_cm, 1),
             y_cm=round(pose.y_cm, 1),
             heading_deg=round(pose.heading_deg, 1),
+            **extra,
         )
         if not result.unavailable:
             self._sensor_error_logged = None
@@ -930,8 +1274,112 @@ class FlightSequenceMixin:
                 attempt=attempt,
                 latency_ms=round(float(latency_ms), 1),
             )
+        elif result.detail.get("cause") == HEADING_NOT_REACHED:
+            self._log.warning(
+                EVENT_SENSE_STALE,
+                drone_id=self.drone_id,
+                lane_index=lane_index,
+                attempt=attempt,
+                cause=HEADING_NOT_REACHED,
+                measured_heading_deg=result.detail.get("measured_heading_deg"),
+                commanded_heading_deg=result.detail.get("commanded_heading_deg"),
+            )
         else:
             self._log.warning(EVENT_SENSE_STALE, drone_id=self.drone_id, lane_index=lane_index, attempt=attempt)
+
+    # ------------------------------------------------------------------
+    # The sensed way back of a resume_search (``lane_manual._run_return``)
+    # ------------------------------------------------------------------
+
+    def _fly_return_sensed(self, path: list[tuple[str, int]]) -> str:
+        """Fly the way back of a ``resume_search`` in sensed steps: ``done``, ``stopped`` or ``blocked``.
+
+        *path* is ``lane_manual``'s way back: an optional ``("rotate",
+        degrees)`` to the hold heading, then moves along that heading's
+        forward and right axes. With turning on, every move is flown nose
+        first, like a lane: the drone turns to face it by the shortest
+        rotation, and each step of at most the sensed step length is gated
+        with a fresh view (``_look``) and flown as a body ``forward`` move.
+        The hold heading itself is not restored, because the plan then turns
+        to face its own next step. With turning off (``forward_only``) the
+        drone turns to the hold heading as before and only ``forward`` steps
+        are gated, as on a lane.
+
+        A gate that does not clear cuts the lane the search resumes with, as
+        the cut policy cuts a lane at its own gate, and the way back ends
+        there (``blocked``): the drone hovers where it stopped. A landing, a
+        hold, manual control or a link-loss hold stops it before its next
+        move (``stopped``), exactly as an unsensed way back stops.
+        """
+        turning = self._turns_to_face()
+        limits = getattr(self.envelope, "limits", ROOM_LIMITS)
+        base = self.envelope.pose_snapshot().heading_deg
+        lane_index = self.lane_index
+
+        def current() -> bool:
+            return True
+
+        index = 0
+        for direction, amount in path:
+            if direction == "rotate":
+                base = (base + amount) % 360.0
+                if not turning and not self._command_rotate(amount):
+                    return "stopped"
+                continue
+            face = (base + plan_heading(direction)) % 360.0 if turning else None
+            body = "forward" if turning else direction
+            for distance in self._split_lane(amount, limits):
+                step = (lane_index, index, direction, distance)
+                key = ("return", index)
+                index += 1
+                while True:
+                    if face is not None:
+                        verdict = self._face(face, step, key, current, self._resume_cut_target_locked)
+                        if verdict == _AGAIN:
+                            if not self._pause_point():
+                                return "stopped"
+                            continue
+                        if verdict is not None:
+                            return "blocked" if verdict == _CUT else "stopped"
+                    if body != "forward":
+                        break  # forward_only: a back or sideways step is flown unsensed, as on a lane
+                    verdict = self._look(step, current, self._resume_cut_target_locked, source="return")
+                    if verdict == _GO:
+                        break
+                    if verdict == _AGAIN:
+                        if not self._pause_point():
+                            return "stopped"
+                        continue
+                    return "blocked" if verdict == _CUT else "stopped"
+                if not self.envelope.check_move(body, distance):
+                    pose = self.envelope.pose_snapshot()
+                    self._log.error(
+                        "edge_geofence_refused", drone_id=self.drone_id, direction=body, distance_cm=distance,
+                        x_cm=round(pose.x_cm, 1), y_cm=round(pose.y_cm, 1), heading_deg=round(pose.heading_deg, 1),
+                        source="return",
+                    )
+                    self.land_now("geofence")
+                    return "stopped"
+                if not self._command_move(body, distance, record=True):
+                    return "stopped"
+        return "done"
+
+    def _resume_cut_target_locked(self) -> tuple[int, int, str, int] | None:
+        """The lane a blocked way back cuts: the next move of the plan, or None when none is left. Caller holds ``_lock``."""
+        return self._moves[self._step] if self._step < len(self._moves) else None
+
+    def _pause_point(self) -> bool:
+        """False when the sequence must stop before its next move; nothing is sent either way.
+
+        Asks ``_claim_move``, so a landing, a hold, manual control or a
+        link-loss hold stops and releases the sequence exactly as a refused
+        move does (a manual hold records its hold point then).
+        """
+        if not self._claim_move():
+            return False
+        with self._lock:
+            self._moving = False
+        return True
 
     def _stopped_short_flown(self, start: Any, direction: str, distance: int) -> int:
         """How far a move the autopilot stopped short got, from the drone's measured position.

@@ -53,9 +53,12 @@ stops, never lands for it, skips the rest of the lane and of any following
 lane in the same direction, and keeps later lanes on the planned grid). A
 sensor that cannot look is retried, then cuts the lane, and a sensor down
 for ``OBSTACLE_SENSOR_DOWN_S`` ends the lanes through the plan's own
-``on_complete``. Without a sensor (the default) lanes are flown exactly as
-before. ``obstacle_status()`` holds the telemetry fields; the flight half
-is ``flightrisk.drone.lane_flight`` and the arithmetic
+``on_complete``. A drone that measures its own heading
+(``measured_heading_deg()``) has a step cleared only while it faces the
+commanded heading. The way back of a ``resume_search`` is flown the same
+way (``lane_manual``). Without a sensor (the default) lanes are flown
+exactly as before. ``obstacle_status()`` holds the telemetry fields; the
+flight half is ``flightrisk.drone.lane_flight`` and the arithmetic
 ``flightrisk.drone.lane_steps``.
 
 Fail-safe rules: any unexpected exception while flying a sequence or running
@@ -430,8 +433,20 @@ class LaneExecutor(
         self._obstacle_state: str | None = None
         self._obstacle_latency_ms: float | None = None
         # Edge clock time of the first of the current run of gates whose
-        # sensor could not look, or None while the sensor works.
+        # sensor could not look, or None while the sensor works. A landing
+        # and a new plan that does not continue the current one have the
+        # sensor probed once; a view clears it (``lane_flight``).
         self._sensor_down_since: float | None = None
+        # Sense calls in flight (gates, abandoned ones included, and the
+        # probe); the probe starts only when there is none. ``_probe_wanted``
+        # is why a probe waits for them (or None), ``_probe_running`` is True
+        # while its call runs.
+        self._sense_inflight = 0
+        self._probe_wanted: str | None = None
+        self._probe_running = False
+        # The step (with its plan generation) the running sequence already
+        # asked to turn to its commanded heading (``lane_flight._face``).
+        self._realigned: Any = None
         # The sensor error last logged, so each change is logged once.
         self._sensor_error_logged: str | None = None
         # Edge clock time at which the last move, turn or takeoff ended:
@@ -573,7 +588,9 @@ class LaneExecutor(
         * ``obstacle_sensor_ok``: False when no sensor could be built, for the
           ``off`` override, and while the sensor has been unable to look for
           ``OBSTACLE_SENSOR_DOWN_S`` or longer; True otherwise (``autopilot``:
-          always True);
+          always True). The run of failures ends at the next view, a gate's
+          or the probe's that a landing or a new plan that does not continue
+          the current one starts, so a sensor that works again is ok again;
         * ``obstacle_state`` and ``obstacle_latency_ms``: the last gate's
           outcome (``clear``, ``blocked`` or ``unavailable``) and how long
           its sense call took; left out before the first gate of the plan;
@@ -628,11 +645,14 @@ class LaneExecutor(
         """Forget the cuts and the gate state of the plan being replaced. Caller holds ``_lock``.
 
         ``obstacle_seq`` and the sensor's down timer are kept: they describe
-        the edge and its sensor, not the plan.
+        the edge and its sensor, not the plan. While that timer runs the
+        sensor is probed once (``_request_sensor_probe_locked``), so a sensor
+        that works again is reported ok before the new plan is started.
         """
         self._cuts = []
         self._obstacle_state = None
         self._obstacle_latency_ms = None
+        self._request_sensor_probe_locked("new_plan")
 
     def _worker_alive(self) -> bool:
         """True while a flight sequence may still send commands. Caller holds ``_lock``."""
@@ -1036,6 +1056,9 @@ class LaneExecutor(
             if owner:
                 with self._lock:
                     self._land_inflight = False
+                    # The drone lands: ask a sensor that was down whether it
+                    # can look again (never blocks, never raises).
+                    self._request_sensor_probe_locked("landing")
 
     def _drone_land(self, reason: str, retry: bool = False) -> Any:
         """Call the controller's landing for *reason*.

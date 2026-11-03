@@ -44,9 +44,11 @@ OBSTACLE_STEP_MAX_CM = 100
 OBSTACLE_STEP_FIELD_CM = 500
 #: Seconds to wait after a move's reply before a frame counts as settled.
 OBSTACLE_SETTLE_S = 0.3
-#: How long ``LatestFrame.wait_for`` waits for a frame newer than ``after + settle``.
+#: How long ``LatestFrame.wait_for`` waits for a frame newer than ``after + settle``,
+#: counted from ``after + settle`` (or from the call, when that is later).
 OBSTACLE_FRAME_WAIT_S = 0.7
-#: Longest a single ``sense`` call may take before it counts as a timeout.
+#: Longest a single ``sense`` call may take in all (frame wait, inference and
+#: person wait together) before it counts as a timeout.
 OBSTACLE_SENSE_TIMEOUT_S = 2.0
 #: Attempts at the gate before a stale or failing sensor cuts the lane.
 OBSTACLE_SENSE_RETRIES = 3
@@ -54,10 +56,20 @@ OBSTACLE_SENSE_RETRIES = 3
 OBSTACLE_SENSOR_DOWN_S = 10.0
 #: A person box taller than this fraction of the frame height is a close person.
 OBSTACLE_PERSON_FRACTION = 0.55
+#: Allowed ``FLIGHTRISK_OBSTACLE_PERSON_FRACTION``. A box can never be taller
+#: than the frame, so a fraction near 1.0 would switch the cue off without a
+#: word; at 0.9 a standing adult still fires at about 1.8 m and a crouching one
+#: at about 1.1 m, beyond the 100 cm stop margin (design sections 2.4, 3.2).
+OBSTACLE_PERSON_FRACTION_RANGE = (0.2, 0.9)
 #: The person box must be centred inside the middle fraction of the frame width.
 OBSTACLE_PERSON_CENTRAL_FRACTION = 1.0 / 3.0
 #: The depth guard's threshold for "the centre is close" (``ObstacleGuard``).
 OBSTACLE_MIN_SAFE_DEPTH = 0.35
+#: Allowed ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``. The guard divides the map by
+#: its 95th percentile, so the closest thing in view scores about 1.0: a
+#: threshold at or above that would never block, and one at 0 divides by zero
+#: in the guard's confidence.
+OBSTACLE_MIN_SAFE_DEPTH_RANGE = (0.05, 0.9)
 #: How long the person cue waits for a detection result newer than ``after + settle``.
 OBSTACLE_DETECTION_WAIT_S = 1.0
 #: This many ``unknown`` person cues in a row log ``EVENT_PERSON_CUE_DOWN`` once.
@@ -189,6 +201,9 @@ EVENT_LANES_ENDED_SENSOR_DOWN = "edge_lanes_ended_sensor_down"
 EVENT_PERSON_CUE_DOWN = "edge_obstacle_person_cue_down"
 EVENT_OBSTACLE_TURN = "edge_obstacle_turn"
 EVENT_START_REFUSED = "edge_start_refused"
+#: Logged once at startup, at warning level, for every obstacle setting that
+#: is not its default (``variable``, ``value``, ``default``).
+EVENT_SETTING_NON_DEFAULT = "edge_obstacle_setting_non_default"
 #: ``reason`` of ``edge_start_refused`` when the sensor is missing.
 START_REFUSED_REASON = "obstacle_sensor"
 #: Prefix of the ``drone_unreachable`` nack detail: ``"<prefix> <error>"``.
@@ -480,13 +495,22 @@ class LatestFrame:
         after: float,
         settle_s: float = OBSTACLE_SETTLE_S,
         wait_s: float = OBSTACLE_FRAME_WAIT_S,
+        limit_s: float | None = None,
     ) -> TimedFrame | None:
         """Return the newest frame that arrived at or after ``after + settle_s``.
 
-        Waits up to ``wait_s`` for one and returns ``None`` when none came.
+        Waits until ``wait_s`` past the later of now and ``after + settle_s``,
+        so a call made before the settle time is over still gets the whole
+        ``wait_s`` once a frame can count, and returns ``None`` when no such
+        frame came. ``limit_s``, when given, caps the wait counted from now
+        (the caller's remaining time budget). A ``wait_s`` or ``limit_s`` of 0
+        looks once and does not wait.
         """
         threshold = after + settle_s
-        deadline = self._clock() + wait_s
+        now = self._clock()
+        deadline = max(now, threshold) + wait_s if wait_s > 0 else now
+        if limit_s is not None:
+            deadline = min(deadline, now + max(0.0, limit_s))
         with self._cond:
             while True:
                 latest = self._latest
