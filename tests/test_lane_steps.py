@@ -284,6 +284,31 @@ def test_sensor_down_ends_every_later_lane():
     assert replay_lanes(DEMO + [("left", 100)], [(1, 50, CUT_SENSOR_DOWN), (5, 20)]).targets[-1] == 0
 
 
+def test_sensor_down_after_a_cut_reports_the_remaining_lanes_where_they_are_planned():
+    # Lane 0 is cut at 250 (the drone is 150 cm behind on y) and the sensor
+    # goes down 50 cm into lane 1. Lane 1's own remainder is where the drone
+    # flies it, at y 250; lanes 2 to 4 are never flown, so they are the
+    # planned lanes (design section 4: "the remaining lanes become uncovered
+    # segments"), not lanes shifted 150 cm back and out of the zone.
+    replay = replay_lanes(DEMO, [(0, 250), (1, 50, CUT_SENSOR_DOWN)])
+    assert replay.targets == (400, 100, 0, 0, 0)
+    assert [seg(s) for s in replay.segments] == [
+        (0, (0, 250), (0, 400), CUT_OBSTACLE),
+        (1, (50, 250), (100, 250), CUT_SENSOR_DOWN),
+        (2, (100, 400), (100, 0), CUT_SENSOR_DOWN),
+        (3, (100, 0), (200, 0), CUT_SENSOR_DOWN),
+        (4, (200, 0), (200, 400), CUT_SENSOR_DOWN),
+    ]
+    assert [s.cut for s in replay.segments] == [0, 1, 1, 1, 1]
+    # The drone stays where it stopped; nothing after the cut is flown.
+    assert replay.position == (50, 250)
+    # Every ended lane lies on its planned span.
+    starts = [planned_end(DEMO[:k]) for k in range(len(DEMO) + 1)]
+    for segment in replay.segments[2:]:
+        assert (segment.x_cm, segment.y_cm) == starts[segment.lane_index]
+        assert (segment.end_x_cm, segment.end_y_cm) == starts[segment.lane_index + 1]
+
+
 def test_two_cuts_attribute_their_shadows():
     lanes = [("forward", 400), ("right", 100), ("back", 400), ("right", 100), ("forward", 400), ("right", 100),
              ("back", 400)]

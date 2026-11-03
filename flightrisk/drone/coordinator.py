@@ -60,6 +60,26 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from flightrisk.drone.lane_steps import (
+    Cut,
+    UncoveredSegment,
+    decode_cuts,
+    uncovered_segments,
+)
+from flightrisk.drone.obstacle_sensor import (
+    SENSING_OFF,
+    SENSING_STEPPED,
+    SENSOR_UNAVAILABLE_DETAIL,
+    TELEMETRY_CUT_REASONS,
+    TELEMETRY_CUTS,
+    TELEMETRY_CUTS_TOTAL,
+    TELEMETRY_FIELDS,
+    TELEMETRY_LATENCY_MS,
+    TELEMETRY_SENSING,
+    TELEMETRY_SENSOR_OK,
+    TELEMETRY_SEQ,
+    TELEMETRY_STATE,
+)
 from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.search import split_parallel_track_zones
 
@@ -104,6 +124,9 @@ _DIRECTION_VECTORS = {
     "right": (1, 0),
     "left": (-1, 0),
 }
+
+# The telemetry fields ``status()`` copies for a drone that reports obstacle sensing.
+_STATUS_OBSTACLE_KEYS = (TELEMETRY_SENSING, TELEMETRY_SENSOR_OK, TELEMETRY_STATE, TELEMETRY_LATENCY_MS)
 
 _PASSTHROUGH_DETECTION_KEYS = ("thumbnail", "lat", "lon")
 
@@ -360,6 +383,18 @@ class _DroneState:
     ping_t1: float | None = None
     ping_event: threading.Event | None = None
     pong: tuple[float, float, float] | None = None
+    # Obstacle sensing (design section 6). ``obstacle_seq`` is the last
+    # ``obstacle_seq`` the edge reported, so each increase is announced once.
+    # The edge counts every cut it makes while it runs and never restarts the
+    # count for a new plan, so the k-th last listed cut is cut number
+    # ``obstacle_seq - k``. ``obstacle_plan_seq`` is the count when the
+    # current plan was installed: cuts numbered up to it belong to an earlier
+    # plan. ``obstacle_cuts`` maps the number of every cut of the current
+    # plan the ground has seen to the cut, because telemetry lists only the
+    # last ``MAX_CUTS_LISTED``.
+    obstacle_seq: int = 0
+    obstacle_plan_seq: int = 0
+    obstacle_cuts: dict[int, Cut] = field(default_factory=dict)
 
 
 def _number(value: Any) -> float | None:
@@ -381,6 +416,13 @@ def _drone_link_refusal(msg: dict, key: str = "drone_link_detail") -> str:
     if isinstance(detail, str) and detail.strip():
         return detail.strip()[:200]
     return "drone unreachable"
+
+
+def _obstacle_sensor_refusal(msg: dict) -> str:
+    """Why a start is refused for a stepped drone whose telemetry says its obstacle sensor is down."""
+    state = msg.get(TELEMETRY_STATE)
+    suffix = f" (obstacle_state {state})" if isinstance(state, str) else ""
+    return f"{SENSOR_UNAVAILABLE_DETAIL} the edge reports it cannot sense obstacles{suffix}"
 
 
 def _lane(direction: str, distance_cm: int) -> dict:
@@ -598,6 +640,7 @@ class FleetCoordinator:
                 if chunk.status == "failed"
                 for entry in chunk.lane_entries()
             ] + [dict(area) for area in self._plan.uncovered_areas]
+            out["uncovered"] += self._obstacle_uncovered_locked()
             return out
 
     def detections(self) -> list[FleetDetection]:
@@ -650,6 +693,14 @@ class FleetCoordinator:
                     "drone_link_ok": telemetry.get("drone_link_ok"),
                     "drone_link_detail": telemetry.get("drone_link_detail"),
                 }
+                if state.obstacle_cuts or any(key in telemetry for key in TELEMETRY_FIELDS):
+                    # Only for a drone that reports obstacle sensing, so the
+                    # status of a fleet without it (and the mobile contract
+                    # fixtures built from it) is unchanged.
+                    entry.update({key: telemetry.get(key) for key in _STATUS_OBSTACLE_KEYS})
+                    _, segments = self._obstacle_replay_locked(state)
+                    entry["uncovered_cm"] = sum(seg.length_cm for seg in segments)
+                    entry["reflights"] = self._reflight_counts_locked(drone_id)
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:
@@ -792,6 +843,7 @@ class FleetCoordinator:
                 state.offer = None
                 state.nack_reason = None
                 state.executed_at_ground_s = None
+                self._reset_obstacles_locked(state)
                 self._clear_ack(state)
                 messages[zone.drone_id] = self._assign_message(zone.drone_id, state)
         for drone_id, msg in messages.items():
@@ -982,6 +1034,14 @@ class FleetCoordinator:
                     # cached value and a start_at would be refused anyway.
                     refusals[drone_id] = _drone_link_refusal(telemetry)
                     continue
+                sensing = telemetry.get(TELEMETRY_SENSING)
+                if telemetry.get(TELEMETRY_SENSOR_OK) is False and sensing == SENSING_STEPPED:
+                    # The edge flies short sensed steps and cannot sense: it
+                    # would refuse start_at itself, so refuse here with the reason.
+                    refusals[drone_id] = _obstacle_sensor_refusal(telemetry)
+                    continue
+                if sensing == SENSING_OFF:
+                    logger.warning("%s flies its lanes unsensed (obstacle sensing is off)", drone_id)
                 fresh = _number(telemetry.get("battery"))
                 if fresh is not None:
                     battery = fresh
@@ -1026,9 +1086,10 @@ class FleetCoordinator:
                 state = self._drones[drone_id]
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
+                events.extend(self._note_cuts_locked(drone_id, state, state.telemetry))
                 if self._release_deferred_locked(drone_id, state.telemetry):
                     messages = self._dispatch_locked()
-                    events = self._settle_and_collect_locked()
+                    events.extend(self._settle_and_collect_locked())
             self._emit_all(events)
             self._send_offers(messages)
         elif msg_type == "detections":
@@ -1165,6 +1226,186 @@ class FleetCoordinator:
         if here_x is not None and here_y is not None:
             parts.append(f"{drone_id} is at ({here_x:g}, {here_y:g}) cm from its takeoff point")
         return reason + (": " + "; ".join(parts) if parts else "")
+
+    # ------------------------------------------------------------------
+    # Obstacle cuts
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _reset_obstacles_locked(state: _DroneState) -> None:
+        """Forget the cuts of the previous plan.
+
+        The edge keeps counting cuts across plans, so the count last reported
+        becomes the plan's starting point: a telemetry message from before the
+        edge accepted the new plan still lists the old plan's cuts, and those
+        are numbered at or below it.
+        """
+        state.obstacle_cuts = {}
+        state.obstacle_plan_seq = state.obstacle_seq
+
+    @staticmethod
+    def _listed_cuts(telemetry: dict, seq: int) -> list[tuple[int, Cut]]:
+        """The cuts a telemetry message lists, as (cut number, cut), oldest first.
+
+        The listed cuts are the edge's last ones, so the last is number
+        *seq* and each earlier one is one less. A pair that is not two
+        numbers is dropped without shifting the numbers of the others.
+        """
+        flat = telemetry.get(TELEMETRY_CUTS)
+        if not isinstance(flat, (list, tuple)):
+            return []
+        text = telemetry.get(TELEMETRY_CUT_REASONS)
+        names = text.split(",") if isinstance(text, str) else []
+        count = len(flat) // 2
+        listed = []
+        for k in range(count):
+            name = names[k] if k < len(names) else None
+            decoded = decode_cuts(flat[2 * k:2 * k + 2], name)
+            if decoded:
+                listed.append((seq - (count - 1 - k), decoded[0]))
+        return listed
+
+    @staticmethod
+    def _obstacle_replay_locked(state: _DroneState) -> tuple[list[int], list[UncoveredSegment]]:
+        """The drone's cuts of this plan and the segments nobody searched, in the drone's frame.
+
+        Returns the cut numbers in the order the cuts happened and
+        ``lane_steps.uncovered_segments`` of the drone's current lanes
+        (appended lanes included) and those cuts, which is exactly what the
+        edge derives. A segment's ``cut`` indexes the cut numbers, so
+        ``numbers[segment.cut]`` is the ``obstacle_seq`` of the cut that
+        produced it or, for a ``skipped`` segment, caused it. Positions are
+        relative to the drone's takeoff point; add ``_origin(state)`` for
+        the shared grid. Lanes the replay cannot read (no edge accepts them,
+        so they never carry cuts) give no segments rather than an error in
+        the telemetry handler.
+        """
+        numbers = sorted(state.obstacle_cuts)
+        try:
+            segments = uncovered_segments(state.lanes, [state.obstacle_cuts[n] for n in numbers])
+        except (KeyError, TypeError, ValueError):
+            segments = []
+        return numbers, segments
+
+    def _note_cuts_locked(self, drone_id: str, state: _DroneState, telemetry: dict) -> list[tuple[str, dict]]:
+        """Record a drone's reported cuts and return one ``lane_blocked`` event per new cut.
+
+        Does nothing for telemetry without a whole, non-negative
+        ``obstacle_seq``. The edge counts cuts for as long as it runs, so a
+        lower count than before means it restarted: what it reported before
+        no longer applies. ``obstacle_cuts_total`` says how many cuts the
+        edge's current plan has, which are the last ones it counted, so any
+        older cut the ground still holds belongs to a plan the edge has left.
+        Every listed cut is kept by its number, so a plan with more cuts than
+        one message lists is still replayed in full.
+
+        A ``lane_blocked`` event names the point where the drone stopped and
+        everything the cut left unsearched (the rest of its lane, a
+        same-direction run after it, or for ``sensor_down`` every later
+        lane), in shared-grid coordinates.
+        """
+        seq = _number(telemetry.get(TELEMETRY_SEQ))
+        if seq is None or seq < 0 or seq != int(seq):
+            return []
+        seq = int(seq)
+        if seq < state.obstacle_seq:
+            logger.warning(
+                "%s reports obstacle_seq %d after %d: its edge restarted, so its earlier cuts are dropped",
+                drone_id, seq, state.obstacle_seq,
+            )
+            state.obstacle_cuts = {}
+            state.obstacle_seq = state.obstacle_plan_seq = 0
+        oldest = state.obstacle_plan_seq
+        total = _number(telemetry.get(TELEMETRY_CUTS_TOTAL))
+        if total is not None and total >= 0 and total == int(total):
+            oldest = max(oldest, seq - int(total))
+        for number in [n for n in state.obstacle_cuts if n <= oldest]:
+            del state.obstacle_cuts[number]
+        for number, cut in self._listed_cuts(telemetry, seq):
+            if number > oldest:
+                state.obstacle_cuts[number] = cut
+        last_seen, state.obstacle_seq = state.obstacle_seq, seq
+        new = [(n, state.obstacle_cuts[n]) for n in range(max(last_seen, oldest) + 1, seq + 1)
+               if n in state.obstacle_cuts]
+        if seq - max(last_seen, oldest) > len(new):
+            logger.warning(
+                "%s made %d cuts that no telemetry listed; its uncovered segments may be incomplete",
+                drone_id, seq - max(last_seen, oldest) - len(new),
+            )
+        if not new:
+            return []
+        numbers, segments = self._obstacle_replay_locked(state)
+        origin_x, origin_y = self._origin(state)
+        events = []
+        for number, cut in new:
+            index = numbers.index(number)
+            own = [s for s in segments if s.cut == index and s.reason == cut.reason]
+            if not own:
+                logger.warning("%s cut lane %d, which its current lanes do not fly; not announced",
+                               drone_id, cut.lane_index)
+                continue
+            x_cm, y_cm = origin_x + own[0].x_cm, origin_y + own[0].y_cm
+            unflown = sum(s.length_cm for s in own)
+            events.append(("fleet_event", {
+                "event": "lane_blocked",
+                "drone_id": drone_id,
+                "lane_index": cut.lane_index,
+                "x_cm": x_cm,
+                "y_cm": y_cm,
+                "unflown_cm": unflown,
+                "reason": cut.reason,
+                "detail": (
+                    f"{drone_id}: lane {cut.lane_index} stopped at ({x_cm:g}, {y_cm:g}) cm, "
+                    f"{unflown:g} cm not searched ({cut.reason})"
+                ),
+            }))
+        self._on_new_cuts_locked(drone_id, state, new)
+        return events
+
+    def _on_new_cuts_locked(self, drone_id: str, state: _DroneState, new_cuts: list[tuple[int, Cut]]) -> None:
+        """Seam for the re-flight (design section 3.4), called with the coordinator lock held.
+
+        Called once for each telemetry message that reports cuts the ground
+        has not seen. ``new_cuts`` are those cuts as ``(obstacle_seq of the
+        cut, lane_steps.Cut)``, oldest first; ``state.obstacle_cuts`` already
+        holds them, so ``_obstacle_replay_locked(state)`` includes their
+        segments. Nothing happens here yet.
+        """
+
+    def _reflight_counts_locked(self, drone_id: str) -> dict[str, int]:
+        """Seam for the re-flight: the segments this drone received to re-fly, by outcome. All zero for now."""
+        return {"offered": 0, "reflown": 0, "blocked_again": 0}
+
+    def _obstacle_uncovered_locked(self) -> list[dict]:
+        """Every drone's obstacle segments in the shape of ``current_plan()["uncovered"]``, on the shared grid.
+
+        Each entry has the keys of a ``retask_failed`` lane (``index``,
+        ``direction``, ``distance_cm`` and the two ends), plus ``kind``
+        ``segment``, ``drone_id``, ``reason`` and ``cut_seq``, the
+        ``obstacle_seq`` of the cut that produced or caused it, which groups
+        the segments of one cut.
+        """
+        out = []
+        for drone_id, state in self._drones.items():
+            if not state.obstacle_cuts:
+                continue
+            numbers, segments = self._obstacle_replay_locked(state)
+            origin_x, origin_y = self._origin(state)
+            for seg in segments:
+                out.append({
+                    "kind": "segment",
+                    "index": seg.lane_index,
+                    "direction": seg.direction,
+                    "distance_cm": seg.length_cm,
+                    "x_cm": origin_x + seg.x_cm,
+                    "y_cm": origin_y + seg.y_cm,
+                    "end_x_cm": origin_x + seg.end_x_cm,
+                    "end_y_cm": origin_y + seg.end_y_cm,
+                    "drone_id": drone_id,
+                    "reason": seg.reason,
+                    "cut_seq": numbers[seg.cut],
+                })
+        return out
 
     # ------------------------------------------------------------------
     # Detection dedup

@@ -43,7 +43,9 @@ The cut rules (design section 3.3) as the replay applies them:
   length, so the drone never flies past a lane's planned end and never back
   into a cut.
 * A cut with reason ``sensor_down`` ends the plan: every later lane, appended
-  ones included, is uncovered with that reason and flown as nothing.
+  ones included, is uncovered with that reason and flown as nothing. Those
+  lanes are reported where they are planned (the drone's position minus its
+  deficit), because no deficit rule moves a lane that is never flown.
 """
 from __future__ import annotations
 
@@ -314,7 +316,7 @@ def replay_lanes(
     segments: list[UncoveredSegment] = []
     # An active same-direction run after a cut: (direction, cursor, reason, cut index).
     run: tuple[str, tuple[int, int], str, int] | None = None
-    # After a sensor_down cut: (cursor, cut index).
+    # After a sensor_down cut: (planned position, cut index).
     ended: tuple[tuple[int, int], int] | None = None
 
     def segment(lane_index: int, direction: str, start: tuple[int, int], end: tuple[int, int],
@@ -370,7 +372,9 @@ def replay_lanes(
         axis_cut[axis] = cut_index
         x, y = stop
         if cut.reason == CUT_SENSOR_DOWN:
-            ended = (end, cut_index)
+            # The later lanes start where the plan puts them: the drone's
+            # position minus its deficit (the cut lane's planned end).
+            ended = ((stop[0] - deficit[0], stop[1] - deficit[1]), cut_index)
         else:
             run = (direction, end, cut.reason, cut_index)
     return LaneReplay(tuple(targets), tuple(segments), (x, y), deficit)
