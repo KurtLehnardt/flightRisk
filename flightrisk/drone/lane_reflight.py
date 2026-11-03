@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from flightrisk.drone.lane_steps import UncoveredSegment
@@ -41,6 +41,7 @@ from flightrisk.drone.safety import MAX_MOVE_CM, MIN_MOVE_CM
 
 __all__ = [
     "ReflightPlan",
+    "leg_rest",
     "plan_reflight",
     "reflight_lanes",
     "split_too_short",
@@ -197,6 +198,48 @@ def plan_reflight(segments: Sequence[Any], min_move_cm: float = MIN_MOVE_CM) -> 
         ordered.append(seg)
         points.append(end)
     return ReflightPlan(tuple(lanes), tuple(points), tuple(legs), tuple(ordered), tuple(too_short))
+
+
+def leg_rest(segment: UncoveredSegment, flown_from: Point, flown_to: Point) -> list[UncoveredSegment]:
+    """What of *segment* a move actually flown from *flown_from* to *flown_to* leaves unflown.
+
+    The move covers the part of the segment it runs along: both must lie on
+    the same line, so a move beside the segment, or across it, or no move
+    at all covers nothing and the whole segment is returned. Otherwise up to
+    two pieces are left, one before and one after the stretch flown, each
+    with its end next to that stretch as ``x_cm, y_cm`` and the segment's
+    other fields kept. The receiver of a re-flight is judged with this
+    against its replayed path, so a leg counts as re-flown only where the
+    drone really flew it.
+    """
+    p = (int(segment.x_cm), int(segment.y_cm))
+    e = (int(segment.end_x_cm), int(segment.end_y_cm))
+    length = _travel(p, e)
+    if length <= 0:
+        return []
+    a = (int(flown_from[0]), int(flown_from[1]))
+    b = (int(flown_to[0]), int(flown_to[1]))
+    ux, uy = (e[0] - p[0]) // length, (e[1] - p[1]) // length
+    if (ux and not (a[1] == b[1] == p[1])) or (uy and not (a[0] == b[0] == p[0])):
+        return [segment]
+
+    def along(point: Point) -> int:
+        return (point[0] - p[0]) * ux + (point[1] - p[1]) * uy
+
+    lo = max(0, min(along(a), along(b)))
+    hi = min(length, max(along(a), along(b)))
+    if hi <= lo:
+        return [segment]
+
+    def at(t: int) -> Point:
+        return p[0] + ux * t, p[1] + uy * t
+
+    rest = []
+    for near, far in ((lo, 0), (hi, length)):
+        if near != far:
+            (x0, y0), (x1, y1) = at(near), at(far)
+            rest.append(replace(segment, x_cm=x0, y_cm=y0, end_x_cm=x1, end_y_cm=y1, length_cm=abs(far - near)))
+    return rest
 
 
 def reflight_lanes(segments: Sequence[Any]) -> tuple[list[dict], list[Point]]:
