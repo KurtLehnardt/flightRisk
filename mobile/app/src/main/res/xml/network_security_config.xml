@@ -18,6 +18,10 @@
     private-range rule in code on the resolved address before connecting:
     10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8,
     ::1, fe80::/10 and fc00::/7 (LanAddressPolicy).
+
+    wss:// and https:// to the ground station run over the platform's default
+    SSLSocketFactory, which uses this file's trust anchors (system only), so a
+    user-installed certificate is not trusted for the ground link either.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">

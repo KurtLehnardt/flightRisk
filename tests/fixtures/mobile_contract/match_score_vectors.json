@@ -1,0 +1,2196 @@
+{
+  "_meta": {
+    "description": "Inputs and the results of the Python MatchScorer.score, which the Swift and Kotlin scorers must reproduce exactly, including the rounding of combined_score to three places (Python rounds the exact binary value, ties to even; truncation is wrong). NaN and infinity are spelled 'nan', 'inf' and '-inf' because JSON has no such numbers. signals holds reid, face and registered extra signals; reasoning is not covered.",
+    "file": "match_score_vectors.json",
+    "generated_at_commit": "7d2518eee73329d3c5e754c0f0d18e8bc7dcfd4c",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.vision.scorer.MatchScorer.score"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "all_zero": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0,
+          "reid": 0.0
+        }
+      }
+    },
+    "custom_weights": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.512,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.3,
+          "match_threshold": 0.6,
+          "reasoning_weight": 0.2,
+          "reid_weight": 0.5
+        },
+        "signals": {
+          "face": 0.2,
+          "reid": 0.7
+        }
+      }
+    },
+    "denormal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 5e-324,
+          "reid": 5e-324
+        }
+      }
+    },
+    "extra_signal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.567,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.58,
+          "reid": 0.62,
+          "thermal": 0.41
+        }
+      }
+    },
+    "extra_signal_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "thermal": 0.0005
+        }
+      }
+    },
+    "huge_positive": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1e+300,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1e+300
+        }
+      }
+    },
+    "inf_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": "inf",
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": "inf"
+        }
+      }
+    },
+    "inf_reid": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": "inf",
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "inf"
+        }
+      }
+    },
+    "just_below_threshold_rounds_down": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.449,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4494
+        }
+      }
+    },
+    "just_below_threshold_rounds_up": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4496
+        }
+      }
+    },
+    "nan_only": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": "nan"
+        }
+      }
+    },
+    "nan_reid": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.6,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "nan"
+        }
+      }
+    },
+    "negative_inf": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.6,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6,
+          "reid": "-inf"
+        }
+      }
+    },
+    "negative_scores": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.75,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.75,
+          "reid": -0.5
+        }
+      }
+    },
+    "negative_zero": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "none",
+          "is_match": false,
+          "signals_used": 0
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": -0.0,
+          "reid": -0.0
+        }
+      }
+    },
+    "negative_zero_result": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": -0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": -0.9999,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 1.0
+        },
+        "signals": {
+          "face": 0.000100015,
+          "reid": 0.0001
+        }
+      }
+    },
+    "negative_zero_with_face": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5,
+          "reid": -0.0
+        }
+      }
+    },
+    "opposite_weights_negative_result": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": -0.9999,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 1.0
+        },
+        "signals": {
+          "face": 0.0001,
+          "reid": 0.0001
+        }
+      }
+    },
+    "seeded_00": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.721,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.985,
+          "reid": 0.5665,
+          "thermal": 0.3772
+        }
+      }
+    },
+    "seeded_01": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.364,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1216,
+          "reid": 0.6409
+        }
+      }
+    },
+    "seeded_02": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.468,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8389,
+          "reid": 0.0447
+        }
+      }
+    },
+    "seeded_03": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.594,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9365,
+          "reid": 0.203
+        }
+      }
+    },
+    "seeded_04": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.824,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6169,
+          "reid": 0.9954,
+          "thermal": 0.9773
+        }
+      }
+    },
+    "seeded_05": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.851,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8991,
+          "reid": 0.7957
+        }
+      }
+    },
+    "seeded_06": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.655,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7036,
+          "reid": 0.5984
+        }
+      }
+    },
+    "seeded_07": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.616,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7989,
+          "reid": 0.4075
+        }
+      }
+    },
+    "seeded_08": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.678,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8018,
+          "reid": 0.5924,
+          "thermal": 0.5463
+        }
+      }
+    },
+    "seeded_09": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.495,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0552,
+          "reid": 0.997
+        }
+      }
+    },
+    "seeded_10": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.507,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8754,
+          "reid": 0.0863
+        }
+      }
+    },
+    "seeded_11": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.447,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7727,
+          "reid": 0.0737
+        }
+      }
+    },
+    "seeded_12": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.655,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9908,
+          "reid": 0.5425,
+          "thermal": 0.02
+        }
+      }
+    },
+    "seeded_13": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.47,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5673,
+          "reid": 0.3593
+        }
+      }
+    },
+    "seeded_14": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.484,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.8463,
+          "reid": 0.0698
+        }
+      }
+    },
+    "seeded_15": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.657,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.6004,
+          "reid": 0.721
+        }
+      }
+    },
+    "seeded_16": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.229,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2234,
+          "reid": 0.1194,
+          "thermal": 0.5023
+        }
+      }
+    },
+    "seeded_17": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.423,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0991,
+          "reid": 0.7923
+        }
+      }
+    },
+    "seeded_18": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.691,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5217,
+          "reid": 0.885
+        }
+      }
+    },
+    "seeded_19": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.27,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1243,
+          "reid": 0.4363
+        }
+      }
+    },
+    "seeded_20": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.53,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5691,
+          "reid": 0.6446,
+          "thermal": 0.1582
+        }
+      }
+    },
+    "seeded_21": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.509,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3223,
+          "reid": 0.7223
+        }
+      }
+    },
+    "seeded_22": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.433,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7073,
+          "reid": 0.1194
+        }
+      }
+    },
+    "seeded_23": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.273,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4921,
+          "reid": 0.0231
+        }
+      }
+    },
+    "seeded_24": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.752,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7153,
+          "reid": 0.9695,
+          "thermal": 0.3429
+        }
+      }
+    },
+    "seeded_25": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.615,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4349,
+          "reid": 0.8208
+        }
+      }
+    },
+    "seeded_26": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.311,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2296,
+          "reid": 0.4048
+        }
+      }
+    },
+    "seeded_27": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.341,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.2728,
+          "reid": 0.4189
+        }
+      }
+    },
+    "seeded_28": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.162,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3007,
+          "reid": 0.0036,
+          "thermal": 0.163
+        }
+      }
+    },
+    "seeded_29": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.413,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1477,
+          "reid": 0.7156
+        }
+      }
+    },
+    "seeded_30": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.681,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4585,
+          "reid": 0.9346
+        }
+      }
+    },
+    "seeded_31": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4974,
+          "reid": 0.5025
+        }
+      }
+    },
+    "seeded_32": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.44,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0919,
+          "reid": 0.7667,
+          "thermal": 0.6082
+        }
+      }
+    },
+    "seeded_33": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.487,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1822,
+          "reid": 0.8359
+        }
+      }
+    },
+    "seeded_34": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.567,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7706,
+          "reid": 0.3346
+        }
+      }
+    },
+    "seeded_35": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.471,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7213,
+          "reid": 0.1857
+        }
+      }
+    },
+    "seeded_36": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.427,
+          "confidence_level": "medium",
+          "is_match": false,
+          "signals_used": 3
+        },
+        "extra_signal_weights": {
+          "thermal": 0.15
+        },
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.372,
+          "reid": 0.3817,
+          "thermal": 0.6806
+        }
+      }
+    },
+    "seeded_37": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.527,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.7311,
+          "reid": 0.2946
+        }
+      }
+    },
+    "seeded_38": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.498,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.4703,
+          "reid": 0.5292
+        }
+      }
+    },
+    "seeded_39": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.493,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.3492,
+          "reid": 0.6569
+        }
+      }
+    },
+    "single_face_half_even_tie": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.062,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.0625
+        }
+      }
+    },
+    "single_face_half_even_tie_odd": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.188,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.1875
+        }
+      }
+    },
+    "single_reid_0_0004": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0004
+        }
+      }
+    },
+    "single_reid_0_0005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0005
+        }
+      }
+    },
+    "single_reid_0_0006": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.001,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0006
+        }
+      }
+    },
+    "single_reid_0_0015": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.002,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0015
+        }
+      }
+    },
+    "single_reid_0_0025": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.003,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0025
+        }
+      }
+    },
+    "single_reid_0_0035": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.004,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.0035
+        }
+      }
+    },
+    "single_reid_0_1235": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.123,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.1235
+        }
+      }
+    },
+    "single_reid_0_2345": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.234,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.2345
+        }
+      }
+    },
+    "single_reid_0_2355": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.235,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.2355
+        }
+      }
+    },
+    "single_reid_0_3335": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.334,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.3335
+        }
+      }
+    },
+    "single_reid_0_4495": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4495
+        }
+      }
+    },
+    "single_reid_0_4499999": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4499999
+        }
+      }
+    },
+    "single_reid_0_45": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.45
+        }
+      }
+    },
+    "single_reid_0_4505": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.451,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4505
+        }
+      }
+    },
+    "single_reid_0_4995": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.499,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.4995
+        }
+      }
+    },
+    "single_reid_0_5": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.5
+        }
+      }
+    },
+    "single_reid_0_5005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.5005
+        }
+      }
+    },
+    "single_reid_0_6445": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.644,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6445
+        }
+      }
+    },
+    "single_reid_0_6455": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.645,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6455
+        }
+      }
+    },
+    "single_reid_0_6495": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.649,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6495
+        }
+      }
+    },
+    "single_reid_0_6505": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.65,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.6505
+        }
+      }
+    },
+    "single_reid_0_8625": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.863,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.8625
+        }
+      }
+    },
+    "single_reid_0_99949999999": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.999,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.99949999999
+        }
+      }
+    },
+    "single_reid_0_9995": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.9995
+        }
+      }
+    },
+    "single_reid_0_9996": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 0.9996
+        }
+      }
+    },
+    "single_reid_1_0": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.0
+        }
+      }
+    },
+    "single_reid_1_0005": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.0,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.0005
+        }
+      }
+    },
+    "single_reid_1_5": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 1.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1.5
+        }
+      }
+    },
+    "single_reid_2_675": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 2.675,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 2.675
+        }
+      }
+    },
+    "threshold_exactly": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.45,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.45,
+          "reid": 0.45
+        }
+      }
+    },
+    "tiny_positive": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.0,
+          "confidence_level": "low",
+          "is_match": false,
+          "signals_used": 1
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "reid": 1e-300
+        }
+      }
+    },
+    "two_signals_default_weights": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.78,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.71,
+          "reid": 0.86
+        }
+      }
+    },
+    "two_signals_near_tie": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.5,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.5001,
+          "reid": 0.4999
+        }
+      }
+    },
+    "two_signals_unequal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.62,
+          "confidence_level": "medium",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.4,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9,
+          "reid": 0.3
+        }
+      }
+    },
+    "zero_weight_signal": {
+      "direction": "reference",
+      "notes": "Python MatchScorer.score result for these inputs.",
+      "payload": {
+        "expected": {
+          "combined_score": 0.8,
+          "confidence_level": "high",
+          "is_match": true,
+          "signals_used": 2
+        },
+        "extra_signal_weights": {},
+        "scorer": {
+          "face_weight": 0.0,
+          "match_threshold": 0.45,
+          "reasoning_weight": 0.25,
+          "reid_weight": 0.35
+        },
+        "signals": {
+          "face": 0.9,
+          "reid": 0.8
+        }
+      }
+    }
+  }
+}

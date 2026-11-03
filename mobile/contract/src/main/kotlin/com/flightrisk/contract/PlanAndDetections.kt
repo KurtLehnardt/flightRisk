@@ -238,3 +238,37 @@ data class MatchAlert(
         )
     }
 }
+
+/**
+ * The `match_alert_resolved` event: the operator answered a match alert on the laptop. The ground
+ * sends it to every client with the alert's id, the answer and the alert latch snapshot. A phone
+ * only learns from it that the alert was answered; it never answers an alert itself.
+ */
+data class MatchAlertResolved(
+    val alertId: String?,
+    /** What the operator did, or null when the ground sent an answer this app does not know. */
+    val action: Action?,
+    /** The answer exactly as the ground wrote it (for an unknown answer). */
+    val rawAction: String?,
+    val ok: Boolean?,
+    /** The latch phase after the answer (`searching` or `resolved`), or null. */
+    val phase: String?,
+) : ServerEvent {
+    enum class Action(val wire: String) {
+        CONFIRM("confirm"),
+        DISMISS("dismiss"),
+    }
+
+    companion object {
+        fun fromJson(o: JsonObject): MatchAlertResolved {
+            val raw = o.str("action")
+            return MatchAlertResolved(
+                alertId = o.str("alert_id") ?: o.num("alert_id")?.let(::jsNumber),
+                action = Action.entries.firstOrNull { it.wire == raw },
+                rawAction = raw,
+                ok = o.bool("ok"),
+                phase = o.obj("state")?.str("phase"),
+            )
+        }
+    }
+}

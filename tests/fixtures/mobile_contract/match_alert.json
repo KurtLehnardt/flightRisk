@@ -1,12 +1,13 @@
 {
   "_meta": {
-    "description": "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the laptop (match_alert_response is not in the phone's allow-list).",
+    "description": "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the laptop (match_alert_response is not in the phone's allow-list). 'match_alert_resolved' tells every client that the operator answered one.",
     "file": "match_alert.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "7d2518eee73329d3c5e754c0f0d18e8bc7dcfd4c",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "MatchAlertLatch.pending_alert",
-      "flightrisk.dashboard.app._emit_edge_alert"
+      "flightrisk.dashboard.app._emit_edge_alert",
+      "flightrisk.dashboard.recovery.handle_alert_response"
     ],
     "spec": "docs/mobile-contract.md"
   },
@@ -49,6 +50,38 @@
         "time": "12:34:56",
         "track_id": "8_7",
         "type": "edge"
+      }
+    },
+    "resolved_confirm": {
+      "direction": "server_to_client",
+      "event": "match_alert_resolved",
+      "notes": "Sent to every client when the operator confirms the outstanding alert on the laptop. The confirm recovery sequence is stubbed while this fixture is built; nothing flies.",
+      "payload": {
+        "action": "confirm",
+        "alert_id": "00000000000040008000000000000002",
+        "ok": true,
+        "state": {
+          "alert_id": "00000000000040008000000000000002",
+          "phase": "resolved",
+          "renotify_count": 0,
+          "resolution": "confirmed"
+        }
+      }
+    },
+    "resolved_dismiss": {
+      "direction": "server_to_client",
+      "event": "match_alert_resolved",
+      "notes": "Sent to every client when the operator dismisses the outstanding alert on the laptop. A phone marks the alert with this alert_id as answered; it never sends match_alert_response.",
+      "payload": {
+        "action": "dismiss",
+        "alert_id": "00000000000040008000000000000001",
+        "ok": true,
+        "state": {
+          "alert_id": null,
+          "phase": "searching",
+          "renotify_count": 0,
+          "resolution": "dismissed"
+        }
       }
     }
   }

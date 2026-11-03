@@ -1,6 +1,13 @@
 package com.flightrisk.app.vision
 
+import com.flightrisk.app.ground.ContractFixtures
 import com.flightrisk.app.llm.ReasoningResult
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlin.math.withSign
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -434,5 +441,86 @@ class MatchScorerTest {
             "MatchScorer with reasoning gives different score than pipeline inline",
             withReasoning.combinedScore != pipelineScore,
         )
+    }
+
+    // -- Rounding parity with the Python scorer (shared vectors) --
+
+    private fun number(element: kotlinx.serialization.json.JsonElement?): Double {
+        val primitive = element as JsonPrimitive
+        return if (primitive.isString) {
+            when (primitive.content) {
+                "nan" -> Double.NaN
+                "inf" -> Double.POSITIVE_INFINITY
+                "-inf" -> Double.NEGATIVE_INFINITY
+                else -> error("unexpected special value ${primitive.content}")
+            }
+        } else {
+            primitive.doubleOrNull ?: error("not a number: $primitive")
+        }
+    }
+
+    /** A weight the Float based constructor reads back as exactly the decimal the vector wrote. */
+    private fun weight(element: kotlinx.serialization.json.JsonElement?): Float {
+        val d = number(element)
+        val f = d.toFloat()
+        assertEquals("the vector weight $d must survive the Float API", d, f.toString().toDouble(), 0.0)
+        return f
+    }
+
+    @Test
+    fun `every shared vector gives exactly the Python score`() {
+        val cases = ContractFixtures.cases("match_score_vectors.json")
+        assertTrue("expected the full vector set", cases.size >= 80)
+        var negativeZero = 0
+        for ((name, case) in cases) {
+            val payload = case["payload"] as JsonObject
+            val config = payload["scorer"] as JsonObject
+            val scorer = MatchScorer(
+                reidWeight = weight(config["reid_weight"]),
+                faceWeight = weight(config["face_weight"]),
+                reasoningWeight = weight(config["reasoning_weight"]),
+                matchThreshold = weight(config["match_threshold"]),
+            )
+            for ((extra, w) in payload["extra_signal_weights"] as JsonObject) scorer.registerSignal(extra, weight(w))
+            val signals = (payload["signals"] as JsonObject).mapValues { number(it.value) }
+            val result = scorer.scoreExact(
+                reidScore = signals["reid"] ?: 0.0,
+                faceScore = signals["face"] ?: 0.0,
+                extraSignals = signals - "reid" - "face",
+            )
+            val expected = payload["expected"] as JsonObject
+            val want = number(expected["combined_score"])
+            val got = result.combinedScoreExact
+            if (want.isNaN()) {
+                assertTrue("$name: expected NaN", got.isNaN())
+            } else {
+                // Exact equality on purpose, and the sign bit too: -0.0 is not 0.0 for Python's round().
+                assertEquals("$name: combined score", want, got, 0.0)
+                assertEquals("$name: sign of the combined score", 1.0.withSign(want), 1.0.withSign(got), 0.0)
+                if (want == 0.0 && 1.0.withSign(want) < 0) negativeZero++
+            }
+            assertEquals("$name: is_match", (expected["is_match"] as JsonPrimitive).booleanOrNull, result.isMatch)
+            assertEquals("$name: confidence", (expected["confidence_level"] as JsonPrimitive).content, result.confidenceLevel)
+            assertEquals("$name: signals", (expected["signals_used"] as JsonPrimitive).intOrNull, result.signalsUsed)
+        }
+        assertTrue("the vectors must include a negative zero result", negativeZero > 0)
+    }
+
+    @Test
+    fun `rounding is half to even on the exact binary value not truncation`() {
+        val scorer = MatchScorer()
+        assertEquals(0.062, scorer.scoreExact(reidScore = 0.0625).combinedScoreExact, 0.0)
+        assertEquals(0.188, scorer.scoreExact(reidScore = 0.1875).combinedScoreExact, 0.0)
+        assertEquals(0.001, scorer.scoreExact(reidScore = 0.0005).combinedScoreExact, 0.0)
+        // 0.8571 truncated is 0.857 and rounded is 0.857; 0.6666 truncated is 0.666 and rounded is 0.667.
+        assertEquals(0.667, scorer.scoreExact(reidScore = 0.6666).combinedScoreExact, 0.0)
+    }
+
+    @Test
+    fun `non finite scores follow Python`() {
+        val scorer = MatchScorer()
+        assertEquals(0.0f, scorer.scoreExact(reidScore = Double.NaN).combinedScore, 0f)
+        assertEquals("none", scorer.scoreExact(reidScore = Double.NaN).confidenceLevel)
+        assertTrue(scorer.scoreExact(reidScore = Double.POSITIVE_INFINITY).combinedScoreExact.isInfinite())
     }
 }

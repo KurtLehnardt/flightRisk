@@ -281,10 +281,10 @@ actor SearchPipeline {
         )
 
         self.scorer = MatchScorer(
-            reidWeight: config.vision.scorerReidWeight,
-            faceWeight: config.vision.scorerFaceWeight,
-            reasoningWeight: config.vision.scorerReasoningWeight,
-            matchThreshold: config.vision.scorerMatchThreshold
+            reidWeight: MatchScorer.decimal(config.vision.scorerReidWeight),
+            faceWeight: MatchScorer.decimal(config.vision.scorerFaceWeight),
+            reasoningWeight: MatchScorer.decimal(config.vision.scorerReasoningWeight),
+            matchThreshold: MatchScorer.decimal(config.vision.scorerMatchThreshold)
         )
 
         // Create event stream (buffered for UI consumption)
@@ -494,8 +494,8 @@ actor SearchPipeline {
 
                     // Use MatchScorer for weighted combination with
                     // dynamic weight redistribution for missing signals
-                    let scored = scorer.score(reidScore: detReid, faceScore: detFace)
-                    matchScore = scored.combinedScore
+                    let scored = scorer.score(reidScore: Double(detReid), faceScore: Double(detFace))
+                    matchScore = Float(scored.combinedScore)
                     alertLevel = scorer.alertLevel(scored)
 
                     // -------------------------------------------

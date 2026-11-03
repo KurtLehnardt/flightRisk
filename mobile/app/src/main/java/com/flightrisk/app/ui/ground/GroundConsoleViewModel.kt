@@ -33,8 +33,11 @@ import com.flightrisk.contract.DroneRecord
 import com.flightrisk.contract.FleetEvent
 import com.flightrisk.contract.FleetPlan
 import com.flightrisk.contract.FleetStatus
+import com.flightrisk.contract.Frame
 import com.flightrisk.contract.LandAllAck
 import com.flightrisk.contract.ManualAction
+import com.flightrisk.contract.MatchAlert
+import com.flightrisk.contract.MatchAlertResolved
 import com.flightrisk.contract.ManualDroneStatus
 import com.flightrisk.contract.ManualReply
 import com.flightrisk.contract.ManualStatus
@@ -127,6 +130,10 @@ class GroundConsoleViewModel(
     private val orphanBase = HashMap<String, Pair<Double, Long>>()
     private var lastFleetStatusAt = 0L
     private var noRecentUpdate = false
+
+    // Video tiles and match alerts (read only; the phone never starts or stops video and never answers an alert)
+    private var receivedFrames: Map<String, ReceivedFrame> = emptyMap()
+    private val alertsLog = GroundAlertsLog()
 
     // Command feedback
     private var attemptCounter = 0
@@ -232,7 +239,7 @@ class GroundConsoleViewModel(
             }
             is EndpointParseResult.Ok -> {
                 addressError = null
-                val normalized = parsed.endpoint.hostHeader
+                val normalized = parsed.endpoint.savedText
                 val changed = normalized != addressSetting
                 settingsLoaded = true
                 addressSetting = normalized
@@ -583,11 +590,11 @@ class GroundConsoleViewModel(
             attempt, MissionFormat.profileSent(droneId, label), isFailure = false, awaitsAnswer = true, startedAtMs = clock.nowMs(),
         )
         publish()
-        val epochAtSend = lossEpoch
         val outcome = emit { if (droneId == null) it.setFleetDetectionProfile(profile) else it.setDetectionProfile(droneId, profile) }
+        // Sent: if the link dropped afterwards, `onProfileLinkLost` already said the answer is unknown ("Check the
+        // active profile"). The change may have reached the ground, so it is never reported as "NOT changed".
         val why = when {
-            outcome == Outcome.SENT && lossEpoch == epochAtSend -> null
-            outcome == Outcome.SENT -> MissionFormat.WHY_LINK_LOST
+            outcome == Outcome.SENT -> null
             outcome == Outcome.SEND_FAILED -> MissionFormat.WHY_SEND_FAILED
             else -> MissionFormat.WHY_NOT_CONNECTED
         }
@@ -695,6 +702,7 @@ class GroundConsoleViewModel(
                 fleetFresh = false
                 noRecentUpdate = false
                 planIsCurrent = false // The ground sends its plan again after the state requests.
+                alertsLog.onSessionStarted()
             }
             is GroundEvent.SessionEnded -> {
                 fleetFresh = false
@@ -745,6 +753,8 @@ class GroundConsoleViewModel(
                 }
             }
             is FleetPlan -> planIsCurrent = true
+            is MatchAlert -> alertsLog.onAlert(event)
+            is MatchAlertResolved -> alertsLog.onResolved(event)
             is DetectionProfiles -> onProfilesFromGround()
             is ManualReply -> applyManualReply(event, at)
             is LandAllAck -> applyLandAllAck(event, at)
@@ -988,8 +998,9 @@ class GroundConsoleViewModel(
         fleetFresh = false
         freshInThisClient = false
         link = GroundLink.Connecting(1)
-        // `events` is collected from exactly this one place. Video frames are not used by this screen.
+        // `events` is collected from exactly this one place. Video frames come from `frames`, latest per drone.
         collectors.launch { c.events.collect { if (client === c) handle(it) } }
+        collectors.launch { c.frames.collect { if (client === c) onFrames(it) } }
         collectors.launch { c.connection.collect { if (client === c) onConnectionStatus(it) } }
         collectors.launch { c.board.collect { if (client === c) publish() } }
         collectors.launch { c.snapshot.collect { if (client === c) publish() } }
@@ -997,8 +1008,25 @@ class GroundConsoleViewModel(
         publish()
     }
 
+    /**
+     * Stamps each new frame with the time it arrived (a frame is new when it is not the same object as the
+     * one kept for that drone). The client already bounds the count of drones and the size of a frame; a
+     * frame the client dropped (link lost) disappears here too, so its image is released.
+     */
+    private fun onFrames(latest: Map<String, Frame>) {
+        val now = clock.nowMs()
+        val next = LinkedHashMap<String, ReceivedFrame>(latest.size)
+        for ((id, frame) in latest) {
+            val before = receivedFrames[id]
+            next[id] = if (before != null && before.frame === frame) before else ReceivedFrame(frame, now)
+        }
+        receivedFrames = next
+        publish()
+    }
+
     private fun closeClient() {
         val c = client ?: return
+        receivedFrames = emptyMap()
         retainedBoard = displayBoard()
         retainedSnapshot = c.snapshot.value
         val cs = clientScope
@@ -1035,6 +1063,8 @@ class GroundConsoleViewModel(
     /** A different ground: nothing from the old one may stay on screen. */
     private fun forgetGroundState() {
         planIsCurrent = false
+        alertsLog.clear()
+        receivedFrames = emptyMap()
         profileFeedback = null
         retainedBoard = null
         retainedSnapshot = null
@@ -1073,6 +1103,8 @@ class GroundConsoleViewModel(
             is HealthProbeResult.UnexpectedStatus -> "The address answered with HTTP ${result.status}; it may not be a FlightRisk ground station."
             is HealthProbeResult.UnexpectedBody -> "Not a FlightRisk ground station response: ${GroundText.shorten(result.detail)}."
             is HealthProbeResult.AddressNotAllowed -> "Address refused: ${GroundText.shorten(result.detail)}"
+            is HealthProbeResult.SecureConnectionFailed ->
+                "The secure connection failed: ${GroundText.shorten(result.detail)}. The ground's certificate may be missing, expired, self-signed or issued for another name."
             is HealthProbeResult.Unreachable -> "Unreachable: ${GroundText.shorten(result.detail)}. Check the address and that the phone is on the ground's network."
         }
     }
@@ -1148,6 +1180,9 @@ class GroundConsoleViewModel(
             snapshot = snapshot,
             planIsCurrent = planIsCurrent,
             profileFeedback = profileFeedback,
+            videoTiles = VideoTileLogic.makeTiles(receivedFrames, now, snapshot.streamVideo, stale),
+            videoOffAtGround = snapshot.streamVideo == false && !stale,
+            alerts = alertsLog.ui(stale),
         )
     }
 

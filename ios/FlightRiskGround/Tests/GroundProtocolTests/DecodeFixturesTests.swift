@@ -3,9 +3,9 @@ import XCTest
 
 /// R-8: every received payload decodes from its fixture; missing optional fields decode as nil.
 final class DecodeFixturesTests: XCTestCase {
-    func testThereAreTwentyThreeFixtureFiles() throws {
+    func testThereAreTwentyFourFixtureFiles() throws {
         let names = try Fixtures.fileNames()
-        XCTAssertEqual(names.count, 23, "fixture files: \(names)")
+        XCTAssertEqual(names.count, 24, "fixture files: \(names)")
     }
 
     /// Every case of every file with a server event this build handles decodes into the matching
@@ -253,6 +253,47 @@ final class DecodeFixturesTests: XCTestCase {
         XCTAssertEqual(r.renotifyCount, 0)
         let unknownLevel = try JSONDecoder().decode(MatchAlert.self, from: Data(#"{"alert_level":"definite"}"#.utf8))
         XCTAssertEqual(unknownLevel.alertLevel, .unknown("definite"))
+    }
+
+    func testMatchAlertResolved() throws {
+        let confirm = try Fixtures.decode(MatchAlertResolved.self, "match_alert", "resolved_confirm")
+        XCTAssertEqual(confirm.ok, true)
+        XCTAssertEqual(confirm.action, .confirm)
+        XCTAssertEqual(confirm.alertId, "00000000000040008000000000000002")
+        let dismiss = try Fixtures.decode(MatchAlertResolved.self, "match_alert", "resolved_dismiss")
+        XCTAssertEqual(dismiss.action, .dismiss)
+        XCTAssertEqual(dismiss.alertId, "00000000000040008000000000000001")
+        for c in try Fixtures.cases("match_alert") where c.event == "match_alert_resolved" {
+            let data = try XCTUnwrap(c.payloadData)
+            guard case .matchAlertResolved = GroundEvent.decode(name: "match_alert_resolved", payload: data) else {
+                return XCTFail("\(c.name) did not decode as match_alert_resolved")
+            }
+        }
+        XCTAssertTrue(GroundEvent.handledEventNames.contains("match_alert_resolved"))
+    }
+
+    func testMatchAlertResolvedSurvivesHostilePayloads() {
+        let bodies = [
+            #"{"ok":"yes","alert_id":7,"action":3}"#,
+            #"{"ok":null,"alert_id":null,"action":null}"#,
+            #"{"alert_id":["a"],"action":{"x":1},"state":"not an object"}"#,
+            #"{"action":"archive","alert_id":"a-1","x_future_field":1}"#,
+            "{}",
+        ]
+        for body in bodies {
+            guard case let .matchAlertResolved(r) = GroundEvent.decode(name: "match_alert_resolved", payload: Data(body.utf8)) else {
+                return XCTFail("did not decode: \(body)")
+            }
+            if body.contains("archive") {
+                XCTAssertEqual(r.action, .unknown("archive"))
+                XCTAssertEqual(r.alertId, "a-1")
+            } else {
+                XCTAssertNil(r.action, body)
+                XCTAssertNil(r.alertId, body)
+            }
+        }
+        XCTAssertEqual(GroundEvent.decode(name: "match_alert_resolved", payload: Data("[1]".utf8)), .undecodable(name: "match_alert_resolved"))
+        XCTAssertEqual(GroundEvent.decode(name: "match_alert_resolved", payload: Data("nope".utf8)), .undecodable(name: "match_alert_resolved"))
     }
 
     func testDetectionProfilesEveryCase() throws {

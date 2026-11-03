@@ -518,6 +518,11 @@ final class GroundViewModel {
     // END mission cards
     /// At most `maxMatchAlerts`, oldest dropped first.
     private(set) var matchAlerts: [MatchAlert] = []
+    /// How the operator answered an alert on the laptop (`match_alert_resolved`), by the ground's
+    /// alert id. An answer is final: a later reminder or alert event for the same id does not undo
+    /// it. At most `maxMatchAlerts` ids are kept, oldest dropped first.
+    private(set) var alertAnswers: [String: MatchAlertAction] = [:]
+    private var alertAnswerOrder: [String] = []
     private(set) var streamVideoEnabled: Bool?
 
     // Settings, mirrored for the views.
@@ -1176,6 +1181,8 @@ final class GroundViewModel {
                 matchAlerts.append(a)
                 if matchAlerts.count > Self.maxMatchAlerts { matchAlerts.removeFirst(matchAlerts.count - Self.maxMatchAlerts) }
             }
+        case let .matchAlertResolved(r):
+            applyAlertAnswer(r)
         case let .detectionProfiles(p):
             detectionProfiles = p
             onProfilesFromGround()
@@ -1321,6 +1328,8 @@ final class GroundViewModel {
         reasoningProvider = nil
         profileFeedback = nil
         matchAlerts = []
+        alertAnswers = [:]
+        alertAnswerOrder = []
         streamVideoEnabled = nil
         landFeedback = [:]
         resumeFeedback = [:]
@@ -1491,6 +1500,18 @@ final class GroundViewModel {
     }
 
     // MARK: Private: answers
+
+    /// Record that the operator answered an alert. Read only: nothing is sent. The event needs
+    /// `ok` true and an alert id; anything else changes nothing. The first answer for an id wins,
+    /// as the ground accepts only one.
+    private func applyAlertAnswer(_ answer: MatchAlertResolved) {
+        guard answer.ok == true, let id = answer.alertId, !id.isEmpty, alertAnswers[id] == nil else { return }
+        alertAnswerOrder.append(id)
+        alertAnswers[id] = answer.action ?? .unknown("")
+        while alertAnswerOrder.count > Self.maxMatchAlerts {
+            alertAnswers[alertAnswerOrder.removeFirst()] = nil
+        }
+    }
 
     /// Each ack answers the oldest outstanding LAND ALL. While a newer tap still waits, an
     /// earlier tap's result is shown as a detail (and as a banner when it is not a success),
