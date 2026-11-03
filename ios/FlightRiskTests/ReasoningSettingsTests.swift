@@ -517,6 +517,20 @@ extension ReasoningSettingsTests {
         XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
     }
 
+    func testUserDecisionSupersedesADeferredLegacyOptIn() {
+        defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)
+        let locked = FakeKeyStore(key: nil)
+        locked.lookup = .unreadable
+        settings.migrateLegacyValues(keyStore: locked)  // deferred, legacy true stays
+        settings.setCloudOptIn(true)
+        settings.setCloudOptIn(false)
+        XCTAssertNil(defaults.object(forKey: ReasoningSettings.cloudOptInKey))
+        // Relaunch with the key readable: the old value must not come back.
+        let relaunched = ReasoningSettings(defaults: defaults, consent: consent)
+        relaunched.migrateLegacyValues(keyStore: FakeKeyStore(key: "test-key"))
+        XCTAssertFalse(relaunched.cloudOptIn)
+    }
+
     func testMigrationOnAPhoneWithoutTheKeyDropsTheStaleFlagAndStaysOff() {
         // A restored phone: the backup carried the flag and the provider, but the ThisDeviceOnly key is gone.
         defaults.set(true, forKey: ReasoningSettings.cloudOptInKey)

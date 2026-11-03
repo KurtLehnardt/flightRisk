@@ -166,6 +166,9 @@ struct ReasoningSettings {
         // If the consent file cannot be written the opt-in stays off, so a
         // failure never leaves cloud use on without a recorded consent.
         consent.setGranted(enabled)
+        // An explicit decision supersedes any legacy value still waiting in
+        // UserDefaults, so a deferred migration can never turn consent back on.
+        defaults.removeObject(forKey: Self.cloudOptInKey)
         if !enabled,
            let raw = defaults.string(forKey: Self.providerKey),
            ReasoningProvider(storedValue: raw)?.isCloud == true {

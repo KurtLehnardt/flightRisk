@@ -15,7 +15,6 @@ import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 
 class RawWebSocketTest {
 
@@ -84,31 +83,43 @@ class RawWebSocketTest {
 
     @Test
     fun `a 40 MB message is refused from its header, before the payload is read`() {
-        val written = AtomicLong(-1)
-        val buffers = AtomicLong(0)
-        val finished = CountDownLatch(1)
+        // The server sends only the header of a 40 MiB text message and then
+        // waits: not one payload byte is sent before the client has refused the
+        // message. A client that read or waited for any of the payload would
+        // block until its read timeout and fail with a timeout instead of
+        // MessageTooLargeException. (An earlier version streamed the payload and
+        // bounded the bytes the server managed to write by the reported socket
+        // buffer sizes, but macOS grows loopback buffers on its own up to
+        // net.inet.tcp.autorcvbufmax, 4 MiB, so that count measured the kernel
+        // and the scheduler, not the client, and failed in most runs.)
+        val clientRefused = CountDownLatch(1)
+        val peerClosed = CountDownLatch(1)
         val declared = 40L * 1024 * 1024
         LoopbackServer { s ->
-            buffers.set(s.sendBufferSize.toLong() + s.receiveBufferSize.toLong())
-            acceptUpgrade(readRequestHead(s.getInputStream()), s.getOutputStream())
-            written.set(streamHugeMessage(s.getOutputStream(), declared))
-            finished.countDown()
+            val out = s.getOutputStream()
+            acceptUpgrade(readRequestHead(s.getInputStream()), out)
+            writeFrameHeader(out, 0x1, declared)
+            out.flush()
+            check(clientRefused.await(20, TimeUnit.SECONDS)) { "the client never refused the message" }
+            if (awaitPeerClose(s, timeoutMs = 10_000)) peerClosed.countDown()
         }.use { server ->
-            val ws = connect(server)
+            val ws = RawWebSocket.connect(
+                loopback, server.port, "127.0.0.1:${server.port}", GroundEndpoint.SOCKET_IO_PATH,
+                maxMessageBytes = oneMiB, timeoutMs = 5_000, readTimeoutMs = 3_000,
+            )
             try {
                 ws.receiveText()
                 fail("expected MessageTooLargeException")
             } catch (e: MessageTooLargeException) {
                 assertEquals(oneMiB, e.limitBytes)
             } finally {
+                clientRefused.countDown()
                 ws.close()
             }
-            assertTrue("server stopped writing", finished.await(20, TimeUnit.SECONDS))
-            assertTrue("the client stopped the transfer early (${written.get()} bytes)", written.get() < declared)
-            // Nothing but the kernel's socket buffers (both ends, which may grow up to
-            // twice their reported size) holds the bytes the client never read.
-            val bound = 2 * (buffers.get() + java.net.Socket().use { it.receiveBufferSize.toLong() }) + 64 * 1024
-            assertTrue("wrote ${written.get()} bytes, bound $bound", written.get() <= bound)
+            // The client also closed the connection rather than leaving the
+            // rest of the message to queue up.
+            assertTrue("the server saw the client close the connection", peerClosed.await(15, TimeUnit.SECONDS))
+            assertTrue(server.errors.toString(), server.errors.isEmpty())
         }
     }
 
@@ -398,7 +409,7 @@ class RawWebSocketTest {
     @Test
     fun `the client over a real socket closes on a 40 MB message with a typed reason`() = runBlocking {
         val connectFrames = CopyOnWriteArrayList<String>()
-        val written = AtomicLong(-1)
+        val peerClosed = CountDownLatch(1)
         val declared = 40L * 1024 * 1024
         val server = LoopbackServer { s ->
             val input = s.getInputStream()
@@ -408,7 +419,11 @@ class RawWebSocketTest {
             connectFrames += readClientText(input)
             writeServerText(out, ContractFixtures.eventFrame("status.json", "fleet_two_drones"))
             writeServerText(out, ContractFixtures.frame("socketio_connect_ack"))
-            written.set(streamHugeMessage(out, declared))
+            // Only the header of the 40 MiB message is sent; the client must drop
+            // the link on the header alone (see the RawWebSocket test above).
+            writeFrameHeader(out, 0x1, declared)
+            out.flush()
+            if (awaitPeerClose(s, timeoutMs = 20_000)) peerClosed.countDown()
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val log = CapturingLog()
@@ -427,8 +442,7 @@ class RawWebSocketTest {
             assertEquals(DropReason.MessageTooLarge(oneMiB), status.reason)
             assertEquals(listOf("40{\"api_key\":\"$TEST_KEY\"}"), connectFrames.toList())
             assertTrue(client.snapshot.value.status != null)
-            eventually("server finished", timeoutMs = 20_000) { written.get() >= 0 }
-            assertTrue(written.get() < declared)
+            assertTrue("the server saw the client close the connection", peerClosed.await(20, TimeUnit.SECONDS))
             log.lines.forEach { assertFalse(it, it.contains(TEST_KEY)) }
         } finally {
             client.shutdown()
