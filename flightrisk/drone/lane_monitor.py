@@ -48,6 +48,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import TELEMETRY_FIELDS as OBSTACLE_TELEMETRY_FIELDS
+
 __all__ = ["MonitorMixin"]
 
 
@@ -361,4 +363,26 @@ class MonitorMixin:
                 drone_link_age_s=link.age_s,
                 drone_link_detail=None if link.ok else (link.detail or "drone unreachable"),
             )
+        msg.update(self._obstacle_telemetry())
         return msg
+
+    def _obstacle_telemetry(self) -> dict[str, Any]:
+        """The optional obstacle fields (design section 6), or nothing.
+
+        The executor provides them through an optional ``obstacle_status()``
+        accessor. Without the accessor, or when it returns nothing, no field is
+        added and the telemetry is exactly what it was before obstacle sensing.
+        Only the contract's field names pass, so a stray key never reaches the
+        wire. A failing accessor must not break telemetry, so it adds nothing.
+        """
+        accessor = getattr(self, "obstacle_status", None)
+        if not callable(accessor):
+            return {}
+        try:
+            status = accessor()
+        except Exception as exc:
+            self._log.warning("edge_obstacle_status_failed", drone_id=self.drone_id, error=str(exc))
+            return {}
+        if not status:
+            return {}
+        return {key: status[key] for key in OBSTACLE_TELEMETRY_FIELDS if key in status}
