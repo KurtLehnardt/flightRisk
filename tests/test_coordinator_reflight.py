@@ -176,11 +176,16 @@ def test_a_cut_queues_a_reflight_and_nothing_is_sent_while_the_cutter_has_lanes(
     assert len(fleet.assigns("drone-2")) == 1 and fleet.reflight_events() == []
 
 
-def test_the_cutter_finishing_releases_the_offer_after_the_receivers_remaining_lanes():
+def test_the_cutter_finishing_releases_the_offer_once_the_receiver_has_finished_its_own_lanes():
     fleet = Fleet()
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
     fleet.tel("drone-2", lane_index=1)  # still flying its own zone
     fleet.done("drone-1")
+    # A sensing receiver takes appended lanes only once its own are done.
+    assert len(fleet.assigns("drone-2")) == 1 and fleet.reflight_events() == []
+    assert {(s["status"], s["waiting_for"], s["detail"]) for s in fleet.segments()} == {
+        ("waiting", None, "waiting for drone-2 to finish its own lanes")}
+    fleet.done("drone-2")
     offer = fleet.assigns("drone-2")[-1]
     fp.validate_message(offer)
     # Its own lanes unchanged, then the transit, then the reversed segment and the shadow.
@@ -748,7 +753,9 @@ def test_the_receiver_lost_while_re_flying_leaves_nothing_to_re_task():
 
 def test_lanes_after_a_re_flight_are_still_re_tasked_when_the_receiver_is_lost():
     fleet = released(3, retask_separation=False, origins={"drone-3": 700})
-    # drone-3 is lost first and some of its lanes go to drone-2, after the re-flight.
+    # drone-2 finishes the re-flight; drone-3 is lost and some of its lanes
+    # go to drone-2, after the re-flight.
+    fleet.done("drone-2", lane_index=APPENDED_END, lanes_total=APPENDED_END)
     fleet.tel("drone-3", lane_index=0)
     fleet.coord.on_drone_lost("drone-3", wait_s=0)
     lanes = fleet.coord.lanes("drone-2")

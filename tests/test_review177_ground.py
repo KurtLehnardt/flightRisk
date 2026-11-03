@@ -309,15 +309,16 @@ def test_b3_a_lost_drones_lanes_go_to_a_receiver_from_where_it_stopped():
     ]
 
 
-def test_b3_c_a_receiver_moved_by_its_own_later_cut_has_not_re_flown_the_segment():
+def test_b3_c_a_receiver_moved_by_a_cut_the_ground_learns_late_has_not_re_flown_the_segment():
     fleet = Fleet()
-    fleet.tel("drone-2", lane_index=1)  # still flying its own zone
+    fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
     fleet.done("drone-1")
     offer = fleet.assigns("drone-2")[-1]
     assert offer["lanes"] == list(LANES) + TRANSIT + REFLIGHT
-    # Then drone-2's own last lane is cut 50 cm in: it flies the appended
-    # lanes from (500, 0), 50 cm left of where the ground planned them.
+    # Only then does drone-2's telemetry list a cut 50 cm into its last lane:
+    # it flies the appended lanes from (500, 0), 50 cm left of where the
+    # ground planned them.
     fleet.cut("drone-2", [(3, 50)], CUT_OBSTACLE, lane_index=4)
     end = len(offer["lanes"])
     fleet.done("drone-2", lane_index=end, lanes_total=end)
@@ -500,3 +501,82 @@ def test_nit_a_sensor_down_on_the_re_flight_is_reported_as_sensor_down_not_block
     assert statuses(fleet) == {(0, "failed", reason), (2, "failed", reason)}
     assert fleet.segments("drone-2") == []
     assert fleet.coord.status()["drone-2"]["reflights"]["blocked_again"] == 0
+
+
+# ---------------------------------------------------------------------------
+# A sensing receiver takes appended lanes only once its own lanes are done
+# ---------------------------------------------------------------------------
+
+WAIT_DRONE_2 = "waiting for drone-2 to finish its own lanes"
+
+
+def retask_events(fleet):
+    return [p for name, p in fleet.events if name == "fleet_event" and p.get("event") == "retask"]
+
+
+def test_rule_a_re_flight_waits_for_a_receiver_with_lanes_left_and_goes_out_once_it_finishes(caplog):
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=2)
+    fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        fleet.done("drone-1")
+        fleet.tel("drone-2", lane_index=3)
+    assert len(fleet.assigns("drone-2")) == 1 and fleet.reflight_events() == []
+    assert {(s["status"], s["waiting_for"], s["detail"]) for s in fleet.segments()} == {("waiting", None, WAIT_DRONE_2)}
+    assert sum(WAIT_DRONE_2 in r.getMessage() for r in caplog.records) == 1  # logged once, not per message
+    fleet.done("drone-2")
+    assert fleet.assigns("drone-2")[-1]["lanes"] == list(LANES) + TRANSIT + REFLIGHT
+    assert [e["event"] for e in fleet.reflight_events()] == ["reflight_offered", "reflight_accepted"]
+
+
+def test_rule_a_lost_drones_lanes_wait_for_a_stepped_receiver_mid_zone(caplog):
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=1)
+    fleet.tel("drone-1", lane_index=1)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    assert len(fleet.assigns("drone-2")) == 1
+    (waiting,) = retask_events(fleet)
+    assert waiting["to"] == {} and waiting["detail"].endswith(f"3 lanes awaiting a free drone ({WAIT_DRONE_2})")
+    assert [(lane["index"], lane["detail"]) for lane in waiting["awaiting"]] == [(k, WAIT_DRONE_2) for k in (1, 2, 3)]
+    assert any(r.getMessage() == f"Re-tasked lanes 1, 2, 3 of drone-1 wait: {WAIT_DRONE_2}" for r in caplog.records)
+    # Its own lanes done, drone-2 takes them.
+    fleet.done("drone-2")
+    offer = fleet.assigns("drone-2")[-1]
+    assert offer["lanes"][:len(LANES)] == list(LANES) and offer["lanes"][-3:] == list(LANES[1:])
+    accepted = retask_events(fleet)[-1]
+    assert accepted["to"] == {"drone-2": len(offer["lanes"]) - len(LANES)}
+
+
+def test_rule_a_fleet_without_obstacle_fields_re_tasks_a_mid_zone_drone_at_once():
+    fleet = Fleet()
+    for rid in ("drone-1", "drone-2"):
+        fleet.edges[rid].telemetry(is_flying=True, lane_index=1, lanes_total=len(LANES))
+    fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    offer = fleet.assigns("drone-2")[-1]
+    assert len(fleet.assigns("drone-2")) == 2
+    # Its own lanes, then a transit from (550, 0) to drone-1's lane 1 start at (0, 400), then lanes 1 to 3.
+    assert offer["lanes"] == list(LANES) + TRANSIT + list(LANES[1:])
+    (event,) = retask_events(fleet)
+    assert event["to"] == {"drone-2": len(TRANSIT) + 3} and "awaiting" not in event
+
+
+def test_rule_a_receiver_that_cuts_its_own_last_lane_before_finishing_is_planned_from_there():
+    fleet = Fleet()
+    fleet.tel("drone-2", lane_index=3)
+    fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
+    fleet.done("drone-1", is_flying=False)
+    assert {s["detail"] for s in fleet.segments()} == {WAIT_DRONE_2}
+    # drone-2 stops 50 cm into its last lane and is done: it is at (500, 0), not (550, 0).
+    fleet.cut("drone-2", [(3, 50)], CUT_OBSTACLE, lane_index=4, rel_x_cm=150, rel_y_cm=0)
+    offer = fleet.assigns("drone-2")[-1]
+    assert offer["lanes"] == list(LANES) + [
+        {"direction": "forward", "distance_cm": 400},
+        {"direction": "left", "distance_cm": 500},
+    ] + REFLIGHT
+    end = len(offer["lanes"])
+    fleet.done("drone-2", lane_index=end, lanes_total=end)
+    (done,) = fleet.reflight_events("reflight_done")
+    assert done["drone_id"] == "drone-1" and done["receiver"] == "drone-2"
+    assert fleet.segments("drone-1") == []
+

@@ -377,9 +377,11 @@ class _Chunk:
     gate_open: bool = False
     cutter_lanes: int = 0
     crowded: str | None = None
-    # Re-flight only. Why the chunk waits for a receiver that may take it
-    # once it reports fresh telemetry or has taken off (design section 3.4,
-    # review N7), shown as the waiting segment's ``detail``.
+    # Why the chunk waits for a receiver that may take it later: one that
+    # senses obstacles and has not finished its own lanes (both kinds), or,
+    # for a re-flight, one without fresh telemetry or taking off (review
+    # N7). Shown as the waiting segment's ``detail`` and in the ``retask``
+    # event's ``awaiting`` lanes.
     held: str | None = None
     # Re-flight only. Where ``appended`` starts in the receiver's lanes (set
     # with the offer), the drone that accepted it (kept when the chunk fails
@@ -1232,7 +1234,9 @@ class FleetCoordinator:
                 # A re-flight this drone flies may have ended, or one of its
                 # own cuts may now be offered (design section 3.4).
                 reflight = self._track_reflights_locked(drone_id, state)
-                if self._release_deferred_locked(drone_id, state.telemetry) or reflight:
+                held = any(chunk.status == "queued" and chunk.held
+                           for retask in self._retasks for chunk in retask.chunks)
+                if self._release_deferred_locked(drone_id, state.telemetry) or reflight or held:
                     messages = self._dispatch_locked()
                     events.extend(self._settle_and_collect_locked())
                 else:
@@ -1885,6 +1889,10 @@ class FleetCoordinator:
         lanes unchanged, then a transit to the chunk's start, then the chunk,
         so an edge keeps its lane index and flies the appended lanes after its
         own. A drone answers one offer at a time; further chunks for it wait.
+        A drone that reports obstacle sensing is offered lanes only once it
+        has finished its own (``_own_lanes_left_locked``): a later cut of its
+        own would move where it flies the appended lanes. Until then a chunk
+        it would take waits, and the ``retask`` event says why.
 
         An ``ack`` makes the offered lanes covered. A ``nack`` (or a failed
         send) withdraws the offer, and the chunk is offered to another
@@ -1993,6 +2001,31 @@ class FleetCoordinator:
             return "ended its lanes (obstacle sensor down)"
         return None
 
+    def _own_lanes_left_locked(self, rid: str) -> str | None:
+        """Why *rid* may not be given appended lanes yet: it senses obstacles and has lanes of its own left.
+
+        A drone that reports ``obstacle_sensing`` (any mode) may cut one of
+        its own lanes, and a cut moves where it starts lanes appended after
+        them, away from the path whose separation and fence were checked. So
+        it gets appended lanes, of a lost drone or of a re-flight, only once
+        its telemetry from the last ``TELEMETRY_FRESH_S`` seconds shows it
+        has finished its own lanes (``lane_index`` at or past ``lanes_total``
+        and past every lane the ground gave it); its cuts are then all known
+        and its replayed position is where it is. Until then the chunk waits
+        with this text. A drone without the obstacle fields is not held back,
+        as before. Returns None when *rid* may take lanes now.
+        """
+        state = self._drones[rid]
+        telemetry = state.telemetry or {}
+        if telemetry.get(TELEMETRY_SENSING) is None:
+            return None
+        fresh = state.telemetry_at is not None and self._clock() - state.telemetry_at <= TELEMETRY_FRESH_S
+        lane_index, lanes_total = telemetry.get("lane_index"), telemetry.get("lanes_total")
+        whole = all(isinstance(v, int) and not isinstance(v, bool) for v in (lane_index, lanes_total))
+        if fresh and whole and lane_index >= lanes_total and lane_index >= len(state.lanes):
+            return None
+        return f"waiting for {rid} to finish its own lanes"
+
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
         if self._geofence_cm is None:
             return True
@@ -2069,10 +2102,13 @@ class FleetCoordinator:
         lanes, by ``_offer_reflight_locked``.
 
         A drone that cannot fly appended lanes because of its obstacle
-        sensing (``_unfit_receiver_locked``) is never offered any. The
-        transit to a chunk starts where the receiver will actually be after
-        its lanes (``_actual_path_locked``), and the fence and the separation
-        are checked on the path it will actually fly.
+        sensing (``_unfit_receiver_locked``) is never offered any, and one
+        that senses obstacles is offered them only once it has finished its
+        own lanes (``_own_lanes_left_locked``): until then a chunk it would
+        take waits, with that reason in ``held``. The transit to a chunk
+        starts where the receiver will actually be after its lanes
+        (``_actual_path_locked``), and the fence and the separation are
+        checked on the path it will actually fly.
         """
         planned: dict[str, list[dict]] = {}
         batches: dict[str, list[_Chunk]] = {}
@@ -2086,6 +2122,7 @@ class FleetCoordinator:
                 fits = []
                 waiting = False
                 unfit: dict[str, str] = {}
+                busy: list[str] = []
                 for rid in self._receivers():
                     if rid in chunk.refusals:
                         continue
@@ -2104,8 +2141,12 @@ class FleetCoordinator:
                         chunk.too_close.pop(rid, None)
                         if rid in chunk.deferred:
                             waiting = True  # refused for now: wait, do not fail
+                        elif (left := self._own_lanes_left_locked(rid)) is not None:
+                            waiting = True  # it takes lanes once its own are done
+                            busy.append(left)
                         else:
                             fits.append((rid, end, added))
+                self._hold_locked(chunk, None if fits else "; ".join(busy) or None)
                 if not fits and waiting:
                     continue
                 if not fits:
@@ -2218,8 +2259,19 @@ class FleetCoordinator:
         chunk.status = "failed"
         chunk.receiver = None
         chunk.reason = reason
+        chunk.held = None
         logger.error("Re-tasked lanes %s of %s are uncovered: %s",
                      ", ".join(str(entry["index"]) for entry in chunk.lane_entries()), chunk.lost_id, reason)
+
+    @staticmethod
+    def _hold_locked(chunk: _Chunk, held: str | None) -> None:
+        """Record why *chunk* waits for a receiver (``held``), and log it when that changes."""
+        if held == chunk.held:
+            return
+        chunk.held = held
+        if held:
+            lanes = ", ".join(str(entry["index"]) for entry in chunk.lane_entries())
+            logger.info("Re-tasked lanes %s of %s wait: %s", lanes, chunk.lost_id, held)
 
     def _release_deferred_locked(self, drone_id: str, telemetry: dict) -> bool:
         """Clear the transient refusals of *drone_id* that its telemetry shows are over.
@@ -2342,7 +2394,9 @@ class FleetCoordinator:
 
         ``to`` counts the lanes appended to each accepting drone (transit
         included) and ``lanes`` lists the lost drone's lanes it accepted.
-        Lanes still waiting for an answer are listed under ``awaiting``.
+        Lanes still waiting for an answer are listed under ``awaiting``; a
+        lane that waits for a drone to finish its own lanes carries that as
+        its ``detail``, and the event's ``detail`` says it too.
         """
         to: dict[str, int] = {}
         lanes = []
@@ -2357,8 +2411,11 @@ class FleetCoordinator:
             for chunk in pending:
                 who = chunk.receiver or "a free drone"
                 waiting[who] = waiting.get(who, 0) + len(chunk.lanes)
-                awaiting.extend(dict(entry, drone_id=chunk.receiver) for entry in chunk.lane_entries())
-            parts.append(", ".join(f"{n} lanes awaiting {who}" for who, n in waiting.items()))
+                extra = {"detail": chunk.held} if chunk.held and chunk.receiver is None else {}
+                awaiting.extend(dict(entry, drone_id=chunk.receiver, **extra) for entry in chunk.lane_entries())
+            text = ", ".join(f"{n} lanes awaiting {who}" for who, n in waiting.items())
+            held = list(dict.fromkeys(c.held for c in pending if c.held and c.receiver is None))
+            parts.append(text + (f" ({'; '.join(held)})" if held else ""))
             payload["awaiting"] = awaiting
         payload["detail"] = "; ".join(parts)
         return payload
@@ -2596,8 +2653,9 @@ class FleetCoordinator:
         and the transit starts where the receiver actually ends its lanes. It
         keeps waiting while a drone that refused it for now (``landing``,
         ``busy``) may take it later, while a drone has no fresh telemetry or
-        is taking off (``held``, review N7), or while only the cutting drone's
-        position is in the way; it is re-evaluated on each telemetry message
+        is taking off (``held``, review N7), while a drone that would take it
+        has not finished its own lanes (``_own_lanes_left_locked``), or while
+        only the cutting drone's position is in the way; it is re-evaluated on each telemetry message
         of the cutting drone, and of every drone while it is held. With no
         drone left it fails with the reason and is never offered again.
         """
@@ -2622,6 +2680,7 @@ class FleetCoordinator:
         fits = []
         waiting = False
         crowded = None
+        busy: list[str] = []
         for rid in receivers:
             if rid in chunk.refusals:
                 continue
@@ -2640,11 +2699,14 @@ class FleetCoordinator:
                 continue
             if rid in chunk.deferred:
                 waiting = True  # refused for now: wait, do not fail
+            elif (left := self._own_lanes_left_locked(rid)) is not None:
+                waiting = True  # it takes the re-flight once its own lanes are done
+                busy.append(left)
             else:
                 fits.append((rid, end, added))
         chunk.crowded = None if fits else crowded
-        held = [rid for rid in soon if rid not in chunk.refusals]
-        chunk.held = None if fits or not held else "; ".join(f"{rid} {why[rid]}" for rid in held)
+        held = [f"{rid} {why[rid]}" for rid in soon if rid not in chunk.refusals] + busy
+        self._hold_locked(chunk, None if fits or not held else "; ".join(held))
         if not fits and (waiting or crowded or held):
             return
         if not fits:
