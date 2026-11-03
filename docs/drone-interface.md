@@ -119,6 +119,23 @@ OK), stick values never passed outside -100..100, and the obstacle rules: a back
    exactly while the capability is declared, and `measured_pose()`, a
    `RelativePose` or `None`. Declare it at runtime, after the autopilot's
    avoidance configuration has been read, not at construction.
+9. A backend whose autopilot measures the vehicle's heading in the plan
+   frame may provide the optional `measured_heading_deg() -> float | None`
+   (degrees clockwise from the plan's "ahead", `None` while it cannot tell:
+   before the first takeoff, or with stale telemetry). It is not part of
+   the protocol check. A drone that has it is held to the heading rule of
+   `docs/obstacle-sensing.md`: a sensed step is cleared only while the
+   measured heading is within 10 degrees of the commanded one, so the
+   forward camera faces the step. Unlike `measured_pose()` it must not
+   fall back to the commanded heading. For such a drone `rotate(0)` means
+   "turn to the commanded (plan-frame) heading": the executor sends it once
+   per step when no turn is due but the measured heading is off. A
+   `rotate` that returns `NOT_EXECUTED` while `measured_heading_deg()`
+   still returns a number means the turn did not finish (the heading was
+   not reached by the deadline): the executor cuts the lane with
+   `sensor_stale` and does not land. Without `measured_heading_deg()`
+   (the Tello, the fake drone) a `rotate` that is not executed raises and
+   lands the drone as before.
 
 ## Command results
 
@@ -157,6 +174,11 @@ What callers do with a result that is not OK:
   that was not executed is answered with a `nack` and is not recorded, and
   the drone keeps hovering: the nudge is not part of a lane, so nothing is
   left half-flown.
+* **Lane executor, a `rotate` that was not executed:** for a drone that
+  provides `measured_heading_deg()` and still reports a heading, the turn
+  did not finish; the lane is cut `sensor_stale` and the drone is not
+  landed. For any other drone it is handled like a move that was not
+  executed.
 * **Lane executor, `STOPPED_SHORT`:** the move is not added to the
   dead-reckoned pose, and the drone is not landed. The executor reads the
   drone's `measured_pose()`, cuts the lane there with reason `autopilot`
