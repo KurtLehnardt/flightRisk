@@ -540,3 +540,78 @@ def test_run_edge_device_still_sends_one_message_per_frame_with_a_sensor():
 
     assert processed == 3
     assert len(transport.sent) == 3
+
+
+def test_mavlink_sim_edge_with_required_sensing_and_a_failing_sensor_refuses_takeoff(monkeypatch, stub_camera):
+    """Converse of the sensing=off override: required sensing, no avoidance, no sensor means no takeoff."""
+    import secrets
+    import sys
+    import types
+
+    import cv2
+
+    from flightrisk import edge_device
+    from flightrisk import fleet_protocol as fp  # noqa: F401
+    from flightrisk.drone.obstacle_sensor import SENSOR_UNAVAILABLE_DETAIL
+    from flightrisk.edge_device import _startup_envelope
+    from flightrisk.transport import GroundTransportSync
+    from tests.support.fake_mavsdk import SimVehicle, install
+    from tests.test_mavlink_fleet_edge import _FakeDetector, _FakeReID, _StillCapture, parse
+
+    from flightrisk.drone.autopilot import ARDUPILOT
+
+    stub_camera.fail_with = RuntimeError("midas weights missing")
+    for name, attr, cls in (
+        ("flightrisk.vision.detector", "PersonDetector", _FakeDetector),
+        ("flightrisk.vision.reid", "PersonReID", _FakeReID),
+    ):
+        module = types.ModuleType(name)
+        setattr(module, attr, cls)
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(cv2, "VideoCapture", _StillCapture)
+    monkeypatch.setattr(edge_device, "start_local_land_key", lambda *a, **k: None)
+    monkeypatch.delenv(ENV_OBSTACLE_SENSING, raising=False)
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    install(monkeypatch, vehicle)
+    token = secrets.token_hex(16)
+    monkeypatch.setenv("FLIGHTRISK_EDGE_TOKEN", token)
+
+    class CapturingLog(StructuredLogger):
+        records: list = []
+
+        def warning(self, event, **fields):
+            self.records.append(("warning", event, fields))
+            super().warning(event, **fields)
+
+    log = CapturingLog(component="test-mavlink-edge")
+    log.records = []
+    controls: list[dict] = []
+    ground = GroundTransportSync(host="127.0.0.1", port=0, token=token, on_control=controls.append,
+                                 on_message=lambda m: None)
+    ground.start()
+    stop = threading.Event()
+    args = parse(["--drone", "mavlink", "--frame-heading-deg", "0", "--source", "camera",
+                  "--mavlink-address", "tcpout://127.0.0.1:1", "--drone-id", "drone-1",
+                  "--ws-url", f"ws://127.0.0.1:{ground.port}"])
+    edge = threading.Thread(target=edge_device._run_flight_edge,
+                            args=(args, log, stop,
+                                  _startup_envelope(args, environ={})), daemon=True)
+    edge.start()
+    try:
+        assert wait_for(lambda: "drone-1" in ground.drone_ids())
+        ground.sync_clock("drone-1")
+        ground.send_to_drone("drone-1", {"type": "assign_lanes", "drone_id": "drone-1", "alt_cm": 1500,
+                                         "lanes": [{"direction": "forward", "distance_cm": 1000}],
+                                         "zone": {"x_cm": 0, "y_cm": 0, "w_cm": 1000, "h_cm": 1000}})
+        assert wait_for(lambda: any(m.get("for") == "assign_lanes" for m in list(controls)))
+        ground.send_to_drone("drone-1", {"type": "start_at", "t_ground_s": ground.now() + 0.5})
+        # A v1 start is refused in the edge log with the sensor detail (a v2 start also gets the nack).
+        assert wait_for(lambda: any(r[1] == "edge_start_refused" for r in log.records))
+        refused = [r for r in log.records if r[1] == "edge_start_refused"][-1][2]
+        assert refused["reason"] == "obstacle_sensor"
+        assert SENSOR_UNAVAILABLE_DETAIL in refused["detail"] and "midas weights missing" in refused["detail"]
+        assert not [c for c in vehicle.commands if c and c[0] in ("takeoff", "arm")]
+    finally:
+        stop.set()
+        edge.join(20.0)
+        ground.stop()
