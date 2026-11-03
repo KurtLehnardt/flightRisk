@@ -12,9 +12,10 @@ import numpy as np
 import pytest
 
 from flightrisk.drone import obstacle_camera
-from flightrisk.drone.controller import Capability
+from flightrisk.drone.controller import Capability, CommandOutcome
 from flightrisk.drone.fake import FakeDrone
 from flightrisk.drone.lane_executor import LaneExecutor
+from flightrisk.drone.mavlink_fleet import SENSING_NONE
 from flightrisk.drone.obstacle_sensor import (
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
@@ -22,6 +23,7 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_SENSING,
     ENV_OBSTACLE_STEP_CM,
     ENV_OBSTACLE_TURN,
+    SENSING_AUTOPILOT,
     SENSING_FORWARD_ONLY,
     SENSING_OFF,
     SENSING_STEPPED,
@@ -36,10 +38,13 @@ from flightrisk.edge_device import (
     DroneFrameSource,
     _build_obstacle_wiring,
     _build_parser,
+    _FrameFeedingSource,
+    _tell_mavlink_drone,
     run_edge_device,
 )
 from flightrisk.observability import StructuredLogger
 from tests.test_edge_device import FakeSource, FakeTransport
+from tests.test_mavlink_avoidance import AVOIDING, avoidance_known, make_drone, wait_for  # noqa: F401
 
 
 class RecordingLog:
@@ -93,9 +98,9 @@ def _args(source: str, *argv: str):
     return _build_parser().parse_args(["--source", source, *argv])
 
 
-def _mavlink_args():
+def _mavlink_args(source="file"):
     return _build_parser().parse_args(
-        ["--drone", "mavlink", "--source", "camera", "--frame-heading-deg", "0"]
+        ["--drone", "mavlink", "--source", source, "--frame-heading-deg", "0"]
     )
 
 
@@ -263,11 +268,150 @@ def test_fake_obstacle_y_must_be_a_number():
 # -- MAVLink ---------------------------------------------------------------------
 
 
-def test_mavlink_builds_no_sensor_and_leaves_the_autopilot_to_preflight():
-    wiring, log, *_ = _wire(args=_mavlink_args(), drone=object())
+def _mavlink_wiring(source="camera", environ=None):
+    args = _build_parser().parse_args(["--drone", "mavlink", "--source", source, "--frame-heading-deg", "0"])
+    from flightrisk.edge_device import _field_envelope
+
+    envelope = _field_envelope(args, {})
+    log = RecordingLog()
+    return _build_obstacle_wiring(args, log, object(), "runner", envelope, environ or {}), log
+
+
+@pytest.mark.parametrize("source", ["camera", "url"])
+def test_mavlink_companion_camera_gets_a_stepped_sensor_at_the_field_step(source):
+    wiring, _log = _mavlink_wiring(source)
+    assert isinstance(wiring.sensor, StubCameraSensor)
+    assert wiring.sensor.frames is wiring.holder
+    assert wiring.step_cm == 500
+    assert wiring.executor_kwargs()["obstacle_step_cm"] == 500
+
+
+def test_mavlink_step_knob_uses_the_field_range():
+    wiring, _log = _mavlink_wiring(environ={ENV_OBSTACLE_STEP_CM: "1000"})
+    assert wiring.step_cm == 1000
+    with pytest.raises(SystemExit):
+        _mavlink_wiring(environ={ENV_OBSTACLE_STEP_CM: "5001"})
+
+
+def test_mavlink_camera_sensor_failure_is_a_sensor_error(stub_camera):
+    stub_camera.fail_with = RuntimeError("no torch")
+    wiring, _log = _mavlink_wiring()
+    assert wiring.sensor is None and wiring.sensor_error == "RuntimeError: no torch"
+
+
+def test_mavlink_without_a_camera_source_builds_no_sensor():
+    wiring, _log = _mavlink_wiring("file")
     assert wiring.sensor is None and wiring.sensor_error is None
+    assert wiring.holder is None
     assert wiring.executor_kwargs() == {}
     assert not StubCameraSensor.instances
+
+
+def test_the_capture_source_feeds_the_holder_a_copy_of_every_frame():
+    holder = LatestFrame()
+    released = []
+
+    class Source:
+        def __init__(self):
+            self.frames = [np.zeros((2, 2, 3), np.uint8) for _ in range(3)]
+
+        def __next__(self):
+            if not self.frames:
+                raise StopIteration
+            return self.frames.pop(0)
+
+        def release(self):
+            released.append(True)
+
+    source = _FrameFeedingSource(Source(), holder)
+    first = next(source)
+    first[:] = 9
+    assert int(holder.latest().frame.max()) == 0
+    assert list(source) and holder.frames_seen == 3
+    source.release()
+    assert released == [True]
+
+
+class _RecordingMavlinkDrone:
+    def __init__(self, avoidance=False):
+        from flightrisk.drone.controller import BASIC_FLIGHT, DroneCapabilities
+
+        features = BASIC_FLIGHT | ({Capability.ONBOARD_AVOIDANCE} if avoidance else set())
+        self.capabilities = DroneCapabilities(features=frozenset(features))
+        self.modes: list[str] = []
+
+    def set_obstacle_sensing(self, mode):
+        self.modes.append(mode)
+
+
+def _wiring_of(sensor=None, sensor_error=None, turn=True):
+    from flightrisk.edge_device import ObstacleWiring
+
+    return ObstacleWiring(sensor=sensor, sensor_error=sensor_error, turn=turn)
+
+
+@pytest.mark.parametrize(
+    ("wiring", "avoidance", "expected"),
+    [
+        (_wiring_of(sensor=NullSensor()), False, SENSING_OFF),
+        (_wiring_of(sensor=NullSensor()), True, SENSING_OFF),
+        (_wiring_of(sensor=object()), False, SENSING_STEPPED),
+        (_wiring_of(sensor=object(), turn=False), False, SENSING_FORWARD_ONLY),
+        (_wiring_of(sensor_error="boom"), False, SENSING_STEPPED),
+        (_wiring_of(), True, SENSING_AUTOPILOT),
+        (_wiring_of(), False, SENSING_NONE),
+    ],
+)
+def test_the_mavlink_drone_is_told_how_the_edge_senses(wiring, avoidance, expected):
+    drone = _RecordingMavlinkDrone(avoidance)
+    assert _tell_mavlink_drone(drone, wiring) == expected
+    assert drone.modes == [expected]
+
+
+def test_a_drone_that_takes_no_sensing_mode_is_left_alone():
+    assert _tell_mavlink_drone(object(), _wiring_of()) is None
+
+
+def test_every_mode_is_accepted_by_the_real_mavlink_drone(make_drone):
+    drone, _vehicle = make_drone()
+    for wiring in (_wiring_of(sensor=NullSensor()), _wiring_of(sensor=object()), _wiring_of(sensor=object(), turn=False),
+                   _wiring_of(sensor_error="x"), _wiring_of()):
+        assert _tell_mavlink_drone(drone, wiring) is not None
+
+
+def test_a_real_mavlink_drone_with_no_sensor_and_no_avoidance_refuses_takeoff(make_drone):
+    drone, vehicle = make_drone()
+    assert avoidance_known(drone)
+    assert _tell_mavlink_drone(drone, _wiring_of()) == SENSING_NONE
+    result = drone.takeoff()
+    assert result.outcome is CommandOutcome.REJECTED and "no obstacle avoidance" in result.detail
+    assert vehicle.commands == []
+
+
+def test_a_real_mavlink_drone_with_avoidance_configured_takes_off_without_a_sensor(make_drone):
+    drone, _vehicle = make_drone(avoidance=AVOIDING)
+    assert avoidance_known(drone)
+    assert drone.capabilities.supports(Capability.ONBOARD_AVOIDANCE)
+    assert _tell_mavlink_drone(drone, _wiring_of()) == SENSING_AUTOPILOT
+    assert wait_for(lambda: drone.link_status().ok), drone.link_status()
+
+
+def test_a_real_mavlink_drone_with_sensing_off_passes_the_gate(make_drone):
+    drone, _vehicle = make_drone()
+    assert _tell_mavlink_drone(drone, _wiring_of(sensor=NullSensor())) == SENSING_OFF
+    assert wait_for(lambda: drone.link_status().ok), drone.link_status()
+
+
+def test_executor_on_an_avoiding_mavlink_drone_reports_autopilot(make_drone):
+    from flightrisk.edge_device import _field_envelope
+
+    drone, _vehicle = make_drone(avoidance=AVOIDING)
+    assert avoidance_known(drone)
+    args = _build_parser().parse_args(["--drone", "mavlink", "--source", "file", "--frame-heading-deg", "0"])
+    envelope = _field_envelope(args, {})
+    wiring = _wiring_of()
+    flight = LaneExecutor(drone, envelope, "drone-1", send=lambda msg: None, **wiring.executor_kwargs())
+    assert flight.obstacle_sensing == SENSING_AUTOPILOT
 
 
 # -- the off override ------------------------------------------------------------

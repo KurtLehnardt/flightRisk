@@ -129,10 +129,15 @@ from flightrisk.drone.obstacle_sensor import (
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_PERSON_FRACTION,
     OBSTACLE_STEP_CM,
+    OBSTACLE_STEP_FIELD_CM,
     OBSTACLE_STEP_MAX_CM,
     OBSTACLE_STEP_MIN_CM,
     SENSING_ENV_OFF,
+    SENSING_AUTOPILOT,
     SENSING_ENV_REQUIRED,
+    SENSING_FORWARD_ONLY,
+    SENSING_OFF,
+    SENSING_STEPPED,
     BlockedZone,
     FakeObstacleSensor,
     LatestFrame,
@@ -369,6 +374,31 @@ class DroneFrameSource:
 
     def release(self) -> None:
         pass
+
+
+class _FrameFeedingSource:
+    """Wraps a frame source and gives every frame it yields to the obstacle sensor's frame holder.
+
+    Used for the MAVLink companion camera, which has no ``drone.on_frame`` hook. The holder gets its
+    own copy of each frame. Everything else (iteration, ``release``) is passed through.
+    """
+
+    def __init__(self, source: Any, holder: LatestFrame):
+        self._source = source
+        self._feed = _copying_frame_feed(holder)
+
+    def __iter__(self) -> "_FrameFeedingSource":
+        return self
+
+    def __next__(self):
+        frame = next(self._source)
+        self._feed(frame)
+        return frame
+
+    def release(self) -> None:
+        release = getattr(self._source, "release", None)
+        if callable(release):
+            release()
 
 
 class ResilientCaptureSource:
@@ -1468,8 +1498,9 @@ def _build_obstacle_wiring(
       MiDaS weights, the first inference) the error is passed to the executor, which refuses to take off.
     * ``fake``: a ``FakeObstacleSensor``, blocked from ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` along the
       plan-frame y axis when that is set and never otherwise. It loads no model.
-    * ``mavlink``: no sensor. The autopilot's own avoidance is checked at preflight (the drone declares
-      ``ONBOARD_AVOIDANCE`` after its parameter read) and ``off`` is the only override.
+    * ``mavlink``: with ``--source camera`` or ``url``, the same camera sensor in steps of 500 cm (the field
+      profile), fed from the capture source; with another source no sensor, and the drone's own preflight
+      needs the autopilot's avoidance (see ``_tell_mavlink_drone``). ``off`` is the override.
     """
     env = os.environ if environ is None else environ
     kind = _drone_kind(args)
@@ -1483,12 +1514,18 @@ def _build_obstacle_wiring(
         )
         return ObstacleWiring(sensor=NullSensor(), turn=turn)
     if kind == "mavlink":
-        log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
-        return ObstacleWiring(turn=turn)
-
-    step_cm = _obstacle_number(
-        ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_CM, OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM, env, integer=True,
-    )
+        if getattr(args, "source", None) not in ("camera", "url"):
+            # No companion camera to look through: the autopilot's own avoidance or the override.
+            log.info("edge_obstacle_sensing_autopilot", drone_id=drone_id)
+            return ObstacleWiring(turn=turn)
+        step_cm = _obstacle_number(
+            ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_FIELD_CM, envelope.limits.min_move_cm, envelope.limits.max_move_cm,
+            env, integer=True,
+        )
+    else:
+        step_cm = _obstacle_number(
+            ENV_OBSTACLE_STEP_CM, OBSTACLE_STEP_CM, OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM, env, integer=True,
+        )
     if kind == "fake":
         y_raw = (env.get(ENV_FAKE_OBSTACLE_Y_CM) or "").strip()
         zones: list[BlockedZone] = []
@@ -1504,12 +1541,14 @@ def _build_obstacle_wiring(
     person_fraction = _obstacle_number(ENV_OBSTACLE_PERSON_FRACTION, OBSTACLE_PERSON_FRACTION, 0.0, 1.0, env)
     holder = LatestFrame(time.monotonic)
     try:
-        on_frame = getattr(drone, "on_frame", None)
-        if not callable(on_frame):
-            raise RuntimeError("the drone provides no on_frame hook for the camera sensor")
+        if kind != "mavlink":
+            # A MAVLink edge feeds the holder from its capture source instead (``_flight_frame_source``).
+            on_frame = getattr(drone, "on_frame", None)
+            if not callable(on_frame):
+                raise RuntimeError("the drone provides no on_frame hook for the camera sensor")
+            on_frame(_copying_frame_feed(holder))
         from flightrisk.drone import obstacle_camera
 
-        on_frame(_copying_frame_feed(holder))
         sensor = obstacle_camera.ForwardCameraSensor(
             holder, runner, drone_id=drone_id, min_safe_depth=min_safe_depth, person_fraction=person_fraction,
             clock=time.monotonic,
@@ -1519,6 +1558,34 @@ def _build_obstacle_wiring(
         log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
         return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder)
     return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder)
+
+
+def _tell_mavlink_drone(drone: Any, wiring: ObstacleWiring) -> str | None:
+    """Tell a ``MavlinkFleetDrone`` how this edge senses obstacles; call after ``connect()``, before any takeoff.
+
+    ``off`` for the override, ``stepped`` (or ``forward_only``) when the edge has a camera sensor, or
+    failed to build one and so refuses to fly. With no sensor the drone needs the autopilot's avoidance:
+    ``autopilot`` when ``ONBOARD_AVOIDANCE`` is declared now, otherwise ``none``. Both make the drone's
+    preflight refuse a takeoff until ``avoidance_status()`` is empty, so the capability, which can still
+    appear after the first parameter read and drop later, is checked by the drone and the executor and not
+    decided here for good. Returns the mode, or None when the drone does not take one.
+    """
+    setter = getattr(drone, "set_obstacle_sensing", None)
+    if not callable(setter):
+        return None
+    from flightrisk.drone.controller import Capability, capabilities_of
+    from flightrisk.drone.mavlink_fleet import SENSING_NONE
+
+    if isinstance(wiring.sensor, NullSensor):
+        mode = SENSING_OFF
+    elif wiring.sensor is not None or wiring.sensor_error is not None:
+        mode = SENSING_STEPPED if wiring.turn else SENSING_FORWARD_ONLY
+    elif capabilities_of(drone).supports(Capability.ONBOARD_AVOIDANCE):
+        mode = SENSING_AUTOPILOT
+    else:
+        mode = SENSING_NONE
+    setter(mode)
+    return mode
 
 
 def _build_drone(args: argparse.Namespace, log: StructuredLogger) -> Any:
@@ -1716,6 +1783,9 @@ def _run_flight_edge(
     if not drone.connect():
         log.error("edge_drone_connect_failed", drone_id=args.drone_id)
         raise SystemExit(1)
+    if kind == "mavlink":
+        mode = _tell_mavlink_drone(drone, obstacle)
+        log.info("edge_obstacle_sensing", drone_id=args.drone_id, mode=mode)
 
     previous_sigint = None
     try:
@@ -1747,7 +1817,8 @@ def _run_flight_edge(
         transport.connect()
         run_edge_device(
             _flight_frame_source(args, drone, stop_event, log,
-                                 on_camera_status=lambda ok: setattr(runner, "camera_ok", ok)),
+                                 on_camera_status=lambda ok: setattr(runner, "camera_ok", ok),
+                                 obstacle_holder=obstacle.holder),
             transport,
             runner,
             logger=log,
@@ -1787,8 +1858,12 @@ def _flight_frame_source(
     stop_event: threading.Event,
     log: StructuredLogger,
     on_camera_status: Callable[[bool], None] | None = None,
+    obstacle_holder: LatestFrame | None = None,
 ):
-    """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL."""
+    """Frames for a flying edge: the drone's own video, or the companion computer's camera, file or URL.
+
+    For a companion camera, ``obstacle_holder`` (the obstacle sensor's frame holder) is fed every frame read.
+    """
     if _drone_kind(args) != "mavlink":
         # The fake drone only yields blank frames, so a low rate saves CPU.
         return DroneFrameSource(
@@ -1807,7 +1882,8 @@ def _flight_frame_source(
 
     log.info("edge_frames_capture", source=args.source, camera_index=args.camera_index if args.source == "camera"
              else None)
-    return ResilientCaptureSource(_open, stop_event, log=log, on_status=on_camera_status)
+    source = ResilientCaptureSource(_open, stop_event, log=log, on_status=on_camera_status)
+    return _FrameFeedingSource(source, obstacle_holder) if obstacle_holder is not None else source
 
 
 def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
