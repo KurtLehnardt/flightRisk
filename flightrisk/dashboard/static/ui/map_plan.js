@@ -291,6 +291,29 @@
             });
         }
 
+        // Obstacle segments of the fleet plan (uncovered entries of kind "segment"), coloured by re-flight status so
+        // the map and the NOT SEARCHED box agree. Amber dashed: offered, accepted or being re-flown. Red solid:
+        // blocked again or failed. Red dashed: not searched and not (yet) offered.
+        function segmentStyle(u) {
+            if (u.status === 'offered' || u.status === 'acked' || u.status === 'flying') {
+                return { color: '#d97706', weight: 4, dashArray: '8 6', className: 'plan-segment plan-segment-reflight' };
+            }
+            if (u.status === 'blocked_again' || u.status === 'failed') {
+                return { color: '#dc2626', weight: 4, className: 'plan-segment plan-segment-final' };
+            }
+            return { color: '#dc2626', weight: 4, dashArray: '8 6', className: 'plan-segment plan-segment-uncovered' };
+        }
+        function renderSegments(group) {
+            (S.segments || []).forEach((u) => {
+                if (typeof u.x_cm !== 'number' || typeof u.y_cm !== 'number'
+                    || typeof u.end_x_cm !== 'number' || typeof u.end_y_cm !== 'number') return;
+                const style = Object.assign({ interactive: true }, segmentStyle(u));
+                L.polyline([project(u.x_cm, u.y_cm), project(u.end_x_cm, u.end_y_cm)], style)
+                    .bindTooltip(tip((u.drone_id || 'drone') + ' lane ' + u.index + ': ' + (u.status || u.reason || 'not searched')))
+                    .addTo(group);
+            });
+        }
+
         function renderAnchor(group) {
             if (S.mode !== 'latlon' || !S.anchor) return;
             const m = L.marker([S.anchor.lat, S.anchor.lon], {
@@ -312,6 +335,7 @@
             if (!ready() || !canDraw()) { if (S.mode === 'latlon') renderAnchor(S.layers.plan); return; }
             renderArea(S.layers.plan, S.layers.handles);
             renderProblems(S.layers.plan);
+            renderSegments(S.layers.plan);
             droneIds().forEach((id) => renderDrone(id, S.layers.plan, S.layers.handles));
             renderAnchor(S.layers.plan);
             if (!S.fitted) {
@@ -687,6 +711,12 @@
                     return true;
                 }
                 return false;
+            },
+            // The obstacle segments of the running mission (fleet_plan.uncovered and fleet_uncovered, kind
+            // "segment"); they are drawn on top of the plan and replaced on every call.
+            setUncoveredSegments: (list) => {
+                S.segments = (list || []).filter((u) => u && u.kind === 'segment');
+                render();
             },
             // Why editing is not allowed now (drones fly or a pattern runs), or null to allow it again.
             setLocked: (reason) => {
