@@ -1,5 +1,8 @@
 package com.flightrisk.app.ui.ground
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -69,8 +72,11 @@ class GroundConsoleScreenTest {
             GroundLink.Connecting(1), GroundLink.Connected, GroundLink.Reconnecting(2, 4.0, "the ground stopped answering"),
             GroundLink.WrongKey, GroundLink.AddressRefused("not private"), GroundLink.Stopped,
         )
+        // setContent may be called once per test, so drive the link through state.
+        var current by mutableStateOf(links.first())
+        compose.setContent { FlightRiskTheme { GroundConsoleContent(GroundUiState(link = current), GroundActions()) } }
         for (link in links) {
-            compose.setContent { FlightRiskTheme { GroundConsoleContent(GroundUiState(link = link), GroundActions()) } }
+            compose.runOnIdle { current = link }
             compose.onNodeWithTag("ground.landAll").assertIsDisplayed().assertIsEnabled()
         }
     }
