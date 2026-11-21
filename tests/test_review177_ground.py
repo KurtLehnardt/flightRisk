@@ -411,6 +411,9 @@ def test_n8_the_cuts_own_segment_is_still_offered_when_the_cutter_is_lost():
     fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=1, rel_x_cm=50, rel_y_cm=250)
     fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    # drone-1 may still hover beside the segment for LOST_OBSTACLE_S.
+    fleet.clock.advance(coordinator_module.LOST_OBSTACLE_S)
+    fleet.done("drone-2")
     with fleet.coord._lock:
         (chunk,) = fleet.coord._reflights
     assert [(s.lane_index, s.reason) for s in chunk.segments] == [(0, CUT_OBSTACLE)]
@@ -418,11 +421,11 @@ def test_n8_the_cuts_own_segment_is_still_offered_when_the_cutter_is_lost():
 
 
 # ---------------------------------------------------------------------------
-# N9: a lost cutter is no longer a point obstacle
+# N9: a lost cutter's frozen position holds its chunk only for LOST_OBSTACLE_S
 # ---------------------------------------------------------------------------
 
 
-def test_n9_a_lost_cutters_frozen_position_no_longer_holds_its_chunk():
+def test_n9_a_lost_cutters_frozen_position_holds_its_chunk_only_while_it_may_still_hover():
     fleet = Fleet()
     fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)
@@ -433,8 +436,16 @@ def test_n9_a_lost_cutters_frozen_position_no_longer_holds_its_chunk():
         lanes = fleet.coord.lanes("drone-2") + TRANSIT + REFLIGHT
         assert fleet.coord._near_cutter_locked("drone-2", lanes, "drone-1") is not None
     fleet.coord.on_drone_lost("drone-1", wait_s=0)
+    # Lost, but a Tello with no commands hovers up to 15 s before it lands.
+    with fleet.coord._lock:
+        assert "lost" in fleet.coord._near_cutter_locked("drone-2", lanes, "drone-1")
+    assert len(fleet.assigns("drone-2")) == 1
+    fleet.clock.advance(coordinator_module.LOST_OBSTACLE_S)
     with fleet.coord._lock:
         assert fleet.coord._near_cutter_locked("drone-2", lanes, "drone-1") is None
+    # Its position is frozen and it sends nothing more: drone-2's telemetry
+    # is what lets the chunk through, so it never waits for ever.
+    fleet.done("drone-2")
     assert fleet.assigns("drone-2")[-1]["lanes"] == list(LANES) + TRANSIT + REFLIGHT
 
 
