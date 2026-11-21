@@ -88,6 +88,8 @@ from flightrisk.dashboard.alerts import (  # noqa: F401 — re-exported for back
     _save_match_snapshot,
     _gemma_worker,
     CAPTURES_DIR,
+    enqueue_reasoning,
+    prepare_edge_reasoning,
 )
 from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for backward compat
     _build_track_id_by_bbox,
@@ -349,12 +351,22 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         except Exception:
             alert_level = "possible_match"
 
+    # Layer B: the edge's own crop (already received for the snapshot) feeds the
+    # same "analyze" job the frame loop queues. Built here, enqueued below once
+    # the entry is in match_history so the worker's back-fill finds it.
+    reasoning_job = None
+    try:
+        reasoning_job = prepare_edge_reasoning(track_key, crop_jpeg)
+    except Exception:
+        if app_state.logger:
+            app_state.logger.warning("edge_reasoning_prepare_failed", exc_info=True)
+
     match_entry = {
         "time": time.strftime("%H:%M:%S"),
         "score": round(combined, 3),
         "gemma_match": None,
-        "gemma_confidence": None,
-        "reasoning": None,
+        "gemma_confidence": "pending" if reasoning_job else None,
+        "reasoning": f"Awaiting {app_state.reasoning.label} reasoning..." if reasoning_job else None,
         "snapshot": snapshot_b64,
         "type": "edge",
         "face_score": round(face_score, 3),
@@ -386,6 +398,8 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         app_state.match_history = app_state.match_history[-50:]
 
     alert_latch.attach(alert_id, match_entry)
+    if reasoning_job is not None:
+        enqueue_reasoning(reasoning_job)  # put_nowait; drops when full, never blocks
     socketio.emit("match_alert", match_entry)
 
 

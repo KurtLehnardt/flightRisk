@@ -17,6 +17,7 @@ import traceback
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from flightrisk import obs_events
 from flightrisk.dashboard.alert_latch import alert_latch
@@ -24,7 +25,9 @@ from flightrisk.dashboard.state import (
     ALERT_COOLDOWN,
     alerted_tracks,
     app_state,
+    gemma_last_call,
     gemma_queue,
+    GEMMA_RATE_LIMIT,
     match_history_lock,
 )
 
@@ -155,6 +158,41 @@ def _timed_reasoning(agent, kind: str, call):
             tokens_out=usage.get("output_tokens"),
             error_type=type(error).__name__ if error is not None else usage.get("error_type"),
         )
+
+
+def prepare_edge_reasoning(track_key, crop_jpeg, now=None):
+    """Build an ``analyze`` job for an edge alert, or ``None`` when not eligible.
+
+    Same payload shape as the frame-loop path: ``("analyze", track_key, crop,
+    reference)`` with BGR arrays. Returns ``None`` (and enqueues nothing) when
+    reasoning is off or not opted in (``app_state.reasoning is None``), there is
+    no target photo, the edge sent no usable crop, or the per-track
+    ``GEMMA_RATE_LIMIT`` window has not elapsed. The rate-limit stamp is taken
+    only once the job is actually built.
+    """
+    if app_state.reasoning is None or not app_state.target_photo_path or not crop_jpeg:
+        return None
+    now = time.time() if now is None else now
+    if now - gemma_last_call.get(track_key, 0) < GEMMA_RATE_LIMIT:
+        return None
+    crop = cv2.imdecode(np.frombuffer(crop_jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if crop is None or crop.size == 0:
+        return None
+    ref_img = cv2.imread(app_state.target_photo_path)
+    if ref_img is None:
+        return None
+    gemma_last_call[track_key] = now
+    return ("analyze", track_key, crop, ref_img)
+
+
+def enqueue_reasoning(job):
+    """Non-blocking enqueue; drops (never raises, never waits) when full."""
+    try:
+        gemma_queue.put_nowait(job)
+        return True
+    except queue.Full:
+        obs_events.queue_dropped("reasoning", kind=job[0])
+        return False
 
 
 def _gemma_worker(socketio):
