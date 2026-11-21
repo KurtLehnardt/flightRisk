@@ -110,6 +110,7 @@ class LauncherApp:
         self.environ = dict(os.environ if environ is None else environ)
         self._token_loader = token_loader
         self.redact = Redactor()
+        self.redact.add(self.environ.get("FLIGHTRISK_CLAUDE_API_KEY"))  # the ground's child env carries it
         self.token = self.reload_token()
         self.store = store or PresetStore(secret=lambda: self.token.reveal())
         if manager is None:
