@@ -298,7 +298,13 @@ MAX_ID_LEN = 64
 MAX_TEXT_LEN = 200
 MAX_LANES = 1024
 MAX_LANE_DISTANCE_CM = 100_000
-MAX_FIELDS = 32
+# Top-level fields of one message. An edge's telemetry is the executor's own
+# fields (up to 34 with GPS, the drone link and the obstacle fields) plus the
+# ones the edge adds on the way out (``detector_ok``, ``camera_ok`` and up to
+# five detection profile fields), so up to 41. The limit leaves headroom
+# above that; ``tests/test_telemetry_field_cap.py`` guards it. Raising it only
+# loosens what a ground accepts, so an older edge's messages are unchanged.
+MAX_FIELDS = 48
 MAX_DEPTH = 8
 MAX_NODES = 10_000
 MAX_ROSTER = 8

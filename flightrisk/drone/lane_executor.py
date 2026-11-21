@@ -125,6 +125,8 @@ from flightrisk.drone.obstacle_sensor import (
     OBSTACLE_SENSE_TIMEOUT_S,
     OBSTACLE_SENSOR_DOWN_S,
     OBSTACLE_STEP_CM,
+    PERSON_CUE_AGE_KEY,
+    PERSON_CUE_DOWN_KEY,
     SENSING_AUTOPILOT,
     SENSING_FORWARD_ONLY,
     SENSING_OFF,
@@ -135,6 +137,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_CUTS,
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_LATENCY_MS,
+    TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
     TELEMETRY_SEQ,
@@ -610,7 +613,12 @@ class LaneExecutor(
         * ``obstacle_cuts``: ``[lane, flown_cm, ...]`` for the last eight cuts
           of the plan, ``obstacle_cuts_total`` their count over the whole
           plan, and ``obstacle_cut_reasons`` the listed cuts' reasons, comma
-          separated.
+          separated;
+        * ``obstacle_person_cue``: for a sensor with a person cue (the camera
+          sensor), ``{"person_cue_down": bool, "detection_age_s": number or
+          null}``: whether the cue has been ``unknown`` for several gates in a
+          row, and how old the view of the newest detection result is. Left
+          out for a sensor that reports no person cue.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps
@@ -645,7 +653,26 @@ class LaneExecutor(
         status[TELEMETRY_CUTS] = flat
         status[TELEMETRY_CUTS_TOTAL] = len(cuts)
         status[TELEMETRY_CUT_REASONS] = reasons
+        person = self._person_cue_status()
+        if person is not None:
+            status[TELEMETRY_PERSON_CUE] = person
         return status
+
+    def _person_cue_status(self) -> dict[str, Any] | None:
+        """The sensor's person cue health for telemetry, or None when it reports none. Never raises."""
+        sensor = self._obstacle_sensor
+        if sensor is None:
+            return None
+        try:
+            status = sensor.status()
+        except Exception:  # noqa: BLE001 - telemetry must not fail for a sensor's status
+            return None
+        if not isinstance(status, dict) or PERSON_CUE_DOWN_KEY not in status:
+            return None
+        age = status.get("person_detection_age_s")
+        if not is_finite_number(age) or age < 0:
+            age = None
+        return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
 
     def _obstacle_unavailable_detail(self) -> str:
         """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""
