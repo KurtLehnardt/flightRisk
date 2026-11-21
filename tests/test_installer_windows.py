@@ -460,3 +460,40 @@ def test_uninstall_takes_the_install_lock(winbox: WinBox):
     finally:
         proc.communicate("no\n", timeout=60)
     assert winbox.app_dir.exists()
+
+
+def _requirements_file(role: str | None, arch: str = "AMD64") -> str:
+    """Get-RequirementsFile against a copy of the repository's lock files, for FLIGHTRISK_ROLE=*role*."""
+    app = Path(tempfile.mkdtemp()) / "FlightRisk" / "app"
+    (app / "installer" / "locks").mkdir(parents=True)
+    for name in ("windows-x64-edge.txt", "windows-x64-ground.txt"):
+        (app / "installer" / "locks" / name).write_text("# lock\n")
+    env = {**os.environ, "FLIGHTRISK_HOME": str(app.parent), "PROCESSOR_ARCHITECTURE": arch}
+    env.pop("FLIGHTRISK_ROLE", None)
+    if role is not None:
+        env["FLIGHTRISK_ROLE"] = role
+    result = lib("Get-RequirementsFile", env)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_default_and_edge_role_install_the_edge_lock():
+    assert _requirements_file(None) == "installer\\locks\\windows-x64-edge.txt"
+    assert _requirements_file("edge") == "installer\\locks\\windows-x64-edge.txt"
+
+
+def test_ground_role_installs_the_ground_lock():
+    assert _requirements_file("ground") == "installer\\locks\\windows-x64-ground.txt"
+    assert _requirements_file(" Ground ") == "installer\\locks\\windows-x64-ground.txt"
+
+
+def test_ground_role_without_a_lock_falls_back_to_the_floors_file():
+    assert _requirements_file("ground", arch="ARM64") == "requirements-ground.txt"
+    assert _requirements_file(None, arch="ARM64") == "requirements-edge.txt"
+
+
+def test_unknown_role_is_refused():
+    app = Path(tempfile.mkdtemp())
+    result = lib("Get-InstallRole", {**os.environ, "FLIGHTRISK_ROLE": "everything", "FLIGHTRISK_HOME": str(app)})
+    assert result.returncode != 0
+    assert "FLIGHTRISK_ROLE must be edge or ground" in result.stdout + result.stderr

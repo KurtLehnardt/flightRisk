@@ -6,6 +6,9 @@ drone. The Tello probe sends only ``command`` (enter SDK mode), ``battery?``
 and ``temp?``; it can never send a takeoff, move, land or motor command
 (``probe_tello`` refuses any other text before it reaches a socket).
 
+The one network touch is the Claude uplink check (only when the provider is claude): a DNS lookup and a TLS
+handshake with api.anthropic.com, no API call; its failures show as WARN, never blocking a start.
+
 All side effects go through ``PreflightEnv`` so tests can inject fakes.
 """
 
@@ -16,11 +19,12 @@ import os
 import socket
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
 from flightrisk.launcher.settings import (
@@ -260,6 +264,10 @@ class PreflightEnv:
     )
     environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
     is_windows: bool = sys.platform == "win32"
+    #: The Claude API reachability rows; replaced in tests so no DNS or socket is touched.
+    claude_uplink: Callable[[Mapping[str, str]], list[uplink.UplinkRow]] = field(
+        default=lambda environ: uplink.check_claude_uplink(uplink.UplinkEnv(environ=environ))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +377,19 @@ def run_preflight(
         # Fail closed: with no adapter list, a probe from all addresses could reach another drone.
         ambiguous.add(drone.drone_id)
         checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, UNREADABLE_ADAPTERS))
+
+    # Claude reasoning: only when this computer runs the ground and the provider is claude.
+    if settings.runs_ground and uplink.provider_is_claude(env.environ):
+        if not settings.llm:
+            checks.append(Check(
+                "Language model", WARN,
+                "FLIGHTRISK_REASONING_PROVIDER=claude, but \"Language model on\" is off in the launcher, so the ground "
+                "starts with --no-llm and no reasoning runs",
+            ))
+        for row in env.claude_uplink(env.environ):
+            # A missing uplink never blocks a start: alerts still fire, only the reasoning shows an error.
+            status = WARN if row.status == uplink.FAIL else row.status
+            checks.append(Check(f"Claude: {row.name}", status, row.detail))
 
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))

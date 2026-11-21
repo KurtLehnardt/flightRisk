@@ -82,3 +82,16 @@ def test_windows_edge_lock_pins_every_edge_requirement():
     assert not missing, f"requirements-edge.txt names not in the Windows lock: {sorted(missing)}"
     for heavy in ("insightface", "ollama", "open-clip-torch", "mavsdk", "flask"):
         assert heavy not in pins, f"the edge lock must not install {heavy}"
+
+
+def test_windows_ground_lock_pins_every_ground_requirement_and_anthropic():
+    pins = _pins(LOCKS / "windows-x64-ground.txt")
+    for requirements in ("requirements-ground.txt", "requirements-edge.txt"):
+        missing = _requirement_names(ROOT / requirements) - {"-r"} - set(pins)
+        assert not missing, f"{requirements} names not in the Windows ground lock: {sorted(missing)}"
+    for needed in ("anthropic", "flask", "flask-socketio"):
+        assert needed in pins
+    for heavy in ("insightface", "ollama", "open-clip-torch", "mavsdk"):
+        assert heavy not in pins, f"the ground lock must not install {heavy}"
+    edge = set(_pins(LOCKS / "windows-x64-edge.txt"))
+    assert edge <= set(pins), "the ground lock must contain everything the edge lock does"

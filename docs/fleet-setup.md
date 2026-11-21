@@ -447,6 +447,86 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 | 3 | Station mode: drones and laptops on one 2.4 GHz router (Path 1 above) | `tello_hw_check.py --station-mode` and `--video-check` both pass. Tello video may not work in station mode (UNVERIFIED for current EDU firmware) |
 | 4 | One live Tello plus one fake edge (rung 2 in `docs/demo-script.md`) | there is no working link between the laptops at all |
 
+## Layout B with Claude reasoning
+
+Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the ZBook), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
+
+This was written from code and from the ZBook's adapter layout; the PowerShell steps and the installer option have not yet been run end to end on the ZBook.
+
+### Which adapter is which
+
+On the ZBook at the time of writing, the built-in Intel AX201 Wi-Fi ("Wi-Fi", ifIndex 21) is on the home LAN and is the internet uplink. The two TP-Link USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (ifIndex 10, static 192.168.10.50/24) and "Wi-Fi 5" (ifIndex 26). **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
+
+```powershell
+Get-NetAdapter | Sort-Object ifIndex | Format-Table Name, InterfaceDescription, ifIndex, Status
+```
+
+and use what it prints. If there is no home Wi-Fi where you fly, the uplink can be a USB Ethernet adapter or a USB tether from a phone instead; it is then the third adapter in the table, and everything below applies to it the same way.
+
+### 1. Install the ground role
+
+The Windows installer installs the edge role only unless asked. For Layout B set `FLIGHTRISK_ROLE=ground` for that PowerShell, then run the installer (an environment variable, because the one-liner runs through `irm | iex`, which takes no parameters):
+
+```powershell
+$env:FLIGHTRISK_ROLE = "ground"
+irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
+```
+
+It installs `installer\locks\windows-x64-ground.txt`: the edge packages plus Flask, Flask-SocketIO, Pillow, cryptography, the HTTP telemetry exporter and `anthropic`, all pinned with hashes. Ollama, InsightFace and open_clip are still not installed.
+
+The ground and the edges need `yolo11n.pt`, and a clean clone has none. The installer downloads it into the app folder and checks its SHA-256; if it printed "could not download yolo11n.pt now", run the installer again with internet before launching. Check with `Test-Path "$env:LOCALAPPDATA\FlightRisk\app\yolo11n.pt"`. In a development checkout use `venv\Scripts\python.exe -m pip install -r requirements-ground.txt` and `scripts\install_windows.ps1` for the weights.
+
+### 2. Environment variables
+
+Three variables turn Claude on. Set them once with `setx`, then **close the shell and open a new one** (and restart the launcher): `setx` changes the registry for future processes, not the current shell.
+
+```powershell
+setx FLIGHTRISK_ALLOW_CLOUD_LLM 1
+setx FLIGHTRISK_REASONING_PROVIDER claude
+setx FLIGHTRISK_CLAUDE_API_KEY "<your key>"
+```
+
+- The key variable is `FLIGHTRISK_CLAUDE_API_KEY`. `ANTHROPIC_API_KEY` is not read.
+- Never paste the key into a file in the repository, a note or a chat. PowerShell keeps typed commands in its history file, so for the key either use Settings, System, About, Advanced system settings, Environment Variables (User variables, New), or run the `setx` line and then delete it from `(Get-PSReadLineOption).HistorySavePath`.
+- Without `FLIGHTRISK_ALLOW_CLOUD_LLM=1` the ground refuses the cloud model, even with a key.
+
+### 3. The launcher toggle
+
+In the launcher window turn on **Language model on** for the ground. It is off by default, and while it is off the launcher starts the ground with `--no-llm`, so no reasoning runs whatever the variables say. With the provider set to claude, the launcher warns when it is off.
+
+### 4. Make the default route go out the uplink
+
+Each Tello adapter that joined by DHCP learns a default route through 192.168.10.1, and Windows picks the route with the lowest metric, so the Claude traffic can be sent into a Tello access point and time out. Give the uplink a lower interface metric than both Tello adapters. In an administrator PowerShell, with the aliases read from the `Get-NetAdapter` table above:
+
+```powershell
+$uplink = "Wi-Fi"            # the home Wi-Fi, the USB Ethernet or the phone tether
+$tellos = "Wi-Fi 2", "Wi-Fi 5"
+Set-NetIPInterface -InterfaceAlias $uplink -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 10
+foreach ($t in $tellos) { Set-NetIPInterface -InterfaceAlias $t -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 200 }
+```
+
+The metric belongs to the adapter, so it survives a reboot; if a replug gives a USB adapter a new name, redo this for the new alias. This does not touch the Tello traffic: the edges bind each adapter's own IP (`local_ip` and the interface index) and talk to 192.168.10.1 on its own connected subnet.
+
+### 5. Verify the route
+
+```powershell
+Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Format-Table InterfaceAlias, NextHop, RouteMetric, ifIndex
+$api = (Resolve-DnsName api.anthropic.com -Type A | Select-Object -First 1).IPAddress
+Find-NetRoute -RemoteIPAddress $api | Format-Table InterfaceAlias, IPAddress, NextHop
+```
+
+The first table should list the uplink first. `Find-NetRoute` should show the uplink's alias and a local address that is not in 192.168.10.0/24. Then run the preflight check, which resolves `api.anthropic.com`, opens TLS to it (no request is sent and no key is used), prints the local address the route leaves from, warns if that is a Tello subnet, and reports each Claude variable as set or unset without showing a value:
+
+```powershell
+venv\Scripts\python.exe scripts\check_claude_uplink.py
+```
+
+It exits 1 on a failure and does nothing (exit 0) unless `FLIGHTRISK_REASONING_PROVIDER=claude`. The launcher's Check runs the same rows for a ground whose environment says claude, as `Claude: ...` rows; there they show as warnings and never block Start, for the reason below.
+
+### Without internet
+
+If the uplink is down, the flight still works: detection, matching and the alerts fire as usual, and the reasoning panel shows an error for each call that could not reach Claude (the client waits up to 60 s and retries twice, so the error can take a while to appear). The preflight shows this beforehand, as DNS or TLS rows.
+
 ## Launch
 
 Run the launchers after exporting the settings and `FLIGHTRISK_EDGE_TOKEN`. Start the ground station first.

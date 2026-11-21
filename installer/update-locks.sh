@@ -13,6 +13,7 @@
 #
 #   installer/locks/macos-arm64.txt        requirements.txt, macOS 14 or newer on Apple Silicon
 #   installer/locks/windows-x64-edge.txt   requirements-edge.txt, 64-bit Windows (the edge laptop)
+#   installer/locks/windows-x64-ground.txt requirements-ground.txt, 64-bit Windows (ground + edges on one laptop, with anthropic)
 #
 # Commit the result together with the change to requirements*.txt that needed it.
 set -euo pipefail
@@ -45,3 +46,5 @@ compile requirements.txt aarch64-apple-darwin installer/locks/macos-arm64.txt \
   "Pinned dependencies of the full app for macOS 14 or newer on Apple Silicon, Python 3.13."
 compile requirements-edge.txt x86_64-pc-windows-msvc installer/locks/windows-x64-edge.txt \
   "Pinned dependencies of the edge role for 64-bit Windows, Python 3.13."
+compile requirements-ground.txt x86_64-pc-windows-msvc installer/locks/windows-x64-ground.txt \
+  "Pinned dependencies of the ground role (ground, dashboard, edges, anthropic) for 64-bit Windows, Python 3.13."
