@@ -472,6 +472,31 @@ Lay out the drones as in "Placement and heading" above first. The dashboard shou
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
+## Cutting edge CPU load: run detection on every Nth frame (optional)
+
+Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel i7-10610U, 4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Most of that cost is detection, so the edge can skip it on some frames.
+
+`--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame as before. The flag wins over the environment variable, which wins over the default. N must be a whole number from 1 to 30, written with plain digits (`1_0` and non-ASCII digits are refused); 0, negative, non-integer and larger values stop the edge at startup with an error.
+
+- It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored. When the stride came from the environment variable, the error says `FLIGHTRISK_EDGE_FRAME_STRIDE=<n> is set` and tells you to unset it.
+- The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So detection runs at about 1/N of the stride-1 rate even on a machine where detection is slower than the video. A plain count of every Nth frame would not do that, because after a slow detection the newest frame is already many frames ahead.
+- Dropped frames are still polled at the full rate. That keeps the newest frame available and keeps the frozen-stream recovery working, which counts identical polls. The video is decoded on its own thread, so polling does not hold the decoder up, and the polling costs almost no CPU.
+- With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
+- Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). The detector's busy time fell the same way, from 100 percent to 50, 34.5, 20 and 10 percent. A person is therefore seen N times less often. A stride of 2 was flown on 28 October.
+- The launcher window has no field for it. The launcher passes its environment through to the edges, so set `FLIGHTRISK_EDGE_FRAME_STRIDE` before starting it, or use the flag when starting an edge by hand.
+
+```
+FLIGHTRISK_EDGE_FRAME_STRIDE=2 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+python -m flightrisk.edge_device --source tello --drone-id drone-1 --frame-stride 2 ...
+```
+
+On Windows PowerShell, set the variable for the current window, then start the launcher or the edge from the same window:
+
+```
+$env:FLIGHTRISK_EDGE_FRAME_STRIDE = "2"
+python -m flightrisk.edge_device --source tello --drone-id drone-1 ...
+```
+
 ## Observability (optional)
 
 To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
