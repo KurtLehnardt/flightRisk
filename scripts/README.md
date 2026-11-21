@@ -111,32 +111,57 @@ before shipping a model that fails parity.
 
 ## Obstacle Sensing Scripts
 
+### `obstacle_record.py` -- Record the frames the obstacle sensor sees
+
+Connects to one Tello, turns its video on (it never takes off) and records the
+frames the edge's obstacle sensor would judge, through the same feeds the edge
+uses: each new decoded frame once, converted from the decoder's RGB to the
+sensor's BGR, stamped with its capture time, and refused when the decoder marks
+it stale (a decoder backlog, or a corrupt frame after lost video). Each frame is
+a lossless PNG, so a replay gives the depth model exactly the input it had in
+flight. With `--tello-local-ip` (the two-drone layout) the decoder stamps
+capture times; without it a frame counts from its arrival.
+
+```bash
+venv/bin/python scripts/obstacle_record.py --out rec/plant_150cm --seconds 5 --label "plant 150 cm"
+venv/bin/python scripts/obstacle_record.py --out rec/wall_300cm --tello-local-ip 192.168.10.2
+```
+
+It writes `frame_000001.png` and onwards, `frames.csv` (`index`, `file`,
+`captured_at_s`, `arrived_at_s`, `capture_to_arrival_ms`, `wall_time`) and
+`meta.json` (the label, the channel order, the settle time and the frame,
+stale and decoder counts). The output directory must not already hold a
+recording.
+
 ### `obstacle_replay.py` -- Replay recordings and calibrate depth threshold
 
 Replays a drone recording and runs the obstacle sensor on every nth frame to
 calibrate the MiDaS depth threshold (`FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`)
 against known distances. Prints per-frame cue values, decisions and latency to
-stdout; optionally writes per-frame results to CSV for analysis.
+stdout; optionally writes per-frame results to CSV for analysis. Every frame
+goes through the same channel conversion as the edge's frame feeds
+(`to_sensor_frame`), so a frame replayed from a recording reaches MiDaS as the
+same tensor it was in flight.
 
 ```bash
-# Replay a video, process every 5th frame
+# Replay a recording made by obstacle_record.py (the input to calibrate with)
+python scripts/obstacle_replay.py --frames rec/plant_150cm --out rec/plant_150cm/replay.csv
+
+# Replay a video, process every 5th frame (lossy: numbers can differ a little from flight)
 python scripts/obstacle_replay.py --video recording.mp4 --stride 5
 
-# Process all frames and write CSV
-python scripts/obstacle_replay.py --video recording.mp4 --stride 1 --out results.csv
-
 # Test with a custom depth threshold
-python scripts/obstacle_replay.py --video recording.mp4 --min-safe-depth 0.40
+python scripts/obstacle_replay.py --frames rec/plant_150cm --min-safe-depth 0.40
 ```
 
 **Arguments:**
-- `--video <mp4>` (required): Path to the video file to replay.
+- `--frames <dir>` or `--video <mp4>` (one is required): A recording directory written by `obstacle_record.py`, or a video file.
 - `--stride n` (default 1): Process every nth frame.
 - `--out csv` (optional): Write per-frame data to CSV file.
 - `--min-safe-depth x` (default 0.35): Depth threshold for obstacle detection.
 
 **Output columns (CSV):**
-- `frame`: Original frame number in video.
+- `frame`: Original frame number in the recording or video.
 - `processed`: Frame count among processed (stride-ed) frames.
 - `action`: Decision from depth cue (`clear`, `reverse`, `go_left`, `go_right`).
 - `center_depth`: Depth statistic at frame center (normalized inverse depth).
@@ -146,6 +171,7 @@ python scripts/obstacle_replay.py --video recording.mp4 --min-safe-depth 0.40
 - `center_stat`: Statistic used (`mean` or `p90`).
 - `latency_ms`: Inference time in milliseconds.
 - `safe`: Boolean, whether the path is clear.
+- `captured_at_s`: The frame's capture time from the recording (empty for a video).
 
 ### `bench_obstacle.py` -- Benchmark MiDaS latency under YOLO load
 

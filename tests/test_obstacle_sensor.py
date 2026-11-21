@@ -76,12 +76,13 @@ class TestConstants:
         for name in (
             os_.ENV_OBSTACLE_SENSING, os_.ENV_OBSTACLE_STEP_CM, os_.ENV_OBSTACLE_TURN,
             os_.ENV_OBSTACLE_MIN_SAFE_DEPTH, os_.ENV_OBSTACLE_PERSON_FRACTION,
-            os_.ENV_FAKE_OBSTACLE_Y_CM,
+            os_.ENV_OBSTACLE_SETTLE_S, os_.ENV_FAKE_OBSTACLE_Y_CM,
         ):
             assert name.startswith("FLIGHTRISK_")
 
     def test_telemetry_fields_are_unique_and_prefixed(self):
-        assert len(set(os_.TELEMETRY_FIELDS)) == len(os_.TELEMETRY_FIELDS) == 8
+        assert len(set(os_.TELEMETRY_FIELDS)) == len(os_.TELEMETRY_FIELDS) == 9
+        assert os_.TELEMETRY_PERSON_CUE in os_.TELEMETRY_FIELDS
         assert all(f.startswith("obstacle_") for f in os_.TELEMETRY_FIELDS)
         # Eight cuts of two numbers fit the privacy screen's 16-number list.
         assert os_.MAX_CUTS_LISTED * 2 == 16

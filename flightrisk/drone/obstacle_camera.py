@@ -6,14 +6,17 @@ Tello). It combines two cues, both evaluated on a view taken while the drone
 hovers (design ``.claude/build/obstacle/design.md``, section 2):
 
 * Depth, the primary cue: MiDaS Small through ``ObstacleGuard`` with
-  ``center_stat="p90"``, run on a frame that arrived after the last stop plus
-  the settle time (``LatestFrame.wait_for``). Only this cue can make a result
-  ``clear``.
+  ``center_stat="p90"``, run on a frame captured after the last stop plus
+  the settle time (``LatestFrame.wait_for``; the capture time is the video
+  decoder's stamp when it gives one, else the frame's arrival). The holder's
+  frames are BGR (``SENSOR_CHANNEL_ORDER``), which the guard turns into the
+  RGB that MiDaS expects. Only this cue can make a result ``clear``.
 * A close person, the secondary cue: a box from the runner's newest detection
   result that is taller than ``OBSTACLE_PERSON_FRACTION`` of the frame height
   and centred in the middle third of the frame width. The cue can add a
   ``blocked`` and never a ``clear``. When the runner has produced no result
-  since ``after + settle`` (a frame stride makes that likely), the cue is
+  for a view since ``after + settle`` (a slow detector makes that likely; the
+  edge refuses a frame stride above 1 while sensing is required), the cue is
   ``unknown``: it neither blocks nor clears and the depth cue decides.
 
 Every failure to look (no fresh frame, a blank frame, a model that takes too
@@ -382,6 +385,14 @@ class ForwardCameraSensor:
         ``non_default_thresholds`` names each threshold that differs from its
         default (``OBSTACLE_MIN_SAFE_DEPTH``, ``OBSTACLE_PERSON_FRACTION``) with
         its value, and is empty when both are the defaults.
+        ``person_cue_down`` is true while the person cue has been ``unknown``
+        for ``OBSTACLE_PERSON_CUE_DOWN_AFTER`` gates in a row, and
+        ``person_detection_age_s`` is how old the view of the newest detection
+        result is (seconds since its frame was captured, or obtained when the
+        decoder cannot tell), or None before the first result. The lane
+        executor puts both in telemetry (``obstacle_person_cue``).
+        ``stale_frames`` counts frames refused because their decoder marked
+        them stale, and ``settle_s`` is the settle time in force.
         """
         with self._lock:
             state = self._last_state
@@ -398,11 +409,30 @@ class ForwardCameraSensor:
             "frames_seen": self._frames.frames_seen,
             "worker_busy": self._worker.busy,
             "person_cue_down": self._unknown_streak >= OBSTACLE_PERSON_CUE_DOWN_AFTER,
+            "person_detection_age_s": self.person_detection_age_s(),
+            "stale_frames": getattr(self._frames, "stale_frames", 0),
+            "settle_s": self.settle_s,
             "reason": reason,
             TELEMETRY_STATE: state,
             TELEMETRY_LATENCY_MS: latency,
             TELEMETRY_SENSOR_OK: state != OBSTACLE_STATE_UNAVAILABLE,
         }
+
+    def person_detection_age_s(self) -> float | None:
+        """Seconds since the frame of the runner's newest detection result was captured, or None.
+
+        None without a runner or before its first result. Never negative.
+        """
+        at = getattr(self._runner, "last_detections_at", None) if self._runner is not None else None
+        if at is None:
+            return None
+        try:
+            age = self._clock() - float(at)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(age):
+            return None
+        return round(max(0.0, age), 2)
 
     def non_default_thresholds(self) -> dict[str, float]:
         """The thresholds that differ from their defaults, by name."""
