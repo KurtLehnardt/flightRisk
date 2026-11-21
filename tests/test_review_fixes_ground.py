@@ -550,3 +550,27 @@ def test_land_all_with_every_path_failing_is_still_critical(stalled_fleet, caplo
     assert any(r.levelno == logging.CRITICAL and "REACHED NO DRONE" in r.getMessage() for r in caplog.records)
     errors = [payload for event, payload in app_module.socketio.events if event == "error"]
     assert errors and "reached no drone" in errors[-1]["message"]
+
+
+def test_init_pipeline_with_no_reid_model_does_not_touch_it_for_the_startup_target(clean_app_state, monkeypatch, tmp_path):
+    """The HF cache can be missing offline, leaving reid None; the ground must still start."""
+    target = tmp_path / "target.jpg"
+    target.write_bytes(b"x")
+
+    def broken_reid(*a, **k):
+        raise OSError("model not in the cache")
+
+    imread = MagicMock()
+    monkeypatch.setattr(app_module, "PersonReID", broken_reid)
+    monkeypatch.setattr(app_module, "PersonDetector", MagicMock())
+    monkeypatch.setattr(app_module, "SessionDB", MagicMock())
+    monkeypatch.setattr(app_module, "_HAS_TELEMETRY", False)
+    monkeypatch.setattr(app_module, "_ensure_reasoning_worker", MagicMock())
+    monkeypatch.setattr(app_module.cv2, "imread", imread)
+    app_module.app_state.reid = None
+
+    # Before the fix this raised AttributeError on None.
+    app_module._init_pipeline(SourceConfig(source="file", enable_llm=False, appearance_only=True), target_path=str(target))
+
+    assert app_module.app_state.reid is None
+    imread.assert_not_called()

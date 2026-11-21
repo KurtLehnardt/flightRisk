@@ -332,7 +332,7 @@ if (Test-OurRegistration) { Remove-Item -Path $UninstallKey -Recurse -Force; $un
 
 # Only the files the installer writes, by name; then the folder, if empty.
 $lockStream.Dispose()
-foreach ($name in @("install-status.json", "install-status.json.lock")) {
+foreach ($name in @("install-status.json", "install-status.json.lock", "install-role")) {
     Remove-Item -LiteralPath (Join-Path $FlightRiskHome $name) -Force -ErrorAction SilentlyContinue
 }
 foreach ($pattern in @(".app-incoming.*", ".removing-*")) {

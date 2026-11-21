@@ -1,4 +1,5 @@
-# FlightRisk -- per-user installer for Windows (the edge laptop).
+# FlightRisk -- per-user installer for Windows (the edge laptop, or with FLIGHTRISK_ROLE=ground
+# the one computer that runs ground, dashboard and edges).
 #
 #   irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
 #
@@ -16,9 +17,10 @@
 #      picks one. An existing install is moved to it, but never backwards, never
 #      over local changes, never while FlightRisk is running, and never when the
 #      folder was not made by this installer.
-#   3. Creates the virtual environment app\venv and installs the pinned edge
-#      packages of installer\locks\windows-x64-edge.txt (PyTorch, Ultralytics,
-#      OpenCV, djitellopy; this laptop runs edges only): wheels only, each
+#   3. Creates the virtual environment app\venv and installs the pinned
+#      packages of installer\locks\windows-x64-edge.txt (PyTorch,
+#      Ultralytics, OpenCV, djitellopy), or with FLIGHTRISK_ROLE=ground those of
+#      windows-x64-ground.txt (also open_clip, Flask, anthropic and more): wheels only, each
 #      checked against its SHA-256 in the lock, from PyPI only (pip's own
 #      settings and PIP_* variables are ignored).
 #   4. Downloads the yolo11n detector weights and checks their SHA-256.
@@ -53,6 +55,13 @@
 #   FLIGHTRISK_ALLOW_DOWNGRADE=1 allow moving an install to an older release
 #   FLIGHTRISK_INSTALL_SKIP_DEPS=1  install no packages and download no weights
 #   FLIGHTRISK_NO_SHORTCUTS=1    add no Start menu entry and no Installed apps entry
+#   FLIGHTRISK_ROLE=ground       also install what the ground station and dashboard need, plus
+#                                the anthropic package (layout B: everything on one laptop,
+#                                and Claude reasoning). Pins installer\locks\windows-x64-ground.txt.
+#                                Unset keeps the role of the last install (edge on a first one); "edge"
+#                                (or "edges") picks the edge-only install. The role is saved in
+#                                %FLIGHTRISK_HOME%\install-role, so update.ps1 keeps it. An env variable, not a
+#                                parameter, because this file also runs through "irm | iex".
 
 $ErrorActionPreference = "Stop"
 
@@ -68,6 +77,7 @@ $script:RepoUrl = if ($env:FLIGHTRISK_REPO_URL) { $env:FLIGHTRISK_REPO_URL } els
 $script:MarkerName = "flightrisk-installer"
 $script:PythonWanted = "3.13"
 $script:LockFileWindows = "installer\locks\windows-x64-edge.txt"
+$script:LockFileGround = "installer\locks\windows-x64-ground.txt"
 $script:PipIndex = if ($env:FLIGHTRISK_PIP_INDEX_URL) { $env:FLIGHTRISK_PIP_INDEX_URL } else { "https://pypi.org/simple" }
 # installer/macos/install.sh pins the same file; a test keeps the two in step.
 $script:WeightsUrl = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
@@ -544,11 +554,41 @@ function New-Venv {
     Ok "virtual environment created ($($script:VenvDir))"
 }
 
+# The role to install for: "edge" (the default) or "ground". FLIGHTRISK_ROLE
+# decides when it is set ("edges" is accepted for "edge"). When it is not, the
+# role saved by the last install (install-role in the install root) is kept, so
+# update.ps1, which does not pass FLIGHTRISK_ROLE, leaves a ground install a
+# ground install.
+function Get-InstallRole {
+    $role = "$($env:FLIGHTRISK_ROLE)".Trim().ToLowerInvariant()
+    $given = $env:FLIGHTRISK_ROLE
+    if (-not $role) {
+        $saved = Join-Path $script:FlightRiskHome "install-role"
+        if (Test-Path -LiteralPath $saved -PathType Leaf) {
+            $role = (Get-Content -LiteralPath $saved -Raw -ErrorAction SilentlyContinue)
+            $role = "$role".Trim().ToLowerInvariant()
+            $given = "$role (from $saved)"
+        }
+    }
+    if (-not $role -or $role -eq "edge" -or $role -eq "edges") { return "edge" }
+    if ($role -eq "ground") { return "ground" }
+    Die "FLIGHTRISK_ROLE must be edge or ground (got '$given')."
+}
+
+# Remembers the role for the next run of this installer (see Get-InstallRole).
+function Save-InstallRole {
+    $role = Get-InstallRole
+    [System.IO.File]::WriteAllText((Join-Path $script:FlightRiskHome "install-role"), $role, (New-Object System.Text.UTF8Encoding $false))
+}
+
 # The requirements file to install from: the pinned lock on 64-bit Windows,
-# else requirements-edge.txt with its version floors only.
+# else the requirements file with its version floors only.
 function Get-RequirementsFile {
-    $lock = Join-Path $script:AppDir $script:LockFileWindows
-    if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -and (Test-Path -LiteralPath $lock)) { return $script:LockFileWindows }
+    $ground = (Get-InstallRole) -eq "ground"
+    $lockName = if ($ground) { $script:LockFileGround } else { $script:LockFileWindows }
+    $lock = Join-Path $script:AppDir $lockName
+    if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -and (Test-Path -LiteralPath $lock)) { return $lockName }
+    if ($ground) { return "requirements-ground.txt" }
     return "requirements-edge.txt"
 }
 
@@ -571,10 +611,10 @@ function Install-Dependencies {
     Log "Installing the Python packages from $req (several GB; this takes a while)..."
     # --isolated: pip's configuration files and PIP_* variables are ignored; the index is named explicitly.
     $pipArgs = @("-I", "-m", "pip", "--isolated", "install", "--require-virtualenv", "--no-input", "--index-url", $script:PipIndex)
-    if ($req -eq $script:LockFileWindows) {
+    if ($req -eq $script:LockFileWindows -or $req -eq $script:LockFileGround) {
         $pipArgs += @("--require-hashes", "--only-binary", ":all:")
     } else {
-        Warn "no pinned package list for this computer; installing requirements-edge.txt (version floors only, no hashes)"
+        Warn "no pinned package list for this computer; installing $req (version floors only, no hashes)"
     }
     Push-Location $script:AppDir
     try {
@@ -693,6 +733,7 @@ function Invoke-Install {
     }
     try {
         Write-Status "running" ""
+        $null = Get-InstallRole  # an invalid FLIGHTRISK_ROLE stops here, before anything is changed
         Remove-StaleIncoming
         Log "FlightRisk -- Windows install into $($script:FlightRiskHome)"
 
@@ -711,6 +752,8 @@ function Invoke-Install {
         Set-Step "packages" "Installing the Python packages"
         Install-Dependencies
 
+        Save-InstallRole
+
         Set-Step "weights" "Detector weights"
         Get-Weights
 
@@ -727,6 +770,9 @@ function Invoke-Install {
         Log "Done. FlightRisk $($script:Ref) is installed in $($script:AppDir)."
         Write-Host "  Open FlightRisk from the Start menu (it opens the launcher window)."
         Write-Host "  The edge token is read from FLIGHTRISK_EDGE_TOKEN or %USERPROFILE%\.flightrisk-fleet.env; this installer never asks for it."
+        if ((Get-InstallRole) -eq "ground") {
+            Write-Host "  Ground role installed (ground, dashboard, anthropic). Claude reasoning setup: docs\fleet-setup.md, Layout B with Claude reasoning."
+        }
         Write-Host "  Still manual (administrator): the cable adapter's address and the firewall rules, docs\windows-edge-setup.md steps 3 and 7."
         Write-Host "  Update:    powershell -NoProfile -ExecutionPolicy Bypass -File `"$($script:AppDir)\installer\windows\update.ps1`""
         Write-Host "  Uninstall: Settings > Apps > Installed apps > FlightRisk"
