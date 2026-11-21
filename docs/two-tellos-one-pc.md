@@ -1,6 +1,6 @@
 # Two standard Tellos from one Windows laptop
 
-This note describes how one Windows laptop (the ZBook) flies two standard (non-EDU) Tello drones, one per Wi-Fi adapter, as two FlightRisk edge processes: edge-1 for drone-1 and edge-2 for drone-2. Both edges dial the ground station on the Mac over the Thunderbolt cable (`ws://10.42.0.1:9000`). Nothing here has been verified on hardware yet; the [hardware checklist](#hardware-verification-checklist) at the end is the plan for that.
+This note describes how one Windows laptop (the ZBook) flies two standard (non-EDU) Tello drones, one per Wi-Fi adapter, as two FlightRisk edge processes: edge-1 for drone-1 and edge-2 for drone-2. Both edges dial the ground station on the Mac over the Thunderbolt cable (`ws://10.42.0.1:9000`). The two-local-IPs layout has passed a two-Tello hardware test on the ZBook; the [hardware checklist](#hardware-verification-checklist) at the end is the full verification plan.
 
 When the new option is not given, an edge behaves exactly as before: it uses the djitellopy client unchanged and binds the usual wildcard sockets.
 
@@ -16,7 +16,7 @@ For that reason `docs/fleet-setup.md` runs one edge per computer.
 
 ## The idea: one local IP per adapter
 
-Windows on the ZBook uses the strong host model (WeakHostSend and WeakHostReceive are off, verified). If the two Wi-Fi adapters have different local IPs, for example 192.168.10.2 and 192.168.10.50, then a socket bound to one adapter's IP receives only the datagrams sent to that IP. Each Tello replies to, and streams to, the address that sent it `command` and `streamon`. So an edge whose sockets are all bound to one adapter's IP talks only to the drone on that adapter. Two sockets on the same port bound to two different local IPs coexist, but a wildcard bind on that port then fails (WinError 10048, verified on loopback). Therefore, in this mode no socket on 8889, 8890 or 11111 may ever bind 0.0.0.0, and every edge on the laptop must use the option.
+Windows on the ZBook uses the strong host model (WeakHostSend and WeakHostReceive are off, verified). If the two Wi-Fi adapters have different local IPs, for example 192.168.10.2 and 192.168.10.50, then a socket bound to one adapter's IP receives only the datagrams sent to that IP. Each Tello replies to, and streams to, the address that sent it `command` and `streamon`. So an edge whose sockets are all bound to one adapter's IP talks only to the drone on that adapter. Two sockets on the same port bound to two different local IPs coexist. What a wildcard bind on that port does depends on the platform. On macOS and Linux it fails with EADDRINUSE. On Windows it succeeds (verified on the ZBook with Python 3.13, on loopback and with the two-Tello hardware test), because Windows lets a more specific bind and a wildcard bind share a port; the socket bound to the specific IP still receives every datagram sent to that IP, and the wildcard socket receives only datagrams for other addresses. So the bind error is not the protection. The protection is that no edge in this mode ever binds 0.0.0.0 on 8889, 8890 or 11111, and that every edge on the laptop uses the option: a program that still binds the wildcard would not stop an edge from starting on Windows, and would not take its datagrams, but it would be the only listener for any other address on the laptop.
 
 ## Transport design
 
@@ -56,7 +56,7 @@ The edge refuses to start, with a message that names the problem and the fix, wh
 
 - The local IP is not assigned to any adapter on this computer (the adapter is missing, unplugged or not yet joined). This is checked by binding a throwaway socket to `(local_ip, 0)`, which works the same way on Windows, macOS and Linux.
 - The local IP is on two adapters at once (an address conflict, for example both adapters on DHCP got 192.168.10.2 from their drones). Checked with `psutil`, which the edge already has through Ultralytics; if `psutil` is missing the check is skipped and logged.
-- A port is already bound on that IP: another edge uses the same local IP, the hardware check is still running, or an edge without the option holds the wildcard. The message says which port and suggests these causes.
+- A port is already bound on that IP: another edge uses the same local IP, the hardware check is still running, or (macOS and Linux only) an edge without the option holds the wildcard. On Windows a wildcard holder does not make the specific bind fail, so the edge starts anyway; the message names these causes because it cannot tell which one applies.
 - `--tello-ifindex` is given off Windows, without a local IP, or names an interface that does not exist.
 
 A Tello host outside the local IP's /24 network is logged as a warning, not refused.
@@ -115,7 +115,7 @@ Run on the ZBook, step by step, before any flight with two drones:
 3. Start the edge pair. Each edge logs `tello_transport_bound` with its own IP, then `tello_connected` with that drone's battery.
 4. Cross-talk test: power off drone-2 while both edges run. Within about 3 s edge-2's link must go unhealthy (`state_stale`, detail ending `via <IP2>`) while edge-1 stays healthy. Power drone-2 on again, restart edge-2, then repeat with drone-1.
 5. Video: each dashboard tile shows its own drone's camera (cover one lens to tell them apart).
-6. A wildcard bind fails while the edges run: a quick `python -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 8889))"` must raise WinError 10048.
+6. Delivery isolation while the edges run. On Windows a wildcard bind on the port is expected to succeed, so it is not a failure signal. Run `venv\Scripts\python.exe -m pytest tests\test_tello_local_ip.py` with the edges stopped, which checks that a wildcard bind never takes the datagrams sent to a specific IP. Then, with the edges running, check by hand that the edges are not disturbed by a wildcard listener: `python -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 8889)); print('bound')"` may print `bound` or raise WinError 10048 (both are acceptable), and in either case both edges must stay healthy (no `state_stale` in their link status). On macOS and Linux the same command must raise EADDRINUSE.
 7. Takeoff and land each drone alone from the dashboard, then both together, at slots 50 and 80 cm.
 8. CPU: watch both edges for 5 minutes with Task Manager; note the CPU and each edge's frame rate.
 9. After any failure, run the log summary from runbook step 7 and keep its output with the notes of that step.
