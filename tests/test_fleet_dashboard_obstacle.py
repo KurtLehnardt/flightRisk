@@ -213,7 +213,7 @@ NODE = shutil.which("node")
 HARNESS = r"""
 const src = require('fs').readFileSync(process.argv[2], 'utf8');
 const cases = JSON.parse(process.argv[3]);
-const f = new Function('fmt', src + '; return {senseBadge, obstacleStopBadge, laneBlockedText, reflightSentence, '
+const f = new Function('fmt', src + '; return {senseBadge, personCueBadge, obstacleStopBadge, laneBlockedText, reflightSentence, '
     + 'reflightBannerText, unsensedWarning, REFLIGHT_AWAITING, REFLIGHT_SETTLED};')(
     (v) => (v === undefined || v === null) ? '--' : (typeof v === 'number' ? Math.round(v * 10) / 10 : v));
 console.log(JSON.stringify(cases.map((c) => f[c.fn].apply(null, c.args))));
@@ -253,6 +253,20 @@ class TestBrowserHelpers:
         assert auto["text"] == "SENSE AUTOPILOT"
         assert fwd["text"] == "SENSE forward only ok 220 ms"
         assert none is None
+
+    def test_person_cue_badge_when_down_or_stale(self, tmp_path):
+        """Review N2 of #177 round 2: the person cue reached no drone card."""
+        down, stale, fresh, unknown_age, absent, junk = _run(tmp_path, [
+            ("personCueBadge", [_sensing(obstacle_person_cue={"person_cue_down": True, "detection_age_s": 0.4})]),
+            ("personCueBadge", [_sensing(obstacle_person_cue={"person_cue_down": False, "detection_age_s": 4.25})]),
+            ("personCueBadge", [_sensing(obstacle_person_cue={"person_cue_down": False, "detection_age_s": 0.4})]),
+            ("personCueBadge", [_sensing(obstacle_person_cue={"person_cue_down": False, "detection_age_s": None})]),
+            ("personCueBadge", [_sensing()]),
+            ("personCueBadge", [_sensing(obstacle_person_cue="down")]),
+        ])
+        assert down["text"] == "PERSON CUE down" and down["cls"] == "held"
+        assert stale["text"] == "PERSON CUE 4.3 s old" and stale["cls"] == "held"
+        assert fresh is None and unknown_age is None and absent is None and junk is None
 
     def test_stop_badge_only_while_blocked(self, tmp_path):
         blocked, clear, absent = _run(tmp_path, [
@@ -322,10 +336,10 @@ class TestBrowserHelpers:
 # ---------------------------------------------------------------------------
 
 
-def test_drone_card_shows_both_badges():
+def test_drone_card_shows_every_badge():
     card = JS[JS.index("function renderDroneStatus()"):]
     card = card[: card.index("function renderTimingTable")]
-    assert "senseBadge(d)" in card and "obstacleStopBadge(d)" in card
+    assert "senseBadge(d)" in card and "obstacleStopBadge(d)" in card and "personCueBadge(d)" in card
 
 
 def test_lane_blocked_and_reflight_events_raise_banners_and_the_single_drone_toast_is_unchanged():
