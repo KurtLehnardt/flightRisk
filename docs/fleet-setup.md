@@ -451,6 +451,8 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 
 Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the ZBook), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
 
+**Claude reasoning in Layout B needs `feature/edge-claude-reasoning`.** The call that sends an edge-sourced alert to Claude is in that branch, not on this tree; until it is merged, steps 2 to 5 prepare the machine but no reasoning request is made for edge alerts.
+
 This was written from code and from the ZBook's adapter layout; the PowerShell steps and the installer option have not yet been run end to end on the ZBook.
 
 ### Which adapter is which
@@ -472,7 +474,18 @@ $env:FLIGHTRISK_ROLE = "ground"
 irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
 ```
 
-It installs `installer\locks\windows-x64-ground.txt`: the edge packages plus Flask, Flask-SocketIO, Pillow, cryptography, the HTTP telemetry exporter and `anthropic`, all pinned with hashes. Ollama, InsightFace and open_clip are still not installed.
+It installs `installer\locks\windows-x64-ground.txt`: the edge packages plus Flask, Flask-SocketIO, Pillow, cryptography, the HTTP telemetry exporter and `anthropic`, all pinned with hashes. `open-clip-torch` is in both the ground and the edge lock: the ground builds the target embedding from the uploaded photo with it, and each edge ships a `reid_embedding` with every detection that the ground matches against (`flightrisk/edge.py:200-212`, `flightrisk/ground.py:67`). Without it on the edges nothing matches, because there is no face recognition on Windows to fall back on. Ollama and InsightFace are not installed. The role is saved in `%LOCALAPPDATA%\FlightRisk\install-role`, so `update.ps1` keeps a ground install a ground install.
+
+**One online start for the ReID weights.** The first time `PersonReID` is built, open_clip downloads the `laion2b_s34b_b88k` ViT-B/16 weights (about 600 MB) into the Hugging Face cache (`%USERPROFILE%\.cache\huggingface`). Pre-fetch them once while online, before going to the field:
+
+```powershell
+cd $env:LOCALAPPDATA\FlightRisk\app
+venv\Scripts\python.exe -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-16', pretrained='laion2b_s34b_b88k')"
+```
+
+Without the weights and without internet the ground starts with ReID off: setting a target photo then answers 503 ("Person re-identification is not loaded") and no alert can fire. The same weights are needed by each edge process, and they share the cache.
+
+**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the ZBook's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
 
 The ground and the edges need `yolo11n.pt`, and a clean clone has none. The installer downloads it into the app folder and checks its SHA-256; if it printed "could not download yolo11n.pt now", run the installer again with internet before launching. Check with `Test-Path "$env:LOCALAPPDATA\FlightRisk\app\yolo11n.pt"`. In a development checkout use `venv\Scripts\python.exe -m pip install -r requirements-ground.txt` and `scripts\install_windows.ps1` for the weights.
 
@@ -510,14 +523,15 @@ The metric belongs to the adapter, so it survives a reboot; if a replug gives a 
 ### 5. Verify the route
 
 ```powershell
-Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Format-Table InterfaceAlias, NextHop, RouteMetric, ifIndex
-$api = (Resolve-DnsName api.anthropic.com -Type A | Select-Object -First 1).IPAddress
+Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Format-Table InterfaceAlias, NextHop, RouteMetric, InterfaceMetric, ifIndex
+$api = (Resolve-DnsName api.anthropic.com -Type A | Where-Object Type -eq 'A' | Select-Object -First 1).IPAddress
 Find-NetRoute -RemoteIPAddress $api | Format-Table InterfaceAlias, IPAddress, NextHop
 ```
 
 The first table should list the uplink first. `Find-NetRoute` should show the uplink's alias and a local address that is not in 192.168.10.0/24. Then run the preflight check, which resolves `api.anthropic.com`, opens TLS to it (no request is sent and no key is used), prints the local address the route leaves from, warns if that is a Tello subnet, and reports each Claude variable as set or unset without showing a value:
 
 ```powershell
+cd $env:LOCALAPPDATA\FlightRisk\app
 venv\Scripts\python.exe scripts\check_claude_uplink.py
 ```
 
@@ -525,7 +539,7 @@ It exits 1 on a failure and does nothing (exit 0) unless `FLIGHTRISK_REASONING_P
 
 ### Without internet
 
-If the uplink is down, the flight still works: detection, matching and the alerts fire as usual, and the reasoning panel shows an error for each call that could not reach Claude (the client waits up to 60 s and retries twice, so the error can take a while to appear). The preflight shows this beforehand, as DNS or TLS rows.
+If the uplink is down, the flight still works: detection, matching and the alerts fire as usual (given the ReID weights are cached, see step 1). Whether Claude is called at all, and so whether a reasoning panel error can appear, depends on the edge-alert reasoning in the unmerged `feature/edge-claude-reasoning` branch: on a tree without it, **Claude is never called for edge alerts in Layout B**, so the Claude variables and uplink do nothing for an edge-sourced fleet. With it, the reasoning panel shows an error for each call that could not reach Claude (the client waits up to 60 s and retries twice, so the error can take a while to appear). The preflight shows this beforehand, as DNS or TLS rows.
 
 ## Launch
 
