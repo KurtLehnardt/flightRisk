@@ -305,9 +305,17 @@ def test_f2_the_dashboard_offers_a_re_fly_button_only_for_a_person_cut_waiting_f
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
-def test_f2_the_waiting_person_cut_has_its_own_sentence(tmp_path):
-    (text,) = _run(tmp_path, [("reflightSentence", [{"status": "needs_confirmation"}])])
-    assert text == "a person stopped the drone here; not re-flown unless you confirm it"
+def test_f2_the_waiting_person_cut_has_its_own_sentence_and_banner(tmp_path):
+    sentence, person, plant = _run(tmp_path, [
+        ("reflightSentence", [{"status": "needs_confirmation"}]),
+        ("laneBlockedText", [{"event": "lane_blocked", "drone_id": "drone-1", "lane_index": 0, "x_cm": 0,
+                              "y_cm": 250, "unflown_cm": 150, "reason": "person"}]),
+        ("laneBlockedText", [{"event": "lane_blocked", "drone_id": "drone-1", "lane_index": 0, "x_cm": 0,
+                              "y_cm": 250, "unflown_cm": 150, "reason": "obstacle"}]),
+    ])
+    assert sentence == "a person stopped the drone here; not re-flown unless you confirm it"
+    assert person.endswith("; a person: re-flown only if you confirm it under NOT SEARCHED")
+    assert plant == "OBSTACLE drone-1: lane 0 stopped at (0, 250) cm, 150 cm not searched"
 
 
 # ---------------------------------------------------------------------------

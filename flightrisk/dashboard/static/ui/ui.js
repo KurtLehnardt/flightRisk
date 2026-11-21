@@ -177,7 +177,9 @@ const socket = io();
         const lane = ev.lane_index !== undefined && ev.lane_index !== null ? 'lane ' + ev.lane_index : 'a lane';
         const at = ' stopped at (' + fmt(ev.x_cm) + ', ' + fmt(ev.y_cm) + ') cm';
         const left = typeof ev.unflown_cm === 'number' ? ', ' + fmt(ev.unflown_cm) + ' cm not searched' : '';
-        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left;
+        // A person cut is re-flown only once the operator confirms it (the Re-fly button under NOT SEARCHED).
+        const person = ev.reason === 'person' ? '; a person: re-flown only if you confirm it under NOT SEARCHED' : '';
+        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left + person;
     }
     // One plain sentence for the re-flight status of an uncovered segment, or '' for a segment with none.
     function reflightSentence(e) {
@@ -1548,6 +1550,7 @@ const socket = io();
     socket.on('reflight_confirm_result', (r) => {
         if (!r) return;
         showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
+        if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
     });
     // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
     // the box and to the map; re-tasked lanes of a lost drone are kept as they are.

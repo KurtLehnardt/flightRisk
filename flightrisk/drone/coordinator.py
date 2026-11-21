@@ -1795,14 +1795,14 @@ class FleetCoordinator:
             logger.warning("Operator confirmed the re-flight of %s's cut %d", drone_id, cut_seq)
             messages = self._dispatch_locked()
             events = self._settle_and_collect_locked()
-            status = chunk.status
+            status, reason, receiver = chunk.status, chunk.reason, chunk.receiver or chunk.flown_by
         self._emit_all(events)
         self._send_offers(messages)
         if status == "failed":
-            return True, f"{drone_id}'s cut {cut_seq} confirmed, but it cannot be re-flown: {chunk.reason}"
+            return True, f"{drone_id}'s cut {cut_seq} confirmed, but it cannot be re-flown: {reason}"
         if status == "queued":
             return True, f"{drone_id}'s cut {cut_seq} confirmed; it is offered once a drone can take it"
-        return True, f"{drone_id}'s cut {cut_seq} confirmed and offered to {chunk.receiver or chunk.flown_by}"
+        return True, f"{drone_id}'s cut {cut_seq} confirmed and offered to {receiver}"
 
     def _reflight_counts_locked(self, drone_id: str) -> dict[str, int]:
         """The re-flights *drone_id* received: offered to it, re-flown by it and blocked again on it."""
