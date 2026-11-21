@@ -1919,6 +1919,13 @@ def index():
     return render_template("index.html")
 
 
+_REID_UNAVAILABLE = (
+    "Person re-identification is not loaded (open_clip or its weights are missing), so no target photo "
+    "can be set. The laion2b weights download once on the first online start; see docs/fleet-setup.md, "
+    "Layout B with Claude reasoning."
+)
+
+
 @app.route("/api/upload-target", methods=["POST"])
 def upload_target():
     """HTTP fallback for target photo upload (bypasses WebSocket size limits)."""
@@ -1931,6 +1938,8 @@ def upload_target():
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return jsonify({"error": "Invalid image"}), 400
+    if app_state.reid is None:
+        return jsonify({"error": _REID_UNAVAILABLE}), 503
 
     app_state.reid.set_target(img)
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
@@ -2205,6 +2214,9 @@ def on_set_target(data):
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     if img is not None:
+        if app_state.reid is None:
+            emit("error", {"message": _REID_UNAVAILABLE})
+            return
         app_state.reid.set_target(img)
         app_state.target_photo = data["image"]
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
