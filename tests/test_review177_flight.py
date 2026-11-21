@@ -518,7 +518,7 @@ class MavEdge:
         self.log = QuietLogger()
         self.executor = LaneExecutor(self.drone, self.envelope, "drone-1", send=self.sent.append, logger=self.log,
                                      telemetry_interval_s=0.1, obstacle_sensor=self.sensor, obstacle_step_cm=500,
-                                     obstacle_retry_pause_s=0.02)
+                                     obstacle_retry_pause_s=0.02, obstacle_takeoff_probe=False)
         assert self.drone.connect()
         self.drone.set_obstacle_sensing(SENSING_STEPPED)
         self.executor.start()

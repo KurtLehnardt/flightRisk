@@ -153,8 +153,12 @@ CUT_SENSOR_STALE = "sensor_stale"
 CUT_SENSOR_DOWN = "sensor_down"
 CUT_AUTOPILOT = "autopilot"
 CUT_REASONS = (CUT_OBSTACLE, CUT_PERSON, CUT_SENSOR_STALE, CUT_SENSOR_DOWN, CUT_AUTOPILOT)
-#: Cut reasons the ground offers once to another drone (design section 3.4).
-REFLIGHT_CUT_REASONS = frozenset({CUT_OBSTACLE, CUT_PERSON, CUT_SENSOR_STALE})
+#: Cut reasons the ground offers once to another drone on its own (design section 3.4).
+REFLIGHT_CUT_REASONS = frozenset({CUT_OBSTACLE, CUT_SENSOR_STALE})
+#: Cut reasons offered once to another drone only after the operator confirms
+#: it on the dashboard. A person is not a fixed obstacle: a drone sent to fly
+#: the rest of the lane from the far side would fly toward the same person.
+CONFIRM_REFLIGHT_CUT_REASONS = frozenset({CUT_PERSON})
 
 #: Segment reasons that are not cut reasons.
 SEGMENT_SKIPPED = "skipped"

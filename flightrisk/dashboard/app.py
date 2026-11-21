@@ -48,6 +48,7 @@ from flightrisk.drone.controller import (
 )
 from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM, FleetCoordinator, StartResult
 from flightrisk.drone import plan_edit
+from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, CHANNEL_ORDER_RGB, to_sensor_frame
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_events
@@ -1202,6 +1203,23 @@ class FleetSupervisor:
             self._emit("fleet_event", {"event": "start_refused", "detail": detail})
         self.emit_status()
         return result
+
+    def confirm_reflight(self, drone_id: str, cut_seq: object) -> tuple[bool, str]:
+        """The operator confirms the re-flight of a person cut (``FleetCoordinator.confirm_reflight``).
+
+        Logged as a ``reflight_confirmed`` flight-safety event; the fleet
+        status that follows shows the segment's new state.
+        """
+        with self._lock:
+            landed_all = self._landed_all
+        if landed_all:
+            return False, "LAND ALL was pressed; nothing is re-flown"
+        ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+        obs_events.flight_safety("reflight_confirmed" if ok else "reflight_confirm_refused", reason="operator",
+                                 drone_id=drone_id, cut_seq=cut_seq, detail=detail,
+                                 level=logging.WARNING if ok else logging.INFO)
+        self.emit_status()
+        return ok, detail
 
     def land_all(self) -> dict:
         """Send ``emergency_land_all`` to every drone through the coordinator.
@@ -2590,6 +2608,37 @@ def on_manual_resume_search(data=None):
     _manual_reply(supervisor.manual.resume_search(str(drone_id), sid=_sid()))
 
 
+@socketio.on("confirm_reflight")
+def on_confirm_reflight(data=None):
+    """The operator confirms that a person cut's unsearched segment may be re-flown by another drone.
+
+    A person cut is never offered to another drone on its own: that drone
+    would fly toward the same person from the far side. ``{"drone_id",
+    "cut_seq"}`` name the cut (from the segment's ``fleet_status.uncovered``
+    entry). Runs on a worker thread, because the offer it may send must never
+    hold up other socket events such as ``land_all``; the answer is a
+    ``reflight_confirm_result`` event to this browser.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Re-flights need fleet mode (--source edge --fleet ...)"})
+        return
+    data = data if isinstance(data, dict) else {}
+    drone_id, cut_seq = str(data.get("drone_id")), data.get("cut_seq")
+    sid = _sid()
+
+    def _work():
+        try:
+            ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+        except Exception as exc:  # noqa: BLE001 - reported to the operator
+            log.error("Re-flight confirmation failed", exc_info=True)
+            ok, detail = False, f"re-flight confirmation failed: {exc}"
+        socketio.emit("reflight_confirm_result", {"drone_id": drone_id, "cut_seq": cut_seq, "ok": ok,
+                                                  "detail": detail}, to=sid)
+
+    threading.Thread(target=_work, daemon=True, name="fleet-confirm-reflight").start()
+
+
 @socketio.on("get_manual_status")
 def on_get_manual_status(data=None):
     supervisor = app_state.fleet_supervisor
@@ -2795,6 +2844,22 @@ def _single_plan(spec: "plan_edit.PlanSpec") -> "plan_edit.BuiltPlan":
 
 
 _obstacle_guard_lock = threading.Lock()
+
+
+def _guard_frame(drone, frame):
+    """*frame* from *drone*'s ``get_frame`` in the channel order ``ObstacleGuard`` takes (BGR).
+
+    A Tello's decoder delivers RGB (its ``frame_channel_order``); an OpenCV
+    capture, such as the MAVLink controller's RTSP stream, delivers BGR, which
+    is also assumed for a controller that declares no order. The frame goes
+    through ``obstacle_sensor.to_sensor_frame``, the one conversion the edge's
+    obstacle sensor uses, so this search and a fleet edge give the depth model
+    the same input.
+    """
+    order = getattr(drone, "frame_channel_order", CHANNEL_ORDER_BGR)
+    if order not in (CHANNEL_ORDER_RGB, CHANNEL_ORDER_BGR):
+        order = CHANNEL_ORDER_BGR
+    return to_sensor_frame(frame, order)
 
 
 def _obstacle_guard_for_search():
@@ -3075,7 +3140,7 @@ def on_start_search(data):
                         frame_warned = True
                     break
 
-                check = obstacle_guard.check_path(frame)
+                check = obstacle_guard.check_path(_guard_frame(drone, frame))
                 obs_events.obstacle_check(
                     check, min_safe_depth=getattr(obstacle_guard, "min_safe_depth", None),
                     waypoint=i + 1, retry=avoidance_retries, drone_id=getattr(drone, "name", None),
