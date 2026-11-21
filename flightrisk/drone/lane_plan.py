@@ -3,8 +3,15 @@
 This module holds the plan half of the edge lane executor
 (``flightrisk.drone.lane_executor``):
 
-* ``split_lane_moves`` and ``parse_lanes`` turn an ``assign_lanes`` lane list
-  into Tello-sized horizontal moves.
+* ``split_lane_moves`` (re-exported from ``flightrisk.drone.lane_steps``)
+  and ``parse_lanes`` turn an ``assign_lanes`` lane list into Tello-sized
+  horizontal moves. An executor with an obstacle sensor splits every lane
+  into sensed steps of at most its step length instead (``split_steps``),
+  and keeps lanes that follow a cut on the planned grid with the deficit
+  rule (``lane_targets``; see ``flightrisk.drone.lane_flight``). The first
+  lane a continuing re-task appends is kept as a ``lane_steps.RetaskLane``:
+  the ground plans appended lanes from where the drone actually is, so the
+  deficit of earlier cuts ends there.
 * ``PlanIdentity``, ``plan_identity`` and ``classify_plan`` implement the
   plan ordering of protocol v2 (``docs/fleet-protocol-v2.md``, "Plan
   ordering"). Plans are ordered by ``(epoch, plan_seq)``. A plan older than
@@ -33,13 +40,12 @@ can never fly the drone again.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any
 
+from flightrisk.drone.lane_steps import RetaskLane, lane_targets, split_lane_moves, split_steps
 from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
-    MAX_MOVE_CM,
     MIN_MOVE_CM,
     ROOM_LIMITS,
     CeilingError,
@@ -73,22 +79,6 @@ _MAX_SEQ = 2**53 - 1
 # Verdicts of ``classify_plan`` besides the two nack reasons.
 NEW_PLAN = "new"
 SAME_PLAN = "same"
-
-
-def split_lane_moves(
-    distance_cm: float, min_move_cm: float = MIN_MOVE_CM, max_move_cm: float = MAX_MOVE_CM
-) -> list[int]:
-    """Split one lane into Tello-sized moves of 20-500 cm each, as evenly as possible.
-
-    *min_move_cm* and *max_move_cm* replace the Tello range for a drone with
-    another envelope profile (``SafetyEnvelope.limits``).
-    """
-    total = round(distance_cm)
-    if total < min_move_cm:
-        raise ValueError(f"lane distance {distance_cm!r} cm is below the {min_move_cm:g} cm minimum move")
-    count = max(1, math.ceil(total / max_move_cm))
-    base, extra = divmod(total, count)
-    return [base + (1 if i < extra else 0) for i in range(count)]
 
 
 def parse_lanes(raw: Any, min_move_cm: float = MIN_MOVE_CM) -> list[tuple[str, int]]:
@@ -276,13 +266,22 @@ class LanePlanMixin:
         plan starts with the lanes flown so far (including the current one)
         unchanged, progress carries over. The drone keeps its lane index and
         continues into the appended lanes instead of starting again from
-        lane 0. Any other plan starts from its first lane at the current
-        position. A drone that is holding stores the plan and flies it only
-        after ``resume``. A plan that would re-task the drone after a landing
-        was requested (``land_now`` called, the landing not yet recorded) is
-        refused with ``landing`` and the current plan is kept. So is any new
-        plan while a landing is wanted: announced, in flight, or retried by
-        the monitor while the drone still descends.
+        lane 0. With obstacle sensing the cuts of the current plan carry
+        over into such a plan, so the lanes it already had are flown as the
+        cut rules say, and a later cut is reported with its index in the new
+        lane list. The appended lanes are not: the ground plans them from
+        where the drone actually is when it gets there (its replayed
+        position, ``lane_steps.replay_lanes``), so the first of them is kept
+        as a ``RetaskLane`` and the deficit of the earlier cuts, and any
+        same-direction run, end there. No old cut shortens, skips or moves
+        an appended lane. Any other plan starts from its first lane at the
+        current position, and clears the cuts. A drone that is holding
+        stores the plan and flies it only after ``resume``. A plan that would
+        re-task the drone after a landing was requested (``land_now`` called,
+        the landing not yet recorded) is refused with ``landing`` and the
+        current plan is kept. So is any new plan while a landing is wanted:
+        announced, in flight, or retried by the monitor while the drone still
+        descends.
         """
         raw_lanes = msg.get("lanes")
         lanes_received = len(raw_lanes) if isinstance(raw_lanes, list) else 0
@@ -325,11 +324,7 @@ class LanePlanMixin:
         if not is_finite_number(battery):
             return self._refuse_lanes(msg, "battery", lanes_received, battery=battery)
 
-        moves = [
-            (lane_index, chunk_index, direction, distance)
-            for lane_index, (direction, lane_cm) in enumerate(lanes)
-            for chunk_index, distance in enumerate(split_lane_moves(lane_cm, limits.min_move_cm, limits.max_move_cm))
-        ]
+        moves = self._plan_moves(lanes, limits)
         content = (tuple(lanes), alt_cm, on_complete, hover_timeout_s)
 
         outside = None
@@ -353,6 +348,17 @@ class LanePlanMixin:
             if verdict == NEW_PLAN:
                 if self._flying_lanes and self._is_flying():
                     carried_step = self._carried_step(lanes, moves)
+                    if carried_step is not None:
+                        # The plan continues the current one. Its first new lane
+                        # is a re-task start: the ground planned the appended
+                        # lanes from where the drone will actually be.
+                        lanes = self._continued_lanes(lanes)
+                        if self._cuts:
+                            # The cuts still hold for the lanes the plan already
+                            # had (the current lane keeps its steps); they end at
+                            # the re-task start.
+                            moves = self._plan_moves(lanes, limits, self._cuts)
+                            carried_step = self._carried_step(lanes, moves)
                 start_step = carried_step if carried_step is not None else 0
                 # Check the path still to be flown against the geofence before
                 # accepting anything. A move in progress is not in the pose yet,
@@ -423,6 +429,60 @@ class LanePlanMixin:
         self._ack_lanes(msg, battery, len(lanes))
         return True
 
+    def _continued_lanes(self, lanes: list[tuple[str, int]]) -> list[tuple[str, int]]:
+        """*lanes*, a plan that continues the current one, with its first new lane marked. Caller holds ``_lock``.
+
+        The lanes it shares with the current plan are kept as they are (an
+        earlier re-task start among them stays marked). The first lane that
+        differs from the current plan, normally the first lane the ground
+        appended, becomes a ``lane_steps.RetaskLane``: every replay of the
+        plan (the moves below, a later cut in ``lane_flight``, the uncovered
+        segments) then ends the old cuts' deficit there, exactly as the
+        ground's replay does with its ``retask_starts``. A plan with no new
+        lane is returned unchanged.
+        """
+        old = self._lanes
+        start = min(len(lanes), len(old))
+        for index in range(start):
+            if lanes[index] != old[index]:
+                start = index
+                break
+        continued = list(old[:start])
+        if start < len(lanes):
+            continued.append(RetaskLane(lanes[start]))
+            continued.extend(lanes[start + 1:])
+        return continued
+
+    def _plan_moves(
+        self, lanes: list[tuple[str, int]], limits: Any, cuts: Any = ()
+    ) -> list[tuple[int, int, str, int]]:
+        """Flatten *lanes* into ``(lane_index, chunk_index, direction, cm)`` moves.
+
+        Without an obstacle sensor every lane is split into moves of at most
+        the envelope's longest move, as always. With stepped sensing it is
+        split into steps of at most the step length (``split_steps``). With
+        *cuts* (the cuts of a plan this one continues) each lane is flown as
+        the cut rules say (``lane_targets``, which ends their deficit at a
+        ``RetaskLane``) and a lane flown as nothing has no moves.
+        """
+        if cuts:
+            targets = lane_targets(lanes, cuts, limits.min_move_cm)
+        else:
+            targets = [lane_cm for _, lane_cm in lanes]
+        return [
+            (lane_index, chunk_index, direction, distance)
+            for lane_index, ((direction, _), target) in enumerate(zip(lanes, targets))
+            if target > 0
+            for chunk_index, distance in enumerate(self._split_lane(target, limits))
+        ]
+
+    def _split_lane(self, distance_cm: int, limits: Any) -> list[int]:
+        """The moves one lane of *distance_cm* is flown as: sensed steps, or Tello-sized moves."""
+        step_cm = self._lane_step_cm()
+        if step_cm is not None:
+            return split_steps(distance_cm, min(step_cm, limits.max_move_cm), limits.min_move_cm)
+        return split_lane_moves(distance_cm, limits.min_move_cm, limits.max_move_cm)
+
     def _path_start_pose(self) -> RelativePose:
         """The pose the rest of a plan would be flown from.
 
@@ -444,9 +504,16 @@ class LanePlanMixin:
     ) -> tuple[float, float] | None:
         """First dead-reckoned point of ``moves[start_step:]`` outside the geofence, or None.
 
-        The path starts at *start*, by default ``_path_start_pose()``.
+        The path starts at *start*, by default ``_path_start_pose()``. A
+        drone that turns to face every move (stepped obstacle sensing,
+        ``lane_flight``) flies each plan direction in the plan frame, so its
+        path is simulated at heading 0 whatever its current heading; any
+        other drone flies plan directions as body directions at its current
+        heading, as it always has.
         """
         pose = self._path_start_pose() if start is None else RelativePose(start.x_cm, start.y_cm, start.heading_deg)
+        if self._turns_to_face():
+            pose = RelativePose(pose.x_cm, pose.y_cm, 0.0)
         for _, _, direction, distance in moves[start_step:]:
             pose.apply_move(direction, distance)
             if not self.envelope.inside_fence(pose.x_cm, pose.y_cm):
@@ -482,6 +549,9 @@ class LanePlanMixin:
             self._linked_gens.add(self._plan_gen)
         else:
             self._linked_gens.clear()
+            # A plan that does not continue the current one starts from
+            # the drone's position: no cut of the old plan applies to it.
+            self._reset_obstacle_plan_locked()
         self._lanes = lanes
         self._moves = moves
         self._step = start_step

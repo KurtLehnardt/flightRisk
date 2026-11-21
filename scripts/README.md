@@ -108,3 +108,73 @@ before shipping a model that fails parity.
 - `(pixel - 127.5) / 127.5` (maps 0-255 to -1..1)
 - BGR -> RGB, HWC -> CHW
 - L2-normalize the 512-d output embedding
+
+## Obstacle Sensing Scripts
+
+### `obstacle_replay.py` -- Replay recordings and calibrate depth threshold
+
+Replays a drone recording and runs the obstacle sensor on every nth frame to
+calibrate the MiDaS depth threshold (`FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`)
+against known distances. Prints per-frame cue values, decisions and latency to
+stdout; optionally writes per-frame results to CSV for analysis.
+
+```bash
+# Replay a video, process every 5th frame
+python scripts/obstacle_replay.py --video recording.mp4 --stride 5
+
+# Process all frames and write CSV
+python scripts/obstacle_replay.py --video recording.mp4 --stride 1 --out results.csv
+
+# Test with a custom depth threshold
+python scripts/obstacle_replay.py --video recording.mp4 --min-safe-depth 0.40
+```
+
+**Arguments:**
+- `--video <mp4>` (required): Path to the video file to replay.
+- `--stride n` (default 1): Process every nth frame.
+- `--out csv` (optional): Write per-frame data to CSV file.
+- `--min-safe-depth x` (default 0.35): Depth threshold for obstacle detection.
+
+**Output columns (CSV):**
+- `frame`: Original frame number in video.
+- `processed`: Frame count among processed (stride-ed) frames.
+- `action`: Decision from depth cue (`clear`, `reverse`, `go_left`, `go_right`).
+- `center_depth`: Depth statistic at frame center (normalized inverse depth).
+- `center_p90`: 90th percentile of center region.
+- `left_depth`, `right_depth`: Left and right region depths.
+- `confidence`: Model confidence in the decision.
+- `center_stat`: Statistic used (`mean` or `p90`).
+- `latency_ms`: Inference time in milliseconds.
+- `safe`: Boolean, whether the path is clear.
+
+### `bench_obstacle.py` -- Benchmark MiDaS latency under YOLO load
+
+Measures depth model inference latency (p50, p95) while YOLO11n runs in a
+background thread to simulate realistic edge load. Can read frames from a video
+file or generate synthetic frames.
+
+```bash
+# Benchmark with synthetic frames, no YOLO load
+python scripts/bench_obstacle.py --frames 100
+
+# Benchmark with video and YOLO background load
+python scripts/bench_obstacle.py --video recording.mp4 --frames 100 --with-yolo
+
+# Test with custom depth threshold
+python scripts/bench_obstacle.py --frames 100 --min-safe-depth 0.40
+```
+
+**Arguments:**
+- `--video <mp4>` (optional): Path to video file. If not given, generates synthetic frames.
+- `--frames n` (default 100): Number of frames to process.
+- `--with-yolo`: Run YOLO11n on a background thread to simulate load.
+- `--min-safe-depth x` (default 0.35): Depth threshold (for consistency with replay).
+
+**Output:**
+Prints latency percentiles (p50, p95) and summary statistics to stderr:
+- Mean, min, and max latency across all frames.
+- P50 and P95 percentiles for typical and worst-case inference times.
+
+Use this to verify that MiDaS inference stays below the design budget (design
+section 2.3: 150 to 300 ms under two-drone YOLO load on the ZBook) and to
+measure actual performance on your hardware before flight.

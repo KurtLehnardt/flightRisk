@@ -25,6 +25,13 @@ The rules (``docs/drone-interface.md``):
   never returns ``DROPPED_BUSY``.
 * ``rc_control`` never passes a stick value outside -100..100 to the drone:
   it is either refused or clamped.
+* A backend declaring ``STEPPED_SENSING`` provides ``on_frame``, because the
+  edge's obstacle sensor is fed by frame callbacks.
+* A backend declaring ``ONBOARD_AVOIDANCE`` provides ``avoidance_status()``,
+  a list of problem strings that is empty exactly while the capability is
+  declared, and ``measured_pose()``, a ``RelativePose`` or None, because the
+  edge cuts a lane at that pose. A backend that does not declare it never
+  returns ``CommandOutcome.STOPPED_SHORT``.
 """
 from __future__ import annotations
 
@@ -44,6 +51,7 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
+from flightrisk.drone.safety import RelativePose
 from flightrisk.drone.snapshot import (
     READING_UNITS,
     Reading,
@@ -66,6 +74,11 @@ _BASIC_METHODS = {
     Capability.ROTATE: ("rotate",),
     Capability.RC_CONTROL: ("rc_control",),
     Capability.VIDEO: ("get_frame", "on_frame"),
+}
+#: Obstacle-sensing capability -> the methods that must exist when it is declared.
+_SENSING_METHODS = {
+    Capability.STEPPED_SENSING: ("on_frame",),
+    Capability.ONBOARD_AVOIDANCE: ("avoidance_status", "measured_pose"),
 }
 
 
@@ -155,12 +168,76 @@ def check_capabilities_honest(subject: Subject) -> None:
         for capability, method in _OPTIONAL_METHODS.items():
             if caps.supports(capability):
                 assert callable(getattr(ctrl, method, None)), f"{subject.name}: declares {capability} without {method}"
+        for capability, methods in _SENSING_METHODS.items():
+            if caps.supports(capability):
+                for method in methods:
+                    assert callable(getattr(ctrl, method, None)), f"{subject.name}: declares {capability} without {method}"
         source = inspect.getsource(inspect.getmodule(type(ctrl)))
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Raise) and node.exc is not None:
                 target = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
                 assert getattr(target, "id", None) != "NotImplementedError", subject.name
     finally:
+        subject.teardown(ctrl)
+
+
+def _assert_avoidance_status(subject: Subject, ctrl: Any) -> None:
+    """``avoidance_status()`` is a list of strings, empty exactly while ONBOARD_AVOIDANCE is declared."""
+    probe = getattr(ctrl, "avoidance_status", None)
+    declared = capabilities_of(ctrl).supports(Capability.ONBOARD_AVOIDANCE)
+    if not callable(probe):
+        assert not declared, f"{subject.name}: declares ONBOARD_AVOIDANCE without avoidance_status"
+        return
+    problems = probe()
+    assert isinstance(problems, list) and all(isinstance(p, str) for p in problems), (subject.name, problems)
+    if declared:
+        assert problems == [], f"{subject.name}: declares ONBOARD_AVOIDANCE while avoidance_status() lists {problems}"
+    else:
+        assert problems, f"{subject.name}: avoidance_status() is empty but ONBOARD_AVOIDANCE is not declared"
+
+
+def _assert_measured_pose(subject: Subject, ctrl: Any) -> None:
+    """``measured_pose()`` is a ``RelativePose`` or None when the vehicle's position is unknown."""
+    probe = getattr(ctrl, "measured_pose", None)
+    if not callable(probe):
+        return
+    pose = probe()
+    assert pose is None or isinstance(pose, RelativePose), (subject.name, pose)
+
+
+def assert_outcome_allowed(subject: Subject, ctrl: Any, value: Any) -> None:
+    """Only a backend declaring ONBOARD_AVOIDANCE may return ``STOPPED_SHORT``, and it must offer a pose to cut at."""
+    result = command_result(value, "move")
+    if result.outcome is not CommandOutcome.STOPPED_SHORT:
+        return
+    assert capabilities_of(ctrl).supports(Capability.ONBOARD_AVOIDANCE), (
+        f"{subject.name}: returned STOPPED_SHORT without declaring ONBOARD_AVOIDANCE: {result}")
+    assert callable(getattr(ctrl, "measured_pose", None)), (
+        f"{subject.name}: returned STOPPED_SHORT without measured_pose()")
+
+
+def check_obstacle_capabilities(subject: Subject) -> None:
+    """The obstacle-sensing capabilities hold on the ground, in the air and after every command."""
+    ctrl = _connected(subject)
+    try:
+        _assert_avoidance_status(subject, ctrl)
+        _assert_measured_pose(subject, ctrl)
+        result = command_result(ctrl.takeoff(), "takeoff")
+        assert result.ok, f"{subject.name}: takeoff failed: {result}"
+        caps = capabilities_of(ctrl)
+        _assert_avoidance_status(subject, ctrl)
+        _assert_measured_pose(subject, ctrl)
+        if caps.supports(Capability.STEPPED_SENSING):
+            ctrl.on_frame(lambda frame: None)  # registering must not raise
+        if caps.supports(Capability.RELATIVE_MOVE):
+            assert_outcome_allowed(subject, ctrl, ctrl.move("forward", subject.move_cm))
+            assert_outcome_allowed(subject, ctrl, ctrl.move("sideways", subject.move_cm))
+            _assert_measured_pose(subject, ctrl)
+        if caps.supports(Capability.ROTATE):
+            result = command_result(ctrl.rotate(10), "rotate")
+            assert result.outcome is not CommandOutcome.STOPPED_SHORT, (subject.name, result)
+    finally:
+        _land_quietly(ctrl)
         subject.teardown(ctrl)
 
 
@@ -202,6 +279,7 @@ def check_command_results(subject: Subject) -> None:
                 continue
             value = call()
             assert value is None or isinstance(value, (bool, CommandResult)), (subject.name, name, value)
+            assert_outcome_allowed(subject, ctrl, value)
             result = command_result(value, name)
             assert result.command == name, (subject.name, name, result)
             assert result.ok, (subject.name, name, result)
@@ -289,6 +367,7 @@ CHECKS: dict[str, Callable[[Subject], None]] = {
     "land_idempotent": check_land_idempotent,
     "land_during_move": check_land_during_move,
     "rc_bounds": check_rc_bounds,
+    "obstacle_capabilities": check_obstacle_capabilities,
 }
 
 

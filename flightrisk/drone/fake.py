@@ -134,7 +134,7 @@ class FakeDrone:
         self.config = config or FakeDroneConfig()
         self._clock = clock
         self._sleep = sleep
-        features = set(BASIC_FLIGHT)
+        features = set(BASIC_FLIGHT) | {Capability.STEPPED_SENSING}
         if self.config.supports_return_to_home:
             features.add(Capability.RETURN_TO_HOME)
         self.capabilities = DroneCapabilities(
