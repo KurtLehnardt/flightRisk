@@ -212,9 +212,16 @@ def main(argv: list[str] | None = None) -> int:
     from flightrisk.drone.tello import TelloController
 
     out = Path(args.out)
-    drone = TelloController(
-        name="recorder", host=args.tello_host, local_ip=args.tello_local_ip, ifindex=args.tello_ifindex,
-    )
+    if (out / INDEX_NAME).exists():
+        print(f"Error: {out} already holds a recording; choose another --out", file=sys.stderr)
+        return 1
+    try:
+        drone = TelloController(
+            name="recorder", host=args.tello_host, local_ip=args.tello_local_ip, ifindex=args.tello_ifindex,
+        )
+    except Exception as exc:  # noqa: BLE001 - a binding that cannot work (TelloBindingError) ends with its reason
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     if not drone.connect():
         print(f"Error: could not connect to the Tello at {args.tello_host}", file=sys.stderr)
         return 1
