@@ -2,12 +2,15 @@
 # one computer, docs/two-tellos-one-pc.md and docs/fleet-setup.md). It is the
 # edge set plus what the ground and dashboard import, plus anthropic for
 # FLIGHTRISK_REASONING_PROVIDER=claude. Version floors match requirements.txt.
-# Still absent: InsightFace, Ollama, open_clip, MediaPipe and mavsdk (heavy or
+# open-clip-torch comes in through requirements-edge.txt and is also needed by
+# the ground itself: PersonReID builds the target embedding from the uploaded
+# photo. Still absent: InsightFace, Ollama, MediaPipe and mavsdk (heavy or
 # Windows-hostile builds; the local Gemma path needs Ollama installed by hand).
 -r requirements-edge.txt
 flask>=3.1
 flask-socketio>=5.4
 Pillow>=10.4
+open-clip-torch>=2.26
 anthropic>=2.3
 cryptography>=43.0
 opentelemetry-exporter-otlp-proto-http>=1.25
