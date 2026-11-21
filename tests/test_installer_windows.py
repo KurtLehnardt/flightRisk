@@ -497,3 +497,31 @@ def test_unknown_role_is_refused():
     result = lib("Get-InstallRole", {**os.environ, "FLIGHTRISK_ROLE": "everything", "FLIGHTRISK_HOME": str(app)})
     assert result.returncode != 0
     assert "FLIGHTRISK_ROLE must be edge or ground" in result.stdout + result.stderr
+
+
+def test_edges_is_an_alias_of_edge():
+    assert _requirements_file("edges") == "installer\\locks\\windows-x64-edge.txt"
+
+
+def test_saved_role_is_used_when_the_variable_is_unset(tmp_path):
+    """update.ps1 reruns the installer without FLIGHTRISK_ROLE; a ground install must stay ground."""
+    home = tmp_path / "FlightRisk"
+    (home / "app" / "installer" / "locks").mkdir(parents=True)
+    for name in ("windows-x64-edge.txt", "windows-x64-ground.txt"):
+        (home / "app" / "installer" / "locks" / name).write_text("# lock\n")
+    env = {**os.environ, "FLIGHTRISK_HOME": str(home), "PROCESSOR_ARCHITECTURE": "AMD64"}
+    env["FLIGHTRISK_ROLE"] = "ground"
+    assert lib("Save-InstallRole", env).returncode == 0
+    assert (home / "install-role").read_text().strip() == "ground"
+    env.pop("FLIGHTRISK_ROLE")
+    assert lib("Get-InstallRole", env).stdout.strip() == "ground"
+    assert lib("Get-RequirementsFile", env).stdout.strip() == "installer\\locks\\windows-x64-ground.txt"
+    env["FLIGHTRISK_ROLE"] = "edge"  # an explicit variable wins over the saved role
+    assert lib("Get-InstallRole", env).stdout.strip() == "edge"
+
+
+def test_ground_lock_path_installs_with_require_hashes():
+    text = INSTALL.read_text()
+    assert "$req -eq $script:LockFileWindows -or $req -eq $script:LockFileGround" in text
+    block = text[text.index('$req -eq $script:LockFileWindows'):]
+    assert '"--require-hashes"' in block[:200]

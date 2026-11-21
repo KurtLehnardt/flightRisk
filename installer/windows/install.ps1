@@ -1,4 +1,5 @@
-# FlightRisk -- per-user installer for Windows (the edge laptop).
+# FlightRisk -- per-user installer for Windows (the edge laptop, or with FLIGHTRISK_ROLE=ground
+# the one computer that runs ground, dashboard and edges).
 #
 #   irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
 #
@@ -16,9 +17,10 @@
 #      picks one. An existing install is moved to it, but never backwards, never
 #      over local changes, never while FlightRisk is running, and never when the
 #      folder was not made by this installer.
-#   3. Creates the virtual environment app\venv and installs the pinned edge
-#      packages of installer\locks\windows-x64-edge.txt (PyTorch, Ultralytics,
-#      OpenCV, djitellopy; this laptop runs edges only): wheels only, each
+#   3. Creates the virtual environment app\venv and installs the pinned
+#      packages of installer\locks\windows-x64-edge.txt (PyTorch, open_clip,
+#      Ultralytics, OpenCV, djitellopy), or with FLIGHTRISK_ROLE=ground those of
+#      windows-x64-ground.txt (also Flask, anthropic and more): wheels only, each
 #      checked against its SHA-256 in the lock, from PyPI only (pip's own
 #      settings and PIP_* variables are ignored).
 #   4. Downloads the yolo11n detector weights and checks their SHA-256.
@@ -53,7 +55,9 @@
 #   FLIGHTRISK_ROLE=ground       also install what the ground station and dashboard need, plus
 #                                the anthropic package (layout B: everything on one laptop,
 #                                and Claude reasoning). Pins installer\locks\windows-x64-ground.txt.
-#                                Unset or "edge" keeps the edge-only install. An env variable, not a
+#                                Unset keeps the role of the last install (edge on a first one); "edge"
+#                                (or "edges") picks the edge-only install. The role is saved in
+#                                %FLIGHTRISK_HOME%\install-role, so update.ps1 keeps it. An env variable, not a
 #                                parameter, because this file also runs through "irm | iex".
 
 $ErrorActionPreference = "Stop"
@@ -547,12 +551,31 @@ function New-Venv {
     Ok "virtual environment created ($($script:VenvDir))"
 }
 
-# The role to install for: "edge" (the default) or "ground" (FLIGHTRISK_ROLE=ground).
+# The role to install for: "edge" (the default) or "ground". FLIGHTRISK_ROLE
+# decides when it is set ("edges" is accepted for "edge"). When it is not, the
+# role saved by the last install (install-role in the install root) is kept, so
+# update.ps1, which does not pass FLIGHTRISK_ROLE, leaves a ground install a
+# ground install.
 function Get-InstallRole {
     $role = "$($env:FLIGHTRISK_ROLE)".Trim().ToLowerInvariant()
-    if (-not $role -or $role -eq "edge") { return "edge" }
+    $given = $env:FLIGHTRISK_ROLE
+    if (-not $role) {
+        $saved = Join-Path $script:FlightRiskHome "install-role"
+        if (Test-Path -LiteralPath $saved -PathType Leaf) {
+            $role = (Get-Content -LiteralPath $saved -Raw -ErrorAction SilentlyContinue)
+            $role = "$role".Trim().ToLowerInvariant()
+            $given = "$role (from $saved)"
+        }
+    }
+    if (-not $role -or $role -eq "edge" -or $role -eq "edges") { return "edge" }
     if ($role -eq "ground") { return "ground" }
-    Die "FLIGHTRISK_ROLE must be edge or ground (got '$($env:FLIGHTRISK_ROLE)')."
+    Die "FLIGHTRISK_ROLE must be edge or ground (got '$given')."
+}
+
+# Remembers the role for the next run of this installer (see Get-InstallRole).
+function Save-InstallRole {
+    $role = Get-InstallRole
+    [System.IO.File]::WriteAllText((Join-Path $script:FlightRiskHome "install-role"), $role, (New-Object System.Text.UTF8Encoding $false))
 }
 
 # The requirements file to install from: the pinned lock on 64-bit Windows,
@@ -699,6 +722,8 @@ function Invoke-Install {
 
         Set-Step "packages" "Installing the Python packages"
         Install-Dependencies
+
+        Save-InstallRole
 
         Set-Step "weights" "Detector weights"
         Get-Weights
