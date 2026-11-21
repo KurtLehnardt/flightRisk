@@ -265,8 +265,12 @@ class PreflightEnv:
     environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
     is_windows: bool = sys.platform == "win32"
     #: The Claude API reachability rows; replaced in tests so no DNS or socket is touched.
-    claude_uplink: Callable[[Mapping[str, str]], list[uplink.UplinkRow]] = field(
-        default=lambda environ: uplink.check_claude_uplink(uplink.UplinkEnv(environ=environ))
+    #: Called as ``claude_uplink(environ, adapters, network)``: the adapter list the preflight already
+    #: read is reused, and ``network=False`` asks for the variable and package rows only.
+    claude_uplink: Callable[[Mapping[str, str], list[Adapter], bool], list[uplink.UplinkRow]] = field(
+        default=lambda environ, adapters, network: uplink.check_claude_uplink(
+            uplink.UplinkEnv(environ=environ, adapters=lambda: adapters), network=network
+        )
     )
 
 
@@ -386,7 +390,12 @@ def run_preflight(
                 "FLIGHTRISK_REASONING_PROVIDER=claude, but \"Language model on\" is off in the launcher, so the ground "
                 "starts with --no-llm and no reasoning runs",
             ))
-        for row in env.claude_uplink(env.environ):
+        # With the model off no request is ever made, so nothing touches the network here.
+        try:
+            rows = env.claude_uplink(env.environ, adapters, bool(settings.llm))
+        except Exception as exc:  # noqa: BLE001 - this check must never fail a start
+            rows = [uplink.UplinkRow("uplink check", uplink.WARN, f"could not run ({type(exc).__name__}); Start is not blocked")]
+        for row in rows:
             # A missing uplink never blocks a start: alerts still fire, only the reasoning shows an error.
             status = WARN if row.status == uplink.FAIL else row.status
             checks.append(Check(f"Claude: {row.name}", status, row.detail))

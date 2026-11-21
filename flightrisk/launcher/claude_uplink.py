@@ -1,7 +1,7 @@
 """Read-only check that this computer can reach the Claude API, for ground stations on FLIGHTRISK_REASONING_PROVIDER=claude.
 
 It resolves ``api.anthropic.com``, opens a TLS connection to port 443 with a short timeout and closes it
-without sending a byte of HTTP, and reports which local address the operating system routes that traffic
+after the handshake without sending an HTTP request, and reports which local address the operating system routes that traffic
 from. It makes no authenticated API call and never reads a key's value: the three Claude variables are
 reported only as set or unset. A route that leaves through a Tello's Wi-Fi (192.168.10.0/24) is warned
 about, because a Tello access point has no internet.
@@ -17,6 +17,8 @@ import ipaddress
 import os
 import socket
 import ssl
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -25,6 +27,11 @@ from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
 API_HOST = "api.anthropic.com"
 API_PORT = 443
 TIMEOUT_S = 4.0
+#: The whole check (DNS, route and TLS) is cut off after about this long, so Start never waits on it for longer.
+BUDGET_S = 5.0
+#: A literal address of api.anthropic.com (Anthropic's 160.79.104.0/23), used to still show which adapter the
+#: route leaves from when DNS does not answer.
+FALLBACK_IP = "160.79.104.10"
 TELLO_SUBNET = ipaddress.ip_network("192.168.10.0/24")
 
 PROVIDER_ENV = "FLIGHTRISK_REASONING_PROVIDER"
@@ -46,6 +53,30 @@ class UplinkRow:
 def _resolve(host: str) -> list[str]:
     infos = socket.getaddrinfo(host, API_PORT, socket.AF_INET, socket.SOCK_STREAM)
     return list(dict.fromkeys(info[4][0] for info in infos))
+
+
+def _call_with_deadline(fn: Callable[[], list[str]], deadline_s: float) -> list[str]:
+    """Run *fn* on a daemon thread and give up after *deadline_s* seconds.
+
+    ``getaddrinfo`` has no timeout of its own and can block for a minute or more; the abandoned thread
+    is a daemon, so it never holds the process open. Raises ``TimeoutError`` (an ``OSError``) on expiry.
+    """
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread
+            box["error"] = exc
+
+    thread = threading.Thread(target=run, name="claude-uplink-dns", daemon=True)
+    thread.start()
+    thread.join(max(deadline_s, 0.0))
+    if thread.is_alive():
+        raise TimeoutError(f"no answer within {deadline_s:g} s")
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
+    return box["value"]  # type: ignore[return-value]
 
 
 def _route_local_ip(remote_ip: str) -> str | None:
@@ -82,7 +113,8 @@ class UplinkEnv:
     tls_handshake: Callable[[str, str, float], str] = _tls_handshake
     adapters: Callable[[], list[Adapter]] = list_adapters
     module_found: Callable[[str], bool] = _module_found
-    environ: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
+    # repr=False: the environ holds the Claude key, and a dataclass repr would print it.
+    environ: Mapping[str, str] = field(default_factory=lambda: dict(os.environ), repr=False)
 
 
 def provider_is_claude(environ: Mapping[str, str]) -> bool:
@@ -117,45 +149,64 @@ def _env_rows(environ: Mapping[str, str], module_found: Callable[[str], bool]) -
     return rows
 
 
-def check_claude_uplink(env: UplinkEnv | None = None, *, timeout: float = TIMEOUT_S, host: str = API_HOST) -> list[UplinkRow]:
-    """Every uplink row. Any ``FAIL`` means Claude reasoning will not work from this computer."""
+def check_claude_uplink(
+    env: UplinkEnv | None = None, *, timeout: float = TIMEOUT_S, host: str = API_HOST,
+    budget: float = BUDGET_S, network: bool = True,
+) -> list[UplinkRow]:
+    """Every uplink row. Any ``FAIL`` means Claude reasoning will not work from this computer.
+
+    The whole check is held to about *budget* seconds: DNS runs on a thread with a deadline, and the TLS
+    handshake gets what is left. With ``network=False`` only the variable and package rows are returned.
+    """
     env = env or UplinkEnv()
     rows = _env_rows(env.environ, env.module_found)
-
-    try:
-        addresses = env.resolve(host)
-    except OSError as exc:
-        rows.append(UplinkRow(f"DNS {host}", FAIL, f"does not resolve ({exc}); no internet uplink, or DNS goes to a Tello"))
+    if not network:
         return rows
-    if not addresses:
-        rows.append(UplinkRow(f"DNS {host}", FAIL, "resolved to no IPv4 address"))
+    started = time.monotonic()
+
+    dns_failed = False
+    try:
+        addresses = _call_with_deadline(lambda: env.resolve(host), min(timeout, budget))
+    except OSError as exc:
+        rows.append(UplinkRow(f"DNS {host}", FAIL, f"does not resolve ({type(exc).__name__}: {exc}); no internet uplink, or DNS goes to a Tello"))
+        dns_failed = True
+    else:
+        if not addresses:
+            rows.append(UplinkRow(f"DNS {host}", FAIL, "resolved to no IPv4 address"))
+            dns_failed = True
+    if dns_failed:
+        # The route does not need DNS: probe a literal Anthropic address so a bad adapter still shows.
+        rows.append(_route_row(env, FALLBACK_IP, "(a literal api.anthropic.com address, DNS failed)"))
         return rows
     ip = addresses[0]
     rows.append(UplinkRow(f"DNS {host}", PASS, ", ".join(addresses[:3])))
+    rows.append(_route_row(env, ip, ""))
 
-    local = env.route_local_ip(ip)
-    if local is None:
-        rows.append(UplinkRow(f"Route to {ip}", FAIL, "this computer has no route to it (no default route out)"))
-    else:
-        adapters = _safe_adapters(env.adapters)
-        owners = address_owners(adapters, local)
-        via = f"{local} on {owners[0].name}" + (f" (index {owners[0].index})" if owners[0].index is not None else "") if owners else local
-        if on_tello_subnet(local):
-            rows.append(UplinkRow(
-                f"Route to {ip}", WARN,
-                f"leaves from {via}, a Tello subnet (192.168.10.0/24) with no internet. Set the uplink's interface metric "
-                f"lower than both Tello Wi-Fi adapters (docs/fleet-setup.md, Layout B with Claude reasoning)",
-            ))
-        else:
-            rows.append(UplinkRow(f"Route to {ip}", PASS, f"leaves from {via}"))
-
+    remaining = budget - (time.monotonic() - started)
     try:
-        version = env.tls_handshake(host, ip, timeout)
+        version = env.tls_handshake(host, ip, min(timeout, max(remaining, 0.5)))
     except (OSError, ssl.SSLError) as exc:
         rows.append(UplinkRow(f"TLS {host}:{API_PORT}", FAIL, f"handshake failed within {timeout:g} s ({type(exc).__name__}: {exc})"))
     else:
-        rows.append(UplinkRow(f"TLS {host}:{API_PORT}", PASS, f"{version} handshake ok; nothing was sent"))
+        rows.append(UplinkRow(f"TLS {host}:{API_PORT}", PASS, f"{version} handshake ok; no HTTP request was sent"))
     return rows
+
+
+def _route_row(env: UplinkEnv, ip: str, note: str) -> UplinkRow:
+    name = f"Route to {ip}"
+    suffix = f" {note}" if note else ""
+    local = env.route_local_ip(ip)
+    if local is None:
+        return UplinkRow(name, FAIL, "this computer has no route to it (no default route out)" + suffix)
+    owners = address_owners(_safe_adapters(env.adapters), local)
+    via = f"{local} on {owners[0].name}" + (f" (index {owners[0].index})" if owners[0].index is not None else "") if owners else local
+    if on_tello_subnet(local):
+        return UplinkRow(
+            name, WARN,
+            f"leaves from {via}, a Tello subnet (192.168.10.0/24) with no internet. Set the uplink's interface metric "
+            f"lower than both Tello Wi-Fi adapters (docs/fleet-setup.md, Layout B with Claude reasoning){suffix}",
+        )
+    return UplinkRow(name, PASS, f"leaves from {via}{suffix}")
 
 
 def _safe_adapters(lister: Callable[[], list[Adapter]]) -> list[Adapter]:

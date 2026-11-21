@@ -246,7 +246,7 @@ def test_default_tls_handshake_connects_with_timeout_and_sends_no_data(monkeypat
 
 
 def preflight(settings, environ, rows=None, calls=None):
-    def fake_uplink(env):
+    def fake_uplink(env, adapters=None, network=True):
         if calls is not None:
             calls.append(dict(env))
         return rows if rows is not None else [cu.UplinkRow("TLS api.anthropic.com:443", cu.PASS, "ok")]
@@ -342,3 +342,97 @@ def test_script_exits_nonzero_on_failure(capsys):
 def test_script_force_runs_for_other_providers(capsys):
     script = load_script()
     assert script.main(["--force"], make_env({cu.PROVIDER_ENV: "gemma"})) == 1  # env vars missing
+
+
+# --- review round 1: timeouts, the route row without DNS, secrets ------------------------------------
+
+
+def test_a_hanging_dns_lookup_is_cut_off_and_still_shows_the_route():
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def hang(host):
+        release.wait(30)
+        return ["160.79.104.10"]
+
+    def no_tls(*a):
+        raise AssertionError("must not connect when DNS timed out")
+
+    started = time.monotonic()
+    try:
+        rows = by_name(cu.check_claude_uplink(make_env(resolve=hang, tls=no_tls), timeout=0.2))
+    finally:
+        release.set()
+    assert time.monotonic() - started < 3
+    assert rows["DNS api.anthropic.com"].status == cu.FAIL
+    assert "TimeoutError" in rows["DNS api.anthropic.com"].detail
+
+
+def test_dns_failure_still_probes_the_route_to_a_literal_anthropic_address():
+    def boom(host):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    rows = by_name(cu.check_claude_uplink(make_env(resolve=boom, local="192.168.10.50")))
+    route = rows[f"Route to {cu.FALLBACK_IP}"]
+    assert route.status == cu.WARN and "Wi-Fi 2" in route.detail and "DNS failed" in route.detail
+
+
+def test_the_handshake_gets_only_what_is_left_of_the_budget():
+    seen = {}
+
+    def tls(host, ip, timeout):
+        seen["timeout"] = timeout
+        return "TLSv1.3"
+
+    cu.check_claude_uplink(make_env(tls=tls), timeout=4.0, budget=0.0)
+    assert seen["timeout"] == 0.5
+
+
+def test_network_false_returns_only_the_variable_rows():
+    def never(*a):
+        raise AssertionError("no network when the language model is off")
+
+    env = make_env()
+    env.resolve = never
+    rows = cu.check_claude_uplink(env, network=False)
+    assert {r.name for r in rows} == {cu.ALLOW_ENV, cu.KEY_ENV, "anthropic package"}
+
+
+def test_the_uplink_env_repr_does_not_contain_the_key():
+    assert SECRET not in repr(make_env())
+
+
+def test_preflight_makes_no_network_check_with_the_model_off_and_passes_the_adapters():
+    seen = {}
+
+    def fake(environ, adapters, network):
+        seen.update(adapters=adapters, network=network)
+        return []
+
+    settings = layout_b(llm=False)
+    env = PreflightEnv(
+        in_venv=lambda: True, module_found=lambda m: True, port_free=lambda h, p: True,
+        tcp_reachable=lambda h, p: True, adapters=lambda: ADAPTERS,
+        weights=lambda: [], ceiling_file=lambda: (settings.ceiling_cm, settings.margin_cm, None, "c.json"),
+        environ=GOOD_ENV, claude_uplink=fake,
+    )
+    run_preflight(settings, EdgeToken("set", "env"), env, probe_drones=False)
+    assert seen == {"adapters": ADAPTERS, "network": False}
+
+
+def test_a_crashing_uplink_check_is_a_warning_and_never_fails_start():
+    def crash(environ, adapters, network):
+        raise RuntimeError("boom")
+
+    settings = layout_b(llm=True)
+    env = PreflightEnv(
+        in_venv=lambda: True, module_found=lambda m: True, port_free=lambda h, p: True,
+        tcp_reachable=lambda h, p: True, adapters=lambda: ADAPTERS,
+        weights=lambda: [], ceiling_file=lambda: (settings.ceiling_cm, settings.margin_cm, None, "c.json"),
+        environ=GOOD_ENV, claude_uplink=crash,
+    )
+    checks = run_preflight(settings, EdgeToken("set", "env"), env, probe_drones=False)
+    row = next(c for c in checks if c.name == "Claude: uplink check")
+    assert row.status == WARN and "RuntimeError" in row.detail

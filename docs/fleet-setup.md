@@ -528,7 +528,7 @@ $api = (Resolve-DnsName api.anthropic.com -Type A | Where-Object Type -eq 'A' | 
 Find-NetRoute -RemoteIPAddress $api | Format-Table InterfaceAlias, IPAddress, NextHop
 ```
 
-The first table should list the uplink first. `Find-NetRoute` should show the uplink's alias and a local address that is not in 192.168.10.0/24. Then run the preflight check, which resolves `api.anthropic.com`, opens TLS to it (no request is sent and no key is used), prints the local address the route leaves from, warns if that is a Tello subnet, and reports each Claude variable as set or unset without showing a value:
+The first table should list the uplink first. `Find-NetRoute` should show the uplink's alias and a local address that is not in 192.168.10.0/24. Then run the preflight check, which resolves `api.anthropic.com`, opens TLS to it (no HTTP request is sent and no key is used), prints the local address the route leaves from, warns if that is a Tello subnet, and reports each Claude variable as set or unset without showing a value:
 
 ```powershell
 cd $env:LOCALAPPDATA\FlightRisk\app
