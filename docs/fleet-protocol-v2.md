@@ -426,7 +426,7 @@ All fields are optional, are sticky for the current plan, and are sent only by a
 | `obstacle_cuts` | list of at most 16 numbers | `[lane, flown_cm, lane, flown_cm, ...]`, the last 8 cuts of the plan |
 | `obstacle_cuts_total` | integer | The number of cuts in the plan, so that a truncated list is visible |
 | `obstacle_cut_reasons` | string, at most 200 characters | The reasons of the listed cuts, comma separated: `obstacle`, `person`, `sensor_stale`, `sensor_down`, `autopilot` |
-| `obstacle_person_cue` | object | Sent by an edge whose sensor has a person cue (the camera sensor): `{"person_cue_down": boolean, "detection_age_s": number or null}`. `person_cue_down` is true while the person cue has been unknown at several gates in a row (`edge_obstacle_person_cue_down`), so the depth cue alone decides; `detection_age_s` is how old the view of the newest detection result is, in seconds since its frame was captured, or null before the first. One field holds both because a Tello's v2 telemetry with the drone link fields already has 31 of the 32 fields a message may carry (`MAX_FIELDS`). The ground does not act on it |
+| `obstacle_person_cue` | object | Sent by an edge whose sensor has a person cue (the camera sensor): `{"person_cue_down": boolean, "detection_age_s": number or null}`. `person_cue_down` is true while the person cue has been unknown at several gates in a row (`edge_obstacle_person_cue_down`), so the depth cue alone decides; `detection_age_s` is how old the view of the newest detection result is, in seconds since its frame was captured, or null before the first. One field holds both to keep the field count down (`MAX_FIELDS`). The ground does not act on it |
 
 The cut fields are kept through a landing and through a re-task that continues the plan. They are cleared only when the edge accepts a plan that does not continue the old one.
 
@@ -494,7 +494,7 @@ The ground announces each change of a re-flight with a `fleet_event` whose `even
   |---|---|
   | Encoded fleet message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
   | Encoded legacy message (`detections` from an edge, `set_target` or `stream_video` from a ground) | 1 MiB (`LEGACY_MAX_BYTES`, the WebSocket frame limit; a larger caller `max_bytes` raises it) |
-  | Top-level fields | 32 |
+  | Top-level fields | 48 (`MAX_FIELDS`; it was 32 before the MAVLink edge's GPS, drone link, obstacle and profile fields together passed that, so a ground older than this limit drops such an edge's telemetry) |
   | Nesting depth | 8 |
   | Values in one message | 10,000 |
   | Identifiers (`drone_id`, `node_id`, `leader_id`, `cmd_id`, `plan_id`, `to_node`) | 64 characters |

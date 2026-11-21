@@ -194,8 +194,8 @@ TELEMETRY_CUTS_TOTAL = "obstacle_cuts_total"
 TELEMETRY_CUT_REASONS = "obstacle_cut_reasons"
 #: The person cue's health, for a sensor that has one: an object
 #: ``{"person_cue_down": bool, "detection_age_s": number or null}``. One field
-#: holds both, because a Tello's telemetry already has 31 of the 32 fields a
-#: fleet message may carry (``fleet_protocol.MAX_FIELDS``).
+#: holds both, to keep the telemetry's field count down
+#: (``fleet_protocol.MAX_FIELDS``).
 TELEMETRY_PERSON_CUE = "obstacle_person_cue"
 #: Keys of ``TELEMETRY_PERSON_CUE``.
 PERSON_CUE_DOWN_KEY = "person_cue_down"
