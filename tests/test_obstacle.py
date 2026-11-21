@@ -303,3 +303,40 @@ class TestDepthVisualization:
         with mock_module.patch.object(mock_midas, 'forward', wraps=mock_midas.forward) as spy:
             guard.get_depth_visualization(frame)
             spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive model loading
+# ---------------------------------------------------------------------------
+
+class TestNonInteractiveLoad:
+    def test_hub_loads_pass_trust_repo(self, monkeypatch):
+        """Every torch.hub.load call must pass trust_repo=True so that torch
+        never prompts on stdin ("Do you trust this repository (y/N)?")."""
+        from flightrisk.drone.obstacle import ObstacleGuard
+
+        calls = []
+
+        def recording_load(repo, model_name, **kwargs):
+            calls.append((repo, model_name, kwargs))
+            return _mock_hub_load(repo, model_name, **kwargs)
+
+        monkeypatch.setattr("torch.hub.load", recording_load)
+        ObstacleGuard()
+
+        assert [c[1] for c in calls] == ["MiDaS_small", "transforms"]
+        for repo, _name, kwargs in calls:
+            assert repo == "intel-isl/MiDaS"
+            assert kwargs.get("trust_repo") is True
+
+    def test_startup_never_reads_stdin(self, monkeypatch):
+        """Constructing the guard must not call input(), even with a live stdin."""
+        import builtins
+
+        from flightrisk.drone.obstacle import ObstacleGuard
+
+        def fail_input(*args, **kwargs):
+            raise AssertionError("ObstacleGuard read from stdin")
+
+        monkeypatch.setattr(builtins, "input", fail_input)
+        ObstacleGuard()
