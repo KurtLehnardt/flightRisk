@@ -239,6 +239,7 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
     (winbox.app_dir / "logs" / "edge.log").write_text("line")
     token_file = winbox.home / ".flightrisk-fleet.env"
     token_file.write_text("export FLIGHTRISK_EDGE_TOKEN=not-a-real-token\n")
+    (winbox.flightrisk_home / "install-role").write_text("ground")
 
     check = json.loads(winbox.run(copy, "-Check").stdout)
     assert check["exists"] and check["flightriskCheckout"] and check["installerMade"]
@@ -265,6 +266,7 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
     assert data["removed"] is True
     assert not winbox.app_dir.exists()
     assert not winbox.flightrisk_home.exists()
+    assert not (winbox.flightrisk_home / "install-role").exists()
     kept = Path(data["keptData"])
     assert kept.parent == winbox.flightrisk_home.parent / "FlightRisk data", "not Documents, which OneDrive may sync"
     assert (kept / "logs" / "edge.log").read_text() == "line"
@@ -460,3 +462,68 @@ def test_uninstall_takes_the_install_lock(winbox: WinBox):
     finally:
         proc.communicate("no\n", timeout=60)
     assert winbox.app_dir.exists()
+
+
+def _requirements_file(role: str | None, arch: str = "AMD64") -> str:
+    """Get-RequirementsFile against a copy of the repository's lock files, for FLIGHTRISK_ROLE=*role*."""
+    app = Path(tempfile.mkdtemp()) / "FlightRisk" / "app"
+    (app / "installer" / "locks").mkdir(parents=True)
+    for name in ("windows-x64-edge.txt", "windows-x64-ground.txt"):
+        (app / "installer" / "locks" / name).write_text("# lock\n")
+    env = {**os.environ, "FLIGHTRISK_HOME": str(app.parent), "PROCESSOR_ARCHITECTURE": arch}
+    env.pop("FLIGHTRISK_ROLE", None)
+    if role is not None:
+        env["FLIGHTRISK_ROLE"] = role
+    result = lib("Get-RequirementsFile", env)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_default_and_edge_role_install_the_edge_lock():
+    assert _requirements_file(None) == "installer\\locks\\windows-x64-edge.txt"
+    assert _requirements_file("edge") == "installer\\locks\\windows-x64-edge.txt"
+
+
+def test_ground_role_installs_the_ground_lock():
+    assert _requirements_file("ground") == "installer\\locks\\windows-x64-ground.txt"
+    assert _requirements_file(" Ground ") == "installer\\locks\\windows-x64-ground.txt"
+
+
+def test_ground_role_without_a_lock_falls_back_to_the_floors_file():
+    assert _requirements_file("ground", arch="ARM64") == "requirements-ground.txt"
+    assert _requirements_file(None, arch="ARM64") == "requirements-edge.txt"
+
+
+def test_unknown_role_is_refused():
+    app = Path(tempfile.mkdtemp())
+    result = lib("Get-InstallRole", {**os.environ, "FLIGHTRISK_ROLE": "everything", "FLIGHTRISK_HOME": str(app)})
+    assert result.returncode != 0
+    assert "FLIGHTRISK_ROLE must be edge or ground" in result.stdout + result.stderr
+
+
+def test_edges_is_an_alias_of_edge():
+    assert _requirements_file("edges") == "installer\\locks\\windows-x64-edge.txt"
+
+
+def test_saved_role_is_used_when_the_variable_is_unset(tmp_path):
+    """update.ps1 reruns the installer without FLIGHTRISK_ROLE; a ground install must stay ground."""
+    home = tmp_path / "FlightRisk"
+    (home / "app" / "installer" / "locks").mkdir(parents=True)
+    for name in ("windows-x64-edge.txt", "windows-x64-ground.txt"):
+        (home / "app" / "installer" / "locks" / name).write_text("# lock\n")
+    env = {**os.environ, "FLIGHTRISK_HOME": str(home), "PROCESSOR_ARCHITECTURE": "AMD64"}
+    env["FLIGHTRISK_ROLE"] = "ground"
+    assert lib("Save-InstallRole", env).returncode == 0
+    assert (home / "install-role").read_text().strip() == "ground"
+    env.pop("FLIGHTRISK_ROLE")
+    assert lib("Get-InstallRole", env).stdout.strip() == "ground"
+    assert lib("Get-RequirementsFile", env).stdout.strip() == "installer\\locks\\windows-x64-ground.txt"
+    env["FLIGHTRISK_ROLE"] = "edge"  # an explicit variable wins over the saved role
+    assert lib("Get-InstallRole", env).stdout.strip() == "edge"
+
+
+def test_ground_lock_path_installs_with_require_hashes():
+    text = INSTALL.read_text()
+    assert "$req -eq $script:LockFileWindows -or $req -eq $script:LockFileGround" in text
+    block = text[text.index('$req -eq $script:LockFileWindows'):]
+    assert '"--require-hashes"' in block[:200]

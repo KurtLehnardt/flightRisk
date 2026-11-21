@@ -596,3 +596,12 @@ def test_windows_server_binds_exclusively():
     sock = Sock()
     exclusive_bind_options(sock, windows=False)
     assert sock.options == []
+
+
+def test_the_launcher_redactor_hides_the_claude_key(tmp_path):
+    app = LauncherApp(
+        port=0, store=PresetStore(tmp_path / "launcher.json", secret=lambda: TOKEN),
+        token_loader=lambda: EdgeToken(TOKEN, "environment"), python=sys.executable,
+        environ={"FLIGHTRISK_CLAUDE_API_KEY": "sk-ant-not-a-real-key"},
+    )
+    assert app.redact("saw sk-ant-not-a-real-key here") == "saw [redacted] here"

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: The files the fixture repository needs: the package, the installer and the requirement files.
 FIXTURE_PATHS = ["flightrisk", "installer", "scripts/launcher.command", "scripts/launcher.bat",
-                 "requirements.txt", "requirements-edge.txt"]
+                 "requirements.txt", "requirements-edge.txt", "requirements-ground.txt"]
 
 
 def git(*args: str, cwd: Path) -> str:

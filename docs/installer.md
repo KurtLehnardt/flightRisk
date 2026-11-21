@@ -48,6 +48,11 @@ FlightRisk from the Start menu. The Windows install sets up the edge role only (
 the steps that need an administrator stay manual: the cable adapter's address, the firewall rules and the
 power settings in [windows-edge-setup.md](windows-edge-setup.md), steps 3 and 7.
 
+For one laptop that runs the ground, the dashboard and the edges (layout B), with or without Claude
+reasoning, set `FLIGHTRISK_ROLE=ground` before the command; it then installs
+`installer\locks\windows-x64-ground.txt` (the edge set plus the ground and dashboard packages and `anthropic`).
+See [Layout B with Claude reasoning](fleet-setup.md#layout-b-with-claude-reasoning).
+
 **SmartScreen.** The Setup .exe is not code-signed, so Windows may say "Windows protected your PC". Click
 **More info**, then **Run anyway**.
 
@@ -235,8 +240,8 @@ that wants to watch, and the launcher window is the GUI from then on.
   files resolved by `uv` against the versions the development environment runs (`installer/locks/`), so a
   new install gets tested versions. A Mac that is not Apple Silicon with macOS 14 falls back to
   `requirements.txt`.
-- **Windows runs edges only.** The Windows lock is `requirements-edge.txt`, as `scripts/install_windows.ps1`
-  already does; InsightFace, Ollama, open_clip and MediaPipe are never installed there.
+- **Windows runs edges only, unless `FLIGHTRISK_ROLE=ground`.** The default Windows lock is `requirements-edge.txt`, as `scripts/install_windows.ps1`
+  already does (`requirements-ground.txt` and `installer/locks/windows-x64-ground.txt` add the ground, dashboard and `anthropic`); open_clip is installed only with the ground role; InsightFace, Ollama and MediaPipe are never installed there.
 - **The Start menu entry opens `scripts\launcher.bat`.** It keeps the console window that the launcher
   documentation already describes (the address, Ctrl+C), so the Windows behaviour stays the one that the
   launcher was built and documented for.
