@@ -52,7 +52,7 @@ and units, honest capabilities (no undeclared method that pretends to work,
 no `NotImplementedError` anywhere in the module), command results with the
 right names, `land()` idempotent and never dropped (also while a move is in
 progress, and, with a `land_sent` hook, really sent rather than only reported
-OK), and stick values never passed outside -100..100.
+OK), stick values never passed outside -100..100, and the obstacle rules: a backend declaring `STEPPED_SENSING` provides `on_frame`; one declaring `ONBOARD_AVOIDANCE` provides `avoidance_status()` (empty exactly while the capability is declared) and `measured_pose()`; and a backend that does not declare `ONBOARD_AVOIDANCE` never returns `STOPPED_SHORT`.
 
 ## The pieces
 
@@ -60,7 +60,7 @@ OK), and stick values never passed outside -100..100.
 |---|---|---|
 | Role protocols | `flightrisk/drone/controller.py` | `Lifecycle`, `TelemetrySource`, `FlightControl`, `Motion`, `Navigation`, `GpsDroneController`, `VideoSource` |
 | Capabilities | `flightrisk/drone/controller.py` | `DroneCapabilities.features` (a set of `Capability` values) and `supports()` |
-| Command results | `flightrisk/drone/controller.py` | `CommandResult` with outcome `OK`, `DROPPED_BUSY`, `REJECTED` or `NOT_EXECUTED`; `command_result()` and `require_executed()` read any return value |
+| Command results | `flightrisk/drone/controller.py` | `CommandResult` with outcome `OK`, `DROPPED_BUSY`, `REJECTED`, `NOT_EXECUTED` or `STOPPED_SHORT`; `command_result()` and `require_executed()` read any return value |
 | Telemetry | `flightrisk/drone/snapshot.py` | `TelemetrySnapshot` made of optional `Reading`s (value, unit, source, measured_at, age) |
 | Registry | `flightrisk/drone/registry.py` | `register(name, factory, default_host=..., options_from=...)` |
 | Built-in entries | `flightrisk/drone/backends.py` | The only module that names concrete backends (`tello`, `mavlink`, `sim`) |
@@ -108,6 +108,34 @@ OK), and stick values never passed outside -100..100.
 7. Logs carry ids, numbers and the reason for a failure (the exception
    text, as the Tello's connect and land messages do). No free text from
    operators, and no credentials, tokens or other secrets.
+8. Obstacle sensing has two optional capabilities (see
+   `docs/obstacle-sensing.md`). Declare `Capability.STEPPED_SENSING` if the
+   edge should sense for the drone: the edge then flies each lane in short
+   steps and checks a camera frame before every step, so the backend must
+   provide `on_frame()`, because the edge's obstacle sensor is fed by frame
+   callbacks. Declare `Capability.ONBOARD_AVOIDANCE` only if the autopilot
+   avoids obstacles by itself on the edge's lanes: the backend must then
+   provide `avoidance_status()`, a list of problem strings that is empty
+   exactly while the capability is declared, and `measured_pose()`, a
+   `RelativePose` or `None`. Declare it at runtime, after the autopilot's
+   avoidance configuration has been read, not at construction.
+9. A backend whose autopilot measures the vehicle's heading in the plan
+   frame may provide the optional `measured_heading_deg() -> float | None`
+   (degrees clockwise from the plan's "ahead", `None` while it cannot tell:
+   before the first takeoff, or with stale telemetry). It is not part of
+   the protocol check. A drone that has it is held to the heading rule of
+   `docs/obstacle-sensing.md`: a sensed step is cleared only while the
+   measured heading is within 10 degrees of the commanded one, so the
+   forward camera faces the step. Unlike `measured_pose()` it must not
+   fall back to the commanded heading. For such a drone `rotate(0)` means
+   "turn to the commanded (plan-frame) heading": the executor sends it once
+   per step when no turn is due but the measured heading is off. A
+   `rotate` that returns `NOT_EXECUTED` while `measured_heading_deg()`
+   still returns a number means the turn did not finish (the heading was
+   not reached by the deadline): the executor cuts the lane with
+   `sensor_stale` and does not land. Without `measured_heading_deg()`
+   (the Tello, the fake drone) a `rotate` that is not executed raises and
+   lands the drone as before.
 
 ## Command results
 
@@ -129,6 +157,7 @@ took effect (it raises `CommandNotExecutedError` otherwise):
 | `CommandResult(..., DROPPED_BUSY)` | another command held the channel | no |
 | `CommandResult(..., REJECTED)` | unsupported or invalid argument | no |
 | `CommandResult(..., NOT_EXECUTED)` | not executed, for another reason | no |
+| `CommandResult(..., STOPPED_SHORT)` | a move ended before its target because the autopilot's own avoidance held the vehicle; only a backend declaring `ONBOARD_AVOIDANCE` returns it, and it must offer `measured_pose()` | no |
 
 Checks such as `result is False` or `if result:` are wrong: a dropped
 `CommandResult` is not `False`, and a legacy `None` means success. (A
@@ -145,6 +174,16 @@ What callers do with a result that is not OK:
   that was not executed is answered with a `nack` and is not recorded, and
   the drone keeps hovering: the nudge is not part of a lane, so nothing is
   left half-flown.
+* **Lane executor, a `rotate` that was not executed:** for a drone that
+  provides `measured_heading_deg()` and still reports a heading, the turn
+  did not finish; the lane is cut `sensor_stale` and the drone is not
+  landed. For any other drone it is handled like a move that was not
+  executed.
+* **Lane executor, `STOPPED_SHORT`:** the move is not added to the
+  dead-reckoned pose, and the drone is not landed. The executor reads the
+  drone's `measured_pose()`, cuts the lane there with reason `autopilot`
+  using the normal cut policy, and flies on with the next lane
+  (`docs/obstacle-sensing.md`).
 * **Confirm recovery:** a land that was not executed is a failed land, like
   an exception: it falls back to the fail-safe land, and if that is not
   executed either the outcome is `failsafe_land_failed` with an `error`
