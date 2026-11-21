@@ -50,6 +50,7 @@ The edge's `LaneExecutor` is unchanged in what it asks of a drone; a backend pro
 - `telemetry_fields()` (optional): extra telemetry fields (autopilot, flight mode, whether the cruise speed was taken, external control);
 - `capabilities.flight_scale`: `room` or `field`. It declares the drone's scale; today the edge picks the envelope profile from `--drone` (`mavlink` is `field`), and nothing else reads this field yet;
 - `fence_breach_margin_cm` (optional): GPS noise allowance before a measured position outside the fence lands the drone.
+- `capabilities.features` may include `STEPPED_SENSING` (the edge senses and steps; the backend provides `on_frame`) or `ONBOARD_AVOIDANCE` (the autopilot avoids; the backend provides `avoidance_status()` and `measured_pose()` and may return `STOPPED_SHORT`). See "Obstacle avoidance preflight" below and `docs/drone-interface.md`.
 
 The fleet protocol is unchanged. Telemetry gains optional fields from drones that report them (`lat`, `lon`, `autopilot`, `flight_mode`, `speed_set`, `external_control`, and `camera_ok` on an edge with its own camera); every ground accepts extra telemetry fields.
 
@@ -81,7 +82,7 @@ Watchdogs: every move and takeoff has a deadline (twice the expected time plus 2
 
 The altitude reference is taken at every send (the autopilot's AMSL altitude minus its height above home), because both autopilots reset home at arming.
 
-Rotation: PX4 turns to the yaw of a reposition, so `rotate()` waits for the heading. ArduCopter ignores that yaw (in GUIDED it faces its direction of travel, `WP_YAW_BEHAVIOR`), so on ArduPilot `rotate()` turns the plan's "forward" for the next moves without waiting for a heading the autopilot will never hold.
+Rotation: PX4 turns to the yaw of a reposition, so `rotate()` waits for the heading. ArduCopter ignores that yaw (in GUIDED it faces its direction of travel, `WP_YAW_BEHAVIOR`), so on ArduPilot `rotate()` turns the plan's "forward" for the next moves without waiting for a heading the autopilot will never hold. The autopilot link may also provide an optional `yaw_to(yaw_deg)` command (`MAV_CMD_CONDITION_YAW`, turn in place, absolute). A link with `yaw_to` lets the drone turn an ArduCopter in place and wait until `measured_heading_deg()` is within 10 degrees of the target, which stepped camera sensing needs (the camera must face each step). No link implements `yaw_to` yet; it is a follow-up, and it has not been verified on an autopilot. Without it, an ArduCopter with stepped camera sensing cuts every lane it is not already facing (see below). PX4 already waits for the heading and is unchanged.
 
 The plan frame: the origin is the takeoff point of the current flight; "ahead" is `--frame-heading-deg`, a compass bearing that is required and must be the same on every drone of a fleet (for example 0 for north). Without it each drone's own takeoff heading would rotate its zone into its neighbours'.
 
@@ -110,6 +111,32 @@ The return-altitude rule applies even with `--failsafe-action land`, because the
 ### The edge's preflight (before every takeoff from the ground)
 
 Fresh telemetry from the autopilot (no older than 3 s, checked per stream: a stream that stopped keeps its last values, so position, GPS, health and battery must each be fresh), a known autopilot (PX4 or ArduPilot), a 3D GPS fix with at least 8 satellites, the autopilot's own global-position, home-position and arming checks, a battery reading at or above `FLIGHTRISK_MIN_TAKEOFF_BATTERY` (30% by default), the parameters above, and the existing checks (ground link alive, plan valid). A refused start is logged, reported in telemetry (`drone_link_ok: false` with the reason in `drone_link_detail`), and, for a protocol v2 ground, answered with a `drone_unreachable` nack carrying the reason. Phase 1 reuses `drone_unreachable` because adding a nack reason is a protocol change; a dedicated "not ready" reason is a follow-up.
+
+### Obstacle avoidance preflight
+
+An autopilot drone must either avoid obstacles by itself on the edge's lanes or be sensed by the edge, and the preflight checks which (`docs/obstacle-sensing.md`). The edge tells the drone its sensing mode after connecting: `stepped` or `forward_only` when the edge has a companion camera sensor (`--source camera` or `url`, the same depth and person sensor as the Tello, in steps of 500 cm by default, set with `FLIGHTRISK_OBSTACLE_STEP_CM` within the field move limits), `off` when the operator sets `FLIGHTRISK_OBSTACLE_SENSING=off`, and otherwise `autopilot` or `none`. In the last two modes the preflight adds the avoidance parameter check below to the failsafe parameter check, and a takeoff is refused until it passes. An edge with a camera source is always a stepped drone, even if the autopilot also declares onboard avoidance.
+
+| | ArduPilot (ArduCopter) | PX4 |
+|---|---|---|
+| Onboard avoidance the edge can rely on | `OA_TYPE` 1 (BendyRuler), 2 (Dijkstra) or 3 (both), so GUIDED plans around obstacles; `PRX1_TYPE` not 0 (a proximity source: lidar, rangefinders or MAVLink distance messages); `OA_MARGIN_MAX` at least 2 m; with BendyRuler, `OA_BR_LOOKAHEAD` at least 5 m. An unreadable parameter counts as a problem | None. Collision prevention runs in Position mode only, and the edge flies reposition targets, so a PX4 drone needs a companion camera (stepped sensing) or the override |
+
+The `ONBOARD_AVOIDANCE` capability appears only after the drone has connected and read its parameters, and only while `avoidance_status()` is empty. When neither avoidance nor a stepped sensor is available, `link_status()` reports `preflight` and takeoff is refused with this detail (the parameter problems are listed after the colon, separated by semicolons):
+
+`no obstacle avoidance: <problems> (configure the autopilot's avoidance, use a camera source for stepped sensing, or set FLIGHTRISK_OBSTACLE_SENSING=off)`
+
+For an ArduCopter whose link has no `yaw_to`, a camera source is not a working remedy: a camera edge cuts every lane the vehicle is not already facing, whatever avoidance the autopilot has (see below). So the detail names only the autopilot's avoidance, which this edge then checks, and the override, which relies on that avoidance without checking it:
+
+`no obstacle avoidance: <problems> (configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane this ArduCopter does not already face)`
+
+PX4 keeps the first text above.
+
+This reuses `drone_unreachable` on the wire, like the failsafe parameters. The simple object avoidance of ArduCopter (`AVOID_ENABLE`) works only in AltHold and Loiter, so it does not protect the edge's lanes and is not checked.
+
+With onboard avoidance, lanes are flown as before and the edge does not sense for the autopilot. A move that misses its deadline while the vehicle has stayed within 0.5 m of one spot for `MavlinkFleetOptions.stationary_s` (3.0 s by default, untuned), still in the edge's own flight mode, is not an error: the drone returns `STOPPED_SHORT` with the measured pose, and the executor cuts the lane there with reason `autopilot` and flies on. Without the capability, a missed deadline still raises and lands the drone. The cut is reported to the ground, but a segment cut for `autopilot` is not offered to another drone.
+
+An ArduCopter told `stepped` sensing by an edge with a camera source is not refused when its link has no `yaw_to`, but the edge logs `edge_obstacle_stepped_cannot_yaw` (WARNING) once, because every lane the vehicle is not already facing is cut with `sensor_stale` and never flown blind, and `sensor_down` then ends the remaining lanes. Configuring the autopilot's avoidance does not change that, because an edge with a camera source always builds the stepped sensor. Until a link has `yaw_to`, the only way to fly those lanes is to set `FLIGHTRISK_OBSTACLE_SENSING=off` and rely on the autopilot's own avoidance (`OA_TYPE` plus a proximity source), which the edge does not check in that mode. The warning's detail says so: "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance the autopilot has; to fly those lanes, set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own avoidance (OA_TYPE plus a proximity source), which the edge does not check in that mode". The lane executor also clears a step only while `measured_heading_deg()` is within 10 degrees of the commanded heading (`docs/obstacle-sensing.md`, "Facing the step").
+
+None of this has flown: the parameter names and values come from the ArduPilot and PX4 documentation, not from an aircraft, and how long a real ArduCopter holds before BendyRuler gives up on a target decides whether the stationary window is long enough (hardware item H9).
 
 ### What happens when
 
@@ -142,6 +169,7 @@ Stated plainly:
 
 - **Unit and integration tests against a simulated MAVSDK** (`tests/support/fake_mavsdk.py`): a kinematic model behind MAVSDK's Python API runs the real `MavsdkAutopilotLink`, `MavlinkFleetDrone`, `LaneExecutor`, ground transport and `FleetCoordinator`. They check the edge's logic: frame math, preflight refusals, failsafe mapping, external control, watchdogs, a two-drone field plan end to end, and the `--drone mavlink` edge over a real WebSocket ground link. They do not check how real PX4 or ArduPilot firmware behaves.
 - **ArduCopter 4.6.3 SITL** (native build, `docs/sitl-demo.md`, "Fleet edge in SITL"): one drone flew a field plan from the real coordinator and landed on LAND ALL; two drones in two SITL instances flew their zones at 10 m and 15 m; a silent ground link made the edge return the drone to launch, and it landed 2 cm from its takeoff point; the real edge process (`--drone mavlink`, YOLO detector, WebSocket link) flew a plan from `scripts/field_fleet_ground.py`. SITL also found five problems the simulated tests could not, all fixed (listed there). After the review round's safety fixes it was run again: the field plans (now covering the whole width), the link-loss hold and return, ArduCopter ignoring a reposition's yaw (so `rotate()` no longer waits for it), and a mode switch to LOITER after LAND ALL that the edge did not fight. No PX4 SITL was run. An RC pilot's own switch, the autopilot's own failsafes, a refused return and a geofence breach were not exercised in SITL.
+- **Obstacle avoidance** (parameter check, `ONBOARD_AVOIDANCE`, `STOPPED_SHORT`, the camera sensor at 500 cm steps) is covered by tests against the simulated MAVSDK only. No real autopilot, no ArduCopter SITL run with BendyRuler and no PX4 has exercised it.
 - **Not verified**: any real autopilot, flight controller or companion computer; any real flight; any real radio, mesh or MAVLink router; real GPS noise and wind; camera mounting and the Raspberry Pi camera's footprint at altitude; SITL ran natively on Apple Silicon (no emulation), so emulation timing was not a factor; SITL physics and sensors are idealised.
 
 ## Starting a MAVLink edge

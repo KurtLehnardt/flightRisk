@@ -43,6 +43,18 @@ class MockTransforms:
 _mock_model = MockModel()
 
 
+def _clear_scene():
+    """A valid, clear view: a bright band above the middle row sets the p95
+    scale, and the middle row is far (0.1 / 0.9, about 0.11, below 0.35).
+
+    A uniform map is degenerate (the guard cannot judge it), so the tests that
+    need a plain safe view use this one.
+    """
+    depth = torch.ones(1, 256, 256) * 0.1
+    depth[0, 0:85, :] = 0.9
+    return depth
+
+
 def _mock_hub_load(repo, model_name, **kwargs):
     if model_name == "MiDaS_small":
         return _mock_model
@@ -55,8 +67,8 @@ def _mock_hub_load(repo, model_name, **kwargs):
 def mock_midas(monkeypatch):
     """Patch torch.hub.load globally for all tests."""
     monkeypatch.setattr("torch.hub.load", _mock_hub_load)
-    # Reset mock model to default uniform depth
-    _mock_model.set_depth_map(torch.ones(1, 256, 256) * 0.1)
+    # Reset mock model to a valid, clear view
+    _mock_model.set_depth_map(_clear_scene())
     yield _mock_model
 
 
@@ -93,8 +105,12 @@ class TestCheckPathStructure:
     def test_returns_correct_keys(self, guard, frame):
         """check_path must return all required keys."""
         result = guard.check_path(frame)
-        required_keys = {"safe", "center_depth", "left_depth", "right_depth", "action", "confidence"}
+        required_keys = {
+            "safe", "center_depth", "left_depth", "right_depth", "action", "confidence",
+            "center_p90", "center_stat", "degenerate", "degenerate_reason",
+        }
         assert required_keys == set(result.keys())
+        assert result["degenerate"] is False and result["degenerate_reason"] == ""
 
     def test_depth_values_normalized(self, guard, frame):
         """All depth values should be in 0-1 range."""
@@ -109,20 +125,24 @@ class TestCheckPathStructure:
 
 
 class TestUniformDepth:
-    def test_uniform_low_depth_is_safe(self, mock_midas, guard, frame):
-        """Uniform low inverse depth (everything far away) should be safe."""
+    # A uniform map is degenerate (review of PR #177, B2): no real view gives
+    # one, so the guard cannot say the path is clear. These two cases were
+    # "safe" before the fix; they must now never be.
+    def test_uniform_low_depth_is_degenerate_not_safe(self, mock_midas, guard, frame):
+        """Uniform low inverse depth is degenerate: not safe, and no move suggested."""
         mock_midas.set_depth_map(torch.ones(1, 256, 256) * 0.1)
         result = guard.check_path(frame)
-        assert result["safe"] is True
-        assert result["action"] == "clear"
+        assert result["safe"] is False
+        assert result["action"] == "unavailable"
+        assert result["degenerate"] is True and result["degenerate_reason"] == "uniform"
 
-    def test_all_black_frame_is_safe(self, mock_midas, guard, frame):
-        """All-black frame with uniform depth should report safe."""
+    def test_all_zero_depth_is_degenerate_not_safe(self, mock_midas, guard, frame):
+        """An all-zero depth map (for example from an all-black frame) is degenerate, not safe."""
         mock_midas.set_depth_map(torch.zeros(1, 256, 256))
         result = guard.check_path(frame)
-        # Uniform zero depth normalizes to all-zero — below threshold
-        assert result["safe"] is True
-        assert result["action"] == "clear"
+        assert result["safe"] is False
+        assert result["action"] == "unavailable"
+        assert result["degenerate"] is True and result["degenerate_reason"] == "uniform"
 
     def test_uniform_high_depth_is_blocked(self, mock_midas, guard, frame):
         """Uniform high inverse depth (flat wall approaching) must NOT be safe."""
@@ -130,6 +150,7 @@ class TestUniformDepth:
         result = guard.check_path(frame)
         assert result["safe"] is False
         assert result["action"] == "reverse"
+        assert result["degenerate"] is True
 
 
 class TestObstacleCenter:
@@ -185,7 +206,7 @@ class TestCaching:
         from flightrisk.drone.obstacle import ObstacleGuard
         guard = ObstacleGuard(min_safe_depth=0.35, check_interval=5.0)
 
-        mock_midas.set_depth_map(torch.ones(1, 256, 256) * 0.1)
+        mock_midas.set_depth_map(_clear_scene())
         result1 = guard.check_path(frame)
 
         # Change the depth map — but cached result should be returned
@@ -200,7 +221,7 @@ class TestCaching:
         from flightrisk.drone.obstacle import ObstacleGuard
         guard = ObstacleGuard(min_safe_depth=0.35, check_interval=0.05)
 
-        mock_midas.set_depth_map(torch.ones(1, 256, 256) * 0.1)
+        mock_midas.set_depth_map(_clear_scene())
         result1 = guard.check_path(frame)
         assert result1["safe"] is True
 
@@ -303,3 +324,112 @@ class TestDepthVisualization:
         with mock_module.patch.object(mock_midas, 'forward', wraps=mock_midas.forward) as spy:
             guard.get_depth_visualization(frame)
             spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive model loading
+# ---------------------------------------------------------------------------
+
+class TestNonInteractiveLoad:
+    def test_hub_loads_pass_trust_repo(self, monkeypatch):
+        """Every torch.hub.load call must pass trust_repo=True so that torch
+        never prompts on stdin ("Do you trust this repository (y/N)?")."""
+        from flightrisk.drone.obstacle import ObstacleGuard
+
+        calls = []
+
+        def recording_load(repo, model_name, **kwargs):
+            calls.append((repo, model_name, kwargs))
+            return _mock_hub_load(repo, model_name, **kwargs)
+
+        monkeypatch.setattr("torch.hub.load", recording_load)
+        ObstacleGuard()
+
+        assert [c[1] for c in calls] == ["MiDaS_small", "transforms"]
+        for repo, _name, kwargs in calls:
+            assert repo == "intel-isl/MiDaS"
+            assert kwargs.get("trust_repo") is True
+
+    def test_startup_never_reads_stdin(self, monkeypatch):
+        """Constructing the guard must not call input(), even with a live stdin."""
+        import builtins
+
+        from flightrisk.drone.obstacle import ObstacleGuard
+
+        def fail_input(*args, **kwargs):
+            raise AssertionError("ObstacleGuard read from stdin")
+
+        monkeypatch.setattr(builtins, "input", fail_input)
+        ObstacleGuard()
+
+
+# ---------------------------------------------------------------------------
+# Centre statistic (mean by default, p90 for the fleet sensor)
+# ---------------------------------------------------------------------------
+
+def _thin_stem_depth():
+    """A bright top third sets the p95 scale; a thin stem crosses the centre.
+
+    The stem covers about 12 percent of the centre region, so it barely moves
+    the region's mean but is above its 90th percentile.
+    """
+    depth = torch.ones(1, 256, 256) * 0.1
+    depth[0, 0:85, :] = 0.9  # far-side bright area outside the middle row
+    depth[0, 85:170, 120:130] = 0.9  # 10 of 85 centre columns, all rows
+    return depth
+
+
+class TestCenterStat:
+    def test_default_is_mean(self):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        assert ObstacleGuard().center_stat == "mean"
+
+    def test_unknown_stat_is_rejected(self):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        with pytest.raises(ValueError):
+            ObstacleGuard(center_stat="median")
+
+    def test_thin_stem_is_clear_under_mean(self, mock_midas, frame):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        mock_midas.set_depth_map(_thin_stem_depth())
+        result = ObstacleGuard(check_interval=0.0).check_path(frame)
+        assert result["safe"] is True
+        assert result["action"] == "clear"
+        assert result["center_stat"] == "mean"
+        assert result["center_depth"] < 0.35
+        assert result["center_p90"] > 0.35
+
+    def test_thin_stem_is_blocked_under_p90(self, mock_midas, frame):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        mock_midas.set_depth_map(_thin_stem_depth())
+        result = ObstacleGuard(check_interval=0.0, center_stat="p90").check_path(frame)
+        assert result["safe"] is False
+        assert result["action"] != "clear"
+        assert result["center_stat"] == "p90"
+        assert result["center_depth"] == result["center_p90"]
+
+    def test_clear_scene_is_clear_under_p90(self, mock_midas, frame):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        depth = torch.ones(1, 256, 256) * 0.1
+        depth[0, 0:85, :] = 0.9
+        mock_midas.set_depth_map(depth)
+        result = ObstacleGuard(check_interval=0.0, center_stat="p90").check_path(frame)
+        assert result["safe"] is True
+
+    def test_uniform_cases_report_the_stat(self, mock_midas, frame):
+        from flightrisk.drone.obstacle import ObstacleGuard
+        mock_midas.set_depth_map(torch.ones(1, 256, 256) * 5.0)
+        result = ObstacleGuard(check_interval=0.0, center_stat="p90").check_path(frame)
+        assert result["center_stat"] == "p90"
+        assert result["safe"] is False
+
+    def test_default_center_depth_is_the_region_mean(self, mock_midas, guard, frame):
+        """With the default, center_depth is still the plain mean of the region."""
+        depth = torch.ones(1, 256, 256) * 0.1
+        depth[0, 0:85, :] = 0.9
+        depth[0, 85:170, 85:170] = 0.5
+        mock_midas.set_depth_map(depth)
+        result = guard.check_path(frame)
+        region = (depth.squeeze().numpy() / np.percentile(depth.numpy(), 95))[85:170, 85:170]
+        assert result["center_stat"] == "mean"
+        assert result["center_depth"] == pytest.approx(float(region.mean()), rel=1e-5)

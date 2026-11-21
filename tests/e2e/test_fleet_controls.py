@@ -89,3 +89,24 @@ def test_hotkey_select_not_editable_and_altgr_ignored():
         assert token in editable
     # The LAND ALL tooltip names the in-field shortcut.
     assert re.search(r'title="[^"]*Ctrl/Cmd\+Shift\+L[^"]*text field', _land_all_tag())
+
+
+def test_obstacle_sensing_is_shown_on_the_card_the_banner_and_the_not_searched_box():
+    """The obstacle badges, banners, re-flight statuses and segment colours are wired (design section 6)."""
+    card = _function_body("renderDroneStatus")
+    assert "senseBadge(d)" in card and "obstacleStopBadge(d)" in card
+    assert "OBSTACLE STOP" in JS and "SENSE OFF" in JS and "SENSE AUTOPILOT" in JS and "STALE" in JS
+    events = JS[JS.index("socket.on('fleet_event'"):]
+    events = events[: events.index("// ========== PLAN AND START")]
+    assert "kind === 'lane_blocked'" in events and "kind.indexOf('reflight_') === 0" in events
+    for sentence in (
+        "' to finish its lanes'", "'offered to '", "' will re-fly it after its lanes'", "' is re-flying it'",
+        "', not offered again'", "'not re-flown: '",
+    ):
+        assert sentence in JS
+    assert 'id="fleet-uncovered"' in INDEX
+    assert "applyUncovered(data.uncovered)" in JS
+    # The Start confirmation names drones flying without full sensing before it asks.
+    assert "unsensedWarning(droneInfo" in _function_body("startFleet")
+    map_js = (DASHBOARD / "static" / "ui" / "map_plan.js").read_text(encoding="utf-8")
+    assert "setUncoveredSegments" in map_js and "plan-segment-reflight" in map_js and "plan-segment-final" in map_js

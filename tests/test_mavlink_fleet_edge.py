@@ -436,6 +436,8 @@ def test_mavlink_edge_end_to_end_over_the_ground_transport(monkeypatch):
     monkeypatch.setattr(edge_device, "start_local_land_key", lambda *a, **k: None)
     vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
     install(monkeypatch, vehicle)
+    # This test covers the transport and the ground script, not sensing; the sanctioned override for a MAVLink drone with no avoidance and no usable sensor.
+    monkeypatch.setenv("FLIGHTRISK_OBSTACLE_SENSING", "off")
     token = secrets.token_hex(16)
     monkeypatch.setenv("FLIGHTRISK_EDGE_TOKEN", token)
 
