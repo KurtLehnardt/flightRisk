@@ -26,6 +26,12 @@ geofence contains them, a ``nack`` sends the refused lanes on to another
 eligible drone, and lanes that no drone can take are reported as uncovered
 in a ``retask_failed`` event.
 
+What an obstacle cut leaves unsearched rides on the same machinery: once
+the cutting drone has finished its lanes, the segments of each cut are
+offered once to another drone that senses obstacles, which flies them
+reversed at its own altitude slot (``lane_reflight``); the ``reflight_*``
+events follow each offer to ``reflown`` or ``blocked_again``.
+
 Clock convention: the offset of a link is the median over the sync rounds of
 ``((t2 - t1) + (t3 - t4)) / 2``, which is the edge clock minus the ground
 clock. It is sent unchanged in ``clock{offset_s}``. An edge fires a
@@ -60,6 +66,36 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from flightrisk.drone.lane_reflight import leg_rest, plan_reflight
+from flightrisk.drone.lane_reflight import transit as _transit
+from flightrisk.drone.lane_steps import (
+    Cut,
+    LaneReplay,
+    UncoveredSegment,
+    decode_cuts,
+    replay_lanes,
+    uncovered_segments,  # noqa: F401 - the replay the edge uses; kept importable from here
+)
+from flightrisk.drone.obstacle_sensor import (
+    CUT_SENSOR_DOWN,
+    MAX_CUTS_LISTED,
+    REFLIGHT_CUT_REASONS,
+    SEGMENT_SKIPPED,
+    SEGMENT_TOO_SHORT,
+    SENSING_AUTOPILOT,
+    SENSING_OFF,
+    SENSING_STEPPED,
+    SENSOR_UNAVAILABLE_DETAIL,
+    TELEMETRY_CUT_REASONS,
+    TELEMETRY_CUTS,
+    TELEMETRY_CUTS_TOTAL,
+    TELEMETRY_FIELDS,
+    TELEMETRY_LATENCY_MS,
+    TELEMETRY_SENSING,
+    TELEMETRY_SENSOR_OK,
+    TELEMETRY_SEQ,
+    TELEMETRY_STATE,
+)
 from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.search import split_parallel_track_zones
 
@@ -88,12 +124,34 @@ TELEMETRY_FRESH_S = 2.0
 TRANSIENT_NACKS = frozenset({"landing", "busy"})
 """Telemetry older than this is ignored by the start battery gate."""
 
+# The Tello move range. Transits (``lane_reflight.transit``) are split with the
+# same limits, ``MIN_MOVE_CM`` and ``MAX_MOVE_CM`` of ``flightrisk.drone.safety``.
 TELLO_MIN_MOVE_CM = 20
 TELLO_MAX_MOVE_CM = 500
 
 RETASK_WAIT_S = 2.0
 """How long ``on_drone_lost`` waits for the receiving drones to answer
 before it reports the re-task. Later answers are reported as they arrive."""
+
+MAX_REFLIGHTS_PER_DRONE = 4
+"""Most cuts of one drone per plan whose segments are offered to another drone (design section 3.4).
+
+Later cuts are only reported, so a drone with a flapping sensor cannot flood
+the other drones with re-flights."""
+
+MAX_OBSTACLE_SEQ = 2**31
+"""Highest ``obstacle_seq`` the ground believes. An edge counts one per cut, so
+a higher count is a corrupted or buggy report: its obstacle fields are
+ignored rather than trusted."""
+
+# The fleet_event each re-flight chunk status is announced with (design section 6).
+_REFLIGHT_EVENTS = {
+    "offered": "reflight_offered",
+    "acked": "reflight_accepted",
+    "reflown": "reflight_done",
+    "blocked_again": "reflight_blocked",
+    "failed": "reflight_failed",
+}
 
 # Floating-point slack in the geofence check, matching SafetyEnvelope.
 _FENCE_TOLERANCE_CM = 1e-6
@@ -104,6 +162,9 @@ _DIRECTION_VECTORS = {
     "right": (1, 0),
     "left": (-1, 0),
 }
+
+# The telemetry fields ``status()`` copies for a drone that reports obstacle sensing.
+_STATUS_OBSTACLE_KEYS = (TELEMETRY_SENSING, TELEMETRY_SENSOR_OK, TELEMETRY_STATE, TELEMETRY_LATENCY_MS)
 
 _PASSTHROUGH_DETECTION_KEYS = ("thumbnail", "lat", "lon")
 
@@ -261,7 +322,7 @@ class FleetDetection:
 
 @dataclass(eq=False)
 class _Chunk:
-    """A contiguous run of a lost drone's unflown lanes, re-tasked as one piece.
+    """A contiguous run of a lost drone's unflown lanes, or one cut's re-flight, re-tasked as one piece.
 
     ``points`` are the shared-grid positions along the run: its start, then
     the end of each lane. ``status`` is ``queued`` (waiting for a drone),
@@ -274,6 +335,14 @@ class _Chunk:
     for now (``landing`` or ``busy``, see ``TRANSIENT_NACKS``) to that
     reason: the run waits and is offered to it again once its telemetry
     shows the refusal is over.
+
+    ``kind`` is ``lost`` for a lost drone's lanes and ``reflight`` for the
+    segments one lane cut left unsearched (design section 3.4). A re-flight
+    chunk's ``lost_id`` is the cutting drone, ``first_index`` the cut lane
+    and ``cut_seq`` the cut's ``obstacle_seq``; its lanes come from
+    ``lane_reflight.plan_reflight`` and its status may also become
+    ``flying``, ``reflown`` or ``blocked_again``. Its other fields are
+    described where they are declared.
     """
 
     lost_id: str
@@ -290,13 +359,76 @@ class _Chunk:
     # Drones the run could not go to because their new path would come
     # closer than the zone gap to another drone's path: rid -> why.
     too_close: dict[str, str] = field(default_factory=dict)
+    kind: str = "lost"
+    # Re-flight only. The segments the lanes re-fly, on the shared grid and in
+    # flight order; ``legs[k]`` is the index in ``segments`` of the segment
+    # lane k flies, or None for a transit between two segments. ``too_short``
+    # are the cut's segments under the minimum move, which are not offered.
+    cut_seq: int | None = None
+    segments: list[UncoveredSegment] = field(default_factory=list)
+    legs: list[int | None] = field(default_factory=list)
+    too_short: list[UncoveredSegment] = field(default_factory=list)
+    # Re-flight only. ``gate_open`` turns True once the cutting drone has
+    # finished its lanes, landed or been lost; until then the chunk waits for
+    # it. ``cutter_lanes`` is how many lanes the cutting drone had then: its
+    # path over them is not checked for separation, any lane it is given
+    # later is. ``crowded`` is why the chunk waits while the cutting drone,
+    # still in the air, is too close to the only path that would take it.
+    gate_open: bool = False
+    cutter_lanes: int = 0
+    crowded: str | None = None
+    # Why the chunk waits for a receiver that may take it later: one that
+    # senses obstacles and has not finished its own lanes, has no fresh
+    # telemetry or is not flying yet (both kinds, see
+    # ``_own_lanes_left_locked``), or, for a re-flight, one without fresh
+    # telemetry or taking off (review N7). Shown as the waiting segment's
+    # ``detail``, in the ``retask`` event's ``awaiting`` lanes and, for a
+    # lost drone's lanes, as the ``reason`` of their ``waiting`` entries in
+    # ``current_plan()["uncovered"]``.
+    held: str | None = None
+    # Re-flight only. Where ``appended`` starts in the receiver's lanes (set
+    # with the offer), the drone that accepted it (kept when the chunk fails
+    # afterwards), every drone it was offered to, and the (status, receiver)
+    # last announced in a ``reflight_*`` event.
+    appended_start: int | None = None
+    flown_by: str | None = None
+    offered_to: list[str] = field(default_factory=list)
+    announced: tuple[str, str | None] | None = None
+    # Re-flight only. True once the receiver flew the appended lanes, or
+    # some of them, and the chunk ended without re-flying every segment
+    # (``blocked_again``, or ``failed`` because the receiver's sensor went
+    # down on them, it flew them off the planned path or it landed before
+    # it finished them): what it left unsearched is listed instead of the
+    # whole segments.
+    flown_rest: bool = False
+    # Re-flight only. The receiver's ``lane_index`` when its telemetry showed
+    # it on the ground before it had flown the appended lanes (the chunk then
+    # failed): the lanes from there on were not flown, so the legs on them
+    # are listed whole.
+    landed_at: int | None = None
 
     @property
     def start(self) -> tuple[int, int]:
         return self.points[0]
 
+    @property
+    def appended_range(self) -> tuple[int, int] | None:
+        """``(first, end)`` of the receiver's lanes this offer appended (transit included), or None."""
+        if self.appended_start is None:
+            return None
+        return self.appended_start, self.appended_start + len(self.appended)
+
     def lane_entries(self) -> list[dict]:
-        """One entry per lane: its index in the lost drone's lanes, move and grid ends."""
+        """One entry per lane: its index in the lost drone's lanes, move and grid ends.
+
+        A re-flight chunk lists the segments it re-flies instead: each with
+        the cutting drone's lane index, that lane's direction and the
+        segment's two ends on the shared grid (``x_cm, y_cm`` next to the
+        ground the cutting drone flew), the shape of a
+        ``current_plan()["uncovered"]`` segment entry.
+        """
+        if self.kind == "reflight":
+            return [_segment_entry(seg) for seg in self.segments]
         entries = []
         for k, lane in enumerate(self.lanes):
             (x0, y0), (x1, y1) = self.points[k], self.points[k + 1]
@@ -360,6 +492,35 @@ class _DroneState:
     ping_t1: float | None = None
     ping_event: threading.Event | None = None
     pong: tuple[float, float, float] | None = None
+    # Obstacle sensing (design section 6). ``obstacle_seq`` is the last
+    # ``obstacle_seq`` the edge reported, so each increase is announced once.
+    # The edge counts every cut it makes while it runs and never restarts the
+    # count for a new plan, so the k-th last listed cut is cut number
+    # ``obstacle_seq - k``. ``obstacle_plan_seq`` is the count when the
+    # current plan was installed: cuts numbered up to it belong to an earlier
+    # plan. ``obstacle_cuts`` maps the number of every cut of the current
+    # plan the ground has seen to the cut, because telemetry lists only the
+    # last ``MAX_CUTS_LISTED``.
+    obstacle_seq: int = 0
+    obstacle_plan_seq: int = 0
+    obstacle_cuts: dict[int, Cut] = field(default_factory=dict)
+    # The ground numbers a cut ``obstacle_key_base + obstacle_seq``. The base
+    # grows by the last count each time the edge restarts (its count starts
+    # again at 0), so a cut number is never used twice: cut numbers key
+    # ``obstacle_cuts`` and name re-flights (``cut_seq``). ``obstacle_plan_seq``
+    # is in the ground's numbering. ``obstacle_seen`` turns True with the
+    # first count the edge reports.
+    obstacle_key_base: int = 0
+    obstacle_seen: bool = False
+    # Indexes in ``lanes`` where an accepted re-task appended lanes. The
+    # ground plans appended lanes from where the drone actually is, and the
+    # edge ends the deficit of its earlier cuts there, so the replay of the
+    # drone's lanes restarts its deficit at each of them (``lane_steps``).
+    retask_starts: list[int] = field(default_factory=list)
+    # True once the drone's telemetry has said ``is_flying: true`` since the
+    # current plan was installed. A drone that reports it is not flying after
+    # that has landed, and one that never flew may still be taking off.
+    seen_flying: bool = False
 
 
 def _number(value: Any) -> float | None:
@@ -383,8 +544,53 @@ def _drone_link_refusal(msg: dict, key: str = "drone_link_detail") -> str:
     return "drone unreachable"
 
 
+def _obstacle_sensor_refusal(msg: dict) -> str:
+    """Why a start is refused for a stepped drone whose telemetry says its obstacle sensor is down."""
+    state = msg.get(TELEMETRY_STATE)
+    suffix = f" (obstacle_state {state})" if isinstance(state, str) else ""
+    return f"{SENSOR_UNAVAILABLE_DETAIL} the edge reports it cannot sense obstacles{suffix}"
+
+
 def _lane(direction: str, distance_cm: int) -> dict:
     return {"direction": direction, "distance_cm": int(distance_cm)}
+
+
+def _segment_entry(seg: UncoveredSegment) -> dict:
+    """A segment already on the shared grid in the ``lane_entries()`` shape."""
+    return {
+        "index": seg.lane_index,
+        "direction": seg.direction,
+        "distance_cm": seg.length_cm,
+        "x_cm": seg.x_cm,
+        "y_cm": seg.y_cm,
+        "end_x_cm": seg.end_x_cm,
+        "end_y_cm": seg.end_y_cm,
+    }
+
+
+def _on_grid(seg: UncoveredSegment, origin: tuple[int, int]) -> UncoveredSegment:
+    """*seg*, given relative to a drone's takeoff point, moved onto the shared grid."""
+    return replace(
+        seg,
+        x_cm=origin[0] + seg.x_cm,
+        y_cm=origin[1] + seg.y_cm,
+        end_x_cm=origin[0] + seg.end_x_cm,
+        end_y_cm=origin[1] + seg.end_y_cm,
+    )
+
+
+# The keys of a ``lane_entries()`` entry.
+_LANE_ENTRY_KEYS = ("index", "direction", "distance_cm", "x_cm", "y_cm", "end_x_cm", "end_y_cm")
+
+
+def _uncovered_entry(seg: UncoveredSegment, drone_id: str, reason: str, cut_seq: int | None) -> dict:
+    """A shared-grid segment as a ``current_plan()["uncovered"]`` entry of ``kind`` ``segment``."""
+    return {"kind": "segment", **_segment_entry(seg), "drone_id": drone_id, "reason": reason, "cut_seq": cut_seq}
+
+
+def _segment_key(seg: UncoveredSegment, cut_seq: int) -> tuple:
+    """What identifies one shared-grid segment of a drone's replay, whatever its index among the cuts."""
+    return (cut_seq, seg.lane_index, seg.direction, seg.x_cm, seg.y_cm, seg.end_x_cm, seg.end_y_cm, seg.reason)
 
 
 def _path_point(origin: tuple[int, int], lanes: list[dict], upto: int | None = None) -> tuple[int, int]:
@@ -395,32 +601,6 @@ def _path_point(origin: tuple[int, int], lanes: list[dict], upto: int | None = N
         x += dx * lane["distance_cm"]
         y += dy * lane["distance_cm"]
     return x, y
-
-
-def _axis_moves(delta_cm: int, positive: str, negative: str) -> list[dict]:
-    """Tello-valid moves (20 to 500 cm each) whose net displacement is ``delta_cm``.
-
-    A displacement shorter than the Tello minimum is flown as an overshoot
-    followed by a minimum-length return, so the net result stays exact.
-    """
-    if delta_cm == 0:
-        return []
-    direction, opposite = (positive, negative) if delta_cm > 0 else (negative, positive)
-    distance = abs(delta_cm)
-    if distance < TELLO_MIN_MOVE_CM:
-        return [_lane(direction, distance + TELLO_MIN_MOVE_CM), _lane(opposite, TELLO_MIN_MOVE_CM)]
-    segments = math.ceil(distance / TELLO_MAX_MOVE_CM)
-    base, remainder = divmod(distance, segments)
-    return [_lane(direction, base + (1 if i < remainder else 0)) for i in range(segments)]
-
-
-def _transit(start: tuple[int, int], end: tuple[int, int]) -> list[dict]:
-    """Moves from ``start`` to ``end``: forward or back first, then sideways.
-
-    Matching the forward position first keeps the drone inside its own zone
-    until it crosses the gap sideways at the target's forward position.
-    """
-    return _axis_moves(end[1] - start[1], "forward", "back") + _axis_moves(end[0] - start[0], "right", "left")
 
 
 def _split_contiguous(items: list[dict], parts: int) -> list[tuple[int, list[dict]]]:
@@ -462,8 +642,10 @@ class FleetCoordinator:
         on_event: Optional callback ``(event_name, payload)`` for the
             dashboard. It receives ``fleet_detection`` for each new merged
             detection and ``fleet_event`` for ``drone_lost``, ``retask``,
-            ``retask_failed`` and ``land_all``. Exceptions it raises are
-            logged and ignored.
+            ``retask_failed``, ``land_all``, ``lane_blocked`` and the
+            re-flight events ``reflight_offered``, ``reflight_accepted``,
+            ``reflight_done``, ``reflight_blocked`` and ``reflight_failed``.
+            Exceptions it raises are logged and ignored.
         geofence_cm: Half-width of the square geofence each edge keeps
             around its takeoff point (``FLIGHTRISK_GEOFENCE_CM`` on the
             edge). Re-tasked lanes are offered only to drones whose geofence
@@ -545,6 +727,8 @@ class FleetCoordinator:
         self._detections: list[FleetDetection] = []
         self._next_detection_id = 1
         self._retasks: list[_Retask] = []
+        # One chunk per lane cut offered once to another drone (design section 3.4).
+        self._reflights: list[_Chunk] = []
 
         for drone_id, link in self._links.items():
             link.on_message = self._make_callback(drone_id)
@@ -581,7 +765,15 @@ class FleetCoordinator:
 
         ``uncovered`` lists every re-tasked lane that no drone could take, in
         the shape of the ``retask_failed`` event's lanes plus the lost
-        drone's id.
+        drone's id, the plan's unseen areas, and every segment a lane cut
+        left unsearched (``kind`` ``segment``, see
+        ``_obstacle_uncovered_locked``), with its re-flight ``status`` when
+        it is offered to another drone. A re-tasked lane that waits for a
+        drone that senses obstacles (``held``, see
+        ``_own_lanes_left_locked``) is listed in the same shape with
+        ``status`` ``waiting`` and the waiting text as its ``reason``; a
+        fleet without obstacle fields never has one, so its list is
+        unchanged.
         """
         with self._lock:
             if self._plan is None:
@@ -597,7 +789,14 @@ class FleetCoordinator:
                 for chunk in retask.chunks
                 if chunk.status == "failed"
                 for entry in chunk.lane_entries()
+            ] + [
+                dict(entry, drone_id=chunk.lost_id, reason=chunk.held, status="waiting")
+                for retask in self._retasks
+                for chunk in retask.chunks
+                if chunk.status == "queued" and chunk.held
+                for entry in chunk.lane_entries()
             ] + [dict(area) for area in self._plan.uncovered_areas]
+            out["uncovered"] += self._obstacle_uncovered_locked()
             return out
 
     def detections(self) -> list[FleetDetection]:
@@ -626,6 +825,7 @@ class FleetCoordinator:
         """Per-drone summary for the dashboard ``fleet_status`` event."""
         with self._lock:
             out = {}
+            uncovered: list[dict] | None = None
             for drone_id, state in self._drones.items():
                 telemetry = state.telemetry or {}
                 entry: dict[str, Any] = {
@@ -650,6 +850,18 @@ class FleetCoordinator:
                     "drone_link_ok": telemetry.get("drone_link_ok"),
                     "drone_link_detail": telemetry.get("drone_link_detail"),
                 }
+                if state.obstacle_cuts or any(key in telemetry for key in TELEMETRY_FIELDS):
+                    # Only for a drone that reports obstacle sensing, so the
+                    # status of a fleet without it (and the mobile contract
+                    # fixtures built from it) is unchanged.
+                    entry.update({key: telemetry.get(key) for key in _STATUS_OBSTACLE_KEYS})
+                    # What current_plan() lists for the drone: a re-flown
+                    # segment no longer counts, and what a re-flight left of
+                    # one counts for the drone that cut it.
+                    if uncovered is None:
+                        uncovered = self._obstacle_uncovered_locked()
+                    entry["uncovered_cm"] = sum(u["distance_cm"] for u in uncovered if u["drone_id"] == drone_id)
+                    entry["reflights"] = self._reflight_counts_locked(drone_id)
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:
@@ -784,6 +996,8 @@ class FleetCoordinator:
                 retask.reported = True
                 retask.settled.set()
             self._retasks = []
+            # The previous mission's re-flights are dropped with their cuts.
+            self._reflights = []
             for zone in zones:
                 state = self._drones[zone.drone_id]
                 state.zone = zone
@@ -792,6 +1006,9 @@ class FleetCoordinator:
                 state.offer = None
                 state.nack_reason = None
                 state.executed_at_ground_s = None
+                state.retask_starts = []
+                state.seen_flying = False
+                self._reset_obstacles_locked(state)
                 self._clear_ack(state)
                 messages[zone.drone_id] = self._assign_message(zone.drone_id, state)
         for drone_id, msg in messages.items():
@@ -917,7 +1134,10 @@ class FleetCoordinator:
         telemetry from that window says ``drone_link_ok: false`` (its edge
         cannot reach the drone) is refused with the edge's text, for example
         ``Tello unreachable (no state for 12 s)``; telemetry without the
-        field changes nothing.
+        field changes nothing. So is a drone whose telemetry from that window
+        says ``obstacle_sensor_ok: false``, unless its ``obstacle_sensing`` is
+        ``off`` (it flies unsensed on purpose, with a warning) or
+        ``autopilot`` (the autopilot avoids obstacles itself).
 
         If a ``start_at`` cannot be sent, no further ``start_at`` is sent,
         ``land_all()`` is issued to abort and the result is not ok.
@@ -982,6 +1202,15 @@ class FleetCoordinator:
                     # cached value and a start_at would be refused anyway.
                     refusals[drone_id] = _drone_link_refusal(telemetry)
                     continue
+                sensing = telemetry.get(TELEMETRY_SENSING)
+                if telemetry.get(TELEMETRY_SENSOR_OK) is False and sensing not in (SENSING_OFF, SENSING_AUTOPILOT):
+                    # The edge needs its sensor (stepped or forward-only
+                    # sensing, or a mode this ground does not know) and
+                    # cannot sense: refuse here with the reason.
+                    refusals[drone_id] = _obstacle_sensor_refusal(telemetry)
+                    continue
+                if sensing == SENSING_OFF:
+                    logger.warning("%s flies its lanes unsensed (obstacle sensing is off)", drone_id)
                 fresh = _number(telemetry.get("battery"))
                 if fresh is not None:
                     battery = fresh
@@ -1026,9 +1255,22 @@ class FleetCoordinator:
                 state = self._drones[drone_id]
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
-                if self._release_deferred_locked(drone_id, state.telemetry):
+                if msg.get("is_flying") is True:
+                    state.seen_flying = True
+                events.extend(self._note_cuts_locked(drone_id, state, state.telemetry))
+                # A re-flight this drone flies may have ended, or one of its
+                # own cuts may now be offered (design section 3.4).
+                reflight = self._track_reflights_locked(drone_id, state)
+                held = any(chunk.status == "queued" and chunk.held
+                           for retask in self._retasks for chunk in retask.chunks)
+                if self._release_deferred_locked(drone_id, state.telemetry) or reflight or held:
                     messages = self._dispatch_locked()
-                    events = self._settle_and_collect_locked()
+                    events.extend(self._settle_and_collect_locked())
+                else:
+                    # A re-flight may have changed without a dispatch (an
+                    # edge restart fails its cutter's waiting chunks).
+                    for chunk in self._reflights:
+                        events.extend(self._reflight_events_locked(chunk))
             self._emit_all(events)
             self._send_offers(messages)
         elif msg_type == "detections":
@@ -1074,8 +1316,15 @@ class FleetCoordinator:
                     # The acked plan is the one that carries the pending
                     # re-task offer, so its lanes are now covered.
                     offer, state.offer = state.offer, None
+                    if len(offer.base_lanes) < len(state.lanes):
+                        # The edge flies the appended lanes from where it is
+                        # when it reaches them: its replay restarts there.
+                        state.retask_starts.append(len(offer.base_lanes))
                     for chunk in offer.chunks:
                         chunk.status = "acked"
+                        if chunk.kind == "reflight":
+                            # Accepted once: this chunk is never queued again.
+                            chunk.flown_by = drone_id
                     logger.info("%s accepted %d re-tasked lanes", drone_id,
                                 sum(len(chunk.lanes) for chunk in offer.chunks))
                     messages = self._dispatch_locked()
@@ -1167,6 +1416,430 @@ class FleetCoordinator:
         return reason + (": " + "; ".join(parts) if parts else "")
 
     # ------------------------------------------------------------------
+    # Obstacle cuts
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _reset_obstacles_locked(state: _DroneState) -> None:
+        """Forget the cuts of the previous plan.
+
+        The edge keeps counting cuts across plans, so the count last reported
+        becomes the plan's starting point: a telemetry message from before the
+        edge accepted the new plan still lists the old plan's cuts, and those
+        are numbered at or below it.
+        """
+        state.obstacle_cuts = {}
+        state.obstacle_plan_seq = state.obstacle_key_base + state.obstacle_seq
+
+    @staticmethod
+    def _listed_cuts(telemetry: dict, seq: int) -> list[tuple[int, Cut]]:
+        """The cuts a telemetry message lists, as (cut number, cut), oldest first.
+
+        The listed cuts are the edge's last ones, so the last is number
+        *seq* and each earlier one is one less. A pair that is not two
+        numbers is dropped without shifting the numbers of the others. An
+        edge lists at most ``MAX_CUTS_LISTED`` cuts, so only that many of
+        the last pairs are read.
+        """
+        flat = telemetry.get(TELEMETRY_CUTS)
+        if not isinstance(flat, (list, tuple)):
+            return []
+        text = telemetry.get(TELEMETRY_CUT_REASONS)
+        names = text.split(",") if isinstance(text, str) else []
+        count = len(flat) // 2
+        listed = []
+        for k in range(max(0, count - MAX_CUTS_LISTED), count):
+            name = names[k] if k < len(names) else None
+            decoded = decode_cuts(flat[2 * k:2 * k + 2], name)
+            if decoded:
+                listed.append((seq - (count - 1 - k), decoded[0]))
+        return listed
+
+    @staticmethod
+    def _retask_starts_locked(state: _DroneState, appended_at: int | None = None) -> list[int]:
+        """Where re-tasks appended lanes to the drone's lanes: accepted, pending, and *appended_at*.
+
+        A pending offer already put its lanes in ``state.lanes``, so its
+        start counts too; *appended_at* is where lanes a dispatch is about to
+        offer would start.
+        """
+        starts = list(state.retask_starts)
+        if state.offer is not None:
+            starts.append(len(state.offer.base_lanes))
+        if appended_at is not None:
+            starts.append(appended_at)
+        return starts
+
+    def _replay_locked(
+        self, state: _DroneState, lanes: list[dict] | None = None, appended_at: int | None = None,
+    ) -> LaneReplay | None:
+        """``lane_steps.replay_lanes`` of the drone's lanes (or *lanes*) with its cuts and re-task starts.
+
+        This is exactly the replay the edge makes of the same lanes, cuts
+        and re-task starts. None when the lanes cannot be read (no edge
+        accepts such lanes, so they never carry cuts).
+        """
+        lanes = state.lanes if lanes is None else lanes
+        cuts = [state.obstacle_cuts[n] for n in sorted(state.obstacle_cuts)]
+        try:
+            return replay_lanes(lanes, cuts, retask_starts=self._retask_starts_locked(state, appended_at))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _obstacle_replay_locked(self, state: _DroneState) -> tuple[list[int], list[UncoveredSegment]]:
+        """The drone's cuts of this plan and the segments nobody searched, in the drone's frame.
+
+        Returns the cut numbers in the order the cuts happened and
+        ``lane_steps.uncovered_segments`` of the drone's current lanes
+        (appended lanes included), those cuts and its re-task starts, which
+        is exactly what the edge derives. A segment's ``cut`` indexes the cut
+        numbers, so ``numbers[segment.cut]`` is the number of the cut that
+        produced it or, for a ``skipped`` segment, caused it. Positions are
+        relative to the drone's takeoff point; add ``_origin(state)`` for
+        the shared grid. Lanes the replay cannot read give no segments rather
+        than an error in the telemetry handler.
+        """
+        numbers = sorted(state.obstacle_cuts)
+        replay = self._replay_locked(state)
+        return numbers, ([] if replay is None else list(replay.segments))
+
+    def _actual_path_locked(self, drone_id: str, lanes: list[dict] | None = None) -> list[tuple[int, int]]:
+        """The shared-grid points of the path *drone_id* actually flies, from its takeoff point.
+
+        *lanes* are the drone's lanes (the default), or its lanes followed by
+        lanes a dispatch would append to them. The path is the drone's
+        replay (``LaneReplay.path``): a cut lane ends where the drone
+        stopped, a lane the deficit rule shortens or skips is flown that
+        way, and appended lanes start where the drone actually is. One point
+        for the start and one after each lane. A drone without cuts flies
+        its lanes as planned, which is also the fallback for lanes the replay
+        cannot read.
+        """
+        state = self._drones[drone_id]
+        lanes = state.lanes if lanes is None else lanes
+        origin = self._origin(state)
+        replay = None
+        if state.obstacle_cuts:
+            appended_at = len(state.lanes) if len(lanes) > len(state.lanes) else None
+            replay = self._replay_locked(state, lanes, appended_at)
+        if replay is None:
+            points = [origin]
+            for lane in lanes:
+                points.append(_path_point(points[-1], [lane]))
+            return points
+        return [(origin[0] + x, origin[1] + y) for x, y in replay.path]
+
+    def _planned_points_locked(self, drone_id: str, lanes: list[dict]) -> list[tuple[int, int]]:
+        """Where each of *lanes* (the drone's lanes, maybe before a loss truncated them) is planned on the grid.
+
+        One point per lane start and one for the end (``LaneReplay.planned``):
+        the takeoff point plus the planned lanes, except that lanes after a
+        re-task start are planned from where the drone was when it got
+        there. Without cuts that is simply the planned path.
+        """
+        state = self._drones[drone_id]
+        origin = self._origin(state)
+        replay = self._replay_locked(state, lanes) if state.obstacle_cuts else None
+        if replay is None:
+            points = [origin]
+            for lane in lanes:
+                points.append(_path_point(points[-1], [lane]))
+            return points
+        return [(origin[0] + x, origin[1] + y) for x, y in replay.planned]
+
+    def _edge_restarted_locked(self, drone_id: str, state: _DroneState, seq: int) -> None:
+        """The edge's cut count went down from ``state.obstacle_seq`` to *seq*: it restarted.
+
+        What it reported before no longer applies, so its cuts are dropped.
+        Later cut numbers follow on from the earlier ones
+        (``obstacle_key_base``), so the edge's reused counts never name a cut
+        the ground already knows. The drone's re-flights still waiting are
+        failed: their cuts are no longer reported, and a reused number must
+        never be offered twice (review N12). Offers already out keep going.
+        """
+        logger.warning(
+            "%s reports obstacle_seq %d after %d: its edge restarted, so its earlier cuts are dropped",
+            drone_id, seq, state.obstacle_seq,
+        )
+        state.obstacle_key_base += state.obstacle_seq
+        state.obstacle_cuts = {}
+        state.obstacle_seq = 0
+        state.obstacle_plan_seq = state.obstacle_key_base
+        for chunk in self._reflights:
+            if chunk.lost_id == drone_id and chunk.status == "queued":
+                self._fail_reflight_locked(chunk, f"{drone_id}'s edge restarted, so its cuts are no longer known")
+
+    @staticmethod
+    def _rebase_cut_numbers_locked(state: _DroneState, listed: list[tuple[int, Cut]], seq: int) -> int:
+        """The ``obstacle_key_base`` that numbers *listed* (edge numbering, last one *seq*) after a suspect jump.
+
+        The listed cuts are the last ones of the edge's plan. Those at their
+        front that repeat, in order, the last cuts the ground knows are those
+        cuts and keep their numbers; the others follow on from the last
+        number seen. So a jump in the count alone neither renames nor
+        repeats a cut.
+        """
+        last_seen = state.obstacle_key_base + state.obstacle_seq
+        if not listed:
+            return last_seen - seq
+        known = [(n, state.obstacle_cuts[n]) for n in sorted(state.obstacle_cuts)]
+        cuts = [cut for _, cut in listed]
+        for overlap in range(min(len(known), len(cuts)), 0, -1):
+            if [cut for _, cut in known[-overlap:]] == cuts[:overlap]:
+                return known[-overlap][0] - listed[0][0]
+        return last_seen + 1 - listed[0][0]
+
+    def _note_cuts_locked(self, drone_id: str, state: _DroneState, telemetry: dict) -> list[tuple[str, dict]]:
+        """Record a drone's reported cuts and return one ``lane_blocked`` event per new cut.
+
+        Does nothing for telemetry without a whole, non-negative
+        ``obstacle_seq``, and ignores one above ``MAX_OBSTACLE_SEQ``. The
+        edge counts cuts for as long as it runs, so a lower count than before
+        means it restarted (``_edge_restarted_locked``). ``obstacle_cuts_total``
+        says how many cuts the edge's current plan has, which are the last
+        ones it counted, so any older cut the ground still holds belongs to a
+        plan the edge has left. Every listed cut is kept by its number, so a
+        plan with more cuts than one message lists is still replayed in full.
+
+        Only the cuts listed and the cuts already known are ever walked,
+        never the range of numbers between two counts, so no count can stall
+        the ground (review B4). A count that rose by more than the cuts listed
+        plus ``obstacle_cuts_total`` can explain is suspect: it is logged and
+        only the listed cuts are used, numbered so that a cut the ground
+        already knows keeps its number (``_rebase_cut_numbers_locked``) and
+        is never announced or offered twice. Otherwise cuts that no message
+        listed are counted and logged.
+
+        A ``lane_blocked`` event names the point where the drone stopped and
+        everything the cut left unsearched (the rest of its lane, a
+        same-direction run after it, or for ``sensor_down`` every later
+        lane), in shared-grid coordinates.
+        """
+        raw = _number(telemetry.get(TELEMETRY_SEQ))
+        if raw is None or raw < 0 or raw != int(raw):
+            return []
+        if raw > MAX_OBSTACLE_SEQ:
+            logger.warning("%s reports obstacle_seq %.0f, above %d: its obstacle cuts are ignored",
+                           drone_id, raw, MAX_OBSTACLE_SEQ)
+            return []
+        seq = int(raw)
+        if seq < state.obstacle_seq:
+            self._edge_restarted_locked(drone_id, state, seq)
+        last_seen = state.obstacle_key_base + state.obstacle_seq
+        total_raw = _number(telemetry.get(TELEMETRY_CUTS_TOTAL))
+        total = int(total_raw) if total_raw is not None and total_raw >= 0 and total_raw == int(total_raw) else None
+        listed = self._listed_cuts(telemetry, seq)
+        suspect = state.obstacle_seen and seq - state.obstacle_seq > len(listed) + (total or 0)
+        if suspect:
+            logger.warning(
+                "%s's obstacle_seq jumped from %d to %d, more than its %d listed cuts and obstacle_cuts_total %s "
+                "explain; only the listed cuts are used",
+                drone_id, state.obstacle_seq, seq, len(listed), total,
+            )
+            state.obstacle_key_base = self._rebase_cut_numbers_locked(state, listed, seq)
+        base = state.obstacle_key_base
+        number = base + seq
+        oldest = state.obstacle_plan_seq
+        if total is not None:
+            oldest = max(oldest, number - total)
+        for known in [n for n in state.obstacle_cuts if n <= oldest]:
+            del state.obstacle_cuts[known]
+        for n, cut in listed:
+            if base + n > oldest:
+                state.obstacle_cuts[base + n] = cut
+        state.obstacle_seq = seq
+        state.obstacle_seen = True
+        floor = max(last_seen, oldest)
+        new = sorted(((n, cut) for n, cut in state.obstacle_cuts.items() if n > floor), key=lambda item: item[0])
+        if not suspect and number - floor > len(new):
+            logger.warning(
+                "%s made %d cuts that no telemetry listed; its uncovered segments may be incomplete",
+                drone_id, number - floor - len(new),
+            )
+        if not new:
+            return []
+        numbers, segments = self._obstacle_replay_locked(state)
+        origin_x, origin_y = self._origin(state)
+        events = []
+        for n, cut in new:
+            index = numbers.index(n)
+            own = [s for s in segments if s.cut == index and s.reason == cut.reason]
+            if not own:
+                logger.warning("%s cut lane %d, which its current lanes do not fly; not announced",
+                               drone_id, cut.lane_index)
+                continue
+            x_cm, y_cm = origin_x + own[0].x_cm, origin_y + own[0].y_cm
+            unflown = sum(s.length_cm for s in own)
+            events.append(("fleet_event", {
+                "event": "lane_blocked",
+                "drone_id": drone_id,
+                "lane_index": cut.lane_index,
+                "x_cm": x_cm,
+                "y_cm": y_cm,
+                "unflown_cm": unflown,
+                "reason": cut.reason,
+                "detail": (
+                    f"{drone_id}: lane {cut.lane_index} stopped at ({x_cm:g}, {y_cm:g}) cm, "
+                    f"{unflown:g} cm not searched ({cut.reason})"
+                ),
+            }))
+        self._on_new_cuts_locked(drone_id, state, new)
+        return events
+
+    def _on_new_cuts_locked(self, drone_id: str, state: _DroneState, new_cuts: list[tuple[int, Cut]]) -> None:
+        """Queue a re-flight for each new cut that is offered (design section 3.4). Caller holds the lock.
+
+        Called once for each telemetry message that reports cuts the ground
+        has not seen. ``new_cuts`` are those cuts as ``(obstacle_seq of the
+        cut, lane_steps.Cut)``, oldest first; ``state.obstacle_cuts`` already
+        holds them, so ``_obstacle_replay_locked(state)`` includes their
+        segments.
+
+        A cut is offered when its reason is in ``REFLIGHT_CUT_REASONS``
+        (``obstacle``, ``person`` and ``sensor_stale``; never ``sensor_down``,
+        ``autopilot`` or a lone ``skipped`` shadow, which rides with its cut),
+        when it is not on lanes this drone flies to re-fly another drone's cut
+        (that cut makes that re-flight ``blocked_again``, and a segment is
+        never offered twice), and while the drone has had fewer than
+        ``MAX_REFLIGHTS_PER_DRONE`` cuts taken up in this plan; later cuts are
+        only reported. The new chunk waits for the drone to finish its lanes.
+        Every waiting chunk of the drone is derived again, because a later
+        cut can change which shadows an earlier cut has.
+
+        A re-flight re-tasks a running mission, like the recovery of a lost
+        drone, so nothing is offered for a cut reported before ``start()``
+        (which no edge flying the plan can make): it is only reported.
+        """
+        if state.zone is None or self._started_at is None:
+            return
+        taken = sum(1 for chunk in self._reflights if chunk.lost_id == drone_id)
+        for number, cut in new_cuts:
+            if cut.reason not in REFLIGHT_CUT_REASONS:
+                continue
+            if self._in_reflight_lanes_locked(drone_id, cut.lane_index):
+                continue
+            if taken >= MAX_REFLIGHTS_PER_DRONE:
+                logger.warning(
+                    "%s cut lane %d (cut %d), but %d of its cuts are already offered for a re-flight; "
+                    "this one is only reported",
+                    drone_id, cut.lane_index, number, MAX_REFLIGHTS_PER_DRONE,
+                )
+                continue
+            chunk = _Chunk(
+                lost_id=drone_id, first_index=cut.lane_index, lanes=[], points=[],
+                kind="reflight", cut_seq=number,
+            )
+            self._refresh_reflight_locked(chunk)
+            if not chunk.segments and not chunk.too_short:
+                continue  # Nothing of it in the replay; _note_cuts_locked has said so.
+            self._reflights.append(chunk)
+            taken += 1
+            logger.info("%s's cut %d on lane %d waits to be offered to another drone", drone_id, number, cut.lane_index)
+        for chunk in self._reflights:
+            if chunk.lost_id == drone_id and chunk.status == "queued":
+                self._refresh_reflight_locked(chunk)
+
+    def _reflight_counts_locked(self, drone_id: str) -> dict[str, int]:
+        """The re-flights *drone_id* received: offered to it, re-flown by it and blocked again on it."""
+        return {
+            "offered": sum(1 for chunk in self._reflights if drone_id in chunk.offered_to),
+            "reflown": sum(1 for chunk in self._reflights if chunk.flown_by == drone_id and chunk.status == "reflown"),
+            "blocked_again": sum(
+                1 for chunk in self._reflights if chunk.flown_by == drone_id and chunk.status == "blocked_again"
+            ),
+        }
+
+    def _obstacle_uncovered_locked(self) -> list[dict]:
+        """Every drone's obstacle segments in the shape of ``current_plan()["uncovered"]``, on the shared grid.
+
+        Each entry has the keys of a ``retask_failed`` lane (``index``,
+        ``direction``, ``distance_cm`` and the two ends), plus ``kind``
+        ``segment``, ``drone_id``, ``reason`` and ``cut_seq``, the
+        ``obstacle_seq`` of the cut that produced or caused it, which groups
+        the segments of one cut.
+
+        A segment of a cut taken up for a re-flight (design section 3.4) also
+        has a ``status`` (see ``_reflight_fields``). A segment under the
+        minimum move has status and reason ``too_short``. A re-flown segment
+        is left out. A segment the receiver flew only in part (blocked again,
+        its sensor down on it, flown off the planned path, or the receiver
+        landed before it finished the re-flight) is replaced by what the
+        receiver left unsearched of it (``_reflight_rest_locked``).
+        The receiver's own replay of the lanes a re-flight appended to it
+        (the transit included) is not listed: those lanes re-fly the cutting
+        drone's segments, whose entries say what became of them.
+        """
+        marks: dict[tuple, tuple[_Chunk, bool]] = {}
+        appended: dict[str, set[int]] = {}
+        for chunk in self._reflights:
+            for seg in chunk.segments:
+                marks[(chunk.lost_id, _segment_key(seg, chunk.cut_seq))] = (chunk, False)
+            for seg in chunk.too_short:
+                marks[(chunk.lost_id, _segment_key(seg, chunk.cut_seq))] = (chunk, True)
+            span = chunk.appended_range
+            if chunk.flown_by is not None and span is not None:
+                appended.setdefault(chunk.flown_by, set()).update(range(*span))
+        out = []
+        for drone_id, state in self._drones.items():
+            if not state.obstacle_cuts:
+                continue
+            numbers, segments = self._obstacle_replay_locked(state)
+            origin = self._origin(state)
+            reflight_lanes = appended.get(drone_id, set())
+            for seg in segments:
+                if seg.lane_index in reflight_lanes:
+                    continue
+                grid = _on_grid(seg, origin)
+                cut_seq = numbers[seg.cut]
+                entry = _uncovered_entry(grid, drone_id, seg.reason, cut_seq)
+                mark = marks.get((drone_id, _segment_key(grid, cut_seq)))
+                if mark is not None:
+                    chunk, short = mark
+                    if short:
+                        entry.update(reason=SEGMENT_TOO_SHORT, status=SEGMENT_TOO_SHORT)
+                    elif chunk.status == "reflown" or chunk.flown_rest:
+                        continue
+                    else:
+                        entry.update(self._reflight_fields(chunk))
+                out.append(entry)
+        for chunk in self._reflights:
+            if chunk.flown_rest:
+                out.extend(self._reflight_rest_locked(chunk))
+        return out
+
+    @staticmethod
+    def _reflight_fields(chunk: _Chunk) -> dict:
+        """The re-flight fields of an uncovered segment of *chunk* that is still waiting, in flight or failed.
+
+        ``waiting``: the chunk is queued. ``waiting_for`` is the cutting drone
+        while the chunk waits for it to finish its lanes, or while it is
+        still in the air too close to the path (then ``detail`` says how
+        close), and None while the chunk waits for a free receiver (then
+        ``detail`` names a receiver that may take it once it reports fresh
+        telemetry or has taken off, when that is why).
+        ``offered`` with ``receiver``; ``acked`` (accepted, the receiver has
+        not reached it yet) and ``flying`` (the receiver is on its appended
+        lanes), both with ``receiver``; ``failed`` with ``reason`` replaced by
+        why it will not be re-flown (and ``receiver`` when it was accepted).
+        """
+        if chunk.status == "queued":
+            fields: dict[str, Any] = {
+                "status": "waiting",
+                "waiting_for": chunk.lost_id if not chunk.gate_open or chunk.crowded else None,
+            }
+            if chunk.crowded or chunk.held:
+                fields["detail"] = chunk.crowded or chunk.held
+            return fields
+        if chunk.status == "offered":
+            return {"status": "offered", "receiver": chunk.receiver}
+        if chunk.status in ("acked", "flying"):
+            return {"status": chunk.status, "receiver": chunk.flown_by}
+        fields = {"status": "failed", "reason": chunk.reason}
+        if chunk.flown_by is not None:
+            fields["receiver"] = chunk.flown_by
+        return fields
+
+    # ------------------------------------------------------------------
     # Detection dedup
     # ------------------------------------------------------------------
 
@@ -1244,12 +1917,29 @@ class FleetCoordinator:
         lanes unchanged, then a transit to the chunk's start, then the chunk,
         so an edge keeps its lane index and flies the appended lanes after its
         own. A drone answers one offer at a time; further chunks for it wait.
+        A drone that reports obstacle sensing is offered lanes only once it
+        has finished its own (``_own_lanes_left_locked``): a later cut of its
+        own would move where it flies the appended lanes. Until then a chunk
+        it would take waits, the ``retask`` event says why, and
+        ``current_plan()["uncovered"]`` lists its lanes as ``waiting`` with
+        that reason. Such a drone that landed before it finished its own
+        lanes never takes the chunk (``_unfit_receiver_locked``), so a chunk
+        that only lost, landed or unplanned drones could take fails at once.
 
         An ``ack`` makes the offered lanes covered. A ``nack`` (or a failed
         send) withdraws the offer, and the chunk is offered to another
         eligible drone. A chunk that no remaining drone can take is uncovered.
         Any offer the lost drone itself had pending is withdrawn and offered
         again.
+
+        Re-flights (design section 3.4): a re-flight the lost drone had
+        accepted and not finished fails with reason ``receiver lost``, and
+        its appended lanes (transit included) are not re-tasked, so no third
+        drone is handed the segment. A waiting re-flight of the lost drone's
+        own cuts drops its segments on lanes now re-tasked whole (they are
+        superseded) and offers the rest, the cut's own segment included,
+        without waiting for the lost drone; only a re-flight left with
+        nothing fails, with reason ``superseded``.
 
         The lost drone is also sent a best-effort ``land`` so it cannot keep
         flying lanes that now belong to another drone. The call emits
@@ -1273,6 +1963,7 @@ class FleetCoordinator:
                 return {}
             state.lost = True
             logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
+            self._fail_lost_receiver_locked(drone_id)
             if state.offer is not None:
                 self._withdraw_offer_locked(drone_id, None)
             if state.zone is not None:
@@ -1283,8 +1974,10 @@ class FleetCoordinator:
                 full_path = state.lanes
                 state.lanes = full_path[:index]
                 if full_path[index:]:
-                    retask = _Retask(drone_id, self._make_chunks(drone_id, self._origin(state), full_path, index))
-                    self._retasks.append(retask)
+                    chunks = self._lost_chunks_locked(drone_id, full_path, index)
+                    if chunks:
+                        retask = _Retask(drone_id, chunks)
+                        self._retasks.append(retask)
             messages = self._dispatch_locked()
             events = self._settle_and_collect_locked()
 
@@ -1323,6 +2016,89 @@ class FleetCoordinator:
             logger.warning("retask_excluded check failed for %s", drone_id, exc_info=True)
             return True
 
+    def _unfit_receiver_locked(self, rid: str) -> str | None:
+        """Why *rid* would accept re-tasked lanes of any kind and not fly them, or None.
+
+        A drone that flies sensed steps and reports in its last telemetry
+        that its obstacle sensor is not ok flies no step (review N6). A drone
+        whose lanes a ``sensor_down`` cut ended never flies a lane appended
+        after it either (``lane_steps``). A drone that reports obstacle
+        sensing and whose fresh telemetry shows it on the ground with lanes
+        of its own left, after it had flown in this plan, has landed: it
+        never finishes its own lanes, so it never takes appended lanes
+        (``_own_lanes_left_locked``; review R2-N2). Telemetry without the
+        obstacle fields changes nothing.
+        """
+        state = self._drones[rid]
+        telemetry = state.telemetry or {}
+        if telemetry.get(TELEMETRY_SENSING) == SENSING_STEPPED and telemetry.get(TELEMETRY_SENSOR_OK) is False:
+            return "reports its obstacle sensor is not ok"
+        if any(cut.reason == CUT_SENSOR_DOWN for cut in state.obstacle_cuts.values()):
+            return "ended its lanes (obstacle sensor down)"
+        if (
+            telemetry.get(TELEMETRY_SENSING) is not None
+            and self._fresh_locked(state)
+            and state.seen_flying
+            and telemetry.get("is_flying") is False
+            and telemetry.get("state") != "taking_off"
+            and not self._own_lanes_done_locked(state)
+        ):
+            return "landed before it finished its own lanes"
+        return None
+
+    def _fresh_locked(self, state: _DroneState) -> bool:
+        """True when the drone's last telemetry is no older than ``TELEMETRY_FRESH_S``."""
+        return state.telemetry_at is not None and self._clock() - state.telemetry_at <= TELEMETRY_FRESH_S
+
+    @staticmethod
+    def _own_lanes_done_locked(state: _DroneState) -> bool:
+        """True when the drone's last telemetry shows it past every lane: ``lanes_total`` and every lane the ground gave it."""
+        telemetry = state.telemetry or {}
+        lane_index, lanes_total = telemetry.get("lane_index"), telemetry.get("lanes_total")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (lane_index, lanes_total)):
+            return False
+        return lane_index >= lanes_total and lane_index >= len(state.lanes)
+
+    def _own_lanes_left_locked(self, rid: str) -> str | None:
+        """Why *rid* may not be given appended lanes yet: it senses obstacles and has lanes of its own left.
+
+        A drone that reports ``obstacle_sensing`` (any mode) may cut one of
+        its own lanes, and a cut moves where it starts lanes appended after
+        them, away from the path whose separation and fence were checked. So
+        it gets appended lanes, of a lost drone or of a re-flight, only once
+        its telemetry from the last ``TELEMETRY_FRESH_S`` seconds shows it
+        has finished its own lanes (``lane_index`` at or past ``lanes_total``
+        and past every lane the ground gave it); its cuts are then all known
+        and its replayed position is where it is. Until then the chunk waits
+        with a text that says why (review R2-N2):
+
+        * ``waiting for <rid>, which has no fresh telemetry`` while its last
+          telemetry is older than ``TELEMETRY_FRESH_S``. It may report again;
+          if it is declared lost instead, it is no longer a receiver.
+        * ``waiting for <rid>, which is taking off`` or ``waiting for <rid>,
+          which is not flying`` while its fresh telemetry shows it on the
+          ground with lanes left before it has flown in this plan.
+        * ``waiting for <rid> to finish its own lanes`` while it flies them.
+
+        A drone that landed with lanes of its own left never takes the chunk
+        and is left out before this check (``_unfit_receiver_locked``). A
+        drone without the obstacle fields is not held back, as before.
+        Returns None when *rid* may take lanes now.
+        """
+        state = self._drones[rid]
+        telemetry = state.telemetry or {}
+        if telemetry.get(TELEMETRY_SENSING) is None:
+            return None
+        if not self._fresh_locked(state):
+            return f"waiting for {rid}, which has no fresh telemetry"
+        if self._own_lanes_done_locked(state):
+            return None
+        if telemetry.get("is_flying") is False:
+            if telemetry.get("state") == "taking_off":
+                return f"waiting for {rid}, which is taking off"
+            return f"waiting for {rid}, which is not flying"
+        return f"waiting for {rid} to finish its own lanes"
+
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
         if self._geofence_cm is None:
             return True
@@ -1331,21 +2107,15 @@ class FleetCoordinator:
         return abs(point[0] - origin[0]) <= limit and abs(point[1] - origin[1]) <= limit
 
     def _path_inside_fence(self, drone_id: str, lanes: list[dict]) -> bool:
-        """True if every point of ``lanes`` flown from the drone's takeoff is inside its geofence.
+        """True if every point of ``lanes`` as the drone actually flies them is inside its geofence.
 
-        Lanes are straight moves and the geofence is a square, so checking
-        the end of every move covers the whole path.
+        The path is ``_actual_path_locked`` (from the drone's takeoff point,
+        with its cuts). Lanes are straight moves and the geofence is a
+        square, so checking the end of every move covers the whole path.
         """
         if self._geofence_cm is None:
             return True
-        x, y = self._origin(self._drones[drone_id])
-        for lane in lanes:
-            dx, dy = _DIRECTION_VECTORS.get(lane["direction"], (0, 0))
-            x += dx * lane["distance_cm"]
-            y += dy * lane["distance_cm"]
-            if not self._inside_fence(drone_id, (x, y)):
-                return False
-        return True
+        return all(self._inside_fence(drone_id, point) for point in self._actual_path_locked(drone_id, lanes)[1:])
 
     def _make_chunks(
         self, lost_id: str, origin: tuple[int, int], full_path: list[dict], index: int,
@@ -1355,12 +2125,13 @@ class FleetCoordinator:
         The lanes are first split into one contiguous piece per remaining
         drone. A piece is split again wherever no single drone's geofence
         contains all of it, and lanes outside every geofence are kept
-        together so they are reported as one uncovered chunk.
+        together so they are reported as one uncovered chunk. Each lane is
+        placed where it is planned (``_planned_points_locked``): from the
+        lost drone's takeoff point *origin* along its lanes, and, after a
+        re-task start, from where the lost drone was then.
         """
         unflown = full_path[index:]
-        points = [_path_point(origin, full_path, index)]
-        for lane in unflown:
-            points.append(_path_point(points[-1], [lane]))
+        points = self._planned_points_locked(lost_id, full_path)[index:]
         receivers = self._receivers()
         covers = [
             frozenset(r for r in receivers if self._inside_fence(r, points[k]) and self._inside_fence(r, points[k + 1]))
@@ -1400,7 +2171,19 @@ class FleetCoordinator:
         A chunk whose eligible drones are all answering another offer stays
         queued. A chunk with no eligible drone at all fails. Several chunks
         offered to one drone in the same round go out in one
-        ``assign_lanes``.
+        ``assign_lanes``. Re-flight chunks are offered after a lost drone's
+        lanes, by ``_offer_reflight_locked``.
+
+        A drone that cannot fly appended lanes because of its obstacle
+        sensing, or that senses obstacles and landed before it finished its
+        own lanes (``_unfit_receiver_locked``), is never offered any, and one
+        that senses obstacles is offered them only once it has finished its
+        own lanes (``_own_lanes_left_locked``): until then a chunk it would
+        take waits, with the reason (no fresh telemetry, not flying yet, or
+        lanes of its own left) in ``held``. The transit to a chunk
+        starts where the receiver will actually be after its lanes
+        (``_actual_path_locked``), and the fence and the separation are
+        checked on the path it will actually fly.
         """
         planned: dict[str, list[dict]] = {}
         batches: dict[str, list[_Chunk]] = {}
@@ -1413,11 +2196,17 @@ class FleetCoordinator:
                     continue
                 fits = []
                 waiting = False
+                unfit: dict[str, str] = {}
+                busy: list[str] = []
                 for rid in self._receivers():
                     if rid in chunk.refusals:
                         continue
+                    why = self._unfit_receiver_locked(rid)
+                    if why is not None:
+                        unfit[rid] = why
+                        continue
                     lanes = planned.get(rid, self._drones[rid].lanes)
-                    end = _path_point(self._origin(self._drones[rid]), lanes)
+                    end = self._actual_path_locked(rid, lanes)[-1]
                     added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
                     if self._path_inside_fence(rid, lanes + added):
                         crowded = self._too_close(rid, lanes + added, planned)
@@ -1427,12 +2216,16 @@ class FleetCoordinator:
                         chunk.too_close.pop(rid, None)
                         if rid in chunk.deferred:
                             waiting = True  # refused for now: wait, do not fail
+                        elif (left := self._own_lanes_left_locked(rid)) is not None:
+                            waiting = True  # it takes lanes once its own are done
+                            busy.append(left)
                         else:
                             fits.append((rid, end, added))
+                self._hold_locked(chunk, None if fits else "; ".join(busy) or None)
                 if not fits and waiting:
                     continue
                 if not fits:
-                    self._fail_locked(chunk, self._failure_reason(chunk))
+                    self._fail_locked(chunk, self._failure_reason(chunk, unfit=unfit))
                     continue
                 free = [fit for fit in fits if self._drones[fit[0]].offer is None]
                 if not free:
@@ -1444,6 +2237,9 @@ class FleetCoordinator:
                 chunk.status = "offered"
                 chunk.receiver = rid
                 chunk.appended = [dict(lane) for lane in added]
+        for chunk in self._reflights:
+            if chunk.status == "queued":
+                self._offer_reflight_locked(chunk, planned, batches)
 
         messages = []
         for rid, chunks in batches.items():
@@ -1463,8 +2259,17 @@ class FleetCoordinator:
             logger.info("Offering %d re-tasked lanes to %s", sum(len(c.lanes) for c in chunks), rid)
         return messages
 
-    def _failure_reason(self, chunk: _Chunk) -> str:
-        receivers = self._receivers()
+    def _failure_reason(
+        self, chunk: _Chunk, receivers: list[str] | None = None, unfit: dict[str, str] | None = None,
+    ) -> str:
+        """Why no drone can take *chunk*: refusals, obstacle sensing, crowding and geofences, by drone.
+
+        *receivers* are the drones that were considered; by default every
+        drone ``_receivers()`` returns. *unfit* maps a drone left out for its
+        obstacle sensing (``_unfit_receiver_locked``) to why.
+        """
+        unfit = unfit or {}
+        receivers = self._receivers() if receivers is None else receivers
         if not receivers:
             held = [rid for rid, other in self._drones.items()
                     if not other.lost and other.zone is not None and self._excluded(rid)]
@@ -1475,15 +2280,23 @@ class FleetCoordinator:
         refused = [rid for rid in receivers if rid in chunk.refusals]
         if refused:
             parts.append("refused by " + ", ".join(f"{rid} ({chunk.refusals[rid]})" for rid in refused))
-        crowded = [rid for rid in receivers if rid not in chunk.refusals and rid in chunk.too_close]
+        sensing = [rid for rid in receivers if rid not in chunk.refusals and rid in unfit]
+        if sensing:
+            parts.append("; ".join(f"{rid} {unfit[rid]}" for rid in sensing))
+        crowded = [rid for rid in receivers if rid not in chunk.refusals and rid not in unfit
+                   and rid in chunk.too_close]
         if crowded:
             parts.append("; ".join(f"{rid} would {chunk.too_close[rid]}" for rid in crowded))
-        outside = [rid for rid in receivers if rid not in chunk.refusals and rid not in chunk.too_close]
+        outside = [rid for rid in receivers if rid not in chunk.refusals and rid not in unfit
+                   and rid not in chunk.too_close]
         if outside:
             parts.append("outside the geofence of " + ", ".join(outside))
         return "; ".join(parts)
 
-    def _too_close(self, rid: str, lanes: list[dict], planned: dict[str, list[dict]]) -> str | None:
+    def _too_close(
+        self, rid: str, lanes: list[dict], planned: dict[str, list[dict]],
+        flown: tuple[str, int] | None = None,
+    ) -> str | None:
         """Why giving *rid* the path *lanes* would break the zone gap, or None.
 
         The whole path *rid* would have, flown from its takeoff point, is
@@ -1491,19 +2304,27 @@ class FleetCoordinator:
         lost (also a drone held for manual control, which may still fly). The
         comparison ignores timing, like the plan's own separation check, so a
         re-task never brings two drones closer than the gap at any point.
+        *flown* is ``(drone_id, count)`` for a re-flight's cutting drone
+        (design section 3.4): its first *count* lanes, which it has finished,
+        are not compared, and only lanes it was given after them are.
+
+        Every path is the one the drone actually flies
+        (``_actual_path_locked``): with its cuts, and with lanes a re-task
+        appended flown from where the drone actually is. A drone without
+        cuts flies its lanes as planned.
         """
         gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
         if gap <= 0 or not self._retask_separation:
             return None
-        mine = [self._origin(self._drones[rid])]
-        for lane in lanes:
-            mine.append(_path_point(mine[-1], [lane]))
+        mine = self._actual_path_locked(rid, lanes)
         for other_id, other in self._drones.items():
             if other_id == rid or other.lost or other.zone is None:
                 continue
-            theirs = [self._origin(other)]
-            for lane in planned.get(other_id, other.lanes):
-                theirs.append(_path_point(theirs[-1], [lane]))
+            theirs = self._actual_path_locked(other_id, planned.get(other_id, other.lanes))
+            if flown is not None and other_id == flown[0]:
+                theirs = theirs[flown[1]:]
+                if len(theirs) < 2:
+                    continue
             distance, _, _ = closest_approach(mine, theirs)
             if distance < gap:
                 return f"come within {distance:.0f} cm of {other_id}, below the {gap} cm gap"
@@ -1513,32 +2334,44 @@ class FleetCoordinator:
         chunk.status = "failed"
         chunk.receiver = None
         chunk.reason = reason
+        chunk.held = None
         logger.error("Re-tasked lanes %s of %s are uncovered: %s",
                      ", ".join(str(entry["index"]) for entry in chunk.lane_entries()), chunk.lost_id, reason)
+
+    @staticmethod
+    def _hold_locked(chunk: _Chunk, held: str | None) -> None:
+        """Record why *chunk* waits for a receiver (``held``), and log it when that changes."""
+        if held == chunk.held:
+            return
+        chunk.held = held
+        if held:
+            lanes = ", ".join(str(entry["index"]) for entry in chunk.lane_entries())
+            logger.info("Re-tasked lanes %s of %s wait: %s", lanes, chunk.lost_id, held)
 
     def _release_deferred_locked(self, drone_id: str, telemetry: dict) -> bool:
         """Clear the transient refusals of *drone_id* that its telemetry shows are over.
 
         A ``landing`` refusal is over once the drone reports ``idle`` (or,
         without a state, not flying); a ``busy`` one once it is neither
-        taking off nor landing. Returns True if any queued chunk may now be
-        offered to the drone again. Caller holds ``_lock``.
+        taking off nor landing. Returns True if any queued chunk (a lost
+        drone's lanes or a re-flight) may now be offered to the drone again.
+        Caller holds ``_lock``.
         """
         released = False
         state = telemetry.get("state")
         flying = telemetry.get("is_flying")
-        for retask in self._retasks:
-            for chunk in retask.chunks:
-                reason = chunk.deferred.get(drone_id)
-                if reason is None:
-                    continue
-                if reason == "landing":
-                    over = state == "idle" if isinstance(state, str) else flying is False
-                else:
-                    over = state not in ("taking_off", "landing")
-                if over:
-                    del chunk.deferred[drone_id]
-                    released = released or chunk.status == "queued"
+        chunks = [chunk for retask in self._retasks for chunk in retask.chunks] + self._reflights
+        for chunk in chunks:
+            reason = chunk.deferred.get(drone_id)
+            if reason is None:
+                continue
+            if reason == "landing":
+                over = state == "idle" if isinstance(state, str) else flying is False
+            else:
+                over = state not in ("taking_off", "landing")
+            if over:
+                del chunk.deferred[drone_id]
+                released = released or chunk.status == "queued"
         return released
 
     def _withdraw_offer_locked(self, drone_id: str, reason: str | None, *, transient: bool = False) -> None:
@@ -1563,6 +2396,7 @@ class FleetCoordinator:
             chunk.status = "queued"
             chunk.receiver = None
             chunk.appended = []
+            chunk.appended_start = None
             if reason is not None:
                 (chunk.deferred if transient else chunk.refusals)[drone_id] = reason
 
@@ -1587,7 +2421,9 @@ class FleetCoordinator:
 
         A re-task is settled when every chunk is accepted or failed. Chunks
         of a re-task whose summary was already emitted are reported as soon
-        as they are accepted or fail.
+        as they are accepted or fail. Each re-flight chunk whose status or
+        receiver changed since it was last announced gets its
+        ``reflight_*`` event.
         """
         events = []
         for retask in self._retasks:
@@ -1603,6 +2439,8 @@ class FleetCoordinator:
                 events.append(("fleet_event", self._failed_payload(retask.lost_id, failed)))
             for chunk in acked + failed:
                 chunk.reported = chunk.status
+        for chunk in self._reflights:
+            events.extend(self._reflight_events_locked(chunk))
         return events
 
     def _summarise_locked(self, retask: _Retask) -> tuple[list[tuple[str, dict]], dict[str, list[dict]]]:
@@ -1631,7 +2469,9 @@ class FleetCoordinator:
 
         ``to`` counts the lanes appended to each accepting drone (transit
         included) and ``lanes`` lists the lost drone's lanes it accepted.
-        Lanes still waiting for an answer are listed under ``awaiting``.
+        Lanes still waiting for an answer are listed under ``awaiting``; a
+        lane that waits for a drone to finish its own lanes carries that as
+        its ``detail``, and the event's ``detail`` says it too.
         """
         to: dict[str, int] = {}
         lanes = []
@@ -1646,8 +2486,11 @@ class FleetCoordinator:
             for chunk in pending:
                 who = chunk.receiver or "a free drone"
                 waiting[who] = waiting.get(who, 0) + len(chunk.lanes)
-                awaiting.extend(dict(entry, drone_id=chunk.receiver) for entry in chunk.lane_entries())
-            parts.append(", ".join(f"{n} lanes awaiting {who}" for who, n in waiting.items()))
+                extra = {"detail": chunk.held} if chunk.held and chunk.receiver is None else {}
+                awaiting.extend(dict(entry, drone_id=chunk.receiver, **extra) for entry in chunk.lane_entries())
+            text = ", ".join(f"{n} lanes awaiting {who}" for who, n in waiting.items())
+            held = list(dict.fromkeys(c.held for c in pending if c.held and c.receiver is None))
+            parts.append(text + (f" ({'; '.join(held)})" if held else ""))
             payload["awaiting"] = awaiting
         payload["detail"] = "; ".join(parts)
         return payload
@@ -1663,6 +2506,502 @@ class FleetCoordinator:
             "detail": f"{len(lanes)} lanes of {lost_id} uncovered: " + "; ".join(reasons),
             "lanes": lanes,
         }
+
+    # ------------------------------------------------------------------
+    # Re-flight of cut segments, offered once (design section 3.4).
+    # Callers hold the lock.
+    # ------------------------------------------------------------------
+
+    def _refresh_reflight_locked(self, chunk: _Chunk) -> None:
+        """Derive a re-flight chunk's segments and lanes from its cutting drone's current replay.
+
+        The chunk re-flies the cut's own segments and its ``skipped``
+        shadows, except any on lanes the cutting drone itself flies to re-fly
+        another drone's cut. Nothing changes once the cutting drone is lost
+        (its lanes from the loss on are re-tasked whole) or when its
+        telemetry no longer lists the cut (its edge restarted or left the
+        plan): the chunk keeps what it had.
+        """
+        state = self._drones[chunk.lost_id]
+        if state.lost or chunk.cut_seq not in state.obstacle_cuts:
+            return
+        numbers, segments = self._obstacle_replay_locked(state)
+        index = numbers.index(chunk.cut_seq)
+        reason = state.obstacle_cuts[chunk.cut_seq].reason
+        origin = self._origin(state)
+        mine = [
+            _on_grid(seg, origin) for seg in segments
+            if seg.cut == index and seg.reason in (reason, SEGMENT_SKIPPED)
+            and not self._in_reflight_lanes_locked(chunk.lost_id, seg.lane_index)
+        ]
+        plan = plan_reflight(mine)
+        chunk.lanes = [dict(lane) for lane in plan.lanes]
+        chunk.points = list(plan.points)
+        chunk.legs = list(plan.legs)
+        chunk.segments = list(plan.segments)
+        chunk.too_short = list(plan.too_short)
+
+    def _in_reflight_lanes_locked(self, drone_id: str, lane_index: int) -> bool:
+        """True if lane *lane_index* of *drone_id* was appended to it to re-fly another drone's cut."""
+        for chunk in self._reflights:
+            span = chunk.appended_range
+            if span is None:
+                continue
+            mine = chunk.flown_by == drone_id or (chunk.status == "offered" and chunk.receiver == drone_id)
+            if mine and span[0] <= lane_index < span[1]:
+                return True
+        return False
+
+    def _reflight_rest_locked(self, chunk: _Chunk) -> list[dict]:
+        """What the receiver of a re-flight left unsearched of its segments, as ``current_plan()["uncovered"]`` entries.
+
+        Each lane that re-flies one of the cutting drone's segments (the
+        transits are not ground to search) is judged against the path the
+        receiver actually flies (``_actual_path_locked``, its replay): a
+        segment counts as searched only where that path runs along it
+        (``lane_reflight.leg_rest``), so a leg flown short, displaced or not
+        at all leaves its rest. That holds for the legs up to and including
+        the lane of the receiver's first cut on the lanes the offer appended.
+        Every segment the re-flight would have flown after that lane is
+        reported whole, because the receiver reached it off the planned path,
+        if at all; a cut on the transit to the segments therefore leaves
+        every segment whole. A receiver that landed before it finished the
+        appended lanes (``landed_at``) did not fly the lane it was on nor any
+        after it, so every segment of those lanes is reported whole too.
+
+        Each entry is listed under the cutting drone with the cutting
+        drone's lane index, the chunk's reason (``blocked again by
+        <receiver>``, or why it failed), the chunk's status and ``receiver``.
+        """
+        rid = chunk.flown_by
+        span = chunk.appended_range
+        if rid is None or span is None:
+            return []
+        state = self._drones[rid]
+        first = span[1] - len(chunk.lanes)  # the receiver's lane index of the chunk's first lane
+        hits = [cut.lane_index for cut in state.obstacle_cuts.values() if span[0] <= cut.lane_index < span[1]]
+        blocked_at = min(hits) - first if hits else len(chunk.lanes)
+        path = self._actual_path_locked(rid)
+        out = []
+        for k, leg in enumerate(chunk.legs):
+            if leg is None:
+                continue
+            seg = chunk.segments[leg]
+            lane = first + k
+            landed = chunk.landed_at is not None and lane >= chunk.landed_at
+            if k > blocked_at or landed or lane + 1 >= len(path):
+                pieces = [seg]
+            else:
+                pieces = leg_rest(seg, path[lane], path[lane + 1])
+            for piece in pieces:
+                entry = _uncovered_entry(piece, chunk.lost_id, chunk.reason, chunk.cut_seq)
+                entry.update(status=chunk.status, receiver=rid)
+                out.append(entry)
+        return out
+
+    def _reflight_candidates_locked(self, cutter_id: str) -> tuple[list[str], dict[str, str], list[str]]:
+        """The drones that may re-fly *cutter_id*'s segments, why each other receiver may not, and which may soon.
+
+        The third list names the drones left out only for now: without
+        fresh telemetry, or not flying yet because they are taking off
+        (review N7). A chunk waits for them instead of failing.
+        """
+        now = self._clock()
+        eligible: list[str] = []
+        why: dict[str, str] = {}
+        soon: list[str] = []
+        for rid in self._receivers():
+            if rid == cutter_id:
+                continue
+            state = self._drones[rid]
+            telemetry = state.telemetry or {}
+            battery = _number(telemetry.get("battery"))
+            sensing = telemetry.get(TELEMETRY_SENSING)
+            if state.telemetry_at is None or now - state.telemetry_at > TELEMETRY_FRESH_S:
+                why[rid] = "has no fresh telemetry"
+                soon.append(rid)
+            elif telemetry.get("is_flying") is not True and telemetry.get("state") == "taking_off":
+                why[rid] = "is taking off"
+                soon.append(rid)
+            elif telemetry.get("is_flying") is not True:
+                why[rid] = "is not flying"
+            elif battery is None:
+                why[rid] = "reports no battery"
+            elif battery < MIN_START_BATTERY:
+                why[rid] = f"has battery {battery:g}%, below {MIN_START_BATTERY}%"
+            elif sensing != SENSING_STEPPED:
+                why[rid] = (f"senses obstacles {sensing:.40}" if isinstance(sensing, str)
+                            else "reports no obstacle sensing")
+            elif telemetry.get(TELEMETRY_SENSOR_OK) is not True:
+                why[rid] = "reports its obstacle sensor is not ok"
+            elif telemetry.get("drone_link_ok") is False:
+                why[rid] = "cannot reach its drone"
+            elif (unfit := self._unfit_receiver_locked(rid)) is not None:
+                why[rid] = unfit
+            else:
+                eligible.append(rid)
+        return eligible, why, soon
+
+    def _reflight_receivers(self, cutter_id: str) -> list[str]:
+        """The drones that may receive *cutter_id*'s segments to re-fly (design section 3.4).
+
+        ``_receivers()`` (not lost, part of the plan, not held for manual
+        control) without the cutting drone, keeping only drones whose
+        telemetry from the last ``TELEMETRY_FRESH_S`` seconds shows
+        ``is_flying: true``, a battery of at least ``MIN_START_BATTERY``
+        percent, ``obstacle_sensing`` ``stepped``, ``obstacle_sensor_ok:
+        true`` and not ``drone_link_ok: false``, and whose lanes no
+        ``sensor_down`` cut has ended. A drone that flies unsensed (``off``
+        or ``forward_only``) never receives a segment.
+        """
+        return self._reflight_candidates_locked(cutter_id)[0]
+
+    def _cutter_done_locked(self, cutter_id: str) -> bool:
+        """True once the cutting drone has nothing left to fly.
+
+        It is lost, or its telemetry from the last ``TELEMETRY_FRESH_S``
+        seconds says it is not flying, or that its ``lane_index`` has reached
+        ``lanes_total`` (it hovers at the end of its lanes) while it has no
+        re-task offer pending and the ground has no lane for it beyond that
+        index either.
+        """
+        state = self._drones[cutter_id]
+        if state.lost:
+            return True
+        if state.telemetry_at is None or self._clock() - state.telemetry_at > TELEMETRY_FRESH_S:
+            return False
+        telemetry = state.telemetry or {}
+        if telemetry.get("is_flying") is False:
+            return True
+        lane_index, lanes_total = telemetry.get("lane_index"), telemetry.get("lanes_total")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (lane_index, lanes_total)):
+            return False
+        return state.offer is None and lane_index >= lanes_total and lane_index >= len(state.lanes)
+
+    def _near_cutter_locked(self, rid: str, lanes: list[dict], cutter_id: str) -> str | None:
+        """Why *rid* flying *lanes* would come too close to the cutting drone where it is now, or None.
+
+        While the cutting drone is in the air, its position from telemetry
+        (relative to its takeoff point, placed on the shared grid as
+        ``status()`` does) is a point obstacle at the zone gap; a cutting
+        drone whose telemetry says it is not flying is ignored, and so is a
+        lost one, as ``_too_close`` ignores lost drones (its last position is
+        frozen, so the chunk would wait for ever; review N9). A flying drone
+        whose position is unknown counts as too close. *rid*'s path is the
+        one it actually flies (``_actual_path_locked``).
+        """
+        gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
+        if gap <= 0 or not self._retask_separation:
+            return None
+        cutter = self._drones[cutter_id]
+        if cutter.lost:
+            return None
+        telemetry = cutter.telemetry or {}
+        if telemetry.get("is_flying") is False:
+            return None
+        rel_x, rel_y = _number(telemetry.get("rel_x_cm")), _number(telemetry.get("rel_y_cm"))
+        if rel_x is None or rel_y is None:
+            return f"pass {cutter_id}, whose position is not known"
+        origin = self._origin(cutter)
+        point = (origin[0] + rel_x, origin[1] + rel_y)
+        mine = self._actual_path_locked(rid, lanes)
+        distance, _, _ = closest_approach(mine, [point, point])
+        if distance < gap:
+            return (f"come within {distance:.0f} cm of {cutter_id} at ({point[0]:g}, {point[1]:g}) cm, "
+                    f"below the {gap} cm gap")
+        return None
+
+    def _offer_reflight_locked(
+        self, chunk: _Chunk, planned: dict[str, list[dict]], batches: dict[str, list[_Chunk]],
+    ) -> None:
+        """Offer one queued re-flight chunk, keep it waiting, or fail it. Part of ``_dispatch_locked``.
+
+        The chunk waits until its cutting drone is done (``_cutter_done_locked``).
+        When the cutting drone was lost, its segments on lanes re-tasked whole
+        are superseded and dropped (``_drop_superseded_locked``); the chunk
+        fails with ``superseded`` only when nothing else is left. It fails
+        with ``too_short`` when no segment is long enough to fly. Otherwise
+        it goes to the nearest ``_reflight_receivers`` drone, preferring
+        drones without a pending offer, whose own geofence contains its whole
+        new path and whose new path keeps the zone gap from every other
+        drone's path, from any lane the cutting drone was given after it
+        finished (its finished path is not checked: the segments lie on it),
+        and from the cutting drone's position while it is in the air. Every
+        path is the one the drone actually flies (``_actual_path_locked``),
+        and the transit starts where the receiver actually ends its lanes. It
+        keeps waiting while a drone that refused it for now (``landing``,
+        ``busy``) may take it later, while a drone has no fresh telemetry or
+        is taking off (``held``, review N7), while a drone that would take it
+        has not finished its own lanes (``_own_lanes_left_locked``), or while
+        only the cutting drone's position is in the way; it is re-evaluated on each telemetry message
+        of the cutting drone, and of every drone while it is held. With no
+        drone left it fails with the reason and is never offered again.
+        """
+        cutter_id = chunk.lost_id
+        cutter = self._drones[cutter_id]
+        if self._landed_all:
+            self._fail_reflight_locked(chunk, "LAND ALL issued")
+            return
+        if not chunk.gate_open:
+            if not self._cutter_done_locked(cutter_id):
+                return
+            chunk.gate_open = True
+            chunk.cutter_lanes = len(cutter.lanes)
+        self._refresh_reflight_locked(chunk)
+        if cutter.lost and not self._drop_superseded_locked(chunk):
+            return
+        if not chunk.lanes:
+            self._fail_reflight_locked(chunk, SEGMENT_TOO_SHORT)
+            return
+        receivers, why, soon = self._reflight_candidates_locked(cutter_id)
+        chunk.too_close = {}
+        fits = []
+        waiting = False
+        crowded = None
+        busy: list[str] = []
+        for rid in receivers:
+            if rid in chunk.refusals:
+                continue
+            lanes = planned.get(rid, self._drones[rid].lanes)
+            end = self._actual_path_locked(rid, lanes)[-1]
+            added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
+            if not self._path_inside_fence(rid, lanes + added):
+                continue
+            too_close = self._too_close(rid, lanes + added, planned, flown=(cutter_id, chunk.cutter_lanes))
+            if too_close is None:
+                too_close = self._near_cutter_locked(rid, lanes + added, cutter_id)
+                if too_close is not None and crowded is None:
+                    crowded = f"{rid} would {too_close}"
+            if too_close is not None:
+                chunk.too_close[rid] = too_close
+                continue
+            if rid in chunk.deferred:
+                waiting = True  # refused for now: wait, do not fail
+            elif (left := self._own_lanes_left_locked(rid)) is not None:
+                waiting = True  # it takes the re-flight once its own lanes are done
+                busy.append(left)
+            else:
+                fits.append((rid, end, added))
+        chunk.crowded = None if fits else crowded
+        held = [f"{rid} {why[rid]}" for rid in soon if rid not in chunk.refusals] + busy
+        self._hold_locked(chunk, None if fits or not held else "; ".join(held))
+        if not fits and (waiting or crowded or held):
+            return
+        if not fits:
+            reason = self._failure_reason(chunk, receivers) if receivers else self._no_reflight_receiver(cutter_id, why)
+            self._fail_reflight_locked(chunk, reason)
+            return
+        free = [fit for fit in fits if self._drones[fit[0]].offer is None]
+        if not free:
+            return
+        fresh = [fit for fit in free if fit[0] not in batches]
+        rid, _, added = min(fresh or free, key=lambda fit: math.dist(fit[1], chunk.start))
+        base = planned.get(rid, self._drones[rid].lanes)
+        planned[rid] = base + added
+        batches.setdefault(rid, []).append(chunk)
+        chunk.status = "offered"
+        chunk.receiver = rid
+        chunk.appended = [dict(lane) for lane in added]
+        chunk.appended_start = len(base)
+        if rid not in chunk.offered_to:
+            chunk.offered_to.append(rid)
+
+    def _drop_superseded_locked(self, chunk: _Chunk) -> bool:
+        """Drop the segments of a lost cutting drone's chunk that lie on lanes re-tasked whole (review N8).
+
+        When the cutting drone is lost its lanes from the one it was on are
+        re-tasked whole, so a shadow on them is flown with them: it is
+        superseded and leaves the chunk. Everything else, the cut's own
+        segment included, is still offered. Returns False when nothing is
+        left, after failing the chunk with ``superseded``.
+        """
+        whole_from = len(self._drones[chunk.lost_id].lanes)
+        kept = [seg for seg in chunk.segments if seg.lane_index < whole_from]
+        short = [seg for seg in chunk.too_short if seg.lane_index < whole_from]
+        if len(kept) == len(chunk.segments) and len(short) == len(chunk.too_short):
+            return True
+        logger.info("%s's cut %s: lanes %s are re-tasked whole, so their segments are superseded",
+                    chunk.lost_id, chunk.cut_seq,
+                    ", ".join(str(seg.lane_index) for seg in chunk.segments + chunk.too_short
+                              if seg.lane_index >= whole_from))
+        if not kept and not short:
+            self._fail_reflight_locked(chunk, "superseded")
+            return False
+        plan = plan_reflight(kept)
+        chunk.lanes = [dict(lane) for lane in plan.lanes]
+        chunk.points = list(plan.points)
+        chunk.legs = list(plan.legs)
+        chunk.segments = list(plan.segments)
+        chunk.too_short = short + list(plan.too_short)
+        return True
+
+    def _no_reflight_receiver(self, cutter_id: str, why: dict[str, str]) -> str:
+        """Why no drone at all may re-fly *cutter_id*'s segments."""
+        parts = [f"{rid} {text}" for rid, text in why.items()]
+        parts += [
+            f"{rid} is held for manual control" for rid, other in self._drones.items()
+            if rid != cutter_id and not other.lost and other.zone is not None and self._excluded(rid)
+        ]
+        if not parts:
+            return "no drone left to take them"
+        return "no drone can re-fly it: " + "; ".join(parts)
+
+    def _fail_reflight_locked(self, chunk: _Chunk, reason: str) -> None:
+        """Close a re-flight chunk for good with *reason*; its segments stay uncovered with that reason."""
+        chunk.status = "failed"
+        chunk.receiver = None
+        chunk.reason = reason
+        chunk.crowded = None
+        chunk.held = None
+        logger.error("Re-flight of %s's cut %s (lanes %s) failed: %s", chunk.lost_id, chunk.cut_seq,
+                     ", ".join(str(seg.lane_index) for seg in chunk.segments + chunk.too_short), reason)
+
+    def _track_reflights_locked(self, drone_id: str, state: _DroneState) -> bool:
+        """Follow the re-flights after one telemetry message of *drone_id*.
+
+        For each re-flight *drone_id* accepted and has not finished: its
+        first cut on the lanes the offer appended (the transit included)
+        makes it ``blocked_again``, for good, or, when that cut is a
+        ``sensor_down``, fails it because the sensor went down on it; a
+        ``sensor_down`` cut before them, which ends its lanes, fails it.
+        Either way what the receiver did search counts (``flown_rest``). Else
+        a ``lane_index`` past the appended lanes ends it: ``reflown`` when the
+        receiver's replayed path searched every segment
+        (``_reflight_rest_locked`` leaves nothing), and otherwise ``failed``
+        with what it flew off the planned path, for example after a cut on
+        its own lanes moved where it flew them from. Telemetry that shows the
+        receiver not flying before that (it landed, for example on its
+        battery gate, without a cut) fails it with ``<receiver> landed before
+        it finished the re-flight``, and only what the receiver left
+        unsearched stays listed: the legs of every appended lane from its
+        ``lane_index`` on are listed whole (``landed_at``). A ``lane_index``
+        at or past their start makes it ``flying``. Returns True when a re-flight
+        changed, when *drone_id* has a waiting re-flight of its own cuts that
+        this telemetry may release or let through, or when a re-flight is
+        held for a receiver that may now take it.
+        """
+        telemetry = state.telemetry or {}
+        lane_index = telemetry.get("lane_index")
+        if not isinstance(lane_index, int) or isinstance(lane_index, bool):
+            lane_index = None
+        cuts = [state.obstacle_cuts[n] for n in sorted(state.obstacle_cuts)]
+        wanted = False
+        for chunk in self._reflights:
+            if chunk.status == "queued" and (chunk.lost_id == drone_id or chunk.held):
+                wanted = True
+            span = chunk.appended_range
+            if chunk.flown_by != drone_id or chunk.status not in ("acked", "flying") or span is None:
+                continue
+            first, end = span
+            before = chunk.status
+            hit = next((cut for cut in cuts if first <= cut.lane_index < end), None)
+            if hit is not None and hit.reason == CUT_SENSOR_DOWN:
+                chunk.flown_rest = True
+                self._fail_reflight_locked(chunk, f"{drone_id} ended its lanes on it (obstacle sensor down)")
+            elif hit is not None:
+                chunk.status = "blocked_again"
+                chunk.reason = f"blocked again by {drone_id}"
+                chunk.flown_rest = True
+                logger.warning("%s was blocked again re-flying %s's cut %s; it is not offered again",
+                               drone_id, chunk.lost_id, chunk.cut_seq)
+            elif any(cut.reason == CUT_SENSOR_DOWN and cut.lane_index < first for cut in cuts):
+                self._fail_reflight_locked(chunk, f"{drone_id} ended its lanes before it (obstacle sensor down)")
+            elif lane_index is not None and lane_index >= end:
+                rest = self._reflight_rest_locked(chunk)
+                if rest:
+                    length = sum(entry["distance_cm"] for entry in rest)
+                    chunk.flown_rest = True
+                    self._fail_reflight_locked(
+                        chunk, f"{drone_id} flew it off the planned path, {length} cm not searched")
+                else:
+                    chunk.status = "reflown"
+                    logger.info("%s re-flew %s's cut %s", drone_id, chunk.lost_id, chunk.cut_seq)
+            elif telemetry.get("is_flying") is False:
+                # On the ground with appended lanes left and no cut on them:
+                # it will not fly them, so the chunk would stay flying (or
+                # acked) for ever. Without a lane index nothing counts as flown.
+                chunk.landed_at = lane_index if lane_index is not None else first
+                chunk.flown_rest = True
+                self._fail_reflight_locked(chunk, f"{drone_id} landed before it finished the re-flight")
+            elif lane_index is not None and lane_index >= first:
+                chunk.status = "flying"
+            wanted = wanted or chunk.status != before
+        return wanted
+
+    def _fail_lost_receiver_locked(self, drone_id: str) -> None:
+        """Fail every re-flight the lost *drone_id* accepted and has not finished, with ``receiver lost``."""
+        for chunk in self._reflights:
+            if chunk.flown_by == drone_id and chunk.status in ("acked", "flying"):
+                self._fail_reflight_locked(chunk, "receiver lost")
+
+    def _lost_chunks_locked(self, drone_id: str, full_path: list[dict], index: int) -> list[_Chunk]:
+        """The chunks that re-task a lost drone's lanes ``full_path[index:]``.
+
+        Lanes that were appended to the drone to re-fly another drone's cut
+        (the transit included) are left out, because a re-flight is offered
+        once and no third drone may be handed it; the lanes around them are
+        chunked as ``_make_chunks`` does.
+        """
+        origin = self._origin(self._drones[drone_id])
+        spans = sorted(
+            chunk.appended_range for chunk in self._reflights
+            if chunk.flown_by == drone_id and chunk.appended_range is not None
+        )
+        if not spans:
+            return self._make_chunks(drone_id, origin, full_path, index)
+        chunks: list[_Chunk] = []
+        start = index
+        for first, end in spans:
+            if end <= start:
+                continue
+            if first > start:
+                chunks.extend(self._make_chunks(drone_id, origin, full_path[:first], start))
+            start = end
+        if start < len(full_path):
+            chunks.extend(self._make_chunks(drone_id, origin, full_path, start))
+        return chunks
+
+    def _reflight_events_locked(self, chunk: _Chunk) -> list[tuple[str, dict]]:
+        """The ``reflight_*`` event for *chunk*'s status, once per change of status or receiver.
+
+        Each event carries ``drone_id`` (the cutting drone), ``receiver``,
+        ``cut_seq``, ``lanes`` in the ``lane_entries()`` shape (the segments
+        concerned on the shared grid; for ``reflight_blocked``, and for a
+        ``reflight_failed`` after the receiver flew some of it, what was left
+        unsearched) and a ``detail`` sentence. Waiting and flying are not
+        announced.
+        """
+        mark = (chunk.status, chunk.receiver if chunk.status == "offered" else None)
+        if chunk.announced == mark:
+            return []
+        chunk.announced = mark
+        event = _REFLIGHT_EVENTS.get(chunk.status)
+        if event is None:
+            return []
+        receiver = chunk.receiver if chunk.status == "offered" else chunk.flown_by
+        if chunk.flown_rest:
+            lanes = [{key: entry[key] for key in _LANE_ENTRY_KEYS} for entry in self._reflight_rest_locked(chunk)]
+        elif chunk.status == "failed" and not chunk.segments:
+            lanes = [_segment_entry(seg) for seg in chunk.too_short]
+        else:
+            lanes = chunk.lane_entries()
+        length = sum(entry["distance_cm"] for entry in lanes)
+        what = f"{chunk.lost_id}'s blocked segment (cut {chunk.cut_seq})"
+        detail = {
+            "offered": f"{what} offered to {receiver} to re-fly: {length} cm",
+            "acked": f"{receiver} will re-fly {what} after its lanes",
+            "reflown": f"{receiver} re-flew {what}",
+            "blocked_again": f"{what} was blocked again by {receiver}: {length} cm not searched, not offered again",
+            "failed": f"{what} not re-flown: {chunk.reason}",
+        }[chunk.status]
+        return [("fleet_event", {
+            "event": event,
+            "drone_id": chunk.lost_id,
+            "receiver": receiver,
+            "cut_seq": chunk.cut_seq,
+            "lanes": lanes,
+            "detail": detail,
+        })]
 
     # ------------------------------------------------------------------
     # Emergency landing

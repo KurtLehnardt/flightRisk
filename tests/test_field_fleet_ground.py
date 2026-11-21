@@ -89,6 +89,8 @@ def test_ground_script_flies_a_simulated_mavlink_edge(monkeypatch, capsys):
     vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
     vehicle.params["RTL_ALT"] = 0
     install(monkeypatch, vehicle)
+    # This test covers the transport and the ground script, not sensing; the sanctioned override for a MAVLink drone with no avoidance and no usable sensor.
+    monkeypatch.setenv("FLIGHTRISK_OBSTACLE_SENSING", "off")
     monkeypatch.setenv("FLIGHTRISK_EDGE_TOKEN", secrets.token_hex(16))
     port = _free_port()
 

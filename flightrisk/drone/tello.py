@@ -26,6 +26,7 @@ from djitellopy import Tello
 from flightrisk.config import get_config
 from flightrisk.drone.controller import (
     BASIC_FLIGHT,
+    Capability,
     CommandOutcome,
     CommandResult,
     DroneCapabilities,
@@ -563,7 +564,7 @@ class TelloController:
             max_move_cm=500,
             max_altitude_m=10,
             supports_missions=False,
-            features=BASIC_FLIGHT,
+            features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
         )
         self._frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
@@ -2360,6 +2361,7 @@ class FakeTelloController:
             max_move_cm=500,
             max_altitude_m=10,
             supports_missions=False,
+            features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
         )
         self.calls: list[tuple] = []
         self.takeoff_height_cm = takeoff_height_cm

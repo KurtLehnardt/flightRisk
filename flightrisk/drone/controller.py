@@ -79,6 +79,13 @@ class Capability(str, Enum):
     VIDEO = "video"
     GOTO_GPS = "goto_gps"
     RETURN_TO_HOME = "return_to_home"
+    #: The edge senses obstacles itself and flies lanes in short sensed steps
+    #: (``flightrisk.drone.obstacle_sensor``). The backend provides ``on_frame``.
+    STEPPED_SENSING = "stepped_sensing"
+    #: The autopilot avoids obstacles by itself, so the edge flies lanes as
+    #: usual and only watches progress. The backend provides
+    #: ``avoidance_status()`` (the list of avoidance problems, empty when none).
+    ONBOARD_AVOIDANCE = "onboard_avoidance"
 
 
 #: Capabilities every currently supported backend provides.
@@ -156,6 +163,10 @@ class CommandOutcome(str, Enum):
     #: dropped because a flight command or a landing holds the channel, or
     #: a takeoff refused because a landing is in progress or was requested.
     NOT_EXECUTED = "not_executed"
+    #: A move ended before its target because the autopilot's own obstacle
+    #: avoidance held the vehicle back. It is not an error: ``detail`` says
+    #: where the vehicle stopped and the caller applies its cut policy.
+    STOPPED_SHORT = "stopped_short"
 
 
 @dataclass(frozen=True)

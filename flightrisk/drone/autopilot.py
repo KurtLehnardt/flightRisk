@@ -18,6 +18,8 @@ SDK:
   problem.
 * ``failsafe_problems``: the autopilot-side failsafes and geofence that must
   be configured, read from parameters, per autopilot.
+* ``avoidance_problems``: whether the autopilot avoids obstacles on its own
+  while it flies the edge's lanes (ArduCopter path planning; never PX4).
 
 Flight modes use MAVSDK's ``FlightMode`` names (``HOLD``, ``LAND``,
 ``RETURN_TO_LAUNCH``, ``OFFBOARD`` and so on). MAVSDK reports ArduCopter's
@@ -36,6 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 __all__ = [
     "ARDUPILOT",
     "AUTOPILOTS",
+    "AVOIDANCE_PARAMS",
     "DEFAULT_SYSID",
     "FAILSAFE_PARAMS",
     "FAILSAFE_RULES",
@@ -44,6 +47,7 @@ __all__ = [
     "AutopilotLink",
     "AutopilotState",
     "autonomous_modes",
+    "avoidance_problems",
     "failsafe_problems",
     "preflight_problems",
     "rtl_altitude_cm",
@@ -122,6 +126,14 @@ class AutopilotLink(Protocol):
 
     Implementations are thread-safe: the edge sends a land from one thread
     while another waits for a position target to be reached.
+
+    Optional, not part of the protocol check: ``yaw_to(yaw_deg: float) ->
+    None`` turns the vehicle in place to the compass heading *yaw_deg*
+    (``MAV_CMD_CONDITION_YAW``, absolute, holding position) and returns once
+    the autopilot accepted it. ArduCopter ignores the yaw of a reposition, so
+    ``MavlinkFleetDrone`` needs it to turn an ArduCopter to face each move
+    for stepped obstacle sensing. No link implements it yet, and it has not
+    been verified on an autopilot.
     """
 
     address: str
@@ -341,6 +353,93 @@ def failsafe_problems(
             problems.append(f"cannot read {' / '.join(sysid_names)} (system id)")
         elif int(found) != int(sysid):
             problems.append(f"autopilot system id is {found:g}, expected {sysid} (--mavlink-sysid)")
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Onboard obstacle avoidance
+# ---------------------------------------------------------------------------
+#
+# What the autopilot does by itself while the edge flies reposition targets
+# (design: .claude/build/obstacle/design.md section 5):
+#   ArduCopter path planning, BendyRuler (OA_TYPE 1) or Dijkstra (2), or both
+#     (3), applies in GUIDED, AUTO and RTL, with OA_MARGIN_MAX as the keep-out
+#     distance and OA_BR_LOOKAHEAD as the probe distance, fed by a proximity
+#     source (PRX1_TYPE, or MAVLink DISTANCE_SENSOR / OBSTACLE_DISTANCE_3D):
+#     https://ardupilot.org/copter/docs/common-oa-bendyruler.html
+#     Simple avoidance (AVOID_ENABLE) works only in AltHold and Loiter, so it
+#     does not protect the edge's lanes and is not checked:
+#     https://ardupilot.org/copter/docs/common-simple-object-avoidance.html
+#   PX4 collision prevention (CP_DIST and friends) runs in Position mode only:
+#     https://docs.px4.io/main/en/computer_vision/collision_prevention.html
+#     The edge's reposition flight is not Position mode, so PX4 is never
+#     reported as avoiding.
+# The parameter names and the thresholds below come from those pages. Nothing
+# here has been checked against a real autopilot; docs/open-drone-support.md
+# lists what is verified.
+
+#: ArduCopter OA_TYPE values that plan a path in GUIDED: 1 BendyRuler, 2 Dijkstra, 3 both.
+_AP_OA_TYPES = frozenset({1, 2, 3})
+#: OA_TYPE values that include BendyRuler (which uses OA_BR_LOOKAHEAD).
+_AP_OA_BENDY_TYPES = frozenset({1, 3})
+#: Smallest keep-out distance (OA_MARGIN_MAX, metres) that counts as avoidance.
+MIN_OA_MARGIN_M = 2.0
+#: Smallest BendyRuler probe distance (OA_BR_LOOKAHEAD, metres).
+MIN_OA_LOOKAHEAD_M = 5.0
+
+#: Every parameter ``avoidance_problems`` reads, per autopilot. PX4 has none:
+#: it is never reported as avoiding, whatever its parameters say.
+AVOIDANCE_PARAMS: dict[str, tuple[str, ...]] = {
+    ARDUPILOT: ("OA_TYPE", "PRX1_TYPE", "OA_MARGIN_MAX", "OA_BR_LOOKAHEAD"),
+    PX4: (),
+}
+
+
+def avoidance_problems(values: Mapping[str, float | None], autopilot: str | None) -> list[str]:
+    """Why the autopilot does not avoid obstacles on the edge's lanes, as operator text (empty when it does).
+
+    *values* maps parameter names (``AVOIDANCE_PARAMS``) to the value read,
+    or None when it does not exist or could not be read; an unreadable
+    parameter is a problem (fails closed). ArduPilot needs path planning on
+    (``OA_TYPE`` 1, 2 or 3), a proximity source (``PRX1_TYPE`` not 0), a
+    keep-out distance of at least ``MIN_OA_MARGIN_M`` and, with BendyRuler, a
+    probe distance of at least ``MIN_OA_LOOKAHEAD_M``. PX4 always has a
+    problem: its collision prevention does not run in the mode the edge flies.
+    Whether a configured ArduCopter really stops short of an obstacle has not
+    been flown.
+    """
+    if autopilot == PX4:
+        return ["PX4 has no onboard avoidance here: its collision prevention runs in Position mode only, "
+                "and the edge flies reposition targets"]
+    if autopilot != ARDUPILOT:
+        return [f"autopilot type unknown ({autopilot!r}); cannot check its obstacle avoidance"]
+    problems: list[str] = []
+
+    def value(name: str) -> float | None:
+        v = values.get(name)
+        return float(v) if _finite(v) else None
+
+    oa_type = value("OA_TYPE")
+    if oa_type is None:
+        problems.append("cannot read OA_TYPE; need 1 (BendyRuler), 2 (Dijkstra) or 3 (both)")
+    elif not _int_in(oa_type, _AP_OA_TYPES):
+        problems.append(f"OA_TYPE={oa_type:g}; need 1 (BendyRuler), 2 (Dijkstra) or 3 (both) so GUIDED plans around obstacles")
+    prx = value("PRX1_TYPE")
+    if prx is None:
+        problems.append("cannot read PRX1_TYPE; need a proximity source (not 0)")
+    elif prx == 0:
+        problems.append("PRX1_TYPE=0; need a proximity source (lidar, rangefinders or MAVLink distance messages)")
+    margin = value("OA_MARGIN_MAX")
+    if margin is None:
+        problems.append("cannot read OA_MARGIN_MAX")
+    elif margin < MIN_OA_MARGIN_M:
+        problems.append(f"OA_MARGIN_MAX={margin:g} m; need at least {MIN_OA_MARGIN_M:g} m")
+    if oa_type is not None and _int_in(oa_type, _AP_OA_BENDY_TYPES):
+        lookahead = value("OA_BR_LOOKAHEAD")
+        if lookahead is None:
+            problems.append("cannot read OA_BR_LOOKAHEAD")
+        elif lookahead < MIN_OA_LOOKAHEAD_M:
+            problems.append(f"OA_BR_LOOKAHEAD={lookahead:g} m; need at least {MIN_OA_LOOKAHEAD_M:g} m")
     return problems
 
 
