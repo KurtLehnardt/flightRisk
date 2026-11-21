@@ -199,6 +199,10 @@ def rigs():
         elif callable(sensor) and not hasattr(sensor, "sense"):
             sensor = sensor(timeline, envelope, clock)
         kwargs.setdefault("obstacle_retry_pause_s", 0.0)
+        # These scripted sensors answer the lane gates from their first call;
+        # the look before takeoff is covered by
+        # tests/test_flight_control_robustness.py.
+        kwargs.setdefault("obstacle_takeoff_probe", False)
         sent: list = []
         log = QuietLogger()
         executor = LaneExecutor(drone, envelope, "drone-1", send=sent.append, clock=clock, logger=log,

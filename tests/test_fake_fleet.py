@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from flightrisk.dashboard.app import FleetSupervisor
+from flightrisk.drone import coordinator as coordinator_module
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.drone.tello import FakeTelloController
@@ -321,9 +322,14 @@ def _events(sio, name):
 
 
 @pytest.mark.filterwarnings("ignore:coroutine .EdgeTransport.send. was never awaited")
-def test_n_edges_plan_and_retask_on_loopback(fleet_of_four):
+def test_n_edges_plan_and_retask_on_loopback(fleet_of_four, monkeypatch):
     supervisor, edges, sio = fleet_of_four
     coordinator = supervisor.coordinator
+    # The dropped edge's fake drone keeps hovering on its lane, so its lanes
+    # would wait LOST_OBSTACLE_S (15 s) before they are offered. This test is
+    # about the loopback plumbing; the wait is covered by
+    # tests/test_flight_control_robustness.py.
+    monkeypatch.setattr(coordinator_module, "LOST_OBSTACLE_S", 0.0)
 
     # Every edge reports telemetry, which is what binds its socket to its id.
     def all_reported():

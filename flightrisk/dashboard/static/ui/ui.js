@@ -177,7 +177,9 @@ const socket = io();
         const lane = ev.lane_index !== undefined && ev.lane_index !== null ? 'lane ' + ev.lane_index : 'a lane';
         const at = ' stopped at (' + fmt(ev.x_cm) + ', ' + fmt(ev.y_cm) + ') cm';
         const left = typeof ev.unflown_cm === 'number' ? ', ' + fmt(ev.unflown_cm) + ' cm not searched' : '';
-        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left;
+        // A person cut is re-flown only once the operator confirms it (the Re-fly button under NOT SEARCHED).
+        const person = ev.reason === 'person' ? '; a person: re-flown only if you confirm it under NOT SEARCHED' : '';
+        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left + person;
     }
     // One plain sentence for the re-flight status of an uncovered segment, or '' for a segment with none.
     function reflightSentence(e) {
@@ -192,6 +194,7 @@ const socket = io();
             case 'blocked_again': return 'blocked again by ' + rx + ', not offered again';
             case 'failed': return 'not re-flown: ' + (e.reason || 'no drone can take it');
             case 'too_short': return 'too short to re-fly';
+            case 'needs_confirmation': return 'a person stopped the drone here; not re-flown unless you confirm it';
             default: return '';
         }
     }
@@ -1523,9 +1526,32 @@ const socket = io();
             } else {
                 why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
             }
-            box.appendChild(el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why));
+            const row = el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why);
+            if (e.seg && e.status === 'needs_confirmation') row.appendChild(reflightConfirmButton(e));
+            box.appendChild(row);
         });
     }
+    // A person cut is never re-flown on its own: another drone would fly toward the same person from the far side.
+    // The operator may confirm it once the person is known to have moved away.
+    function reflightConfirmButton(e) {
+        const button = el('button', 'btn reflight-confirm', 'Re-fly');
+        button.type = 'button';
+        button.title = 'Offer this segment to another drone once ' + e.lost_id + ' has finished its lanes';
+        button.addEventListener('click', () => {
+            const question = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
+                + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away. '
+                + 'Re-fly it?';
+            if (!window.confirm(question)) return;
+            button.disabled = true;
+            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq });
+        });
+        return button;
+    }
+    socket.on('reflight_confirm_result', (r) => {
+        if (!r) return;
+        showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
+        if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
+    });
     // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
     // the box and to the map; re-tasked lanes of a lost drone are kept as they are.
     let lastSegmentsJson = '';

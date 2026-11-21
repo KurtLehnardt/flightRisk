@@ -136,9 +136,12 @@ from flightrisk.drone.obstacle_sensor import (
     SenseResult,
 )
 from flightrisk.drone.safety import ROOM_LIMITS, CeilingError
+from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
 __all__ = [
     "EVENT_SENSOR_PROBE",
+    "EVENT_TAKEOFF_SENSE",
+    "TAKEOFF_SENSE_DETAIL",
     "HEADING_NOT_REACHED",
     "HEADING_TOLERANCE_DEG",
     "OBSTACLE_RETRY_PAUSE_S",
@@ -161,6 +164,10 @@ HEADING_NOT_REACHED = "heading not reached"
 #: Logged once per probe of a sensor whose down timer runs (on a landing, or
 #: when a plan that does not continue the current one is accepted).
 EVENT_SENSOR_PROBE = "edge_obstacle_sensor_probe"
+#: One probe sense call before an autonomous takeoff (``_takeoff_sense_refusal``).
+EVENT_TAKEOFF_SENSE = "edge_obstacle_takeoff_sense"
+#: The ``detail`` that starts a takeoff refused because the sensor could not look.
+TAKEOFF_SENSE_DETAIL = "obstacle sensor cannot see before takeoff:"
 # How much longer than its own timeout a sense call may run before the
 # executor abandons its helper thread and treats the gate as timed out.
 _SENSE_JOIN_GRACE_S = 0.5
@@ -431,6 +438,62 @@ class FlightSequenceMixin:
         self._nack(cmd, reason, **({"detail": detail} if detail else {}))
         return False
 
+    def _takeoff_sense_refusal(self) -> str | None:
+        """One probe look before an autonomous takeoff: the refusal's operator text, or None to go on.
+
+        Only with a sensor (stepped sensing) and only for a takeoff that
+        starts lanes (``start_at`` and ``takeoff``; never the operator's
+        ``manual_takeoff``, whose steps are never sensed). Telemetry calls the
+        sensor ok until its gates have failed for ``OBSTACLE_SENSOR_DOWN_S``,
+        and before a flight no gate has run, so without this look a dead
+        video stream would pass the ground's start check, take off, cut every
+        lane on the sensor and land. The look must return a fresh, valid
+        view: one the sensor judged from a frame captured after the probe
+        began, less the settle time (the sensor itself refuses an older
+        frame by its capture time as ``stale``), with the result ``clear`` or
+        ``blocked``. A blocked view is a working sensor that sees something
+        in front of a drone on the ground, which the first lane gate judges
+        again once airborne. ``unavailable`` (stale, timeout or error)
+        refuses the takeoff with nothing sent. The look also feeds the
+        sensor's down timer (``obstacle_sensor_ok``), not the plan's. Logged
+        as ``edge_obstacle_takeoff_sense``. Never raises.
+        """
+        if self._obstacle_sensor is None or not self._obstacle_takeoff_probe:
+            return None
+        with self._lock:
+            kind = self._active_kind
+        if kind == "manual_takeoff":
+            return None
+        started = self._clock()
+        after = max(self._last_motion_end_s, started - OBSTACLE_SETTLE_S)
+        result, latency_ms = self._sense_once(after)
+        detail = result.detail if isinstance(result.detail, dict) else {}
+        with self._lock:
+            if result.unavailable:
+                if self._sensor_down_since is None:
+                    self._sensor_down_since = started
+            else:
+                self._sensor_down_since = None
+        fields = {
+            "drone_id": self.drone_id,
+            "kind": kind,
+            "state": result.state,
+            "reason": result.reason or None,
+            "cause": detail.get("cause"),
+            "error": detail.get("error"),
+            "latency_ms": round(float(latency_ms), 1),
+        }
+        if not result.unavailable:
+            self._log.info(EVENT_TAKEOFF_SENSE, ok=True, **fields)
+            return None
+        self._log.warning(EVENT_TAKEOFF_SENSE, ok=False, **fields)
+        why = result.reason or "unavailable"
+        cause = detail.get("cause") or detail.get("error")
+        text = f"{TAKEOFF_SENSE_DETAIL} {why}" + (f" ({cause})" if cause else "")
+        self._log.warning(EVENT_START_REFUSED, drone_id=self.drone_id, reason=START_REFUSED_REASON, kind=kind,
+                          detail=text)
+        return text[:MAX_TEXT_LEN]
+
     def _wait_until(self, t_edge: float) -> bool:
         """Wait for the edge clock to reach ``t_edge``. False if aborted first."""
         while True:
@@ -454,7 +517,10 @@ class FlightSequenceMixin:
         nothing changed, so there is no landing to retry afterwards. So is a
         drone whose required obstacle sensor could not be built
         (``drone_unreachable`` with the sensor detail), except for the
-        operator's ``manual_takeoff``: manual steps are never sensed.
+        operator's ``manual_takeoff``: manual steps are never sensed. With a
+        sensor, an autonomous takeoff is also refused (``drone_unreachable``,
+        detail ``TAKEOFF_SENSE_DETAIL ...``) unless one probe look right
+        before it sees a fresh, valid view (``_takeoff_sense_refusal``).
         """
         link = self._drone_link()
         if link is not None and not link.ok:
@@ -481,6 +547,10 @@ class FlightSequenceMixin:
                     detail=self._unreachable_detail,
                 )
                 return "drone_unreachable"
+        refused = self._takeoff_sense_refusal()
+        if refused is not None:
+            self._unreachable_detail = refused
+            return "drone_unreachable"
         battery = self._read_battery()
         if not self.envelope.can_takeoff(battery):
             self._log.warning(
@@ -670,7 +740,8 @@ class FlightSequenceMixin:
         """Fly the current lane plan from its current step, following re-tasks.
 
         Stops before the next move when a hold arrives (``resume`` starts it
-        again from the same step), and runs the plan's ``on_complete``
+        again from the same step) or the ground link is lost (the link coming
+        back starts it again), and runs the plan's ``on_complete``
         landing after the last lane. With an obstacle sensor every step is
         turned to and gated first (see the module docstring); without one the
         moves are flown exactly as they always were. A ``resume_search`` way
@@ -698,6 +769,16 @@ class FlightSequenceMixin:
                 if self._held:
                     # Hold: stop here, after the move just flown.
                     self._log.info("edge_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
+                    self._release_active()
+                    return
+                if self._link_holding:
+                    # The ground link is lost: stop here, as ``_claim_move``
+                    # does, and let the link coming back launch the plan
+                    # again (``_end_link_hold``). Without this a gate that
+                    # returns ``_AGAIN`` for the link hold would be asked
+                    # again at once, sense call after sense call.
+                    self._log.info("edge_link_hold_stopped", drone_id=self.drone_id, lane_index=self.lane_index)
+                    self._link_parked = True
                     self._release_active()
                     return
                 gen = self._plan_gen

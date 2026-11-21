@@ -45,6 +45,7 @@ from flightrisk.drone.snapshot import (
     Reading,
     TelemetrySnapshot,
 )
+from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
 from flightrisk.drone.snapshot import reading as _reading
 from flightrisk.obs_log import Throttle, log_event, notice
 
@@ -519,6 +520,11 @@ class TelloController:
     auto-land still fires if every land is lost.
     """
 
+    #: The channel order of ``get_frame`` and ``on_frame`` frames: djitellopy's
+    #: decoder delivers RGB. Whoever hands a frame to an OpenCV-order consumer
+    #: (``ObstacleGuard``) converts it with ``obstacle_sensor.to_sensor_frame``.
+    frame_channel_order = CHANNEL_ORDER_RGB
+
     def __init__(
         self,
         name: str = "drone",
@@ -957,7 +963,7 @@ class TelloController:
         notice(_log, "tello_disconnected", f"[{self.name}] Disconnected.", drone_id=self.name)
 
     def get_frame(self) -> np.ndarray | None:
-        """Get the latest video frame as a BGR numpy array."""
+        """Get the latest video frame as an RGB numpy array (``frame_channel_order``)."""
         if not self.state.is_connected:
             return None
         try:
@@ -2342,6 +2348,8 @@ class FakeTelloController:
     """
 
     TAKEOFF_HEIGHT_CM = 80
+    #: As ``TelloController``: its frames stand in for a Tello decoder's RGB.
+    frame_channel_order = CHANNEL_ORDER_RGB
 
     def __init__(
         self,
