@@ -320,25 +320,13 @@ class TestGuardBuildFunction:
     """Test guard building with mocked torch."""
 
     @patch("scripts.bench_obstacle.load_yolo_model")
-    @patch("flightrisk.drone.obstacle.torch.hub.load")
-    def test_build_guard_with_mocked_torch(self, mock_hub_load, mock_yolo):
-        """Guard is built with mocked torch."""
+    @patch("flightrisk.drone.midas_model.load_midas_small")
+    def test_build_guard_with_mocked_torch(self, mock_load_midas, mock_yolo):
+        """Guard is built with a stand-in MiDaS model and transform."""
         from scripts import bench_obstacle
         from unittest.mock import MagicMock
 
-        # Mock the torch.hub.load to return mock model and transforms
-        mock_model = MagicMock()
-        mock_transforms = MagicMock()
-        mock_transforms.small_transform = MagicMock()
-
-        def hub_load(repo, model_name, **kwargs):
-            if model_name == "MiDaS_small":
-                return mock_model
-            elif model_name == "transforms":
-                return mock_transforms
-            raise ValueError(f"Unknown model: {model_name}")
-
-        mock_hub_load.side_effect = hub_load
+        mock_load_midas.return_value = (MagicMock(), MagicMock())
 
         # Build the guard
         guard = bench_obstacle.build_guard(0.35)

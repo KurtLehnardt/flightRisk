@@ -28,7 +28,10 @@
 #   4. Downloads the yolo11n detector weights and checks their SHA-256. The
 #      fine-tuned HERIDAL weights (models/heridal_yolo11s.pt) are not published;
 #      copy them into app/models yourself if you have them.
-#   5. Creates ~/Applications/FlightRisk.app, which starts the launcher window.
+#   5. Downloads the MiDaS depth weights of the obstacle sensor and checks them
+#      against the SHA-256 pinned in flightrisk/drone/midas_model.py, so no flight
+#      needs the internet for them (without them the sensor refuses takeoff).
+#   6. Creates ~/Applications/FlightRisk.app, which starts the launcher window.
 #
 # An interrupted run (Ctrl+C, a closed window, a kill) can always be repaired by
 # running this again: a first download is made in a separate folder and only
@@ -717,6 +720,25 @@ download_weights() {
   fi
 }
 
+# The MiDaS depth weights of the obstacle sensor, in app/models. midas_model.py holds the
+# pinned URL and SHA-256 and checks the download (a file that does not match is deleted,
+# never loaded). A flight never downloads them: without them the sensor refuses takeoff.
+# Its exit status: 0 installed and checked, 2 the download failed, anything else refused.
+install_midas_weights() {
+  local status=0
+  if [ "${FLIGHTRISK_INSTALL_SKIP_DEPS:-}" = "1" ]; then
+    return 0
+  fi
+  [ -x "$VENV_DIR/bin/python" ] || die "No virtual environment at $VENV_DIR to install the MiDaS depth weights with."
+  # -E -s: no PYTHON* variables and no user site, so flightrisk is this install's.
+  (cd "$APP_DIR" && "$VENV_DIR/bin/python" -E -s -m flightrisk.drone.midas_model install) || status=$?
+  case "$status" in
+    0) ok "MiDaS depth weights downloaded and checked" ;;
+    2) warn "could not download the MiDaS depth weights now; run the installer again before flying (without them the obstacle sensor refuses takeoff)" ;;
+    *) die "The MiDaS depth weights could not be installed and checked (exit status $status), so the obstacle sensor would refuse takeoff." ;;
+  esac
+}
+
 # Whether $1 is an app bundle inside an Applications folder.
 in_applications_folder() {
   case "$1" in
@@ -787,6 +809,9 @@ main() {
 
   step weights "Detector weights"
   download_weights
+
+  step midas "Obstacle sensor depth weights"
+  install_midas_weights
 
   step app "Creating FlightRisk.app"
   create_app

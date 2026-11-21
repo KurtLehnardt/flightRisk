@@ -393,3 +393,16 @@ def _launcher_never_touches_the_real_flightrisk_files(request, tmp_path, monkeyp
         monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
         monkeypatch.setenv("FLIGHTRISK_CEILING_FILE", str(tmp_path / "home-ceiling.json"))
         monkeypatch.setenv("FLIGHTRISK_LAUNCHER_FILE", str(tmp_path / "home-launcher.json"))
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_midas_weights(monkeypatch, tmp_path_factory):
+    """No test loads MiDaS weights installed into this checkout's models/ folder.
+
+    A test that needs weights pins its own (tests/test_midas_supply_chain.py), so the
+    suite gives the same answer whether or not ``midas_model install`` was run here.
+    """
+    from flightrisk.drone import midas_model
+
+    absent = tmp_path_factory.getbasetemp() / "no-midas-weights" / midas_model.WEIGHTS_FILENAME
+    monkeypatch.setattr(midas_model, "DEFAULT_WEIGHTS_PATH", absent)

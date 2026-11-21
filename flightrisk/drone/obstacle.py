@@ -14,6 +14,8 @@ import cv2
 import numpy as np
 import torch
 
+from flightrisk.drone import midas_model
+
 
 class ObstacleGuard:
     """Detects obstacles using MiDaS Small monocular depth estimation.
@@ -71,16 +73,14 @@ class ObstacleGuard:
         else:
             self._device = torch.device("cpu")
 
-        # Load MiDaS Small model. trust_repo=True keeps torch.hub from asking
-        # "Do you trust this repository (y/N)?" on stdin, which would block
-        # dashboard startup on an interactive console.
-        self._model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+        # MiDaS Small from the vendored code pinned to upstream commits and the
+        # SHA-256 checked weights, loaded with weights_only=True (see
+        # flightrisk/drone/midas_model.py). torch.hub is never used, so nothing
+        # is downloaded and nothing asks on stdin; missing or altered weights
+        # raise MidasUnavailable, whose message names the install step.
+        self._model, self._transform = midas_model.load_midas_small()
         self._model.to(self._device)
         self._model.eval()
-
-        # Load transforms
-        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
-        self._transform = midas_transforms.small_transform
 
         # Thread safety
         self._lock = threading.Lock()

@@ -1686,18 +1686,10 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
         app_state.db = SessionDB()
         log.info("session_db_initialized")
 
-    # Initialize obstacle guard
-    if app_state.obstacle_guard is None:
-        try:
-            from flightrisk.drone.obstacle import ObstacleGuard
-            app_state.obstacle_guard = ObstacleGuard()
-            log.info("obstacle_guard_initialized")
-            obs_events.model_load("obstacle_guard", "ok")
-        except Exception as e:
-            log.warning("obstacle_guard_unavailable", error=str(e))
-            obs_events.model_load("obstacle_guard", "failed", error=e)
-            # The search pattern then flies without obstacle checks.
-            obs_events.flight_safety("obstacle_guard_unavailable", reason="init_failed", error_type=type(e).__name__)
+    # The obstacle guard (MiDaS) is not built here: only the single-drone search
+    # uses it, and it is built when that search starts (_obstacle_guard_for_search).
+    # A ground station for edge drones (--source edge) never loads MiDaS; each
+    # edge senses obstacles itself.
 
     if app_state.canon is None:
         app_state.canon = TargetCanon(session_db=app_state.db)
@@ -2816,6 +2808,35 @@ def _single_plan(spec: "plan_edit.PlanSpec") -> "plan_edit.BuiltPlan":
     )
 
 
+_obstacle_guard_lock = threading.Lock()
+
+
+def _obstacle_guard_for_search():
+    """The obstacle guard the single-drone search checks with, built on first use.
+
+    Only this search uses MiDaS on the ground, so it is loaded here and not at
+    startup: a ground station for edge drones never loads it. Returns
+    ``(guard, None)``, or ``(None, why)`` when the guard cannot be built (the
+    weights are not installed, say); the caller then refuses to start the search.
+    A failure is not remembered, so the next start tries again (after the install
+    step, say).
+    """
+    with _obstacle_guard_lock:
+        if app_state.obstacle_guard is not None:
+            return app_state.obstacle_guard, None
+        try:
+            from flightrisk.drone.obstacle import ObstacleGuard
+            app_state.obstacle_guard = ObstacleGuard()
+        except Exception as e:  # noqa: BLE001 - any failure means no obstacle checks, so no search
+            log.warning("obstacle_guard_unavailable error=%s", e)
+            obs_events.model_load("obstacle_guard", "failed", error=e)
+            obs_events.flight_safety("obstacle_guard_unavailable", reason="init_failed", error_type=type(e).__name__)
+            return None, f"{type(e).__name__}: {e}"
+        log.info("obstacle_guard_initialized")
+        obs_events.model_load("obstacle_guard", "ok")
+        return app_state.obstacle_guard, None
+
+
 def _map_plan_locked() -> str | None:
     """Why the map plan may not be replaced now (drones fly or a pattern runs), or None."""
     supervisor = app_state.fleet_supervisor
@@ -3017,6 +3038,12 @@ def on_start_search(data):
         pattern_name = data.get("pattern", "expanding_square")
         pattern_type = PatternType(pattern_name)
         waypoints = get_search_pattern(pattern_type)
+
+    # Fail closed: no obstacle guard, no autonomous pattern.
+    _guard, guard_error = _obstacle_guard_for_search()
+    if guard_error is not None:
+        emit("error", {"message": f"Search not started: the obstacle guard is unavailable ({guard_error})"})
+        return
 
     app_state.search_active = True
     emit("search_started", {"pattern": pattern_name, "waypoints": len(waypoints), "edited": edited})

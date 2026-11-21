@@ -564,7 +564,7 @@ An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_C
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 
-Each Tello edge senses obstacles before every 50 cm step of a lane, using the MiDaS_small depth model. The weights are downloaded into the `torch.hub` cache the first time, so start each edge once while the laptop is online. If the sensor cannot be built, the edge refuses to take off and the drone card shows `obstacle sensor unavailable: <why>`. Settings and the `FLIGHTRISK_OBSTACLE_SENSING=off` override are in [Obstacle sensing](obstacle-sensing.md).
+Each Tello edge senses obstacles before every 50 cm step of a lane, using the MiDaS_small depth model. The installer downloads its weights once and checks their SHA-256; a flight never downloads them. On a laptop set up before that step existed, run `venv\Scripts\python.exe -m flightrisk.drone.midas_model install` (macOS: `venv/bin/python -m flightrisk.drone.midas_model install`) once from the FlightRisk folder while online, or run the installer again. If the sensor cannot be built, the edge refuses to take off and the drone card shows `obstacle sensor unavailable: <why>`. Settings and the `FLIGHTRISK_OBSTACLE_SENSING=off` override are in [Obstacle sensing](obstacle-sensing.md).
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
