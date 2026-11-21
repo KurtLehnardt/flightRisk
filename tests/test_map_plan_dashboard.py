@@ -172,7 +172,7 @@ def flying_drone(clean_app_state, monkeypatch):
     drone.rotate.return_value = True
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
-    app_state.obstacle_guard = None
+    app_state.obstacle_guard = MagicMock()  # a single-drone search does not start without one
     monkeypatch.setattr("flightrisk.dashboard.app.time.sleep", lambda s: None)
     client = socketio.test_client(app)
     client.get_received()

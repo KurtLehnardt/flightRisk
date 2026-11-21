@@ -11,7 +11,7 @@ stride):
 4. there was no tool to record what the sensor sees.
 
 The stride's own tests are in ``tests/test_edge_frame_stride.py``. Everything
-here runs against fakes: no drone, no network, no model download.
+here runs against fakes: no drone, no network, no model weights.
 """
 
 from __future__ import annotations
@@ -143,13 +143,10 @@ class _ClearModel(torch.nn.Module):
 
 @pytest.fixture
 def midas(monkeypatch):
-    """torch.hub.load patched: a model that always sees a clear view and a transform that records its input."""
+    """The MiDaS loader replaced: a model that always sees a clear view and a transform that records its input."""
     transform = _RecordingTransform()
     model = _ClearModel()
-    monkeypatch.setattr(
-        "torch.hub.load",
-        lambda repo, name, **kw: model if name == "MiDaS_small" else SimpleNamespace(small_transform=transform),
-    )
+    monkeypatch.setattr("flightrisk.drone.midas_model.load_midas_small", lambda *a, **kw: (model, transform))
     return transform
 
 

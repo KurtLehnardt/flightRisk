@@ -1,6 +1,6 @@
 """Tests for the forward camera obstacle sensor (ForwardCameraSensor).
 
-The depth guard is a fake (or ObstacleGuard with torch.hub mocked), so no model
+The depth guard is a fake (or ObstacleGuard with its MiDaS loader replaced), so no model
 is downloaded and no network is used.
 """
 from __future__ import annotations
@@ -143,8 +143,8 @@ class TestConstruction:
             small_transform = staticmethod(lambda img: torch.zeros(1, 3, 256, 256))
 
         monkeypatch.setattr(
-            "torch.hub.load",
-            lambda repo, name, **kw: Model() if name == "MiDaS_small" else Transforms(),
+            "flightrisk.drone.midas_model.load_midas_small",
+            lambda *a, **kw: (Model(), Transforms.small_transform),
         )
         sensor = ForwardCameraSensor(frames, None, settle_s=0.0, frame_wait_s=0.05)
         assert sensor._guard.center_stat == "p90"
