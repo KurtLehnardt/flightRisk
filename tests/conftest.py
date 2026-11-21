@@ -94,6 +94,16 @@ def _isolate_map_files(tmp_path, monkeypatch):
     monkeypatch.setenv("FLIGHTRISK_TILES_DIR", str(tmp_path / "tiles"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_torch_threads(monkeypatch):
+    """Keep ``edge_device.main`` from changing the test process's torch thread pools.
+
+    ``FLIGHTRISK_EDGE_TORCH_THREADS=0`` leaves torch's own thread count; a test of the
+    limit sets the variable itself.
+    """
+    monkeypatch.setenv("FLIGHTRISK_EDGE_TORCH_THREADS", "0")
+
+
 # ---------------------------------------------------------------------------
 # A fake Tello command socket under the real djitellopy client
 # ---------------------------------------------------------------------------

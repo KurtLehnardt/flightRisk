@@ -122,6 +122,16 @@ class EdgeRunner:
         # its detections.
         self.last_detections: tuple[list[Detection], int, int] | None = None
         self.last_detections_at: float | None = None
+        # Optional ``frame_stamp(frame)`` that returns the video decoder's
+        # ``FrameStamp`` for a frame (``flightrisk.drone.obstacle_sensor``), or
+        # None when the decoder cannot tell. When it gives a capture time,
+        # ``last_detections_at`` is that capture time (never later than when
+        # the frame was obtained), so a frame that a lagging decoder handed
+        # over late is judged by when it was captured. A frame the decoder
+        # marks stale (decoded behind a backlog, or corrupt after lost video
+        # data) is still processed and sent, but its result does not replace
+        # ``last_detections``: the person cue never judges such a view.
+        self.frame_stamp: Callable[[np.ndarray], Any] | None = None
         self._detector_lock = threading.Lock()
 
     @property
@@ -152,8 +162,13 @@ class EdgeRunner:
         Returns a DetectionMessage with detections, embeddings, and crops.
         """
         # The frame loop calls this as soon as it has the frame, so this is
-        # when the frame was obtained; it stamps ``last_detections_at``.
+        # when the frame was obtained; it stamps ``last_detections_at``,
+        # unless the decoder knows when the frame was captured.
         obtained_at = time.monotonic()
+        stamp = self._frame_stamp_of(frame)
+        if stamp is not None and getattr(stamp, "captured_at", None) is not None:
+            obtained_at = min(obtained_at, float(stamp.captured_at))
+        usable_view = stamp is None or not getattr(stamp, "stale", False)
         self._frame_id += 1
         # Detector and profile name are read together, so a profile switch
         # never labels a frame with the wrong profile.
@@ -226,9 +241,21 @@ class EdgeRunner:
 
             msg.detections.append(detection)
 
-        self.last_detections = (list(msg.detections), msg.frame_width, msg.frame_height)
-        self.last_detections_at = obtained_at
+        if usable_view:
+            self.last_detections = (list(msg.detections), msg.frame_width, msg.frame_height)
+            self.last_detections_at = obtained_at
         return msg
+
+    def _frame_stamp_of(self, frame: np.ndarray) -> Any:
+        """The decoder's stamp of ``frame`` through ``frame_stamp``, or None; a failing lookup is None."""
+        lookup = self.frame_stamp
+        if lookup is None:
+            return None
+        try:
+            return lookup(frame)
+        except Exception:  # noqa: BLE001 - a stamp lookup must never stop detection
+            logger.warning("edge_frame_stamp_failed", exc_info=True)
+            return None
 
     def _stamp_pose(self, msg: DetectionMessage) -> None:
         """Copy the current pose onto *msg*; a failing provider never drops a frame."""

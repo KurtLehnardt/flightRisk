@@ -17,6 +17,7 @@ from flightrisk.drone.fake import FakeDrone
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.mavlink_fleet import SENSING_NONE
 from flightrisk.drone.obstacle_sensor import (
+    CHANNEL_ORDER_RGB,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
@@ -250,7 +251,7 @@ class _DecoderReader:
         self.decoded += 1
         frame = np.zeros((40, 40, 3), np.uint8)
         frame[:, :20] = 80
-        frame[0, 0, 0] = self.decoded % 256
+        frame[0, 0, :] = self.decoded % 256  # in every channel, so the RGB to BGR copy keeps it at [0, 0, 0]
         self.frame = frame
 
     def stop(self):
@@ -265,7 +266,7 @@ def test_both_feeds_give_the_holder_every_new_decoded_frame_once_whatever_the_st
     reader = _DecoderReader()
     ctrl.tello.background_frame_read = reader
     holder = LatestFrame()
-    ctrl.on_frame(_copying_frame_feed(holder))
+    ctrl.on_frame(_copying_frame_feed(holder, CHANNEL_ORDER_RGB))
     poller = DecodedFramePoller(ctrl, holder)
     stop = threading.Event()
 
