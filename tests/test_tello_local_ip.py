@@ -560,7 +560,7 @@ def test_ifindex_is_refused_off_windows():
 def test_ifindex_must_name_an_interface_on_windows():
     log: list = []
     common = {"socket_factory": lambda: _FakeSocket(log), "interface_table": dict,
-              "is_windows": lambda: True, "interface_indexes": lambda: [1, 12, 23]}
+              "is_windows": lambda: True, "interface_indexes": lambda: [1, 12, 23], "udp_endpoints": list}
     with pytest.raises(TelloBindingError, match="not an interface"):
         check_binding(TelloBinding("192.168.10.2", ifindex=13), "192.168.10.1", **common)
     check_binding(TelloBinding("192.168.10.2", ifindex=12), "192.168.10.1", **common)

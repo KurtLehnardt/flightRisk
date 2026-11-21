@@ -39,6 +39,8 @@ import numpy as np
 from djitellopy import Tello
 from djitellopy.tello import TelloException
 
+from flightrisk.drone import udp_endpoints as _udp_endpoints
+from flightrisk.drone.udp_endpoints import UdpEndpoint, netstat_command, process_name, wildcard_holders
 from flightrisk.obs_log import Throttle, log_event, notice
 
 _log = logging.getLogger(__name__)
@@ -50,6 +52,7 @@ __all__ = [
     "TelloBinding",
     "TelloBindingError",
     "check_binding",
+    "check_no_wildcard_holder",
     "open_bound_socket",
     "parse_ifindex",
     "parse_local_ip",
@@ -171,17 +174,22 @@ def check_binding(
     *,
     socket_factory: SocketFactory = _udp_socket,
     interface_table: Callable[[], dict[str, list[str]] | None] = _psutil_ipv4_table,
-    is_windows: Callable[[], bool] = _is_windows,
+    is_windows: Callable[[], bool] | None = None,
     interface_indexes: Callable[[], list[int] | None] | None = None,
+    udp_endpoints: Callable[[], list[UdpEndpoint] | None] | None = None,
 ) -> None:
     """Refuse a binding that cannot work, before any socket on a Tello port is opened.
 
     Raises ``TelloBindingError`` when the local IP is not a usable IPv4
     address, is not assigned to any adapter on this computer, or is
-    assigned to two adapters at once; and when ``ifindex`` is given off
-    Windows or names an interface that does not exist. Logs a warning when
-    the Tello host is outside the local IP's /24 network.
+    assigned to two adapters at once; when ``ifindex`` is given off
+    Windows or names an interface that does not exist; and, on Windows,
+    when another socket holds the wildcard address on a Tello port (see
+    ``check_no_wildcard_holder``). Logs a warning when the Tello host is
+    outside the local IP's /24 network.
     """
+    if is_windows is None:
+        is_windows = _is_windows
     try:
         local_ip = parse_local_ip(binding.local_ip)
     except ValueError as exc:
@@ -234,6 +242,8 @@ def check_binding(
                 f"{local_ip}."
             )
 
+    check_no_wildcard_holder(binding, is_windows=is_windows, udp_endpoints=udp_endpoints)
+
     try:
         same_net = ipaddress.IPv4Address(host) in ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
     except ValueError:
@@ -245,6 +255,65 @@ def check_binding(
             "check that this is the adapter that joined the drone's Wi-Fi.",
             level=logging.WARNING, local_ip=local_ip, tello_host=host,
         )
+
+
+def check_no_wildcard_holder(
+    binding: TelloBinding,
+    *,
+    is_windows: Callable[[], bool] | None = None,
+    udp_endpoints: Callable[[], list[UdpEndpoint] | None] | None = None,
+) -> None:
+    """Windows only: refuse when a socket holds 0.0.0.0 or [::] on one of this binding's Tello ports.
+
+    Windows lets a wildcard bind and a specific bind share a port, in either
+    order, and gives each datagram to the socket bound to the address it was
+    sent to. A program that holds 0.0.0.0:8889 and commands a Tello through
+    one adapter (a djitellopy script, or an edge started without
+    ``--tello-local-ip``) gets its reply sent to that adapter's IP, so
+    Windows delivers the reply to the edge bound there, and the edge's
+    source filter accepts it because it comes from the drone. The edge's
+    bind cannot catch this and ``SO_EXCLUSIVEADDRUSE`` does not either (see
+    ``open_bound_socket``), so the UDP endpoint table is read instead.
+    Another edge's sockets are bound to its own adapter IP, so they are not
+    holders. When the table cannot be read, a warning is logged and the
+    check is skipped. Off Windows nothing is read: there a wildcard holder
+    already makes the edge's own bind fail.
+    """
+    if not (is_windows or _is_windows)():
+        return
+    ports = (binding.cmd_port, binding.state_port, binding.video_port)
+    reader = udp_endpoints if udp_endpoints is not None else _udp_endpoints.read_udp_endpoints
+    endpoints = reader()
+    if endpoints is None:
+        notice(
+            _log, "tello_wildcard_check_skipped",
+            "Could not read the UDP endpoint table (psutil and netstat both failed), so it is not checked "
+            f"that no other program holds UDP {', '.join(map(str, ports))} on all addresses. Check by hand: "
+            f"{netstat_command(ports)} must show no 0.0.0.0 line.",
+            level=logging.WARNING, local_ip=binding.local_ip,
+        )
+        return
+    holders = wildcard_holders(endpoints, ports)
+    if not holders:
+        return
+    found = ", ".join(_describe_holder(h) for h in holders)
+    commands = netstat_command(ports)
+    if any(h.ipv6 for h in holders):
+        commands += f" and {netstat_command(ports, ipv6=True)}"
+    raise TelloBindingError(
+        f"Another program holds UDP {found} on all addresses. A Tello answers the adapter IP that sent the "
+        "command, so Windows would deliver that program's Tello replies to this edge, and two programs would "
+        "command one drone. It is usually a djitellopy script, scripts/tello_hw_check.py without --local-ip, "
+        f"or an edge started without --tello-local-ip. Find it with: {commands} (a line with 0.0.0.0 or [::]; "
+        "the last column is its PID), stop it, and give every Tello program on this computer its own adapter IP."
+    )
+
+
+def _describe_holder(holder: UdpEndpoint) -> str:
+    if holder.pid is None:
+        return holder.address()
+    name = process_name(holder.pid)
+    return f"{holder.address()} (PID {holder.pid}{', ' + name if name else ''})"
 
 
 def _interface_indexes() -> list[int] | None:
@@ -268,6 +337,14 @@ def open_bound_socket(
     ``SO_REUSEADDR``: a second socket on the same address and port must
     fail, which is how two edges with the same local IP are caught. Raises
     ``TelloBindingError`` with an operator-facing message.
+
+    No ``SO_EXCLUSIVEADDRUSE`` either. Microsoft's bind table for Windows
+    Server 2003 and later ("Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE")
+    gives a specific-address bind with it exactly the same outcomes as one
+    without, for the same or a different user. It still succeeds when the
+    same user's default wildcard socket holds the port, and a later default
+    wildcard bind still succeeds beside it. So it would neither refuse nor
+    block a stray wildcard holder; ``check_no_wildcard_holder`` does that.
     """
     if not local_ip or local_ip == "0.0.0.0":
         raise TelloBindingError(f"refusing to bind the {purpose} socket to all addresses")
