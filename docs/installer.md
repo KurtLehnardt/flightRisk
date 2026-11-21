@@ -233,7 +233,7 @@ that wants to watch, and the launcher window is the GUI from then on.
   new install gets tested versions. A Mac that is not Apple Silicon with macOS 14 falls back to
   `requirements.txt`.
 - **Windows runs edges only, unless `FLIGHTRISK_ROLE=ground`.** The default Windows lock is `requirements-edge.txt`, as `scripts/install_windows.ps1`
-  already does (`requirements-ground.txt` and `installer/locks/windows-x64-ground.txt` add the ground, dashboard and `anthropic`); InsightFace, Ollama, open_clip and MediaPipe are never installed there.
+  already does (`requirements-ground.txt` and `installer/locks/windows-x64-ground.txt` add the ground, dashboard and `anthropic`); open_clip is installed only with the ground role; InsightFace, Ollama and MediaPipe are never installed there.
 - **The Start menu entry opens `scripts\launcher.bat`.** It keeps the console window that the launcher
   documentation already describes (the address, Ctrl+C), so the Windows behaviour stays the one that the
   launcher was built and documented for.

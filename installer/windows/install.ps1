@@ -18,9 +18,9 @@
 #      over local changes, never while FlightRisk is running, and never when the
 #      folder was not made by this installer.
 #   3. Creates the virtual environment app\venv and installs the pinned
-#      packages of installer\locks\windows-x64-edge.txt (PyTorch, open_clip,
+#      packages of installer\locks\windows-x64-edge.txt (PyTorch,
 #      Ultralytics, OpenCV, djitellopy), or with FLIGHTRISK_ROLE=ground those of
-#      windows-x64-ground.txt (also Flask, anthropic and more): wheels only, each
+#      windows-x64-ground.txt (also open_clip, Flask, anthropic and more): wheels only, each
 #      checked against its SHA-256 in the lock, from PyPI only (pip's own
 #      settings and PIP_* variables are ignored).
 #   4. Downloads the yolo11n detector weights and checks their SHA-256.

@@ -21,6 +21,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
 
@@ -29,6 +30,8 @@ API_PORT = 443
 TIMEOUT_S = 4.0
 #: The whole check (DNS, route and TLS) is cut off after about this long, so Start never waits on it for longer.
 BUDGET_S = 5.0
+#: No deadline is shorter than this, so a budget that is already spent still gives each step a real chance.
+DEADLINE_FLOOR_S = 0.5
 #: A literal address of api.anthropic.com (Anthropic's 160.79.104.0/23), used to still show which adapter the
 #: route leaves from when DNS does not answer.
 FALLBACK_IP = "160.79.104.10"
@@ -55,7 +58,7 @@ def _resolve(host: str) -> list[str]:
     return list(dict.fromkeys(info[4][0] for info in infos))
 
 
-def _call_with_deadline(fn: Callable[[], list[str]], deadline_s: float) -> list[str]:
+def _call_with_deadline(fn: Callable[[], Any], deadline_s: float) -> Any:
     """Run *fn* on a daemon thread and give up after *deadline_s* seconds.
 
     ``getaddrinfo`` has no timeout of its own and can block for a minute or more; the abandoned thread
@@ -71,7 +74,7 @@ def _call_with_deadline(fn: Callable[[], list[str]], deadline_s: float) -> list[
 
     thread = threading.Thread(target=run, name="claude-uplink-dns", daemon=True)
     thread.start()
-    thread.join(max(deadline_s, 0.0))
+    thread.join(max(deadline_s, DEADLINE_FLOOR_S))
     if thread.is_alive():
         raise TimeoutError(f"no answer within {deadline_s:g} s")
     if "error" in box:
@@ -183,10 +186,12 @@ def check_claude_uplink(
     rows.append(_route_row(env, ip, ""))
 
     remaining = budget - (time.monotonic() - started)
+    tls_deadline = min(timeout, max(remaining, DEADLINE_FLOOR_S))
     try:
-        version = env.tls_handshake(host, ip, min(timeout, max(remaining, 0.5)))
+        # The socket timeout applies per operation, so the whole handshake also runs under one deadline.
+        version = _call_with_deadline(lambda: env.tls_handshake(host, ip, tls_deadline), tls_deadline)
     except (OSError, ssl.SSLError) as exc:
-        rows.append(UplinkRow(f"TLS {host}:{API_PORT}", FAIL, f"handshake failed within {timeout:g} s ({type(exc).__name__}: {exc})"))
+        rows.append(UplinkRow(f"TLS {host}:{API_PORT}", FAIL, f"handshake failed within {tls_deadline:g} s ({type(exc).__name__}: {exc})"))
     else:
         rows.append(UplinkRow(f"TLS {host}:{API_PORT}", PASS, f"{version} handshake ok; no HTTP request was sent"))
     return rows

@@ -390,6 +390,33 @@ def test_the_handshake_gets_only_what_is_left_of_the_budget():
     assert seen["timeout"] == 0.5
 
 
+def test_a_stalled_handshake_is_cut_off_at_the_deadline_and_reports_it():
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def stalled(host, ip, timeout):
+        release.wait(30)
+        return "TLSv1.3"
+
+    started = time.monotonic()
+    try:
+        rows = by_name(cu.check_claude_uplink(make_env(tls=stalled), timeout=0.6, budget=5.0))
+    finally:
+        release.set()
+    assert time.monotonic() - started < 3
+    tls = rows["TLS api.anthropic.com:443"]
+    assert tls.status == cu.FAIL and "TimeoutError" in tls.detail
+    assert "within 0.6 s" in tls.detail
+
+
+def test_a_spent_budget_still_gives_dns_the_floor_not_a_zero_deadline():
+    # budget=0 used to mean a DNS deadline of 0, so join(0) raced the resolver.
+    rows = by_name(cu.check_claude_uplink(make_env(), timeout=4.0, budget=0.0))
+    assert rows["DNS api.anthropic.com"].status == cu.PASS
+
+
 def test_network_false_returns_only_the_variable_rows():
     def never(*a):
         raise AssertionError("no network when the language model is off")

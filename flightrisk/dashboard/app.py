@@ -1661,7 +1661,9 @@ def _init_pipeline(source_config: SourceConfig, target_path=None):
     # and not already running from a previous init call, e.g. restart_dashboard).
     _ensure_reasoning_worker()
 
-    if target_path and os.path.exists(target_path):
+    # reid is None when its model could not load (for example the HF cache is missing offline); the ground
+    # then still starts, without the appearance target.
+    if target_path and os.path.exists(target_path) and app_state.reid is not None:
         app_state.reid.set_target_from_file(target_path)
         app_state.target_photo_path = target_path
         img = cv2.imread(target_path)

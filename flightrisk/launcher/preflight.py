@@ -262,7 +262,7 @@ class PreflightEnv:
     tello_probe: Callable[[DroneSettings], TelloProbe] = field(
         default=lambda d: probe_tello(d.tello_host, d.local_ip, d.ifindex)
     )
-    environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
+    environ: dict[str, str] = field(default_factory=lambda: dict(os.environ), repr=False)
     is_windows: bool = sys.platform == "win32"
     #: The Claude API reachability rows; replaced in tests so no DNS or socket is touched.
     #: Called as ``claude_uplink(environ, adapters, network)``: the adapter list the preflight already

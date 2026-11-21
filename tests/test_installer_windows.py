@@ -239,6 +239,7 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
     (winbox.app_dir / "logs" / "edge.log").write_text("line")
     token_file = winbox.home / ".flightrisk-fleet.env"
     token_file.write_text("export FLIGHTRISK_EDGE_TOKEN=not-a-real-token\n")
+    (winbox.flightrisk_home / "install-role").write_text("ground")
 
     check = json.loads(winbox.run(copy, "-Check").stdout)
     assert check["exists"] and check["flightriskCheckout"] and check["installerMade"]
@@ -265,6 +266,7 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
     assert data["removed"] is True
     assert not winbox.app_dir.exists()
     assert not winbox.flightrisk_home.exists()
+    assert not (winbox.flightrisk_home / "install-role").exists()
     kept = Path(data["keptData"])
     assert kept.parent == winbox.flightrisk_home.parent / "FlightRisk data", "not Documents, which OneDrive may sync"
     assert (kept / "logs" / "edge.log").read_text() == "line"
