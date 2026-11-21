@@ -1,14 +1,11 @@
 # Dependencies of the drone edge role only (python -m flightrisk.edge_device
 # --source tello|fake). Version floors match requirements.txt. InsightFace,
-# Ollama and MediaPipe are deliberately absent, because they have heavy or
-# Windows-hostile builds. open-clip-torch is present: the ground station
-# matches the target only on the reid_embedding the edge ships with each
-# detection (flightrisk/ground.py:67), so an edge without it can never match.
+# Ollama, open_clip and MediaPipe are deliberately absent, because they have
+# heavy or Windows-hostile builds and the edge does not need them.
 djitellopy>=2.5
 ultralytics>=8.3
 opencv-python>=4.10
 numpy>=1.26
-open-clip-torch>=2.26
 websockets>=12.0
 # Telemetry export (FLIGHTRISK_OTEL_ENABLED=true, OTEL_EXPORTER=otlp-grpc);
 # same floors as requirements.txt. Without them the edge logs a warning and

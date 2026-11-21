@@ -80,9 +80,7 @@ def test_windows_edge_lock_pins_every_edge_requirement():
     pins = _pins(LOCKS / "windows-x64-edge.txt")
     missing = _requirement_names(ROOT / "requirements-edge.txt") - set(pins)
     assert not missing, f"requirements-edge.txt names not in the Windows lock: {sorted(missing)}"
-    # The ground matches the target on the embedding the edge ships with each detection, so the edge needs it.
-    assert "open-clip-torch" in pins, "an edge without open_clip sends reid_embedding null and never matches"
-    for heavy in ("insightface", "ollama", "mavsdk", "flask"):
+    for heavy in ("insightface", "ollama", "open-clip-torch", "mavsdk", "flask"):
         assert heavy not in pins, f"the edge lock must not install {heavy}"
 
 
@@ -93,7 +91,8 @@ def test_windows_ground_lock_pins_every_ground_requirement_and_anthropic():
         assert not missing, f"{requirements} names not in the Windows ground lock: {sorted(missing)}"
     for needed in ("anthropic", "flask", "flask-socketio"):
         assert needed in pins
-    # PersonReID needs open_clip; without it app_state.reid is None and the target photo cannot be set.
+    # PersonReID needs open_clip; without it app_state.reid is None and the target photo cannot be set. The
+    # edges of layout B run from this same venv, so they get it too (the edge-only lock stays without, R-104).
     assert "open-clip-torch" in pins
     for heavy in ("insightface", "ollama", "mavsdk"):
         assert heavy not in pins, f"the ground lock must not install {heavy}"
