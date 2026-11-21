@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
+import threading
 import time
 from fractions import Fraction
 from types import SimpleNamespace
@@ -911,3 +912,48 @@ def test_a_full_tello_telemetry_message_with_the_person_cue_is_still_a_valid_fle
     assert "drone_link_ok" in msg and "obstacle_state" in msg and TELEMETRY_PERSON_CUE in msg
     assert len(msg) <= fp.MAX_FIELDS
     assert fp.validate_message(msg, proto=2) == "telemetry"
+
+
+def test_a_tello_flight_edge_stamps_detections_from_its_decoder(monkeypatch):
+    """``_run_flight_edge`` gives the runner the drone's decoder stamps, so the person cue sees capture times."""
+    from flightrisk import edge_device
+
+    reader = StampingReader(TickClock())
+    drone = FakeTelloController(name="drone-1")
+    drone.tello = SimpleNamespace(background_frame_read=reader)
+    runner = EdgeRunner(detector=_NoDetector(), drone_id="drone-1")
+    seen = []
+
+    class Executor:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class Transport:
+        urls = ()
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(edge_device, "_build_runner", lambda *a, **k: runner)
+    monkeypatch.setattr(edge_device, "_build_drone", lambda *a, **k: drone)
+    monkeypatch.setattr(edge_device, "_build_obstacle_wiring", lambda *a, **k: edge_device.ObstacleWiring())
+    monkeypatch.setattr(edge_device, "_build_transport", lambda *a, **k: Transport())
+    monkeypatch.setattr(edge_device, "LaneExecutor", Executor)
+    monkeypatch.setattr(edge_device, "start_local_land_key", lambda *a, **k: None)
+    monkeypatch.setattr(edge_device, "_install_sigint_land", lambda *a, **k: None)
+    monkeypatch.setattr(edge_device, "_wire_emergency_callback", lambda *a, **k: None)
+    monkeypatch.setattr(edge_device, "run_edge_device", lambda source, transport, r, **k: seen.append(r))
+    args = _build_parser().parse_args(["--source", "tello", "--drone-id", "drone-1"])
+    edge_device._run_flight_edge(args, RecordingLog(), stop_event=threading.Event(), envelope=_envelope())
+    assert seen == [runner]
+    reader.decode(_rgb_scene(), 7.5)
+    assert runner.frame_stamp(reader.frame) == FrameStamp(7.5)

@@ -2149,7 +2149,7 @@ def _run_flight_edge(
         bind_envelope(envelope)
 
     obstacle = _build_obstacle_wiring(args, log, drone, runner, envelope)
-    if kind != "mavlink":
+    if kind != "mavlink" and hasattr(runner, "frame_stamp"):
         # Detections are stamped with their frame's capture time, and a frame the decoder marks stale
         # never feeds the person cue (``EdgeRunner.frame_stamp``).
         runner.frame_stamp = _decoder_frame_stamp(drone)
