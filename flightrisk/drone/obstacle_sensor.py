@@ -477,9 +477,9 @@ class FrameStamp:
     """What a video decoder knows about one decoded frame.
 
     ``captured_at`` is the latest time the frame can have been captured, on the
-    ``time.monotonic()`` clock: the arrival of the video data that completed it,
-    stamped by a receiver that does not wait for the decoder, so a decoder that
-    falls behind cannot make an old view look new. It is ``None`` when the
+    ``time.monotonic()`` clock: the arrival of the first datagram of its video
+    data, stamped by a receiver that does not wait for the decoder, so a decoder
+    that falls behind cannot make an old view look new. It is ``None`` when the
     decoder cannot tell. ``stale_cause`` is set (one of ``STALE_*``) when the
     frame must not be judged at all: it was decoded behind a backlog, it is
     corrupt or partial after lost video data, or it is built on such a frame.

@@ -372,10 +372,11 @@ class BoundFrameRead:
       the socket's receive buffer drained whatever the decoder does.
     * The decoder thread feeds the queued datagrams to PyAV's H.264 parser
       and decoder. A frame's capture stamp is the arrival of the first
-      datagram of its access unit, which is after the camera captured it,
-      so the stamp never makes a frame look older than it is by more than
-      the camera's own latency. That latency is what the obstacle settle
-      time must cover (``FLIGHTRISK_OBSTACLE_SETTLE_S``, hardware item H5).
+      datagram of its access unit. That is after the camera captured it,
+      so the stamp makes a frame look newer than it is by the camera's own
+      latency (encoding and Wi-Fi), and by nothing the decoder does. That
+      latency is what the obstacle settle time must cover
+      (``FLIGHTRISK_OBSTACLE_SETTLE_S``, hardware item H5).
     * A frame is stale (``FrameStamp.stale_cause``) when it was decoded more
       than ``max_lag_s`` after its first datagram arrived (the decoder is
       behind; ``decoder backlog``), when the decoder flags it corrupt, and
