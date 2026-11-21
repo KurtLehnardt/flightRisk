@@ -129,8 +129,8 @@ fi
 
 info "Ollama ready with model: $MODEL"
 
-# ── Step 5: Download matching models ────────────────────────────
-step "Step 5/6: Downloading matching models (OSNet + InsightFace)"
+# ── Step 5: Download models ─────────────────────────────────────
+step "Step 5/6: Downloading models (OSNet, InsightFace, MiDaS)"
 
 if [ -f "$REPO_ROOT/models/osnet_x1_0.onnx" ] && [ -f "$REPO_ROOT/models/insightface_r18.onnx" ]; then
     info "Matching models already downloaded"
@@ -139,6 +139,17 @@ else
         warn "Matching model download had issues (see above). Continuing..."
     }
 fi
+
+# MiDaS depth weights for the obstacle sensor: the pinned URL and SHA-256 are in
+# flightrisk/drone/midas_model.py, which deletes a download that does not match.
+# Flights never download them; without them the obstacle sensor refuses takeoff.
+midas_status=0
+python3 -E -s -m flightrisk.drone.midas_model install || midas_status=$?
+case "$midas_status" in
+    0) info "MiDaS depth weights installed and checked" ;;
+    2) warn "MiDaS depth weights not downloaded (no internet?); run 'python3 -m flightrisk.drone.midas_model install' before flying" ;;
+    *) fail "MiDaS depth weights refused (see above); nothing was installed" ;;
+esac
 
 # ── Step 6: Run tests ──────────────────────────────────────────
 step "Step 6/6: Running test suite"

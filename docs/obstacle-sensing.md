@@ -10,6 +10,12 @@ On 28 October two Tello EDUs each flew a single `forward 400` move. About 2.5 m 
 
 The single-drone dashboard search already had a depth guard (`flightrisk/drone/obstacle.py`), but it checked once per long move and its reactions shifted every later lane off the plan. The fleet lane path had no sensing at all.
 
+## The model and its weights
+
+The depth model is MiDaS v2.1 Small. Its code is vendored in `flightrisk/third_party/midas_small` from isl-org/MiDaS at commit `454597711a62eabcbf7d1e89f3fb9f569051ac9b` and rwightman/gen-efficientnet-pytorch at commit `771ce082b2ce6d033f55b3d47c1f77389ad3c180`, trimmed to this one model. Nothing is loaded through `torch.hub`, so no repository code is downloaded or trusted at run time and nothing asks "Do you trust this repository?" on the console. The weights, `models/midas_v21_small_256.pt`, come from the MiDaS v2.1 release. The installers download them once with `python -m flightrisk.drone.midas_model install`, which checks them against the SHA-256 in `flightrisk/drone/midas_model.py`. Every load checks that SHA-256 again before the file is unpickled, and loads it with `weights_only=True`. A missing or altered file makes the sensor unavailable, so the edge refuses to take off, and the message names the install command. `python -m flightrisk.drone.midas_model verify` checks the file without the network.
+
+The ground station loads MiDaS only for the single-drone dashboard search, when that search starts; a ground for edge drones (`--source edge`) never loads it. That search does not start without the guard.
+
 ## What the drone does on every lane
 
 A sensed drone never moves into space it has not just checked.

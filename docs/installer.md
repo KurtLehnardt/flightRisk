@@ -66,6 +66,7 @@ as described in [fleet-setup.md](fleet-setup.md).
 | Virtual environment | `app/venv` (Python 3.13) | `app\venv` |
 | Packages | `installer/locks/macos-arm64.txt` (full app) | `installer\locks\windows-x64-edge.txt` (edge role) |
 | Detector weights | `app/yolo11n.pt` | `app\yolo11n.pt` |
+| Obstacle-sensor depth weights | `app/models/midas_v21_small_256.pt` | `app\models\midas_v21_small_256.pt` |
 | Marker | `app/.git/flightrisk-installer` | `app\.git\flightrisk-installer` |
 | Progress | `install-status.json` and the lock `install.lock` (a symbolic link to "pid\|start time") | `install-status.json` and `install-status.json.lock` (held open) |
 | App | `~/Applications/FlightRisk.app` | Start menu `FlightRisk` (opens `scripts\launcher.bat`) |
@@ -150,6 +151,13 @@ FlightRisk or a running install (exit 3), and work that is not on GitHub without
   checked against its SHA-256 before it is put in place; a mismatch stops the install. If the download
   fails, the installer warns, and running it again before flying downloads and checks the weights;
   otherwise Ultralytics would download them unchecked when an edge starts.
+- `midas_v21_small_256.pt`, the MiDaS depth weights of the obstacle sensor, is downloaded by
+  `python -m flightrisk.drone.midas_model install` from the pinned MiDaS v2.1 release URL and checked
+  against the SHA-256 recorded in `flightrisk/drone/midas_model.py`; a download that does not match is
+  deleted and stops the install. If the download fails, the installer warns. Flights never download it:
+  without it the obstacle sensor is unavailable and the edge refuses to take off. The MiDaS model code is
+  vendored in `flightrisk/third_party/midas_small` from pinned commits, so nothing is fetched through
+  `torch.hub` (see [Obstacle sensing](obstacle-sensing.md#the-model-and-its-weights)).
 
 ## The launcher window's key
 

@@ -22,7 +22,10 @@
 #      checked against its SHA-256 in the lock, from PyPI only (pip's own
 #      settings and PIP_* variables are ignored).
 #   4. Downloads the yolo11n detector weights and checks their SHA-256.
-#   5. Adds a FlightRisk entry to the Start menu (it opens the launcher window) and
+#   5. Downloads the MiDaS depth weights of the obstacle sensor and checks them
+#      against the SHA-256 pinned in flightrisk\drone\midas_model.py, so no flight
+#      needs the internet for them (an edge without them refuses to take off).
+#   6. Adds a FlightRisk entry to the Start menu (it opens the launcher window) and
 #      to Settings > Apps > Installed apps (for uninstalling).
 #
 # An interrupted run can always be repaired by running this again: a first
@@ -609,6 +612,32 @@ function Get-Weights {
     Ok "yolo11n.pt downloaded and checked"
 }
 
+# The MiDaS depth weights of the obstacle sensor, in app\models. midas_model.py holds the
+# pinned URL and SHA-256 and checks the download (a file that does not match is deleted,
+# never loaded). A flight never downloads them: without them the edge refuses to take off.
+# Its exit code: 0 installed and checked, 2 the download failed, anything else refused.
+function Get-MidasWeights {
+    if ($env:FLIGHTRISK_INSTALL_SKIP_DEPS -eq "1") { return }
+    $ErrorActionPreference = "Continue"  # see Get-PythonVersion
+    $venvPython = Get-VenvPython
+    if (-not (Test-Path -LiteralPath $venvPython)) { Die "No virtual environment at $($script:VenvDir) to install the MiDaS depth weights with." }
+    $code = 1
+    Push-Location $script:AppDir
+    try {
+        # -E -s: no PYTHON* variables and no user site, so flightrisk is this install's.
+        & $venvPython -E -s -m flightrisk.drone.midas_model install
+        $code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($code -eq 0) { Ok "MiDaS depth weights downloaded and checked"; return }
+    if ($code -eq 2) {
+        Warn "could not download the MiDaS depth weights now; run the installer again before flying (without them the obstacle sensor refuses takeoff)"
+        return
+    }
+    Die "The MiDaS depth weights could not be installed and checked (exit code $code), so the obstacle sensor would refuse takeoff."
+}
+
 function Get-StartMenuShortcut {
     return (Join-Path ([Environment]::GetFolderPath("Programs")) "FlightRisk.lnk")
 }
@@ -684,6 +713,9 @@ function Invoke-Install {
 
         Set-Step "weights" "Detector weights"
         Get-Weights
+
+        Set-Step "midas" "Obstacle sensor depth weights"
+        Get-MidasWeights
 
         Set-Step "shortcuts" "Start menu and Installed apps"
         Register-App
