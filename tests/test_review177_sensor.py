@@ -20,7 +20,7 @@
 * R2-N3 (round 2): a frame whose pixels are all the same (the black frame a
   restarted decoder starts on) is refused before inference as ``stale``.
 
-MiDaS is never loaded (``torch.hub.load`` is mocked or the guard is a fake),
+MiDaS is never loaded (``midas_model.load_midas_small`` is replaced or the guard is a fake),
 no network is used and no drone is contacted.
 """
 from __future__ import annotations
@@ -97,7 +97,7 @@ class _Transforms:
 def model(monkeypatch):
     m = _Model()
     monkeypatch.setattr(
-        "torch.hub.load", lambda repo, name, **kw: m if name == "MiDaS_small" else _Transforms(),
+        "flightrisk.drone.midas_model.load_midas_small", lambda *a, **kw: (m, _Transforms.small_transform),
     )
     return m
 

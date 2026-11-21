@@ -529,7 +529,8 @@ class TestDashboardWiring:
         fleet = MagicMock()
         fleet.primary = drone
         app_mod._state["fleet"] = fleet
-        app_mod._state["obstacle_guard"] = None
+        # A clear-path guard: a single-drone search does not start without one.
+        app_mod._state["obstacle_guard"] = MagicMock(min_safe_depth=0.35, **{"check_path.return_value": {"safe": True, "action": "clear", "center_depth": 0.1}})
         monkeypatch.setattr(app_mod, "time", types.SimpleNamespace(sleep=lambda s: None, time=time.time, strftime=time.strftime))
 
         client = app_mod.socketio.test_client(app_mod.app)
