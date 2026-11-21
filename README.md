@@ -121,13 +121,18 @@ stays active and the reason is shown.
 | `FLIGHTRISK_REASONING_PROVIDER` | `gemma` | `gemma`, `claude` or `off` |
 | `FLIGHTRISK_ALLOW_CLOUD_LLM` | unset (off) | `1` to allow the Claude cloud backend |
 | `FLIGHTRISK_CLAUDE_API_KEY` | unset | Anthropic API key used only when cloud use is allowed |
-| `FLIGHTRISK_CLAUDE_MODEL` | `claude-opus-5-5` | any vision-capable Claude model, e.g. `claude-sonnet-5-5` to cut cost |
-| `FLIGHTRISK_CLAUDE_EFFORT` | `medium` | `low` to `max`; lower is faster and cheaper |
+| `FLIGHTRISK_CLAUDE_MODEL` | `claude-sonnet-5-5` | any vision-capable Claude model, e.g. `claude-opus-5-5` for harder cases |
+| `FLIGHTRISK_CLAUDE_EFFORT` | `high` | `low` to `max`; lower is faster and cheaper |
+| `FLIGHTRISK_CLAUDE_BREAKER_THRESHOLD` | `3` | consecutive failures (timeout, 429, 5xx, connection) before Claude calls pause |
+| `FLIGHTRISK_CLAUDE_BREAKER_COOLOFF` | `60` | seconds Claude calls stay paused after the breaker opens |
+| `FLIGHTRISK_CLAUDE_MAX_CALLS_PER_MINUTE` | `20` | cap on Claude calls per rolling minute; extra calls are skipped, never queued |
 | `FLIGHTRISK_GEMMA_MODEL` | `gemma4:latest` | Ollama model when using `gemma` |
 
 Each confirmation sends the reference photo and the detected person's crop to the chosen backend
 (for Gemma, to the local Ollama server; for Claude, to the Anthropic API). Calls are rate-limited per
-tracked person.
+tracked person. For Claude, both images are downscaled to at most 768 px on the long edge before
+upload, each call times out after 15 s with one retry, and a circuit breaker plus a per-minute cap
+make the reasoning worker fail fast instead of stalling.
 
 ## Observability (Grafana)
 

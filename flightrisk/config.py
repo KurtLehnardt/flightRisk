@@ -120,8 +120,14 @@ class ReasoningConfig:
     # is True (env FLIGHTRISK_ALLOW_CLOUD_LLM=1).
     allow_cloud: bool = False
     model: str = "gemma4:latest"  # Ollama model, used when provider == "gemma"
-    claude_model: str = "claude-opus-5-5"
-    claude_effort: str = "medium"  # low | medium | high | xhigh | max
+    claude_model: str = "claude-sonnet-5-5"
+    claude_effort: str = "high"  # low | medium | high | xhigh | max
+    # Claude call hardening: after this many consecutive failures (timeout,
+    # 429, 5xx, connection) calls are skipped for the cool-off window, and at
+    # most this many calls go out per rolling minute. Both fail fast.
+    claude_breaker_threshold: int = 3
+    claude_breaker_cooloff: float = 60.0
+    claude_max_calls_per_minute: int = 20
     queue_maxsize: int = 10
     alert_cooldown: float = 10.0
     gemma_rate_limit: float = 5.0
@@ -203,6 +209,10 @@ class FlightRiskConfig:
             "FLIGHTRISK_GEMMA_MODEL": ("reasoning", "model", str),
             "FLIGHTRISK_CLAUDE_MODEL": ("reasoning", "claude_model", str),
             "FLIGHTRISK_CLAUDE_EFFORT": ("reasoning", "claude_effort", str),
+            "FLIGHTRISK_CLAUDE_BREAKER_THRESHOLD": ("reasoning", "claude_breaker_threshold", int),
+            "FLIGHTRISK_CLAUDE_BREAKER_COOLOFF": ("reasoning", "claude_breaker_cooloff", float),
+            "FLIGHTRISK_CLAUDE_MAX_CALLS_PER_MINUTE": (
+                "reasoning", "claude_max_calls_per_minute", int),
             "FLIGHTRISK_ALERT_COOLDOWN": ("reasoning", "alert_cooldown", float),
             "FLIGHTRISK_QUEUE_SIZE": ("reasoning", "queue_maxsize", int),
             "FLIGHTRISK_PORT": ("dashboard", "port", int),

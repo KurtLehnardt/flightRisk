@@ -263,17 +263,17 @@ class TestRequestShape:
         agent.match_description(img, "red jacket")
 
         kwargs = client.beta.messages.create.call_args.kwargs
-        assert kwargs["model"] == "claude-opus-5-5"
-        assert kwargs["output_config"] == {"effort": "medium"}
+        assert kwargs["model"] == "claude-sonnet-5-5"
+        assert kwargs["output_config"] == {"effort": "high"}
         assert "thinking" not in kwargs  # always-on adaptive; must not be sent
         assert "temperature" not in kwargs
 
     def test_model_and_effort_overridable(self, make_agent, img):
-        agent, client = make_agent(model="claude-sonnet-5-5", effort="low")
+        agent, client = make_agent(model="claude-opus-5-5", effort="low")
         agent.match_description(img, "red jacket")
 
         kwargs = client.beta.messages.create.call_args.kwargs
-        assert kwargs["model"] == "claude-sonnet-5-5"
+        assert kwargs["model"] == "claude-opus-5-5"
         assert kwargs["output_config"] == {"effort": "low"}
 
     def test_refusal_fallback_enabled_for_supported_model(self, make_agent, img):

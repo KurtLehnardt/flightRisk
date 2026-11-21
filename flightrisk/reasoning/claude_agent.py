@@ -15,7 +15,12 @@ error results.
 
 import logging
 import os
+import threading
+import time
 from typing import Any
+
+import cv2
+import numpy as np
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
@@ -27,9 +32,48 @@ _log = logging.getLogger(__name__)
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-# Thinking tokens count toward max_tokens, so leave headroom beyond the
-# three-line MATCH / CONFIDENCE / REASONING reply.
-_MAX_TOKENS = 4096
+# Thinking tokens count toward max_tokens. The visible reply is three short
+# lines (well under 200 tokens), so the rest is headroom for adaptive thinking
+# at high effort: a truncated thinking block would leave no text at all.
+_MAX_TOKENS = 8192
+
+# Short timeout and a single retry keep the single serial reasoning worker from
+# stalling for minutes on a sick API (worst case about 2 x 15 s per call).
+_TIMEOUT_S = 15.0
+_MAX_RETRIES = 1
+
+# Long-edge cap for images sent to the cloud. Smaller uploads are faster and
+# cheaper and also limit how much of the reference photo leaves the machine.
+_MAX_IMAGE_EDGE = 768
+
+_RATE_WINDOW_S = 60.0
+RATE_CAP_MESSAGE = "skipped: rate cap"
+BREAKER_OPEN_MESSAGE = "skipped: Claude circuit breaker open"
+
+
+class ClaudeCallSkipped(RuntimeError):
+    """A Claude call was skipped locally (breaker open or rate cap); nothing was sent."""
+
+
+def _is_outage_error(exc: Exception) -> bool:
+    """True for failures that mean the API is unhealthy: timeout, connection, 429, 5xx."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and (status == 429 or status >= 500):
+        return True
+    names = {c.__name__ for c in type(exc).__mro__}
+    return bool(names & {"APITimeoutError", "APIConnectionError", "TimeoutError"})
+
+
+def downscale_for_upload(image: np.ndarray, max_edge: int = _MAX_IMAGE_EDGE) -> np.ndarray:
+    """Shrink ``image`` so its long edge is at most ``max_edge``; never upscales."""
+    h, w = image.shape[:2]
+    long_edge = max(h, w)
+    if long_edge <= max_edge:
+        return image
+    scale = max_edge / long_edge
+    new_w = max(1, round(w * scale))
+    new_h = max(1, round(h * scale))
+    return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
 API_KEY_ENV = "FLIGHTRISK_CLAUDE_API_KEY"
@@ -76,7 +120,15 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         self.model = model or cfg.claude_model
         self.effort = effort or cfg.claude_effort
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic(api_key=key, timeout=60.0, max_retries=2)
+        self._client = anthropic.Anthropic(
+            api_key=key, timeout=_TIMEOUT_S, max_retries=_MAX_RETRIES)
+        self._breaker_threshold = max(1, int(cfg.claude_breaker_threshold))
+        self._breaker_cooloff = float(cfg.claude_breaker_cooloff)
+        self._max_calls_per_minute = int(cfg.claude_max_calls_per_minute)
+        self._guard = threading.Lock()
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+        self._call_times: list[float] = []
         self._available = True
         self.last_usage: dict[str, Any] = {}
         # Say where the key came from (never the key itself) and that data
@@ -88,7 +140,46 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             provider=self.provider, model=self.model, key_source=key_source, cloud=True,
         )
 
+    def _image_to_base64(self, image: np.ndarray) -> str:
+        """Downscale to the upload cap, then encode as base64 JPEG."""
+        return super()._image_to_base64(downscale_for_upload(image))
+
+    def _admit(self) -> None:
+        """Raise ClaudeCallSkipped if the breaker is open or the minute cap is hit."""
+        now = time.monotonic()
+        with self._guard:
+            if now < self._open_until:
+                raise ClaudeCallSkipped(BREAKER_OPEN_MESSAGE)
+            self._call_times = [t for t in self._call_times if now - t < _RATE_WINDOW_S]
+            if len(self._call_times) >= self._max_calls_per_minute:
+                raise ClaudeCallSkipped(RATE_CAP_MESSAGE)
+            self._call_times.append(now)
+
+    def _record_result(self, exc: Exception | None) -> None:
+        """Update the breaker: success resets it; an outage error counts toward opening it."""
+        with self._guard:
+            if exc is None:
+                self._consecutive_failures = 0
+                self._open_until = 0.0
+            elif _is_outage_error(exc):
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= self._breaker_threshold:
+                    self._open_until = time.monotonic() + self._breaker_cooloff
+                    _log.warning(
+                        "claude_breaker_open failures=%d cooloff_s=%.0f",
+                        self._consecutive_failures, self._breaker_cooloff)
+
     def _ask(self, prompt: str, images_b64: list[str]) -> str:
+        self._admit()
+        try:
+            text = self._send(prompt, images_b64)
+        except Exception as e:
+            self._record_result(e)
+            raise
+        self._record_result(None)
+        return text
+
+    def _send(self, prompt: str, images_b64: list[str]) -> str:
         content: list[dict[str, Any]] = [
             {
                 "type": "image",
