@@ -20,7 +20,7 @@
 * R2-N3 (round 2): a frame whose pixels are all the same (the black frame a
   restarted decoder starts on) is refused before inference as ``stale``.
 
-MiDaS is never loaded (``torch.hub.load`` is mocked or the guard is a fake),
+MiDaS is never loaded (``midas_model.load_midas_small`` is replaced or the guard is a fake),
 no network is used and no drone is contacted.
 """
 from __future__ import annotations
@@ -36,6 +36,7 @@ import torch
 from flightrisk.drone import obstacle_camera
 from flightrisk.drone.obstacle_camera import ForwardCameraSensor
 from flightrisk.drone.obstacle_sensor import (
+    CHANNEL_ORDER_RGB,
     CAUSE_BLANK_FRAME,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
@@ -97,7 +98,7 @@ class _Transforms:
 def model(monkeypatch):
     m = _Model()
     monkeypatch.setattr(
-        "torch.hub.load", lambda repo, name, **kw: m if name == "MiDaS_small" else _Transforms(),
+        "flightrisk.drone.midas_model.load_midas_small", lambda *a, **kw: (m, _Transforms.small_transform),
     )
     return m
 
@@ -680,9 +681,12 @@ PRE_TURN, POST_TURN = 1, 2
 
 
 def _marked_view(marker, height=300, width=400):
-    """A textured frame whose top-left pixel says which view it is."""
+    """A textured frame whose top-left pixel says which view it is, in every channel.
+
+    The marker survives the feeds' conversion from the decoder's RGB to the sensor's BGR.
+    """
     frame = _view(height, width)
-    frame[0, 0, 0] = marker
+    frame[0, 0, :] = marker
     return frame
 
 
@@ -714,7 +718,8 @@ class _StalledTello:
         self.reader = _Reader(first_frame)
         self.ctrl.tello.background_frame_read = self.reader
         self.holder = LatestFrame(self.clock)
-        self.ctrl.on_frame(_copying_frame_feed(self.holder))
+        # As on a Tello edge: the decoder's frames are RGB.
+        self.ctrl.on_frame(_copying_frame_feed(self.holder, CHANNEL_ORDER_RGB))
         self.poller = DecodedFramePoller(self.ctrl, self.holder)
         self.guard = _MarkerGuard()
         # frame_wait_s=0 looks once: the injected clock does not move while the sensor waits.

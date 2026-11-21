@@ -2,26 +2,50 @@
 """Replay a drone recording and run the obstacle sensor on every nth frame.
 
 Calibrates the depth threshold (FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH) against
-known distances in a recorded video. Prints per-frame cue values, decisions and
+known distances in a recording. Prints per-frame cue values, decisions and
 latency to stdout; optionally writes a CSV for further analysis.
 
 Usage:
+    python scripts/obstacle_replay.py --frames <dir> [--stride n] [--out csv] [--min-safe-depth x]
     python scripts/obstacle_replay.py --video <mp4> [--stride n] [--out csv] [--min-safe-depth x]
 
 Arguments:
-    --video <mp4>: Path to the video file to replay.
+    --frames <dir>: A recording made by scripts/obstacle_record.py: the PNG frames
+        the sensor saw in flight, in its channel order, with their capture times.
+        This is the input to calibrate with: MiDaS gets exactly what it got in flight.
+    --video <mp4>: A video file read with OpenCV. Lossy compression changes the
+        pixels, so its numbers can differ a little from flight.
     --stride n: Process every nth frame (default 1).
     --out csv: Write per-frame data to CSV file (optional).
     --min-safe-depth x: Depth threshold for obstacle detection (default 0.35).
+
+Every frame goes through ``flightrisk.drone.obstacle_sensor.to_sensor_frame``,
+the same conversion the edge's frame feeds use, so a frame replayed here and
+the same frame in flight reach the depth model as the same tensor. OpenCV
+reads PNG and video files as BGR, the sensor's channel order.
 """
 
 import argparse
 import csv
 import sys
 import time
+from pathlib import Path
 
 import cv2
-import numpy as np
+
+# Run from a checkout without installing the package.
+_REPO = Path(__file__).resolve().parent.parent
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+#: The frame index of a recording made by ``scripts/obstacle_record.py``.
+INDEX_NAME = "frames.csv"
+
+CSV_FIELDS = [
+    "frame", "processed", "action", "center_depth", "center_p90",
+    "left_depth", "right_depth", "confidence", "center_stat",
+    "latency_ms", "safe", "captured_at_s",
+]
 
 
 def parse_args(args=None):
@@ -31,10 +55,14 @@ def parse_args(args=None):
         args: List of arguments to parse (for testing). If None, uses sys.argv.
     """
     parser = argparse.ArgumentParser(
-        description="Replay video and run obstacle sensor on every nth frame"
+        description="Replay a recording and run the obstacle sensor on every nth frame"
     )
-    parser.add_argument(
-        "--video", required=True, help="Path to video file (MP4)"
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--frames", help="A recording directory written by scripts/obstacle_record.py"
+    )
+    source.add_argument(
+        "--video", help="Path to video file (MP4)"
     )
     parser.add_argument(
         "--stride", type=int, default=1,
@@ -48,11 +76,14 @@ def parse_args(args=None):
         "--min-safe-depth", type=float, default=0.35,
         help="Depth threshold for obstacle detection (default 0.35)"
     )
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
+    if parsed.stride < 1:
+        parser.error("--stride must be 1 or more")
+    return parsed
 
 
 def build_guard(min_safe_depth):
-    """Build an ObstacleGuard with the given threshold."""
+    """Build an ObstacleGuard with the given threshold, as the edge's camera sensor does."""
     from flightrisk.drone.obstacle import ObstacleGuard
 
     return ObstacleGuard(
@@ -62,29 +93,71 @@ def build_guard(min_safe_depth):
     )
 
 
-def run_replay(video_path, stride, min_safe_depth, csv_out=None):
-    """Replay video and run obstacle sensor on every nth frame.
-
-    Args:
-        video_path: Path to the video file.
-        stride: Process every stride-th frame.
-        min_safe_depth: Depth threshold for obstacle detection.
-        csv_out: Path to write CSV output (optional).
-
-    Returns:
-        List of per-frame results (dicts).
-    """
+def video_frames(video_path):
+    """Yield ``(frame, None)`` for every frame of a video file, BGR as OpenCV reads it."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"Error: could not open video file: {video_path}", file=sys.stderr)
         sys.exit(1)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            yield frame, None
+    finally:
+        cap.release()
 
-    guard = build_guard(min_safe_depth)
+
+def recorded_frames(frames_dir):
+    """Yield ``(frame, captured_at_s)`` for every frame of an ``obstacle_record.py`` recording, in order.
+
+    The PNGs are read with OpenCV, which gives back the BGR arrays the
+    recorder wrote, pixel for pixel. A frame file that cannot be read stops
+    the replay with an error, because a gap would shift every frame number.
+    """
+    directory = Path(frames_dir)
+    index = directory / INDEX_NAME
+    if not index.is_file():
+        print(f"Error: {directory} holds no {INDEX_NAME}; record it with scripts/obstacle_record.py",
+              file=sys.stderr)
+        sys.exit(1)
+    with open(index, newline="") as f:
+        rows = list(csv.DictReader(f))
+    for row in rows:
+        path = directory / row["file"]
+        frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if frame is None:
+            print(f"Error: could not read {path}", file=sys.stderr)
+            sys.exit(1)
+        captured = row.get("captured_at_s")
+        yield frame, (float(captured) if captured else None)
+
+
+def run_replay(video_path, stride, min_safe_depth, csv_out=None, frames_dir=None, guard=None):
+    """Replay a recording and run the obstacle sensor on every nth frame.
+
+    Args:
+        video_path: Path to a video file, or None when ``frames_dir`` is given.
+        stride: Process every stride-th frame.
+        min_safe_depth: Depth threshold for obstacle detection.
+        csv_out: Path to write CSV output (optional).
+        frames_dir: A recording written by ``scripts/obstacle_record.py`` (optional).
+        guard: An already built ``ObstacleGuard`` (for tests); built here by default.
+
+    Returns:
+        List of per-frame results (dicts).
+    """
+    from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, to_sensor_frame
+
+    source = recorded_frames(frames_dir) if frames_dir is not None else video_frames(video_path)
+    if guard is None:
+        guard = build_guard(min_safe_depth)
     results = []
     frame_num = 0
     processed = 0
 
-    print(f"Processing video: {video_path}")
+    print(f"Processing {'recording' if frames_dir is not None else 'video'}: {frames_dir or video_path}")
     print(f"Stride: {stride}, Min safe depth: {min_safe_depth}")
     print(
         "Frame\tAction\tDepth\tCentre_Stat\tLatency_ms\tSafe\tCentre_Depth\t"
@@ -92,11 +165,7 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None):
         flush=True
     )
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for raw, captured_at in source:
         frame_num += 1
 
         # Skip frames based on stride
@@ -104,6 +173,8 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None):
             continue
 
         processed += 1
+        # OpenCV reads BGR, the sensor's order: the same conversion the edge's feeds apply.
+        frame = to_sensor_frame(raw, CHANNEL_ORDER_BGR)
 
         # Run obstacle check
         start = time.perf_counter()
@@ -141,20 +212,14 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None):
             "center_stat": center_stat,
             "latency_ms": latency_ms,
             "safe": safe,
+            "captured_at_s": "" if captured_at is None else captured_at,
         })
-
-    cap.release()
 
     # Write CSV if requested
     if csv_out:
         try:
             with open(csv_out, "w", newline="") as f:
-                fieldnames = [
-                    "frame", "processed", "action", "center_depth", "center_p90",
-                    "left_depth", "right_depth", "confidence", "center_stat",
-                    "latency_ms", "safe",
-                ]
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
                 writer.writeheader()
                 writer.writerows(results)
             print(f"\nWrote {len(results)} frames to: {csv_out}", file=sys.stderr)
@@ -177,6 +242,7 @@ def main():
         args.stride,
         args.min_safe_depth,
         args.csv_out,
+        frames_dir=args.frames,
     )
 
 

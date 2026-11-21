@@ -1,6 +1,7 @@
 """Tests for vision-based obstacle avoidance (ObstacleGuard).
 
-All tests mock torch.hub.load so no model download is required.
+All tests replace midas_model.load_midas_small with a stand-in model, so no
+weights are needed. tests/test_midas_supply_chain.py loads the real model code.
 """
 
 import threading
@@ -55,18 +56,14 @@ def _clear_scene():
     return depth
 
 
-def _mock_hub_load(repo, model_name, **kwargs):
-    if model_name == "MiDaS_small":
-        return _mock_model
-    elif model_name == "transforms":
-        return MockTransforms()
-    raise ValueError(f"Unknown model: {model_name}")
+def _mock_load_midas_small(*args, **kwargs):
+    return _mock_model, MockTransforms.small_transform
 
 
 @pytest.fixture(autouse=True)
 def mock_midas(monkeypatch):
-    """Patch torch.hub.load globally for all tests."""
-    monkeypatch.setattr("torch.hub.load", _mock_hub_load)
+    """Replace the MiDaS loader for all tests."""
+    monkeypatch.setattr("flightrisk.drone.midas_model.load_midas_small", _mock_load_midas_small)
     # Reset mock model to a valid, clear view
     _mock_model.set_depth_map(_clear_scene())
     yield _mock_model
@@ -331,24 +328,17 @@ class TestDepthVisualization:
 # ---------------------------------------------------------------------------
 
 class TestNonInteractiveLoad:
-    def test_hub_loads_pass_trust_repo(self, monkeypatch):
-        """Every torch.hub.load call must pass trust_repo=True so that torch
-        never prompts on stdin ("Do you trust this repository (y/N)?")."""
+    def test_guard_loads_through_the_pinned_loader_not_torch_hub(self, monkeypatch):
+        """The model comes from midas_model.load_midas_small; torch.hub is never called."""
         from flightrisk.drone.obstacle import ObstacleGuard
 
-        calls = []
+        def no_hub(*args, **kwargs):
+            raise AssertionError("ObstacleGuard called torch.hub")
 
-        def recording_load(repo, model_name, **kwargs):
-            calls.append((repo, model_name, kwargs))
-            return _mock_hub_load(repo, model_name, **kwargs)
-
-        monkeypatch.setattr("torch.hub.load", recording_load)
-        ObstacleGuard()
-
-        assert [c[1] for c in calls] == ["MiDaS_small", "transforms"]
-        for repo, _name, kwargs in calls:
-            assert repo == "intel-isl/MiDaS"
-            assert kwargs.get("trust_repo") is True
+        monkeypatch.setattr("torch.hub.load", no_hub)
+        guard = ObstacleGuard()
+        assert guard._model is _mock_model
+        assert guard._transform is MockTransforms.small_transform
 
     def test_startup_never_reads_stdin(self, monkeypatch):
         """Constructing the guard must not call input(), even with a live stdin."""

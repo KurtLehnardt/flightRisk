@@ -206,3 +206,11 @@ def test_load_token_prefers_environment_then_file(tmp_path):
     assert from_env.reveal() == "env-token" and from_env.source == "environment"
     missing = load_token({}, tmp_path / "absent.env")
     assert missing.status == "missing"
+
+
+def test_edges_do_not_inherit_the_claude_key_but_the_ground_does():
+    env = {"FLIGHTRISK_CLAUDE_API_KEY": "sk-ant-x", "PATH": "/bin"}
+    plan = {spec.name: spec for spec in _plan(builtin_presets()["Layout B (everything here)"], base_env=env)}
+    assert plan["ground"].env["FLIGHTRISK_CLAUDE_API_KEY"] == "sk-ant-x"
+    edges = [spec for spec in plan.values() if spec.kind == "edge"]
+    assert edges and all("FLIGHTRISK_CLAUDE_API_KEY" not in spec.env for spec in edges)

@@ -82,3 +82,30 @@ def test_windows_edge_lock_pins_every_edge_requirement():
     assert not missing, f"requirements-edge.txt names not in the Windows lock: {sorted(missing)}"
     for heavy in ("insightface", "ollama", "open-clip-torch", "mavsdk", "flask"):
         assert heavy not in pins, f"the edge lock must not install {heavy}"
+
+
+def test_windows_ground_lock_pins_every_ground_requirement_and_anthropic():
+    pins = _pins(LOCKS / "windows-x64-ground.txt")
+    for requirements in ("requirements-ground.txt", "requirements-edge.txt"):
+        missing = _requirement_names(ROOT / requirements) - {"-r"} - set(pins)
+        assert not missing, f"{requirements} names not in the Windows ground lock: {sorted(missing)}"
+    for needed in ("anthropic", "flask", "flask-socketio"):
+        assert needed in pins
+    # PersonReID needs open_clip; without it app_state.reid is None and the target photo cannot be set. The
+    # edges of layout B run from this same venv, so they get it too (the edge-only lock stays without, R-104).
+    assert "open-clip-torch" in pins
+    for heavy in ("insightface", "ollama", "mavsdk"):
+        assert heavy not in pins, f"the ground lock must not install {heavy}"
+    edge = set(_pins(LOCKS / "windows-x64-edge.txt"))
+    assert edge <= set(pins), "the ground lock must contain everything the edge lock does"
+
+
+def test_ground_lock_agrees_with_the_macos_lock_on_every_shared_pin():
+    """Windows pins must be versions the macOS lock (the tested app) already runs, anthropic included."""
+    mac = _pins(LOCKS / "macos-arm64.txt")
+    for lock in ("windows-x64-ground.txt", "windows-x64-edge.txt"):
+        win = _pins(LOCKS / lock)
+        # Platform wheels differ per OS (torch builds, pywin32 and so on), but versions of shared packages must not.
+        differ = {n: (mac[n], v) for n, v in win.items() if n in mac and mac[n] != v}
+        assert not differ, f"{lock} pins other versions than the macOS lock: {differ}"
+    assert "anthropic" in mac and _pins(LOCKS / "windows-x64-ground.txt")["anthropic"] == mac["anthropic"]

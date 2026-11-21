@@ -88,3 +88,24 @@ def test_connect_sends_face_report_when_target_present(clean_app_state, monkeypa
     assert names["face_report"]["face_report"]["reason"] == "no_face"
 
 
+
+
+def test_upload_target_without_reid_is_503_not_500(clean_app_state, monkeypatch):
+    _wire(monkeypatch)
+    app_state.reid = None
+    resp = app.test_client().post(
+        "/api/upload-target", data={"file": (io.BytesIO(_jpeg_bytes()), "t.jpg")},
+        content_type="multipart/form-data")
+    assert resp.status_code == 503
+    assert "re-identification" in resp.get_json()["error"]
+
+
+def test_socket_set_target_without_reid_emits_an_error(clean_app_state, monkeypatch):
+    import base64
+
+    _wire(monkeypatch)
+    app_state.reid = None
+    client = socketio.test_client(app)
+    client.emit("set_target", {"image": base64.b64encode(_jpeg_bytes()).decode()})
+    events = [e for e in client.get_received() if e["name"] == "error"]
+    assert events and "re-identification" in events[0]["args"][0]["message"]

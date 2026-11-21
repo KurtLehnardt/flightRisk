@@ -192,8 +192,12 @@ def _otel_env(settings: LauncherSettings, instance: str) -> dict[str, str]:
     }
 
 
-def _child_env(base: Mapping[str, str], extra: Mapping[str, str], token: EdgeToken) -> dict[str, str]:
-    env = {k: v for k, v in base.items() if k not in CONTROLLED_ENV}
+#: The Claude key is for the ground only: an edge never calls Claude, so it does not inherit the key.
+CLAUDE_KEY_ENV = "FLIGHTRISK_CLAUDE_API_KEY"
+
+
+def _child_env(base: Mapping[str, str], extra: Mapping[str, str], token: EdgeToken, *, drop: tuple[str, ...] = ()) -> dict[str, str]:
+    env = {k: v for k, v in base.items() if k not in CONTROLLED_ENV and k not in drop}
     env.update(extra)
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -268,7 +272,7 @@ def edge_spec(settings: LauncherSettings, index: int, token: EdgeToken, python: 
         name=f"edge-{drone.drone_id}",
         kind="edge",
         argv=tuple(argv),
-        env=_child_env(base_env, extra, token),
+        env=_child_env(base_env, extra, token, drop=(CLAUDE_KEY_ENV,)),
         display_env=dict(extra),
         drone_id=drone.drone_id,
     )
