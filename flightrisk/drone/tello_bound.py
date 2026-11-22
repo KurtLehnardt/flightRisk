@@ -26,6 +26,9 @@ from __future__ import annotations
 import errno
 import ipaddress
 import logging
+import math
+import os
+import re
 import socket
 import struct
 import sys
@@ -41,6 +44,9 @@ from djitellopy import Tello
 from djitellopy.tello import TelloException
 
 from flightrisk.drone.obstacle_sensor import (
+    ENV_MAX_DECODE_LAG_S,
+    MAX_DECODE_LAG_RANGE_S,
+    MAX_DECODE_LAG_S,
     STALE_CORRUPT_FRAME,
     STALE_DATA_DROPPED,
     STALE_DECODE_ERROR,
@@ -59,6 +65,7 @@ __all__ = [
     "TelloBinding",
     "TelloBindingError",
     "check_binding",
+    "max_decode_lag_s",
     "open_bound_socket",
     "parse_ifindex",
     "parse_local_ip",
@@ -83,9 +90,11 @@ _VIDEO_RCVBUF_BYTES = 1 << 20
 # How long stopping the video reader waits for each of its threads before
 # closing the socket anyway.
 _VIDEO_STOP_JOIN_S = 1.0
-#: A frame decoded more than this many seconds after the first datagram of its
-#: access unit arrived is stale: the decoder is behind the video.
-MAX_DECODE_LAG_S = 0.3
+# A frame decoded more than ``MAX_DECODE_LAG_S`` (0.3 s by default,
+# ``FLIGHTRISK_MAX_DECODE_LAG_S``; ``max_decode_lag_s``) after the first datagram
+# of its access unit arrived is stale: the decoder is behind the video.
+# An ASCII decimal number, as the edge's other settings (``edge_device._obstacle_number``).
+_ASCII_DECIMAL_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 #: When the oldest datagram waiting for the decoder is older than this, the
 #: waiting datagrams are dropped and decoding resumes at the present.
 MAX_QUEUE_AGE_S = 2.0
@@ -112,6 +121,30 @@ SocketFactory = Callable[[], socket.socket]
 
 class TelloBindingError(RuntimeError):
     """The Tello sockets cannot be bound as asked. The message tells the operator what to fix."""
+
+
+def max_decode_lag_s(environ: Any = None) -> float:
+    """The bound decoder's stale limit in seconds: ``FLIGHTRISK_MAX_DECODE_LAG_S``, else ``MAX_DECODE_LAG_S``.
+
+    A plain ASCII decimal number from 0.1 to 2.0, the same rules as the edge's
+    obstacle settings. Raises ``ValueError`` with an operator-facing message
+    otherwise. The edge checks it at startup (``ObstacleSettings``), so a bad
+    value refuses to start the edge before any drone is connected.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_MAX_DECODE_LAG_S) or "").strip()
+    if not raw:
+        return MAX_DECODE_LAG_S
+    lo, hi = MAX_DECODE_LAG_RANGE_S
+    value: float | None = None
+    if _ASCII_DECIMAL_RE.fullmatch(raw):
+        try:
+            value = float(raw)
+        except (ValueError, OverflowError):
+            value = None
+    if value is None or not math.isfinite(value) or not lo <= value <= hi:
+        raise ValueError(f"{ENV_MAX_DECODE_LAG_S}={raw!r} must be a number of seconds from {lo:g} to {hi:g}")
+    return value
 
 
 def _udp_socket() -> socket.socket:
@@ -381,7 +414,10 @@ class BoundFrameRead:
       than ``max_lag_s`` after its first datagram arrived (the decoder is
       behind; ``decoder backlog``), when the decoder flags it corrupt, and
       from a decode error or dropped video data until the next intra frame,
-      because every frame until then is built on a damaged one. Video data is
+      because every frame until then is built on a damaged one; such a frame
+      keeps the cause that tainted the stream (``decode error``, ``video data
+      dropped`` or ``corrupt frame``), and before the first intra frame of a
+      stream it is ``damaged reference, waiting for a key frame``. Video data is
       dropped only here: when the oldest queued datagram is older than
       ``max_queue_age_s``, the queue is discarded so decoding resumes at the
       present instead of working through seconds of old video. The decoder
@@ -587,7 +623,9 @@ class BoundFrameRead:
             if _is_intra(decoded):
                 self._taint = None
             else:
-                cause = STALE_UNTIL_KEY_FRAME
+                # The cause that tainted the stream (a decode error, dropped video data, a corrupt
+                # frame, or no key frame yet) stays the cause until the next intra frame.
+                cause = self._taint
         if cause is None and self._clock() - started > self.max_lag_s:
             cause = STALE_DECODER_BACKLOG
         stamp = FrameStamp(captured_at=started, stale_cause=cause)
@@ -788,7 +826,7 @@ class BoundTello(Tello):
         if self.background_frame_read is None:
             reader = BoundFrameRead(
                 self.address[0], self.binding.local_ip, self.vs_udp_port,
-                name=self.name, socket_factory=self._socket_factory,
+                name=self.name, socket_factory=self._socket_factory, max_lag_s=max_decode_lag_s(),
             )
             reader.start()
             self.background_frame_read = reader

@@ -34,6 +34,19 @@ Rules:
   itself dies, the edge's ground-link watchdog lands the drone within
   ``FLIGHTRISK_LINK_LOSS_LAND_S`` (3 s), sooner than this countdown.
   The battery landing still applies throughout.
+* **Held with no controller, whatever the cause.** The same countdown also
+  starts whenever a flying drone's edge reports it ``manual`` or ``held``
+  and no dashboard controls it, not only after a disconnect: for example
+  when a ``resume_search`` way back was blocked by an obstacle after the
+  edge had acknowledged it (the edge then puts the drone back under manual
+  control by itself), or when the drone a tile switch tried to resume
+  refused. It does not start while a ``resume_search`` or a ``land`` for
+  that drone awaits its answer, for ``_RELEASE_GRACE_S`` after a
+  ``resume_search`` was acknowledged (telemetry sent before the release may
+  still say ``manual``), while the edge reports the drone landing, or for a
+  drone on the ground. A running countdown is never restarted by later
+  telemetry. It starts as ``manual_orphan_started`` and is cancelled as
+  above.
 * **Commands.** Moves, rotations and Takeoff go only to the controlled
   drone, and are refused here (reason ``drone_unreachable``) while its
   telemetry says the drone link is down. Land is never gated: it goes to
@@ -187,6 +200,9 @@ class ManualControl:
             MIN_ORPHAN_LAND_S, float(orphan_land_s)
         )
         self._orphans: dict[str, float] = {}
+        # When each drone's last ``resume_search`` was acknowledged (ground
+        # clock): telemetry this soon after may predate the edge's release.
+        self._resumed_at: dict[str, float] = {}
         self._background = bool(background)
         self._queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
         self._worker: threading.Thread | None = None
@@ -240,6 +256,24 @@ class ManualControl:
             return False  # already on the ground: nothing to land
         self._orphans[drone_id] = self._clock() + self.orphan_land_s
         return True
+
+    def _unattended_locked(self, drone_id: str, mode: Any, state: Any) -> bool:
+        """True when *drone_id*'s edge reports it paused for manual control and nobody here controls it.
+
+        Caller holds ``_lock``. Only a drone without a countdown, flying (or
+        not known to be on the ground) and not landing counts, and not while
+        a ``resume_search`` or ``land`` for it awaits its answer or within
+        ``_RELEASE_GRACE_S`` of an acknowledged ``resume_search``: in those
+        cases the edge is about to release or land the drone.
+        """
+        if mode not in ("manual", "held") or drone_id == self._controlled or drone_id in self._orphans:
+            return False
+        if state == "landing" or self._flying.get(drone_id) is False:
+            return False
+        if any(p.drone_id == drone_id and p.mtype in (fp.RESUME_SEARCH, fp.LAND) for p in self._pending.values()):
+            return False
+        resumed = self._resumed_at.get(drone_id)
+        return resumed is None or self._clock() - resumed >= _RELEASE_GRACE_S
 
     def cancel_orphan(self, drone_id: str, reason: str) -> bool:
         """Stop *drone_id*'s orphan-landing countdown; True if one was running."""
@@ -332,11 +366,17 @@ class ManualControl:
             self._link_detail[drone_id] = detail if isinstance(detail, str) else None
             self._flying[drone_id] = msg.get("is_flying") if isinstance(msg.get("is_flying"), bool) else None
             orphan_over = None
+            orphan_started = False
             if drone_id in self._orphans:
                 if self._flying[drone_id] is False:
                     orphan_over = "landed"
                 elif mode == "autonomous":
                     orphan_over = "edge_released"
+            elif self._unattended_locked(drone_id, mode, msg.get("state")):
+                # Held with nobody controlling it (a blocked way back, a
+                # refused resume): it must not hover until its battery runs
+                # out, so it gets the same countdown as after a disconnect.
+                orphan_started = self._start_orphan_locked(drone_id)
             hold_pending = any(p.drone_id == drone_id and p.mtype == fp.MANUAL_HOLD for p in self._pending.values())
             recent_hold = self._hold_sent_at is not None and self._clock() - self._hold_sent_at < _RELEASE_GRACE_S
             if drone_id == self._controlled and mode == "autonomous" and not hold_pending and not recent_hold:
@@ -347,6 +387,12 @@ class ManualControl:
                 released = True
         if orphan_over is not None:
             self.cancel_orphan(drone_id, orphan_over)
+        if orphan_started:
+            obs_events.flight_safety("manual_orphan_started", reason="no_controller", drone_id=drone_id,
+                                     control_mode=mode, orphan_land_s=self.orphan_land_s)
+            log.warning("%s's edge reports it %s with no controller; it lands in %g s unless someone takes "
+                        "control or presses Resume search", drone_id, mode, self.orphan_land_s)
+            self._emit_status()
         if released:
             obs_events.flight_safety("manual_release", reason="edge_released", drone_id=drone_id)
             self._result(drone_id, "release", True, reason="edge_released",
@@ -380,7 +426,11 @@ class ManualControl:
                                            "target_x_cm", "target_y_cm") if key in msg}
         self._result(drone_id, pending.action, ok, reason=reason, detail=detail, **extra)
         if ok and pending.mtype == fp.RESUME_SEARCH:
-            # The search resumed: no orphan landing for this drone.
+            # The search resumed: no orphan landing for this drone. If the
+            # way back is blocked later, the edge reports the drone manual
+            # again and the countdown starts from that telemetry.
+            with self._lock:
+                self._resumed_at[drone_id] = self._clock()
             self.cancel_orphan(drone_id, "resume_search")
         if lost_control or pending.mtype in (fp.MANUAL_HOLD, fp.RESUME_SEARCH):
             self._emit_status()

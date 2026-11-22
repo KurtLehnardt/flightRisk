@@ -48,6 +48,7 @@ from flightrisk.drone.controller import (
 )
 from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM, FleetCoordinator, StartResult
 from flightrisk.drone import plan_edit
+from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, CHANNEL_ORDER_RGB, to_sensor_frame
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_events
@@ -88,6 +89,8 @@ from flightrisk.dashboard.alerts import (  # noqa: F401 — re-exported for back
     _save_match_snapshot,
     _gemma_worker,
     CAPTURES_DIR,
+    enqueue_reasoning,
+    prepare_edge_reasoning,
 )
 from flightrisk.dashboard.pipeline import (  # noqa: F401 — re-exported for backward compat
     _build_track_id_by_bbox,
@@ -349,12 +352,25 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         except Exception:
             alert_level = "possible_match"
 
+    # Layer B: the edge's own crop (already received for the snapshot) feeds the
+    # same "analyze" job the frame loop queues. Built here, enqueued below once
+    # the entry is in match_history so the worker's back-fill finds it.
+    reasoning_job = None
+    reasoning_label = None
+    try:
+        prepared = prepare_edge_reasoning(track_key, crop_jpeg, alert_id)
+        if prepared is not None:
+            reasoning_job, reasoning_label = prepared
+    except Exception:
+        if app_state.logger:
+            app_state.logger.warning("edge_reasoning_prepare_failed", exc_info=True)
+
     match_entry = {
         "time": time.strftime("%H:%M:%S"),
         "score": round(combined, 3),
         "gemma_match": None,
-        "gemma_confidence": None,
-        "reasoning": None,
+        "gemma_confidence": "pending" if reasoning_job else None,
+        "reasoning": f"Awaiting {reasoning_label} reasoning..." if reasoning_job else None,
         "snapshot": snapshot_b64,
         "type": "edge",
         "face_score": round(face_score, 3),
@@ -386,6 +402,15 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         app_state.match_history = app_state.match_history[-50:]
 
     alert_latch.attach(alert_id, match_entry)
+    if reasoning_job is not None and not enqueue_reasoning(reasoning_job):  # put_nowait; never blocks
+        # Queue full: no verdict will ever arrive, so do not leave the alert
+        # on "Awaiting ...". Mark it "unavailable" like the frame loop does,
+        # release the rate-limit stamp, and re-attach the copy.
+        _gemma_last_call.pop(track_key, None)
+        with _match_history_lock:
+            match_entry["gemma_confidence"] = "unavailable"
+            match_entry["reasoning"] = "AI check not run (queue full)."
+        alert_latch.attach(alert_id, match_entry)
     socketio.emit("match_alert", match_entry)
 
 
@@ -1203,6 +1228,23 @@ class FleetSupervisor:
         self.emit_status()
         return result
 
+    def confirm_reflight(self, drone_id: str, cut_seq: object) -> tuple[bool, str]:
+        """The operator confirms the re-flight of a person cut (``FleetCoordinator.confirm_reflight``).
+
+        Logged as a ``reflight_confirmed`` flight-safety event; the fleet
+        status that follows shows the segment's new state.
+        """
+        with self._lock:
+            landed_all = self._landed_all
+        if landed_all:
+            return False, "LAND ALL was pressed; nothing is re-flown"
+        ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+        obs_events.flight_safety("reflight_confirmed" if ok else "reflight_confirm_refused", reason="operator",
+                                 drone_id=drone_id, cut_seq=cut_seq, detail=detail,
+                                 level=logging.WARNING if ok else logging.INFO)
+        self.emit_status()
+        return ok, detail
+
     def land_all(self) -> dict:
         """Send ``emergency_land_all`` to every drone through the coordinator.
 
@@ -1937,7 +1979,7 @@ def upload_target():
 
     app_state.reid.set_target(img)
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
-    cv2.imwrite(str(path), img)
+    _write_reference_photo(path, img)
     app_state.target_photo_path = str(path)
     _, buf = cv2.imencode(".jpg", img)
     app_state.target_photo = base64.b64encode(buf).decode("utf-8")
@@ -1953,6 +1995,24 @@ def upload_target():
     obs_events.target_image(img, source="upload", raw=img_data, face_report=_face_report(), face_detected=face_ok)
     return jsonify({"success": True, "face_detected": face_ok,
                     "face_report": _face_report()})
+
+
+def _write_reference_photo(path, img) -> None:
+    """Write the target reference atomically: temp file in the same dir, then ``os.replace``.
+
+    Reasoning reads the live file, so it must never see a half-written image.
+    """
+    path = Path(path)
+    tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp{path.suffix}")
+    try:
+        if not cv2.imwrite(str(tmp), img):
+            raise OSError("could not encode reference photo")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _face_report() -> dict | None:
@@ -2214,7 +2274,7 @@ def on_set_target(data):
         app_state.reid.set_target(img)
         app_state.target_photo = data["image"]
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
-        cv2.imwrite(str(path), img)
+        _write_reference_photo(path, img)
         app_state.target_photo_path = str(path)
         log.info("set_target_saved")
         # Store in target canon
@@ -2262,6 +2322,11 @@ def on_revert_target(data):
         return
     _, buf = cv2.imencode(".jpg", img)
     app_state.target_photo = base64.b64encode(buf).decode("utf-8")
+    # Reasoning reads the reference from disk, so the reverted image must
+    # replace target_reference.jpg and the path, as set_target does.
+    path = Path(__file__).parent.parent.parent / "target_reference.jpg"
+    _write_reference_photo(path, img)
+    app_state.target_photo_path = str(path)
     if app_state.reid:
         app_state.reid.set_target(img)
     face_ok = False
@@ -2604,6 +2669,37 @@ def on_manual_resume_search(data=None):
     _manual_reply(supervisor.manual.resume_search(str(drone_id), sid=_sid()))
 
 
+@socketio.on("confirm_reflight")
+def on_confirm_reflight(data=None):
+    """The operator confirms that a person cut's unsearched segment may be re-flown by another drone.
+
+    A person cut is never offered to another drone on its own: that drone
+    would fly toward the same person from the far side. ``{"drone_id",
+    "cut_seq"}`` name the cut (from the segment's ``fleet_status.uncovered``
+    entry). Runs on a worker thread, because the offer it may send must never
+    hold up other socket events such as ``land_all``; the answer is a
+    ``reflight_confirm_result`` event to this browser.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Re-flights need fleet mode (--source edge --fleet ...)"})
+        return
+    data = data if isinstance(data, dict) else {}
+    drone_id, cut_seq = str(data.get("drone_id")), data.get("cut_seq")
+    sid = _sid()
+
+    def _work():
+        try:
+            ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+        except Exception as exc:  # noqa: BLE001 - reported to the operator
+            log.error("Re-flight confirmation failed", exc_info=True)
+            ok, detail = False, f"re-flight confirmation failed: {exc}"
+        socketio.emit("reflight_confirm_result", {"drone_id": drone_id, "cut_seq": cut_seq, "ok": ok,
+                                                  "detail": detail}, to=sid)
+
+    threading.Thread(target=_work, daemon=True, name="fleet-confirm-reflight").start()
+
+
 @socketio.on("get_manual_status")
 def on_get_manual_status(data=None):
     supervisor = app_state.fleet_supervisor
@@ -2809,6 +2905,22 @@ def _single_plan(spec: "plan_edit.PlanSpec") -> "plan_edit.BuiltPlan":
 
 
 _obstacle_guard_lock = threading.Lock()
+
+
+def _guard_frame(drone, frame):
+    """*frame* from *drone*'s ``get_frame`` in the channel order ``ObstacleGuard`` takes (BGR).
+
+    A Tello's decoder delivers RGB (its ``frame_channel_order``); an OpenCV
+    capture, such as the MAVLink controller's RTSP stream, delivers BGR, which
+    is also assumed for a controller that declares no order. The frame goes
+    through ``obstacle_sensor.to_sensor_frame``, the one conversion the edge's
+    obstacle sensor uses, so this search and a fleet edge give the depth model
+    the same input.
+    """
+    order = getattr(drone, "frame_channel_order", CHANNEL_ORDER_BGR)
+    if order not in (CHANNEL_ORDER_RGB, CHANNEL_ORDER_BGR):
+        order = CHANNEL_ORDER_BGR
+    return to_sensor_frame(frame, order)
 
 
 def _obstacle_guard_for_search():
@@ -3089,7 +3201,7 @@ def on_start_search(data):
                         frame_warned = True
                     break
 
-                check = obstacle_guard.check_path(frame)
+                check = obstacle_guard.check_path(_guard_frame(drone, frame))
                 obs_events.obstacle_check(
                     check, min_safe_depth=getattr(obstacle_guard, "min_safe_depth", None),
                     waypoint=i + 1, retry=avoidance_retries, drone_id=getattr(drone, "name", None),

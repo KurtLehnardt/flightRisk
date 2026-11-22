@@ -505,19 +505,21 @@ def test_reflight_receivers_lists_the_eligible_drones():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("reason, offered", [
-    (CUT_OBSTACLE, True),
-    (CUT_PERSON, True),
-    (CUT_SENSOR_STALE, True),
-    (CUT_SENSOR_DOWN, False),
-    (CUT_AUTOPILOT, False),
+@pytest.mark.parametrize("reason, status, offered", [
+    (CUT_OBSTACLE, "waiting", True),
+    # A person cut waits for the operator; it is never offered on its own
+    # (tests/test_flight_control_robustness.py covers the confirmation).
+    (CUT_PERSON, "needs_confirmation", False),
+    (CUT_SENSOR_STALE, "waiting", True),
+    (CUT_SENSOR_DOWN, None, False),
+    (CUT_AUTOPILOT, None, False),
 ])
-def test_only_obstacle_person_and_sensor_stale_cuts_are_offered(reason, offered):
+def test_only_obstacle_and_sensor_stale_cuts_are_offered_on_their_own(reason, status, offered):
     fleet = Fleet()
     fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], reason, lane_index=2)
     statuses = {s.get("status") for s in fleet.segments()}
-    assert statuses == ({"waiting"} if offered else {None})
+    assert statuses == {status}
     fleet.done("drone-1", is_flying=False)
     assert (len(fleet.assigns("drone-2")) == 2) is offered
 
@@ -830,6 +832,11 @@ def test_the_cutting_drone_lost_later_supersedes_only_the_shadow_on_a_lane_re_ta
     fleet.coord.on_drone_lost("drone-1", wait_s=0)
     assert fleet.reflight_events("reflight_failed") == []
     assert any(name == "fleet_event" and p.get("event") == "retask" for name, p in fleet.events)
+    # drone-1 may still hover at (50, 250), on the way: nothing is offered
+    # until LOST_OBSTACLE_S after the loss, then everything at once.
+    assert len(fleet.assigns("drone-2")) == 1
+    fleet.clock.advance(coordinator_module.LOST_OBSTACLE_S)
+    fleet.done("drone-2")
     # One assign_lanes: drone-1's lanes 1 to 3 from their planned start
     # (0, 400) to (200, 0), the transit back to (0, 400), then the reversed
     # segment of lane 0 alone.

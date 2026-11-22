@@ -256,6 +256,7 @@ class LaneExecutor(
         obstacle_sensor_error: str | None = None,
         obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
         obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
+        obstacle_takeoff_probe: bool = True,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -281,6 +282,11 @@ class LaneExecutor(
           after it (a hung sensor never holds up the flight thread).
         * *obstacle_retry_pause_s*: hover between attempts at a gate whose
           sensor could not look.
+        * *obstacle_takeoff_probe*: with a sensor, look once right before an
+          autonomous takeoff and refuse it unless the view is fresh and
+          valid (``lane_flight._takeoff_sense_refusal``). The edge always
+          keeps it on; False is only for tests whose scripted sensor must
+          answer the lane gates from its very first call.
         """
         self.drone = drone
         self.envelope = envelope
@@ -423,6 +429,7 @@ class LaneExecutor(
             else "".join(ch for ch in str(obstacle_sensor_error) if ch.isprintable()) or "unknown error"
         )
         self.obstacle_step_cm = int(obstacle_step_cm)
+        self._obstacle_takeoff_probe = bool(obstacle_takeoff_probe)
         self._obstacle_turn = bool(obstacle_turn)
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))

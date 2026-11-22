@@ -162,6 +162,15 @@ class MatchAlertLatch:
                 return False
             return self._payload.get("track_id") == track_key
 
+    def owns_alert(self, alert_id) -> bool:
+        """True while ``alert_id`` is the outstanding alert awaiting the operator."""
+        with self._lock:
+            return (
+                bool(alert_id)
+                and self._phase is AlertPhase.AWAITING_RESPONSE
+                and alert_id == self._alert_id
+            )
+
     def pending_alert(self) -> dict | None:
         """Copy of the outstanding alert payload, or None if nothing is pending."""
         with self._lock:
@@ -219,6 +228,22 @@ class MatchAlertLatch:
         with self._lock:
             if alert_id == self._alert_id and self._phase is AlertPhase.AWAITING_RESPONSE:
                 self._payload = dict(payload)
+
+    def update(self, alert_id: str, fields: dict) -> bool:
+        """Merge ``fields`` into the stored payload of the outstanding alert.
+
+        Lets late results (the reasoning verdict) reach reminders and
+        reconnects. No-op, returning False, for any other id or once resolved.
+        """
+        with self._lock:
+            if (
+                alert_id != self._alert_id
+                or self._phase is not AlertPhase.AWAITING_RESPONSE
+                or self._payload is None
+            ):
+                return False
+            self._payload.update(fields)
+            return True
 
     def due_renotify(self) -> dict | None:
         """Return the outstanding alert payload if a reminder is due, else None.
