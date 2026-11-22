@@ -490,9 +490,9 @@ def _frame_loop(socketio):
                                 if ref_img is None:
                                     skipped = "reference photo unreadable"
                                 else:
-                                    gemma_last_call[track_key] = now_alert
                                     try:
                                         gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy(), alert_id))
+                                        gemma_last_call[track_key] = now_alert
                                     except queue.Full:
                                         obs_events.queue_dropped("reasoning", kind="analyze")  # drop, don't block
                                         skipped = "queue full"

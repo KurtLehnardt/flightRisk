@@ -792,14 +792,18 @@ const socket = io();
         $('overlay-score').textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
         $('overlay-reasoning').textContent = data.reasoning || '';
     }
+    const LEVEL_RANK = { no_match: 0, weak_signal: 1, possible_match: 2, confirmed_match: 3 };
     function applyAlertUpdate(alertId, fields) {
         const view = alertViews[alertId];
         if (view) {
             Object.assign(view.data, fields);
-            view.scores.textContent = scoresText(view.data);
-            view.reasoning.textContent = view.data.reasoning || '';
-            view.reasoning.hidden = !view.data.reasoning;
-            if (fields.alert_level) {
+            // A restored overlay has data only; its history row elements are absent.
+            if (view.scores) view.scores.textContent = scoresText(view.data);
+            if (view.reasoning) {
+                view.reasoning.textContent = view.data.reasoning || '';
+                view.reasoning.hidden = !view.data.reasoning;
+            }
+            if (fields.alert_level && view.entry && view.level) {
                 const cls = fields.alert_level === 'confirmed_match' ? 'confirmed' : 'possible';
                 view.entry.className = 'match-entry ' + cls;
                 view.level.textContent = cls === 'confirmed' ? 'Strong match' : 'Possible';
@@ -825,6 +829,10 @@ const socket = io();
     });
     socket.on('alert_upgrade', (d) => {
         if (!d || !d.alert_id) return;
+        // Only raises apply: a verdict never demotes the level the operator already sees.
+        const view = alertViews[d.alert_id];
+        const cur = view ? view.data.alert_level : null;
+        if ((LEVEL_RANK[d.new_level] || 0) <= (LEVEL_RANK[cur] || 0)) return;
         applyAlertUpdate(d.alert_id, { alert_level: d.new_level, reasoning: d.reasoning || '' });
     });
 
@@ -929,6 +937,8 @@ const socket = io();
 
     socket.on('match_alert_reminder', (data) => {
         if (!data || !data.alert_id) return;
+        // An overlay restored by a reminder/reconnect has no history row; keep its data so a late verdict can land.
+        if (!alertViews[data.alert_id]) rememberAlertView(data.alert_id, { data: Object.assign({}, data) });
         playAlertSound();
         showMatchOverlay(data, data.alert_level === 'confirmed_match' ? 'confirmed' : 'possible');
         showToast('Match still awaiting your answer');

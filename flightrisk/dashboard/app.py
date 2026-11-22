@@ -404,10 +404,12 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
     alert_latch.attach(alert_id, match_entry)
     if reasoning_job is not None and not enqueue_reasoning(reasoning_job):  # put_nowait; never blocks
         # Queue full: no verdict will ever arrive, so do not leave the alert
-        # on "Awaiting ...". Clear the pending fields and re-attach the copy.
+        # on "Awaiting ...". Mark it "unavailable" like the frame loop does,
+        # release the rate-limit stamp, and re-attach the copy.
+        _gemma_last_call.pop(track_key, None)
         with _match_history_lock:
-            match_entry["gemma_confidence"] = None
-            match_entry["reasoning"] = None
+            match_entry["gemma_confidence"] = "unavailable"
+            match_entry["reasoning"] = "AI check not run (queue full)."
         alert_latch.attach(alert_id, match_entry)
     socketio.emit("match_alert", match_entry)
 
@@ -1977,7 +1979,7 @@ def upload_target():
 
     app_state.reid.set_target(img)
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
-    cv2.imwrite(str(path), img)
+    _write_reference_photo(path, img)
     app_state.target_photo_path = str(path)
     _, buf = cv2.imencode(".jpg", img)
     app_state.target_photo = base64.b64encode(buf).decode("utf-8")
@@ -1993,6 +1995,24 @@ def upload_target():
     obs_events.target_image(img, source="upload", raw=img_data, face_report=_face_report(), face_detected=face_ok)
     return jsonify({"success": True, "face_detected": face_ok,
                     "face_report": _face_report()})
+
+
+def _write_reference_photo(path, img) -> None:
+    """Write the target reference atomically: temp file in the same dir, then ``os.replace``.
+
+    Reasoning reads the live file, so it must never see a half-written image.
+    """
+    path = Path(path)
+    tmp = path.with_name(f".{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp{path.suffix}")
+    try:
+        if not cv2.imwrite(str(tmp), img):
+            raise OSError("could not encode reference photo")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _face_report() -> dict | None:
@@ -2254,7 +2274,7 @@ def on_set_target(data):
         app_state.reid.set_target(img)
         app_state.target_photo = data["image"]
         path = Path(__file__).parent.parent.parent / "target_reference.jpg"
-        cv2.imwrite(str(path), img)
+        _write_reference_photo(path, img)
         app_state.target_photo_path = str(path)
         log.info("set_target_saved")
         # Store in target canon
@@ -2305,7 +2325,7 @@ def on_revert_target(data):
     # Reasoning reads the reference from disk, so the reverted image must
     # replace target_reference.jpg and the path, as set_target does.
     path = Path(__file__).parent.parent.parent / "target_reference.jpg"
-    cv2.imwrite(str(path), img)
+    _write_reference_photo(path, img)
     app_state.target_photo_path = str(path)
     if app_state.reid:
         app_state.reid.set_target(img)

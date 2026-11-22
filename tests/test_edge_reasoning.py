@@ -157,13 +157,17 @@ def test_full_queue_drops_without_raising(edge_env):
     assert len(sio.named("match_alert")) == 1
     assert gemma_queue.qsize() == gemma_queue.maxsize
     # The alert must not say "Awaiting ..." for a verdict that will never come.
+    # It reads "unavailable", as the frame loop's photo path does, and the
+    # rate-limit window is not started by a job that never queued.
     alert = sio.named("match_alert")[0]
-    assert alert["gemma_confidence"] is None and alert["reasoning"] is None
-    assert app_state.match_history[-1]["gemma_confidence"] is None
-    assert app_state.match_history[-1]["reasoning"] is None
+    assert alert["gemma_confidence"] == "unavailable"
+    assert alert["reasoning"] == "AI check not run (queue full)."
+    assert app_state.match_history[-1]["gemma_confidence"] == "unavailable"
+    assert app_state.match_history[-1]["reasoning"] == "AI check not run (queue full)."
     pending = alert_latch.pending_alert()
     assert pending["alert_id"] == alert["alert_id"]
-    assert pending["gemma_confidence"] is None and pending["reasoning"] is None
+    assert pending["gemma_confidence"] == "unavailable"
+    assert alert["track_id"] not in gemma_last_call
 
 
 def test_reasoning_result_attaches_to_edge_alert(edge_env):
@@ -382,9 +386,157 @@ def test_revert_target_updates_reasoning_reference_path(clean_app_state, monkeyp
     app_state.signal_registry = None
     app_state.target_photo_path = "/old/path.jpg"
     written = []
-    monkeypatch.setattr(app_module.cv2, "imwrite", lambda p, i, *a: written.append(p) or True)
+    monkeypatch.setattr(app_module, "_write_reference_photo", lambda p, i: written.append(str(p)))
     monkeypatch.setattr(app_module, "emit", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "_push_edge_target", lambda i: None)
     app_module.on_revert_target({"version_id": "v1"})
     assert written and app_state.target_photo_path == written[0]
     assert app_state.target_photo_path != "/old/path.jpg"
+
+
+# ---------------------------------------------------------------------------
+# F1: the header scan must see the same SOF the decoder does
+# ---------------------------------------------------------------------------
+
+def _fake_sof(width, height):
+    return (b"\xff\xc0\x00\x0b\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big")
+            + b"\x01\x01\x11\x00")
+
+
+def _stuffed_bypass(real_jpeg, fake_w=16, fake_h=16):
+    """``FF D8 FF 00 00 06`` + a COM segment hiding a fake SOF, then the real JPEG body.
+
+    A scanner that reads ``FF 00`` as length-prefixed (len 6) lands on the fake
+    SOF inside the COM payload; libjpeg discards ``FF 00`` and resyncs.
+    """
+    fake = _fake_sof(fake_w, fake_h)
+    com = b"\xff\xfe" + (len(fake) + 2).to_bytes(2, "big") + fake
+    return b"\xff\xd8\xff\x00\x00\x06" + com + real_jpeg[2:]
+
+
+def test_stuffed_ff00_fake_sof_bypass_is_rejected(edge_env, no_decode):
+    real = _encode((3000, 3000))
+    crafted = _stuffed_bypass(real)
+    assert crafted[:6] == b"\xff\xd8\xff\x00\x00\x06"
+    assert alerts_module._jpeg_dimensions(crafted) is None
+    assert alerts_module.prepare_edge_reasoning("k", crafted, "a") is None
+    assert "k" not in gemma_last_call
+
+
+def test_stuffed_ff00_payload_decodes_larger_than_declared(monkeypatch):
+    """The payload really is a bypass: the decoder sees 3000x3000, the fake SOF says 16x16."""
+    crafted = _stuffed_bypass(_encode((3000, 3000)))
+    img = cv2.imdecode(np.frombuffer(crafted, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None and img.shape[:2] == (3000, 3000)
+
+
+def test_decoded_shape_checked_after_decode(monkeypatch):
+    """Defence in depth: even if the header scan is fooled, an oversize decode is dropped."""
+    big = np.zeros((2500, 100, 3), dtype=np.uint8)
+    monkeypatch.setattr(alerts_module, "_jpeg_dimensions", lambda data: (16, 16))
+    monkeypatch.setattr(alerts_module.cv2, "imdecode", lambda *a, **k: big)
+    assert alerts_module.decode_edge_crop(_jpeg()) is None
+
+
+def test_declared_8000x8000_sof_rejected_before_decode(edge_env, no_decode):
+    jpg = bytearray(_encode((40, 20)))
+    i = bytes(jpg).index(b"\xff\xc0")
+    jpg[i + 5:i + 9] = (8000).to_bytes(2, "big") + (8000).to_bytes(2, "big")
+    assert alerts_module._jpeg_dimensions(bytes(jpg)) == (8000, 8000)
+    assert alerts_module.prepare_edge_reasoning("k", bytes(jpg), "a") is None
+    assert alerts_module.decode_edge_crop(bytes(jpg)) is None
+
+
+@pytest.mark.parametrize("marker", [0x00, 0x02, 0x7F, 0xBF])
+def test_reserved_and_stuffed_markers_rejected(marker):
+    data = b"\xff\xd8\xff" + bytes([marker]) + b"\x00\x06" + _fake_sof(16, 16)
+    assert alerts_module._jpeg_dimensions(data) is None
+
+
+def test_fill_bytes_before_marker_are_skipped():
+    data = b"\xff\xd8\xff\xff\xff" + _fake_sof(20, 40)[1:] + b"\x00"
+    assert alerts_module._jpeg_dimensions(b"\xff\xd8" + b"\xff\xff" + _fake_sof(20, 40)) == (20, 40)
+
+
+# ---------------------------------------------------------------------------
+# F2: a verdict only ever raises the alert level
+# ---------------------------------------------------------------------------
+
+def test_medium_verdict_does_not_demote_confirmed_alert(edge_env, monkeypatch):
+    edge_env.analyze_match.return_value = {"match": True, "confidence": "medium", "reasoning": "similar"}
+    scorer = MagicMock()
+    scorer.alert_level.return_value = "confirmed_match"
+    app_state.scorer = scorer
+    sio = FakeSocketIO()
+    det = MagicMock(crop_jpeg=_jpeg())
+    app_module._maybe_emit_edge_match(sio, det, {"bbox": (10, 10, 50, 50), "reid_score": 0.9, "face_score": 0.0}, {"combined_score": 0.9}, time.time())
+    assert sio.named("match_alert")[0]["alert_level"] == "confirmed_match"
+    _run_worker(sio)
+    assert sio.named("alert_upgrade") == []
+    assert app_state.match_history[-1]["alert_level"] == "confirmed_match"
+    assert alert_latch.pending_alert()["alert_level"] == "confirmed_match"
+
+
+def test_high_verdict_raises_and_saves_level_for_reminders(edge_env):
+    scorer = MagicMock()
+    scorer.alert_level.return_value = "possible_match"
+    app_state.scorer = scorer
+    sio = FakeSocketIO()
+    det = MagicMock(crop_jpeg=_jpeg())
+    app_module._maybe_emit_edge_match(sio, det, {"bbox": (10, 10, 50, 50), "reid_score": 0.9, "face_score": 0.0}, {"combined_score": 0.9}, time.time())
+    _run_worker(sio)
+    assert sio.named("alert_upgrade")[0]["new_level"] == "confirmed_match"
+    assert app_state.match_history[-1]["alert_level"] == "confirmed_match"
+    assert alert_latch.pending_alert()["alert_level"] == "confirmed_match"
+
+
+def test_raise_alert_level_never_lowers():
+    app_state.match_history = [{"alert_id": "A", "track_id": "t", "alert_level": "confirmed_match"}]
+    assert alerts_module.raise_alert_level("A", "t", "possible_match") is False
+    assert app_state.match_history[-1]["alert_level"] == "confirmed_match"
+    app_state.match_history = [{"alert_id": "A", "track_id": "t", "alert_level": "possible_match"}]
+    assert alerts_module.raise_alert_level("A", "t", "confirmed_match") is True
+
+
+# ---------------------------------------------------------------------------
+# F4/F6: analyze errors resolve to "error"; alert-less skipped jobs stay quiet
+# ---------------------------------------------------------------------------
+
+def test_analyze_exception_resolves_entry_to_error(edge_env):
+    edge_env.analyze_match.side_effect = RuntimeError("boom")
+    sio = FakeSocketIO()
+    _fire(sio)
+    _run_worker(sio)
+    entry = app_state.match_history[-1]
+    assert entry["gemma_confidence"] == "error"
+    assert sio.named("reasoning_result")[0]["result"]["confidence"] == "error"
+    assert sio.named("alert_upgrade") == []
+
+
+def test_alertless_skipped_job_resolves_nothing(edge_env):
+    gemma_queue.put_nowait(("analyze", "t", np.zeros((4, 4, 3), np.uint8), np.zeros((4, 4, 3), np.uint8), None))
+    app_state.match_history = [{"track_id": "t", "alert_id": None, "gemma_confidence": "pending"}]
+    assert alert_latch.try_open(["grid:other"])  # another alert awaits: "t" is not owned
+    sio = FakeSocketIO()
+    _run_worker(sio)
+    assert sio.named("reasoning_result") == []
+    assert app_state.match_history[0]["gemma_confidence"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# F5: the reference photo is replaced atomically
+# ---------------------------------------------------------------------------
+
+def test_reference_write_is_atomic(tmp_path, monkeypatch):
+    path = tmp_path / "target_reference.jpg"
+    old = np.full((10, 10, 3), 50, dtype=np.uint8)
+    cv2.imwrite(str(path), old)
+    app_module._write_reference_photo(path, np.full((20, 20, 3), 200, dtype=np.uint8))
+    assert cv2.imread(str(path)).shape[:2] == (20, 20)
+    assert [p.name for p in tmp_path.iterdir()] == ["target_reference.jpg"]
+    # A failed encode leaves the live file untouched and no temp behind.
+    monkeypatch.setattr(app_module.cv2, "imwrite", lambda *a, **k: False)
+    with pytest.raises(OSError):
+        app_module._write_reference_photo(path, old)
+    assert cv2.imread(str(path)).shape[:2] == (20, 20)
+    assert [p.name for p in tmp_path.iterdir()] == ["target_reference.jpg"]

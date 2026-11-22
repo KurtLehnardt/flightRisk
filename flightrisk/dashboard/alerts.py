@@ -184,9 +184,14 @@ def _jpeg_dimensions(data: bytes):
         if data[pos] != 0xFF:
             return None
         marker = data[pos + 1]
-        if marker == 0xFF:  # fill byte
+        if marker == 0xFF:  # fill byte: libjpeg skips it and re-reads the marker
             pos += 1
             continue
+        if marker == 0x00 or 0x02 <= marker <= 0xBF:
+            # FF 00 is stuffed data and 02-BF are reserved: libjpeg discards
+            # them and resyncs, so a length-prefixed read here could hide a
+            # fake SOF from the decoder. Reject rather than guess.
+            return None
         if marker == 0x01 or 0xD0 <= marker <= 0xD8:  # standalone markers
             pos += 2
             continue
@@ -223,6 +228,9 @@ def decode_edge_crop(crop_jpeg):
     if crop is None or crop.size == 0:
         return None
     long_edge = max(crop.shape[:2])
+    if long_edge > MAX_CROP_EDGE_PX:
+        # Defence in depth: the header scan disagreed with the decoder.
+        return None
     if long_edge > REASONING_CROP_EDGE_PX:
         scale = REASONING_CROP_EDGE_PX / long_edge
         crop = cv2.resize(
@@ -329,6 +337,30 @@ def resolve_reasoning(socketio, alert_id, track_key, result):
         socketio.emit("reasoning_result", payload)
 
 
+_LEVEL_RANK = {"no_match": 0, "weak_signal": 1, "possible_match": 2, "confirmed_match": 3}
+
+
+def raise_alert_level(alert_id, track_key, new_level):
+    """Raise an alert's level to ``new_level``; never lowers it.
+
+    Saves the level on the history entry and, for an id'd alert, in the latch
+    so reminders carry it. Returns True only when the level actually rose.
+    """
+    new_rank = _LEVEL_RANK.get(new_level, 0)
+    raised = False
+    with match_history_lock:
+        for entry in reversed(app_state.match_history):
+            hit = entry.get("alert_id") == alert_id if alert_id else entry.get("track_id") == track_key
+            if hit:
+                if new_rank > _LEVEL_RANK.get(entry.get("alert_level"), 0):
+                    entry["alert_level"] = new_level
+                    raised = True
+                break
+    if raised and alert_id:
+        alert_latch.update(alert_id, {"alert_level": new_level})
+    return raised
+
+
 def enqueue_reasoning(job):
     """Non-blocking enqueue; drops (never raises, never waits) when full."""
     try:
@@ -345,7 +377,7 @@ def _gemma_worker(socketio):
     Runs ``analyze_match`` or ``match_description`` off the frame-processing
     thread and emits the result over SocketIO once it's ready.  The initial
     match alert has already fired (based on ReID + face scores) by the time
-    this runs; this can upgrade/downgrade that alert via ``alert_upgrade``.
+    this runs; this can only raise that alert's level, via ``alert_upgrade``.
 
     Shutdown: this thread is a daemon thread -- it is terminated
     automatically when the main process exits.  There is no graceful
@@ -376,11 +408,12 @@ def _gemma_worker(socketio):
                     alert_latch.matching_allowed() or alert_latch.owns_track(item[1])
                 )
                 if not owned:
-                    resolve_reasoning(socketio, alert_id, item[1], {
-                        "match": False,
-                        "confidence": "skipped",
-                        "reasoning": "AI check skipped: alert was already answered.",
-                    })
+                    if alert_id:
+                        resolve_reasoning(socketio, alert_id, item[1], {
+                            "match": False,
+                            "confidence": "skipped",
+                            "reasoning": "AI check skipped: alert was already answered.",
+                        })
                     continue
             elif not alert_latch.matching_allowed():
                 # While a match alert awaits the operator (or after a confirmed
@@ -481,14 +514,16 @@ def _gemma_worker(socketio):
                             app_state.logger.error("gemma_analyze_error", error=str(exc), error_type=type(exc).__name__)
                         result = {"match": False, "confidence": "error", "reasoning": ""}
                 resolve_reasoning(socketio, alert_id, track_key, result)
-                # If reasoning confirms, upgrade alert level
+                # If reasoning confirms, raise the alert level (never lower it).
                 if result.get("match") and result.get("confidence") in ("high", "medium"):
-                    socketio.emit("alert_upgrade", {
-                        "track_id": track_key,
-                        **({"alert_id": alert_id} if alert_id else {}),
-                        "new_level": "confirmed_match" if result["confidence"] == "high" else "possible_match",
-                        "reasoning": result.get("reasoning", ""),
-                    })
+                    new_level = "confirmed_match" if result["confidence"] == "high" else "possible_match"
+                    if raise_alert_level(alert_id, track_key, new_level):
+                        socketio.emit("alert_upgrade", {
+                            "track_id": track_key,
+                            **({"alert_id": alert_id} if alert_id else {}),
+                            "new_level": new_level,
+                            "reasoning": result.get("reasoning", ""),
+                        })
         except Exception as e:
             if app_state.logger:
                 app_state.logger.error("gemma_worker_error", error=str(e), error_type=type(e).__name__,
