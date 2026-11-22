@@ -326,7 +326,7 @@ def test_n_edges_plan_and_retask_on_loopback(fleet_of_four, monkeypatch):
     supervisor, edges, sio = fleet_of_four
     coordinator = supervisor.coordinator
     # The dropped edge's fake drone keeps hovering on its lane, so its lanes
-    # would wait LOST_OBSTACLE_S (15 s) before they are offered. This test is
+    # would wait LOST_OBSTACLE_S (20 s) before they are offered. This test is
     # about the loopback plumbing; the wait is covered by
     # tests/test_flight_control_robustness.py.
     monkeypatch.setattr(coordinator_module, "LOST_OBSTACLE_S", 0.0)

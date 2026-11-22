@@ -263,7 +263,7 @@ class FakeEdge:
 
 def test_two_fake_edges_end_to_end(monkeypatch):
     # Drone-2 drops while it hovers on its lane, so on the real clock its lanes
-    # would wait LOST_OBSTACLE_S (15 s) before they are offered. The wait is
+    # would wait LOST_OBSTACLE_S (20 s) before they are offered. The wait is
     # covered by tests/test_flight_control_robustness.py.
     monkeypatch.setattr(coordinator_module, "LOST_OBSTACLE_S", 0.0)
     started = time.monotonic()

@@ -5,8 +5,9 @@ Connects to one Tello and turns its video on. It never takes off: no flight
 command is sent, so the motors do not start. The frames are fed into the same
 kind of frame holder the edge's obstacle sensor judges, through the same two
 feeds (``flightrisk.edge_device.feed_sensor_holder`` and
-``DecodedFramePoller``): every new decoded frame once, converted from the
-decoder's RGB to the sensor's BGR, stamped with the decoder's capture time,
+``DecodedFramePoller``, sharing one ``EdgeFrames`` conversion): every new
+decoded frame once, converted from the decoder's RGB to the sensor's BGR,
+stamped with the decoder's capture time,
 and refused when the decoder marks it stale. Every frame the holder stores is
 written as a lossless PNG, so ``scripts/obstacle_replay.py --frames <dir>``
 gives the depth model exactly the input it had in flight.
@@ -14,17 +15,28 @@ gives the depth model exactly the input it had in flight.
 Usage:
     venv/bin/python scripts/obstacle_record.py --out rec/plant_150cm --seconds 5 --label "plant 150 cm"
     venv/bin/python scripts/obstacle_record.py --out rec/wall_300cm --tello-local-ip 192.168.10.2
+    venv/bin/python scripts/obstacle_record.py --clock
 
 Writes into ``--out`` (which must not hold a recording yet):
     frame_000001.png ...  one BGR PNG per frame the sensor would judge
-    frames.csv            index, file, captured_at_s, arrived_at_s, capture_to_arrival_ms, wall_time
-    meta.json             label, channel order, settle time, frame and stale counts, Tello host
+    frames.csv            index, file, captured_at_s, arrived_at_s, decode_lag_ms, wall_time, wall_clock
+    meta.json             label, channel order, settle time, decode lag limit, frame and stale counts, Tello host
 
 ``captured_at_s`` and ``arrived_at_s`` are ``time.monotonic()`` seconds: the
 latest capture time the decoder vouches for (the arrival of the frame's first
 datagram with ``--tello-local-ip``; the frame's arrival otherwise) and the
-time the frame reached the holder. Hold a clock in view to measure the video
-latency for H5 from the same recording.
+time the frame reached the holder. ``decode_lag_ms`` is the difference: how
+long after its first datagram the frame reached the holder (decoding and the
+feeds). It is not the video latency, which also holds the camera's encoding
+and the Wi-Fi before the first datagram arrives. (Recordings made before this
+column was renamed call it ``capture_to_arrival_ms``.)
+
+``wall_time`` is the ``time.time()`` at which the frame reached the holder and
+``wall_clock`` the same instant as local ``HH:MM:SS.mmm``. To measure the video
+latency (hardware item H5), run ``--clock`` on the same computer: it shows that
+clock in large digits. Point the drone at it while recording; for a frame, the
+latency is its ``wall_clock`` minus the clock shown in its PNG
+(``docs/obstacle-sensing.md``, H5).
 """
 
 from __future__ import annotations
@@ -57,7 +69,9 @@ from flightrisk.drone.obstacle_sensor import (  # noqa: E402
 #: Name of the frame index written next to the PNGs.
 INDEX_NAME = "frames.csv"
 META_NAME = "meta.json"
-INDEX_FIELDS = ["index", "file", "captured_at_s", "arrived_at_s", "capture_to_arrival_ms", "wall_time"]
+INDEX_FIELDS = ["index", "file", "captured_at_s", "arrived_at_s", "decode_lag_ms", "wall_time", "wall_clock"]
+#: The name ``decode_lag_ms`` had in recordings made before it was renamed; ``obstacle_replay.py`` reads both.
+LEGACY_DECODE_LAG_FIELD = "capture_to_arrival_ms"
 #: How often the frame loop polls the drone, like the edge's frame loop (30 fps).
 _POLL_S = 1 / 30
 
@@ -66,7 +80,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Record the frames the obstacle sensor sees, with capture times, for calibration (H1)."
     )
-    parser.add_argument("--out", required=True, help="Directory to write the recording into (created)")
+    parser.add_argument("--out", help="Directory to write the recording into (created); required unless --clock")
+    parser.add_argument(
+        "--clock", action="store_true",
+        help="Show this computer's clock in large digits (HH:MM:SS.mmm) to film for the video latency (H5), "
+             "instead of recording. Press q or Esc to quit",
+    )
     parser.add_argument("--seconds", type=float, default=5.0, help="How long to record (default 5)")
     parser.add_argument("--label", default="", help="What is in front of the drone, for meta.json")
     parser.add_argument("--tello-host", default="192.168.10.1", help="The Tello's IP (default 192.168.10.1)")
@@ -77,9 +96,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--tello-ifindex", type=int, default=None, help="Windows interface index, as for the edge")
     args = parser.parse_args(argv)
+    if args.clock:
+        return args
+    if not args.out:
+        parser.error("--out is required (unless --clock)")
     if not 0 < args.seconds <= 600:
         parser.error("--seconds must be more than 0 and at most 600")
     return args
+
+
+def clock_text(wall: float) -> str:
+    """``wall`` (``time.time()`` seconds) as local ``HH:MM:SS.mmm``: the ``--clock`` display and ``wall_clock``."""
+    millis = int(wall * 1000.0)
+    return time.strftime("%H:%M:%S", time.localtime(millis // 1000)) + f".{millis % 1000:03d}"
+
+
+def show_clock(wall_clock: Callable[[], float] = time.time) -> None:
+    """Show ``clock_text`` of the current time in large digits until q or Esc is pressed (``--clock``).
+
+    The digits are redrawn as fast as the window allows. A shown time is never later than the
+    instant the camera films it (it was drawn before the screen showed it), so the latency read
+    from a recording errs on the long side, by up to a screen refresh or two.
+    """
+    import cv2
+    import numpy as np
+
+    window = "FlightRisk clock (q to quit)"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    try:
+        while True:
+            image = np.full((240, 1280, 3), 255, np.uint8)
+            cv2.putText(image, clock_text(wall_clock()), (24, 175), cv2.FONT_HERSHEY_SIMPLEX, 4.4, (0, 0, 0), 12,
+                        cv2.LINE_AA)
+            cv2.imshow(window, image)
+            if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
+                return
+    finally:
+        cv2.destroyWindow(window)
 
 
 class FrameRecorder:
@@ -138,8 +191,9 @@ class FrameRecorder:
                 "file": name,
                 "captured_at_s": f"{timed.captured_at:.6f}",
                 "arrived_at_s": f"{timed.arrived_at:.6f}",
-                "capture_to_arrival_ms": f"{(timed.arrived_at - timed.captured_at) * 1000.0:.1f}",
+                "decode_lag_ms": f"{(timed.arrived_at - timed.captured_at) * 1000.0:.1f}",
                 "wall_time": f"{wall:.6f}",
+                "wall_clock": clock_text(wall),
             })
             self.written = number
 
@@ -161,13 +215,19 @@ def record(
     does, and the decoder poller runs beside it. Returns the summary also
     written to ``meta.json``. The drone is not disconnected.
     """
-    from flightrisk.edge_device import DecodedFramePoller, feed_sensor_holder
+    from flightrisk.edge_device import (
+        DecodedFramePoller,
+        EdgeFrames,
+        feed_sensor_holder,
+    )
 
     holder = LatestFrame(clock)
-    feed_sensor_holder(drone, holder)
+    # One conversion per frame, shared by both feeds, as on the edge.
+    frames = EdgeFrames.for_drone(drone)
+    feed_sensor_holder(drone, holder, frames)
     recorder = FrameRecorder(out_dir)
     holder.add_listener(recorder.add)
-    poller = DecodedFramePoller.for_drone(drone, holder, log)
+    poller = DecodedFramePoller.for_drone(drone, holder, log, frames=frames)
     if poller is not None:
         poller.start()
     polls = 0
@@ -183,6 +243,7 @@ def record(
         written = recorder.close()
     settle_raw = (os.environ.get(ENV_OBSTACLE_SETTLE_S) or "").strip()
     reader = getattr(getattr(drone, "tello", None), "background_frame_read", None)
+    max_lag = getattr(reader, "max_lag_s", None)
     meta = {
         "label": label,
         "channel_order": SENSOR_CHANNEL_ORDER,
@@ -199,6 +260,8 @@ def record(
         },
         "frame_loop_polls": polls,
         "settle_s": float(settle_raw) if settle_raw else OBSTACLE_SETTLE_S,
+        # The decoder's stale limit (FLIGHTRISK_MAX_DECODE_LAG_S); None without capture stamps.
+        "max_decode_lag_s": max_lag if isinstance(max_lag, (int, float)) else None,
         "tello_host": host,
         "write_errors": recorder.errors[:20],
     }
@@ -209,7 +272,17 @@ def record(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.clock:
+        show_clock()
+        return 0
     from flightrisk.drone.tello import TelloController
+    from flightrisk.drone.tello_bound import max_decode_lag_s
+
+    try:
+        max_decode_lag_s()  # the bound decoder reads it when the video starts; refuse a bad value now
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     out = Path(args.out)
     if (out / INDEX_NAME).exists():

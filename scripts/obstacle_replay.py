@@ -44,8 +44,10 @@ INDEX_NAME = "frames.csv"
 CSV_FIELDS = [
     "frame", "processed", "action", "center_depth", "center_p90",
     "left_depth", "right_depth", "confidence", "center_stat",
-    "latency_ms", "safe", "captured_at_s",
+    "latency_ms", "safe", "captured_at_s", "decode_lag_ms",
 ]
+#: The recording's decode lag column, and the name it had before it was renamed (still read).
+DECODE_LAG_FIELDS = ("decode_lag_ms", "capture_to_arrival_ms")
 
 
 def parse_args(args=None):
@@ -94,7 +96,7 @@ def build_guard(min_safe_depth):
 
 
 def video_frames(video_path):
-    """Yield ``(frame, None)`` for every frame of a video file, BGR as OpenCV reads it."""
+    """Yield ``(frame, None, None)`` for every frame of a video file, BGR as OpenCV reads it."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"Error: could not open video file: {video_path}", file=sys.stderr)
@@ -104,13 +106,23 @@ def video_frames(video_path):
             ret, frame = cap.read()
             if not ret:
                 break
-            yield frame, None
+            yield frame, None, None
     finally:
         cap.release()
 
 
+def _float_or_none(text):
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
 def recorded_frames(frames_dir):
-    """Yield ``(frame, captured_at_s)`` for every frame of an ``obstacle_record.py`` recording, in order.
+    """Yield ``(frame, captured_at_s, decode_lag_ms)`` for every frame of an ``obstacle_record.py`` recording.
+
+    In order. ``decode_lag_ms`` is read from the ``decode_lag_ms`` column, or from
+    ``capture_to_arrival_ms`` in a recording made before it was renamed; None when neither is there.
 
     The PNGs are read with OpenCV, which gives back the BGR arrays the
     recorder wrote, pixel for pixel. A frame file that cannot be read stops
@@ -131,7 +143,8 @@ def recorded_frames(frames_dir):
             print(f"Error: could not read {path}", file=sys.stderr)
             sys.exit(1)
         captured = row.get("captured_at_s")
-        yield frame, (float(captured) if captured else None)
+        lag = next((row[name] for name in DECODE_LAG_FIELDS if row.get(name)), None)
+        yield frame, (float(captured) if captured else None), _float_or_none(lag)
 
 
 def run_replay(video_path, stride, min_safe_depth, csv_out=None, frames_dir=None, guard=None):
@@ -165,7 +178,7 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None, frames_dir=None
         flush=True
     )
 
-    for raw, captured_at in source:
+    for raw, captured_at, decode_lag_ms in source:
         frame_num += 1
 
         # Skip frames based on stride
@@ -213,6 +226,7 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None, frames_dir=None
             "latency_ms": latency_ms,
             "safe": safe,
             "captured_at_s": "" if captured_at is None else captured_at,
+            "decode_lag_ms": "" if decode_lag_ms is None else decode_lag_ms,
         })
 
     # Write CSV if requested

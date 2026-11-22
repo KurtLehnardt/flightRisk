@@ -6,7 +6,8 @@
 2. A person cut is never offered for a re-flight on its own; the operator
    confirms it on the dashboard. Obstacle cuts keep the old behaviour.
 3. A lost drone's last position stays an obstacle for re-task and re-flight
-   paths for ``LOST_OBSTACLE_S`` (15 s), or until it reports not flying.
+   paths for ``LOST_OBSTACLE_S`` (20 s since review N6 of #177 round 2: the
+   15 s hover plus the 2 to 4 s auto-land descent), or until it reports not flying.
 4. A gate stopped by a link-loss hold stops the plan loop, instead of
    sensing again at once, sense call after sense call.
 5. One probe look before an autonomous takeoff; a sensor that cannot see a
@@ -319,15 +320,15 @@ def test_f2_the_waiting_person_cut_has_its_own_sentence_and_banner(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 3: a lost drone may still hover for 15 s
+# Finding 3: a lost drone may still hover for 15 s and then descend (held 20 s)
 # ---------------------------------------------------------------------------
 
 
-def test_f3_a_lost_drone_is_an_obstacle_for_15_s():
-    assert coordinator_module.LOST_OBSTACLE_S == LOST_OBSTACLE_S == 15.0
+def test_f3_a_lost_drone_is_an_obstacle_for_20_s():
+    assert coordinator_module.LOST_OBSTACLE_S == LOST_OBSTACLE_S == 20.0
 
 
-def test_f3_a_lost_cutters_last_position_holds_the_re_flight_for_15_s_only():
+def test_f3_a_lost_cutters_last_position_holds_the_re_flight_for_lost_obstacle_s_only():
     fleet = Fleet()
     fleet.done("drone-2")
     fleet.cut("drone-1", [(0, 250)], CUT_OBSTACLE, lane_index=2)

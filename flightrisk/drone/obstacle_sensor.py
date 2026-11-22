@@ -30,6 +30,7 @@ actually looked at a fresh view and saw nothing; every failure to look is
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -85,6 +86,13 @@ OBSTACLE_MIN_SAFE_DEPTH_RANGE = (0.05, 0.9)
 OBSTACLE_DETECTION_WAIT_S = 1.0
 #: This many ``unknown`` person cues in a row log ``EVENT_PERSON_CUE_DOWN`` once.
 OBSTACLE_PERSON_CUE_DOWN_AFTER = 5
+#: A frame that the bound Tello decoder (``tello_bound.BoundFrameRead``) decodes more
+#: than this many seconds after the first datagram of its video data arrived is
+#: stale (``STALE_DECODER_BACKLOG``): the decoder is behind the video. The default;
+#: ``FLIGHTRISK_MAX_DECODE_LAG_S`` changes it.
+MAX_DECODE_LAG_S = 0.3
+#: Allowed ``FLIGHTRISK_MAX_DECODE_LAG_S``.
+MAX_DECODE_LAG_RANGE_S = (0.1, 2.0)
 
 # ---------------------------------------------------------------------------
 # Environment variables read by ``edge_device`` (all ``FLIGHTRISK_`` prefixed)
@@ -96,6 +104,9 @@ ENV_OBSTACLE_TURN = "FLIGHTRISK_OBSTACLE_TURN"
 ENV_OBSTACLE_MIN_SAFE_DEPTH = "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH"
 ENV_OBSTACLE_PERSON_FRACTION = "FLIGHTRISK_OBSTACLE_PERSON_FRACTION"
 ENV_OBSTACLE_SETTLE_S = "FLIGHTRISK_OBSTACLE_SETTLE_S"
+#: The bound Tello decoder's stale limit (``MAX_DECODE_LAG_S``); read by
+#: ``tello_bound.max_decode_lag_s`` and validated at the edge's start.
+ENV_MAX_DECODE_LAG_S = "FLIGHTRISK_MAX_DECODE_LAG_S"
 #: Fake drone only: the plan-frame y (cm) at which the fake sensor reports blocked.
 ENV_FAKE_OBSTACLE_Y_CM = "FLIGHTRISK_FAKE_OBSTACLE_Y_CM"
 
@@ -519,6 +530,11 @@ def to_sensor_frame(frame: Any, channel_order: str) -> Any:
     object that is not an array is returned as it is (``copy()`` when it has
     one). Every feed of the sensor and the replay script go through this one
     function. Raises ``ValueError`` for an unknown order.
+
+    The channels are reversed with OpenCV's ``cvtColor`` when it can take the
+    array (a contiguous SIMD swap, several times cheaper than NumPy's strided
+    copy of a reversed view, which matters at 30 frames a second on the ZBook);
+    otherwise with NumPy. Both give the same pixels.
     """
     if channel_order not in (CHANNEL_ORDER_RGB, CHANNEL_ORDER_BGR):
         raise ValueError(f"unknown channel order: {channel_order!r}")
@@ -529,10 +545,21 @@ def to_sensor_frame(frame: Any, channel_order: str) -> Any:
         and len(shape) == 3
         and shape[2] == 3
     ):
-        # A reversed view, then a C-contiguous copy of it.
-        return frame[..., ::-1].copy()
+        return _reverse_channels(frame)
     copy = getattr(frame, "copy", None)
     return copy() if callable(copy) else frame
+
+
+def _reverse_channels(frame: Any) -> Any:
+    """A new C-contiguous array of ``frame`` (height x width x 3) with its channels reversed."""
+    if str(getattr(frame, "dtype", "")) in ("uint8", "uint16", "float32"):
+        # No OpenCV, or an array layout it refuses (negative strides): NumPy below.
+        with contextlib.suppress(Exception):
+            import cv2  # lazy: keep this module importable without OpenCV
+
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    # A reversed view, then a C-contiguous copy of it.
+    return frame[..., ::-1].copy()
 
 
 # ---------------------------------------------------------------------------

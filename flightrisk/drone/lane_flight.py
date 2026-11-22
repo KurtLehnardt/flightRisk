@@ -406,8 +406,14 @@ class FlightSequenceMixin:
                 reason, detail = self._cancel_reason()
                 self._nack(cmd, reason, **({"detail": detail} if detail else {}))
                 return
-        elif not self._takeoff_or_refuse(cmd, t_exec):
-            return
+        else:
+            if not self._takeoff_or_refuse(cmd):
+                return
+            # The start executed when the takeoff was sent (``_do_takeoff``), after the takeoff probe's
+            # look, which can take its whole sense budget: not when the start time came.
+            with self._lock:
+                if self._takeoff_at_local_s is not None:
+                    t_exec = self._takeoff_at_local_s
         # The offset is the one the start was scheduled with, so the
         # reported ground time matches the requested t_ground_s.
         if self._is_v2(cmd):
@@ -421,9 +427,9 @@ class FlightSequenceMixin:
             })
         self._fly_plan()
 
-    def _takeoff_or_refuse(self, cmd: dict[str, Any] | None, t_exec: float | None = None) -> bool:
+    def _takeoff_or_refuse(self, cmd: dict[str, Any] | None) -> bool:
         """Take off; on refusal answer *cmd* with a nack. True once airborne."""
-        refusal = self._do_takeoff(self._clock() if t_exec is None else t_exec)
+        refusal = self._do_takeoff()
         if refusal is None:
             return True
         if refusal == "battery":
@@ -455,8 +461,14 @@ class FlightSequenceMixin:
         in front of a drone on the ground, which the first lane gate judges
         again once airborne. ``unavailable`` (stale, timeout or error)
         refuses the takeoff with nothing sent. The look also feeds the
-        sensor's down timer (``obstacle_sensor_ok``), not the plan's. Logged
-        as ``edge_obstacle_takeoff_sense``. Never raises.
+        sensor's down timer (``obstacle_sensor_ok``), not the plan's, and is
+        recorded for telemetry like a gate's, so the drone card's SENSE badge
+        shows it: ``obstacle_latency_ms`` is the look's, and ``obstacle_state``
+        is ``unavailable`` when it could not look (``SENSE STALE`` on the
+        refused takeoff, not the ``ok`` of a sensor that no gate has tried
+        yet). A look that saw a view clears ``obstacle_state``: no lane was
+        stopped, so a blocked view on the ground is not an ``OBSTACLE STOP``. Logged as ``edge_obstacle_takeoff_sense``. Never
+        raises.
         """
         if self._obstacle_sensor is None or not self._obstacle_takeoff_probe:
             return None
@@ -472,8 +484,11 @@ class FlightSequenceMixin:
             if result.unavailable:
                 if self._sensor_down_since is None:
                     self._sensor_down_since = started
+                self._obstacle_state = OBSTACLE_STATE_UNAVAILABLE
             else:
                 self._sensor_down_since = None
+                self._obstacle_state = None
+            self._obstacle_latency_ms = round(float(latency_ms), 1)
         fields = {
             "drone_id": self.drone_id,
             "kind": kind,
@@ -507,8 +522,13 @@ class FlightSequenceMixin:
             else:
                 self._sleep(0.0005)
 
-    def _do_takeoff(self, t_exec: float) -> str | None:
+    def _do_takeoff(self) -> str | None:
         """Take off. Returns None once airborne, else why not.
+
+        The takeoff time (``_takeoff_at_local_s``, and the ``executed_at_ground_s``
+        of a ``start_at``) is stamped when the takeoff is sent, after every
+        check below, including the probe look, which can take its whole sense
+        budget (``OBSTACLE_SENSE_TIMEOUT_S`` plus the frame wait).
 
         The reasons are drone_unreachable, battery, link_loss, aborted and
         not_executed. The drone link is checked first, immediately before
@@ -606,6 +626,7 @@ class FlightSequenceMixin:
                 previous_x_cm=round(previous_pose.x_cm, 1),
                 previous_y_cm=round(previous_pose.y_cm, 1),
             )
+        t_exec = self._clock()
         try:
             result = command_result(self._drone_takeoff(), "takeoff")
         finally:

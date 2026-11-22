@@ -560,6 +560,8 @@ On Windows, for edge-2:
 $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 ```
 
+A Tello edge needs the IP of the Wi-Fi adapter joined to its drone, `FLIGHTRISK_TELLO_LOCAL_IP` (or `--tello-local-ip`; `export FLIGHTRISK_TELLO_LOCAL_IP=192.168.10.2` on the Mac, `$env:FLIGHTRISK_TELLO_LOCAL_IP = "192.168.10.2"` on Windows, with the address `ipconfig` or `ifconfig` shows for that adapter), whenever obstacle sensing is required, which is the default. Only that bound decoder stamps each frame with its capture time, and without the stamps the obstacle sensor could judge a view from before the last move, so the edge refuses to start and names the setting. One drone on one adapter works the same way (`docs/two-tellos-one-pc.md`). Under `FLIGHTRISK_OBSTACLE_SENSING=off` the edge starts without it and logs `edge_obstacle_no_capture_stamps`.
+
 An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM`, 140 cm by default); see [Ceiling height and altitude slots](ceiling-and-altitude.md). On a dashboard flight the slot comes from the dashboard's settings, not from `ALT_CM`.
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
@@ -584,7 +586,7 @@ Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel 
 - With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
 - Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, before the skip cap: detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). With the 1 s cap, stride 5 and above give about 0.75 a second at 330 ms. A person is therefore seen about N times less often.
 - **Nothing with this stride code has flown.** The stride 2 flown on 28 October was an earlier version that counted frames (commit `acf72d2`), which was never merged; the merged, time-based stride has not flown.
-- The stride does not affect the obstacle sensor's camera frames. The sensor keeps its own copy of the newest frame, fed by the drone's frame callback and by a small thread that reads the newest frame of the video decoder 30 times a second (`edge_obstacle_frame_poller` is logged when it starts). Each frame the decoder produces is taken once, judged by its capture time, and refused when the decoder marks it stale (see "How old a frame is" in `docs/obstacle-sensing.md`).
+- The stride does not affect the obstacle sensor's camera frames. The sensor keeps the newest frame, fed by the drone's frame callback and by a small thread that reads the newest frame of the video decoder 30 times a second (`edge_obstacle_frame_poller` is logged when it starts). Each frame the decoder produces is taken once, judged by its capture time, and refused when the decoder marks it stale (see "How old a frame is" in `docs/obstacle-sensing.md`).
 - The launcher window has no field for it. The launcher passes its environment through to the edges, so set the variables before starting it, or use the flag when starting an edge by hand.
 
 ```

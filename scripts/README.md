@@ -120,18 +120,25 @@ sensor's BGR, stamped with its capture time, and refused when the decoder marks
 it stale (a decoder backlog, or a corrupt frame after lost video). Each frame is
 a lossless PNG, so a replay gives the depth model exactly the input it had in
 flight. With `--tello-local-ip` (the two-drone layout) the decoder stamps
-capture times; without it a frame counts from its arrival.
+capture times; without it a frame counts from its arrival (an edge refuses to
+fly that way while obstacle sensing is required).
 
 ```bash
 venv/bin/python scripts/obstacle_record.py --out rec/plant_150cm --seconds 5 --label "plant 150 cm"
 venv/bin/python scripts/obstacle_record.py --out rec/wall_300cm --tello-local-ip 192.168.10.2
+venv/bin/python scripts/obstacle_record.py --clock
 ```
 
 It writes `frame_000001.png` and onwards, `frames.csv` (`index`, `file`,
-`captured_at_s`, `arrived_at_s`, `capture_to_arrival_ms`, `wall_time`) and
-`meta.json` (the label, the channel order, the settle time and the frame,
-stale and decoder counts). The output directory must not already hold a
-recording.
+`captured_at_s`, `arrived_at_s`, `decode_lag_ms`, `wall_time`, `wall_clock`) and
+`meta.json` (the label, the channel order, the settle time, the decoder's
+`FLIGHTRISK_MAX_DECODE_LAG_S` and the frame, stale and decoder counts). The
+output directory must not already hold a recording. `decode_lag_ms` (called
+`capture_to_arrival_ms` in older recordings) is the time from the frame's first
+datagram to the holder: the decoder's part only, not the video latency.
+`--clock` records nothing: it shows the computer's clock as `HH:MM:SS.mmm` in
+large digits, to film for the video latency of hardware item H5 (a frame's
+`wall_clock` minus the clock in its PNG; `docs/obstacle-sensing.md`).
 
 ### `obstacle_replay.py` -- Replay recordings and calibrate depth threshold
 

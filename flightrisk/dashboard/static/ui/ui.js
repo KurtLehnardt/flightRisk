@@ -170,6 +170,23 @@ const socket = io();
         return { text: label + ' ok' + ms, cls: cls, title: mode === 'forward_only'
             ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.' };
     }
+    // A person detection older than this many seconds leaves the obstacle sensor's person cue stale.
+    const PERSON_CUE_STALE_S = 2;
+    // The person cue badge of a drone card: down, or the age of the newest detection while it is stale; else null.
+    function personCueBadge(d) {
+        const cue = d && d.obstacle_person_cue;
+        if (!cue || typeof cue !== 'object') return null;
+        if (cue.person_cue_down === true) {
+            return { text: 'PERSON CUE down', cls: 'held',
+                title: 'The obstacle sensor has had no usable person detection for several looks: it stops for obstacles by depth alone.' };
+        }
+        const age = cue.detection_age_s;
+        if (typeof age === 'number' && age > PERSON_CUE_STALE_S) {
+            return { text: 'PERSON CUE ' + fmt(age) + ' s old', cls: 'held',
+                title: 'The newest person detection the obstacle sensor can use is ' + fmt(age) + ' s old: a person who steps in front now is seen by depth alone.' };
+        }
+        return null;
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -258,7 +275,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), obstacleStopBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;
