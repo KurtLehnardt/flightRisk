@@ -45,6 +45,7 @@ from flightrisk.drone.snapshot import (
     Reading,
     TelemetrySnapshot,
 )
+from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
 from flightrisk.drone.snapshot import reading as _reading
 from flightrisk.obs_log import Throttle, log_event, notice
 
@@ -519,6 +520,13 @@ class TelloController:
     auto-land still fires if every land is lost.
     """
 
+    #: The channel order of ``get_frame`` and ``on_frame`` frames: djitellopy's
+    #: decoder and ``BoundFrameRead`` deliver RGB. Whoever hands a frame to an
+    #: OpenCV-order consumer (YOLO, ReID, a JPEG, ``ObstacleGuard``) converts it:
+    #: the edge once per frame for all of them (``edge_device.EdgeFrames``), the
+    #: dashboard's search with ``obstacle_sensor.to_sensor_frame``.
+    frame_channel_order = CHANNEL_ORDER_RGB
+
     def __init__(
         self,
         name: str = "drone",
@@ -566,8 +574,6 @@ class TelloController:
             supports_missions=False,
             features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
         )
-        self._frame: np.ndarray | None = None
-        self._frame_lock = threading.Lock()
         self._cmd_lock = threading.Lock()
         self._keepalive_thread: threading.Thread | None = None
         self._state_thread: threading.Thread | None = None
@@ -957,7 +963,7 @@ class TelloController:
         notice(_log, "tello_disconnected", f"[{self.name}] Disconnected.", drone_id=self.name)
 
     def get_frame(self) -> np.ndarray | None:
-        """Get the latest video frame as a BGR numpy array."""
+        """Get the latest video frame as an RGB numpy array (``frame_channel_order``)."""
         if not self.state.is_connected:
             return None
         try:
@@ -984,8 +990,8 @@ class TelloController:
                     return None
 
                 self._last_frame_time = time.time()
-                with self._frame_lock:
-                    self._frame = frame.copy()
+                # No copy: the decoder makes a new array for every frame and never writes to one it
+                # handed out, and every consumer that keeps a frame converts it (``EdgeFrames``).
                 for cb in self._frame_callbacks:
                     cb(frame)
                 return frame
@@ -2342,6 +2348,8 @@ class FakeTelloController:
     """
 
     TAKEOFF_HEIGHT_CM = 80
+    #: As ``TelloController``: its frames stand in for a Tello decoder's RGB.
+    frame_channel_order = CHANNEL_ORDER_RGB
 
     def __init__(
         self,

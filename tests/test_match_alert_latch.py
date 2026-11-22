@@ -790,7 +790,7 @@ class TestSearchPauseResume:
     def test_search_pattern_holds_while_awaiting_and_resumes_on_dismiss(self, clean_app_state):
         drone = FakeDrone()
         app_state.fleet = _fleet_with(drone)
-        app_state.obstacle_guard = None
+        app_state.obstacle_guard = MagicMock()  # a single-drone search does not start without one
         aid = _open_alert("1_1")
 
         sio_client = app_module.socketio.test_client(app_module.app)

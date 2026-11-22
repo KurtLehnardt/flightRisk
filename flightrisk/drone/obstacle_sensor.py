@@ -14,9 +14,12 @@ The module holds:
   ``FakeObstacleSensor`` (scripted by the dead-reckoned pose and heading, for
   deterministic tests and the fake fleet demo).
 * ``LatestFrame``, the holder of the newest camera frame with its arrival
-  time, so a sensor can insist on a frame that arrived after the drone settled.
-  It never stamps the same source frame object twice, so a stalled video
-  decoder cannot pass an old frame off as a new one.
+  and capture times, so a sensor can insist on a frame captured after the
+  drone settled. It never stamps the same source frame object twice, so a
+  stalled video decoder cannot pass an old frame off as a new one, and it
+  refuses a frame its decoder marks stale (``FrameStamp``).
+* ``to_sensor_frame``, the one place a frame is converted to the channel
+  order the sensor judges (``SENSOR_CHANNEL_ORDER``).
 * Constants for every knob, cut reason, telemetry field and event name.
 
 A sensor is evaluated while the drone hovers, so a slow sensor costs mission
@@ -27,6 +30,7 @@ actually looked at a fresh view and saw nothing; every failure to look is
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -44,8 +48,14 @@ OBSTACLE_STEP_MIN_CM = 20
 OBSTACLE_STEP_MAX_CM = 100
 #: The field profile (MAVLink) steps as far as its reposition granularity.
 OBSTACLE_STEP_FIELD_CM = 500
-#: Seconds to wait after a move's reply before a frame counts as settled.
+#: Seconds after a move's reply before a frame counts as settled: a view must have
+#: been captured at least this long after the end of the last move or turn. The
+#: default; ``FLIGHTRISK_OBSTACLE_SETTLE_S`` changes it. It must cover the camera's
+#: own latency (capture to arrival at the edge), so it must not be below the p95
+#: video latency that hardware item H5 measures (``docs/obstacle-sensing.md``).
 OBSTACLE_SETTLE_S = 0.3
+#: Allowed ``FLIGHTRISK_OBSTACLE_SETTLE_S``.
+OBSTACLE_SETTLE_RANGE_S = (0.1, 3.0)
 #: How long ``LatestFrame.wait_for`` waits for a frame newer than ``after + settle``,
 #: counted from ``after + settle`` (or from the call, when that is later).
 OBSTACLE_FRAME_WAIT_S = 0.7
@@ -76,6 +86,13 @@ OBSTACLE_MIN_SAFE_DEPTH_RANGE = (0.05, 0.9)
 OBSTACLE_DETECTION_WAIT_S = 1.0
 #: This many ``unknown`` person cues in a row log ``EVENT_PERSON_CUE_DOWN`` once.
 OBSTACLE_PERSON_CUE_DOWN_AFTER = 5
+#: A frame that the bound Tello decoder (``tello_bound.BoundFrameRead``) decodes more
+#: than this many seconds after the first datagram of its video data arrived is
+#: stale (``STALE_DECODER_BACKLOG``): the decoder is behind the video. The default;
+#: ``FLIGHTRISK_MAX_DECODE_LAG_S`` changes it.
+MAX_DECODE_LAG_S = 0.3
+#: Allowed ``FLIGHTRISK_MAX_DECODE_LAG_S``.
+MAX_DECODE_LAG_RANGE_S = (0.1, 2.0)
 
 # ---------------------------------------------------------------------------
 # Environment variables read by ``edge_device`` (all ``FLIGHTRISK_`` prefixed)
@@ -86,6 +103,10 @@ ENV_OBSTACLE_STEP_CM = "FLIGHTRISK_OBSTACLE_STEP_CM"
 ENV_OBSTACLE_TURN = "FLIGHTRISK_OBSTACLE_TURN"
 ENV_OBSTACLE_MIN_SAFE_DEPTH = "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH"
 ENV_OBSTACLE_PERSON_FRACTION = "FLIGHTRISK_OBSTACLE_PERSON_FRACTION"
+ENV_OBSTACLE_SETTLE_S = "FLIGHTRISK_OBSTACLE_SETTLE_S"
+#: The bound Tello decoder's stale limit (``MAX_DECODE_LAG_S``); read by
+#: ``tello_bound.max_decode_lag_s`` and validated at the edge's start.
+ENV_MAX_DECODE_LAG_S = "FLIGHTRISK_MAX_DECODE_LAG_S"
 #: Fake drone only: the plan-frame y (cm) at which the fake sensor reports blocked.
 ENV_FAKE_OBSTACLE_Y_CM = "FLIGHTRISK_FAKE_OBSTACLE_Y_CM"
 
@@ -143,8 +164,12 @@ CUT_SENSOR_STALE = "sensor_stale"
 CUT_SENSOR_DOWN = "sensor_down"
 CUT_AUTOPILOT = "autopilot"
 CUT_REASONS = (CUT_OBSTACLE, CUT_PERSON, CUT_SENSOR_STALE, CUT_SENSOR_DOWN, CUT_AUTOPILOT)
-#: Cut reasons the ground offers once to another drone (design section 3.4).
-REFLIGHT_CUT_REASONS = frozenset({CUT_OBSTACLE, CUT_PERSON, CUT_SENSOR_STALE})
+#: Cut reasons the ground offers once to another drone on its own (design section 3.4).
+REFLIGHT_CUT_REASONS = frozenset({CUT_OBSTACLE, CUT_SENSOR_STALE})
+#: Cut reasons offered once to another drone only after the operator confirms
+#: it on the dashboard. A person is not a fixed obstacle: a drone sent to fly
+#: the rest of the lane from the far side would fly toward the same person.
+CONFIRM_REFLIGHT_CUT_REASONS = frozenset({CUT_PERSON})
 
 #: Segment reasons that are not cut reasons.
 SEGMENT_SKIPPED = "skipped"
@@ -178,6 +203,14 @@ TELEMETRY_CUTS = "obstacle_cuts"
 TELEMETRY_CUTS_TOTAL = "obstacle_cuts_total"
 #: Comma separated reasons of the listed cuts, at most 200 characters.
 TELEMETRY_CUT_REASONS = "obstacle_cut_reasons"
+#: The person cue's health, for a sensor that has one: an object
+#: ``{"person_cue_down": bool, "detection_age_s": number or null}``. One field
+#: holds both, to keep the telemetry's field count down
+#: (``fleet_protocol.MAX_FIELDS``).
+TELEMETRY_PERSON_CUE = "obstacle_person_cue"
+#: Keys of ``TELEMETRY_PERSON_CUE``.
+PERSON_CUE_DOWN_KEY = "person_cue_down"
+PERSON_CUE_AGE_KEY = "detection_age_s"
 TELEMETRY_FIELDS = (
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -187,6 +220,7 @@ TELEMETRY_FIELDS = (
     TELEMETRY_CUTS,
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_CUT_REASONS,
+    TELEMETRY_PERSON_CUE,
 )
 #: The executor keeps and reports this many of the latest cuts.
 MAX_CUTS_LISTED = 8
@@ -441,16 +475,115 @@ class FakeObstacleSensor:
 
 
 # ---------------------------------------------------------------------------
+# Frame stamps and the channel order of the sensor's frames
+# ---------------------------------------------------------------------------
+
+#: ``FrameStamp.stale_cause`` values: why a decoded frame is not a usable view.
+STALE_DECODER_BACKLOG = "decoder backlog"
+STALE_DECODE_ERROR = "decode error"
+STALE_CORRUPT_FRAME = "corrupt frame"
+STALE_UNTIL_KEY_FRAME = "damaged reference, waiting for a key frame"
+STALE_DATA_DROPPED = "video data dropped"
+STALE_CAPTURE_UNKNOWN = "capture time unknown"
+
+
+@dataclass(frozen=True)
+class FrameStamp:
+    """What a video decoder knows about one decoded frame.
+
+    ``captured_at`` is the latest time the frame can have been captured, on the
+    ``time.monotonic()`` clock: the arrival of the first datagram of its video
+    data, stamped by a receiver that does not wait for the decoder, so a decoder
+    that falls behind cannot make an old view look new. It is ``None`` when the
+    decoder cannot tell. ``stale_cause`` is set (one of ``STALE_*``) when the
+    frame must not be judged at all: it was decoded behind a backlog, it is
+    corrupt or partial after lost video data, or it is built on such a frame.
+    """
+
+    captured_at: float | None = None
+    stale_cause: str | None = None
+
+    @property
+    def stale(self) -> bool:
+        return self.stale_cause is not None
+
+
+#: Channel orders of a colour frame.
+CHANNEL_ORDER_RGB = "rgb"
+CHANNEL_ORDER_BGR = "bgr"
+#: The channel order of every frame the sensor holds and judges. ``ObstacleGuard``
+#: takes BGR (OpenCV's order) and converts it to the RGB that MiDaS expects, and a
+#: video file read by OpenCV for a replay is BGR too, so in flight and in a replay
+#: the model gets the same input. The Tello's decoder delivers RGB, so its frames
+#: are converted once, where they enter the sensor (``to_sensor_frame``).
+SENSOR_CHANNEL_ORDER = CHANNEL_ORDER_BGR
+
+
+def to_sensor_frame(frame: Any, channel_order: str) -> Any:
+    """The sensor's own copy of ``frame``, in ``SENSOR_CHANNEL_ORDER``.
+
+    ``channel_order`` is the order of ``frame`` as its source delivers it:
+    ``CHANNEL_ORDER_RGB`` (the Tello decoders) is reversed, ``CHANNEL_ORDER_BGR``
+    (an OpenCV capture or a file read with OpenCV) is copied as it is. A frame
+    without three colour channels has no order and is copied. The result is
+    always a new array, so later changes to the source cannot reach it; an
+    object that is not an array is returned as it is (``copy()`` when it has
+    one). Every feed of the sensor and the replay script go through this one
+    function. Raises ``ValueError`` for an unknown order.
+
+    The channels are reversed with OpenCV's ``cvtColor`` when it can take the
+    array (a contiguous SIMD swap, several times cheaper than NumPy's strided
+    copy of a reversed view, which matters at 30 frames a second on the ZBook);
+    otherwise with NumPy. Both give the same pixels.
+    """
+    if channel_order not in (CHANNEL_ORDER_RGB, CHANNEL_ORDER_BGR):
+        raise ValueError(f"unknown channel order: {channel_order!r}")
+    shape = getattr(frame, "shape", None)
+    if (
+        channel_order != SENSOR_CHANNEL_ORDER
+        and shape is not None
+        and len(shape) == 3
+        and shape[2] == 3
+    ):
+        return _reverse_channels(frame)
+    copy = getattr(frame, "copy", None)
+    return copy() if callable(copy) else frame
+
+
+def _reverse_channels(frame: Any) -> Any:
+    """A new C-contiguous array of ``frame`` (height x width x 3) with its channels reversed."""
+    if str(getattr(frame, "dtype", "")) in ("uint8", "uint16", "float32"):
+        # No OpenCV, or an array layout it refuses (negative strides): NumPy below.
+        with contextlib.suppress(Exception):
+            import cv2  # lazy: keep this module importable without OpenCV
+
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    # A reversed view, then a C-contiguous copy of it.
+    return frame[..., ::-1].copy()
+
+
+# ---------------------------------------------------------------------------
 # The frame holder
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class TimedFrame:
-    """A camera frame with its arrival time on the holder's clock."""
+    """A camera frame with its arrival time on the holder's clock and its capture time.
+
+    ``arrived_at`` is when the holder stored the frame. ``captured_at`` is the
+    latest time the frame can have been captured: the decoder's stamp when it
+    gave one (``FrameStamp``), never later than ``arrived_at``, and otherwise
+    ``arrived_at`` itself. Freshness is judged on ``captured_at``.
+    """
 
     frame: Any
     arrived_at: float
+    captured_at: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.captured_at is None:
+            object.__setattr__(self, "captured_at", self.arrived_at)
 
 
 #: The source object of a holder that has not been offered a frame yet.
@@ -458,18 +591,21 @@ _NO_SOURCE = object()
 
 
 class LatestFrame:
-    """Holds the newest camera frame and when it arrived.
+    """Holds the newest usable camera frame, when it arrived and when it was captured.
 
     Every feed of the holder (the drone's frame callback, a decoder poller, a
     capture source) goes through ``offer``. It is fed for every new frame
     object the controller hands over, independent of any frame stride the
     detector uses, and never for the same object twice: a stalled video
     decoder keeps handing over the frame it last decoded, and that frame must
-    not be stamped again as if it had just arrived. The holder itself can be
-    registered as the drone's frame callback (``drone.on_frame(holder)``),
-    which offers each frame without a copy. ``clock`` is the monotonic clock
-    that stamps arrivals (``time.monotonic`` by default); the executor's
-    ``after`` stamps must come from the same clock.
+    not be stamped again as if it had just arrived. A frame the decoder marks
+    stale (``FrameStamp``) is refused and counted, never stored, so the sensor
+    keeps judging only frames that show a real, current view, and with none
+    fails closed. The holder itself can be registered as the drone's frame
+    callback (``drone.on_frame(holder)``), which offers each frame without a
+    copy. ``clock`` is the monotonic clock that stamps arrivals
+    (``time.monotonic`` by default); the executor's ``after`` stamps and a
+    decoder's capture stamps must come from the same clock.
 
     ``wait_for`` waits in real time on a condition but measures the deadline on
     ``clock``. A test that injects a clock which never advances must use
@@ -484,6 +620,9 @@ class LatestFrame:
         self._cond = threading.Condition()
         self._latest: TimedFrame | None = None
         self._count = 0
+        self._stale_count = 0
+        self._last_stale_cause: str | None = None
+        self._listeners: list[Callable[[TimedFrame], None]] = []
         # The last source object any feed offered. Holding the reference keeps
         # the object alive, so ``is`` can never match a new object that reuses
         # its id; ``id()`` alone could.
@@ -492,31 +631,47 @@ class LatestFrame:
     def __call__(self, frame: Any) -> None:
         self.offer(frame)
 
-    def offer(self, source: Any, copy: Callable[[Any], Any] | None = None) -> bool:
-        """Store ``source`` as the newest frame unless it is the source object offered last.
+    def offer(
+        self, source: Any, copy: Callable[[Any], Any] | None = None, stamp: FrameStamp | None = None,
+    ) -> bool:
+        """Store ``source`` as the newest frame unless it is the source object offered last or is stale.
 
         The check runs on ``source`` itself, before ``copy`` is called, and
         compares it with ``is`` against the last source object that any feed
         of this holder offered, so every feed shares the one record: a frame
         the frame loop already handed over is not stamped again when a poller
-        reads it, and the other way round. A new object is stored (as
-        ``copy(source)`` when ``copy`` is given) and stamped with the current
-        time. Returns True when the frame was stored.
+        reads it, and the other way round. A frame whose ``stamp`` is stale is
+        recorded as offered, counted (``stale_frames``) and not stored. Any
+        other new object is stored (as ``copy(source)`` when ``copy`` is given),
+        stamped with the current time as its arrival and with the stamp's
+        capture time (no later than the arrival) as its capture time, and
+        handed to the listeners. Returns True when the frame was stored.
 
         A controller that reused one buffer object for every frame would
         therefore feed the holder only once, and the sensor would report the
-        view as stale: it fails closed. djitellopy's decoder, the fake
-        controllers and OpenCV's ``read`` all return a new array per frame.
+        view as stale: it fails closed. djitellopy's decoder, the bound
+        decoder, the fake controllers and OpenCV's ``read`` all return a new
+        array per frame.
         """
         with self._cond:
             if source is self._source:
                 return False
             self._source = source
+            if stamp is not None and stamp.stale:
+                self._stale_count += 1
+                self._last_stale_cause = stamp.stale_cause
+                return False
             frame = source if copy is None else copy(source)
-            self._latest = TimedFrame(frame, self._clock())
+            now = self._clock()
+            captured = None if stamp is None or stamp.captured_at is None else min(stamp.captured_at, now)
+            timed = TimedFrame(frame, now, captured)
+            self._latest = timed
             self._count += 1
+            listeners = list(self._listeners)
             self._cond.notify_all()
-            return True
+        for listener in listeners:
+            listener(timed)
+        return True
 
     def update(self, frame: Any) -> None:
         """Store ``frame`` as the newest, stamped with the current time, whatever it is.
@@ -528,10 +683,31 @@ class LatestFrame:
             self._count += 1
             self._cond.notify_all()
 
+    def add_listener(self, listener: Callable[[TimedFrame], None]) -> None:
+        """Call ``listener(timed_frame)`` with every frame ``offer`` stores, after storing it.
+
+        For a recorder that must save exactly the frames the sensor can judge
+        (``scripts/obstacle_record.py``). A listener runs on the feeding thread
+        and must be quick; an exception it raises reaches the feed.
+        """
+        with self._cond:
+            self._listeners.append(listener)
+
     @property
     def frames_seen(self) -> int:
         with self._cond:
             return self._count
+
+    @property
+    def stale_frames(self) -> int:
+        """Frames refused because their decoder marked them stale."""
+        with self._cond:
+            return self._stale_count
+
+    @property
+    def last_stale_cause(self) -> str | None:
+        with self._cond:
+            return self._last_stale_cause
 
     def latest(self) -> TimedFrame | None:
         """The newest frame whatever its age, or ``None`` before the first."""
@@ -545,14 +721,16 @@ class LatestFrame:
         wait_s: float = OBSTACLE_FRAME_WAIT_S,
         limit_s: float | None = None,
     ) -> TimedFrame | None:
-        """Return the newest frame that arrived at or after ``after + settle_s``.
+        """Return the newest frame captured at or after ``after + settle_s``.
 
         Waits until ``wait_s`` past the later of now and ``after + settle_s``,
         so a call made before the settle time is over still gets the whole
         ``wait_s`` once a frame can count, and returns ``None`` when no such
         frame came. ``limit_s``, when given, caps the wait counted from now
         (the caller's remaining time budget). A ``wait_s`` or ``limit_s`` of 0
-        looks once and does not wait.
+        looks once and does not wait. A frame counts by its capture time
+        (``TimedFrame.captured_at``), so one that a slow decoder hands over
+        late does not count as a view of the present.
         """
         threshold = after + settle_s
         now = self._clock()
@@ -562,7 +740,7 @@ class LatestFrame:
         with self._cond:
             while True:
                 latest = self._latest
-                if latest is not None and latest.arrived_at >= threshold:
+                if latest is not None and latest.captured_at >= threshold:
                     return latest
                 remaining = deadline - self._clock()
                 if remaining <= 0:

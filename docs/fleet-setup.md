@@ -447,6 +447,100 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 | 3 | Station mode: drones and laptops on one 2.4 GHz router (Path 1 above) | `tello_hw_check.py --station-mode` and `--video-check` both pass. Tello video may not work in station mode (UNVERIFIED for current EDU firmware) |
 | 4 | One live Tello plus one fake edge (rung 2 in `docs/demo-script.md`) | there is no working link between the laptops at all |
 
+## Layout B with Claude reasoning
+
+Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the ZBook), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
+
+**Claude reasoning in Layout B needs `feature/edge-claude-reasoning`.** The call that sends an edge-sourced alert to Claude is in that branch, not on this tree; until it is merged, steps 2 to 5 prepare the machine but no reasoning request is made for edge alerts.
+
+This was written from code and from the ZBook's adapter layout; the PowerShell steps and the installer option have not yet been run end to end on the ZBook.
+
+### Which adapter is which
+
+On the ZBook at the time of writing, the built-in Intel AX201 Wi-Fi ("Wi-Fi", ifIndex 21) is on the home LAN and is the internet uplink. The two TP-Link USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (ifIndex 10, static 192.168.10.50/24) and "Wi-Fi 5" (ifIndex 26). **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
+
+```powershell
+Get-NetAdapter | Sort-Object ifIndex | Format-Table Name, InterfaceDescription, ifIndex, Status
+```
+
+and use what it prints. If there is no home Wi-Fi where you fly, the uplink can be a USB Ethernet adapter or a USB tether from a phone instead; it is then the third adapter in the table, and everything below applies to it the same way.
+
+### 1. Install the ground role
+
+The Windows installer installs the edge role only unless asked. For Layout B set `FLIGHTRISK_ROLE=ground` for that PowerShell, then run the installer (an environment variable, because the one-liner runs through `irm | iex`, which takes no parameters):
+
+```powershell
+$env:FLIGHTRISK_ROLE = "ground"
+irm https://raw.githubusercontent.com/KurtLehnardt/flightRisk/main/installer/windows/install.ps1 | iex
+```
+
+It installs `installer\locks\windows-x64-ground.txt`: the edge packages plus Flask, Flask-SocketIO, Pillow, cryptography, the HTTP telemetry exporter and `anthropic`, all pinned with hashes. `open-clip-torch` is in the ground lock only: the ground builds the target embedding from the uploaded photo with it, and each edge ships a `reid_embedding` with every detection that the ground matches against (`flightrisk/edge.py:200-212`, `flightrisk/ground.py:67`). The edges of Layout B run from this same virtual environment, so they get it too; an edge-role install (`windows-x64-edge.txt`) deliberately has none and sends `null`, so nothing would match, because there is no face recognition on Windows to fall back on. Ollama and InsightFace are not installed. The role is saved in `%LOCALAPPDATA%\FlightRisk\install-role`, so `update.ps1` keeps a ground install a ground install.
+
+**One online start for the ReID weights.** The first time `PersonReID` is built, open_clip downloads the `laion2b_s34b_b88k` ViT-B/16 weights (about 600 MB) into the Hugging Face cache (`%USERPROFILE%\.cache\huggingface`). Pre-fetch them once while online, before going to the field:
+
+```powershell
+cd $env:LOCALAPPDATA\FlightRisk\app
+venv\Scripts\python.exe -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-16', pretrained='laion2b_s34b_b88k')"
+```
+
+Without the weights and without internet the ground starts with ReID off: setting a target photo then answers 503 ("Person re-identification is not loaded") and no alert can fire. The same weights are needed by each edge process, and they share the cache.
+
+**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the ZBook's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
+
+The ground and the edges need `yolo11n.pt`, and a clean clone has none. The installer downloads it into the app folder and checks its SHA-256; if it printed "could not download yolo11n.pt now", run the installer again with internet before launching. Check with `Test-Path "$env:LOCALAPPDATA\FlightRisk\app\yolo11n.pt"`. In a development checkout use `venv\Scripts\python.exe -m pip install -r requirements-ground.txt` and `scripts\install_windows.ps1` for the weights.
+
+### 2. Environment variables
+
+Three variables turn Claude on. Set them once with `setx`, then **close the shell and open a new one** (and restart the launcher): `setx` changes the registry for future processes, not the current shell.
+
+```powershell
+setx FLIGHTRISK_ALLOW_CLOUD_LLM 1
+setx FLIGHTRISK_REASONING_PROVIDER claude
+setx FLIGHTRISK_CLAUDE_API_KEY "<your key>"
+```
+
+- The key variable is `FLIGHTRISK_CLAUDE_API_KEY`. `ANTHROPIC_API_KEY` is not read.
+- Never paste the key into a file in the repository, a note or a chat. PowerShell keeps typed commands in its history file, so for the key either use Settings, System, About, Advanced system settings, Environment Variables (User variables, New), or run the `setx` line and then delete it from `(Get-PSReadLineOption).HistorySavePath`.
+- Without `FLIGHTRISK_ALLOW_CLOUD_LLM=1` the ground refuses the cloud model, even with a key.
+
+### 3. The launcher toggle
+
+In the launcher window turn on **Language model on** for the ground. It is off by default, and while it is off the launcher starts the ground with `--no-llm`, so no reasoning runs whatever the variables say. With the provider set to claude, the launcher warns when it is off.
+
+### 4. Make the default route go out the uplink
+
+Each Tello adapter that joined by DHCP learns a default route through 192.168.10.1, and Windows picks the route with the lowest metric, so the Claude traffic can be sent into a Tello access point and time out. Give the uplink a lower interface metric than both Tello adapters. In an administrator PowerShell, with the aliases read from the `Get-NetAdapter` table above:
+
+```powershell
+$uplink = "Wi-Fi"            # the home Wi-Fi, the USB Ethernet or the phone tether
+$tellos = "Wi-Fi 2", "Wi-Fi 5"
+Set-NetIPInterface -InterfaceAlias $uplink -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 10
+foreach ($t in $tellos) { Set-NetIPInterface -InterfaceAlias $t -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 200 }
+```
+
+The metric belongs to the adapter, so it survives a reboot; if a replug gives a USB adapter a new name, redo this for the new alias. This does not touch the Tello traffic: the edges bind each adapter's own IP (`local_ip` and the interface index) and talk to 192.168.10.1 on its own connected subnet.
+
+### 5. Verify the route
+
+```powershell
+Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Format-Table InterfaceAlias, NextHop, RouteMetric, InterfaceMetric, ifIndex
+$api = (Resolve-DnsName api.anthropic.com -Type A | Where-Object Type -eq 'A' | Select-Object -First 1).IPAddress
+Find-NetRoute -RemoteIPAddress $api | Format-Table InterfaceAlias, IPAddress, NextHop
+```
+
+The first table should list the uplink first. `Find-NetRoute` should show the uplink's alias and a local address that is not in 192.168.10.0/24. Then run the preflight check, which resolves `api.anthropic.com`, opens TLS to it (no HTTP request is sent and no key is used), prints the local address the route leaves from, warns if that is a Tello subnet, and reports each Claude variable as set or unset without showing a value:
+
+```powershell
+cd $env:LOCALAPPDATA\FlightRisk\app
+venv\Scripts\python.exe scripts\check_claude_uplink.py
+```
+
+It exits 1 on a failure and does nothing (exit 0) unless `FLIGHTRISK_REASONING_PROVIDER=claude`. The launcher's Check runs the same rows for a ground whose environment says claude, as `Claude: ...` rows; there they show as warnings and never block Start, for the reason below.
+
+### Without internet
+
+If the uplink is down, the flight still works: detection, matching and the alerts fire as usual (given the ReID weights are cached, see step 1). Whether Claude is called at all, and so whether a reasoning panel error can appear, depends on the edge-alert reasoning in the unmerged `feature/edge-claude-reasoning` branch: on a tree without it, **Claude is never called for edge alerts in Layout B**, so the Claude variables and uplink do nothing for an edge-sourced fleet. With it, the reasoning panel shows an error for each call that could not reach Claude (the client waits up to 60 s and retries twice, so the error can take a while to appear). The preflight shows this beforehand, as DNS or TLS rows.
+
 ## Launch
 
 Run the launchers after exporting the settings and `FLIGHTRISK_EDGE_TOKEN`. Start the ground station first.
@@ -466,36 +560,45 @@ On Windows, for edge-2:
 $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 ```
 
+A Tello edge needs the IP of the Wi-Fi adapter joined to its drone, `FLIGHTRISK_TELLO_LOCAL_IP` (or `--tello-local-ip`; `export FLIGHTRISK_TELLO_LOCAL_IP=192.168.10.2` on the Mac, `$env:FLIGHTRISK_TELLO_LOCAL_IP = "192.168.10.2"` on Windows, with the address `ipconfig` or `ifconfig` shows for that adapter), whenever obstacle sensing is required, which is the default. Only that bound decoder stamps each frame with its capture time, and without the stamps the obstacle sensor could judge a view from before the last move, so the edge refuses to start and names the setting. One drone on one adapter works the same way (`docs/two-tellos-one-pc.md`). Under `FLIGHTRISK_OBSTACLE_SENSING=off` the edge starts without it and logs `edge_obstacle_no_capture_stamps`.
+
 An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM`, 140 cm by default); see [Ceiling height and altitude slots](ceiling-and-altitude.md). On a dashboard flight the slot comes from the dashboard's settings, not from `ALT_CM`.
 
 Lay out the drones as in "Placement and heading" above first. The dashboard should show both drones with their clock offsets and round-trip times. Check each battery is at least 30 percent and the floor area is clear before takeoff.
 
-Each Tello edge senses obstacles before every 50 cm step of a lane, using the MiDaS_small depth model. The weights are downloaded into the `torch.hub` cache the first time, so start each edge once while the laptop is online. If the sensor cannot be built, the edge refuses to take off and the drone card shows `obstacle sensor unavailable: <why>`. Settings and the `FLIGHTRISK_OBSTACLE_SENSING=off` override are in [Obstacle sensing](obstacle-sensing.md).
+Each Tello edge senses obstacles before every 50 cm step of a lane, using the MiDaS_small depth model. The installer downloads its weights once and checks their SHA-256; a flight never downloads them. On a laptop set up before that step existed, run `venv\Scripts\python.exe -m flightrisk.drone.midas_model install` (macOS: `venv/bin/python -m flightrisk.drone.midas_model install`) once from the FlightRisk folder while online, or run the installer again. If the sensor cannot be built, the edge refuses to take off and the drone card shows `obstacle sensor unavailable: <why>`. Settings and the `FLIGHTRISK_OBSTACLE_SENSING=off` override are in [Obstacle sensing](obstacle-sensing.md).
 
 Confirming a match on a fleet lands every drone in place with LAND ALL. The Tello has no return-to-home, so each drone lands wherever it is.
 
-## Cutting edge CPU load: run detection on every Nth frame (optional)
+## Cutting edge CPU load: torch threads, and detection on every Nth frame (sensing off only)
 
-Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel i7-10610U, 4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Most of that cost is detection, so the edge can skip it on some frames.
+Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel i7-10610U, 4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Each edge also runs MiDaS for the obstacle sensor, and an overloaded laptop lets the video decoder fall behind the drone's video.
 
-`--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame as before. The flag wins over the environment variable, which wins over the default. N must be a whole number from 1 to 30, written with plain digits (`1_0` and non-ASCII digits are refused); 0, negative, non-integer and larger values stop the edge at startup with an error.
+**Torch threads.** Each edge limits torch to 2 threads and one inter-op thread by default (`FLIGHTRISK_EDGE_TORCH_THREADS`, 0 to 64; 0 leaves torch's own default of one thread per core). With torch's default every edge process would use all 4 cores for YOLO and MiDaS at once, so two edges and the ground oversubscribe the ZBook. 2 per edge fits two edges and the ground on its 4 cores; one edge alone on the ZBook may use 4. The edge logs `edge_torch_threads` with the numbers in force.
 
-- It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored. When the stride came from the environment variable, the error says `FLIGHTRISK_EDGE_FRAME_STRIDE=<n> is set` and tells you to unset it.
-- The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So detection runs at about 1/N of the stride-1 rate even on a machine where detection is slower than the video. A plain count of every Nth frame would not do that, because after a slow detection the newest frame is already many frames ahead.
+**The frame stride.** `--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame. The flag wins over the environment variable, which wins over the default. N must be a whole number from 1 to 30, written with plain digits (`1_0` and non-ASCII digits are refused); 0, negative, non-integer and larger values stop the edge at startup with an error.
+
+- **A stride above 1 is refused while obstacle sensing is required** (`FLIGHTRISK_OBSTACLE_SENSING=required`, the default), on a Tello edge and a fake edge alike. The obstacle sensor's person cue needs a detection of a view taken after each stop, and a stride starves it: the review of PR #170 measured one 5 s frame at stride 10 leaving about 50 s with no detection. The edge stops at startup with a message that names the stride and the remedy. Use stride 1 whenever obstacle sensing is required. Only `FLIGHTRISK_OBSTACLE_SENSING=off`, which flies with no obstacle sensing at all (`docs/obstacle-sensing.md`), allows a stride, and then a stride of at most 2 is the recommendation for the ZBook-only layout.
+- It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored. When the stride came from the environment variable, the error says `FLIGHTRISK_EDGE_FRAME_STRIDE=<n> is set`.
+- The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So the detection interval is N times the processing time, not N frames: on the ZBook, with 330 ms per detection, stride 2 gives a detection about every 0.66 s, and stride 30 would give one about every 10 s without the cap below, not one a second (one a second is what stride 30 gives a detector faster than the video).
+- **The skip is capped.** Frames are dropped for at most `FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S` seconds (default 1.0, 0 to 5) after the edge comes back from a frame, however slow that frame was. Without the cap the blind time after a frame is (N - 1) times its processing time, so a 5 s frame at stride 10 left 45 s with no detection; with it, at most 1 s. On the ZBook the cap does not bind for stride 2 or 3 (0.33 s and 0.66 s of skip).
 - Dropped frames are still polled at the full rate. That keeps the newest frame available and keeps the frozen-stream recovery working, which counts identical polls. The video is decoded on its own thread, so polling does not hold the decoder up, and the polling costs almost no CPU.
 - With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
-- Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). The detector's busy time fell the same way, from 100 percent to 50, 34.5, 20 and 10 percent. A person is therefore seen N times less often. A stride of 2 was flown on 28 October.
-- The stride does not affect the obstacle sensor's camera frames. The sensor keeps its own copy of the newest frame. On a Tello it is fed by the drone's frame callback and also by a small thread that reads the newest frame of the video decoder 30 times a second, independent of detection (`edge_obstacle_frame_poller` is logged when it starts), so neither the stride nor a slow detection keeps a new frame from the depth check. Each frame the decoder produces is taken once. When the video stalls, the decoder keeps returning its last frame, and neither the callback nor the thread hands that frame over again, so the sensor keeps the time that frame first arrived. A gate after a move or a turn then finds no fresh frame: it waits, retries and, if the video does not come back, cuts the lane with `sensor_stale`, instead of judging a view from before the move. A frame whose pixels are all the same, such as the black frame a restarted decoder starts on, is refused in the same way and never judged. The person cue is different: it uses the detections, so it needs a detection result computed from a frame that was obtained after the drone's last stop. The sensor waits up to 1 second for one. With a high stride, or a slow detector, that result may not arrive in time. The person cue then reports `unknown` for that step, which neither blocks nor clears the step, and the depth cue alone decides it. Five unknown results in a row log `edge_obstacle_person_cue_down` once. A stride of 1 to 3 is fine for this; see `docs/obstacle-sensing.md`.
-- The launcher window has no field for it. The launcher passes its environment through to the edges, so set `FLIGHTRISK_EDGE_FRAME_STRIDE` before starting it, or use the flag when starting an edge by hand.
+- Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, before the skip cap: detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). With the 1 s cap, stride 5 and above give about 0.75 a second at 330 ms. A person is therefore seen about N times less often.
+- **Nothing with this stride code has flown.** The stride 2 flown on 28 October was an earlier version that counted frames (commit `acf72d2`), which was never merged; the merged, time-based stride has not flown.
+- The stride does not affect the obstacle sensor's camera frames. The sensor keeps the newest frame, fed by the drone's frame callback and by a small thread that reads the newest frame of the video decoder 30 times a second (`edge_obstacle_frame_poller` is logged when it starts). Each frame the decoder produces is taken once, judged by its capture time, and refused when the decoder marks it stale (see "How old a frame is" in `docs/obstacle-sensing.md`).
+- The launcher window has no field for it. The launcher passes its environment through to the edges, so set the variables before starting it, or use the flag when starting an edge by hand.
 
 ```
-FLIGHTRISK_EDGE_FRAME_STRIDE=2 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
-python -m flightrisk.edge_device --source tello --drone-id drone-1 --frame-stride 2 ...
+FLIGHTRISK_OBSTACLE_SENSING=off FLIGHTRISK_EDGE_FRAME_STRIDE=2 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
+FLIGHTRISK_OBSTACLE_SENSING=off python -m flightrisk.edge_device --source tello --drone-id drone-1 --frame-stride 2 ...
 ```
 
-On Windows PowerShell, set the variable for the current window, then start the launcher or the edge from the same window:
+On Windows PowerShell, set the variables for the current window, then start the launcher or the edge from the same window:
 
 ```
+$env:FLIGHTRISK_EDGE_TORCH_THREADS = "2"
+$env:FLIGHTRISK_OBSTACLE_SENSING = "off"   # only for a stride above 1; flies with NO obstacle sensing
 $env:FLIGHTRISK_EDGE_FRAME_STRIDE = "2"
 python -m flightrisk.edge_device --source tello --drone-id drone-1 ...
 ```

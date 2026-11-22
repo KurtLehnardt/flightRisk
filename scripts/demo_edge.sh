@@ -15,6 +15,9 @@
 # export FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
 # ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
 # dials ws://10.42.0.1:9000, which is what the Windows laptop must do.
+# With obstacle sensing required (the default) the edge needs capture stamps on its video, so set
+# export FLIGHTRISK_TELLO_LOCAL_IP=<this computer's IP on the Tello's Wi-Fi> (docs/two-tellos-one-pc.md);
+# without it the edge refuses to start and says so.
 # DEMO_DRY_RUN=1 prints the command instead of running it.
 set -euo pipefail
 

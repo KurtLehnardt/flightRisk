@@ -54,6 +54,8 @@ EMITTED = {
     # The search plan editor (docs/map-and-plan-editing.md).
     "fleet_plan_edited", "get_map_config", "list_plans", "load_plan", "map_cache_status", "preview_plan",
     "save_plan",
+    # The operator's confirmation that a person cut may be re-flown (docs/obstacle-sensing.md).
+    "confirm_reflight",
 }
 LISTENED = {
     "battery_critical", "battery_warning", "confidence_progress", "connect", "description_set",
@@ -65,6 +67,10 @@ LISTENED = {
     "stream_video_state", "target_photo", "target_set", "threshold_updated",
     # The search plan editor.
     "map_cache_status", "map_config", "plan_list", "plan_loaded", "plan_preview", "plan_saved",
+    # The answer to confirm_reflight.
+    "reflight_confirm_result",
+    # The reasoning verdict landing on an open alert (keyed by alert_id).
+    "reasoning_result", "alert_upgrade",
 }
 FETCHED = {
     "/api/clear-target", "/api/feedback-stats", "/api/matches", "/api/sessions", "/api/target-history",

@@ -13,6 +13,9 @@
 # The Tello address and ground URL come from scripts\fleet_env.ps1. In ap mode, set
 # $env:FLIGHTRISK_GROUND_LOCAL = "1" only on a machine that runs the ground station itself, so
 # its edge connects to ws://127.0.0.1:9000; otherwise the edge dials ws://10.42.0.1:9000.
+# With obstacle sensing required (the default) the edge needs capture stamps on its video, so set
+# $env:FLIGHTRISK_TELLO_LOCAL_IP = "<this computer's IP on the Tello's Wi-Fi>" (docs/two-tellos-one-pc.md);
+# without it the edge refuses to start and says so.
 # Set DEMO_DRY_RUN=1 to print the command instead of running it.
 
 $ErrorActionPreference = "Stop"

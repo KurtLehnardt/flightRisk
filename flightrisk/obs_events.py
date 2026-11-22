@@ -331,6 +331,14 @@ def edge_telemetry(drone_id: str, msg: Mapping[str, Any], *, side: str = "ground
     keep = ("battery", "height_cm", "is_flying", "rel_x_cm", "rel_y_cm", "heading_deg", "lane_index",
             "lanes_total", "link_age_s", "epoch", "plan_id", "state", "plan_valid")
     readings = {k: msg.get(k) for k in keep if k in msg and (msg.get(k) is None or isinstance(msg.get(k), (int, float, bool, str)))}
+    cue = msg.get("obstacle_person_cue")
+    if isinstance(cue, Mapping):
+        # The obstacle sensor's person cue: down, or how old its newest detection is.
+        down, age = cue.get("person_cue_down"), cue.get("detection_age_s")
+        readings["obstacle_person_cue_down"] = down if isinstance(down, bool) else None
+        readings["obstacle_detection_age_s"] = (
+            age if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+        )
     fields: dict[str, Any] = {
         "drone_id": drone_id,
         "backend": "edge",

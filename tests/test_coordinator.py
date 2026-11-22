@@ -462,7 +462,9 @@ def test_retask_on_loss_redistributes_lanes():
     assert len(original_two) == 5
 
     edges["drone-1"].telemetry(lane_index=1, is_flying=True)
-    edges["drone-2"].telemetry(lane_index=2, is_flying=True)
+    # drone-2 landed on lane 2 (a drone still in the air would hold its lanes
+    # back for LOST_OBSTACLE_S; tests/test_flight_control_robustness.py).
+    edges["drone-2"].telemetry(lane_index=2, is_flying=False)
     appended = coord.on_drone_lost("drone-2")
     assert set(appended) == {"drone-1"}
 

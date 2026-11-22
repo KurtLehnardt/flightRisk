@@ -3,7 +3,8 @@
 # Creates the Python 3.13 virtual environment, installs the Python
 # edge dependencies from requirements-edge.txt (not the full requirements.txt,
 # so InsightFace, Ollama, open_clip and MediaPipe are never installed) and
-# downloads the yolo11n detection weights. It also skips Ollama and InsightFace model setup, because the edge role does not use
+# downloads the yolo11n detection weights and the MiDaS depth weights of the obstacle
+# sensor (checked against the SHA-256 pinned in flightrisk\drone\midas_model.py). It also skips Ollama and InsightFace model setup, because the edge role does not use
 # the on-device language model or face matching.
 #
 # Usage (regular PowerShell, from the repository root):
@@ -11,7 +12,7 @@
 #
 # Requirements:
 #   - Python 3.13 installed so that "py -3.13" works (choco install python313 -y)
-#   - Internet connection for pip and the weights download
+#   - Internet connection for pip and the weights downloads (flights need none)
 
 $ErrorActionPreference = "Stop"
 
@@ -31,7 +32,7 @@ function Invoke-Checked([string]$Description, [scriptblock]$Command) {
 }
 
 # Step 1: Python 3.13 check
-Write-Step "Step 1/4: Checking for Python 3.13"
+Write-Step "Step 1/5: Checking for Python 3.13"
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
     throw "The py launcher was not found. Install Python 3.13 first: choco install python313 -y (administrator PowerShell)."
 }
@@ -41,7 +42,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Step 2: virtual environment
-Write-Step "Step 2/4: Creating the virtual environment"
+Write-Step "Step 2/5: Creating the virtual environment"
 $VenvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
     Invoke-Checked "Creating the virtual environment" { py -3.13 -m venv venv }
@@ -51,17 +52,23 @@ if (-not (Test-Path $VenvPython)) {
 
 # Step 3: dependencies. The venv python is called directly, which avoids the
 # Activate.ps1 execution policy block.
-Write-Step "Step 3/4: Installing Python dependencies"
+Write-Step "Step 3/5: Installing Python dependencies"
 Invoke-Checked "Upgrading pip" { venv\Scripts\python.exe -m pip install --upgrade pip }
 Invoke-Checked "Installing edge requirements" { venv\Scripts\python.exe -m pip install -r requirements-edge.txt -r requirements-dev.txt }
 
 # Step 4: yolo11n weights
-Write-Step "Step 4/4: Downloading yolo11n.pt"
+Write-Step "Step 4/5: Downloading yolo11n.pt"
 if (-not (Test-Path "yolo11n.pt")) {
     Invoke-Checked "Downloading yolo11n.pt" { venv\Scripts\python.exe -c "from ultralytics import YOLO; YOLO('yolo11n.pt')" }
 } else {
     Write-Host "yolo11n.pt already present."
 }
+
+# Step 5: MiDaS depth weights for the obstacle sensor. midas_model.py downloads the pinned
+# URL and deletes a file that does not match the pinned SHA-256; flights never download
+# them, and without them the edge refuses to take off.
+Write-Step "Step 5/5: Downloading and checking the MiDaS depth weights"
+Invoke-Checked "Installing the MiDaS depth weights" { venv\Scripts\python.exe -E -s -m flightrisk.drone.midas_model install }
 
 Write-Host ""
 Write-Host "Ollama and InsightFace setup skipped: the edge role does not need them." -ForegroundColor Yellow

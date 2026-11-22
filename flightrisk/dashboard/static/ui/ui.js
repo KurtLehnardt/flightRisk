@@ -170,6 +170,23 @@ const socket = io();
         return { text: label + ' ok' + ms, cls: cls, title: mode === 'forward_only'
             ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.' };
     }
+    // A person detection older than this many seconds leaves the obstacle sensor's person cue stale.
+    const PERSON_CUE_STALE_S = 2;
+    // The person cue badge of a drone card: down, or the age of the newest detection while it is stale; else null.
+    function personCueBadge(d) {
+        const cue = d && d.obstacle_person_cue;
+        if (!cue || typeof cue !== 'object') return null;
+        if (cue.person_cue_down === true) {
+            return { text: 'PERSON CUE down', cls: 'held',
+                title: 'The obstacle sensor has had no usable person detection for several looks: it stops for obstacles by depth alone.' };
+        }
+        const age = cue.detection_age_s;
+        if (typeof age === 'number' && age > PERSON_CUE_STALE_S) {
+            return { text: 'PERSON CUE ' + fmt(age) + ' s old', cls: 'held',
+                title: 'The newest person detection the obstacle sensor can use is ' + fmt(age) + ' s old: a person who steps in front now is seen by depth alone.' };
+        }
+        return null;
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -177,7 +194,9 @@ const socket = io();
         const lane = ev.lane_index !== undefined && ev.lane_index !== null ? 'lane ' + ev.lane_index : 'a lane';
         const at = ' stopped at (' + fmt(ev.x_cm) + ', ' + fmt(ev.y_cm) + ') cm';
         const left = typeof ev.unflown_cm === 'number' ? ', ' + fmt(ev.unflown_cm) + ' cm not searched' : '';
-        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left;
+        // A person cut is re-flown only once the operator confirms it (the Re-fly button under NOT SEARCHED).
+        const person = ev.reason === 'person' ? '; a person: re-flown only if you confirm it under NOT SEARCHED' : '';
+        return 'OBSTACLE ' + (ev.drone_id || 'a drone') + ': ' + lane + at + left + person;
     }
     // One plain sentence for the re-flight status of an uncovered segment, or '' for a segment with none.
     function reflightSentence(e) {
@@ -192,6 +211,7 @@ const socket = io();
             case 'blocked_again': return 'blocked again by ' + rx + ', not offered again';
             case 'failed': return 'not re-flown: ' + (e.reason || 'no drone can take it');
             case 'too_short': return 'too short to re-fly';
+            case 'needs_confirmation': return 'a person stopped the drone here; not re-flown unless you confirm it';
             default: return '';
         }
     }
@@ -255,7 +275,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), obstacleStopBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;
@@ -773,6 +793,65 @@ const socket = io();
     // ========== MATCH ALERTS ==========
     let matchCount = 0;
     let currentOverlayAlertId = null;
+    // Latest payload and history-row elements per alert_id, so a late reasoning verdict
+    // (reasoning_result / alert_upgrade) can update the open modal and its history row.
+    const alertViews = {};
+    function rememberAlertView(alertId, view) {
+        alertViews[alertId] = view;
+        const ids = Object.keys(alertViews);
+        if (ids.length > 100) delete alertViews[ids[0]];
+    }
+    function scoresText(data) {
+        return 'Score ' + data.score + ' | AI ' + (data.gemma_confidence || '--')
+            + (data.face_score ? ' | Face ' + data.face_score : '') + (data.reid_score ? ' | ReID ' + data.reid_score : '');
+    }
+    function renderOverlayVerdict(data) {
+        $('overlay-score').textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
+        $('overlay-reasoning').textContent = data.reasoning || '';
+    }
+    const LEVEL_RANK = { no_match: 0, weak_signal: 1, possible_match: 2, confirmed_match: 3 };
+    function applyAlertUpdate(alertId, fields) {
+        const view = alertViews[alertId];
+        if (view) {
+            Object.assign(view.data, fields);
+            // A restored overlay has data only; its history row elements are absent.
+            if (view.scores) view.scores.textContent = scoresText(view.data);
+            if (view.reasoning) {
+                view.reasoning.textContent = view.data.reasoning || '';
+                view.reasoning.hidden = !view.data.reasoning;
+            }
+            if (fields.alert_level && view.entry && view.level) {
+                const cls = fields.alert_level === 'confirmed_match' ? 'confirmed' : 'possible';
+                view.entry.className = 'match-entry ' + cls;
+                view.level.textContent = cls === 'confirmed' ? 'Strong match' : 'Possible';
+            }
+        }
+        if (currentOverlayAlertId === alertId) {
+            const data = view ? view.data : Object.assign({}, fields);
+            renderOverlayVerdict(data);
+            if (fields.alert_level === 'confirmed_match') {
+                $('overlay-title').textContent = 'Possible match: verify in person';
+                $('overlay-subtitle').textContent = 'Strong match detected. Verify visually.';
+                $('match-overlay-card').className = 'match-overlay-card confirmed';
+            }
+        }
+    }
+    socket.on('reasoning_result', (d) => {
+        if (!d || !d.alert_id || d.type !== 'analyze' || !d.result) return;
+        applyAlertUpdate(d.alert_id, {
+            gemma_match: d.result.match,
+            gemma_confidence: d.result.confidence,
+            reasoning: d.result.reasoning || '',
+        });
+    });
+    socket.on('alert_upgrade', (d) => {
+        if (!d || !d.alert_id) return;
+        // Only raises apply: a verdict never demotes the level the operator already sees.
+        const view = alertViews[d.alert_id];
+        const cur = view ? view.data.alert_level : null;
+        if ((LEVEL_RANK[d.new_level] || 0) <= (LEVEL_RANK[cur] || 0)) return;
+        applyAlertUpdate(d.alert_id, { alert_level: d.new_level, reasoning: d.reasoning || '' });
+    });
 
     socket.on('match_alert', (data) => {
         matchCount++;
@@ -794,7 +873,8 @@ const socket = io();
         const cls = level === 'confirmed_match' ? 'confirmed' : level === 'possible_match' ? 'possible' : 'weak';
         const entry = el('div', 'match-entry ' + cls);
         const head = el('div', 'match-head');
-        head.appendChild(el('span', 'level', cls === 'confirmed' ? 'Strong match' : cls === 'possible' ? 'Possible' : 'Weak'));
+        const levelEl = el('span', 'level', cls === 'confirmed' ? 'Strong match' : cls === 'possible' ? 'Possible' : 'Weak');
+        head.appendChild(levelEl);
         head.appendChild(el('span', 'time', data.time));
         const matchId = Number.isInteger(data.match_id) ? data.match_id : null;
         if (matchId) {
@@ -809,9 +889,14 @@ const socket = io();
             head.appendChild(fb);
         }
         entry.appendChild(head);
-        entry.appendChild(el('div', 'scores', 'Score ' + data.score + ' | AI ' + (data.gemma_confidence || '--')
-            + (data.face_score ? ' | Face ' + data.face_score : '') + (data.reid_score ? ' | ReID ' + data.reid_score : '')));
-        if (data.reasoning) entry.appendChild(el('div', 'reasoning', data.reasoning));
+        const scoresEl = el('div', 'scores', scoresText(data));
+        entry.appendChild(scoresEl);
+        const reasoningEl = el('div', 'reasoning', data.reasoning || '');
+        reasoningEl.hidden = !data.reasoning;
+        entry.appendChild(reasoningEl);
+        if (data.alert_id) {
+            rememberAlertView(data.alert_id, { data: Object.assign({}, data), entry: entry, level: levelEl, scores: scoresEl, reasoning: reasoningEl });
+        }
         if (data.snapshot) {
             const img = el('img');
             img.alt = 'Match snapshot';
@@ -834,8 +919,9 @@ const socket = io();
         }
         const snap = $('overlay-snapshot');
         if (data.snapshot) { snap.src = 'data:image/jpeg;base64,' + data.snapshot; snap.hidden = false; } else { snap.hidden = true; }
-        $('overlay-score').textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
-        $('overlay-reasoning').textContent = data.reasoning || '';
+        // A reminder or reconnect carries the latest verdict; a re-sent alert must not regress it.
+        const known = data.alert_id ? alertViews[data.alert_id] : null;
+        renderOverlayVerdict(known ? Object.assign({}, data, known.data) : data);
         // The pop-up stays up until the operator answers or hides it; re-showing the same alert keeps its status.
         if (currentOverlayAlertId !== (data.alert_id || null)) {
             currentOverlayAlertId = data.alert_id || null;
@@ -868,6 +954,8 @@ const socket = io();
 
     socket.on('match_alert_reminder', (data) => {
         if (!data || !data.alert_id) return;
+        // An overlay restored by a reminder/reconnect has no history row; keep its data so a late verdict can land.
+        if (!alertViews[data.alert_id]) rememberAlertView(data.alert_id, { data: Object.assign({}, data) });
         playAlertSound();
         showMatchOverlay(data, data.alert_level === 'confirmed_match' ? 'confirmed' : 'possible');
         showToast('Match still awaiting your answer');
@@ -1523,9 +1611,32 @@ const socket = io();
             } else {
                 why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
             }
-            box.appendChild(el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why));
+            const row = el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why);
+            if (e.seg && e.status === 'needs_confirmation') row.appendChild(reflightConfirmButton(e));
+            box.appendChild(row);
         });
     }
+    // A person cut is never re-flown on its own: another drone would fly toward the same person from the far side.
+    // The operator may confirm it once the person is known to have moved away.
+    function reflightConfirmButton(e) {
+        const button = el('button', 'btn reflight-confirm', 'Re-fly');
+        button.type = 'button';
+        button.title = 'Offer this segment to another drone once ' + e.lost_id + ' has finished its lanes';
+        button.addEventListener('click', () => {
+            const question = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
+                + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away. '
+                + 'Re-fly it?';
+            if (!window.confirm(question)) return;
+            button.disabled = true;
+            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq });
+        });
+        return button;
+    }
+    socket.on('reflight_confirm_result', (r) => {
+        if (!r) return;
+        showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
+        if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
+    });
     // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
     // the box and to the map; re-tasked lanes of a lost drone are kept as they are.
     let lastSegmentsJson = '';

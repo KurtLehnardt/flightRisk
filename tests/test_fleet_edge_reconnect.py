@@ -104,6 +104,8 @@ def _capture_transport(monkeypatch):
 ])
 def test_entry_points_use_the_source_specific_backoff(monkeypatch, argv, expected):
     edge_device, built = _capture_transport(monkeypatch)
+    # Sensing off: with it required, a Tello edge without --tello-local-ip refuses to start (no capture stamps).
+    monkeypatch.setenv("FLIGHTRISK_OBSTACLE_SENSING", "off")
     with pytest.raises(_Built):
         edge_device.main(argv + ["--ws-url", "ws://127.0.0.1:1"])
     assert built == [expected]

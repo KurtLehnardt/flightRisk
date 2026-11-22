@@ -26,11 +26,15 @@ from __future__ import annotations
 import errno
 import ipaddress
 import logging
+import math
+import os
+import re
 import socket
 import struct
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -40,7 +44,23 @@ from djitellopy import Tello
 from djitellopy.tello import TelloException
 
 from flightrisk.drone import udp_endpoints as _udp_endpoints
-from flightrisk.drone.udp_endpoints import UdpEndpoint, netstat_command, process_name, wildcard_holders
+from flightrisk.drone.obstacle_sensor import (
+    ENV_MAX_DECODE_LAG_S,
+    MAX_DECODE_LAG_RANGE_S,
+    MAX_DECODE_LAG_S,
+    STALE_CORRUPT_FRAME,
+    STALE_DATA_DROPPED,
+    STALE_DECODE_ERROR,
+    STALE_DECODER_BACKLOG,
+    STALE_UNTIL_KEY_FRAME,
+    FrameStamp,
+)
+from flightrisk.drone.udp_endpoints import (
+    UdpEndpoint,
+    netstat_command,
+    process_name,
+    wildcard_holders,
+)
 from flightrisk.obs_log import Throttle, log_event, notice
 
 _log = logging.getLogger(__name__)
@@ -53,6 +73,7 @@ __all__ = [
     "TelloBindingError",
     "check_binding",
     "check_no_wildcard_holder",
+    "max_decode_lag_s",
     "open_bound_socket",
     "parse_ifindex",
     "parse_local_ip",
@@ -74,9 +95,23 @@ _RECV_POLL_S = 0.2
 # The video socket asks for this much receive buffer, so a burst of H.264
 # datagrams (one frame is several) is not dropped while a frame decodes.
 _VIDEO_RCVBUF_BYTES = 1 << 20
-# How long stopping the video reader waits for its thread before closing the
-# socket anyway.
+# How long stopping the video reader waits for each of its threads before
+# closing the socket anyway.
 _VIDEO_STOP_JOIN_S = 1.0
+# A frame decoded more than ``MAX_DECODE_LAG_S`` (0.3 s by default,
+# ``FLIGHTRISK_MAX_DECODE_LAG_S``; ``max_decode_lag_s``) after the first datagram
+# of its access unit arrived is stale: the decoder is behind the video.
+# An ASCII decimal number, as the edge's other settings (``edge_device._obstacle_number``).
+_ASCII_DECIMAL_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+#: When the oldest datagram waiting for the decoder is older than this, the
+#: waiting datagrams are dropped and decoding resumes at the present.
+MAX_QUEUE_AGE_S = 2.0
+# Decoded frames whose stamps are kept for ``BoundFrameRead.frame_info`` (about
+# a second of video), and packets whose arrival is kept until they decode.
+_STAMPS_KEPT = 32
+_PACKETS_TRACKED = 64
+# ``pict_type`` of an intra-coded picture (PyAV's ``PictureType.I``).
+_PICT_TYPE_I = 1
 # Repeated receive problems are logged at most once per this many seconds
 # per drone and kind.
 _LOG_INTERVAL_S = 10.0
@@ -94,6 +129,30 @@ SocketFactory = Callable[[], socket.socket]
 
 class TelloBindingError(RuntimeError):
     """The Tello sockets cannot be bound as asked. The message tells the operator what to fix."""
+
+
+def max_decode_lag_s(environ: Any = None) -> float:
+    """The bound decoder's stale limit in seconds: ``FLIGHTRISK_MAX_DECODE_LAG_S``, else ``MAX_DECODE_LAG_S``.
+
+    A plain ASCII decimal number from 0.1 to 2.0, the same rules as the edge's
+    obstacle settings. Raises ``ValueError`` with an operator-facing message
+    otherwise. The edge checks it at startup (``ObstacleSettings``), so a bad
+    value refuses to start the edge before any drone is connected.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_MAX_DECODE_LAG_S) or "").strip()
+    if not raw:
+        return MAX_DECODE_LAG_S
+    lo, hi = MAX_DECODE_LAG_RANGE_S
+    value: float | None = None
+    if _ASCII_DECIMAL_RE.fullmatch(raw):
+        try:
+            value = float(raw)
+        except (ValueError, OverflowError):
+            value = None
+    if value is None or not math.isfinite(value) or not lo <= value <= hi:
+        raise ValueError(f"{ENV_MAX_DECODE_LAG_S}={raw!r} must be a number of seconds from {lo:g} to {hi:g}")
+    return value
 
 
 def _udp_socket() -> socket.socket:
@@ -416,10 +475,42 @@ class BoundFrameRead:
     Has the parts of djitellopy's ``BackgroundFrameRead`` that
     ``TelloController`` uses: ``frame`` (an RGB array, like djitellopy's
     ``np.array(frame.to_image())``; a black 300 x 400 frame until the
-    first one decodes), ``start()`` and ``stop()``. Datagrams are fed to
-    PyAV's H.264 parser and decoder. Datagrams from any address other than
-    the drone's are dropped. ``stop()`` closes the socket, so the stream can
-    be restarted on the same port.
+    first one decodes), ``start()`` and ``stop()``. Datagrams from any
+    address other than the drone's are dropped. ``stop()`` closes the
+    socket, so the stream can be restarted on the same port.
+
+    Receiving and decoding run on two threads, so the obstacle sensor can
+    tell how old a frame is and whether it can be trusted (``frame_info``):
+
+    * The receiver thread only reads datagrams. It stamps each with its
+      arrival on ``clock`` (``time.monotonic``) and queues it, so it keeps
+      the socket's receive buffer drained whatever the decoder does.
+    * The decoder thread feeds the queued datagrams to PyAV's H.264 parser
+      and decoder. A frame's capture stamp is the arrival of the first
+      datagram of its access unit. That is after the camera captured it,
+      so the stamp makes a frame look newer than it is by the camera's own
+      latency (encoding and Wi-Fi), and by nothing the decoder does. That
+      latency is what the obstacle settle time must cover
+      (``FLIGHTRISK_OBSTACLE_SETTLE_S``, hardware item H5).
+    * A frame is stale (``FrameStamp.stale_cause``) when it was decoded more
+      than ``max_lag_s`` after its first datagram arrived (the decoder is
+      behind; ``decoder backlog``), when the decoder flags it corrupt, and
+      from a decode error or dropped video data until the next intra frame,
+      because every frame until then is built on a damaged one; such a frame
+      keeps the cause that tainted the stream (``decode error``, ``video data
+      dropped`` or ``corrupt frame``), and before the first intra frame of a
+      stream it is ``damaged reference, waiting for a key frame``. Video data is
+      dropped only here: when the oldest queued datagram is older than
+      ``max_queue_age_s``, the queue is discarded so decoding resumes at the
+      present instead of working through seconds of old video. The decoder
+      starts in that state too, so nothing is trusted before the first intra
+      frame. A stale frame still becomes ``frame``, for the video tile and
+      detection; only the sensor refuses it.
+
+    A lost datagram that the decoder conceals without an error and without
+    flagging the frame cannot be seen here: the Tello's video has no
+    sequence numbers. ``stale_frames``, ``decode_errors`` and
+    ``datagrams_dropped`` count what is seen.
     """
 
     def __init__(
@@ -430,6 +521,9 @@ class BoundFrameRead:
         *,
         name: str = "drone",
         socket_factory: SocketFactory = _udp_socket,
+        clock: Callable[[], float] = time.monotonic,
+        max_lag_s: float = MAX_DECODE_LAG_S,
+        max_queue_age_s: float = MAX_QUEUE_AGE_S,
     ):
         import av  # djitellopy imports it too; kept local so this module imports without it
 
@@ -438,10 +532,27 @@ class BoundFrameRead:
         self.name = name
         self.lock = threading.Lock()
         self._frame = np.zeros([300, 400, 3], dtype=np.uint8)
+        self._stamps: deque[tuple[np.ndarray, FrameStamp]] = deque(maxlen=_STAMPS_KEPT)
         self.stopped = False
         self.frames_decoded = 0
+        self.stale_frames = 0
         self.decode_errors = 0
         self.foreign_datagrams = 0
+        self.datagrams_dropped = 0
+        self._clock = clock
+        self.max_lag_s = float(max_lag_s)
+        self.max_queue_age_s = float(max_queue_age_s)
+        # Datagrams waiting for the decoder, as (arrival, data), and whether
+        # some were dropped since the decoder last looked.
+        self._queue: deque[tuple[float, bytes]] = deque()
+        self._queue_cond = threading.Condition()
+        self._gap = False
+        # Decoder state (decoder thread only): until an intra frame decodes
+        # cleanly, every frame is stale for this cause.
+        self._taint: str | None = STALE_UNTIL_KEY_FRAME
+        self._au_started_at: float | None = None
+        self._packet_index = 0
+        self._packet_started: dict[int, float] = {}
         self._sock = open_bound_socket(local_ip, port, purpose="video", socket_factory=socket_factory)
         try:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _VIDEO_RCVBUF_BYTES)
@@ -449,6 +560,7 @@ class BoundFrameRead:
             pass  # the default buffer still works, it just drops more under load
         self._sock.settimeout(_RECV_POLL_S)
         self._codec = av.CodecContext.create("h264", "r")
+        self.receiver = threading.Thread(target=self.receive_datagrams, daemon=True, name=f"{name}-video-rx")
         self.worker = threading.Thread(target=self.update_frame, daemon=True, name=f"{name}-video")
 
     @property
@@ -461,11 +573,28 @@ class BoundFrameRead:
         with self.lock:
             self._frame = value
 
+    def frame_info(self, frame: Any) -> FrameStamp | None:
+        """The ``FrameStamp`` of ``frame``, one of the last frames this reader decoded, else None.
+
+        ``frame`` is matched by identity, so only the array this reader
+        handed out counts (``frame``, or a callback's argument). A frame that
+        is not among the last ``_STAMPS_KEPT`` decoded ones, such as the black
+        frame before the first decode, returns None.
+        """
+        with self.lock:
+            for array, stamp in reversed(self._stamps):
+                if array is frame:
+                    return stamp
+        return None
+
     def start(self) -> None:
+        self.receiver.start()
         self.worker.start()
 
-    def update_frame(self) -> None:
-        """Receive datagrams and decode frames until ``stop()``."""
+    # --- Receiving ---
+
+    def receive_datagrams(self) -> None:
+        """Receive the drone's datagrams, stamp and queue them until ``stop()``. Closes the socket at the end."""
         sock = self._sock
         try:
             while not self.stopped:
@@ -483,32 +612,134 @@ class BoundFrameRead:
                     self.foreign_datagrams += 1
                     _note_foreign(self.name, "video", source, self.host, self.foreign_datagrams)
                     continue
-                self._decode(data)
+                self.queue_datagram(data, self._clock())
         finally:
             try:
                 sock.close()
             except OSError:
                 pass
+            with self._queue_cond:
+                self._queue_cond.notify_all()
 
-    def _decode(self, data: bytes) -> None:
+    def queue_datagram(self, data: bytes, arrived_at: float) -> None:
+        """Queue one datagram for the decoder, first dropping the queue if its oldest datagram is too old."""
+        with self._queue_cond:
+            if self._queue and arrived_at - self._queue[0][0] > self.max_queue_age_s:
+                self.datagrams_dropped += len(self._queue)
+                self._queue.clear()
+                self._gap = True
+                _note_receive_error(
+                    self.name, "video_backlog",
+                    RuntimeError(f"the decoder fell more than {self.max_queue_age_s:g} s behind; old video dropped"),
+                )
+            self._queue.append((arrived_at, data))
+            self._queue_cond.notify()
+
+    @property
+    def queue_depth(self) -> int:
+        """Datagrams received and not yet decoded."""
+        with self._queue_cond:
+            return len(self._queue)
+
+    def _next_datagram(self) -> tuple[float, bytes, bool] | None:
+        with self._queue_cond:
+            if not self._queue and not self.stopped:
+                self._queue_cond.wait(_RECV_POLL_S)
+            if not self._queue:
+                return None
+            arrived_at, data = self._queue.popleft()
+            gap, self._gap = self._gap, False
+            return arrived_at, data, gap
+
+    # --- Decoding ---
+
+    def update_frame(self) -> None:
+        """Decode queued datagrams into frames until ``stop()``."""
+        while not self.stopped:
+            item = self._next_datagram()
+            if item is None:
+                continue
+            arrived_at, data, gap = item
+            if gap:
+                self._taint = STALE_DATA_DROPPED
+            self._decode(data, arrived_at)
+
+    def _decode(self, data: bytes, arrived_at: float | None = None) -> None:
+        """Feed one datagram that arrived at ``arrived_at`` to the parser and publish what decodes."""
+        if arrived_at is None:
+            arrived_at = self._clock()
+        if self._au_started_at is None:
+            self._au_started_at = arrived_at
         try:
             for packet in self._codec.parse(data):
+                # The packet's data began with the datagram that ended the previous packet's access unit.
+                started = self._au_started_at
+                self._au_started_at = arrived_at
+                packet.pts = self._packet_index
+                self._packet_started[self._packet_index] = started
+                self._packet_index += 1
+                while len(self._packet_started) > _PACKETS_TRACKED:
+                    del self._packet_started[next(iter(self._packet_started))]
                 for decoded in self._codec.decode(packet):
-                    self.frame = decoded.to_ndarray(format="rgb24")
-                    self.frames_decoded += 1
+                    self._publish(decoded)
         except Exception as exc:  # noqa: BLE001 - a lost datagram corrupts a frame; keep decoding
             self.decode_errors += 1
+            self._taint = STALE_DECODE_ERROR
             _note_receive_error(self.name, "video_decode", exc)
 
+    def _publish(self, decoded: Any) -> None:
+        """Make ``decoded`` the newest frame, with its capture stamp and whether it can be trusted."""
+        started = self._packet_started.get(decoded.pts) if decoded.pts is not None else None
+        if started is None:
+            # Not matched to its packet: the oldest packet still outstanding, which is never newer.
+            started = min(self._packet_started.values(), default=self._clock())
+        if decoded.pts is not None:
+            for index in [i for i in self._packet_started if i <= decoded.pts]:
+                del self._packet_started[index]
+        array = decoded.to_ndarray(format="rgb24")
+        cause: str | None = None
+        if getattr(decoded, "is_corrupt", False):
+            cause = STALE_CORRUPT_FRAME
+            self._taint = STALE_CORRUPT_FRAME
+        elif self._taint is not None:
+            if _is_intra(decoded):
+                self._taint = None
+            else:
+                # The cause that tainted the stream (a decode error, dropped video data, a corrupt
+                # frame, or no key frame yet) stays the cause until the next intra frame.
+                cause = self._taint
+        if cause is None and self._clock() - started > self.max_lag_s:
+            cause = STALE_DECODER_BACKLOG
+        stamp = FrameStamp(captured_at=started, stale_cause=cause)
+        with self.lock:
+            self._frame = array
+            self._stamps.append((array, stamp))
+        self.frames_decoded += 1
+        if cause is not None:
+            self.stale_frames += 1
+
     def stop(self) -> None:
-        """Stop decoding and close the socket (waits up to ``_VIDEO_STOP_JOIN_S`` for the thread)."""
+        """Stop receiving and decoding and close the socket (waits up to ``_VIDEO_STOP_JOIN_S`` per thread)."""
         self.stopped = True
-        if self.worker.is_alive() and self.worker is not threading.current_thread():
-            self.worker.join(_VIDEO_STOP_JOIN_S)
+        with self._queue_cond:
+            self._queue_cond.notify_all()
+        for thread in (self.receiver, self.worker):
+            if thread.is_alive() and thread is not threading.current_thread():
+                thread.join(_VIDEO_STOP_JOIN_S)
         try:
             self._sock.close()
         except OSError:
             pass
+
+
+def _is_intra(decoded: Any) -> bool:
+    """Whether ``decoded`` is a key frame or an intra-coded picture, which needs no earlier frame."""
+    if getattr(decoded, "key_frame", False):
+        return True
+    try:
+        return int(decoded.pict_type) == _PICT_TYPE_I
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 class BoundTello(Tello):
@@ -677,7 +908,7 @@ class BoundTello(Tello):
         if self.background_frame_read is None:
             reader = BoundFrameRead(
                 self.address[0], self.binding.local_ip, self.vs_udp_port,
-                name=self.name, socket_factory=self._socket_factory,
+                name=self.name, socket_factory=self._socket_factory, max_lag_s=max_decode_lag_s(),
             )
             reader.start()
             self.background_frame_read = reader
