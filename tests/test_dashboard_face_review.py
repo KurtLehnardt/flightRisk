@@ -17,7 +17,7 @@ from tests.test_dashboard_edge import _jpeg_bytes
 
 
 def _wire(monkeypatch, face_report=None):
-    monkeypatch.setattr(cv2, "imwrite", MagicMock())
+    monkeypatch.setattr("flightrisk.dashboard.app._write_reference_photo", MagicMock())
     reid = MagicMock()
     reid.extract_embedding.return_value = np.array([1.0, 2.0, 3.0])
     face = MagicMock()

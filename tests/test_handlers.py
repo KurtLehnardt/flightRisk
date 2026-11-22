@@ -101,7 +101,7 @@ class TestSessionMatchesRoute:
 
 class TestUploadTarget:
     def test_upload_valid_image(self, client, clean_app_state, monkeypatch):
-        monkeypatch.setattr(cv2, "imwrite", MagicMock())
+        monkeypatch.setattr("flightrisk.dashboard.app._write_reference_photo", MagicMock())
         reid = MagicMock()
         _state["reid"] = reid
         _state["face"] = None

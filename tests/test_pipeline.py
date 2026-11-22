@@ -496,3 +496,101 @@ class TestFrameLoopDroneTelemetry:
         finally:
             for k, v in originals.items():
                 setattr(app_state, k, v)
+
+
+class TestFrameLoopReasoningSkipped:
+    """A photo match with reasoning on resolves its "Awaiting" alert when no job can be queued."""
+
+    def _run(self, *, stamp_recent=False, imread_result="ok", full_queue=False):
+        frame = _make_mock_frame()
+        crop = np.zeros((50, 50, 3), dtype=np.uint8)
+        names = [
+            "running", "detector", "tracker", "reid", "face", "scorer", "target_photo",
+            "target_photo_path", "cap", "fleet", "logger", "metrics", "recorder", "tracer",
+            "otel_metrics", "reasoning", "db", "session_id", "search_active", "target_description",
+        ]
+        originals = {n: getattr(app_state, n) for n in names}
+        alerted_tracks.clear()
+        gemma_last_call.clear()
+        while not gemma_queue.empty():
+            gemma_queue.get_nowait()
+        detector = MagicMock()
+        detector.detect.return_value = [{"bbox": [10, 10, 50, 50], "confidence": 0.9, "crop": crop}]
+        detector.annotate.return_value = frame
+        reid = MagicMock()
+        reid.find_match.return_value = (0, 0.85)
+        reid.compare.return_value = 0.85
+        reid.match_threshold = 0.55
+        scorer = MagicMock()
+        scorer.score.return_value = {"combined_score": 0.85}
+        scorer.alert_level.return_value = "possible_match"
+        cap = MagicMock()
+        cap.isOpened.return_value = True
+        cap.read.return_value = (True, frame)
+        reasoning = MagicMock()
+        reasoning.label = "Claude"
+        for n, v in dict(
+            running=True, detector=detector, tracker=None, reid=reid, face=None, scorer=scorer,
+            target_photo="b64", target_photo_path="/fake/target.jpg", cap=cap, fleet=None,
+            logger=None, metrics=None, recorder=None, tracer=None, otel_metrics=None,
+            reasoning=reasoning, db=None, session_id=None, search_active=False,
+            target_description=None,
+        ).items():
+            setattr(app_state, n, v)
+        app_state.match_history = []
+        if full_queue:
+            for i in range(gemma_queue.maxsize):
+                gemma_queue.put_nowait(("describe", f"x{i}", None, "d"))
+        events = []
+        sio = MagicMock()
+
+        def emit(event, payload=None, *a, **k):
+            events.append((event, payload))
+            if event == "frame":
+                app_state.running = False
+
+        sio.emit = emit
+        ref = np.zeros((5, 5, 3), dtype=np.uint8) if imread_result == "ok" else None
+        try:
+            class _Recent(dict):
+                def get(self, k, d=0):
+                    return time.time()
+
+            stamps = _Recent() if stamp_recent else gemma_last_call
+            with patch("flightrisk.dashboard.pipeline._save_match_snapshot"), \
+                    patch("flightrisk.dashboard.pipeline.cv2.imread", return_value=ref), \
+                    patch("flightrisk.dashboard.pipeline.gemma_last_call", stamps):
+                _frame_loop(sio)
+            return events, dict(gemma_last_call)
+        finally:
+            for k, v in originals.items():
+                setattr(app_state, k, v)
+            while not gemma_queue.empty():
+                gemma_queue.get_nowait()
+            gemma_last_call.clear()
+            alerted_tracks.clear()
+
+    @staticmethod
+    def _resolved(events):
+        return [p for e, p in events if e == "reasoning_result"]
+
+    def test_unreadable_reference_resolves_unavailable(self):
+        events, stamps = self._run(imread_result=None)
+        res = self._resolved(events)
+        assert res and res[0]["result"]["confidence"] == "unavailable"
+        assert "reference photo unreadable" in res[0]["result"]["reasoning"]
+        assert stamps == {}
+
+    def test_queue_full_resolves_unavailable_and_does_not_stamp(self):
+        events, stamps = self._run(full_queue=True)
+        res = self._resolved(events)
+        assert res and res[0]["result"]["confidence"] == "unavailable"
+        assert "queue full" in res[0]["result"]["reasoning"]
+        assert stamps == {}  # a failed enqueue must not start the rate-limit window
+
+    def test_rate_limited_resolves_unavailable(self):
+        events, _ = self._run(stamp_recent=True)
+        res = self._resolved(events)
+        assert res and res[0]["result"]["confidence"] == "unavailable"
+        assert "rate-limited" in res[0]["result"]["reasoning"]
+        assert gemma_queue.empty()
