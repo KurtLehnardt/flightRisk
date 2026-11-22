@@ -13,6 +13,7 @@ import pytest
 from flask import Flask
 
 from flightrisk.dashboard import map_tiles as mt
+from tests.support.symlinks import symlink_or_skip
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"tile-bytes"
 JPG = b"\xff\xd8\xff\xe0" + b"jpeg-bytes"
@@ -617,7 +618,7 @@ def test_symlink_escaping_cache_dir_is_404(client, tmp_path):
     outside.write_bytes(b"OUTSIDE-SECRET")
     link = tmp_path / "cache" / "usgs-imagery" / "15" / "5" / "7.png"
     link.parent.mkdir(parents=True)
-    link.symlink_to(outside)
+    symlink_or_skip(link, outside)
     resp = client.get("/tiles/usgs-imagery/15/5/7")
     assert resp.status_code == 404
     assert b"OUTSIDE-SECRET" not in resp.data
@@ -630,7 +631,7 @@ def test_symlinked_directory_escaping_cache_dir_is_404(client, tmp_path):
     (outside / "5" / "7.png").write_bytes(b"OUTSIDE-SECRET")
     provider_dir = tmp_path / "cache" / "usgs-imagery"
     provider_dir.mkdir()
-    (provider_dir / "15").symlink_to(outside)
+    symlink_or_skip(provider_dir / "15", outside)
     assert client.get("/tiles/usgs-imagery/15/5/7").status_code == 404
 
 
@@ -639,7 +640,7 @@ def test_symlink_inside_cache_dir_is_allowed(client, tmp_path):
     real = put_tile(cache, x=1, y=1)
     link = cache / "usgs-imagery" / "15" / "5" / "7.png"
     link.parent.mkdir(parents=True)
-    link.symlink_to(real)
+    symlink_or_skip(link, real)
     assert client.get("/tiles/usgs-imagery/15/5/7").status_code == 200
 
 

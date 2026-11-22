@@ -44,7 +44,7 @@ import tempfile
 import types
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest import mock
 
@@ -1102,7 +1102,8 @@ def build_detection_profiles() -> dict:
 class _FixedStore:
     """A ceiling store at a fixed, fake path that holds *settings* (nothing is read from or written to disk)."""
 
-    path = Path("/home/operator/.flightrisk/ceiling.json")
+    # A POSIX path on every OS, so the fixtures read the same when they are regenerated on Windows.
+    path = PurePosixPath("/home/operator/.flightrisk/ceiling.json")
 
     def __init__(self, settings=None, error: str | None = None):
         from flightrisk.dashboard.ceiling import CeilingSettings

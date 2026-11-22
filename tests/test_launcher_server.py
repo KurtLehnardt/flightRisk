@@ -202,7 +202,8 @@ def test_start_logs_and_stop_through_the_api(launcher):
 
 
 def test_restart_through_the_api(launcher):
-    client, _, _ = launcher
+    client, app, _ = launcher
+    app.manager.windows = False  # this exercises the POSIX restart; Windows refuses to restart an edge
     client.post("/api/start", {"settings": REHEARSAL})
     assert _wait(lambda: [p["status"] for p in client.get("/api/state")[1]["processes"]] == ["running"] * 3)
     pid = client.get("/api/state")[1]["processes"][1]["pid"]
@@ -508,6 +509,7 @@ def test_stop_twice_and_restart_while_stopping(launcher):
 
 def test_state_reports_how_stop_treats_drones(launcher):
     client, app, _ = launcher
+    app.manager.windows = False  # the first half is the POSIX wording, whatever OS this runs on
     state = client.get("/api/state")[1]
     assert "will land" in state["stop_warning"] and "LAND ALL" in state["stop_warning"]
     app.manager.windows = True
