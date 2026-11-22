@@ -521,8 +521,10 @@ class TelloController:
     """
 
     #: The channel order of ``get_frame`` and ``on_frame`` frames: djitellopy's
-    #: decoder delivers RGB. Whoever hands a frame to an OpenCV-order consumer
-    #: (``ObstacleGuard``) converts it with ``obstacle_sensor.to_sensor_frame``.
+    #: decoder and ``BoundFrameRead`` deliver RGB. Whoever hands a frame to an
+    #: OpenCV-order consumer (YOLO, ReID, a JPEG, ``ObstacleGuard``) converts it:
+    #: the edge once per frame for all of them (``edge_device.EdgeFrames``), the
+    #: dashboard's search with ``obstacle_sensor.to_sensor_frame``.
     frame_channel_order = CHANNEL_ORDER_RGB
 
     def __init__(
@@ -572,8 +574,6 @@ class TelloController:
             supports_missions=False,
             features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
         )
-        self._frame: np.ndarray | None = None
-        self._frame_lock = threading.Lock()
         self._cmd_lock = threading.Lock()
         self._keepalive_thread: threading.Thread | None = None
         self._state_thread: threading.Thread | None = None
@@ -990,8 +990,8 @@ class TelloController:
                     return None
 
                 self._last_frame_time = time.time()
-                with self._frame_lock:
-                    self._frame = frame.copy()
+                # No copy: the decoder makes a new array for every frame and never writes to one it
+                # handed out, and every consumer that keeps a frame converts it (``EdgeFrames``).
                 for cb in self._frame_callbacks:
                     cb(frame)
                 return frame

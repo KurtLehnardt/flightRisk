@@ -80,6 +80,8 @@ from flightrisk.drone.obstacle_sensor import (
     CONFIRM_REFLIGHT_CUT_REASONS,
     CUT_SENSOR_DOWN,
     MAX_CUTS_LISTED,
+    PERSON_CUE_AGE_KEY,
+    PERSON_CUE_DOWN_KEY,
     REFLIGHT_CUT_REASONS,
     SEGMENT_SKIPPED,
     SEGMENT_TOO_SHORT,
@@ -92,6 +94,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_FIELDS,
     TELEMETRY_LATENCY_MS,
+    TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
     TELEMETRY_SEQ,
@@ -140,14 +143,16 @@ MAX_REFLIGHTS_PER_DRONE = 4
 Later cuts are only reported, so a drone with a flapping sensor cannot flood
 the other drones with re-flights."""
 
-LOST_OBSTACLE_S = 15.0
+LOST_OBSTACLE_S = 20.0
 """How long a lost drone's last reported position stays an obstacle for re-task paths, in seconds.
 
 A drone is declared lost when its edge stops answering, but the drone itself
 may still be in the air: a Tello that gets no commands hovers up to 15 s
-before it lands by itself. Until this long after the loss, or until its
-telemetry says it is not flying, a re-task or re-flight path that would come
-within the zone gap of that position waits instead of being offered."""
+before it starts to land by itself, and its auto-land descent takes another
+2 to 4 s. Until this long after the loss (the 15 s hover, the descent and a
+margin), or until its telemetry says it is not flying, a re-task or re-flight
+path that would come within the zone gap of that position waits instead of
+being offered."""
 
 MAX_OBSTACLE_SEQ = 2**31
 """Highest ``obstacle_seq`` the ground believes. An edge counts one per cut, so
@@ -174,6 +179,7 @@ _DIRECTION_VECTORS = {
 }
 
 # The telemetry fields ``status()`` copies for a drone that reports obstacle sensing.
+# ``TELEMETRY_PERSON_CUE`` is copied through ``_person_cue`` instead.
 _STATUS_OBSTACLE_KEYS = (TELEMETRY_SENSING, TELEMETRY_SENSOR_OK, TELEMETRY_STATE, TELEMETRY_LATENCY_MS)
 
 _PASSTHROUGH_DETECTION_KEYS = ("thumbnail", "lat", "lon")
@@ -560,6 +566,20 @@ def _drone_link_refusal(msg: dict, key: str = "drone_link_detail") -> str:
     return "drone unreachable"
 
 
+def _person_cue(value: Any) -> dict | None:
+    """An edge's ``obstacle_person_cue`` telemetry as ``status()`` shows it, or None when it sent none.
+
+    ``{"person_cue_down": bool, "detection_age_s": seconds or None}``: whether the
+    camera sensor's person cue has been ``unknown`` for several gates in a row,
+    and how old the view of its newest detection result is. Anything else in
+    the field is dropped, and a value that is not that shape is None.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get(PERSON_CUE_DOWN_KEY), bool):
+        return None
+    age = _number(value.get(PERSON_CUE_AGE_KEY))
+    return {PERSON_CUE_DOWN_KEY: value[PERSON_CUE_DOWN_KEY], PERSON_CUE_AGE_KEY: age if age is None or age >= 0 else None}
+
+
 def _obstacle_sensor_refusal(msg: dict) -> str:
     """Why a start is refused for a stepped drone whose telemetry says its obstacle sensor is down."""
     state = msg.get(TELEMETRY_STATE)
@@ -871,6 +891,8 @@ class FleetCoordinator:
                     # status of a fleet without it (and the mobile contract
                     # fixtures built from it) is unchanged.
                     entry.update({key: telemetry.get(key) for key in _STATUS_OBSTACLE_KEYS})
+                    # Whether the drone's gates still have the person cue, or rely on depth alone.
+                    entry[TELEMETRY_PERSON_CUE] = _person_cue(telemetry.get(TELEMETRY_PERSON_CUE))
                     # What current_plan() lists for the drone: a re-flown
                     # segment no longer counts, and what a re-flight left of
                     # one counts for the drone that cut it.
@@ -1270,6 +1292,7 @@ class FleetCoordinator:
             events: list[tuple[str, dict]] = []
             with self._lock:
                 state = self._drones[drone_id]
+                cue_before = _person_cue((state.telemetry or {}).get(TELEMETRY_PERSON_CUE))
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
                 if msg.get("is_flying") is True:
@@ -1290,10 +1313,25 @@ class FleetCoordinator:
                         events.extend(self._reflight_events_locked(chunk))
             self._emit_all(events)
             self._send_offers(messages)
+            self._log_person_cue(drone_id, cue_before, _person_cue(msg.get(TELEMETRY_PERSON_CUE)))
         elif msg_type == "detections":
             self.on_detection(drone_id, msg)
         else:
             logger.debug("Ignoring %r message from %s", msg_type, drone_id)
+
+    @staticmethod
+    def _log_person_cue(drone_id: str, before: dict | None, after: dict | None) -> None:
+        """Log once when a drone's obstacle person cue goes down, and once when it works again."""
+        was_down = bool(before and before[PERSON_CUE_DOWN_KEY])
+        is_down = bool(after and after[PERSON_CUE_DOWN_KEY])
+        if is_down and not was_down:
+            age = after[PERSON_CUE_AGE_KEY] if after else None
+            logger.warning(
+                "%s's obstacle person cue is down (newest detection %s): its gates rely on the depth cue alone",
+                drone_id, "none yet" if age is None else f"{age:.1f} s old",
+            )
+        elif was_down and after is not None and not is_down:
+            logger.info("%s's obstacle person cue works again", drone_id)
 
     def _on_pong(self, drone_id: str, msg: dict) -> None:
         t4 = self._clock()

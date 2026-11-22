@@ -529,13 +529,14 @@ def test_main_passes_the_environment_stride_to_the_flight_edge(monkeypatch):
 
 
 def test_main_defaults_the_stride_to_one(monkeypatch):
-    captured = _captured_args(monkeypatch, ["--source", "tello"])
+    # Sensing off: a required sensor refuses a Tello edge without --tello-local-ip (no capture stamps).
+    captured = _captured_args(monkeypatch, ["--source", "tello"], OFF)
     assert [a.frame_stride for a in captured] == [1]
     assert [a.stride_max_skip_s for a in captured] == [DEFAULT_STRIDE_MAX_SKIP_S]
 
 
 def test_main_passes_the_skip_cap_to_the_flight_edge(monkeypatch):
-    captured = _captured_args(monkeypatch, ["--source", "tello"], {SKIP_ENV: "0.4"})
+    captured = _captured_args(monkeypatch, ["--source", "tello"], {SKIP_ENV: "0.4", **OFF})
     assert [a.stride_max_skip_s for a in captured] == [0.4]
 
 

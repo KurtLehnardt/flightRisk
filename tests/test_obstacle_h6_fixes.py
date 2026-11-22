@@ -35,6 +35,7 @@ from flightrisk.drone.obstacle_camera import ForwardCameraSensor
 from flightrisk.drone.obstacle_sensor import (
     CHANNEL_ORDER_BGR,
     CHANNEL_ORDER_RGB,
+    ENV_OBSTACLE_SENSING,
     ENV_OBSTACLE_SETTLE_S,
     OBSTACLE_PERSON_CUE_DOWN_AFTER,
     OBSTACLE_SENSE_TIMEOUT_S,
@@ -315,7 +316,7 @@ def test_recorder_writes_exactly_the_frames_the_sensor_holds_with_their_capture_
     with open(out / "frames.csv", newline="") as f:
         rows = list(csv.DictReader(f))
     assert [float(r["captured_at_s"]) for r in rows] == [49.8, 49.9]
-    assert all(float(r["capture_to_arrival_ms"]) >= 0 for r in rows)
+    assert all(float(r["decode_lag_ms"]) >= 0 for r in rows)
     import cv2
 
     for row in rows:
@@ -651,7 +652,8 @@ def test_bound_decoder_drops_an_old_queue_and_distrusts_frames_until_the_next_in
     assert after, "nothing decoded after the drop"
     first_clean = next(i for i, s in enumerate(after) if not s.stale)
     assert first_clean >= 1
-    assert {s.stale_cause for s in after[:first_clean]} <= {STALE_UNTIL_KEY_FRAME, STALE_DECODER_BACKLOG}
+    # Each keeps the cause that tainted the stream (review N10 of #177 round 2), not "damaged reference".
+    assert {s.stale_cause for s in after[:first_clean]} <= {STALE_DATA_DROPPED, STALE_DECODER_BACKLOG}
 
 
 def _fake_decoded(pts, key=False, corrupt=False, intra=False):
@@ -674,7 +676,7 @@ def test_bound_decoder_trusts_nothing_before_the_first_intra_frame_and_after_a_c
     reader._publish(_fake_decoded(5, intra=True))  # a non-IDR intra picture also restores trust
     reader._publish(_fake_decoded(6))
     causes = [s.stale_cause for s in _decoded(reader)]
-    assert causes == [STALE_UNTIL_KEY_FRAME, None, None, STALE_CORRUPT_FRAME, STALE_UNTIL_KEY_FRAME, None, None]
+    assert causes == [STALE_UNTIL_KEY_FRAME, None, None, STALE_CORRUPT_FRAME, STALE_CORRUPT_FRAME, None, None]
 
 
 def test_bound_decoder_distrusts_frames_after_a_decode_error(bound_reader):
@@ -691,7 +693,7 @@ def test_bound_decoder_distrusts_frames_after_a_decode_error(bound_reader):
     assert reader.decode_errors == 1 and reader._taint == STALE_DECODE_ERROR
     reader._packet_started[0] = clock()
     reader._publish(_fake_decoded(0))
-    assert _decoded(reader)[-1].stale_cause == STALE_UNTIL_KEY_FRAME
+    assert _decoded(reader)[-1].stale_cause == STALE_DECODE_ERROR
 
 
 def test_bound_decoder_receiver_and_decoder_threads_start_and_stop(bound_reader):
@@ -798,6 +800,8 @@ def test_main_limits_torch_threads_before_any_model_loads(monkeypatch):
 
     order = []
     monkeypatch.setenv("FLIGHTRISK_EDGE_TORCH_THREADS", "3")
+    # Sensing off: a required sensor refuses a Tello edge without --tello-local-ip (no capture stamps).
+    monkeypatch.setenv(ENV_OBSTACLE_SENSING, "off")
     monkeypatch.setattr(edge_device, "_limit_torch_threads", lambda n, log: order.append(("limit", n)))
     monkeypatch.setattr(edge_device, "_run_flight_edge", lambda args, *a, **k: order.append(("fly", None)))
     monkeypatch.setattr(edge_device, "_init_edge_telemetry", lambda log: False)
