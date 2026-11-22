@@ -356,8 +356,11 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
     # same "analyze" job the frame loop queues. Built here, enqueued below once
     # the entry is in match_history so the worker's back-fill finds it.
     reasoning_job = None
+    reasoning_label = None
     try:
-        reasoning_job = prepare_edge_reasoning(track_key, crop_jpeg)
+        prepared = prepare_edge_reasoning(track_key, crop_jpeg, alert_id)
+        if prepared is not None:
+            reasoning_job, reasoning_label = prepared
     except Exception:
         if app_state.logger:
             app_state.logger.warning("edge_reasoning_prepare_failed", exc_info=True)
@@ -367,7 +370,7 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         "score": round(combined, 3),
         "gemma_match": None,
         "gemma_confidence": "pending" if reasoning_job else None,
-        "reasoning": f"Awaiting {app_state.reasoning.label} reasoning..." if reasoning_job else None,
+        "reasoning": f"Awaiting {reasoning_label} reasoning..." if reasoning_job else None,
         "snapshot": snapshot_b64,
         "type": "edge",
         "face_score": round(face_score, 3),
@@ -399,8 +402,13 @@ def _emit_edge_alert(socketio, det, result, score_result, track_key, alert_id):
         app_state.match_history = app_state.match_history[-50:]
 
     alert_latch.attach(alert_id, match_entry)
-    if reasoning_job is not None:
-        enqueue_reasoning(reasoning_job)  # put_nowait; drops when full, never blocks
+    if reasoning_job is not None and not enqueue_reasoning(reasoning_job):  # put_nowait; never blocks
+        # Queue full: no verdict will ever arrive, so do not leave the alert
+        # on "Awaiting ...". Clear the pending fields and re-attach the copy.
+        with _match_history_lock:
+            match_entry["gemma_confidence"] = None
+            match_entry["reasoning"] = None
+        alert_latch.attach(alert_id, match_entry)
     socketio.emit("match_alert", match_entry)
 
 
@@ -2294,6 +2302,11 @@ def on_revert_target(data):
         return
     _, buf = cv2.imencode(".jpg", img)
     app_state.target_photo = base64.b64encode(buf).decode("utf-8")
+    # Reasoning reads the reference from disk, so the reverted image must
+    # replace target_reference.jpg and the path, as set_target does.
+    path = Path(__file__).parent.parent.parent / "target_reference.jpg"
+    cv2.imwrite(str(path), img)
+    app_state.target_photo_path = str(path)
     if app_state.reid:
         app_state.reid.set_target(img)
     face_ok = False

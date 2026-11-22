@@ -69,6 +69,8 @@ LISTENED = {
     "map_cache_status", "map_config", "plan_list", "plan_loaded", "plan_preview", "plan_saved",
     # The answer to confirm_reflight.
     "reflight_confirm_result",
+    # The reasoning verdict landing on an open alert (keyed by alert_id).
+    "reasoning_result", "alert_upgrade",
 }
 FETCHED = {
     "/api/clear-target", "/api/feedback-stats", "/api/matches", "/api/sessions", "/api/target-history",

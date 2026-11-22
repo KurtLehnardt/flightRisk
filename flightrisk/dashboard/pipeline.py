@@ -34,6 +34,7 @@ from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot 
     _compute_track_key,
     _save_match_snapshot,
     maybe_save_match_snapshot,
+    resolve_reasoning,
 )
 from flightrisk.dashboard.alert_latch import alert_latch
 from flightrisk.dashboard.safety import SafetyPolicy
@@ -481,14 +482,28 @@ def _frame_loop(socketio):
                         # Queue Gemma reasoning asynchronously (rate-limited per track)
                         # so the frame loop never blocks on the LLM call.
                         if app_state.reasoning:
-                            if now_alert - gemma_last_call.get(track_key, 0) >= GEMMA_RATE_LIMIT:
+                            skipped = None
+                            if now_alert - gemma_last_call.get(track_key, 0) < GEMMA_RATE_LIMIT:
+                                skipped = "rate-limited"
+                            else:
                                 ref_img = cv2.imread(app_state.target_photo_path)
-                                if ref_img is not None:
+                                if ref_img is None:
+                                    skipped = "reference photo unreadable"
+                                else:
                                     gemma_last_call[track_key] = now_alert
                                     try:
-                                        gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy()))
+                                        gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy(), alert_id))
                                     except queue.Full:
                                         obs_events.queue_dropped("reasoning", kind="analyze")  # drop, don't block
+                                        skipped = "queue full"
+                            if skipped:
+                                # The alert already says "Awaiting ... reasoning":
+                                # resolve it so the operator is not left waiting.
+                                resolve_reasoning(socketio, alert_id, track_key, {
+                                    "match": False,
+                                    "confidence": "unavailable",
+                                    "reasoning": f"AI check not run ({skipped}).",
+                                })
             elif match_idx is not None:
                 match_score = max(reid_score, face_score)
 

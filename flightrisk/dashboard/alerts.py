@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import queue
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -160,29 +162,171 @@ def _timed_reasoning(agent, kind: str, call):
         )
 
 
-def prepare_edge_reasoning(track_key, crop_jpeg, now=None):
-    """Build an ``analyze`` job for an edge alert, or ``None`` when not eligible.
+#: Largest crop the edge may send for reasoning, in bytes.
+MAX_CROP_BYTES = 512 * 1024
+#: Longest edge, in pixels, the JPEG header may declare before it is rejected.
+MAX_CROP_EDGE_PX = 2048
+#: Crops are downscaled so their longest edge is at most this before queueing.
+REASONING_CROP_EDGE_PX = 768
 
-    Same payload shape as the frame-loop path: ``("analyze", track_key, crop,
-    reference)`` with BGR arrays. Returns ``None`` (and enqueues nothing) when
-    reasoning is off or not opted in (``app_state.reasoning is None``), there is
-    no target photo, the edge sent no usable crop, or the per-track
-    ``GEMMA_RATE_LIMIT`` window has not elapsed. The rate-limit stamp is taken
-    only once the job is actually built.
+_JPEG_MAGIC = b"\xff\xd8\xff"
+
+
+def _jpeg_dimensions(data: bytes):
+    """Return ``(width, height)`` read from a JPEG's SOF header, or ``None``.
+
+    Walks the marker segments only; no pixel data is decoded, so hostile bytes
+    never reach an image decoder before the size is known.
     """
-    if app_state.reasoning is None or not app_state.target_photo_path or not crop_jpeg:
+    n = len(data)
+    pos = 2
+    while pos + 4 <= n:
+        if data[pos] != 0xFF:
+            return None
+        marker = data[pos + 1]
+        if marker == 0xFF:  # fill byte
+            pos += 1
+            continue
+        if marker == 0x01 or 0xD0 <= marker <= 0xD8:  # standalone markers
+            pos += 2
+            continue
+        if marker in (0xD9, 0xDA):  # EOI / SOS before any frame header
+            return None
+        seglen = (data[pos + 2] << 8) | data[pos + 3]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            if seglen < 8 or pos + 9 > n:
+                return None
+            height = (data[pos + 5] << 8) | data[pos + 6]
+            width = (data[pos + 7] << 8) | data[pos + 8]
+            return width, height
+        if seglen < 2:
+            return None
+        pos += 2 + seglen
+    return None
+
+
+def decode_edge_crop(crop_jpeg):
+    """Validate untrusted edge crop bytes and return a BGR array, or ``None``.
+
+    Requires the JPEG magic, at most ``MAX_CROP_BYTES`` bytes and a header
+    long edge of at most ``MAX_CROP_EDGE_PX`` (checked before any decode),
+    then downscales to ``REASONING_CROP_EDGE_PX`` on the long edge.
+    """
+    if not isinstance(crop_jpeg, (bytes, bytearray)) or not crop_jpeg:
         return None
-    now = time.time() if now is None else now
-    if now - gemma_last_call.get(track_key, 0) < GEMMA_RATE_LIMIT:
+    if len(crop_jpeg) > MAX_CROP_BYTES or bytes(crop_jpeg[:3]) != _JPEG_MAGIC:
+        return None
+    dims = _jpeg_dimensions(bytes(crop_jpeg))
+    if dims is None or min(dims) <= 0 or max(dims) > MAX_CROP_EDGE_PX:
         return None
     crop = cv2.imdecode(np.frombuffer(crop_jpeg, np.uint8), cv2.IMREAD_COLOR)
     if crop is None or crop.size == 0:
         return None
-    ref_img = cv2.imread(app_state.target_photo_path)
+    long_edge = max(crop.shape[:2])
+    if long_edge > REASONING_CROP_EDGE_PX:
+        scale = REASONING_CROP_EDGE_PX / long_edge
+        crop = cv2.resize(
+            crop,
+            (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return crop
+
+
+_reference_cache: dict = {"key": None, "img": None}
+_reference_cache_lock = threading.Lock()
+
+
+def load_reference_photo(path):
+    """Read the target reference photo, cached by ``(path, mtime, size)``.
+
+    The returned array is shared and read-only. ``None`` when unreadable.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    with _reference_cache_lock:
+        if _reference_cache["key"] == key:
+            return _reference_cache["img"]
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    img.setflags(write=False)
+    with _reference_cache_lock:
+        _reference_cache["key"] = key
+        _reference_cache["img"] = img
+    return img
+
+
+def prepare_edge_reasoning(track_key, crop_jpeg, alert_id, now=None):
+    """Build an ``analyze`` job for an edge alert: ``(job, label)`` or ``None``.
+
+    The job is ``("analyze", track_key, crop, reference, alert_id)`` with BGR
+    arrays, keyed by ``alert_id`` so a stale job can never land on another
+    alert. ``label`` is the provider label, read from the same agent snapshot
+    the job was gated on. Returns ``None`` (and enqueues nothing) when
+    reasoning is off or not opted in, there is no target photo, the crop fails
+    validation (see ``decode_edge_crop``), or the per-track
+    ``GEMMA_RATE_LIMIT`` window has not elapsed. The rate-limit stamp is taken
+    only once the job is actually built.
+    """
+    agent = app_state.reasoning
+    photo_path = app_state.target_photo_path
+    if agent is None or not photo_path or not crop_jpeg:
+        return None
+    now = time.time() if now is None else now
+    if now - gemma_last_call.get(track_key, 0) < GEMMA_RATE_LIMIT:
+        return None
+    crop = decode_edge_crop(crop_jpeg)
+    if crop is None:
+        return None
+    ref_img = load_reference_photo(photo_path)
     if ref_img is None:
         return None
     gemma_last_call[track_key] = now
-    return ("analyze", track_key, crop, ref_img)
+    return ("analyze", track_key, crop, ref_img, alert_id), str(getattr(agent, "label", "") or "reasoning")
+
+
+def resolve_reasoning(socketio, alert_id, track_key, result):
+    """Land an ``analyze`` outcome on the alert it was queued for.
+
+    Updates the history entry (matched by ``alert_id`` when given, so a stale
+    job cannot touch another drone's alert in the same grid cell), the latch's
+    stored copy (so reminders and reconnects carry the verdict), the DB row,
+    and emits ``reasoning_result`` keyed by ``alert_id``.
+    """
+    fields = {
+        "gemma_match": result.get("match", False),
+        "gemma_confidence": result.get("confidence"),
+        "reasoning": result.get("reasoning", ""),
+    }
+    mid = None
+    with match_history_lock:
+        for entry in reversed(app_state.match_history):
+            hit = entry.get("alert_id") == alert_id if alert_id else entry.get("track_id") == track_key
+            if hit:
+                entry.update(fields)
+                mid = entry.get("match_id")
+                break
+    if alert_id:
+        alert_latch.update(alert_id, fields)
+    # DB I/O outside the lock so other threads touching match_history are not held up.
+    if mid and app_state.db:
+        app_state.db.update_match(
+            match_id=mid,
+            gemma_match=fields["gemma_match"],
+            gemma_confidence=fields["gemma_confidence"],
+            reasoning=fields["reasoning"],
+        )
+    payload = {"track_id": track_key, "result": result, "type": "analyze"}
+    if alert_id:
+        payload["alert_id"] = alert_id
+    # Jobs queued for an alert always report back so its "Awaiting" state clears;
+    # alert-less (legacy) jobs keep emitting only when the agent actually ran.
+    if alert_id or result.get("confidence") != "off":
+        socketio.emit("reasoning_result", payload)
 
 
 def enqueue_reasoning(job):
@@ -218,16 +362,29 @@ def _gemma_worker(socketio):
         except queue.Empty:
             continue
 
-        # Items are tuples: ("analyze", track_key, crop, reference)
+        # Items are tuples: ("analyze", track_key, crop, reference, alert_id)
         #                 or ("describe", track_key, crop, description)
         item_type = item[0]
         try:
-            # While a match alert awaits the operator (or after a confirmed
-            # match) skip every queued LLM call except the single "analyze"
-            # call queued for the open alert itself.
-            if not alert_latch.matching_allowed() and not (
-                item_type == "analyze" and alert_latch.owns_track(item[1])
-            ):
+            if item_type == "analyze":
+                alert_id = item[4] if len(item) > 4 else None
+                # An analyze job runs only for the alert it was queued for and
+                # only while that alert awaits the operator. Anything else
+                # (dismissed, confirmed, superseded) is skipped, never sent to
+                # the LLM, and its entry resolves to a clear "skipped" state.
+                owned = alert_latch.owns_alert(alert_id) if alert_id else (
+                    alert_latch.matching_allowed() or alert_latch.owns_track(item[1])
+                )
+                if not owned:
+                    resolve_reasoning(socketio, alert_id, item[1], {
+                        "match": False,
+                        "confidence": "skipped",
+                        "reasoning": "AI check skipped: alert was already answered.",
+                    })
+                    continue
+            elif not alert_latch.matching_allowed():
+                # While a match alert awaits the operator (or after a confirmed
+                # match) skip every other queued LLM call.
                 continue
             if item_type == "describe":
                 _, track_key, crop, description = item
@@ -309,42 +466,26 @@ def _gemma_worker(socketio):
                     maybe_save_match_snapshot(crop, crop, match_score, result)
             else:
                 # "analyze" -- photo-based reasoning
-                _, track_key, crop, reference = item
+                _, track_key, crop, reference = item[:4]
                 agent = app_state.reasoning
                 if agent is None:
                     # Reasoning was switched off with this item queued: skip the
                     # call but still back-fill the history entry and DB row.
                     result = {"match": False, "confidence": "off", "reasoning": ""}
                 else:
-                    result = _timed_reasoning(agent, "analyze", lambda a=agent, r=reference, c=crop: a.analyze_match(r, c))
-                    socketio.emit("reasoning_result", {
-                        "track_id": track_key,
-                        "result": result,
-                        "type": "analyze",
-                    })
-                # Back-fill the most recent match_history entry for this track
-                mid = None
-                with match_history_lock:
-                    for entry in reversed(app_state.match_history):
-                        if entry.get("track_id") == track_key:
-                            entry["gemma_match"] = result.get("match", False)
-                            entry["gemma_confidence"] = result.get("confidence")
-                            entry["reasoning"] = result.get("reasoning", "")
-                            mid = entry.get("match_id")
-                            break
-                # Persist Gemma results to DB (outside the lock -- DB I/O
-                # shouldn't hold up other threads touching match_history)
-                if mid and app_state.db:
-                    app_state.db.update_match(
-                        match_id=mid,
-                        gemma_match=result.get("match", False),
-                        gemma_confidence=result.get("confidence"),
-                        reasoning=result.get("reasoning", ""),
-                    )
+                    try:
+                        result = _timed_reasoning(agent, "analyze", lambda a=agent, r=reference, c=crop: a.analyze_match(r, c))
+                    except Exception as exc:
+                        # Resolve the entry so it never stays on "pending".
+                        if app_state.logger:
+                            app_state.logger.error("gemma_analyze_error", error=str(exc), error_type=type(exc).__name__)
+                        result = {"match": False, "confidence": "error", "reasoning": ""}
+                resolve_reasoning(socketio, alert_id, track_key, result)
                 # If reasoning confirms, upgrade alert level
                 if result.get("match") and result.get("confidence") in ("high", "medium"):
                     socketio.emit("alert_upgrade", {
                         "track_id": track_key,
+                        **({"alert_id": alert_id} if alert_id else {}),
                         "new_level": "confirmed_match" if result["confidence"] == "high" else "possible_match",
                         "reasoning": result.get("reasoning", ""),
                     })

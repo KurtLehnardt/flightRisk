@@ -776,6 +776,57 @@ const socket = io();
     // ========== MATCH ALERTS ==========
     let matchCount = 0;
     let currentOverlayAlertId = null;
+    // Latest payload and history-row elements per alert_id, so a late reasoning verdict
+    // (reasoning_result / alert_upgrade) can update the open modal and its history row.
+    const alertViews = {};
+    function rememberAlertView(alertId, view) {
+        alertViews[alertId] = view;
+        const ids = Object.keys(alertViews);
+        if (ids.length > 100) delete alertViews[ids[0]];
+    }
+    function scoresText(data) {
+        return 'Score ' + data.score + ' | AI ' + (data.gemma_confidence || '--')
+            + (data.face_score ? ' | Face ' + data.face_score : '') + (data.reid_score ? ' | ReID ' + data.reid_score : '');
+    }
+    function renderOverlayVerdict(data) {
+        $('overlay-score').textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
+        $('overlay-reasoning').textContent = data.reasoning || '';
+    }
+    function applyAlertUpdate(alertId, fields) {
+        const view = alertViews[alertId];
+        if (view) {
+            Object.assign(view.data, fields);
+            view.scores.textContent = scoresText(view.data);
+            view.reasoning.textContent = view.data.reasoning || '';
+            view.reasoning.hidden = !view.data.reasoning;
+            if (fields.alert_level) {
+                const cls = fields.alert_level === 'confirmed_match' ? 'confirmed' : 'possible';
+                view.entry.className = 'match-entry ' + cls;
+                view.level.textContent = cls === 'confirmed' ? 'Strong match' : 'Possible';
+            }
+        }
+        if (currentOverlayAlertId === alertId) {
+            const data = view ? view.data : Object.assign({}, fields);
+            renderOverlayVerdict(data);
+            if (fields.alert_level === 'confirmed_match') {
+                $('overlay-title').textContent = 'Possible match: verify in person';
+                $('overlay-subtitle').textContent = 'Strong match detected. Verify visually.';
+                $('match-overlay-card').className = 'match-overlay-card confirmed';
+            }
+        }
+    }
+    socket.on('reasoning_result', (d) => {
+        if (!d || !d.alert_id || d.type !== 'analyze' || !d.result) return;
+        applyAlertUpdate(d.alert_id, {
+            gemma_match: d.result.match,
+            gemma_confidence: d.result.confidence,
+            reasoning: d.result.reasoning || '',
+        });
+    });
+    socket.on('alert_upgrade', (d) => {
+        if (!d || !d.alert_id) return;
+        applyAlertUpdate(d.alert_id, { alert_level: d.new_level, reasoning: d.reasoning || '' });
+    });
 
     socket.on('match_alert', (data) => {
         matchCount++;
@@ -797,7 +848,8 @@ const socket = io();
         const cls = level === 'confirmed_match' ? 'confirmed' : level === 'possible_match' ? 'possible' : 'weak';
         const entry = el('div', 'match-entry ' + cls);
         const head = el('div', 'match-head');
-        head.appendChild(el('span', 'level', cls === 'confirmed' ? 'Strong match' : cls === 'possible' ? 'Possible' : 'Weak'));
+        const levelEl = el('span', 'level', cls === 'confirmed' ? 'Strong match' : cls === 'possible' ? 'Possible' : 'Weak');
+        head.appendChild(levelEl);
         head.appendChild(el('span', 'time', data.time));
         const matchId = Number.isInteger(data.match_id) ? data.match_id : null;
         if (matchId) {
@@ -812,9 +864,14 @@ const socket = io();
             head.appendChild(fb);
         }
         entry.appendChild(head);
-        entry.appendChild(el('div', 'scores', 'Score ' + data.score + ' | AI ' + (data.gemma_confidence || '--')
-            + (data.face_score ? ' | Face ' + data.face_score : '') + (data.reid_score ? ' | ReID ' + data.reid_score : '')));
-        if (data.reasoning) entry.appendChild(el('div', 'reasoning', data.reasoning));
+        const scoresEl = el('div', 'scores', scoresText(data));
+        entry.appendChild(scoresEl);
+        const reasoningEl = el('div', 'reasoning', data.reasoning || '');
+        reasoningEl.hidden = !data.reasoning;
+        entry.appendChild(reasoningEl);
+        if (data.alert_id) {
+            rememberAlertView(data.alert_id, { data: Object.assign({}, data), entry: entry, level: levelEl, scores: scoresEl, reasoning: reasoningEl });
+        }
         if (data.snapshot) {
             const img = el('img');
             img.alt = 'Match snapshot';
@@ -837,8 +894,9 @@ const socket = io();
         }
         const snap = $('overlay-snapshot');
         if (data.snapshot) { snap.src = 'data:image/jpeg;base64,' + data.snapshot; snap.hidden = false; } else { snap.hidden = true; }
-        $('overlay-score').textContent = 'Score: ' + data.score + (data.gemma_confidence ? ' | AI: ' + data.gemma_confidence : '');
-        $('overlay-reasoning').textContent = data.reasoning || '';
+        // A reminder or reconnect carries the latest verdict; a re-sent alert must not regress it.
+        const known = data.alert_id ? alertViews[data.alert_id] : null;
+        renderOverlayVerdict(known ? Object.assign({}, data, known.data) : data);
         // The pop-up stays up until the operator answers or hides it; re-showing the same alert keeps its status.
         if (currentOverlayAlertId !== (data.alert_id || null)) {
             currentOverlayAlertId = data.alert_id || null;
