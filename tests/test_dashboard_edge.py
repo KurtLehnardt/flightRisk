@@ -244,7 +244,7 @@ class TestSetStreamVideoHandler:
 class TestSetTargetEdgeMode:
     def test_edge_mode_broadcasts_target_embeddings(self, clean_app_state, monkeypatch):
         # Don't touch disk with the reference-photo write.
-        monkeypatch.setattr(cv2, "imwrite", MagicMock())
+        monkeypatch.setattr(app_module, "_write_reference_photo", MagicMock())
 
         reid = MagicMock()
         reid.extract_embedding.return_value = np.array([1.0, 2.0, 3.0])
@@ -274,7 +274,7 @@ class TestSetTargetEdgeMode:
         reid.set_target.assert_called_once()
 
     def test_non_edge_mode_does_not_broadcast(self, clean_app_state, monkeypatch):
-        monkeypatch.setattr(cv2, "imwrite", MagicMock())
+        monkeypatch.setattr(app_module, "_write_reference_photo", MagicMock())
         reid = MagicMock()
         _state["reid"] = reid
         _state["face"] = None

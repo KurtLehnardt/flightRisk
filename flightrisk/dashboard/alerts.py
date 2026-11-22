@@ -348,14 +348,21 @@ def raise_alert_level(alert_id, track_key, new_level):
     """
     new_rank = _LEVEL_RANK.get(new_level, 0)
     raised = False
+    found = False
     with match_history_lock:
         for entry in reversed(app_state.match_history):
             hit = entry.get("alert_id") == alert_id if alert_id else entry.get("track_id") == track_key
             if hit:
+                found = True
                 if new_rank > _LEVEL_RANK.get(entry.get("alert_level"), 0):
                     entry["alert_level"] = new_level
                     raised = True
                 break
+    if not found:
+        # No history row (legacy path): fall back to the latch's stored level.
+        pending = alert_latch.pending_alert() if alert_id else None
+        current = pending.get("alert_level") if pending and pending.get("alert_id") == alert_id else None
+        raised = new_rank > _LEVEL_RANK.get(current, 0)
     if raised and alert_id:
         alert_latch.update(alert_id, {"alert_level": new_level})
     return raised
