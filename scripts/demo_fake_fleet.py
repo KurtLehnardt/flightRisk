@@ -162,7 +162,7 @@ def port_is_open(port: int, host: str = LOOPBACK) -> bool:
 
 
 class ProcessGroup:
-    """Child processes, each in its own session, all torn down together."""
+    """Child processes, each in its own session (process group on Windows), all torn down together."""
 
     def __init__(self) -> None:
         self.procs: dict[str, subprocess.Popen] = {}
@@ -173,7 +173,7 @@ class ProcessGroup:
         try:
             proc = subprocess.Popen(
                 list(argv), cwd=str(REPO_ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, start_new_session=True,
+                stdin=subprocess.DEVNULL, **_new_group_kwargs(),
             )
         finally:
             if log_path is not None:
@@ -182,7 +182,8 @@ class ProcessGroup:
             self.procs[label] = proc
         return proc
 
-    def kill_one(self, label: str, sig: int = signal.SIGKILL) -> bool:
+    def kill_one(self, label: str, sig: int | None = None) -> bool:
+        """Signal one child's group. ``None`` means SIGKILL, or the nearest thing the platform has."""
         proc = self.procs.get(label)
         if proc is None or proc.poll() is not None:
             return False
@@ -201,7 +202,7 @@ class ProcessGroup:
             try:
                 proc.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                _signal_group(proc, signal.SIGKILL)
+                _signal_group(proc, None)
                 try:
                     proc.wait(timeout=5.0)
                 except subprocess.TimeoutExpired:
@@ -212,9 +213,30 @@ class ProcessGroup:
             return [label for label, proc in self.procs.items() if proc.poll() is None]
 
 
-def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _new_group_kwargs() -> dict:
+    """Popen arguments that put the child in its own session, or its own process group on Windows."""
+    if _is_windows():
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _signal_group(proc: subprocess.Popen, sig: int | None) -> None:
+    """Send ``sig`` to the child's group. ``None`` means SIGKILL, which Windows does not have."""
+    if sig is None:
+        sig = getattr(signal, "SIGKILL", signal.SIGTERM)
     try:
-        os.killpg(proc.pid, sig)
+        if _is_windows():
+            # Windows has no killpg and no real signals: terminate() for a polite stop, kill() otherwise.
+            if sig == signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+        else:
+            os.killpg(proc.pid, sig)
     except (ProcessLookupError, PermissionError):
         pass
 
