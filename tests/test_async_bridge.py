@@ -8,6 +8,8 @@ either caller.
 """
 
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -75,6 +77,86 @@ class TestStartStopLoop:
             assert bridge.is_running is True
         finally:
             bridge.stop_loop()
+
+
+class TestStopLoopRace:
+    def test_repeated_stop_loop_is_idempotent(self):
+        bridge = AsyncBridge(name="t")
+        bridge.start_loop()
+        loop = bridge.loop
+        for _ in range(3):
+            bridge.stop_loop()  # must never raise
+        assert loop.is_closed()
+        assert bridge.loop is None
+        assert bridge.loop_thread is None
+
+    def test_concurrent_stop_loop_closes_loop_exactly_once(self):
+        bridge = AsyncBridge(name="t")
+        bridge.start_loop()
+        loop = bridge.loop
+        original_close = loop.close
+        close_calls = []
+
+        def slow_close():
+            # Widen the window so an unserialized second caller would
+            # enter close() while the first is still tearing down.
+            close_calls.append(threading.get_ident())
+            time.sleep(0.05)
+            original_close()
+
+        loop.close = slow_close
+        n = 8
+        barrier = threading.Barrier(n)
+        errors = []
+
+        def worker():
+            barrier.wait()
+            try:
+                bridge.stop_loop()
+            except BaseException as exc:  # noqa: BLE001 - the test asserts none escape
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert errors == []
+        assert len(close_calls) == 1
+        assert loop.is_closed()
+
+    def test_stop_loop_while_loop_is_busy(self):
+        bridge = AsyncBridge(name="t")
+        bridge.start_loop()
+        started = threading.Event()
+
+        async def busy():
+            started.set()
+            await asyncio.sleep(0.2)
+
+        future = asyncio.run_coroutine_threadsafe(busy(), bridge.loop)
+        assert started.wait(timeout=5)
+        loop = bridge.loop
+        bridge.stop_loop()  # must not raise
+        bridge.stop_loop()
+        assert loop.is_closed()
+        assert bridge.loop is None
+        future.cancel()
+
+    def test_stop_loop_never_raises_when_close_fails(self):
+        bridge = AsyncBridge(name="t")
+        bridge.start_loop()
+        loop = bridge.loop
+        original_close = loop.close
+
+        def failing_close():
+            original_close()
+            raise ValueError("Invalid file descriptor: -1")
+
+        loop.close = failing_close
+        bridge.stop_loop()  # must not raise
+        assert bridge.loop is None
+        assert bridge.loop_thread is None
 
 
 class TestRun:
