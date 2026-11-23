@@ -1968,7 +1968,11 @@ class TestDocsAndNotices:
     def test_notices_carry_both_licences_and_every_copyright_line(self):
         notices = (PIPELINE / "NOTICES.md").read_text()
         assert "Apache License" in notices and "Version 2.0, January 2004" in notices
-        assert notices.count("Permission is hereby granted, free of charge") == 3
+        # open_clip, OpenAI CLIP, LAION, mlx-swift, mlx-swift-examples, GzipSwift, ONNX Runtime
+        assert notices.count("Permission is hereby granted, free of charge") == 7
+        assert "MIT-CMU" in notices and "Copyright (c) 2014-2023 1024jp" in notices
+        assert "Copyright (c) 2023 ml-explore" in notices and "Copyright 2022 Hugging Face SAS" in notices
+        assert "https://github.com/KurtLehnardt/flightRisk" in notices and "has not been granted" in notices
         for line in ("Copyright (c) 2021-2022 Megvii Inc.", "Copyright (c) 2021 OpenAI",
                      "Copyright (c) 2012-2021 Gabriel Ilharco"):
             assert line in notices
