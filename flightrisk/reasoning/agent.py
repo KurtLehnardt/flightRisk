@@ -178,8 +178,13 @@ class FlightRiskAgent:
         return response.message.content.strip()
 
     def _call_failed(self, kind: str, exc: Exception) -> None:
-        """Log a failed call server-side: type and redacted message, never the prompt."""
-        self.last_usage = {"error_type": safe_type_name(exc)}
+        """Log a failed call server-side: type and redacted message, never the prompt.
+
+        ``error_type`` is merged into ``last_usage`` so token counts the call
+        already reported (a reply with no usable verdict) are kept.
+        """
+        usage = self.last_usage if isinstance(self.last_usage, dict) else {}
+        self.last_usage = {**usage, "error_type": safe_type_name(exc)}
         _log.warning("reasoning_call_failed provider=%s kind=%s error_type=%s error=%s",
                      self.provider, kind, safe_type_name(exc), redact_text(exc))
 
@@ -268,6 +273,7 @@ class FlightRiskAgent:
             return "Model not available"
 
         try:
+            self.last_usage = {}
             self._admit()
             return self._ask(
                 "Describe this person's appearance in one sentence. "
@@ -284,6 +290,7 @@ class FlightRiskAgent:
             return "Model not available"
 
         try:
+            self.last_usage = {}
             self._admit()
             return self._ask(
                 "Briefly describe this aerial/drone view scene. "

@@ -110,10 +110,21 @@ class SleepRecorder:
             self._clock.advance(seconds)
 
 
+def _report_real_headers(module):
+    """Make the mocked client report the headers a real one sends for its key."""
+    def build(**kwargs):
+        client = module.Anthropic.return_value
+        client.default_headers = {"Authorization": f"Bearer {kwargs.get('api_key')}",
+                                  "anthropic-version": "2026-10-21"}
+        return client
+    module.Anthropic.side_effect = build
+
+
 @contextmanager
 def fake_anthropic():
-    """Stand in for the anthropic module while the agent is built; keeps the real Timeout."""
+    """Stand in for the anthropic module while the agent is built."""
     module = MagicMock(name="anthropic")
+    _report_real_headers(module)
     with patch.dict(sys.modules, {"anthropic": module}):
         yield module
 
@@ -232,8 +243,8 @@ class TestDefaults:
         assert kwargs["max_retries"] == 0
         assert kwargs["base_url"] == "https://api.anthropic.com"
         assert kwargs["default_headers"] == {}
-        assert kwargs["open_telemetry"] == {"traces": {"content_mode": "metadata_only"}}
-        assert module.Timeout.call_args.kwargs == {"connect": 5.0, "read": 20.0, "write": 10.0, "pool": 5.0}
+        assert kwargs["open_telemetry"] == {"traces": {"content_mode": "metadata_only"}, "propagation": False}
+        assert module.Timeout.call_args.kwargs == {"connect": 5.0, "read": 30.0, "write": 10.0, "pool": 5.0}
         assert kwargs["timeout"] is module.Timeout.return_value
 
 
@@ -418,17 +429,27 @@ class TestRetry:
         assert sleep.waits == []
         assert agent.health()["consecutive_failures"] == 1  # a dropped stream is an outage
 
-    def test_no_retry_when_the_wait_would_pass_the_deadline(self, make_agent, img, clock):
+    @pytest.mark.parametrize("time_left,retried", [
+        (0.5, False),
+        (35.0, False),   # 1 s wait + 5 s connect + 30 s read = 36 s needed
+        (37.0, True),
+    ])
+    def test_retry_only_when_wait_connect_and_read_fit_the_deadline(self, make_agent, img, clock, time_left, retried):
         agent, client, _, sleep = make_agent()
+        calls = []
 
         def overloaded(**kwargs):
-            clock.advance(agent._deadline_s - 0.5)
-            raise _status_error(anthropic.OverloadedError, 529)
+            calls.append(kwargs)
+            if len(calls) == 1:
+                clock.advance(agent._deadline_s - time_left)
+                raise _status_error(anthropic.OverloadedError, 529)
+            return client.beta.messages.stream.return_value
 
         client.beta.messages.stream.side_effect = overloaded
-        agent.analyze_match(img, img)
-        assert _stream_calls(client) == 1
-        assert sleep.waits == []
+        result = agent.analyze_match(img, img)
+        assert _stream_calls(client) == (2 if retried else 1)
+        assert sleep.waits == ([1.0] if retried else [])
+        assert result["match"] is retried
 
 
 def _then_ok(client, exc):
@@ -478,8 +499,8 @@ class TestNoExceptionTextInResults:
         (lambda: _sse_error(LEAK), "AI check failed (Claude stream error: error)."),
         (lambda: anthropic.APIConnectionError(message=f"proxy https://u:{LEAK}@proxy.local", request=_request()),
          "AI check failed (cannot reach Claude)."),
-        (lambda: anthropic.APITimeoutError(request=_request()), "AI check failed (Claude sent no data for 20 s)."),
-        (lambda: httpx2.ReadTimeout(f"read timed out {LEAK}"), "AI check failed (Claude sent no data for 20 s)."),
+        (lambda: anthropic.APITimeoutError(request=_request()), "AI check failed (Claude sent no data for 30 s)."),
+        (lambda: httpx2.ReadTimeout(f"read timed out {LEAK}"), "AI check failed (Claude sent no data for 30 s)."),
     ])
     def test_result_text_is_fixed(self, make_agent, img, caplog, make_exc, expected):
         agent, client, *_ = make_agent()
@@ -1065,7 +1086,7 @@ class TestRealClient:
             assert param not in body
         headers = {k.lower(): v for k, v in fake_api.requests[0]["headers"].items()}
         assert headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
-        assert headers["x-stainless-read-timeout"] == "20.0"
+        assert headers["x-stainless-read-timeout"] == "30.0"
 
     def test_429_with_long_retry_after_ends_within_seconds(self, fake_api, img):
         fake_api.script = [status_reply(429, {"retry-after": "300"}), status_reply(429, {"retry-after": "300"})]
@@ -1108,3 +1129,178 @@ class TestRealClient:
         assert agent.analyze_match(img, img)["reasoning"] == KEY_REJECTED_MESSAGE
         assert len(fake_api.requests) == 1
         assert FAKE_KEY not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review: fail-closed headers, stop reasons, tracing, usage, effort
+# ---------------------------------------------------------------------------
+
+class TestFailClosedHeaders:
+    def test_env_headers_are_removed_and_the_client_starts(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS",
+                           "X-Evil: 1\nAuthorization: Bearer stolen\nanthropic-version: 1999-01-01")
+        agent = ClaudeReasoningAgent(api_key=FAKE_KEY)
+        headers = {k.lower(): v for k, v in agent._client.default_headers.items()}
+        assert "x-evil" not in headers
+        assert headers["authorization"] == f"Bearer {FAKE_KEY}"
+        assert headers["anthropic-version"] != "1999-01-01"
+
+    def _unreset_client(self, api_key=FAKE_KEY):
+        # A client whose environment headers were not removed, as if the SDK
+        # stopped keeping them where _build_client resets them.
+        return anthropic.Anthropic(api_key=api_key, base_url="https://api.anthropic.com", max_retries=0)
+
+    def test_an_extra_header_name_refuses(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "X-Evil: s3cret-value")
+        with pytest.raises(claude_agent.ClaudeClientRefused) as exc:
+            claude_agent._verify_headers(self._unreset_client(), FAKE_KEY)
+        assert "x-evil" in str(exc.value)
+        assert "s3cret-value" not in str(exc.value)
+
+    def test_an_env_value_on_an_sdk_header_refuses(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "Anthropic-Version: 1999-01-01")
+        with pytest.raises(claude_agent.ClaudeClientRefused, match="anthropic-version"):
+            claude_agent._verify_headers(self._unreset_client(), FAKE_KEY)
+
+    def test_an_env_auth_header_refuses(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "Authorization: Bearer sk-ant-api03-OTHEROTHEROTHER")
+        with pytest.raises(claude_agent.ClaudeClientRefused) as exc:
+            claude_agent._verify_headers(self._unreset_client(), FAKE_KEY)
+        assert "OTHER" not in str(exc.value)
+
+    def test_a_different_key_refuses(self):
+        client = self._unreset_client(api_key="sk-ant-some-other-key-000000")
+        with pytest.raises(claude_agent.ClaudeClientRefused, match="FLIGHTRISK_CLAUDE_API_KEY") as exc:
+            claude_agent._verify_headers(client, FAKE_KEY)
+        assert "some-other-key" not in str(exc.value) and FAKE_KEY not in str(exc.value)
+
+    def test_an_x_api_key_header_refuses(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "x-api-key: sk-ant-api03-OTHEROTHEROTHER")
+        with pytest.raises(claude_agent.ClaudeClientRefused):
+            claude_agent._verify_headers(self._unreset_client(), FAKE_KEY)
+
+    def test_the_agent_reports_the_refusal_text(self, monkeypatch):
+        def refuse(client, api_key):
+            raise claude_agent.ClaudeClientRefused("Refusing to start Claude: test")
+
+        monkeypatch.setattr(claude_agent, "_verify_headers", refuse)
+        with pytest.raises(claude_agent.ClaudeClientRefused, match="Refusing to start Claude: test"):
+            ClaudeReasoningAgent(api_key=FAKE_KEY)
+
+
+class TestClientIsNeverCopied:
+    """with_options and copy rebuild the client and re-read ANTHROPIC_CUSTOM_HEADERS."""
+
+    def test_no_code_calls_with_options_or_copies_the_client(self):
+        import ast
+        from pathlib import Path
+
+        package = Path(claude_agent.__file__).resolve().parents[1]
+        offenders = []
+        for path in package.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Attribute) and node.attr == "with_options":
+                    offenders.append(f"{path.name}:{node.lineno}")
+                if path.name == "claude_agent.py" and isinstance(node, ast.Attribute) and node.attr == "copy":
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert offenders == []
+
+    def test_a_real_call_with_a_retry_never_copies_the_client(self, monkeypatch, fake_api, img):
+        def forbidden(self, *args, **kwargs):
+            raise AssertionError("the Claude client must never be copied")
+
+        monkeypatch.setattr(anthropic.Anthropic, "with_options", forbidden)
+        monkeypatch.setattr(anthropic.Anthropic, "copy", forbidden)
+        fake_api.script = [status_reply(529), sse_reply(OK_TEXT)]
+        agent = real_agent(fake_api, sleep=lambda s: None)
+        assert agent.analyze_match(img, img)["match"] is True
+        assert len(fake_api.requests) == 2
+
+
+class TestStopReasons:
+    @pytest.mark.parametrize("stop_reason,shown", [
+        ("max_tokens", "max_tokens"),
+        ("pause_turn", "pause_turn"),
+        ("tool_use", "tool_use"),
+        (None, "unknown"),
+    ])
+    def test_a_reply_that_did_not_end_normally_is_not_a_verdict(self, make_agent, img, stop_reason, shown):
+        agent, client, *_ = make_agent()
+        _set_final_message(client, _message(stop_reason=stop_reason))  # full verdict text present
+        result = agent.analyze_match(img, img)
+        assert result == {"match": False, "confidence": "error",
+                          "reasoning": f"AI check failed (Claude returned no text: {shown})."}
+
+    @pytest.mark.parametrize("stop_reason", ["end_turn", "stop_sequence"])
+    def test_a_normal_end_is_a_verdict(self, make_agent, img, stop_reason):
+        agent, client, *_ = make_agent()
+        _set_final_message(client, _message(stop_reason=stop_reason))
+        assert agent.analyze_match(img, img)["match"] is True
+
+
+class TestTracingOption:
+    def test_default_is_metadata_only_without_propagation(self):
+        agent = ClaudeReasoningAgent(api_key=FAKE_KEY)
+        resolved = agent._client._open_telemetry
+        assert resolved["traces"]["content_mode"] == "metadata_only"
+        assert resolved["traces"]["enabled"] is True
+        assert resolved["propagation"] is False
+
+    def test_operator_opt_outs_are_kept(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY", "false")
+        monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY_PROPAGATION", "false")
+        monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content")
+        resolved = ClaudeReasoningAgent(api_key=FAKE_KEY)._client._open_telemetry
+        assert resolved["traces"]["enabled"] is False
+        assert resolved["propagation"] is False
+        assert resolved["traces"]["content_mode"] == "metadata_only"
+
+    def test_no_trace_context_is_sent(self, fake_api, img):
+        fake_api.script = [sse_reply(OK_TEXT)]
+        real_agent(fake_api).analyze_match(img, img)
+        headers = {k.lower() for k in fake_api.requests[0]["headers"]}
+        assert not headers & {"traceparent", "tracestate", "baggage"}
+
+
+class TestUsageSurvivesFailure:
+    def test_token_counts_are_kept_with_the_error_type(self, make_agent, img):
+        agent, client, *_ = make_agent()
+        message = _message(stop_reason="max_tokens")
+        message.usage = SimpleNamespace(input_tokens=1500, output_tokens=4096)
+        _set_final_message(client, message)
+        agent.analyze_match(img, img)
+        assert agent.last_usage == {"input_tokens": 1500, "output_tokens": 4096, "error_type": "ClaudeNoVerdict"}
+
+    @pytest.mark.parametrize("method", ["describe_person", "analyze_scene"])
+    def test_describe_and_scene_start_with_fresh_usage(self, make_agent, img, method):
+        agent, client, *_ = make_agent()
+        agent.last_usage = {"input_tokens": 9, "output_tokens": 9}
+        client.beta.messages.stream.side_effect = RuntimeError("boom")
+        getattr(agent, method)(img)
+        assert agent.last_usage == {"error_type": "RuntimeError"}
+
+
+class TestEffortValidation:
+    @pytest.mark.parametrize("raw,expected", [
+        ("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "xhigh"), ("max", "max"),
+        (" XHigh ", "xhigh"),
+    ])
+    def test_valid_levels_are_used(self, monkeypatch, make_agent, raw, expected):
+        monkeypatch.setenv("FLIGHTRISK_CLAUDE_EFFORT", raw)
+        reset_config()
+        agent, *_ = make_agent()
+        assert agent.effort == expected
+
+    @pytest.mark.parametrize("raw", ["ultra", "", "none", "HIGHEST"])
+    def test_invalid_level_falls_back_to_high_with_a_warning(self, monkeypatch, make_agent, img, caplog, raw):
+        monkeypatch.setenv("FLIGHTRISK_CLAUDE_EFFORT", raw)
+        reset_config()
+        with caplog.at_level(logging.WARNING, logger="flightrisk.reasoning.claude_agent"):
+            agent, client, *_ = make_agent()
+        agent.analyze_match(img, img)
+        assert client.beta.messages.stream.call_args.kwargs["output_config"] == {"effort": "high"}
+        assert any("claude_setting_invalid" in r.getMessage() for r in caplog.records)
+
+    def test_invalid_constructor_effort_falls_back_too(self, make_agent):
+        agent, *_ = make_agent(effort="turbo")
+        assert agent.effort == "high"

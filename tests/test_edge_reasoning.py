@@ -537,7 +537,9 @@ def real_claude(monkeypatch):
     monkeypatch.setenv("FLIGHTRISK_ALLOW_CLOUD_LLM", "1")
     monkeypatch.delenv("FLIGHTRISK_CLAUDE_BASE_URL", raising=False)
     reset_config()
-    with patch.dict(sys.modules, {"anthropic": MagicMock(name="anthropic")}):
+    module = MagicMock(name="anthropic")
+    module.Anthropic.return_value.default_headers = {"Authorization": "Bearer sk-ant-test-not-a-real-key"}
+    with patch.dict(sys.modules, {"anthropic": module}):
         agent = ClaudeReasoningAgent(api_key="sk-ant-test-not-a-real-key", clock=lambda: 1000.0)
     yield agent
     reset_config()

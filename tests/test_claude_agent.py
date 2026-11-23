@@ -31,10 +31,21 @@ FAKE_KEY = "sk-ant-test-not-a-real-key"
 MATCH_TEXT = "MATCH: yes\nCONFIDENCE: high\nREASONING: same red jacket"
 
 
+def _report_real_headers(module):
+    """Make the mocked client report the headers a real one sends for its key."""
+    def build(**kwargs):
+        client = module.Anthropic.return_value
+        client.default_headers = {"Authorization": f"Bearer {kwargs.get('api_key')}",
+                                  "anthropic-version": "2026-10-21"}
+        return client
+    module.Anthropic.side_effect = build
+
+
 @contextmanager
 def fake_anthropic():
     """Stand in for the anthropic SDK, installed or not; yields the client class mock."""
     module = MagicMock(name="anthropic")
+    _report_real_headers(module)
     with patch.dict(sys.modules, {"anthropic": module}):
         yield module.Anthropic
 

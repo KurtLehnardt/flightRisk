@@ -12,23 +12,34 @@ The API key is read only from ``FLIGHTRISK_CLAUDE_API_KEY``. The SDK's usual
 never enables uploads by accident. The key is never logged or included in
 error results. The client is built with every setting explicit, so
 ``ANTHROPIC_BASE_URL``, ``ANTHROPIC_CUSTOM_HEADERS`` and the SDK's tracing
-content mode cannot redirect the key or copy the photos elsewhere.
+content mode cannot redirect the key or copy the photos elsewhere, and it
+refuses to start if a header from the environment or a different credential
+would still be sent. The SDK's tracing records metadata only and never
+propagates FlightRisk's trace context to Anthropic; the operator's
+``ANTHROPIC_OPEN_TELEMETRY=false`` still turns the SDK's tracing off.
 
 How one call behaves (all of it in ``_ask`` and ``_send``):
 
 * The request is streamed. Each read from the connection may wait at most
-  20 s, so a stalled connection fails fast while a slow reply that keeps
+  30 s, so a stalled connection fails fast while a slow reply that keeps
   sending data is allowed to finish.
 * A wall-clock deadline (``FLIGHTRISK_CLAUDE_DEADLINE``, default 90 s) ends the
-  call even when data keeps arriving. It is checked on every chunk read, so a
-  call ends at the deadline, or at most one read timeout after it when the
-  connection goes silent at that moment.
+  call while the reply streams, even when data keeps arriving: it is checked on
+  every chunk read and every event. Setting up the request is bounded only by
+  its own timeouts, not by the deadline: the DNS lookup (no timeout of its
+  own), connecting (5 s), the upload (10 s per write) and the wait for the
+  response headers (30 s). So a call can end later than the deadline by that
+  setup time, or by one read timeout when the connection goes silent just
+  before the deadline.
 * The SDK's own retries are off. ``_ask`` retries once, only after a
-  connection error or a 429/529 response, and waits at most 2 s first. It never
-  retries after a read timeout or the deadline.
+  connection error or a 429/529 response, waits at most 2 s first, and only
+  when the wait plus a connect and a read timeout still fit inside the
+  deadline. It never retries after a read timeout or the deadline.
 * A circuit breaker and a per-minute cap skip calls before anything is sent.
   A skipped call returns ``confidence="skipped"`` with plain operator text.
 * A rejected key (HTTP 401 or 403) turns the agent off until it is rebuilt.
+* Only a reply that ended normally (``end_turn`` or ``stop_sequence``) gives a
+  verdict; a reply cut off for any other reason is an error.
 """
 
 import functools
@@ -75,9 +86,12 @@ _MAX_TOKENS = 4096
 
 # Per-read limits for the streamed call. The read timeout applies to each chunk
 # read from the connection, not to the whole reply, so a reply that keeps
-# streaming (including the API's keep-alive pings) is not cut off by it.
+# streaming (including the API's keep-alive pings) is not cut off by it; the
+# call deadline bounds the total. 30 s leaves room for long gaps between chunks
+# while the model thinks with its thinking hidden. The real gap length has not
+# been measured against the live API yet (a follow-up smoke test).
 _CONNECT_TIMEOUT_S = 5.0
-_READ_TIMEOUT_S = 20.0
+_READ_TIMEOUT_S = 30.0
 _WRITE_TIMEOUT_S = 10.0
 _POOL_TIMEOUT_S = 5.0
 
@@ -101,6 +115,18 @@ _DEFAULT_COOLOFF_S = 60.0
 _COOLOFF_RANGE_S = (1.0, 3600.0)
 _DEFAULT_DEADLINE_S = 90.0
 _DEADLINE_RANGE_S = (10.0, 600.0)
+
+# Accepted effort levels; anything else falls back to the default with a warning.
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+_DEFAULT_EFFORT = "high"
+
+# A verdict is read only from a reply that ended normally. Any other stop
+# reason (max_tokens, pause_turn, none at all, ...) may have cut the reply off.
+_VERDICT_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
+
+# Header names the SDK itself sends. After the client is built, any other
+# header name means something from the environment got through.
+_SDK_HEADER_NAMES = frozenset({"accept", "content-type", "user-agent", "authorization", "anthropic-version"})
 
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 BASE_URL_ENV = "FLIGHTRISK_CLAUDE_BASE_URL"
@@ -137,6 +163,10 @@ _CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 
 # Error types an SSE ``error`` event can carry mid-stream that mean the API is unhealthy.
 _OUTAGE_BODY_TYPES = {"overloaded_error", "api_error", "rate_limit_error"}
+
+
+class ClaudeClientRefused(RuntimeError):
+    """The SDK client would send a header from the environment or a different credential."""
 
 
 class ClaudeCallSkipped(ReasoningCallSkipped):
@@ -349,6 +379,16 @@ def _install_deadline(stream: Any, deadline: float, clock: Callable[[], float], 
     return True
 
 
+def _valid_effort(value: Any) -> str:
+    """``value`` as an effort level, or the default (with a warning) when it is not one."""
+    effort = value.strip().lower() if isinstance(value, str) else ""
+    if effort in _EFFORT_LEVELS:
+        return effort
+    _log.warning("claude_setting_invalid setting=FLIGHTRISK_CLAUDE_EFFORT value=%s used=%s allowed=%s",
+                 redact_text(value, 64), _DEFAULT_EFFORT, ",".join(_EFFORT_LEVELS))
+    return _DEFAULT_EFFORT
+
+
 def downscale_for_upload(image: np.ndarray, max_edge: int = _MAX_IMAGE_EDGE) -> np.ndarray:
     """Shrink ``image`` to the cloud upload cap (long edge ``max_edge``); never upscales."""
     return downscale_long_edge(image, max_edge)
@@ -378,8 +418,64 @@ def resolve_base_url() -> str:
     return raw
 
 
+def _open_telemetry_option() -> dict[str, Any]:
+    """The SDK tracing option: metadata only, no trace propagation, and the operator's opt-out kept.
+
+    Passing an option makes the SDK ignore its environment variables, so
+    ``ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content`` can never put the
+    photos into trace spans. ``ANTHROPIC_OPEN_TELEMETRY=false`` is read here
+    and still turns the SDK's tracing off. Propagation is always off, so
+    FlightRisk's trace context is never sent to Anthropic.
+    """
+    traces: dict[str, Any] = {"content_mode": "metadata_only"}
+    if os.environ.get("ANTHROPIC_OPEN_TELEMETRY", "").strip().lower() == "false":
+        traces["enabled"] = False
+    return {"traces": traces, "propagation": False}
+
+
+def _env_custom_headers() -> dict[str, str]:
+    """``ANTHROPIC_CUSTOM_HEADERS`` parsed the way the SDK parses it, names lower-cased."""
+    parsed: dict[str, str] = {}
+    for line in (os.environ.get("ANTHROPIC_CUSTOM_HEADERS") or "").split("\n"):
+        colon = line.find(":")
+        if colon >= 0:
+            parsed[line[:colon].strip().lower()] = line[colon + 1:].strip()
+    return parsed
+
+
+def _verify_headers(client: Any, api_key: str) -> None:
+    """Fail closed unless the client sends only the SDK's own headers and our key.
+
+    Raises ClaudeClientRefused (naming headers, never values) when a header
+    name outside the SDK's own set is present, when a header from
+    ``ANTHROPIC_CUSTOM_HEADERS`` kept its value, or when the auth header is
+    anything but ``Bearer <FLIGHTRISK_CLAUDE_API_KEY>``.
+    """
+    # The same name can appear twice with different case (the SDK's own and an
+    # environment copy), so every value of each name is checked.
+    headers: dict[str, list[Any]] = {}
+    for name, value in dict(client.default_headers).items():
+        headers.setdefault(str(name).lower(), []).append(value)
+    unexpected = {k for k in headers if k not in _SDK_HEADER_NAMES and not k.startswith("x-stainless-")}
+    leaked = {k for k, v in _env_custom_headers().items() if v in headers.get(k, [])}
+    bad = sorted(unexpected | leaked)
+    if bad:
+        raise ClaudeClientRefused(
+            "Refusing to start Claude: request headers from the environment could not be removed "
+            f"({', '.join(redact_text(k, 64) for k in bad)}). Unset ANTHROPIC_CUSTOM_HEADERS for FlightRisk.")
+    if headers.get("authorization") != [f"Bearer {api_key}"] or "x-api-key" in headers:
+        raise ClaudeClientRefused(
+            f"Refusing to start Claude: requests would not authenticate with {API_KEY_ENV}.")
+
+
 def _build_client(anthropic: Any, api_key: str, base_url: str, *, read_timeout: float = _READ_TIMEOUT_S) -> Any:
-    """The SDK client with every setting passed explicitly, so no ``ANTHROPIC_*`` variable applies."""
+    """The SDK client with every setting passed explicitly, so no ``ANTHROPIC_*`` variable applies.
+
+    Never copy this client (``with_options``, ``copy``): a copy is built by the
+    SDK's constructor again, which re-reads ``ANTHROPIC_CUSTOM_HEADERS`` and
+    would bring the headers removed here back. Build a new one with this
+    function instead.
+    """
     client = anthropic.Anthropic(
         api_key=api_key,
         base_url=base_url,
@@ -387,14 +483,14 @@ def _build_client(anthropic: Any, api_key: str, base_url: str, *, read_timeout: 
             connect=_CONNECT_TIMEOUT_S, read=read_timeout, write=_WRITE_TIMEOUT_S, pool=_POOL_TIMEOUT_S),
         max_retries=0,
         default_headers={},
-        # Request content (the photos) never goes into trace spans, whatever
-        # ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE says.
-        open_telemetry={"traces": {"content_mode": "metadata_only"}},
+        open_telemetry=_open_telemetry_option(),
     )
     # The SDK merges ANTHROPIC_CUSTOM_HEADERS into its headers even when
     # default_headers is passed, and those headers override the auth header.
-    # Reset them so no header comes from the environment.
+    # Reset them so no header comes from the environment, then check that
+    # nothing but the SDK's own headers and our key is left.
     client._custom_headers = {}
+    _verify_headers(client, api_key)
     return client
 
 
@@ -436,13 +532,16 @@ class ClaudeReasoningAgent(FlightRiskAgent):
 
         cfg = get_config().reasoning
         self.model = model or cfg.claude_model
-        self.effort = effort or cfg.claude_effort
+        self.effort = _valid_effort(effort or cfg.claude_effort)
         self._anthropic = anthropic
         self._clock = clock
         self._sleep = sleep
         self._key_source = key_source
+        self._read_timeout_s = _READ_TIMEOUT_S
         try:
             self._client = _build_client(anthropic, key, base_url)
+        except ClaudeClientRefused:
+            raise  # its text names headers and variables, never values
         except Exception as e:
             # The message goes to the dashboard's provider switch; keep the
             # SDK's text (which may carry request details) in the redacted log.
@@ -570,7 +669,10 @@ class ClaudeReasoningAgent(FlightRiskAgent):
                 text = self._send(prompt, images_b64, deadline, started)
             except Exception as first:
                 wait = _retry_wait(first, started[0])
-                if wait is None or self._clock() + wait >= deadline:
+                # Retry only if the retry could still connect and get a first
+                # chunk before the deadline.
+                needed = 0.0 if wait is None else wait + _CONNECT_TIMEOUT_S + self._read_timeout_s
+                if wait is None or self._clock() + needed >= deadline:
                     raise
                 _log.info("claude_call_retry error_type=%s wait_s=%.1f", type(first).__name__, wait)
                 self._sleep(wait)
@@ -626,6 +728,10 @@ class ClaudeReasoningAgent(FlightRiskAgent):
 
         if response.stop_reason == "refusal":
             raise ClaudeNoVerdict("refusal", getattr(response.stop_details, "category", None))
+        if response.stop_reason not in _VERDICT_STOP_REASONS:
+            # max_tokens, pause_turn or no stop reason: the reply may be cut off
+            # mid-verdict, so it is not trusted even if it has text.
+            raise ClaudeNoVerdict("no_text", response.stop_reason)
 
         text = _verdict_text(response.content)
         if not text:
