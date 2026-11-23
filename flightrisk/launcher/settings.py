@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import obstacle_metric_settings
 from flightrisk.drone.safety import (
     MAX_ALT_SLOT_CM,
     MIN_ALT_SLOT_CM,
@@ -375,6 +376,8 @@ def validate(
                  "station may send match data to the Claude cloud service (if FLIGHTRISK_ALLOW_CLOUD_LLM allows it)")
         else:
             warn("llm", "the language model is on: the ground station connects to the local Ollama server at start")
+
+    _validate_obstacle_metric(settings, os.environ if environ is None else environ, err)
     return issues
 
 
@@ -519,6 +522,24 @@ def _validate_ports(settings: LauncherSettings, reserved: Mapping[int, str], err
             err(name, f"{name.replace('_', ' ')} {port} is already used by {reserved[port]}")
     if settings.role == "ground" and settings.dashboard_port == settings.edge_port:
         err("edge_port", f"the dashboard and the edge link cannot share port {settings.edge_port}")
+
+
+def _validate_obstacle_metric(settings: LauncherSettings, environ: Mapping[str, str], err: Callable) -> None:
+    """The opt-in depth metric the edges started here inherit, checked as the edge checks it.
+
+    ``FLIGHTRISK_OBSTACLE_METRIC`` and ``FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX``
+    have no control in the window; an edge reads them from the environment it
+    inherits from the launcher. A value the edge would refuse is an error here,
+    through the same parser (``obstacle_sensor.obstacle_metric_settings``).
+    Nothing is checked when no edge runs on this computer.
+    """
+    if not settings.local_drones():
+        return
+    try:
+        obstacle_metric_settings(environ)
+    except ValueError as exc:
+        err("obstacle_metric", f"{exc} It is in the launcher's environment, and the edges would refuse to start; "
+            f"unset or fix it and restart the launcher")
 
 
 def errors(issues: list[Issue]) -> list[Issue]:

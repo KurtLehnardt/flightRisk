@@ -24,7 +24,11 @@ cue), ``lane_flight._prepare_step`` holds the cut back and calls
    does not fly the field envelope (the Tello and the fake drone, never a
    MAVLink drone), and only when the blocked view's person cue is ``clear``
    (a fresh detection that saw no close person) and the sensor does not
-   report its person cue down. A lane gate's own blocked view does not wait
+   report its person cue down. A view the depth cue could not judge (no floor
+   reference under the opt-in floor ratio metric, depth action
+   ``no_floor_reference``) is looked at again but never stepped around: it
+   says nothing about either side, so the sidestep is refused and the lane
+   cut. A lane gate's own blocked view does not wait
    for a person detection, so when its cue is ``unknown`` the drone first
    takes one more look that does (``SOURCE_PERSON_CHECK``, within one sense
    budget): a person there cuts the lane for a person, a ``clear`` person
@@ -134,6 +138,7 @@ from typing import Any
 from flightrisk.drone.lane_flight import _AGAIN, _CUT, _GO, _STOP
 from flightrisk.drone.lane_steps import plan_heading, replay_lanes, shortest_rotation
 from flightrisk.drone.obstacle_sensor import (
+    ACTION_NO_FLOOR_REFERENCE,
     AVOID_COUNT_KEYS,
     AVOID_HELD_REASON_KEY,
     AVOID_OFFSETS_KEY,
@@ -151,6 +156,7 @@ from flightrisk.drone.obstacle_sensor import (
     CUT_OBSTACLE,
     CUT_PERSON,
     CUT_SENSOR_DOWN,
+    DEPTH_STATE_NO_FLOOR_REFERENCE,
     EVENT_OBSTACLE_RELOOK,
     EVENT_OBSTACLE_SIDESTEP,
     MAX_OFFSETS_LISTED,
@@ -268,6 +274,15 @@ class _Pass:
     line: RelativePose
     replanned: bool
     budget: bool
+
+
+def _no_floor_reference(result: SenseResult) -> bool:
+    """Whether the depth cue could not judge *result*'s view: no floor reference (the opt-in floor ratio metric)."""
+    detail = result.detail if isinstance(result.detail, dict) else {}
+    return (
+        detail.get("depth_action") == ACTION_NO_FLOOR_REFERENCE
+        or detail.get("depth_state") == DEPTH_STATE_NO_FLOOR_REFERENCE
+    )
 
 
 def _with_person_cue(result: SenseResult, fresh: SenseResult) -> SenseResult:
@@ -677,10 +692,13 @@ class ObstacleAvoidMixin:
     def _sidestep_refusal(self, result: SenseResult) -> str | None:
         """Why no sidestep may be tried after the blocked view *result*, or None.
 
-        The view must have a fresh person detection that saw no close person
-        (``person_cue`` ``clear``; ``unknown`` refuses), and the sensor must
-        not report its person cue down.
+        The depth cue must have judged the view (``no_floor_reference``
+        refuses), the view must have a fresh person detection that saw no
+        close person (``person_cue`` ``clear``; ``unknown`` refuses), and the
+        sensor must not report its person cue down.
         """
+        if _no_floor_reference(result):
+            return ACTION_NO_FLOOR_REFERENCE
         if result.person_cue != PERSON_CUE_CLEAR:
             return f"person_cue_{result.person_cue}"
         status = self._person_cue_status()
@@ -704,6 +722,11 @@ class ObstacleAvoidMixin:
         ``_STOP`` otherwise.
         """
         lane_index = step[0]
+        if _no_floor_reference(why[1]):
+            # The depth cue could not judge this view, so it says nothing about either side; no
+            # sideways move is made for it, and no extra look is taken.
+            self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", reason=ACTION_NO_FLOOR_REFERENCE)
+            return _CUT, why
         if why[1].person_cue == PERSON_CUE_UNKNOWN and not self._person_cue_down():
             # One look that waits for a person detection (bounded by its sense
             # budget), so a lane gate's blocked view, which does not wait for

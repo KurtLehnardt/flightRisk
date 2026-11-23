@@ -129,6 +129,8 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_MAX_DECODE_LAG_S,
     ENV_OBSTACLE_AVOID_BUDGET_S,
     ENV_OBSTACLE_CLEAR_VOTES,
+    ENV_OBSTACLE_FLOOR_RATIO_MAX,
+    ENV_OBSTACLE_METRIC,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
     ENV_OBSTACLE_RELOOK,
@@ -138,13 +140,18 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_SIDESTEPS,
     ENV_OBSTACLE_STEP_CM,
     ENV_OBSTACLE_TURN,
+    EVENT_OBSTACLE_METRIC_UNVALIDATED,
     EVENT_SETTING_NON_DEFAULT,
+    FLOOR_RATIO_UNVALIDATED,
     MAX_DECODE_LAG_RANGE_S,
     MAX_DECODE_LAG_S,
     OBSTACLE_AVOID_BUDGET_RANGE_S,
     OBSTACLE_AVOID_BUDGET_S,
     OBSTACLE_CLEAR_VOTES,
     OBSTACLE_CLEAR_VOTES_RANGE,
+    OBSTACLE_FLOOR_RATIO_MAX,
+    OBSTACLE_METRIC,
+    OBSTACLE_METRIC_FLOOR_RATIO,
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_MIN_SAFE_DEPTH_RANGE,
     OBSTACLE_PERSON_FRACTION,
@@ -175,6 +182,7 @@ from flightrisk.drone.obstacle_sensor import (
     FrameStamp,
     LatestFrame,
     NullSensor,
+    obstacle_metric_settings,
     to_sensor_frame,
 )
 from flightrisk.drone.safety import (
@@ -1843,8 +1851,10 @@ class ObstacleSettings:
     ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
     ``_PERSON_FRACTION``, ``_SETTLE_S``, ``_CLEAR_VOTES``, ``_RELOOK``, ``_SIDESTEP_CM``,
     ``_SIDESTEPS``, ``_AVOID_BUDGET_S``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
-    decoder reads it itself, ``tello_bound.max_decode_lag_s``) and
-    ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
+    decoder reads it itself, ``tello_bound.max_decode_lag_s``),
+    ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` and the opt-in depth metric
+    (``FLIGHTRISK_OBSTACLE_METRIC``, ``_FLOOR_RATIO_MAX``; parsed by
+    ``obstacle_sensor.obstacle_metric_settings``, as the launcher does) are all read
     whatever the mode, the drone kind or the video source, so a malformed value
     refuses to start even when the edge would not use it (under ``off``, on the
     fake drone, or on a MAVLink edge without a camera). The step's range and
@@ -1886,6 +1896,10 @@ class ObstacleSettings:
         self.avoid_budget_s = _obstacle_number(
             ENV_OBSTACLE_AVOID_BUDGET_S, OBSTACLE_AVOID_BUDGET_S, *OBSTACLE_AVOID_BUDGET_RANGE_S, environ,
         )
+        try:
+            self.metric, self.floor_ratio_max = obstacle_metric_settings(environ)
+        except ValueError as exc:
+            raise SystemExit(f"edge_device: {exc} Refusing to start.") from None
         self.non_default: list[tuple[str, Any, Any]] = [
             (name, value, default)
             for name, value, default in (
@@ -1902,6 +1916,8 @@ class ObstacleSettings:
                 (ENV_OBSTACLE_SIDESTEP_CM, self.sidestep_cm, OBSTACLE_SIDESTEP_CM),
                 (ENV_OBSTACLE_SIDESTEPS, self.sidesteps, OBSTACLE_SIDESTEPS),
                 (ENV_OBSTACLE_AVOID_BUDGET_S, self.avoid_budget_s, OBSTACLE_AVOID_BUDGET_S),
+                (ENV_OBSTACLE_METRIC, self.metric, OBSTACLE_METRIC),
+                (ENV_OBSTACLE_FLOOR_RATIO_MAX, self.floor_ratio_max, OBSTACLE_FLOOR_RATIO_MAX),
             )
             if value != default
         ]
@@ -1916,12 +1932,48 @@ class ObstacleSettings:
             "obstacle_avoid_budget_s": self.avoid_budget_s,
         }
 
-    def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
-        """Log every setting that is not its default once, at warning level, by name and value."""
+    def metric_unused(self, camera_sensor: bool = True) -> str | None:
+        """Why the depth metric has no effect on this edge, or None when its camera sensor uses it.
+
+        It has none while obstacle sensing is ``off``, and none on an edge
+        without a camera sensor (*camera_sensor* false: a fake drone, whose
+        scripted sensor never looks at a picture, or a MAVLink edge without a
+        camera source, which relies on the autopilot).
+        """
+        if self.mode == SENSING_ENV_OFF:
+            return "it has no effect while obstacle sensing is off"
+        if not camera_sensor:
+            return ("it has no effect on this edge, which has no camera sensor (a fake drone, or a MAVLink edge "
+                    "without a camera source)")
+        return None
+
+    def warn_non_default(self, log: StructuredLogger, drone_id: str | None, camera_sensor: bool = True) -> None:
+        """Log every setting that is not its default once, at warning level, by name and value.
+
+        While the opt-in ``floor_ratio`` metric is selected it also logs
+        ``edge_obstacle_metric_unvalidated`` once, at warning level. A floor
+        ratio limit set while the score decides is named as having no effect,
+        and so is the metric on an edge that does not use it (``metric_unused``).
+        """
+        unused = self.metric_unused(camera_sensor)
         for name, value, default in self.non_default:
+            detail = f"{name}={value!r} is not the default ({default!r})"
+            if name == ENV_OBSTACLE_FLOOR_RATIO_MAX and self.metric != OBSTACLE_METRIC_FLOOR_RATIO:
+                detail += f"; it has no effect while {ENV_OBSTACLE_METRIC} is {self.metric!r}"
+            elif name in (ENV_OBSTACLE_METRIC, ENV_OBSTACLE_FLOOR_RATIO_MAX) and unused is not None:
+                detail += f"; {unused}"
             log.warning(
                 EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
-                detail=f"{name}={value!r} is not the default ({default!r})",
+                detail=detail,
+            )
+        if self.metric == OBSTACLE_METRIC_FLOOR_RATIO:
+            unused = "" if unused is None else f"; {unused}"
+            log.warning(
+                EVENT_OBSTACLE_METRIC_UNVALIDATED, drone_id=drone_id, metric=self.metric,
+                floor_ratio_max=self.floor_ratio_max,
+                detail=f"{FLOOR_RATIO_UNVALIDATED}. The depth cue blocks above {self.floor_ratio_max:g} and without "
+                       f"a floor reference; refit the limit at flight height for this site and keep an observer at "
+                       f"LAND ALL{unused}",
             )
 
 
@@ -2048,7 +2100,9 @@ def _build_obstacle_wiring(
     kind = _drone_kind(args)
     drone_id = getattr(args, "drone_id", None)
     settings = ObstacleSettings(kind, envelope, env)
-    settings.warn_non_default(log, drone_id)
+    # The edges below that build a camera sensor: all but a fake drone and a MAVLink edge without a camera.
+    camera_sensor = kind != "fake" and not (kind == "mavlink" and getattr(args, "source", None) not in ("camera", "url"))
+    settings.warn_non_default(log, drone_id, camera_sensor=camera_sensor)
     mode, turn, step_cm, settle_s = settings.mode, settings.turn, settings.step_cm, settings.settle_s
     if mode == SENSING_ENV_OFF:
         log.warning(
@@ -2072,6 +2126,10 @@ def _build_obstacle_wiring(
         )
 
     min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
+    # The opt-in depth metric reaches the sensor only when it is chosen, so the default builds it as before.
+    metric_kwargs: dict[str, Any] = {} if settings.metric == OBSTACLE_METRIC else {
+        "metric": settings.metric, "floor_ratio_max": settings.floor_ratio_max,
+    }
     holder = LatestFrame(time.monotonic)
     try:
         if kind != "mavlink":
@@ -2081,7 +2139,7 @@ def _build_obstacle_wiring(
 
         sensor = obstacle_camera.ForwardCameraSensor(
             holder, runner, drone_id=drone_id, min_safe_depth=min_safe_depth, person_fraction=person_fraction,
-            settle_s=settle_s, clock=time.monotonic,
+            settle_s=settle_s, clock=time.monotonic, **metric_kwargs,
         )
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"

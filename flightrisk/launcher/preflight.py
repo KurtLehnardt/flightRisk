@@ -24,6 +24,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import (
+    ENV_OBSTACLE_FLOOR_RATIO_MAX,
+    ENV_OBSTACLE_METRIC,
+    ENV_OBSTACLE_SENSING,
+    FLOOR_RATIO_FIELD_BASIS,
+    OBSTACLE_METRIC,
+    SENSING_ENV_OFF,
+    obstacle_metric_settings,
+)
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
@@ -400,6 +409,12 @@ def run_preflight(
             status = WARN if row.status == uplink.FAIL else row.status
             checks.append(Check(f"Claude: {row.name}", status, row.detail))
 
+    # The opt-in obstacle metric the edges started here inherit, when one is selected.
+    if local:
+        metric_check = obstacle_metric_check(env.environ, tuple(d.source for d in local))
+        if metric_check is not None:
+            checks.append(metric_check)
+
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
 
@@ -479,3 +494,50 @@ def _ceiling_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
             f"drones' slots to that file before the ground station starts",
         )
     return Check("Ceiling", PASS, f"{ceiling} cm, margin {margin} cm, slots up to {ceiling - margin} cm")
+
+
+OBSTACLE_METRIC_CHECK = "Obstacle metric"
+#: The start of the WARN row's detail while the opt-in floor ratio metric is selected.
+OBSTACLE_METRIC_WARNING = "Opt-in metric; threshold not validated indoors (H1)"
+
+
+def obstacle_metric_check(environ: Mapping[str, str], sources: tuple[str, ...] | None = None) -> Check | None:
+    """The depth metric the edges started here inherit, or None for the default score.
+
+    WARN while ``FLIGHTRISK_OBSTACLE_METRIC`` selects an opt-in metric: its
+    threshold rests on 3 outdoor recordings at one height and is not validated
+    indoors. It never blocks the start. INFO instead when no edge started here
+    uses it: the inherited ``FLIGHTRISK_OBSTACLE_SENSING`` is ``off``, or
+    *sources* (the sources of the local drones) has no real Tello, because a
+    fake drone's scripted sensor looks at no picture. A value the edge would
+    refuse is a FAIL (``settings.validate`` reports it as an error too).
+    """
+    try:
+        metric, ratio_max = obstacle_metric_settings(environ)
+    except ValueError as exc:
+        return Check(OBSTACLE_METRIC_CHECK, FAIL, f"{exc} The edges would refuse to start.")
+    if metric == OBSTACLE_METRIC:
+        return None
+    data = {"metric": metric, "floor_ratio_max": ratio_max}
+    if (environ.get(ENV_OBSTACLE_SENSING) or "").strip().lower() == SENSING_ENV_OFF:
+        return Check(
+            OBSTACLE_METRIC_CHECK, INFO,
+            f"{ENV_OBSTACLE_METRIC}={metric} is set but not used: {ENV_OBSTACLE_SENSING}=off, so the edges started "
+            f"here fly with no obstacle sensing at all",
+            data,
+        )
+    if sources is not None and "tello" not in sources:
+        return Check(
+            OBSTACLE_METRIC_CHECK, INFO,
+            f"{ENV_OBSTACLE_METRIC}={metric} is set but not used: every drone started here is a fake drone, whose "
+            f"scripted obstacle sensor looks at no picture",
+            data,
+        )
+    return Check(
+        OBSTACLE_METRIC_CHECK, WARN,
+        f"{OBSTACLE_METRIC_WARNING}: fitted on {FLOOR_RATIO_FIELD_BASIS}. {ENV_OBSTACLE_METRIC}={metric}: the "
+        f"edges started here block a step when the centre's floor ratio is above {ratio_max:g} "
+        f"({ENV_OBSTACLE_FLOOR_RATIO_MAX}) or the view has no floor reference. Refit it at flight height for this "
+        f"site (docs/obstacle-sensing.md), and keep an observer at LAND ALL",
+        data,
+    )

@@ -31,6 +31,8 @@ actually looked at a fresh view and saw nothing; every failure to look is
 from __future__ import annotations
 
 import contextlib
+import math
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -168,6 +170,157 @@ ENV_FAKE_OBSTACLE_Y_CM = "FLIGHTRISK_FAKE_OBSTACLE_Y_CM"
 #: Values of ``FLIGHTRISK_OBSTACLE_SENSING``.
 SENSING_ENV_REQUIRED = "required"
 SENSING_ENV_OFF = "off"
+
+# ---------------------------------------------------------------------------
+# The depth cue's decision metric (opt-in, not validated)
+# ---------------------------------------------------------------------------
+#
+# By default the depth cue blocks a step when the guard's p95 normalised
+# centre score is above ``OBSTACLE_MIN_SAFE_DEPTH``. ``FLIGHTRISK_OBSTACLE_METRIC
+# =floor_ratio`` makes it block when ``obstacle.centre_floor_ratio`` of the raw
+# depth map is above ``OBSTACLE_FLOOR_RATIO_MAX`` instead, so field tests can fly
+# and compare the candidate. The default stays the score. The floor ratio was
+# fitted on one clear and two wall recordings outdoors at 110 cm; it is not
+# validated indoors or at other heights (``docs/obstacle-sensing.md``).
+
+#: ``FLIGHTRISK_OBSTACLE_METRIC`` values: the current score (the default) and the opt-in floor ratio.
+OBSTACLE_METRIC_SCORE = "score"
+OBSTACLE_METRIC_FLOOR_RATIO = "floor_ratio"
+OBSTACLE_METRICS = (OBSTACLE_METRIC_SCORE, OBSTACLE_METRIC_FLOOR_RATIO)
+#: The depth cue's metric unless ``FLIGHTRISK_OBSTACLE_METRIC`` says otherwise.
+OBSTACLE_METRIC = OBSTACLE_METRIC_SCORE
+#: The field fit behind the default limit (110 cm, outdoors, 1 clear and 2 wall
+#: recordings): the highest floor ratio seen on the clear recording and the
+#: lowest seen on the wall recordings. The margin between them is only 0.0016.
+FLOOR_RATIO_FIELD_HIGHEST_CLEAR = 0.7978
+FLOOR_RATIO_FIELD_LOWEST_WALL = 0.7994
+#: Under ``floor_ratio``, a centre whose floor ratio is above this is blocked.
+#: It is the midpoint of the field fit above, so it lies strictly between the
+#: highest clear value and the lowest wall value. Not validated.
+OBSTACLE_FLOOR_RATIO_MAX = 0.7986
+#: Allowed ``FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX``. A ratio of 1 means the
+#: centre is as close as the floor band; a limit above that would let a centre
+#: nearer than the ground ahead pass. The upper bound stays at 1.0 until indoor
+#: data exists.
+OBSTACLE_FLOOR_RATIO_MAX_RANGE = (0.5, 1.0)
+ENV_OBSTACLE_METRIC = "FLIGHTRISK_OBSTACLE_METRIC"
+ENV_OBSTACLE_FLOOR_RATIO_MAX = "FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX"
+
+#: The depth cue's own state at a gate under ``floor_ratio`` (``SenseResult.detail["depth_state"]``).
+DEPTH_STATE_CLEAR = "clear"
+DEPTH_STATE_BLOCKED = "blocked"
+#: The map has no usable floor reference (``centre_floor_ratio`` is None). The
+#: gate is blocked, with the cut reason ``obstacle``: it is never clear, and it
+#: is not ``unavailable``, which is reserved for a sensor that failed to look.
+DEPTH_STATE_NO_FLOOR_REFERENCE = "no_floor_reference"
+DEPTH_STATES = (DEPTH_STATE_CLEAR, DEPTH_STATE_BLOCKED, DEPTH_STATE_NO_FLOOR_REFERENCE)
+#: ``ObstacleGuard`` action (and ``flightrisk_obstacle_checks`` action) of a view without a floor reference.
+ACTION_NO_FLOOR_REFERENCE = DEPTH_STATE_NO_FLOOR_REFERENCE
+
+#: Keys the camera sensor adds to its ``status()`` and to ``TELEMETRY_PERSON_CUE``
+#: while an opt-in metric decides: the metric, its value at the latest gate
+#: (None when that gate had no floor reference or could not look), its limit and
+#: the depth state of that gate. They ride in the existing person cue object so
+#: that no top-level telemetry field is added (``fleet_protocol.MAX_FIELDS``).
+#: Under the default score none of them is sent.
+DEPTH_METRIC_KEY = "depth_metric"
+DEPTH_METRIC_VALUE_KEY = "depth_metric_value"
+DEPTH_METRIC_MAX_KEY = "depth_metric_max"
+DEPTH_STATE_KEY = "depth_state"
+
+#: Logged once per gate by the camera sensor while an opt-in metric decides
+#: (INFO: ``metric``, ``value``, ``limit``, ``depth_state``, ``state``, ``score``,
+#: ``device``, the depth model's compute device).
+EVENT_OBSTACLE_METRIC = "edge_obstacle_metric"
+#: Logged once at the edge's start, at warning level, while the opt-in metric is
+#: selected: its threshold rests on ``FLOOR_RATIO_FIELD_BASIS`` and nothing more.
+EVENT_OBSTACLE_METRIC_UNVALIDATED = "edge_obstacle_metric_unvalidated"
+#: What the floor ratio's threshold rests on, for every warning that names it.
+FLOOR_RATIO_FIELD_BASIS = "3 outdoor recordings at one height"
+#: The edge's startup warning while ``floor_ratio`` is selected.
+FLOOR_RATIO_UNVALIDATED = f"floor_ratio is unvalidated: {FLOOR_RATIO_FIELD_BASIS}"
+
+#: A plain ASCII decimal, as every obstacle setting is read (``edge_device``): no
+#: ``5_0``, non-ASCII digits, ``nan`` or ``inf``.
+_ASCII_DECIMAL_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def obstacle_metric_settings(environ: Any) -> tuple[str, float]:
+    """``(metric, floor_ratio_max)`` from ``FLIGHTRISK_OBSTACLE_METRIC`` and ``FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX``.
+
+    The edge (``edge_device.ObstacleSettings``) and the launcher (``validate``
+    and its preflight) both call this, so they accept and refuse exactly the
+    same values. Unset or empty gives the default. The metric is ``score`` or
+    ``floor_ratio``, ignoring case and surrounding spaces. The limit is a plain
+    ASCII decimal within ``OBSTACLE_FLOOR_RATIO_MAX_RANGE``. Both are checked
+    whatever the metric, like every obstacle setting. Raises ``ValueError``
+    whose message names the variable and the value for anything else.
+    """
+    raw_metric = (environ.get(ENV_OBSTACLE_METRIC) or "").strip()
+    metric = raw_metric.lower() or OBSTACLE_METRIC
+    if metric not in OBSTACLE_METRICS:
+        raise ValueError(
+            f"{ENV_OBSTACLE_METRIC}={raw_metric!r} is not valid; use {OBSTACLE_METRIC_SCORE!r} (the default) "
+            f"or {OBSTACLE_METRIC_FLOOR_RATIO!r}."
+        )
+    raw_max = (environ.get(ENV_OBSTACLE_FLOOR_RATIO_MAX) or "").strip()
+    if not raw_max:
+        return metric, OBSTACLE_FLOOR_RATIO_MAX
+    lo, hi = OBSTACLE_FLOOR_RATIO_MAX_RANGE
+    value: float | None = None
+    if _ASCII_DECIMAL_RE.fullmatch(raw_max):
+        try:
+            value = float(raw_max)
+        except (ValueError, OverflowError):
+            value = None
+    if value is None or not math.isfinite(value) or not lo <= value <= hi:
+        raise ValueError(f"{ENV_OBSTACLE_FLOOR_RATIO_MAX}={raw_max!r} must be a number from {lo:g} to {hi:g}.")
+    return metric, value
+
+
+def valid_floor_ratio_max(value: Any) -> bool:
+    """Whether ``value`` can be a floor ratio limit: a real number (not a bool or a string) in ``OBSTACLE_FLOOR_RATIO_MAX_RANGE``.
+
+    The guard and the camera sensor refuse anything else, so a limit outside
+    the range the edge accepts cannot reach the gate another way either.
+    """
+    lo, hi = OBSTACLE_FLOOR_RATIO_MAX_RANGE
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and lo <= value <= hi
+    )
+
+
+def _finite_or_none(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def depth_metric_fields(source: Any) -> dict[str, Any]:
+    """The opt-in metric's keys of ``TELEMETRY_PERSON_CUE``, cleaned, or ``{}``.
+
+    ``source`` is a sensor's ``status()`` (on the edge) or a received
+    ``obstacle_person_cue`` value (on the ground); both go through this one
+    function. Only a metric of ``OBSTACLE_METRICS`` other than the default
+    gives keys, so the default score adds nothing. A value or limit that is
+    not a finite number, and a depth state that is not one of
+    ``DEPTH_STATES``, become None.
+    """
+    if not isinstance(source, dict):
+        return {}
+    metric = source.get(DEPTH_METRIC_KEY)
+    if metric not in OBSTACLE_METRICS or metric == OBSTACLE_METRIC:
+        return {}
+    state = source.get(DEPTH_STATE_KEY)
+    return {
+        DEPTH_METRIC_KEY: metric,
+        DEPTH_METRIC_VALUE_KEY: _finite_or_none(source.get(DEPTH_METRIC_VALUE_KEY)),
+        DEPTH_METRIC_MAX_KEY: _finite_or_none(source.get(DEPTH_METRIC_MAX_KEY)),
+        DEPTH_STATE_KEY: state if state in DEPTH_STATES else None,
+    }
 
 # ---------------------------------------------------------------------------
 # Sense results

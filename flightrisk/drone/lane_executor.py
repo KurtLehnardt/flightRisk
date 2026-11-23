@@ -151,6 +151,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
     NullSensor,
     ObstacleSensor,
+    depth_metric_fields,
 )
 from flightrisk.drone.safety import ROOM_LIMITS, SafetyEnvelope, is_finite_number
 from flightrisk.fleet_protocol import (
@@ -665,7 +666,10 @@ class LaneExecutor(
           sensor), ``{"person_cue_down": bool, "detection_age_s": number or
           null}``: whether the cue has been ``unknown`` for several gates in a
           row, and how old the view of the newest detection result is. Left
-          out for a sensor that reports no person cue.
+          out for a sensor that reports no person cue. Under the opt-in depth
+          metric it also carries ``depth_metric``, ``depth_metric_value``,
+          ``depth_metric_max`` and ``depth_state``
+          (``obstacle_sensor.depth_metric_fields``).
         * ``obstacle_avoid``: with stepped sensing and the re-look or the
           sidestep switched on (``lane_avoid``), what they did in the plan:
           ``{"relooks", "relook_clears", "sidesteps", "sidestep_passes":
@@ -730,7 +734,9 @@ class LaneExecutor(
         age = status.get("person_detection_age_s")
         if not is_finite_number(age) or age < 0:
             age = None
-        return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
+        # The opt-in depth metric rides in the same object (nothing under the default score).
+        return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age,
+                **depth_metric_fields(status)}
 
     def _obstacle_unavailable_detail(self) -> str:
         """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""

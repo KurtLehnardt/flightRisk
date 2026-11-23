@@ -155,6 +155,27 @@ const socket = io();
     // Text and badges for the per-lane obstacle sensing (docs/obstacle-sensing.md). These helpers only choose
     // text and classes from the telemetry and event fields, and cope with any of them being absent.
     function roundMs(v) { return Math.round(v * 10) / 10; }
+    // The opt-in depth metric (FLIGHTRISK_OBSTACLE_METRIC=floor_ratio) as a short note for the SENSE badge, with a
+    // sentence for its title; null for the default score or a drone that reports no metric. Four decimals: the
+    // field margin around the default limit was only 0.0016.
+    function depthMetricNote(d) {
+        const cue = d && d.obstacle_person_cue;
+        if (!cue || typeof cue !== 'object' || cue.depth_metric !== 'floor_ratio') return null;
+        const round4 = (v) => Math.round(v * 10000) / 10000;
+        const limit = typeof cue.depth_metric_max === 'number' ? cue.depth_metric_max : null;
+        const max = limit !== null ? round4(limit) : null;
+        const v = cue.depth_metric_value;
+        // The comparison uses the unrounded numbers, so a value shown equal to the limit still reads right.
+        let shown;
+        if (cue.depth_state === 'no_floor_reference') shown = 'no floor' + (max !== null ? ', limit ' + max : '');
+        else if (typeof v === 'number' && max !== null) shown = round4(v) + (v <= limit ? ' <= ' : ' > ') + max;
+        else if (typeof v === 'number') shown = String(round4(v));
+        else shown = '--' + (max !== null ? ', limit ' + max : '');
+        return { text: ', floor ratio (unvalidated) ' + shown,
+            title: ' Depth metric: floor ratio (opt-in), blocked above ' + (max !== null ? max : 'its limit')
+                + ' and when the view has no floor reference. Unvalidated: its threshold rests on 3 outdoor'
+                + ' recordings at one height, none indoors (H1).' };
+    }
     // The SENSE badge of a drone card, or null when the drone reported no obstacle sensing mode.
     function senseBadge(d) {
         const mode = d && d.obstacle_sensing;
@@ -162,13 +183,14 @@ const socket = io();
         if (mode === 'off') return { text: 'SENSE OFF', cls: 'held', title: 'This drone flies its lanes without obstacle sensing.' };
         if (mode === 'autopilot') return { text: 'SENSE AUTOPILOT', cls: '', title: 'The autopilot avoids obstacles on its own.' };
         const label = mode === 'forward_only' ? 'SENSE forward only' : 'SENSE';
+        const note = depthMetricNote(d) || { text: '', title: '' };
         if (d.obstacle_sensor_ok === false || d.obstacle_state === 'unavailable') {
-            return { text: label + ' STALE', cls: 'held', title: 'The obstacle sensor is not answering.' };
+            return { text: label + ' STALE' + note.text, cls: 'held', title: 'The obstacle sensor is not answering.' + note.title };
         }
         const ms = typeof d.obstacle_latency_ms === 'number' ? ' ' + roundMs(d.obstacle_latency_ms) + ' ms' : '';
         const cls = mode === 'forward_only' ? 'held' : '';
-        return { text: label + ' ok' + ms, cls: cls, title: mode === 'forward_only'
-            ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.' };
+        return { text: label + ' ok' + ms + note.text, cls: cls, title: (mode === 'forward_only'
+            ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.') + note.title };
     }
     // A person detection older than this many seconds leaves the obstacle sensor's person cue stale.
     const PERSON_CUE_STALE_S = 2;
