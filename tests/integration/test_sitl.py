@@ -1,12 +1,14 @@
 """Integration tests for MavlinkController against ArduPilot SITL.
 
-These tests require a running SITL instance on udp://:14540.
+These tests require a running SITL instance on udpin://0.0.0.0:14540.
 Run with: pytest tests/integration/test_sitl.py -m sitl
 Skip with: pytest -m "not sitl and not slow" (default in pytest.ini)
 
 Start SITL: ./scripts/start_sitl.sh
 """
+import socket
 import sys
+import threading
 import time
 
 import pytest
@@ -16,7 +18,13 @@ pytestmark = [
     pytest.mark.integration,
 ]
 
-SITL_ADDRESS = "udp://:14540"
+# MAVSDK 2 and later dropped the old ``udp://:14540`` listen form; ``udpin://0.0.0.0:14540`` is its replacement.
+SITL_ADDRESS = "udpin://0.0.0.0:14540"
+
+
+#: How long the fixture waits for a first heartbeat before it skips. MavlinkController.connect()
+#: waits for a healthy vehicle with no timeout of its own, which hangs when no SITL is running.
+SITL_CONNECT_TIMEOUT_S = 20.0
 
 
 def _wait_for(condition, timeout=10, interval=0.5):
@@ -104,13 +112,24 @@ def sitl_available():
     """Connect to a live SITL instance, or skip if unavailable."""
     MavlinkController = _import_real_mavlink_controller()
 
-    try:
-        ctrl = MavlinkController("sitl-test", host=SITL_ADDRESS)
-        connected = ctrl.connect()
-        if not connected:
-            pytest.skip("SITL not available")
-    except (ConnectionError, OSError, TimeoutError, RuntimeError) as e:
-        pytest.skip(f"SITL not available: {e}")
+    ctrl = MavlinkController("sitl-test", host=SITL_ADDRESS)
+    outcome: dict = {}
+
+    def _connect() -> None:
+        try:
+            outcome["connected"] = ctrl.connect()
+        except (ConnectionError, OSError, TimeoutError, RuntimeError) as e:
+            outcome["error"] = e
+
+    worker = threading.Thread(target=_connect, daemon=True, name="sitl-connect")
+    worker.start()
+    worker.join(SITL_CONNECT_TIMEOUT_S)
+    if worker.is_alive():
+        pytest.skip(f"SITL not available: no healthy vehicle on {SITL_ADDRESS} within {SITL_CONNECT_TIMEOUT_S:.0f} s")
+    if "error" in outcome:
+        pytest.skip(f"SITL not available: {outcome['error']}")
+    if not outcome.get("connected"):
+        pytest.skip("SITL not available")
 
     yield ctrl
 
@@ -238,10 +257,20 @@ class TestSITLCoverageFlight:
         from pathlib import Path
 
         _import_real_mavlink_controller()  # Skips when the real mavsdk is missing.
+        try:  # SITL instance 0 listens on TCP 5760; MAVSDK would retry a closed port for ever.
+            socket.create_connection(("127.0.0.1", 5760), timeout=2.0).close()
+        except OSError:
+            pytest.skip("no SITL on tcp 127.0.0.1:5760 (run scripts/start_sitl.sh)")
         root = Path(__file__).resolve().parents[2]
         spec = importlib.util.spec_from_file_location("sitl_fly_coverage_it", root / "scripts" / "sitl_fly_coverage.py")
         script = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(script)
+        # Python 3.13 needs the module in sys.modules while it runs (dataclasses look it up there).
+        sys.modules[spec.name] = script
+        try:
+            spec.loader.exec_module(script)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
 
         # Re-import the real controller for the script, then restore the fakes
         # that the unit tests rely on once this test is done.

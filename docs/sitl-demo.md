@@ -132,6 +132,28 @@ mkdir -p run0 && cd run0 && ../ardupilot/build/sitl/bin/arducopter --model + --s
 
 SITL accepts one client on the port and exits when it disconnects, so start a fresh instance for every run. The health flags turn true about 20 s after boot and a takeoff is accepted after about 45 s.
 
+### Windows
+
+This route is documented from the tool layout and the code paths, not from a run: nothing here was executed on a Windows machine.
+
+- SITL: use the prebuilt Cygwin ArduCopter build that Mission Planner downloads, from `https://firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable`. Download the ArduCopter executable and the Cygwin DLLs next to it into one folder. There is no Docker or `sim_vehicle.py` step.
+- Parameters: save the `sitl.parm` text from the native section above (stream rates plus `SYSID_THISMAV 1`, and the failsafe parameters for the CLI path) and start the executable with `--defaults <copter.parm>,sitl.parm --home 40.7608,-111.8910,1288,0 -I0`. Use the `copter.parm` that ships with the ArduPilot source tree of the same version, or only `sitl.parm` if you have not downloaded it.
+- Ports: instance N listens on TCP `5760 + 10 * N`, so `-I0` is `tcpout://127.0.0.1:5760` and `-I1` is `tcpout://127.0.0.1:5770`. SITL accepts one client per instance and exits when it disconnects.
+- MAVSDK pin: install `mavsdk>=3.17,<4` (as `requirements.txt` does). MAVSDK-Python 4 and later is a native binding without `mavsdk_server`, and the link refuses it at `connect()` with a message that says so. The link looks for `mavsdk_server.exe` inside `mavsdk/bin` on Windows.
+- Process lifetime: on Windows the link starts `mavsdk_server.exe` and assigns it to a Windows Job Object created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so Windows ends it when the edge process ends, even after a crash. If the assignment is refused (a parent job that forbids nesting, logged as a warning), the server is stopped only by an `atexit` hook, which covers a clean exit but not a crash. That is the remaining gap; it has not been exercised on a real Windows machine.
+- Check for leftovers after every run, and kill any you find:
+
+```powershell
+Get-Process mavsdk_server -ErrorAction SilentlyContinue
+Stop-Process -Name mavsdk_server -Force
+```
+
+A leftover server keeps heartbeating to the autopilot and holds its port, so a restarted edge cannot connect.
+
+### MAVSDK address form
+
+MAVSDK 2 and later dropped `udp://` for listening. Use `udpin://0.0.0.0:14540` (listen for an autopilot or router sending to that port) in place of the old `udp://:14540`; `tests/integration/test_sitl.py` uses the new form.
+
 ### Run the tests and the CLI path
 
 ```bash
