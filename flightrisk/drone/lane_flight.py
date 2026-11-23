@@ -106,7 +106,16 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from flightrisk.drone.controller import CommandOutcome, command_result
+from flightrisk.drone.controller import (
+    CommandOutcome,
+    CommandRefusedError,
+    command_result,
+)
+from flightrisk.drone.flight_guards import (
+    DESCENT_CLEARANCE_CM,
+    reply_text,
+    transient_refusal,
+)
 from flightrisk.drone.lane_steps import (
     Cut,
     plan_heading,
@@ -146,6 +155,12 @@ from flightrisk.drone.safety import ROOM_LIMITS, CeilingError
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
 __all__ = [
+    "EVENT_DESCENT_REFUSED",
+    "EVENT_HEIGHT_SETTLED",
+    "EVENT_HEIGHT_UNSETTLED",
+    "EVENT_HOVER_TEST",
+    "EVENT_MOVE_REFUSED",
+    "EVENT_TAKEOFF_LATE",
     "EVENT_SENSOR_PROBE",
     "EVENT_TAKEOFF_SENSE",
     "TAKEOFF_SENSE_DETAIL",
@@ -175,6 +190,18 @@ EVENT_SENSOR_PROBE = "edge_obstacle_sensor_probe"
 EVENT_TAKEOFF_SENSE = "edge_obstacle_takeoff_sense"
 #: The ``detail`` that starts a takeoff refused because the sensor could not look.
 TAKEOFF_SENSE_DETAIL = "obstacle sensor cannot see before takeoff:"
+#: Flight guards (``flightrisk.drone.flight_guards``). A settled height read
+#: before a move to the altitude slot, and one that did not settle in time.
+EVENT_HEIGHT_SETTLED = "edge_height_settled"
+EVENT_HEIGHT_UNSETTLED = "edge_height_unsettled"
+#: A descent to the slot refused because the drone would come too close to what is below it.
+EVENT_DESCENT_REFUSED = "edge_descent_refused"
+#: A takeoff answered later than ``FlightGuards.takeoff_late_s``.
+EVENT_TAKEOFF_LATE = "edge_takeoff_late"
+#: A move the drone refused with a transient refusal, retried or not.
+EVENT_MOVE_REFUSED = "edge_move_refused"
+#: The hover-only test skipped a move to the slot, or the lanes.
+EVENT_HOVER_TEST = "edge_hover_test"
 # How much longer than its own timeout a sense call may run before the
 # executor abandons its helper thread and treats the gate as timed out.
 _SENSE_JOIN_GRACE_S = 0.5
@@ -355,6 +382,11 @@ class FlightSequenceMixin:
             elif kind == "return":
                 self._run_return(cmd, payload)
         except Exception as exc:
+            if isinstance(exc, CommandRefusedError) and not exc.counted and transient_refusal(exc.reply):
+                # A turn, manual step, nudge or sensed way back refused with
+                # a transient refusal: never retried, but counted and logged
+                # like a retried one (``_count_refusal``).
+                self._count_refusal(exc, f"{exc.command} answered {reply_text(exc.reply)!r}: not retried, landing")
             self._log.error("edge_executor_error", drone_id=self.drone_id, kind=kind, error=repr(exc))
             self.land_now("executor_error")
             self._nack(cmd, "landing", detail="executor_error")
@@ -563,7 +595,11 @@ class FlightSequenceMixin:
         With a sensor, an autonomous takeoff is also refused
         (``drone_unreachable``, detail ``TAKEOFF_SENSE_DETAIL ...``) unless
         one probe look right before it sees a fresh, valid view
-        (``_takeoff_sense_refusal``). Then the battery.
+        (``_takeoff_sense_refusal``). Then the battery. A drone that reports
+        a settled height (the Tello) whose takeoff was answered later than
+        ``FlightGuards.takeoff_late_s`` after it was sent is landed
+        (``takeoff_late``) and the takeoff ends as aborted: it never moves to
+        its slot.
         """
         too_hot = self._takeoff_temp_refusal()
         if too_hot is not None:
@@ -646,6 +682,10 @@ class FlightSequenceMixin:
                 # A point the plan was to continue from (a sidestep's point on
                 # the lane, a hold point) belongs to the frame just replaced.
                 self._resume_target = None
+                # The flight's refusal budget starts again (``_retry_refusal``);
+                # reset_pose() above cleared the fence margin of its refused
+                # lane steps.
+                self._flight_refusals = 0
             self._flying_lanes = False
             self._phase = "taking_off"
             self._moving = True
@@ -674,12 +714,44 @@ class FlightSequenceMixin:
                 outcome=result.outcome.value,
             )
             return "not_executed"
+        reply_s = self._takeoff_reply_s(t_exec)
         with self._lock:
             self._takeoff_at_local_s = t_exec
             # Seen by the monitor's unrequested-landing check from now on.
             self._was_flying = True
-        self._log.info("edge_takeoff", drone_id=self.drone_id, battery=battery, at_local_s=t_exec)
+        self._log.info("edge_takeoff", drone_id=self.drone_id, battery=battery, at_local_s=t_exec,
+                       reply_s=round(reply_s, 3))
+        if self._settles_height() and reply_s > self._guards.takeoff_late_s:
+            # So much of the takeoff went unobserved that the drone is landed
+            # rather than moved to its slot (``flight_guards``).
+            self._log.error(
+                EVENT_TAKEOFF_LATE,
+                drone_id=self.drone_id,
+                reply_s=round(reply_s, 3),
+                takeoff_late_s=self._guards.takeoff_late_s,
+                detail=(f"takeoff answered after {reply_s:.1f} s, later than {self._guards.takeoff_late_s:g} s: "
+                        "landing instead of moving to the altitude slot"),
+            )
+            self.land_now("takeoff_late")
         return "aborted" if self._abort.is_set() else None
+
+    def _takeoff_reply_s(self, t_exec: float) -> float:
+        """Seconds from the takeoff going on the wire to its reply.
+
+        The controller's own measure (``last_takeoff_reply_s``, the Tello)
+        when it has one, so time spent waiting for the command channel (a
+        keepalive holding it) never counts toward ``takeoff_late_s``;
+        otherwise the time since *t_exec*, just before the takeoff call.
+        """
+        measure = getattr(self.drone, "last_takeoff_reply_s", None)
+        if callable(measure):
+            try:
+                value = measure()
+            except Exception:  # noqa: BLE001 - fall back to the executor's own clock
+                value = None
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+                return float(value)
+        return max(0.0, self._clock() - t_exec)
 
     def _drone_takeoff(self) -> Any:
         """Call ``drone.takeoff``, passing the abort flag when the controller takes one.
@@ -701,38 +773,249 @@ class FlightSequenceMixin:
         return takeoff()
 
     def _climb_to_slot(self, allow_held: bool = False) -> bool:
-        """Move vertically to the altitude slot, measured from the Tello's own height reading.
+        """Move vertically to the altitude slot, measured from the drone's own height reading.
+
+        A drone that reports a settled height (the Tello's
+        ``settled_height``) is first watched until fresh state received
+        after this call shows it holding a steady height
+        (``flightrisk.drone.flight_guards``): nothing is computed from a
+        height read before that, such as the stale height read right after
+        a late takeoff reply, and a drone that does not settle in time is
+        landed (``height_unsettled``) without anything sent. Its descent is
+        bounded by its downward distance (``_descent_clear``). Other drones
+        are read once, as before.
 
         Lands if the height is unknown, and lands instead of climbing when
         the slot, or the climb from the measured height, would end above
         the ceiling limit (``SafetyEnvelope.max_alt_slot_cm``). The edge
         enforces that limit itself, whatever the ground sent.
+
+        A move the drone refuses with a transient refusal is retried after a
+        hover, at most ``FlightGuards.refusal_retries`` times, each time from
+        a new settled height and a newly computed distance, never with the
+        old one, which the drone may have partly flown (``_retry_refusal``).
+        With ``FlightGuards.hover_test`` nothing is sent: the drone hovers
+        where its takeoff left it.
         """
-        height = self._read_height()
+        retries = 0
+        while True:
+            reading = self._height_for_slot()
+            if reading is None:
+                return False
+            height, tof = reading
+            if self._guards.hover_test:
+                self._log.warning(
+                    EVENT_HOVER_TEST,
+                    drone_id=self.drone_id,
+                    skipped="climb",
+                    height_cm=height,
+                    tof_cm=tof,
+                    alt_slot_cm=self.envelope.alt_slot_cm,
+                )
+                return True
+            try:
+                move = self.envelope.slot_move(height)
+            except CeilingError as exc:
+                self._refuse_climb(height, None, str(exc))
+                return False
+            except ValueError as exc:
+                self._log.error("edge_altitude_unknown", drone_id=self.drone_id, error=str(exc))
+                self.land_now("height_unknown")
+                return False
+            if move is None:
+                return True
+            direction, distance = move
+            if direction == "up" and not self.envelope.climb_allowed(height, distance):
+                self._refuse_climb(height, distance, "climb would end above the ceiling limit")
+                return False
+            if direction == "down" and self._settles_height() and not self._descent_clear(height, tof, distance):
+                return False
+            self._log.info(
+                "edge_alt_slot_climb",
+                drone_id=self.drone_id,
+                height_cm=height,
+                tof_cm=tof,
+                alt_slot_cm=self.envelope.alt_slot_cm,
+                direction=direction,
+                distance_cm=distance,
+                retry=retries or None,
+            )
+            try:
+                return self._command_move(direction, distance, record=False, allow_held=allow_held)
+            except CommandRefusedError as exc:
+                if not self._retry_refusal(exc, retries, f"{direction} {distance}", allowed=True):
+                    raise
+                retries += 1
+                if self._abort.is_set():
+                    return False
+
+    def _settles_height(self) -> bool:
+        """True for a drone that reports a settled height (``settled_height``, the Tello)."""
+        return callable(getattr(self.drone, "settled_height", None))
+
+    def _height_for_slot(self) -> tuple[Any, int | None] | None:
+        """``(height, tof)`` to compute the move to the slot from, or None when the sequence must stop.
+
+        A drone without ``settled_height`` gives its height read once and no
+        distance. A Tello gives the settled height and the lowest downward
+        distance of the packets that showed it (``FlightGuards``); one that
+        does not settle within the timeout is landed (``height_unsettled``),
+        and None is returned. None, with nothing done, when a landing
+        started meanwhile.
+        """
+        settle = getattr(self.drone, "settled_height", None)
+        if not callable(settle):
+            return self._read_height(), None
+        guards = self._guards
+        error = None
         try:
-            move = self.envelope.slot_move(height)
-        except CeilingError as exc:
-            self._refuse_climb(height, None, str(exc))
-            return False
-        except ValueError as exc:
-            self._log.error("edge_altitude_unknown", drone_id=self.drone_id, error=str(exc))
-            self.land_now("height_unknown")
-            return False
-        if move is None:
-            return True
-        direction, distance = move
-        if direction == "up" and not self.envelope.climb_allowed(height, distance):
-            self._refuse_climb(height, distance, "climb would end above the ceiling limit")
-            return False
+            settled = settle(
+                samples=guards.settle_samples,
+                tolerance_cm=guards.settle_tolerance_cm,
+                timeout_s=guards.settle_timeout_s,
+                abort=self._abort,
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed watch is a height that did not settle
+            settled, error = None, repr(exc)
+        if settled is None:
+            if self._abort.is_set():
+                return None
+            why = getattr(self.drone, "settle_reject_reason", None)
+            try:
+                reject = why() if callable(why) else None
+            except Exception:  # noqa: BLE001 - a log field only
+                reject = None
+            self._log.error(
+                EVENT_HEIGHT_UNSETTLED,
+                drone_id=self.drone_id,
+                reject=reject,
+                samples=guards.settle_samples,
+                tolerance_cm=guards.settle_tolerance_cm,
+                timeout_s=guards.settle_timeout_s,
+                last_height_cm=self._read_height(),
+                error=error,
+                detail=(f"no {guards.settle_samples} fresh state packets showed a steady height within "
+                        f"{guards.settle_timeout_s:g} s: landing without moving to the altitude slot"),
+            )
+            self.land_now("height_unsettled")
+            return None
         self._log.info(
-            "edge_alt_slot_climb",
+            EVENT_HEIGHT_SETTLED,
+            drone_id=self.drone_id,
+            height_cm=settled.height_cm,
+            tof_cm=settled.tof_cm,
+            samples=settled.samples,
+            waited_s=settled.waited_s,
+            vgx_cm_s=settled.vgx_cm_s,
+            vgy_cm_s=settled.vgy_cm_s,
+        )
+        return settled.height_cm, settled.tof_cm
+
+    def _descent_clear(self, height: Any, tof: int | None, distance: int) -> bool:
+        """True if a descent of *distance* keeps ``DESCENT_CLEARANCE_CM`` above what the drone's distance sensor sees.
+
+        Otherwise logs it and lands (``tof_clearance``): the drone does not
+        descend part of the way, because it would then fly its lanes at
+        another height than its slot. A descent without a usable distance
+        (*tof* None) is refused the same way. ``h`` is the height above the
+        takeoff point; ``tof`` is the distance to whatever is below now,
+        which is lower than ``h`` says when the drone took off from a desk
+        and drifted past its edge, or flies over furniture.
+        """
+        if tof is not None and distance <= tof - DESCENT_CLEARANCE_CM:
+            return True
+        if tof is None:
+            detail = f"down {distance} cm refused: no usable downward distance to bound it"
+        else:
+            detail = (f"down {distance} cm refused: the downward distance is {tof} cm, so it would leave less than "
+                      f"{DESCENT_CLEARANCE_CM} cm below the drone")
+        self._log.error(
+            EVENT_DESCENT_REFUSED,
             drone_id=self.drone_id,
             height_cm=height,
-            alt_slot_cm=self.envelope.alt_slot_cm,
-            direction=direction,
+            tof_cm=tof,
             distance_cm=distance,
+            clearance_cm=DESCENT_CLEARANCE_CM,
+            alt_slot_cm=self.envelope.alt_slot_cm,
+            detail=detail + ": landing",
         )
-        return self._command_move(direction, distance, record=False, allow_held=allow_held)
+        self.land_now("tof_clearance")
+        return False
+
+    def _retry_refusal(
+        self, exc: CommandRefusedError, retries_done: int, command: str, *, allowed: bool, lane_index: int | None = None
+    ) -> bool:
+        """Count a refused move and decide whether to retry it: True after the hover before the retry.
+
+        A transient refusal (``flight_guards.transient_refusal``) is counted
+        in telemetry and logged as ``edge_move_refused`` whether or not it is
+        retried. It is retried only when *allowed*, fewer than
+        ``FlightGuards.refusal_retries`` retries were made for this move, the
+        flight has had at most ``FlightGuards.refusals_per_flight`` refusals
+        in all (this one included; reset at takeoff), and no landing has
+        started. The drone then hovers ``FlightGuards.refusal_hold_s`` first
+        (a landing ends the hover at once, and the caller's next step sees
+        it). False for any other refusal, and when no retry is left: the
+        caller re-raises and the executor lands (``executor_error``).
+        """
+        reply = getattr(exc, "reply", None)
+        if not transient_refusal(reply):
+            return False
+        guards = self._guards
+        with self._lock:
+            self._flight_refusals += 1
+            flight_count = self._flight_refusals
+        retry = (
+            allowed
+            and retries_done < guards.refusal_retries
+            and flight_count <= guards.refusals_per_flight
+            and not self._abort.is_set()
+        )
+        if retry:
+            outcome = f"retry {retries_done + 1} of {guards.refusal_retries} after {guards.refusal_hold_s:g} s"
+        elif not allowed:
+            outcome = "not retried (an unsensed lane move may have been partly flown), landing"
+        elif retries_done >= guards.refusal_retries:
+            outcome = f"{guards.refusal_retries} retries used, landing"
+        elif flight_count > guards.refusals_per_flight:
+            outcome = f"refusal {flight_count} of this flight, above {guards.refusals_per_flight}, landing"
+        else:
+            outcome = "not retried: a landing has started"
+        self._count_refusal(
+            exc,
+            f"{command} answered {reply_text(reply)!r}: {outcome}",
+            lane_index=lane_index,
+            retry=retries_done + 1 if retry else None,
+            hold_s=guards.refusal_hold_s if retry else None,
+            flight_refusals=flight_count,
+        )
+        if retry:
+            self._abort.wait(guards.refusal_hold_s)
+        return retry
+
+    def _count_refusal(self, exc: CommandRefusedError, detail: str, **fields: Any) -> None:
+        """Count one transient refusal in telemetry (``move_refusals``) and log it as ``edge_move_refused``.
+
+        The reply and the command are stored as whitespace-collapsed
+        printable text (``flight_guards.reply_text``). Marks *exc* counted,
+        so the executor's error handler does not count it again.
+        """
+        exc.counted = True
+        now = self._clock()
+        reason, command = reply_text(exc.reply), reply_text(exc.command)
+        with self._lock:
+            total = (self._move_refusals or {}).get("total", 0) + 1
+            self._move_refusals = {"total": total, "last_reason": reason, "last_cmd": command, "last_at": round(now, 3)}
+        self._log.warning(
+            EVENT_MOVE_REFUSED,
+            drone_id=self.drone_id,
+            command=command,
+            reply=reason,
+            retries=self._guards.refusal_retries,
+            refusals_total=total,
+            detail=detail[:MAX_TEXT_LEN],
+            **{"retry": None, "lane_index": None, **fields},
+        )
 
     def _refuse_climb(self, height: Any, distance: int | None, detail: str) -> None:
         """Do not climb above the ceiling limit: log it and land through the normal landing path."""
@@ -809,6 +1092,8 @@ class FlightSequenceMixin:
             if self._is_active():
                 self._phase = "lanes"
         climbed_gen: int | None = None
+        # Transient refusals retried per plan step (``_retry_refusal``).
+        refusals: dict[Any, int] = {}
         while not self._abort.is_set():
             land_after = False
             with self._lock:
@@ -846,6 +1131,16 @@ class FlightSequenceMixin:
                 if not self._climb_to_slot():
                     return
                 climbed_gen = gen
+                if self._guards.hover_test:
+                    # The hover-only test: no lane is flown. The drone hovers
+                    # until a land, a hold, the link-loss failsafe or the
+                    # battery ends the flight.
+                    self._log.warning(EVENT_HOVER_TEST, drone_id=self.drone_id, skipped="lanes",
+                                      lanes_total=self.lanes_total)
+                    with self._lock:
+                        if self._is_active():
+                            self._release_active()
+                    return
                 continue
             if step is None:
                 self._log.info("edge_lanes_complete", drone_id=self.drone_id, lanes_total=self.lanes_total)
@@ -869,6 +1164,14 @@ class FlightSequenceMixin:
             if not self.envelope.check_move(body, distance):
                 pose = self.envelope.pose_snapshot()
                 extra = {} if body == direction else {"heading_deg": round(pose.heading_deg, 1)}
+                margin = self.envelope.fence_margin_cm
+                if margin:
+                    # Refused lane steps may have been partly flown: the
+                    # fence is shrunk by their length (``_retry_refusal``).
+                    extra["refused_margin_cm"] = round(margin, 1)
+                    note = self.envelope.margin_note(body, distance)
+                    if note:
+                        extra["detail"] = f"geofence: {note}"
                 self._log.error(
                     "edge_geofence_refused",
                     drone_id=self.drone_id,
@@ -882,7 +1185,25 @@ class FlightSequenceMixin:
                 self.land_now("geofence")
                 return
             self._short_stop = None
-            if not self._command_move(body, distance, record=True, lane=True):
+            try:
+                moved = self._command_move(body, distance, record=True, lane=True)
+            except CommandRefusedError as exc:
+                # Only a sensed step is retried: it is at most one step long,
+                # and the retry goes back through its gate with a view taken
+                # after the refused move ended. An unsensed lane move may be
+                # most of a lane and may have been partly flown.
+                key = (gen, step)
+                sensed = self._lane_step_cm() is not None and (self._turns_to_face() or direction == "forward")
+                # The refused step may have been partly flown: from now on
+                # every geofence check of this flight keeps its length further
+                # inside (``SafetyEnvelope.add_fence_margin``).
+                self.envelope.add_fence_margin(distance)
+                if not self._retry_refusal(exc, refusals.get(key, 0), f"{body} {distance}", allowed=sensed,
+                                           lane_index=lane_index):
+                    raise
+                refusals[key] = refusals.get(key, 0) + 1
+                continue
+            if not moved:
                 return
             short, self._short_stop = self._short_stop, None
             with self._lock:

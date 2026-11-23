@@ -20,6 +20,7 @@ import pytest
 
 from flightrisk import edge_device
 from flightrisk import fleet_protocol as fp
+from flightrisk.drone.controller import CommandRefusedError
 from flightrisk.drone.lane_avoid import (
     SOURCE_RELOOK,
     SOURCE_SIDESTEP,
@@ -318,6 +319,33 @@ def test_a_sidestep_gets_past_a_thin_obstacle_and_rejoins_the_lane(rigs, votes):
     assert all(not (abs(px) <= 10 and 150 < py <= 250) for px, py in points)  # never through the pole
     assert_back_on_the_plan(rig)
     assert_never_landed(rig)
+
+
+def test_a_transient_refusal_of_a_sidestep_move_lands_counted_and_is_never_retried(rigs):
+    """flight_guards: a sideways move beside an obstacle may have been partly flown, so it is not retried."""
+    rig = rigs([POLE], **SIDESTEP_ONLY)
+    fly_move = rig.drone.move
+    refused: list[str] = []
+
+    def move(direction, distance_cm):
+        started = any(e["phase"] == "start" for e in events(rig, EVENT_OBSTACLE_SIDESTEP))
+        if started and not refused:
+            refused.append(f"{direction} {distance_cm}")
+            raise CommandRefusedError(f"'{direction} {distance_cm}' answered 'error No valid imu' (not retried)",
+                                      command=f"{direction} {distance_cm}", reply="error No valid imu")
+        return fly_move(direction, distance_cm)
+
+    rig.drone.move = move
+    start(rig, DEMO)
+    assert wait_for(lambda: not rig.executor.is_busy and "executor_error" in
+                    [e.get("reason") for e in events(rig, "edge_land")])
+    assert refused == ["forward 50"]
+    (counted,) = events(rig, "edge_move_refused")
+    assert counted["command"] == "forward 50" and counted["detail"].endswith("not retried, landing")
+    assert rig.executor.telemetry()["move_refusals"]["total"] == 1
+    # Nothing was flown after the refused sideways move.
+    after = rig.drone.calls[[c[0] for c in rig.drone.calls].index("rotate"):]
+    assert [c for c in after if c[0] == "move"] == []
 
 
 def test_a_wide_wall_is_not_passed_and_the_lane_is_cut_where_the_drone_stopped(rigs):

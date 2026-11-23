@@ -373,6 +373,11 @@ class MonitorMixin:
             )
         msg.update(self._obstacle_telemetry())
         msg.update(self._temp_telemetry())
+        refusals = getattr(self, "refusal_status", None)
+        if callable(refusals):
+            # Optional: moves the drone refused (``flight_guards``); absent
+            # until the first one.
+            msg.update(refusals())
         return msg
 
     def _temp_telemetry(self) -> dict[str, Any]:

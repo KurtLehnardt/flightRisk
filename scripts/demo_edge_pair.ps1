@@ -4,7 +4,7 @@
 #   .\scripts\demo_edge_pair.ps1 -LocalIp1 192.168.10.2 -LocalIp2 192.168.10.50 -IfIndex1 12 -IfIndex2 23
 #
 # Each edge runs in its own console window with QuickEdit turned off, so a stray click in the window
-# cannot pause the edge. Edge 1 flies drone-1 at altitude slot 50 cm through the adapter with
+# cannot pause the edge. Edge 1 flies drone-1 at altitude slot 60 cm through the adapter with
 # LocalIp1; edge 2 flies drone-2 at 80 cm through the adapter with LocalIp2. Both dial the ground
 # station at ws://10.42.0.1:9000 (the Mac, over the Thunderbolt cable). Get the IPs and interface
 # indexes with:
@@ -25,7 +25,7 @@ param(
     [Parameter(ParameterSetName = "Pair")] [int]$IfIndex2 = 0,
     [Parameter(ParameterSetName = "Pair")] [string]$DroneId1 = "drone-1",
     [Parameter(ParameterSetName = "Pair")] [string]$DroneId2 = "drone-2",
-    [Parameter(ParameterSetName = "Pair")] [int]$Slot1 = 50,
+    [Parameter(ParameterSetName = "Pair")] [int]$Slot1 = 60,
     [Parameter(ParameterSetName = "Pair")] [int]$Slot2 = 80,
     [Parameter(ParameterSetName = "Pair")] [switch]$DryRun,
     [Parameter(ParameterSetName = "Pair")] [string]$LogDir = "logs",
@@ -144,8 +144,9 @@ if ($DroneId1 -eq $DroneId2) {
     exit 1
 }
 foreach ($slot in @($Slot1, $Slot2)) {
-    if ($slot -lt 10) {
-        Write-Error "demo_edge_pair.ps1: altitude slots are in cm and at least 10 (got $slot)"
+    # A Tello's lowest altitude slot (flightrisk/drone/safety.py MIN_ALT_SLOT_CM); the edge refuses a lower one.
+    if ($slot -lt 50) {
+        Write-Error "demo_edge_pair.ps1: altitude slots are in cm and at least 50, the lowest slot for a Tello (got $slot)"
         exit 1
     }
 }

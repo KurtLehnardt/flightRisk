@@ -221,6 +221,37 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
     # reports its control mode (``flightrisk/fleet_protocol/manual.py``).
     if "control_mode" in msg:
         _require_choice(msg, "control_mode", CONTROL_MODES)
+    # Optional on every version: moves the drone refused with a transient
+    # refusal (``flightrisk/drone/flight_guards.py``), present after the first.
+    # One object, so it costs one field of MAX_FIELDS.
+    if "move_refusals" in msg:
+        _validate_move_refusals(msg["move_refusals"])
+
+
+def _validate_move_refusals(value: Any) -> None:
+    """``move_refusals``: ``{total, last_reason, last_cmd, last_at, hover_test, fence_margin_cm}``; only ``total`` required."""
+    what = "'telemetry' field 'move_refusals'"
+    if not isinstance(value, Mapping):
+        raise ProtocolError(f"{what} must be an object, got {_short(value)}")
+    total = value.get("total")
+    if not _is_int(total) or not 0 <= total <= 2**31 - 1:
+        raise ProtocolError(f"{what} needs 'total', a whole number of at least 0, got {_short(total)}")
+    hover_test = value.get("hover_test")
+    if hover_test is not None and not isinstance(hover_test, bool):
+        raise ProtocolError(f"{what} field 'hover_test' must be true, false or null, got {_short(hover_test)}")
+    for key in ("last_reason", "last_cmd"):
+        text = value.get(key)
+        if text is not None and not (isinstance(text, str) and 0 < len(text) <= MAX_TEXT_LEN and text.isprintable()):
+            raise ProtocolError(
+                f"{what} field {key!r} must be printable text of 1 to {MAX_TEXT_LEN} characters or null, "
+                f"got {_short(text)}"
+            )
+    at = value.get("last_at")
+    if at is not None and not _is_number(at):
+        raise ProtocolError(f"{what} field 'last_at' must be a number or null, got {_short(at)}")
+    margin = value.get("fence_margin_cm")
+    if margin is not None and not (_is_number(margin) and margin >= 0):
+        raise ProtocolError(f"{what} field 'fence_margin_cm' must be a number of 0 or more, got {_short(margin)}")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:

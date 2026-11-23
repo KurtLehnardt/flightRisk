@@ -63,7 +63,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20
+          "min_slot_cm": 50
         },
         "load_error": null,
         "locked_reason": null,
@@ -125,7 +125,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20
+          "min_slot_cm": 50
         },
         "load_error": null,
         "locked_reason": null,
@@ -184,7 +184,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20
+          "min_slot_cm": 50
         },
         "load_error": null,
         "locked_reason": "the ceiling and the altitude slots change only while every drone is on the ground and no start is scheduled (drone-1 reported flying)",
@@ -243,7 +243,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20
+          "min_slot_cm": 50
         },
         "load_error": null,
         "locked_reason": null,
@@ -302,7 +302,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20
+          "min_slot_cm": 50
         },
         "load_error": null,
         "locked_reason": null,

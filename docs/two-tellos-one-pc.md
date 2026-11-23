@@ -105,7 +105,7 @@ While running, a reply or state packet that reaches the wrong adapter cannot be 
    .\scripts\demo_edge_pair.ps1 -LocalIp1 192.168.10.2 -LocalIp2 192.168.10.50 -IfIndex1 12 -IfIndex2 23
    ```
 
-   Defaults: drone-1 at altitude slot 50 cm, drone-2 at 80 cm, ground `ws://10.42.0.1:9000`. `-DryRun` prints both command lines without starting anything. The script turns off QuickEdit in each edge window, so a stray click cannot freeze an edge, and each window also writes its output to `logs\edge-<drone id>-<time>.log` (`-NoLog` turns this off).
+   Defaults: drone-1 at altitude slot 60 cm, drone-2 at 80 cm, ground `ws://10.42.0.1:9000`. `-DryRun` prints both command lines without starting anything. The script turns off QuickEdit in each edge window, so a stray click cannot freeze an edge, and each window also writes its output to `logs\edge-<drone id>-<time>.log` (`-NoLog` turns this off).
 
 7. To share what happened, summarise the logs: `.\scripts\flight_log_summary.ps1 logs\edge-drone-1-*.log logs\edge-drone-2-*.log -Minutes 5`. The summary keeps start, refusal, takeoff, link-health and clock events, warnings and errors, removes tokens and long hex strings, and is never longer than 20 000 bytes, so it can be pasted into a message.
 
@@ -119,7 +119,7 @@ Run on the ZBook, step by step, before any flight with two drones:
 4. Cross-talk test: power off drone-2 while both edges run. Within about 3 s edge-2's link must go unhealthy (`state_stale`, detail ending `via <IP2>`) while edge-1 stays healthy. Power drone-2 on again, restart edge-2, then repeat with drone-1.
 5. Video: each dashboard tile shows its own drone's camera (cover one lens to tell them apart).
 6. No wildcard holder. With both edges running, run `netstat -ano -p udp | findstr ":8889 :8890 :11111"`. Every line must show one of the two adapter IPs, each IP on all three ports (11111 once the video is on), and its last column must be the PID of that IP's edge (`tasklist /FI "PID eq <PID>"`). A line with 0.0.0.0 is a stray program that would take one drone's replies: stop it. `netstat -ano -p udpv6 | findstr ":8889 :8890 :11111"` must print nothing. To check the edge's start check itself, with no drone needed and the edges still running, run `venv\Scripts\python.exe scripts\check_wildcard_guard.py --stray`; it must end with `RESULT: PASS`.
-7. Takeoff and land each drone alone from the dashboard, then both together, at slots 50 and 80 cm.
+7. Takeoff and land each drone alone from the dashboard, then both together, at slots 60 and 80 cm.
 8. CPU: watch both edges for 5 minutes with Task Manager; note the CPU and each edge's frame rate. Run `venv\Scripts\python.exe scripts\bench_obstacle.py --with-yolo` at the same time and note the MiDaS p50 and p95 (obstacle-sensing hardware item H4).
 9. After any failure, run the log summary from runbook step 7 and keep its output with the notes of that step.
 10. Open question: swap the adapters (drone-2 on the internal Wi-Fi, drone-1 on the TP-Link) and repeat step 7, to see whether the takeoff refusal follows the TP-Link adapter or the drone.
