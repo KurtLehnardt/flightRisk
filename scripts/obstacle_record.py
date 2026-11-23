@@ -20,7 +20,7 @@ Usage:
 Writes into ``--out`` (which must not hold a recording yet):
     frame_000001.png ...  one BGR PNG per frame the sensor would judge
     frames.csv            index, file, captured_at_s, arrived_at_s, decode_lag_ms, wall_time, wall_clock
-    meta.json             label, channel order, settle time, decode lag limit, frame and stale counts, Tello host
+    meta.json             label, camera height (--height-cm), channel order, settle time, decode lag limit, frame and stale counts, Tello host
 
 ``captured_at_s`` and ``arrived_at_s`` are ``time.monotonic()`` seconds: the
 latest capture time the decoder vouches for (the arrival of the frame's first
@@ -88,6 +88,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--seconds", type=float, default=5.0, help="How long to record (default 5)")
     parser.add_argument("--label", default="", help="What is in front of the drone, for meta.json")
+    parser.add_argument(
+        "--height-cm", type=float, default=None,
+        help="The camera's height above the floor in centimetres, stored in meta.json (record at flight "
+             "altitude: the slot height, 100 or 130). The metrics report prints it per label",
+    )
     parser.add_argument("--tello-host", default="192.168.10.1", help="The Tello's IP (default 192.168.10.1)")
     parser.add_argument(
         "--tello-local-ip", default=None,
@@ -102,6 +107,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--out is required (unless --clock)")
     if not 0 < args.seconds <= 600:
         parser.error("--seconds must be more than 0 and at most 600")
+    if args.height_cm is not None and not 0 < args.height_cm < 10000:
+        parser.error("--height-cm must be more than 0 and less than 10000 (a finite number of centimetres)")
     return args
 
 
@@ -205,6 +212,7 @@ def record(
     *,
     label: str = "",
     host: str | None = None,
+    height_cm: float | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     log: Any = None,
@@ -246,6 +254,7 @@ def record(
     max_lag = getattr(reader, "max_lag_s", None)
     meta = {
         "label": label,
+        "height_cm": height_cm,
         "channel_order": SENSOR_CHANNEL_ORDER,
         "seconds": seconds,
         "frames_written": written,
@@ -299,7 +308,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: could not connect to the Tello at {args.tello_host}", file=sys.stderr)
         return 1
     try:
-        meta = record(drone, out, args.seconds, label=args.label, host=args.tello_host)
+        meta = record(
+            drone, out, args.seconds, label=args.label, host=args.tello_host, height_cm=args.height_cm,
+        )
     finally:
         drone.disconnect()
     print(
