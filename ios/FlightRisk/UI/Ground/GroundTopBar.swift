@@ -42,6 +42,9 @@ struct GroundTopBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+        // The whole bar stops growing at accessibility2: at larger sizes the result text pushed
+        // LAND ALL's result out of the fixed bar height that GroundLayout budgets for.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 
     /// The link pill and the appearance-only badge, side by side or stacked. They stop growing

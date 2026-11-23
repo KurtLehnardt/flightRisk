@@ -404,6 +404,7 @@ final class GroundVerdictAndDemoViewModelTests: XCTestCase {
 
     func testTheDemoClosesTheLiveLinkAndAnswersCommandsOnThePhone() async throws {
         let t = await harness.connect()
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
         await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
         XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
         let transportsBefore = harness.recorder.transports.count
@@ -492,6 +493,7 @@ final class GroundVerdictAndDemoViewModelTests: XCTestCase {
     /// banner; starting it never clears that result.
     func testTheDemoIsRefusedWhileALiveLandAllIsUnansweredOrFailed() async throws {
         let t = await harness.connect()
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
         await vm.landAll()
         XCTAssertEqual(vm.landAllFeedback?.phase, .handedOver)
         XCTAssertEqual(vm.demoStartStep, .refused(DemoModePolicy.landAllUnansweredRefusal))
@@ -568,7 +570,8 @@ final class GroundVerdictAndDemoViewModelTests: XCTestCase {
 
         var announcements: [String] = []
         vm.announce = { announcements.append($0) }
-        _ = await harness.connect()
+        let t0 = await harness.connect()
+        await harness.push(t0, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
         XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
         XCTAssertTrue(vm.startDemo())
         let transports = harness.recorder.transports.count
@@ -593,6 +596,7 @@ final class GroundVerdictAndDemoViewModelTests: XCTestCase {
     /// nothing to any network: no transport, no event frame, no HTTP request.
     func testSettingsRefreshAndProfilesSendNothingDuringTheDemo() async throws {
         let t = await harness.connect()
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
         XCTAssertTrue(vm.startDemo())
         await harness.settle()
         let transports = harness.recorder.transports.count
@@ -636,5 +640,75 @@ final class GroundVerdictAndDemoViewModelTests: XCTestCase {
         vm.tick(now: harness.clock.now)
         XCTAssertFalse(vm.banners.contains { $0.text.contains(GroundUIText.earlierLandAllNoAnswer) }, "\(vm.banners.map(\.text))")
         XCTAssertFalse(vm.banners.contains { $0.isLandAllFailure })
+    }
+
+    // MARK: Round 2 fixes
+
+    private static let oneGroundedFleet = #"{"drones":{"drone-1":{"drone_id":"drone-1","connected":true,"lost":false,"is_flying":false,"control_mode":"autonomous"}}}"#
+    private static let oneFlyingFleet = #"{"drones":{"drone-1":{"drone_id":"drone-1","connected":true,"lost":false,"is_flying":true,"control_mode":"autonomous"}}}"#
+
+    /// Before the first fleet status, an unknown fleet state is not "no drones in the air": the
+    /// demo is refused, and the live link stays as it is. Once the ground reports its drones the
+    /// demo asks for the confirmation as usual.
+    func testTheDemoIsRefusedBeforeTheGroundHasReportedItsDrones() async throws {
+        let t = await harness.connect()
+        XCTAssertTrue(vm.droneCards.isEmpty)
+        XCTAssertEqual(vm.demoStartStep, .refused(GroundViewModel.fleetUnknownRefusal))
+        XCTAssertEqual(GroundViewModel.fleetUnknownRefusal, "The ground has not reported its drones yet. Wait for it, or switch the link off in Settings first.")
+        XCTAssertFalse(vm.startDemo())
+        XCTAssertFalse(vm.isDemoActive)
+        XCTAssertTrue(vm.isEnabled)
+        XCTAssertFalse(t.closed, "the live link was not closed")
+
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
+        XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
+    }
+
+    /// A drone takes off while the confirmation shows; confirming must not start the demo.
+    func testNothingStartsWhenADroneTakesOffWhileTheConfirmationShows() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
+        XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
+        let transports = harness.recorder.transports.count
+        await harness.push(t, "fleet_status", Self.oneFlyingFleet) { self.vm.reducer.drones["drone-1"]?.isFlying == true }
+        let reason = DemoStartConfirmation.start(vm)
+        XCTAssertEqual(reason, DemoModePolicy.flyingRefusal(1, stale: false))
+        XCTAssertFalse(vm.isDemoActive)
+        XCTAssertTrue(vm.isEnabled)
+        XCTAssertEqual(vm.linkStatus, .connected)
+        XCTAssertFalse(t.closed, "the live link was not closed")
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, transports)
+    }
+
+    /// The scene hook, the foreground hooks and Retry open nothing during the demo or after it,
+    /// even when the link was reconnecting before the demo started.
+    func testSceneDidBecomeActiveDuringAndAfterTheDemoOpensNothing() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "fleet_status", Self.oneGroundedFleet) { self.vm.droneCards.count == 1 }
+        t.serverDrop()
+        await harness.waitUntil("reconnecting") {
+            if case .reconnecting = self.vm.linkStatus { return true }
+            return false
+        }
+        XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
+        XCTAssertTrue(vm.startDemo())
+        let transports = harness.recorder.transports.count
+        for _ in 0..<3 {
+            vm.sceneDidBecomeActive()
+            vm.appDidEnterBackground()
+            vm.appWillEnterForeground()
+            vm.sceneDidBecomeActive()
+            vm.retryConnection()
+        }
+        await harness.settle()
+        XCTAssertEqual(vm.linkStatus, .demo)
+        XCTAssertEqual(harness.recorder.transports.count, transports, "no new transport during the demo")
+        vm.stopDemo()
+        vm.sceneDidBecomeActive()
+        vm.appWillEnterForeground()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, transports, "no new transport after the demo")
+        XCTAssertFalse(vm.isEnabled)
     }
 }

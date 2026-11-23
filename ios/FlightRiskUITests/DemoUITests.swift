@@ -66,10 +66,8 @@ final class DemoUITests: XCTestCase {
         let result = app.staticTexts["ground.landAllResult"]
         XCTAssertTrue(result.waitForExistence(timeout: 5), "the tap reached LAND ALL")
         XCTAssertTrue(result.label.hasPrefix("DEMO: LAND ALL"), result.label)
-        if size == nil {
-            // At the default size the result is on screen, not scrolled out of the bar's text area.
-            XCTAssertTrue(result.isHittable, "the LAND ALL result is not visible")
-        }
+        // The result is on screen, not scrolled out of the bar's text area, at every text size.
+        XCTAssertTrue(result.isHittable, "the LAND ALL result is not visible")
         XCTAssertTrue(landAll.isHittable)
         sleep(2)
         shot(app, "ground-demo-after-land-all-\(label)")

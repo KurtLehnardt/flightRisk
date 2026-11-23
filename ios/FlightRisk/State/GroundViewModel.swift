@@ -851,6 +851,20 @@ final class GroundViewModel {
     /// link, and never while live drones may be in the air or a live LAND ALL is unanswered or
     /// failed: starting it would close the link those drones depend on and clear that result.
     var demoStartStep: DemoModePolicy.StartStep {
+        let step = policyStartStep
+        // Before the first fleet status, an unknown fleet is not "no drones in the air": the
+        // link may be open while drones the ground controls are flying.
+        if step == .confirmDisconnectFirst, (client != nil || isEnabled),
+           lastFleetStatusAt == nil, reducer.drones.isEmpty {
+            return .refused(Self.fleetUnknownRefusal)
+        }
+        return step
+    }
+
+    /// Shown when the demo is requested before the live ground has reported its drones.
+    static let fleetUnknownRefusal = "The ground has not reported its drones yet. Wait for it, or switch the link off in Settings first."
+
+    private var policyStartStep: DemoModePolicy.StartStep {
         DemoModePolicy.startStep(
             liveLinkOpen: client != nil, liveLinkSwitchedOn: isEnabled,
             flyingDrones: isDemoActive ? 0 : dronesPossiblyInTheAir,
