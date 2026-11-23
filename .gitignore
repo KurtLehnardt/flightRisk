@@ -13,6 +13,15 @@ venv/
 # Environment
 .env
 
+# Android release signing: never commit an upload keystore or its passwords
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+# The one committed test certificate (a throwaway loopback key, see TEST_ONLY.txt)
+!mobile/app/src/test/resources/tls/test-only-localhost.p12
+
 # macOS
 .DS_Store
 
