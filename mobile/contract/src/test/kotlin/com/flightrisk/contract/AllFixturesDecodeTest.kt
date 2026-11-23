@@ -35,7 +35,7 @@ class AllFixturesDecodeTest {
             }
         }
         assertEquals(total, decoded)
-        // 24 files; the count only guards against an empty or truncated directory.
+        // 27 files; the count only guards against an empty or truncated directory.
         assertTrue("expected well over 100 cases, got $total", total > 100)
     }
 
@@ -78,6 +78,26 @@ class AllFixturesDecodeTest {
                     val reply = EdgeReply.fromJson(o)
                     assertTrue(label, reply.type in EdgeLink.NEVER_SENT_TYPES)
                 }
+            }
+            "demo_scenario.json" -> {
+                // The demo replays these through the real client, so every step, state answer and
+                // reply must decode as the event it names.
+                val p = payload as JsonObject
+                val steps = p["steps"] as JsonArray
+                assertTrue("$label: no steps", steps.isNotEmpty())
+                for ((i, step) in steps.withIndex()) {
+                    val o = step as JsonObject
+                    assertDecodedEvent("$label step $i", o["event"].stringValue()!!, o["payload"])
+                }
+                for ((event, body) in p["state"] as JsonObject) assertDecodedEvent("$label state $event", event, body)
+                for ((command, list) in p["replies"] as JsonObject) {
+                    assertTrue("$label: $command is not a command a phone may send", ClientCommand.isAllowed(command))
+                    for (reply in list as JsonArray) {
+                        val o = reply as JsonObject
+                        assertDecodedEvent("$label reply to $command", o["event"].stringValue()!!, o["payload"])
+                    }
+                }
+                assertDecodedEvent("$label landed", ServerEvents.FLEET_STATUS, p["landed_fleet_status"])
             }
             "unknown_keys.json" -> {
                 val event = case["event"].stringValue()
