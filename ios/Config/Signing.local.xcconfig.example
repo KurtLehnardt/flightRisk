@@ -1,0 +1,9 @@
+// Copy this file to Signing.local.xcconfig (gitignored) and fill in your values.
+// Never commit Signing.local.xcconfig.
+
+// Your Apple Developer team ID: Xcode > Settings > Accounts, or developer.apple.com > Membership.
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Optional: the hosted privacy policy. In an xcconfig file "//" starts a comment, so write
+// the scheme separator as "/$()/".
+// FLIGHTRISK_PRIVACY_POLICY_URL = https:/$()/example.com/flightrisk/privacy

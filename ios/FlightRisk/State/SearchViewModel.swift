@@ -27,6 +27,14 @@ final class SearchViewModel {
     /// Whether a target photo has been set.
     var hasTarget: Bool { targetPhoto != nil }
 
+    // MARK: - Detection Availability
+
+    /// Why person detection is off (the detection model is missing or failed
+    /// to load), or `nil` when it works. Set once at launch from
+    /// ``PersonDetector/unavailableReason``; the Search tab shows it as a
+    /// banner whenever it is set.
+    var detectionUnavailableReason: String?
+
     // MARK: - Search State
 
     /// Whether the search is actively running.

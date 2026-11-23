@@ -189,16 +189,42 @@ public enum ReasoningProviderName: WireEnum {
     }
 }
 
-/// Match alert level.
+/// Match alert level: the scorer's four levels (`flightrisk/vision/scorer.py`). A `match_alert`
+/// normally carries `possible_match` or `confirmed_match`; an `alert_upgrade` raises an alert to
+/// `possible_match` or `confirmed_match` once the reasoning verdict arrives.
 public enum AlertLevel: WireEnum {
-    case possibleMatch
+    case noMatch, weakSignal, possibleMatch, confirmedMatch
     case unknown(String)
 
-    public static let knownWireValues = ["possible_match"]
-    public init(wire: String) { self = wire == "possible_match" ? .possibleMatch : .unknown(wire) }
+    private static let table: [(String, AlertLevel)] = [
+        ("no_match", .noMatch), ("weak_signal", .weakSignal),
+        ("possible_match", .possibleMatch), ("confirmed_match", .confirmedMatch),
+    ]
+    public static let knownWireValues = table.map { $0.0 }
+    public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
     public var wire: String {
         if case .unknown(let s) = self { return s }
-        return "possible_match"
+        return Self.table.first { $0.1 == self }?.0 ?? ""
+    }
+
+    /// The ground's `_LEVEL_RANK` (`flightrisk/dashboard/alerts.py`) and the dashboard's
+    /// `LEVEL_RANK`: a level the build does not know ranks 0, like `no_match`.
+    public var rank: Int {
+        switch self {
+        case .noMatch: return 0
+        case .weakSignal: return 1
+        case .possibleMatch: return 2
+        case .confirmedMatch: return 3
+        case .unknown: return 0
+        }
+    }
+
+    /// The higher of two levels; `current` wins a tie, so an alert keeps the text it already
+    /// shows. A level only ever goes up: this is the one rule for combining them.
+    public static func raised(_ current: AlertLevel?, to candidate: AlertLevel?) -> AlertLevel? {
+        guard let candidate else { return current }
+        guard let current else { return candidate }
+        return candidate.rank > current.rank ? candidate : current
     }
 }
 
@@ -254,13 +280,15 @@ public enum LaneDirection: WireEnum {
 public enum FleetEventKind: WireEnum {
     case planRefused, planInvalidated, start, startRefused, droneLost, retask, retaskFailed
     case landAll, profileSwitchPending
+    /// An obstacle cut: a drone stopped a lane early (`FleetCoordinator`, `lane_blocked`).
+    case laneBlocked
     case unknown(String)
 
     private static let table: [(String, FleetEventKind)] = [
         ("plan_refused", .planRefused), ("plan_invalidated", .planInvalidated), ("start", .start),
         ("start_refused", .startRefused), ("drone_lost", .droneLost), ("retask", .retask),
         ("retask_failed", .retaskFailed), ("land_all", .landAll),
-        ("profile_switch_pending", .profileSwitchPending),
+        ("profile_switch_pending", .profileSwitchPending), ("lane_blocked", .laneBlocked),
     ]
     public static let knownWireValues = table.map { $0.0 }
     public init(wire: String) { self = Self.table.first { $0.0 == wire }?.1 ?? .unknown(wire) }
