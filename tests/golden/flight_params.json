@@ -3343,14 +3343,60 @@
         "FLIGHTRISK_FLEET_STRIP_CM": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         },
         "--fleet-strip-cm": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {

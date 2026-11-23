@@ -252,6 +252,8 @@ LITERAL_ENDS = {
                            for p in PROFILES},
     "link.loss_wait_s": {"generic_multirotor": {
         "lo": (0, False, "flightrisk/drone/safety.py:454 refuses link_loss_hold_s < 0; 0 lands at once")}},
+    "plan.strip_cm": {p: {"lo": (0, True, "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0")}
+                      for p in PROFILES},
     "move.speed_cm_s": {"generic_multirotor": {
         "lo": (0, True, "flightrisk/drone/mavlink_fleet.py:304 refuses speed_mps <= 0"),
         "hi": (1500, False, "flightrisk/drone/mavlink_fleet.py:311 refuses speed_mps above 15 m/s (1500 cm/s)")}},

@@ -216,6 +216,24 @@ TODAY_READS: Mapping[str, TodayRead] = MappingProxyType({
     "--takeoff-alt-m": TodayRead("flightrisk/edge_device.py:1615 argparse type=float", empty_refused=True),
 })
 
+#: Names today's code reads with the registry kind's own parse, so they need no ``TODAY_READS`` entry,
+#: with where today reads them. A name in neither this map nor ``TODAY_READS`` is not read by today's
+#: code at all (a new name, such as ``FLIGHTRISK_LAND_BATTERY``); the resolver checks its value against
+#: the target bound, because there is no today behaviour to keep (design 7.1, risk R4).
+TODAY_READ_AS_KIND: Mapping[str, str] = MappingProxyType({
+    "FLIGHTRISK_HOVER_TEST": "flightrisk/drone/flight_guards.py:88 ENV_HOVER_TEST",
+    "FLIGHTRISK_OBSTACLE_SENSING": "flightrisk/drone/obstacle_sensor.py:152 ENV_OBSTACLE_SENSING",
+    "FLIGHTRISK_OBSTACLE_TURN": "flightrisk/drone/obstacle_sensor.py:154 ENV_OBSTACLE_TURN",
+    "FLIGHTRISK_CAMERA_FOOTPRINT_CM": "flightrisk/drone/plan_edit.py:72 CAMERA_FOOTPRINT_ENV",
+    "FLIGHTRISK_FLEET_STRIP_CM": "flightrisk/dashboard/__main__.py:146 default of --fleet-strip-cm, type=int",
+    "--fleet-strip-cm": "flightrisk/dashboard/__main__.py:145 argparse type=int, :193 refuses a value <= 0",
+})
+
+
+def read_today(name: str) -> bool:
+    """True when today's code reads the environment name or flag ``name``."""
+    return name in TODAY_READS or name in TODAY_READ_AS_KIND
+
 
 def _p(
     id: str,

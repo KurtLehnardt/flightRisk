@@ -316,3 +316,77 @@ def test_a_non_finite_number_is_never_inside_a_range():
     assert _outside_range(float("-inf"), TodayRange(None, None)) == "lo"
     assert _outside_range(float("nan"), TodayRange(0, 10)) is not None
     assert _outside_range(10 ** 400, TodayRange(None, None)) == "hi"
+
+
+# Critic round 1, F2: a name today's code does not read gets the target bound, never an open range.
+@pytest.mark.parametrize("text", ["-50", "0", "9", "51"])
+def test_the_new_land_battery_name_is_checked_against_the_target_bound(text):
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.ENV: {"FLIGHTRISK_LAND_BATTERY": text}})
+
+
+def test_the_new_land_battery_name_inside_the_target_bound_is_accepted():
+    assert _resolve("tello", {Source.ENV: {"FLIGHTRISK_LAND_BATTERY": "20"}})["battery.critical_pct"].value == 20
+
+
+@pytest.mark.parametrize("source,name,text", [
+    (Source.ENV, "FLIGHTRISK_FLEET_STRIP_CM", "-5"),
+    (Source.ENV, "FLIGHTRISK_FLEET_STRIP_CM", "0"),
+    (Source.CLI, "--fleet-strip-cm", "0"),
+    (Source.CLI, "--fleet-strip-cm", "-5"),
+])
+def test_a_fleet_strip_that_is_not_positive_is_refused_as_today(source, name, text):
+    # Today: flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0.
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {source: {name: text}})
+
+
+def test_a_positive_fleet_strip_keeps_todays_open_upper_end():
+    assert _resolve("tello", {Source.ENV: {"FLIGHTRISK_FLEET_STRIP_CM": "5000"}})["plan.strip_cm"].value == 5000
+
+
+def test_a_new_name_with_no_bound_is_not_honoured():
+    result = _resolve("tello", {Source.ENV: {"FLIGHTRISK_LINK_LOSS_WAIT_S": "-5"}})
+    assert result["link.loss_wait_s"].value == 0
+    assert result["link.loss_wait_s"].source is Source.PROFILE
+
+
+def _table_names():
+    for spec in TABLE:
+        for name in ([spec.env] if spec.env else []) + [a.name for a in spec.env_aliases] + list(spec.cli):
+            yield spec, name
+
+
+def _runtime_reads(name: str) -> bool:
+    root = Path(__file__).resolve().parent.parent
+    needle = f'"{name}"'
+    for base in ("flightrisk", "scripts"):
+        for path in (root / base).rglob("*.py"):
+            rel = path.relative_to(root).as_posix()
+            if rel.startswith("flightrisk/params/") or rel == "scripts/make_param_golden.py":
+                continue
+            if needle in path.read_text(encoding="utf-8"):
+                return True
+    return False
+
+
+@pytest.mark.parametrize("name", sorted({n for _, n in _table_names()}))
+def test_read_today_matches_a_reader_in_todays_code(name):
+    from flightrisk.params.table import read_today
+    assert read_today(name) is _runtime_reads(name)
+
+
+def test_an_open_today_range_is_backed_by_a_cited_reader():
+    from flightrisk.params.resolver import _new_name_without_bound
+    from flightrisk.params.table import TODAY_READ_AS_KIND, TODAY_READS, read_today
+    names = {n for _, n in _table_names()}
+    assert set(TODAY_READS) <= names and set(TODAY_READ_AS_KIND) <= names
+    for spec, name in _table_names():
+        for profile, default in spec.defaults.items():
+            if default is None or (TODAY.get(name) or {}).get(profile) is not None:
+                continue
+            # No recorded today range: the value is open only for a name today's code reads. Any other
+            # name is checked against the target bound, or is not honoured when the row has none.
+            assert (read_today(name) or spec.bounds.get(profile) is not None
+                    or _new_name_without_bound(spec, profile, name)
+                    or spec.kind.value in ("bool", "enum")), (name, profile)

@@ -26,8 +26,10 @@ Decisions:
    ``FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`` and ``--link-loss-hold-s`` from 0,
    ``--speed-mps`` above 0 to 15 m/s). A3 to A5 add the target bounds to
    these names as a deliberate change recorded in design section 27. Only
-   with ``today_accepts=None`` (no golden data) is an environment or flag
-   value checked against the target bound.
+   with ``today_accepts=None`` (no golden data), or for a name today's code
+   does not read at all (``table.read_today`` is false, for example
+   ``FLIGHTRISK_LAND_BATTERY`` and ``FLIGHTRISK_LINK_LOSS_WAIT_S``), is an
+   environment or flag value checked against the target bound.
 2. Where today's code clamps (``policy: clamp``, row 23
    ``FLIGHTRISK_MANUAL_ORPHAN_LAND_S``, "min 30, clamped"), the resolver
    clamps to the same end and logs it (risk R5). C5 turns this into a
@@ -144,6 +146,7 @@ from flightrisk.params.table import (
     PARSE_CHOICE,
     TABLE,
     TODAY_READS,
+    read_today,
     TodayRead,
 )
 
@@ -524,9 +527,10 @@ def _check_bound(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, d
                  name: Optional[str], today_accepts: Optional[TodayAccepts]) -> Any:
     """Return the value to use after the bound check, clamped where today's code clamps; raise if refused."""
     profile = model.profile
-    if today_accepts is not None and name and source in _NAME_LAYERS:
-        # Decision 1: an environment or flag value is checked against today's range only. A name with no
-        # recorded range is open, as today's reader accepts any value its parse accepts.
+    if today_accepts is not None and name and source in _NAME_LAYERS and read_today(name):
+        # Decision 1: an environment or flag value of a name today's code reads is checked against today's
+        # range only. Such a name with no recorded range is open, as today's reader accepts any value its
+        # parse accepts. A name today's code does not read falls through to the target bound.
         today = _today_range(today_accepts, name, profile) or _OPEN
         end = _outside_range(value, today)
         if end is None:
@@ -607,6 +611,18 @@ def _converted(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name])
             return _from_today_text(spec, text, name.read, name.scale), False
         return _from_text(spec, text, name.scale if name else 1.0), False
     return coerce_typed(spec, raw), False
+
+
+_NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
+
+
+def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
+    """True for a number from a name today's code does not read, on a row with no target bound.
+
+    Such a value has neither today's range nor a target bound to check it against, so it is not
+    honoured until the PR that brings the bound (``FLIGHTRISK_LINK_LOSS_WAIT_S`` on the Tello, C7).
+    """
+    return not read_today(name) and spec.kind in _NUMERIC_KINDS and spec.bounds.get(profile) is None
 
 
 def _is_test_unit(model: DroneModel, simulated: bool) -> bool:
@@ -741,6 +757,10 @@ def resolve(
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source)
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)
+                continue
+            if name is not None and _new_name_without_bound(spec, profile, name.name):
+                log.warning("%s is ignored: no code reads it today and %s has no bound for %s",
+                            detail, param_id, drone.id)
                 continue
             if edit is Edit.FACT:
                 if not test_unit:
