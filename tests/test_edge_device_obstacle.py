@@ -148,7 +148,11 @@ def test_tello_builds_a_camera_sensor_on_a_frame_holder():
     assert wiring.step_cm == 50
     assert wiring.turn is True
     kwargs = wiring.executor_kwargs()
-    assert kwargs == {"obstacle_sensor": sensor, "obstacle_step_cm": 50, "obstacle_turn": True}
+    assert kwargs == {
+        "obstacle_sensor": sensor, "obstacle_step_cm": 50, "obstacle_turn": True,
+        # The edge's defaults: two clear votes, two re-looks, 50 cm sidesteps, two per lane.
+        "obstacle_clear_votes": 2, "obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2,
+    }
 
 
 def test_tello_sensor_uses_the_monotonic_clock():

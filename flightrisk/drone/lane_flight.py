@@ -39,7 +39,10 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    than the end of the last move or turn plus the settle time (and newer
    than the gate itself). The call runs on a helper thread that is abandoned
    if it hangs. Only ``clear`` lets the step be claimed and sent; nothing is
-   sent after any other result. A drone that measures its own heading in
+   sent after any other result. With ``obstacle_clear_votes`` above 1
+   (``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``, 2 on the edge) the gate needs that
+   many consecutive clear views, each a separate call judging a frame
+   captured after the previous one. A drone that measures its own heading in
    the plan frame (``measured_heading_deg()``, an autopilot's compass) must
    also face the commanded heading within ``HEADING_TOLERANCE_DEG``, before
    and after the look: otherwise the gate's result is ``unavailable``
@@ -57,7 +60,10 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    removed from the plan, the cut ``(lane, flown_cm, reason)`` is recorded
    and reported in telemetry, and later lanes are re-planned with the
    deficit rule (``lane_steps``), which never lengthens a lane. The drone
-   never lands for an obstacle and continues with the next lane.
+   never lands for an obstacle and continues with the next lane. Before an
+   obstacle (``obstacle``, never ``person``) cuts a lane step, the executor
+   may look again and sidestep around it (``flightrisk.drone.lane_avoid``,
+   off unless the executor is given its settings; the edge switches it on).
 4. **Fail-safe.** A sensor that cannot look (stale frame, timeout, error) is
    asked again up to ``OBSTACLE_SENSE_RETRIES`` times, hovering
    ``obstacle_retry_pause_s`` between attempts, and then cuts the lane with
@@ -177,6 +183,7 @@ _GO = "go"  # fly the step now
 _AGAIN = "again"  # look at the plan again (after a turn, a cut, a re-task)
 _STOP = "stop"  # the sequence ends (landing, hold)
 _RETRY = "retry"  # ask the sensor again (inside the gate only)
+_VOTE = "vote"  # a clear view, but the gate needs another one (inside the gate only)
 _CUT = "cut"  # the gate or a turn that did not finish cut the lane
 _OBSTACLE_STATES = {
     STATE_CLEAR: OBSTACLE_STATE_CLEAR,
@@ -906,7 +913,19 @@ class FlightSequenceMixin:
                 return _AGAIN if verdict == _CUT else verdict
         elif direction != "forward":
             return _GO
-        verdict = self._look(step, current, cut)
+        # A gate that saw an obstacle may first look again and sidestep
+        # (``lane_avoid``): its cut is held back here and made there.
+        seen: list[SenseResult] = []
+
+        def gate_cut(reason: str, result: SenseResult) -> None:
+            if self._avoid_wanted_locked(reason, result):
+                seen.append(result)
+            else:
+                cut(reason, result)
+
+        verdict = self._look(step, current, gate_cut)
+        if verdict == _CUT and seen:
+            verdict = self._avoid_blocked(step, gen, current, cut, seen[0])
         return _AGAIN if verdict == _CUT else verdict
 
     def _plan_step_check(self, step: tuple[int, int, str, int], gen: int) -> Callable[[], bool]:
@@ -1114,13 +1133,20 @@ class FlightSequenceMixin:
     ) -> str:
         """The sense gate before *step*: ``_GO``, ``_CUT``, ``_AGAIN`` or ``_STOP``.
 
-        Only a ``clear`` view, taken while the drone faced its commanded
-        heading (``_sense_facing``), for a step that is still *current*,
-        returns ``_GO``. ``blocked`` returns ``_CUT``. A result that is not a
-        view (``unavailable``, or an exception) is retried after a short
-        hover, up to ``OBSTACLE_SENSE_RETRIES`` attempts, then returns
-        ``_CUT`` with ``sensor_stale``; once the plan's gates have been
-        unable to look for ``OBSTACLE_SENSOR_DOWN_S``, with ``sensor_down``.
+        Only ``obstacle_clear_votes`` consecutive ``clear`` views (one by
+        default; ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES`` on the edge), each taken
+        while the drone faced its commanded heading (``_sense_facing``), for
+        a step that is still *current*, return ``_GO``. Every vote is its own
+        sense call, and every vote after the first asks for a view captured
+        at least the settle time after the previous vote ended, so no two
+        votes can judge the same frame and the frames are spread over time,
+        which makes their errors less alike. ``blocked`` at
+        any vote returns ``_CUT``. A result that is not a view
+        (``unavailable``, or an exception) starts the votes again and is
+        retried after a short hover, up to ``OBSTACLE_SENSE_RETRIES`` such
+        attempts, then returns ``_CUT`` with ``sensor_stale``; once the
+        plan's gates have been unable to look for ``OBSTACLE_SENSOR_DOWN_S``,
+        with ``sensor_down``.
         Every ``_CUT`` first calls *cut* under ``_lock`` with the reason and
         the result: a lane step cuts its lane there, the way back of a
         ``resume_search`` only records why it stopped. A step that is no
@@ -1129,7 +1155,13 @@ class FlightSequenceMixin:
         hold between attempts, and the caller stops for it. *source* (for
         example ``return``) is added to the gate's log.
         """
+        votes = max(1, int(getattr(self, "obstacle_clear_votes", 1)))
         attempt = 0
+        failures = 0
+        clear_votes = 0
+        # Edge clock time at which the previous clear vote of this run ended:
+        # the next vote judges only a frame captured after it plus the settle time.
+        vote_after: float | None = None
         while True:
             attempt += 1
             # A probe of a down sensor may hold it (a camera has one
@@ -1140,6 +1172,8 @@ class FlightSequenceMixin:
             # A view newer than the end of the last move or turn plus the
             # settle time, and never older than the gate itself.
             after = max(self._last_motion_end_s, started - OBSTACLE_SETTLE_S)
+            if vote_after is not None:
+                after = max(after, vote_after)
             result, latency_ms = self._sense_facing(after, deadline)
             now = self._clock()
             if self._abort.is_set():
@@ -1152,13 +1186,20 @@ class FlightSequenceMixin:
                     # A re-task replaced the step while the sensor looked.
                     verdict = _AGAIN
                 elif result.clear:
-                    verdict = _GO
+                    clear_votes += 1
+                    verdict = _GO if clear_votes >= votes else _VOTE
+                    vote_after = now
                 elif result.blocked:
                     reason = result.cut_reason
-                elif self._plan_sensor_down_locked(now):
-                    reason = CUT_SENSOR_DOWN
-                elif attempt >= OBSTACLE_SENSE_RETRIES:
-                    reason = CUT_SENSOR_STALE
+                else:
+                    # Not a view: the votes so far no longer count as consecutive.
+                    clear_votes = 0
+                    vote_after = None
+                    failures += 1
+                    if self._plan_sensor_down_locked(now):
+                        reason = CUT_SENSOR_DOWN
+                    elif failures >= OBSTACLE_SENSE_RETRIES:
+                        reason = CUT_SENSOR_STALE
                 if reason is not None:
                     verdict = _CUT
                     cut(reason, result)
@@ -1166,11 +1207,12 @@ class FlightSequenceMixin:
                     self._held or self._manual is not None or self._link_holding or not self._is_active()
                 )
             self._log_gate(step, attempt, result, latency_ms, pose, source)
-            if verdict != _RETRY:
+            if verdict not in (_RETRY, _VOTE):
                 return verdict
             if stopping:
                 return _AGAIN
-            if self._abort.wait(self.obstacle_retry_pause_s):
+            # The next vote needs no pause: its call waits for a newer frame.
+            if verdict == _RETRY and self._abort.wait(self.obstacle_retry_pause_s):
                 return _STOP
 
     def _sense_facing(self, after: float, deadline: float | None = None) -> tuple[SenseResult, float]:
@@ -1470,7 +1512,9 @@ class FlightSequenceMixin:
     # The sensed way back of a resume_search (``lane_manual._run_return``)
     # ------------------------------------------------------------------
 
-    def _fly_return_sensed(self, path: list[tuple[str, int]]) -> tuple[str, tuple[str, SenseResult] | None]:
+    def _fly_return_sensed(
+        self, path: list[tuple[str, int]], source: str = "return"
+    ) -> tuple[str, tuple[str, SenseResult] | None]:
         """Fly the way back of a ``resume_search`` in sensed steps: ``(outcome, why)``.
 
         *outcome* is ``done``, ``stopped`` or ``blocked``; *why* is the
@@ -1496,6 +1540,10 @@ class FlightSequenceMixin:
         back under manual control with its hold point kept. A landing, a
         hold, manual control or a link-loss hold stops it before its next
         move (``stopped``), exactly as an unsensed way back stops.
+
+        *source* names the way back in the gate and geofence logs: ``return``
+        for a ``resume_search``, and the sidestep's own names when
+        ``lane_avoid`` flies a sidestep and its way back to the lane.
         """
         turning = self._turns_to_face()
         limits = getattr(self.envelope, "limits", ROOM_LIMITS)
@@ -1539,7 +1587,7 @@ class FlightSequenceMixin:
                             return ended(verdict)
                     if body != "forward":
                         break  # forward_only: a back or sideways step is flown unsensed, as on a lane
-                    verdict = self._look(step, current, stop, source="return")
+                    verdict = self._look(step, current, stop, source=source)
                     if verdict == _GO:
                         break
                     if verdict == _AGAIN:
@@ -1552,7 +1600,7 @@ class FlightSequenceMixin:
                     self._log.error(
                         "edge_geofence_refused", drone_id=self.drone_id, direction=body, distance_cm=distance,
                         x_cm=round(pose.x_cm, 1), y_cm=round(pose.y_cm, 1), heading_deg=round(pose.heading_deg, 1),
-                        source="return",
+                        source=source,
                     )
                     self.land_now("geofence")
                     return "stopped", None

@@ -94,6 +94,41 @@ MAX_DECODE_LAG_S = 0.3
 #: Allowed ``FLIGHTRISK_MAX_DECODE_LAG_S``.
 MAX_DECODE_LAG_RANGE_S = (0.1, 2.0)
 
+# Avoidance at a blocked gate (``flightrisk.drone.lane_avoid``) and clear votes.
+# The edge's defaults are below; ``LaneExecutor`` itself defaults to the
+# behaviour before them (one clear view clears a step, no re-look, no
+# sidestep), so an executor built without these settings flies as it did.
+
+#: Consecutive clear views a gate needs before a step is flown, each judged
+#: on its own frame captured after the previous view. The edge's default;
+#: ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES`` changes it, and 1 is the behaviour
+#: before votes existed (one clear view clears a step).
+OBSTACLE_CLEAR_VOTES = 2
+#: Allowed ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``.
+OBSTACLE_CLEAR_VOTES_RANGE = (1, 5)
+#: Extra gates after a gate that saw an obstacle, each after a short hover;
+#: the step is flown only if every one of them is clear. The edge's default;
+#: ``FLIGHTRISK_OBSTACLE_RELOOK`` changes it, and 0 switches the re-look off.
+OBSTACLE_RELOOK = 2
+#: Allowed ``FLIGHTRISK_OBSTACLE_RELOOK``.
+OBSTACLE_RELOOK_RANGE = (0, 5)
+#: Sideways distance in centimetres of a sidestep around an obstacle on the
+#: lane. The edge's default; ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` changes it,
+#: and 0 switches the sidestep off. Any other value must be a move the drone
+#: can fly (at least ``OBSTACLE_STEP_MIN_CM``).
+OBSTACLE_SIDESTEP_CM = 50
+#: Allowed ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` besides 0.
+OBSTACLE_SIDESTEP_RANGE_CM = (OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM)
+#: Sidestep attempts allowed on one lane. The edge's default;
+#: ``FLIGHTRISK_OBSTACLE_SIDESTEPS`` changes it, and 0 switches the sidestep off.
+OBSTACLE_SIDESTEPS = 2
+#: Allowed ``FLIGHTRISK_OBSTACLE_SIDESTEPS``.
+OBSTACLE_SIDESTEPS_RANGE = (0, 4)
+#: How far along the lane a sidestep flies on the offset line before it goes
+#: back to the lane: the range within which the depth cue is expected to see
+#: an obstacle (the calibration target of hardware item H1).
+OBSTACLE_SIDESTEP_PASS_CM = 150
+
 # ---------------------------------------------------------------------------
 # Environment variables read by ``edge_device`` (all ``FLIGHTRISK_`` prefixed)
 # ---------------------------------------------------------------------------
@@ -107,6 +142,10 @@ ENV_OBSTACLE_SETTLE_S = "FLIGHTRISK_OBSTACLE_SETTLE_S"
 #: The bound Tello decoder's stale limit (``MAX_DECODE_LAG_S``); read by
 #: ``tello_bound.max_decode_lag_s`` and validated at the edge's start.
 ENV_MAX_DECODE_LAG_S = "FLIGHTRISK_MAX_DECODE_LAG_S"
+ENV_OBSTACLE_CLEAR_VOTES = "FLIGHTRISK_OBSTACLE_CLEAR_VOTES"
+ENV_OBSTACLE_RELOOK = "FLIGHTRISK_OBSTACLE_RELOOK"
+ENV_OBSTACLE_SIDESTEP_CM = "FLIGHTRISK_OBSTACLE_SIDESTEP_CM"
+ENV_OBSTACLE_SIDESTEPS = "FLIGHTRISK_OBSTACLE_SIDESTEPS"
 #: Fake drone only: the plan-frame y (cm) at which the fake sensor reports blocked.
 ENV_FAKE_OBSTACLE_Y_CM = "FLIGHTRISK_FAKE_OBSTACLE_Y_CM"
 
@@ -211,6 +250,24 @@ TELEMETRY_PERSON_CUE = "obstacle_person_cue"
 #: Keys of ``TELEMETRY_PERSON_CUE``.
 PERSON_CUE_DOWN_KEY = "person_cue_down"
 PERSON_CUE_AGE_KEY = "detection_age_s"
+#: What the re-look and the sidestep at blocked gates did in the current plan,
+#: for an edge that has either switched on (``lane_avoid``): an object with
+#: the counts ``AVOID_COUNT_KEYS`` and ``AVOID_PHASE_KEY``, the step under way
+#: (``relook``, ``sidestep``, ``return`` or null). One field holds all of it,
+#: to keep the telemetry's field count down (``fleet_protocol.MAX_FIELDS``).
+TELEMETRY_AVOID = "obstacle_avoid"
+#: Counts in ``TELEMETRY_AVOID``: re-look rounds started, re-look rounds that
+#: let the step fly, sidestep attempts, and sidesteps that got past.
+AVOID_RELOOKS_KEY = "relooks"
+AVOID_RELOOK_CLEARS_KEY = "relook_clears"
+AVOID_SIDESTEPS_KEY = "sidesteps"
+AVOID_SIDESTEP_PASSES_KEY = "sidestep_passes"
+AVOID_COUNT_KEYS = (AVOID_RELOOKS_KEY, AVOID_RELOOK_CLEARS_KEY, AVOID_SIDESTEPS_KEY, AVOID_SIDESTEP_PASSES_KEY)
+AVOID_PHASE_KEY = "phase"
+#: ``AVOID_PHASE_KEY`` values.
+AVOID_PHASE_RELOOK = "relook"
+AVOID_PHASE_SIDESTEP = "sidestep"
+AVOID_PHASE_RETURN = "return"
 TELEMETRY_FIELDS = (
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -221,6 +278,7 @@ TELEMETRY_FIELDS = (
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_PERSON_CUE,
+    TELEMETRY_AVOID,
 )
 #: The executor keeps and reports this many of the latest cuts.
 MAX_CUTS_LISTED = 8
@@ -240,6 +298,10 @@ EVENT_SENSOR_ERROR = "edge_obstacle_sensor_error"
 EVENT_LANES_ENDED_SENSOR_DOWN = "edge_lanes_ended_sensor_down"
 EVENT_PERSON_CUE_DOWN = "edge_obstacle_person_cue_down"
 EVENT_OBSTACLE_TURN = "edge_obstacle_turn"
+#: A re-look round at a gate that saw an obstacle (``lane_avoid``), with its ``phase``.
+EVENT_OBSTACLE_RELOOK = "edge_obstacle_relook"
+#: A sidestep around an obstacle on the lane (``lane_avoid``), with its ``phase``.
+EVENT_OBSTACLE_SIDESTEP = "edge_obstacle_sidestep"
 EVENT_START_REFUSED = "edge_start_refused"
 #: Logged once at startup, at warning level, for every obstacle setting that
 #: is not its default (``variable``, ``value``, ``default``).

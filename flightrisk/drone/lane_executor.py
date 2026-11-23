@@ -48,7 +48,9 @@ Obstacle sensing (``LaneExecutor(obstacle_sensor=..., obstacle_step_cm=...)``,
 design ``.claude/build/obstacle/design.md`` sections 3 and 4): with a sensor
 every lane is flown in sensed steps of at most ``obstacle_step_cm``; the
 drone turns to face each move first, and the sensor must report the view
-clear before each step is sent. A blocked view cuts the lane (the drone
+clear (``obstacle_clear_votes`` times in a row) before each step is sent.
+An obstacle may first be looked at again and stepped around
+(``flightrisk.drone.lane_avoid``). A blocked view cuts the lane (the drone
 stops, never lands for it, skips the rest of the lane and of any following
 lane in the same direction, and keeps later lanes on the planned grid). A
 sensor that cannot look is retried, then cuts the lane, and a sensor down
@@ -90,6 +92,7 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
+from flightrisk.drone.lane_avoid import ObstacleAvoidMixin
 from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
     COMMAND_TYPES,
@@ -133,6 +136,7 @@ from flightrisk.drone.obstacle_sensor import (
     SENSING_STEPPED,
     SENSOR_UNAVAILABLE_DETAIL,
     START_REFUSED_REASON,
+    TELEMETRY_AVOID,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_CUTS,
     TELEMETRY_CUTS_TOTAL,
@@ -222,7 +226,13 @@ _START_NACK_REASONS = {
 
 
 class LaneExecutor(
-    FleetCommandMixin, CeilingCommandMixin, ManualControlMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin
+    FleetCommandMixin,
+    CeilingCommandMixin,
+    ManualControlMixin,
+    LanePlanMixin,
+    ObstacleAvoidMixin,
+    FlightSequenceMixin,
+    MonitorMixin,
 ):
     """Executes ground control messages against one drone inside a safety envelope."""
 
@@ -257,6 +267,10 @@ class LaneExecutor(
         obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
         obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
         obstacle_takeoff_probe: bool = True,
+        obstacle_clear_votes: int = 1,
+        obstacle_relook: int = 0,
+        obstacle_sidestep_cm: int = 0,
+        obstacle_sidesteps: int = 0,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -287,6 +301,14 @@ class LaneExecutor(
           valid (``lane_flight._takeoff_sense_refusal``). The edge always
           keeps it on; False is only for tests whose scripted sensor must
           answer the lane gates from its very first call.
+        * *obstacle_clear_votes*: consecutive clear views a gate needs
+          before a step is flown (1 to 5; 1 is one view, as before). The
+          edge passes ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``.
+        * *obstacle_relook*, *obstacle_sidestep_cm*, *obstacle_sidesteps*:
+          the re-look and the sidestep at a gate that saw an obstacle
+          (``flightrisk.drone.lane_avoid``); all 0, the defaults, cut the
+          lane at once as before. The edge passes
+          ``FLIGHTRISK_OBSTACLE_RELOOK``, ``_SIDESTEP_CM`` and ``_SIDESTEPS``.
         """
         self.drone = drone
         self.envelope = envelope
@@ -433,6 +455,7 @@ class LaneExecutor(
         self._obstacle_turn = bool(obstacle_turn)
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
+        self._init_avoid(obstacle_clear_votes, obstacle_relook, obstacle_sidestep_cm, obstacle_sidesteps)
         # Cuts of the current plan in the order they happened (all of them;
         # telemetry lists the last MAX_CUTS_LISTED). Kept across a re-task
         # that continues the plan, cleared when another plan is accepted.
@@ -626,6 +649,10 @@ class LaneExecutor(
           null}``: whether the cue has been ``unknown`` for several gates in a
           row, and how old the view of the newest detection result is. Left
           out for a sensor that reports no person cue.
+        * ``obstacle_avoid``: with stepped sensing and the re-look or the
+          sidestep switched on (``lane_avoid``), what they did in the plan:
+          ``{"relooks", "relook_clears", "sidesteps", "sidestep_passes":
+          counts, "phase": "relook", "sidestep", "return" or null}``.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps
@@ -663,6 +690,10 @@ class LaneExecutor(
         person = self._person_cue_status()
         if person is not None:
             status[TELEMETRY_PERSON_CUE] = person
+        if mode in (SENSING_STEPPED, SENSING_FORWARD_ONLY):
+            avoid = self._avoid_status()
+            if avoid is not None:
+                status[TELEMETRY_AVOID] = avoid
         return status
 
     def _person_cue_status(self) -> dict[str, Any] | None:
@@ -701,6 +732,7 @@ class LaneExecutor(
         self._obstacle_state = None
         self._obstacle_latency_ms = None
         self._plan_down_since = None
+        self._reset_avoid_plan_locked()
         self._request_sensor_probe_locked("new_plan")
 
     def _worker_alive(self) -> bool:
