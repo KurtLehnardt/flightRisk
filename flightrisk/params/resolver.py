@@ -54,6 +54,40 @@ Decisions:
 11. A scaled value keeps fractional centimetres (``1.234`` m is ``123.4``
     cm), as today's readers multiply floats; an unscaled integer row takes
     only whole numbers.
+
+Safety (step S7):
+
+12. ``less_safe`` compares a value with the built-in base column by
+    ``safer``, never with a custom model's default (RES-8). An off value is
+    less safe unless the base is off too, so the Tello's default sidestep of 0
+    is not. ``non_default`` means "differs from the base default", so a custom
+    default that differs is non-default.
+13. A value needs confirmation when its row is ``confirm: less_safe`` and the
+    value is less safe, or ``confirm: non_default`` and the value is
+    non-default (``needs_confirmation``). Without a launcher layer, such a
+    value won by ``params.json`` or the inventory is refused unless
+    ``confirmations`` (the ``--confirm-less-safe id=value`` flags, see
+    ``parse_confirm_flags``) names exactly that id and value. With a launcher
+    layer, only the launcher's ``confirmed`` object counts; it is passed as
+    the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
+    from the launcher, the environment or a flag are accepted, and those from
+    the environment or a flag are logged at warning level.
+14. A safety switch stored as off in ``params.json`` or the inventory is
+    refused (RES-10). A switch that is a test-adapter fact is refused earlier
+    by decision 7, without naming it. A unit's inventory ``features`` are
+    passed as ``features``; ``forward_obstacle_sensing: false`` is refused.
+15. After layering, the A1 constraints of ``constraints.py`` run against the
+    resolved values (RES-5); K-3 is not among them until C6.
+16. A custom or unknown model (``custom.py``) is passed as ``model``. Its
+    narrowed bounds and defaults replace the profile column; its defaults
+    carry source ``profile`` with the model's ``source_detail``.
+17. ``resolve`` is the layering step: it refuses single values (bounds,
+    types, facts, stored switches) and nothing across values. The
+    confirmation check (decision 13) and the constraints (decision 15) are
+    ``check_resolved``, and ``resolve_unit`` runs both steps. Runtime callers
+    (A3 to A5) call ``resolve_unit``. The split keeps each single-value test of
+    the layering step free of the cross-value rules, which today's readers do
+    not apply when they read one name.
 """
 
 from __future__ import annotations
@@ -61,11 +95,12 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Iterable, Mapping, Optional, Union
 
 from flightrisk.hardware.catalogue import BUILTIN_MODELS, SCALES, DroneModel
+from flightrisk.params.constraints import FILE_SOURCES, check_constraints, stored_feature_off, stored_switch_off
 from flightrisk.params.messages import render_refused_input, render_unavailable_capability
-from flightrisk.params.spec import Bound, EffectiveValue, Edit, Kind, ParamSpec, Source, Unit
+from flightrisk.params.spec import Bound, Confirm, EffectiveValue, Edit, Kind, ParamSpec, Safer, Source, Unit
 from flightrisk.params.table import TABLE
 
 log = logging.getLogger(__name__)
@@ -97,6 +132,15 @@ FACT_OVERRIDE_REFUSED = (
 )
 #: Operator text for a stored value that is not a setting; it does not name the value.
 FACT_NOT_SETTABLE = "A value in {detail} is not a setting and cannot be stored. Refusing to start."
+#: The reserved key of the launcher layer that holds the values the operator confirmed at Start.
+LAUNCHER_CONFIRMED = "confirmed"
+#: Operator text for a less-safe value from a file that nobody confirmed (RES-11).
+UNCONFIRMED_LESS_SAFE = (
+    "`{param_id}` {value} {unit} from {detail} is less safe than the {model} default of {base} {unit}. "
+    "{how} Refusing to start."
+)
+_CONFIRM_BY_FLAG = "Start with --confirm-less-safe {param_id}={value} to use it."
+_CONFIRM_IN_LAUNCHER = "Confirm it in the launcher at Start to use it."
 
 
 class ParamRefused(ValueError):
@@ -422,8 +466,64 @@ def _is_test_unit(model: DroneModel, simulated: bool) -> bool:
     return model.adapter in TEST_ADAPTERS or bool(simulated)
 
 
+def is_less_safe(spec: ParamSpec, value: Any, base: Any) -> bool:
+    """True when ``value`` is less safe than the built-in base default ``base`` (RES-8)."""
+    if _off_match(spec, value):
+        return not _off_match(spec, base)
+    if not (_is_number(value) and _is_number(base)):
+        return False
+    if spec.safer is Safer.HIGHER:
+        return value < base
+    if spec.safer is Safer.LOWER:
+        return value > base
+    return False
+
+
+def needs_confirmation(spec: ParamSpec, value: EffectiveValue) -> bool:
+    """True when the row's ``confirm`` column asks the operator to confirm this value."""
+    if spec.confirm is Confirm.LESS_SAFE:
+        return value.less_safe
+    if spec.confirm is Confirm.NON_DEFAULT:
+        return value.non_default
+    return False
+
+
+def parse_confirm_flags(items: Iterable[str]) -> dict[str, str]:
+    """``{id: value}`` from repeated ``--confirm-less-safe id=value`` flag values."""
+    out: dict[str, str] = {}
+    for item in items:
+        param_id, sep, value = item.partition("=")
+        if not sep or not param_id.strip() or not value.strip():
+            raise ParamRefused(f"--confirm-less-safe {item} is not of the form id=value. Refusing to start.",
+                               source=Source.CLI)
+        out[param_id.strip()] = value.strip()
+    return out
+
+
+def _confirmed(spec: ParamSpec, raw: Any, value: Any) -> bool:
+    """True when a confirmation ``raw`` names exactly ``value`` for the row."""
+    if raw is None:
+        return False
+    if _off_match(spec, raw):
+        return _off_match(spec, value)
+    try:
+        given = _from_text(spec, raw, 1.0) if isinstance(raw, str) else coerce_typed(spec, raw)
+    except _WrongType:
+        return False
+    return isinstance(given, bool) is isinstance(value, bool) and given == value
+
+
+def _model_and_narrowing(model: Any) -> tuple[DroneModel, Any]:
+    """The descriptor of ``model`` and its narrowing (a custom or unknown model), or None."""
+    if isinstance(model, (str, DroneModel)):
+        return _model_of(model), None
+    if callable(getattr(model, "narrow", None)) and isinstance(getattr(model, "model", None), DroneModel):
+        return model.model, model
+    raise ValueError(f"unsupported drone model {model!r}")
+
+
 def resolve(
-    model: Union[str, DroneModel],
+    model: Union[str, DroneModel, Any],
     unit_id: str,
     layers: Mapping[Union[Source, str], Mapping[str, Any]],
     *,
@@ -431,18 +531,24 @@ def resolve(
     simulated: bool = False,
     confirmations: Optional[Mapping[str, Any]] = None,
     today_accepts: Optional[TodayAccepts] = None,
+    features: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, EffectiveValue]:
     """Resolve every row that applies to ``model`` for ``unit_id``.
 
-    ``layers`` maps ``file``, ``inventory`` and ``launcher`` to ``{id: value}``
-    (a value may be a ``LayerValue`` naming where it came from), ``env`` to a
-    copy of the environment and ``cli`` to ``{flag: value}``. ``scale`` is
-    ``room`` or ``field`` and defaults to the model's scale. ``simulated`` is
-    true only for a verified simulated unit. ``confirmations`` is accepted so
-    callers keep one signature; the less-safe checks that read it come with
-    the resolver safety step. Raises ``ParamRefused`` for a refused value.
+    ``model`` is a built-in model id, a ``DroneModel``, or a custom or unknown
+    model from ``custom.py``. ``layers`` maps ``file``, ``inventory`` and
+    ``launcher`` to ``{id: value}`` (a value may be a ``LayerValue`` naming
+    where it came from; the launcher layer may also hold the reserved
+    ``confirmed`` object), ``env`` to a copy of the environment and ``cli`` to
+    ``{flag: value}``. ``scale`` is ``room`` or ``field`` and defaults to the
+    model's scale. ``simulated`` is true only for a verified simulated unit.
+    ``confirmations`` maps an id to the value a ``--confirm-less-safe`` flag
+    names; ``resolve`` only accepts it, and ``resolve_unit`` checks it.
+    ``features`` are the unit's inventory feature switches. Raises
+    ``ParamRefused`` for a refused value or a stored safety switch; the
+    confirmation and constraint checks are ``check_resolved`` (decision 17).
     """
-    drone = _model_of(model)
+    drone, narrowing = _model_and_narrowing(model)
     profile = drone.profile
     scale = scale or drone.scale
     if scale not in SCALES:
@@ -450,23 +556,37 @@ def resolve(
     unknown = {Source(k) if not isinstance(k, Source) else k for k in layers} - set(CALLER_LAYERS)
     if unknown:
         raise ValueError(f"layers {sorted(u.value for u in unknown)} are not caller layers")
+    if features:
+        refused = stored_feature_off(features, f"inventory.json units.{unit_id} features")
+        if refused:
+            raise ParamRefused(refused, source=Source.INVENTORY)
     test_unit = _is_test_unit(drone, simulated)
 
+    specs: dict[str, ParamSpec] = {}
+    bases: dict[str, Any] = {}
     result: dict[str, EffectiveValue] = {}
-    for spec in TABLE:
+    for base_spec in TABLE:
+        spec = narrowing.narrow(base_spec) if narrowing is not None else base_spec
         default = spec.defaults.get(profile)
         if default is None:
             continue
-        result[spec.id] = _effective(spec, drone, default, default, Source.PROFILE, profile, False)
+        specs[spec.id] = spec
+        bases[spec.id] = base_spec.defaults.get(profile)
+        narrowed = narrowing is not None and spec is not base_spec
+        detail = narrowing.source_detail if narrowed else profile
+        result[spec.id] = _effective(spec, drone, default, bases[spec.id], Source.PROFILE, detail, False)
 
     for source in CALLER_LAYERS:
         layer = layers.get(source, layers.get(source.value))
+        if source is Source.LAUNCHER and layer:
+            layer = {k: v for k, v in layer.items() if k != LAUNCHER_CONFIRMED}
         if not layer:
             continue
-        for param_id, (spec, raw, detail, name) in _entries(source, layer, scale, drone, unit_id).items():
+        for param_id, (_, raw, detail, name) in _entries(source, layer, scale, drone, unit_id).items():
             if param_id not in result:
                 log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
                 continue
+            spec = specs[param_id]
             edit = spec.edit.get(profile)
             if source in _ID_LAYERS and edit in (Edit.FACT, Edit.READ_ONLY):
                 if edit is Edit.FACT:
@@ -484,16 +604,93 @@ def resolve(
                 value, is_off = _value_of(spec, raw, source, name)
             except _WrongType:
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source) from None
+            if is_off and spec.safety_switch and source in FILE_SOURCES:
+                raise ParamRefused(stored_switch_off(param_id, value, detail), param_id=param_id, source=source)
             if not is_off:
                 value = _check_bound(spec, drone, unit_id, value, detail, source,
                                      name.name if name else None, today_accepts)
-            result[param_id] = _effective(spec, drone, value, spec.defaults[profile], source, detail, is_off)
+            result[param_id] = _effective(spec, drone, value, bases[param_id], source, detail, is_off)
+
     return result
 
 
-def _effective(spec: ParamSpec, model: DroneModel, value: Any, default: Any, source: Source,
+def resolve_unit(
+    model: Union[str, DroneModel, Any],
+    unit_id: str,
+    layers: Mapping[Union[Source, str], Mapping[str, Any]],
+    *,
+    scale: Optional[str] = None,
+    simulated: bool = False,
+    confirmations: Optional[Mapping[str, Any]] = None,
+    today_accepts: Optional[TodayAccepts] = None,
+    features: Optional[Mapping[str, Any]] = None,
+) -> dict[str, EffectiveValue]:
+    """Resolve one unit and run the safety checks a runtime caller needs (decision 17).
+
+    Takes the arguments of ``resolve`` and then calls ``check_resolved`` with
+    the launcher layer's ``confirmed`` object, if a launcher layer is given,
+    or else with ``confirmations``.
+    """
+    result = resolve(model, unit_id, layers, scale=scale, simulated=simulated, confirmations=confirmations,
+                     today_accepts=today_accepts, features=features)
+    launcher = layers.get(Source.LAUNCHER, layers.get(Source.LAUNCHER.value))
+    drone, _ = _model_and_narrowing(model)
+    if launcher is not None:
+        check_resolved(result, drone, launcher_confirmed=launcher.get(LAUNCHER_CONFIRMED) or {}, unit_id=unit_id)
+    else:
+        check_resolved(result, drone, confirmations=confirmations or {}, unit_id=unit_id)
+    return result
+
+
+def check_resolved(
+    result: Mapping[str, EffectiveValue],
+    model: DroneModel,
+    *,
+    confirmations: Optional[Mapping[str, Any]] = None,
+    launcher_confirmed: Optional[Mapping[str, Any]] = None,
+    unit_id: str = "",
+) -> None:
+    """Refuse unconfirmed less-safe values from files (RES-11) and failed constraints (RES-5).
+
+    Pass ``launcher_confirmed`` when the unit has a launcher layer, and
+    ``confirmations`` (the ``--confirm-less-safe`` flags) otherwise; when
+    ``launcher_confirmed`` is given, ``confirmations`` does not count.
+    """
+    launcher_present = launcher_confirmed is not None
+    confirmed = launcher_confirmed if launcher_present else (confirmations or {})
+    for param_id, effective in result.items():
+        spec = _BY_ID[param_id]
+        if not needs_confirmation(spec, effective):
+            continue
+        if effective.source in FILE_SOURCES:
+            if not _confirmed(spec, confirmed.get(param_id), effective.value):
+                raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
+        elif effective.source in _NAME_LAYERS:
+            log.warning("less-safe %s=%r from %s on %s", param_id, effective.value, effective.source_detail, unit_id)
+    violation = check_constraints(result, model.name)
+    if violation is not None:
+        raise ParamRefused(violation.message)
+
+
+def _unconfirmed(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, base: Any,
+                 launcher_present: bool) -> ParamRefused:
+    """The refusal of a less-safe value from a file that was not confirmed exactly (RES-11)."""
+    value = "off" if _off_match(spec, effective.value) and isinstance(spec.off_value, str) else effective.value
+    shown = str(value).lower() if isinstance(value, bool) else _whole(value) if _is_number(value) else value
+    how = (_CONFIRM_IN_LAUNCHER if launcher_present
+           else _CONFIRM_BY_FLAG.format(param_id=spec.id, value=shown))
+    text = UNCONFIRMED_LESS_SAFE.format(
+        param_id=spec.id, value=shown, unit=spec.unit.value, detail=effective.source_detail,
+        model=model.name, base=_whole(base) if _is_number(base) else base, how=how,
+    )
+    return ParamRefused(text, param_id=spec.id, source=effective.source)
+
+
+def _effective(spec: ParamSpec, model: DroneModel, value: Any, base: Any, source: Source,
                detail: Optional[str], is_off: bool) -> EffectiveValue:
+    """An effective value; ``base`` is the built-in base default that less-safe compares with."""
     bound = spec.bounds.get(model.profile)
+    default = spec.defaults.get(model.profile)
     return EffectiveValue(
         id=spec.id,
         value=value,
@@ -501,11 +698,11 @@ def _effective(spec: ParamSpec, model: DroneModel, value: Any, default: Any, sou
         source=source,
         source_detail=detail,
         default=default,
-        base_default=default,
+        base_default=base,
         lo=bound.lo if bound else None,
         hi=bound.hi if bound else None,
         model=model.id,
         applies=spec.applies,
-        non_default=source is not Source.PROFILE and value != default,
-        less_safe=is_off,
+        non_default=value != base,
+        less_safe=is_less_safe(spec, value, base) if not is_off else not _off_match(spec, base),
     )
