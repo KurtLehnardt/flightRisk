@@ -487,6 +487,39 @@ final class GroundViewModelTests: XCTestCase {
         await harness.push(t2, "fleet_status", GroundSamples.fleetTwo) { !self.vm.isStateStale }
     }
 
+    func testSceneBecomingActiveEndsTheBackoffWaitAtOnce() async {
+        let t1 = await harness.connect()
+        await harness.push(t1, "fleet_status", GroundSamples.fleetTwo) { !self.vm.isStateStale }
+        t1.serverDrop()
+        await harness.waitUntil("reconnecting") { !self.vm.linkStatus.isConnected }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        let t2 = await harness.handshake(after: before)
+        XCTAssertEqual(t2.sentEventNames, GroundCommand.stateRequests.map(\.eventName))
+        // A connected link is left alone.
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before + 1)
+        XCTAssertTrue(vm.linkStatus.isConnected)
+    }
+
+    func testSceneBecomingActiveNeverConnectsALinkThatIsOffOrInTheBackground() async {
+        harness.configure()
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, 0, "a link that is switched off stays off")
+        XCTAssertEqual(vm.linkStatus, .off)
+
+        let t = await harness.connect()
+        vm.appDidEnterBackground()
+        await harness.waitUntil("the client stopped") { t.closed }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before, "no connection from the background")
+        XCTAssertEqual(vm.linkStatus, .paused)
+    }
+
     func testReleasingTheViewModelShutsTheClientDown() async {
         var model: GroundViewModel? = harness.makeViewModel()
         XCTAssertNil(model?.saveAddress(GroundHarness.address))

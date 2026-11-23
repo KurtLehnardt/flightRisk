@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage("flightrisk_onboarding_complete") private var onboardingComplete = false
     @State private var selectedTab = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     let viewModel: SearchViewModel
     let cameraSession: AVCaptureSession
@@ -60,6 +61,14 @@ struct ContentView: View {
                         Label("Ground", systemImage: "antenna.radiowaves.left.and.right")
                     }
                     .tag(3)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Reconnect the ground link at once instead of after the rest of a
+                // backoff wait. Only here, where the Ground tab exists, so the
+                // onboarding screens never create the ground view model.
+                if phase == .active {
+                    GroundViewModel.live.sceneDidBecomeActive()
+                }
             }
         } else {
             OnboardingView { [pipeline] image, report in

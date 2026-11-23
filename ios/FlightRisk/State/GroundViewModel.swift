@@ -647,6 +647,17 @@ final class GroundViewModel {
         connectIfWanted()
     }
 
+    /// The scene became active (SwiftUI `scenePhase == .active`): after launch, after the
+    /// background, and after a brief interruption such as Control Center, where the app never
+    /// reached the background. A client that is waiting out a reconnect backoff (1 to 10 s) or
+    /// a refused key tries again at once, so the link comes back as soon as the user looks at
+    /// the phone. A connected client is not touched, and nothing connects unless the link is
+    /// configured and switched on. It does what the banner's "Retry" does.
+    func sceneDidBecomeActive() {
+        guard !appInBackground else { return }
+        retryConnection()
+    }
+
     // MARK: Settings actions
 
     /// Validates and saves the address. Reconnects to the new address when the link is on.
