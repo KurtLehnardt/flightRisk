@@ -310,7 +310,6 @@ def test_self_allowlist_sections_are_per_file_in_scope():
 # --- full-repo run ---------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="S9 fills tests/param_literal_allowlist.py")
 def test_every_finding_is_allowlisted_with_exact_count():
     from tests.param_literal_allowlist import ALLOWLIST, CATEGORIES
 
