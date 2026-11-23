@@ -393,6 +393,8 @@ def _from_today_text(spec: ParamSpec, raw: str, read: TodayRead, scale: float) -
             values = values * 2
         if len(values) != 2 or min(values) <= 0:
             raise _WrongType(raw)
+        if not all(_is_number(v) for v in values):
+            raise _WrongType(raw)
         return _typed_list(spec, [_scaled(v, scale, Kind.INT) for v in values])
     number: Union[int, float]
     if read.parse == PARSE_ASCII_INT:
@@ -408,7 +410,7 @@ def _from_today_text(spec: ParamSpec, raw: str, read: TodayRead, scale: float) -
             number = float(text)
         except ValueError as exc:
             raise _WrongType(raw) from exc
-    if not math.isfinite(number):
+    if not _is_number(number) or not math.isfinite(number):
         raise _WrongType(raw)
     if read.metres_below is not None and 0 < number < read.metres_below:
         number = number * _METRE_SCALE
@@ -611,8 +613,14 @@ def _value_of(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) 
     """
     if _off_match(spec, raw):
         return spec.off_value, True
-    value, is_off = _converted(spec, raw, source, name)
-    return _finite(value, raw), is_off
+    try:
+        value, is_off = _converted(spec, raw, source, name)
+    except OverflowError:
+        raise _WrongType(raw) from None
+    value = _finite(value, raw)
+    if isinstance(value, float):
+        value += 0.0  # -0.0 becomes 0.0
+    return value, is_off
 
 
 def _converted(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) -> tuple[Any, bool]:
@@ -629,13 +637,22 @@ def _converted(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name])
 _NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
 
 
-def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
-    """True for a number from a name today's code does not read, on a row with no target bound.
+#: The only (profile, name) pairs whose value is ignored with a log line because no code reads the name
+#: and the row has no bound. C7 must add the bound before any code reads it. Pinned by a test.
+IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 
-    Such a value has neither today's range nor a target bound to check it against, so it is not
-    honoured until the PR that brings the bound (``FLIGHTRISK_LINK_LOSS_WAIT_S`` on the Tello, C7).
-    """
+
+def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
+    """True for a number from a name today's code does not read, on a row with no target bound."""
     return not read_today(name) and spec.kind in _NUMERIC_KINDS and spec.bounds.get(profile) is None
+
+
+def _unbounded_id_row(spec: ParamSpec, profile: str) -> bool:
+    """True for a row whose name is in ``IGNORED_WITHOUT_BOUND``; the file, inventory and launcher layers refuse it.
+
+    C7 must add the bound before any code reads it.
+    """
+    return bool(spec.env) and (profile, spec.env) in IGNORED_WITHOUT_BOUND
 
 
 def _is_test_unit(model: DroneModel, simulated: bool) -> bool:
@@ -773,7 +790,11 @@ def resolve(
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)
                 continue
+            if source in _ID_LAYERS and _unbounded_id_row(spec, profile):
+                raise _refusal(spec, drone, unit_id, raw, detail, None, source)
             if name is not None and _new_name_without_bound(spec, profile, name.name):
+                if (profile, name.name) not in IGNORED_WITHOUT_BOUND:
+                    raise _refusal(spec, drone, unit_id, raw, detail, None, source)
                 log.warning("%s is ignored: no code reads it today and %s has no bound for %s",
                             detail, param_id, drone.id)
                 continue

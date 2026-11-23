@@ -418,3 +418,58 @@ def test_a_dangling_params_symlink_is_refused_not_treated_as_missing(tmp_path):
     path.symlink_to(tmp_path / "missing.json")
     with pytest.raises(ParamRefused):
         files.load_params_file(path)
+
+
+# Critic round 2: R2-1 oversized integers, R2-2 and R2-3 the unbounded row, NIT R2-5 negative zero.
+HUGE = "9" * 400
+
+
+@pytest.mark.parametrize("model, name", [("tello", "FLIGHTRISK_TELLO_SETTLE_SAMPLES"),
+                                         (G, "FLIGHTRISK_OBSTACLE_STEP_CM")])
+def test_a_400_digit_ascii_int_is_refused_cleanly(model, name):
+    with pytest.raises(ParamRefused):
+        _resolve(model, {Source.ENV: {name: HUGE}}, simulated=True)
+
+
+def test_a_400_digit_fleet_area_is_refused_cleanly():
+    with pytest.raises(ParamRefused):
+        _resolve(G, {Source.ENV: {"FLIGHTRISK_FLEET_AREA_CM": HUGE}})
+    with pytest.raises(ParamRefused):
+        _resolve(G, {Source.CLI: {"--fleet-area-cm": HUGE}})
+
+
+def test_every_today_read_parse_kind_refuses_a_400_digit_value_cleanly():
+    from flightrisk.params.table import TODAY_READS
+    for name, read in TODAY_READS.items():
+        if read.parse == "choice":
+            continue
+        source = Source.CLI if name.startswith("--") else Source.ENV
+        refused = False
+        for model in ("tello", G):
+            try:
+                _resolve(model, {source: {name: HUGE}}, simulated=True)
+            except ParamRefused:
+                refused = True
+        assert refused, name
+
+
+@pytest.mark.parametrize("source", [Source.FILE, Source.INVENTORY, Source.LAUNCHER])
+@pytest.mark.parametrize("value", [-5, 0, 10, 600])
+def test_link_loss_wait_is_refused_from_id_layers_on_a_tello(source, value):
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {source: {"link.loss_wait_s": value}})
+
+
+def test_link_loss_wait_env_is_still_ignored_on_a_tello():
+    got = _resolve("tello", {Source.ENV: {"FLIGHTRISK_LINK_LOSS_WAIT_S": "-5"}})
+    assert got["link.loss_wait_s"].source is Source.PROFILE
+
+
+def test_the_ignored_without_bound_allowlist_has_exactly_one_entry():
+    from flightrisk.params.resolver import IGNORED_WITHOUT_BOUND
+    assert IGNORED_WITHOUT_BOUND == frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
+
+
+def test_a_negative_zero_float_resolves_to_positive_zero():
+    got = _resolve(G, {Source.ENV: {"FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": "-0"}})["link.loss_wait_s"].value
+    assert str(got) == "0.0"
