@@ -1,37 +1,45 @@
 package com.flightrisk.app.camera
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
 import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.YuvImage
+import android.util.Log
+import android.util.Size
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import java.io.ByteArrayOutputStream
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * CameraX [ImageAnalysis] implementation of [FrameSource].
+ * The phone camera as a [FrameSource]: a CameraX [ImageAnalysis] analyzer.
  *
- * Captures preview frames via [ImageAnalysis.Analyzer], converts
- * YUV_420_888 to RGB [Bitmap], and applies rotation compensation
- * based on device orientation. The latest frame is held in a
- * thread-safe buffer.
+ * The Search screen binds the use case from [buildImageAnalysis] together
+ * with its preview in one `bindToLifecycle` call. CameraX delivers each frame
+ * as RGBA_8888 ([ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888]);
+ * [ImageProxy.toBitmap] turns it into an ARGB_8888 bitmap, honouring the row
+ * stride and padding of the buffer, and the bitmap is rotated upright by
+ * [ImageProxy.getImageInfo]'s rotation. The frame keeps the resolution CameraX
+ * chose (about 1280 x 720), so the detector letterboxes it and the embedder's
+ * crops are cut from it at full resolution.
  *
- * @param targetWidth Desired frame width (default 640 for YOLO input).
- * @param targetHeight Desired frame height (default 480 for YOLO input).
+ * Frames are kept only while the source is started ([start] when a search
+ * starts, [stop] when it ends); [takeNewFrame] hands each frame out once.
  */
-class CameraXFrameSource(
-    private val targetWidth: Int = 640,
-    private val targetHeight: Int = 480,
-) : FrameSource, ImageAnalysis.Analyzer {
+class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
 
     private val lock = ReentrantLock()
     private var latestFrame: Bitmap? = null
+    private var fresh = false
     private var frameCallback: ((Bitmap) -> Unit)? = null
+
+    @Volatile
     private var isRunning = false
+
+    private val executor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
     override fun start() {
         lock.withLock {
@@ -43,11 +51,23 @@ class CameraXFrameSource(
         lock.withLock {
             isRunning = false
             latestFrame = null
+            fresh = false
         }
     }
 
-    override fun getLatestFrame(): Bitmap? {
+    /** Stops the source and its analysis thread. It cannot be used again. */
+    fun release() {
+        stop()
+        executor.shutdown()
+    }
+
+    override fun getLatestFrame(): Bitmap? = lock.withLock { latestFrame }
+
+    /** The latest frame if it has not been taken yet, else null, so each camera frame is processed once. */
+    fun takeNewFrame(): Bitmap? {
         lock.withLock {
+            if (!fresh) return null
+            fresh = false
             return latestFrame
         }
     }
@@ -58,115 +78,75 @@ class CameraXFrameSource(
         }
     }
 
-    /**
-     * Called by CameraX for each preview frame.
-     *
-     * Converts the YUV_420_888 image to an RGB [Bitmap], applies
-     * rotation correction, stores it in the thread-safe buffer,
-     * and fires the frame callback if registered.
-     */
-    override fun analyze(imageProxy: ImageProxy) {
-        if (!isRunning) {
-            imageProxy.close()
-            return
-        }
-
+    /** Called by CameraX on the analysis thread for each frame. */
+    override fun analyze(image: ImageProxy) {
         try {
-            val bitmap = imageProxyToBitmap(imageProxy)
-            if (bitmap != null) {
-                val rotated = applyRotation(bitmap, imageProxy.imageInfo.rotationDegrees)
-                val scaled = Bitmap.createScaledBitmap(rotated, targetWidth, targetHeight, true)
-
-                // Recycle intermediates if they are distinct objects
-                if (rotated !== bitmap) bitmap.recycle()
-                if (scaled !== rotated) rotated.recycle()
-
-                var callback: ((Bitmap) -> Unit)? = null
-                lock.withLock {
-                    latestFrame = scaled
-                    callback = frameCallback
-                }
-                callback?.invoke(scaled)
+            if (!isRunning) return
+            val upright = upright(image.toBitmap(), image.imageInfo.rotationDegrees)
+            var callback: ((Bitmap) -> Unit)? = null
+            lock.withLock {
+                // A frame that arrives after stop() is dropped.
+                if (!isRunning) return
+                latestFrame = upright
+                fresh = true
+                callback = frameCallback
             }
+            callback?.invoke(upright)
+        } catch (e: Exception) {
+            // toBitmap() refuses a format it cannot convert; that frame is skipped.
+            Log.w(TAG, "Camera frame skipped: ${e.javaClass.simpleName}")
         } finally {
-            imageProxy.close()
+            image.close()
         }
     }
 
     /**
-     * Convert an [ImageProxy] in YUV_420_888 format to an RGB [Bitmap].
-     *
-     * Uses [YuvImage] and JPEG compression as the conversion path,
-     * which is the simplest approach that works reliably across
-     * devices. For production, consider RenderScript or a native
-     * YUV converter for better performance.
+     * The [ImageAnalysis] use case for this source. [targetRotation] is the
+     * display rotation (`Surface.ROTATION_*`) of the preview, when known, so
+     * that the reported rotation turns frames the way the preview shows them.
      */
-    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
-        if (imageProxy.format != ImageFormat.YUV_420_888) return null
-
-        val yBuffer = imageProxy.planes[0].buffer
-        val uBuffer = imageProxy.planes[1].buffer
-        val vBuffer = imageProxy.planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        // NV21 format: Y plane followed by interleaved VU
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        val yuvImage = YuvImage(
-            nv21,
-            ImageFormat.NV21,
-            imageProxy.width,
-            imageProxy.height,
-            null,
-        )
-
-        val outputStream = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(
-            Rect(0, 0, imageProxy.width, imageProxy.height),
-            90,
-            outputStream,
-        )
-
-        val jpegBytes = outputStream.toByteArray()
-        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-    }
-
-    /**
-     * Apply rotation compensation to a bitmap.
-     *
-     * CameraX reports the rotation needed to orient the image
-     * upright relative to the device's natural orientation.
-     */
-    private fun applyRotation(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
-        if (rotationDegrees == 0) return bitmap
-
-        val matrix = Matrix().apply {
-            postRotate(rotationDegrees.toFloat())
-        }
-        return Bitmap.createBitmap(
-            bitmap, 0, 0,
-            bitmap.width, bitmap.height,
-            matrix, true,
-        )
-    }
-
-    /**
-     * Build an [ImageAnalysis] use case configured for this frame source.
-     *
-     * Bind the returned use case to a [LifecycleOwner] via CameraX's
-     * [ProcessCameraProvider].
-     */
-    fun buildImageAnalysis(): ImageAnalysis {
-        return ImageAnalysis.Builder()
-            .setTargetResolution(android.util.Size(targetWidth, targetHeight))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+    fun buildImageAnalysis(targetRotation: Int? = null): ImageAnalysis {
+        val selector = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(ANALYSIS_WIDTH, ANALYSIS_HEIGHT),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                ),
+            )
             .build()
-            .also { it.setAnalyzer(java.util.concurrent.Executors.newSingleThreadExecutor(), this) }
+        return ImageAnalysis.Builder()
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setResolutionSelector(selector)
+            .apply { if (targetRotation != null) setTargetRotation(targetRotation) }
+            .build()
+            .also { it.setAnalyzer(executor, this) }
+    }
+
+    companion object {
+        private const val TAG = "CameraXFrameSource"
+        const val ANALYSIS_WIDTH = 1280
+        const val ANALYSIS_HEIGHT = 720
+
+        /** [bitmap] turned upright by [rotationDegrees] (clockwise, as CameraX reports it). */
+        fun upright(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+            val degrees = FrameRotation.normalize(rotationDegrees)
+            if (degrees == 0) return bitmap
+            val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated !== bitmap) bitmap.recycle()
+            return rotated
+        }
+    }
+}
+
+/** Rotation arithmetic for camera frames, without Android types. */
+object FrameRotation {
+    /** [degrees] as 0, 90, 180 or 270; anything that is not a multiple of 90 is refused. */
+    fun normalize(degrees: Int): Int {
+        val d = ((degrees % 360) + 360) % 360
+        require(d % 90 == 0) { "rotation must be a multiple of 90 degrees, got $degrees" }
+        return d
     }
 }

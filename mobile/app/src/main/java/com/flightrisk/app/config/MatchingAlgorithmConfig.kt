@@ -36,7 +36,6 @@ enum class SignalStatus {
  * Categories for grouping signals in the settings UI.
  */
 enum class SignalCategory(val displayName: String) {
-    FACE_RECOGNITION("Face Recognition"),
     PERSON_REID("Person Re-ID"),
     APPEARANCE("Appearance"),
     OTHER("Other"),
@@ -73,41 +72,20 @@ object MatchingAlgorithmConfig {
 
     /**
      * All supported matching signals, in display order.
+     *
+     * There is no face signal: the app ships no face detection or face
+     * recognition model, and no model whose weights are for research use
+     * only. Matching is by appearance only (docs/mobile-models.md).
      */
     val SIGNALS = listOf(
-        // Face Recognition
-        SignalMetadata(
-            key = "face",
-            displayName = "ArcFace (MobileFaceNet)",
-            description = "Face embeddings via SCRFD detection + ArcFace recognition. Works even when clothing changes.",
-            category = SignalCategory.FACE_RECOGNITION,
-            defaultEnabled = true,
-            defaultWeight = 0.40f,
-        ),
-        SignalMetadata(
-            key = "insightface",
-            displayName = "InsightFace R18",
-            description = "Higher-quality face embeddings via InsightFace ResNet-18. Requires insightface_r18.tflite model.",
-            category = SignalCategory.FACE_RECOGNITION,
-            defaultEnabled = true,
-            defaultWeight = 0.35f,
-        ),
         // Person Re-ID
         SignalMetadata(
             key = "reid",
-            displayName = "CLIP ReID",
-            description = "Full-body appearance matching using CLIP visual embeddings. General-purpose re-identification.",
+            displayName = "Appearance (CLIP ViT-B-16)",
+            description = "Full-body appearance matching with the open_clip ViT-B-16 (LAION-2B) image embedder, the ground station's own model.",
             category = SignalCategory.PERSON_REID,
             defaultEnabled = true,
             defaultWeight = 0.35f,
-        ),
-        SignalMetadata(
-            key = "osnet_reid",
-            displayName = "OSNet ReID",
-            description = "Dedicated person re-identification model. More accurate than CLIP for person matching. Requires osnet_x1_0.tflite model.",
-            category = SignalCategory.PERSON_REID,
-            defaultEnabled = true,
-            defaultWeight = 0.30f,
         ),
         // Appearance
         SignalMetadata(

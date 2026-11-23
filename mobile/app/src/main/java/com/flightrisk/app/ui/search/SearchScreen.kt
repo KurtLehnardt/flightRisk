@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -76,6 +77,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
+import com.flightrisk.app.camera.CameraXFrameSource
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloConnectionState
@@ -191,6 +193,8 @@ data class SearchScreenState(
  * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
  * @param onDroneRotate Callback for drone rotation (degrees).
  * @param onSetUpTarget Opens the Target tab, from the "No search target yet" card.
+ * @param cameraFrameSource Receives the camera frames the search pipeline detects people in,
+ *   bound together with the preview while a camera search runs.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -211,6 +215,7 @@ fun SearchScreen(
     onEmergencyStop: () -> Unit = {},
     onSearchPatternChanged: (PatternType) -> Unit = {},
     onSetUpTarget: () -> Unit = {},
+    cameraFrameSource: CameraXFrameSource? = null,
     modifier: Modifier = Modifier,
 ) {
     val readiness = state.readiness
@@ -249,7 +254,7 @@ fun SearchScreen(
             }
             FrameSourceMode.CAMERA -> {
                 if (state.isSearching && state.hasCamera && !state.demoMode) {
-                    LiveCameraPreview(modifier = Modifier.fillMaxSize())
+                    LiveCameraPreview(frameSource = cameraFrameSource, modifier = Modifier.fillMaxSize())
                 } else {
                     CameraPreviewPlaceholder(
                         frame = state.cameraFrame,
@@ -536,10 +541,13 @@ private fun CameraPreviewPlaceholder(
 /**
  * Live camera preview using CameraX [PreviewView] wrapped in [AndroidView].
  *
- * Binds CameraX to the composable's lifecycle owner and unbinds on dispose.
+ * Binds the preview and, when [frameSource] is given, its [ImageAnalysis] use
+ * case to the composable's lifecycle owner in one `bindToLifecycle` call, so
+ * the search pipeline receives the frames the person sees. Unbinds both on
+ * dispose.
  */
 @Composable
-private fun LiveCameraPreview(modifier: Modifier = Modifier) {
+private fun LiveCameraPreview(frameSource: CameraXFrameSource?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -567,11 +575,12 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var cameraUnavailable by remember { mutableStateOf(false) }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, frameSource) {
         // Finding 1: cache provider reference from callback
         var cameraProvider: ProcessCameraProvider? = null
-        // Finding 2: track the specific preview use case
+        // Finding 2: track the specific use cases (preview and frame analysis)
         var preview: Preview? = null
+        var analysis: ImageAnalysis? = null
         // Finding 3: disposed flag to guard against race conditions
         var disposed = false
 
@@ -599,9 +608,16 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
                 previewView?.let { pv -> prev.setSurfaceProvider(pv.surfaceProvider) }
             }
             preview = p
+            // Frames for the search pipeline, turned the way the preview is shown.
+            val a = frameSource?.buildImageAnalysis(previewView?.display?.rotation)
+            analysis = a
             try {
-                // Finding 2: bind without unbindAll — only our use case
-                provider.bindToLifecycle(lifecycleOwner, cameraSelector, p)
+                // Finding 2: bind without unbindAll — only our use cases, together in one call
+                if (a != null) {
+                    provider.bindToLifecycle(lifecycleOwner, cameraSelector, p, a)
+                } else {
+                    provider.bindToLifecycle(lifecycleOwner, cameraSelector, p)
+                }
             } catch (e: IllegalStateException) {
                 // Finding 6: catch specific exceptions
                 Log.e(TAG, "Camera bind failed: illegal state", e)
@@ -617,8 +633,9 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
         onDispose {
             disposed = true
             try {
-                // Finding 1 & 2: unbind only our preview, using cached provider
-                preview?.let { cameraProvider?.unbind(it) }
+                // Finding 1 & 2: unbind only our use cases, using cached provider
+                listOfNotNull(preview, analysis).forEach { cameraProvider?.unbind(it) }
+                analysis?.clearAnalyzer()
             } catch (e: Exception) {
                 Log.w(TAG, "Camera cleanup failed", e)
             }
@@ -963,14 +980,13 @@ private fun MatchAlertCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "ReID: ${(matchEntry.reidScore * 100).toInt()}% | " +
-                            "Face: ${(matchEntry.faceScore * 100).toInt()}%",
+                        // Appearance only: the app runs no face model, so there is no face score to show.
+                        text = "Appearance: ${(matchEntry.reidScore * 100).toInt()}%",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.semantics {
                             contentDescription =
-                                "ReID score: ${(matchEntry.reidScore * 100).toInt()} percent, " +
-                                    "Face score: ${(matchEntry.faceScore * 100).toInt()} percent"
+                                "Appearance score: ${(matchEntry.reidScore * 100).toInt()} percent"
                         },
                     )
 
