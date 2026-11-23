@@ -396,3 +396,12 @@ def test_every_alias_carries_the_scope_its_name_states() -> None:
             assert alias.applies_to_scale == "field", (row_id, alias.name)
         if "_ROOM_" in alias.name:
             assert alias.applies_to_scale == "room", (row_id, alias.name)
+
+
+def test_every_today_read_names_a_registry_name_and_its_reader() -> None:
+    names = {n for r in TABLE for n in ([r.env] if r.env else []) + list(r.cli) + [a.name for a in r.env_aliases]}
+    assert set(table_mod.TODAY_READS) <= names
+    for name, read in table_mod.TODAY_READS.items():
+        assert read.parse in table_mod.PARSE_KINDS, name
+        assert ".py:" in read.today, name
+        assert (read.parse == table_mod.PARSE_CHOICE) == bool(read.values), name
