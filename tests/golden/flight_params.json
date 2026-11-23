@@ -17,17 +17,25 @@
           "scale_from": "name",
           "today_accepts": {
             "tello": {
-              "lo": null,
+              "lo": 0,
               "hi": null,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:ROOM_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
-              "lo": null,
+              "lo": 0,
               "hi": 50000,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -38,17 +46,25 @@
           "scale_from": "name",
           "today_accepts": {
             "tello": {
-              "lo": null,
+              "lo": 0,
               "hi": null,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:ROOM_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
-              "lo": null,
+              "lo": 0,
               "hi": 50000,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -59,17 +75,25 @@
           "scale_from": "name",
           "today_accepts": {
             "tello": {
-              "lo": null,
+              "lo": 0,
               "hi": null,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:ROOM_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
-              "lo": null,
+              "lo": 0,
               "hi": 50000,
               "lo_ref": null,
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_geofence_cm",
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0",
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -136,6 +160,10 @@
               "hi": 1000,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_CEILING_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -143,6 +171,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_ceiling_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -157,6 +189,10 @@
               "hi": 1000,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_CEILING_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -164,6 +200,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_ceiling_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -178,6 +218,10 @@
               "hi": 1000,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_CEILING_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -185,6 +229,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_ceiling_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -245,6 +293,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_MARGIN_CM",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -252,6 +304,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_margin_cm",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -266,6 +322,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_MARGIN_CM",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -273,6 +333,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_margin_cm",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -287,6 +351,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:MIN_CEILING_MARGIN_CM",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -294,6 +362,10 @@
               "hi": null,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_ceiling_margin_cm",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -354,6 +426,10 @@
               "hi": 500,
               "lo_ref": "flightrisk.drone.safety:MIN_ALT_SLOT_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_ALT_SLOT_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -361,6 +437,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_alt_slot_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_alt_slot_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -375,6 +455,10 @@
               "hi": 500,
               "lo_ref": "flightrisk.drone.safety:MIN_ALT_SLOT_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_ALT_SLOT_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -382,6 +466,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_alt_slot_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_alt_slot_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -396,6 +484,10 @@
               "hi": 500,
               "lo_ref": "flightrisk.drone.safety:MIN_ALT_SLOT_CM",
               "hi_ref": "flightrisk.drone.safety:MAX_ALT_SLOT_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -403,6 +495,10 @@
               "hi": 12000,
               "lo_ref": "flightrisk.drone.safety:FIELD_LIMITS.min_alt_slot_cm",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_alt_slot_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -708,16 +804,24 @@
           "today_accepts": {
             "tello": {
               "lo": 15,
-              "hi": null,
+              "hi": 100,
               "lo_ref": "flightrisk.drone.safety:DEFAULT_LAND_BATTERY",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": "flightrisk/drone/safety.py:400 refuses a value above 100",
               "policy": "refuse"
             },
             "generic_multirotor": {
               "lo": 15,
-              "hi": null,
+              "hi": 100,
               "lo_ref": "flightrisk.drone.safety:DEFAULT_LAND_BATTERY",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": "flightrisk/drone/safety.py:400 refuses a value above 100",
               "policy": "refuse"
             }
           },
@@ -956,8 +1060,31 @@
         "FLIGHTRISK_LINK_LOSS_LAND_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:358 LinkWatchdog refuses timeout_s <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:358 LinkWatchdog refuses timeout_s <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1008,20 +1135,56 @@
         "FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:454 refuses link_loss_hold_s < 0; 0 lands at once",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         },
         "--link-loss-hold-s": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:454 refuses link_loss_hold_s < 0; 0 lands at once",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         },
         "FLIGHTRISK_LINK_LOSS_WAIT_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/safety.py:454 refuses link_loss_hold_s < 0; 0 lands at once",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1295,6 +1458,10 @@
               "hi": null,
               "lo_ref": "flightrisk.dashboard.manual_control:MIN_ORPHAN_LAND_S",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "clamp"
             },
             "generic_multirotor": {
@@ -1302,6 +1469,10 @@
               "hi": null,
               "lo_ref": "flightrisk.dashboard.manual_control:MIN_ORPHAN_LAND_S",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "clamp"
             }
           },
@@ -1401,8 +1572,20 @@
         "FLIGHTRISK_TELLO_TAKEOFF_LATE_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 2.0,
+              "hi": 20.0,
+              "lo_ref": "flightrisk.drone.flight_guards:TAKEOFF_LATE_RANGE_S[0]",
+              "hi_ref": "flightrisk.drone.flight_guards:TAKEOFF_LATE_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1444,6 +1627,10 @@
               "hi": 50,
               "lo_ref": "flightrisk.drone.flight_guards:SETTLE_SAMPLES_RANGE[0]",
               "hi_ref": "flightrisk.drone.flight_guards:SETTLE_SAMPLES_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -1483,8 +1670,20 @@
         "FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 2.0,
+              "hi": 50.0,
+              "lo_ref": "flightrisk.drone.flight_guards:SETTLE_TOLERANCE_RANGE_CM[0]",
+              "hi_ref": "flightrisk.drone.flight_guards:SETTLE_TOLERANCE_RANGE_CM[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1520,8 +1719,20 @@
         "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 1.0,
+              "hi": 10.0,
+              "lo_ref": "flightrisk.drone.flight_guards:SETTLE_TIMEOUT_RANGE_S[0]",
+              "hi_ref": "flightrisk.drone.flight_guards:SETTLE_TIMEOUT_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1563,6 +1774,10 @@
               "hi": 3,
               "lo_ref": "flightrisk.drone.flight_guards:REFUSAL_RETRIES_RANGE[0]",
               "hi_ref": "flightrisk.drone.flight_guards:REFUSAL_RETRIES_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -1602,8 +1817,20 @@
         "FLIGHTRISK_TELLO_REFUSAL_HOLD_S": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0.5,
+              "hi": 5.0,
+              "lo_ref": "flightrisk.drone.flight_guards:REFUSAL_HOLD_RANGE_S[0]",
+              "hi_ref": "flightrisk.drone.flight_guards:REFUSAL_HOLD_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1669,8 +1896,20 @@
         "--takeoff-alt-m": {
           "scale": 100,
           "scale_from": "flightrisk.drone.mavlink_fleet:MavlinkFleetOptions.takeoff_alt_m*100",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "generic_multirotor": {
+              "lo": 200.0,
+              "hi": 2000.0,
+              "lo_ref": "flightrisk.drone.mavlink_fleet:_TAKEOFF_ALT_RANGE_M[0]*100",
+              "hi_ref": "flightrisk.drone.mavlink_fleet:_TAKEOFF_ALT_RANGE_M[1]*100",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -1879,6 +2118,10 @@
               "hi": 120,
               "lo_ref": "flightrisk.drone.temp_preflight:TEMP_LIMIT_RANGE_C[0]",
               "hi_ref": "flightrisk.drone.temp_preflight:TEMP_LIMIT_RANGE_C[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -1924,6 +2167,10 @@
               "hi": 120,
               "lo_ref": "flightrisk.drone.temp_preflight:TEMP_LIMIT_RANGE_C[0]",
               "hi_ref": "flightrisk.drone.temp_preflight:TEMP_LIMIT_RANGE_C[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2093,6 +2340,10 @@
               "hi": 100,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_STEP_MIN_CM",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_STEP_MAX_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2100,6 +2351,10 @@
               "hi": 5000,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_STEP_MIN_CM",
               "hi_ref": "flightrisk.drone.safety:FIELD_LIMITS.max_move_cm",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2160,6 +2415,10 @@
               "hi": 3.0,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SETTLE_RANGE_S[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SETTLE_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2167,6 +2426,10 @@
               "hi": 3.0,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SETTLE_RANGE_S[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SETTLE_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2227,6 +2490,10 @@
               "hi": 0.9,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_MIN_SAFE_DEPTH_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_MIN_SAFE_DEPTH_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2234,6 +2501,10 @@
               "hi": 0.9,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_MIN_SAFE_DEPTH_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_MIN_SAFE_DEPTH_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2294,6 +2565,10 @@
               "hi": 0.9,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_PERSON_FRACTION_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_PERSON_FRACTION_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2301,6 +2576,10 @@
               "hi": 0.9,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_PERSON_FRACTION_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_PERSON_FRACTION_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2361,6 +2640,10 @@
               "hi": 2.0,
               "lo_ref": "flightrisk.drone.obstacle_sensor:MAX_DECODE_LAG_RANGE_S[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:MAX_DECODE_LAG_RANGE_S[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2721,6 +3004,10 @@
               "hi": 5,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_CLEAR_VOTES_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_CLEAR_VOTES_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2728,6 +3015,10 @@
               "hi": 5,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_CLEAR_VOTES_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_CLEAR_VOTES_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2788,6 +3079,10 @@
               "hi": 5,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_RELOOK_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_RELOOK_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2795,6 +3090,10 @@
               "hi": 5,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_RELOOK_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_RELOOK_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2855,6 +3154,10 @@
               "hi": 100,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEP_RANGE_CM[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEP_RANGE_CM[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2862,6 +3165,10 @@
               "hi": 100,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEP_RANGE_CM[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEP_RANGE_CM[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -2922,6 +3229,10 @@
               "hi": 4,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEPS_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEPS_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             },
             "generic_multirotor": {
@@ -2929,6 +3240,10 @@
               "hi": 4,
               "lo_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEPS_RANGE[0]",
               "hi_ref": "flightrisk.drone.obstacle_sensor:OBSTACLE_SIDESTEPS_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },
@@ -3028,14 +3343,60 @@
         "FLIGHTRISK_FLEET_STRIP_CM": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         },
         "--fleet-strip-cm": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": null,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0",
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -3549,8 +3910,31 @@
         "FLIGHTRISK_CAMERA_FOOTPRINT_CM": {
           "scale": 1,
           "scale_from": "name",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "tello": {
+              "lo": 20,
+              "hi": 5000,
+              "lo_ref": "flightrisk.drone.safety:MIN_MOVE_CM",
+              "hi_ref": "flightrisk.drone.plan_edit:MAX_FOOTPRINT_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            },
+            "generic_multirotor": {
+              "lo": 20,
+              "hi": 5000,
+              "lo_ref": "flightrisk.drone.safety:MIN_MOVE_CM",
+              "hi_ref": "flightrisk.drone.plan_edit:MAX_FOOTPRINT_CM",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -3779,8 +4163,20 @@
         "--speed-mps": {
           "scale": 100,
           "scale_from": "flightrisk.drone.mavlink_fleet:MavlinkFleetOptions.speed_mps*100",
-          "today_accepts": null,
-          "today_accepts_reason": "no importable range constant for this row"
+          "today_accepts": {
+            "generic_multirotor": {
+              "lo": 0,
+              "hi": 1500,
+              "lo_ref": null,
+              "hi_ref": null,
+              "lo_open": true,
+              "hi_open": false,
+              "lo_reason": "flightrisk/drone/mavlink_fleet.py:304 refuses speed_mps <= 0",
+              "hi_reason": "flightrisk/drone/mavlink_fleet.py:311 refuses speed_mps above 15 m/s (1500 cm/s)",
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
         }
       },
       "profiles": {
@@ -6776,6 +7172,10 @@
               "hi": null,
               "lo_ref": "flightrisk.dashboard.manual_control:MIN_LOST_IDLE_S",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "clamp"
             },
             "generic_multirotor": {
@@ -6783,6 +7183,10 @@
               "hi": null,
               "lo_ref": "flightrisk.dashboard.manual_control:MIN_LOST_IDLE_S",
               "hi_ref": null,
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "clamp"
             }
           },
@@ -7020,6 +7424,10 @@
               "hi": 6,
               "lo_ref": "flightrisk.drone.flight_guards:REFUSALS_PER_FLIGHT_RANGE[0]",
               "hi_ref": "flightrisk.drone.flight_guards:REFUSALS_PER_FLIGHT_RANGE[1]",
+              "lo_open": false,
+              "hi_open": false,
+              "lo_reason": null,
+              "hi_reason": null,
               "policy": "refuse"
             }
           },

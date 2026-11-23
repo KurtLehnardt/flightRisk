@@ -232,6 +232,31 @@ RANGES = {
     "avoid.sidesteps": {p: (OBS + ":OBSTACLE_SIDESTEPS_RANGE[0]", OBS + ":OBSTACLE_SIDESTEPS_RANGE[1]") for p in PROFILES},
     "stranded.countdown_s": {p: (MC + ":MIN_ORPHAN_LAND_S", None) for p in PROFILES},
     "stranded.lost_idle_s": {p: (MC + ":MIN_LOST_IDLE_S", None) for p in PROFILES},
+    "plan.camera_footprint_cm": {p: (SAF + ":MIN_MOVE_CM", "flightrisk.drone.plan_edit:MAX_FOOTPRINT_CM") for p in PROFILES},
+    "takeoff.settle_tolerance_cm": {"tello": (FG + ":SETTLE_TOLERANCE_RANGE_CM[0]", FG + ":SETTLE_TOLERANCE_RANGE_CM[1]")},
+    "takeoff.settle_timeout_s": {"tello": (FG + ":SETTLE_TIMEOUT_RANGE_S[0]", FG + ":SETTLE_TIMEOUT_RANGE_S[1]")},
+    "takeoff.late_s": {"tello": (FG + ":TAKEOFF_LATE_RANGE_S[0]", FG + ":TAKEOFF_LATE_RANGE_S[1]")},
+    "takeoff.refusal_hold_s": {"tello": (FG + ":REFUSAL_HOLD_RANGE_S[0]", FG + ":REFUSAL_HOLD_RANGE_S[1]")},
+    "takeoff.height_cm": {"generic_multirotor": (MF + ":_TAKEOFF_ALT_RANGE_M[0]*100", MF + ":_TAKEOFF_ALT_RANGE_M[1]*100")},
+}
+
+# Ends of today's range that today's code writes as a literal in its check, not as a constant, so there is
+# no ref to import. Row id -> {profile: {side: (value in the registry unit, open end, where and why)}}. An
+# open end is refused itself (``geofence_cm <= 0``). A side here overrides the same side of RANGES.
+LITERAL_ENDS = {
+    "envelope.geofence_cm": {p: {"lo": (0, True, "flightrisk/drone/safety.py:429 refuses geofence_cm <= 0")}
+                             for p in PROFILES},
+    "battery.min_takeoff_pct": {p: {"hi": (100, False, "flightrisk/drone/safety.py:400 refuses a value above 100")}
+                                for p in PROFILES},
+    "link.loss_detect_s": {p: {"lo": (0, True, "flightrisk/drone/safety.py:358 LinkWatchdog refuses timeout_s <= 0")}
+                           for p in PROFILES},
+    "link.loss_wait_s": {"generic_multirotor": {
+        "lo": (0, False, "flightrisk/drone/safety.py:454 refuses link_loss_hold_s < 0; 0 lands at once")}},
+    "plan.strip_cm": {p: {"lo": (0, True, "flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0")}
+                      for p in PROFILES},
+    "move.speed_cm_s": {"generic_multirotor": {
+        "lo": (0, True, "flightrisk/drone/mavlink_fleet.py:304 refuses speed_mps <= 0"),
+        "hi": (1500, False, "flightrisk/drone/mavlink_fleet.py:311 refuses speed_mps above 15 m/s (1500 cm/s)")}},
 }
 CLAMP_IDS = {"stranded.countdown_s", "stranded.lost_idle_s"}
 
@@ -445,14 +470,22 @@ def alias_scale(name: str, refs) -> tuple:
     return suffix, "name"
 
 
-def range_entry(refs):
+def range_entry(refs, literal=None):
+    """Today's range from its refs; a side in ``literal`` (see LITERAL_ENDS) is recorded with its reason."""
     lo_ref, hi_ref = refs
-    return {
+    out = {
         "lo": resolve(lo_ref) if lo_ref else None,
         "hi": resolve(hi_ref) if hi_ref else None,
         "lo_ref": lo_ref,
         "hi_ref": hi_ref,
+        "lo_open": False,
+        "hi_open": False,
+        "lo_reason": None,
+        "hi_reason": None,
     }
+    for side, (value, open_end, reason) in (literal or {}).items():
+        out.update({side: value, f"{side}_ref": None, f"{side}_open": open_end, f"{side}_reason": reason})
+    return out
 
 
 def build():
@@ -533,9 +566,14 @@ def build():
                 raise ValueError(f"row {n} {pid} {prof}: a today value needs a TODAY_REFS ref or a DOC_ONLY_TODAY reason")
             profiles[prof] = entry
         accepts = {}
-        for prof, spec in RANGES.get(pid, {}).items():
+        literal = LITERAL_ENDS.get(pid, {})
+        for prof in PROFILES:
+            if prof not in RANGES.get(pid, {}) and prof not in literal:
+                continue
             if profiles.get(prof) is not None:
-                accepts[prof] = dict(range_entry(spec), policy="clamp" if pid in CLAMP_IDS else "refuse")
+                spec = RANGES.get(pid, {}).get(prof, (None, None))
+                accepts[prof] = dict(range_entry(spec, literal.get(prof)),
+                                     policy="clamp" if pid in CLAMP_IDS else "refuse")
         alias_out = {}
         for a in aliases:
             alias_out[a["name"]] = {

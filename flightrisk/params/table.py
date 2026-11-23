@@ -15,7 +15,9 @@ Tello tuning facts have ``Edit.FACT`` and are read-only and never user-facing
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Mapping, Optional
 
 from flightrisk.params.spec import (
     Applies,
@@ -108,6 +110,129 @@ NAME_SCALES: dict[str, float] = {
     # The edge passes --speed-mps to MavlinkFleetOptions.speed_mps in m/s; the registry is in cm/s.
     "--speed-mps": 100.0,
 }
+
+
+#: Parse kinds of ``TodayRead``. ``float`` is Python ``float()`` of the stripped text. ``ascii_int`` is
+#: ASCII digits only (no sign, no point). ``ascii_float`` is an ASCII decimal with an optional sign and
+#: exponent. ``area`` is a square ``400`` or ``WxH`` in either case, whole and positive. ``choice`` takes
+#: only the keys of ``values``.
+PARSE_FLOAT = "float"
+PARSE_ASCII_INT = "ascii_int"
+PARSE_ASCII_FLOAT = "ascii_float"
+PARSE_AREA = "area"
+PARSE_CHOICE = "choice"
+PARSE_KINDS = (PARSE_FLOAT, PARSE_ASCII_INT, PARSE_ASCII_FLOAT, PARSE_AREA, PARSE_CHOICE)
+
+
+@dataclass(frozen=True)
+class TodayRead:
+    """How today's code reads one environment name or flag (design R4, the behaviour-neutral A1 rule).
+
+    ``parse`` is one of ``PARSE_KINDS``. ``values`` maps an accepted input spelling to the registry
+    value (``choice`` only). ``fold`` strips and lower-cases the text before a choice is matched.
+    ``max_digits`` caps an ``ascii_int``. ``metres_below`` reads a positive value under it as metres.
+    ``round_to`` rounds the value in the registry unit to that many decimals. ``empty_refused`` refuses an
+    empty value instead of treating it as unset. ``today`` is the file and line of today's reader.
+    """
+
+    today: str
+    parse: str = PARSE_FLOAT
+    values: Mapping[str, Any] = field(default_factory=dict)
+    fold: bool = True
+    max_digits: Optional[int] = None
+    metres_below: Optional[float] = None
+    round_to: Optional[int] = None
+    empty_refused: bool = False
+
+    def __post_init__(self) -> None:
+        if self.parse not in PARSE_KINDS:
+            raise ValueError(f"unknown parse kind {self.parse!r}")
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+
+
+_ROOM_READ = TodayRead("flightrisk/drone/safety.py:479-486 SafetyEnvelope.from_env _read, float()")
+_FIELD_ENV_READ = TodayRead("flightrisk/edge_device.py:2374-2385 _field_value_m float(), then :2399 round(m * 100, 1)",
+                            round_to=1)
+_FIELD_FLAG_READ = TodayRead("flightrisk/edge_device.py:1596-1607 argparse type=float, then :2399 round(m * 100, 1)",
+                             round_to=1, empty_refused=True)
+_OBSTACLE_INT = TodayRead("flightrisk/edge_device.py:1846 _ASCII_INT_RE in _obstacle_number (integer=True)",
+                          PARSE_ASCII_INT)
+_OBSTACLE_FLOAT = TodayRead("flightrisk/edge_device.py:1847 _ASCII_FLOAT_RE in _obstacle_number", PARSE_ASCII_FLOAT)
+_AREA_READ = TodayRead("flightrisk/dashboard/__main__.py:39-50 _parse_area", PARSE_AREA, empty_refused=True)
+
+#: Today's read of each environment name and flag, by name (design R4). A name absent here is read as the
+#: registry kind (a whole number for an integer row, a number otherwise).
+TODAY_READS: Mapping[str, TodayRead] = MappingProxyType({
+    "FLIGHTRISK_GEOFENCE_CM": _ROOM_READ,
+    "FLIGHTRISK_CEILING_CM": _ROOM_READ,
+    "FLIGHTRISK_CEILING_MARGIN_CM": _ROOM_READ,
+    "FLIGHTRISK_FIELD_GEOFENCE_M": _FIELD_ENV_READ,
+    "FLIGHTRISK_FIELD_CEILING_M": _FIELD_ENV_READ,
+    "FLIGHTRISK_FIELD_CEILING_MARGIN_M": _FIELD_ENV_READ,
+    "FLIGHTRISK_FIELD_ALT_SLOT_M": _FIELD_ENV_READ,
+    "--geofence-m": _FIELD_FLAG_READ,
+    "--ceiling-m": _FIELD_FLAG_READ,
+    "--ceiling-margin-m": _FIELD_FLAG_READ,
+    "--alt-slot-m": _FIELD_FLAG_READ,
+    # Values above 0 and below 10 are metres; the result is rounded to 0.1 cm.
+    "--alt-slot": TodayRead("flightrisk/edge_device.py:1541-1557 _parse_alt_slot", metres_below=10.0, round_to=1,
+                            empty_refused=True),
+    "FLIGHTRISK_MIN_TAKEOFF_BATTERY": TodayRead("flightrisk/drone/safety.py:382-400 min_takeoff_battery_from_env, float()"),
+    "FLIGHTRISK_LINK_LOSS_LAND_S": TodayRead("flightrisk/drone/safety.py:479-493 and flightrisk/edge_device.py:2401-2403, float()"),
+    "FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": TodayRead("flightrisk/edge_device.py:2401-2403 _read, float()"),
+    "--link-loss-hold-s": TodayRead("flightrisk/edge_device.py:1590 argparse type=float", empty_refused=True),
+    # Today spells the return action rtl and refuses return (flightrisk/edge_device.py:1743-1746).
+    "FLIGHTRISK_FAILSAFE_ACTION": TodayRead("flightrisk/edge_device.py:1743-1746 _failsafe_action", PARSE_CHOICE,
+                                            values={"rtl": "return", "land": "land"}),
+    # argparse choices match the exact text, with no strip and no case folding.
+    "--failsafe-action": TodayRead("flightrisk/edge_device.py:1608 argparse choices=('rtl', 'land')", PARSE_CHOICE,
+                                   values={"rtl": "return", "land": "land"}, fold=False, empty_refused=True),
+    "FLIGHTRISK_MANUAL_ORPHAN_LAND_S": TodayRead("flightrisk/dashboard/manual_control.py:137-150 _seconds_env, float()"),
+    "FLIGHTRISK_MANUAL_LOST_IDLE_S": TodayRead("flightrisk/dashboard/manual_control.py:137-150 _seconds_env, float()"),
+    "FLIGHTRISK_TELLO_SETTLE_SAMPLES": _OBSTACLE_INT,
+    "FLIGHTRISK_TELLO_REFUSAL_RETRIES": _OBSTACLE_INT,
+    "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT": _OBSTACLE_INT,
+    "FLIGHTRISK_OBSTACLE_STEP_CM": _OBSTACLE_INT,
+    "FLIGHTRISK_OBSTACLE_CLEAR_VOTES": _OBSTACLE_INT,
+    "FLIGHTRISK_OBSTACLE_RELOOK": _OBSTACLE_INT,
+    "FLIGHTRISK_OBSTACLE_SIDESTEP_CM": _OBSTACLE_INT,
+    "FLIGHTRISK_OBSTACLE_SIDESTEPS": _OBSTACLE_INT,
+    "FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_TELLO_TAKEOFF_LATE_S": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_TELLO_REFUSAL_HOLD_S": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_OBSTACLE_SETTLE_S": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_OBSTACLE_PERSON_FRACTION": _OBSTACLE_FLOAT,
+    "FLIGHTRISK_MAX_DECODE_LAG_S": _OBSTACLE_FLOAT,
+    # One to three ASCII digits, no sign and no point.
+    "FLIGHTRISK_TELLO_TEMP_WARN_C": TodayRead("flightrisk/drone/temp_preflight.py:184 _env_degrees",
+                                              PARSE_ASCII_INT, max_digits=3),
+    "FLIGHTRISK_TELLO_TEMP_REFUSE_C": TodayRead("flightrisk/drone/temp_preflight.py:184 _env_degrees",
+                                                PARSE_ASCII_INT, max_digits=3),
+    "FLIGHTRISK_FLEET_AREA_CM": _AREA_READ,
+    "--fleet-area-cm": _AREA_READ,
+    "--speed-mps": TodayRead("flightrisk/edge_device.py:1614 argparse type=float", empty_refused=True),
+    "--takeoff-alt-m": TodayRead("flightrisk/edge_device.py:1615 argparse type=float", empty_refused=True),
+})
+
+#: Names today's code reads with the registry kind's own parse, so they need no ``TODAY_READS`` entry,
+#: with where today reads them. A name in neither this map nor ``TODAY_READS`` is not read by today's
+#: code at all (a new name, such as ``FLIGHTRISK_LAND_BATTERY``); the resolver checks its value against
+#: the target bound, because there is no today behaviour to keep (design 7.1, risk R4).
+TODAY_READ_AS_KIND: Mapping[str, str] = MappingProxyType({
+    "FLIGHTRISK_HOVER_TEST": "flightrisk/drone/flight_guards.py:88 ENV_HOVER_TEST",
+    "FLIGHTRISK_OBSTACLE_SENSING": "flightrisk/drone/obstacle_sensor.py:152 ENV_OBSTACLE_SENSING",
+    "FLIGHTRISK_OBSTACLE_TURN": "flightrisk/drone/obstacle_sensor.py:154 ENV_OBSTACLE_TURN",
+    "FLIGHTRISK_CAMERA_FOOTPRINT_CM": "flightrisk/drone/plan_edit.py:72 CAMERA_FOOTPRINT_ENV",
+    "FLIGHTRISK_FLEET_STRIP_CM": "flightrisk/dashboard/__main__.py:146 default of --fleet-strip-cm, type=int",
+    "--fleet-strip-cm": "flightrisk/dashboard/__main__.py:145 argparse type=int, :193 refuses a value <= 0",
+})
+
+
+def read_today(name: str) -> bool:
+    """True when today's code reads the environment name or flag ``name``."""
+    return name in TODAY_READS or name in TODAY_READ_AS_KIND
 
 
 def _p(
