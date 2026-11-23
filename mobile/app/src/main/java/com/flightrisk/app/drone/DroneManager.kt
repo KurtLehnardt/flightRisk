@@ -50,6 +50,15 @@ class DroneManager(
     /** Observable drone state for UI binding. */
     val droneState: StateFlow<TelloState> = connection.state
 
+    private val _obstacleAvoidanceOn = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
+
+    /**
+     * Whether search-pattern flights check for obstacles: null until checked,
+     * false when the depth model is missing (as in every store build) or did not
+     * load. Pattern flights go on either way; the screens show this state.
+     */
+    val obstacleAvoidanceOn: StateFlow<Boolean?> = _obstacleAvoidanceOn
+
     // ------------------------------------------------------------------
     // Alert system
     // ------------------------------------------------------------------
@@ -98,6 +107,8 @@ class DroneManager(
         } catch (e: LinkageError) {
             Log.w(TAG, "Obstacle avoidance: native runtime did not load (${e.javaClass.simpleName})")
             obstacleGuard = null
+        } finally {
+            _obstacleAvoidanceOn.value = obstacleGuard != null
         }
     }
 

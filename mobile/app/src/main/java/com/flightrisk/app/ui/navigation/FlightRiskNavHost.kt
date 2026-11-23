@@ -37,6 +37,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.flightrisk.app.camera.CameraXFrameSource
 import com.flightrisk.app.llm.ReasoningAction
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
@@ -131,6 +132,7 @@ private val destinations = listOf(
  * @param onLand Callback to command drone landing.
  * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
  * @param onDroneRotate Callback for drone rotation (degrees).
+ * @param cameraFrameSource Receives the phone camera's frames for the search pipeline.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -166,6 +168,7 @@ fun FlightRiskNavHost(
     onSearchPatternChanged: (PatternType) -> Unit = {},
     demoActive: Boolean = false,
     onDemoToggle: (Boolean) -> Unit = {},
+    cameraFrameSource: CameraXFrameSource? = null,
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -253,6 +256,7 @@ fun FlightRiskNavHost(
                     onEmergencyStop = onEmergencyStop,
                     onSearchPatternChanged = onSearchPatternChanged,
                     onSetUpTarget = { navigateTo(NavDestination.Target.route) },
+                    cameraFrameSource = cameraFrameSource,
                 )
             }
 

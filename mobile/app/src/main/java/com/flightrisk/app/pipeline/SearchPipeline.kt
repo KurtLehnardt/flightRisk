@@ -19,11 +19,9 @@ import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectionTracker
 import com.flightrisk.app.vision.HeightRatioMatcher
 import com.flightrisk.app.transport.BitmapFrames
-import com.flightrisk.app.vision.InsightFaceMatcher
 import com.flightrisk.app.vision.MatchScorer
 import com.flightrisk.app.vision.EmbeddingProvider
 import com.flightrisk.app.vision.NoEmbeddingProvider
-import com.flightrisk.app.vision.OSNetReIDMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,12 +51,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ## Pipeline sequence per frame
  *
  * 1. Acquire frame (from camera/drone feed)
- * 2. Detect persons (via YOLO / ONNX)
- * 3. ReID match (cosine similarity against target embedding)
- * 4. Face match (face recognition against target face)
- * 5. Score (multi-feature weighted combination)
- * 6. Track (multi-frame corroboration via IoU tracker)
- * 7. (async) LLM reasoning (rate-limited, non-blocking)
+ * 2. Detect persons (YOLOX-S, or a detector the user imported; ONNX)
+ * 3. ReID match (appearance embedding against the target embedding)
+ * 4. Score (multi-feature weighted combination)
+ * 5. Track (multi-frame corroboration via IoU tracker)
+ * 6. (async) LLM reasoning (rate-limited, non-blocking)
+ *
+ * The app runs no face detection or face recognition model: store builds may
+ * carry only the models `scripts/mobile_models/make_models.py` installs
+ * (`docs/mobile-models.md`), and none of those is a face model. The face
+ * score the scorer and the match records carry is therefore always 0, which
+ * the scorer treats as a missing signal.
  *
  * ## Key behaviors ported from Python
  *
@@ -68,8 +71,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   above threshold upgrades to `confirmed_match`.
  * - **LLM rate limiting**: at most one LLM call per 5 seconds
  *   ([REASONING_INTERVAL]).
- * - **Face-only promotion**: if face score exceeds threshold but
- *   combined score is below, promote to `possible_match`.
  * - **Battery critical auto-land**: if drone is connected and battery
  *   drops below critical threshold.
  *
@@ -244,12 +245,6 @@ class SearchPipeline(
     /** Bounding box height ratio matcher. */
     var heightRatioMatcher: HeightRatioMatcher? = null
 
-    /** OSNet person ReID matcher (TFLite). */
-    var osnetReIDMatcher: OSNetReIDMatcher? = null
-
-    /** InsightFace R18 face matcher (TFLite). */
-    var insightFaceMatcher: InsightFaceMatcher? = null
-
     /**
      * Register the new configurable signals with the scorer.
      *
@@ -273,22 +268,6 @@ class SearchPipeline(
             if (cfg.enabled && heightRatioMatcher != null && "height_ratio" !in registeredSignals) {
                 scorer.registerSignal("height_ratio", cfg.weight)
                 registeredSignals.add("height_ratio")
-            }
-        }
-
-        // Register osnet_reid if enabled and model is available
-        configs["osnet_reid"]?.let { cfg ->
-            if (cfg.enabled && osnetReIDMatcher?.isAvailable == true && "osnet_reid" !in registeredSignals) {
-                scorer.registerSignal("osnet_reid", cfg.weight)
-                registeredSignals.add("osnet_reid")
-            }
-        }
-
-        // Register insightface if enabled and model is available
-        configs["insightface"]?.let { cfg ->
-            if (cfg.enabled && insightFaceMatcher?.isAvailable == true && "insightface" !in registeredSignals) {
-                scorer.registerSignal("insightface", cfg.weight)
-                registeredSignals.add("insightface")
             }
         }
     }
@@ -419,41 +398,11 @@ class SearchPipeline(
          * @return Pair of (best index, similarity score) or null.
          */
         fun findMatch(detections: List<Detection>): Pair<Int, Float>?
-
-        /**
-         * Compare a single crop against the target embedding.
-         * @return Cosine similarity score.
-         */
-        fun compare(crop: Bitmap): Float
-    }
-
-    /**
-     * Callback for face recognition matching.
-     */
-    interface FaceCallback {
-        /** Whether a target face embedding has been set. */
-        val hasTarget: Boolean
-
-        /** Face match threshold. */
-        val matchThreshold: Float
-
-        /**
-         * Find the best face match among detections.
-         * @return Pair of (best index, similarity score) or null.
-         */
-        fun findMatch(detections: List<Detection>): Pair<Int, Float>?
-
-        /**
-         * Compare a single crop against the target face.
-         * @return Face similarity score.
-         */
-        fun compare(crop: Bitmap): Float
     }
 
     /** Set by the vision layer (T05). */
     var detectionCallback: DetectionCallback? = null
     var reidCallback: ReidCallback? = null
-    var faceCallback: FaceCallback? = null
 
     /**
      * Receives each processed frame's detections (the phone as an edge for a
@@ -638,7 +587,6 @@ class SearchPipeline(
         var fpsStart = System.currentTimeMillis()
         var lastReasoningTime = 0L
 
-        val faceThreshold = config.vision.faceMatchThreshold.toFloat()
         val corroborationThreshold = config.reasoning.corroborationThreshold
 
         val scope = pipelineScope ?: return
@@ -672,10 +620,10 @@ class SearchPipeline(
                 metrics.incFrames()
                 metrics.incPersons(detections.size)
 
-                // 3. ReID match
+                // 3. ReID match. There is no face model, so the face score stays 0.
                 var matchIdx: Int? = null
                 var reidScore = 0f
-                var faceScore = 0f
+                val faceScore = 0f
 
                 val reid = reidCallback
                 if (reid != null && targetPhoto != null && detections.isNotEmpty()) {
@@ -686,35 +634,18 @@ class SearchPipeline(
                     }
                 }
 
-                // 4. Face match
-                var faceMatchIdx: Int? = null
-                val face = faceCallback
-                if (face != null && face.hasTarget && detections.isNotEmpty()) {
-                    val result = face.findMatch(detections)
-                    if (result != null) {
-                        faceMatchIdx = result.first
-                        faceScore = result.second
-                    }
-                }
-
-                // Merge: prefer face if ReID didn't find anything
-                if (matchIdx == null && faceMatchIdx != null) {
-                    matchIdx = faceMatchIdx
-                } else if (matchIdx != null && faceMatchIdx != null && faceScore > reidScore) {
-                    matchIdx = faceMatchIdx
-                }
-
-                // 5. Update tracker with all detections (IoU-based stable IDs)
+                // 4. Update tracker with all detections (IoU-based stable IDs)
                 val trackedDetections = tracker.update(detections)
 
-                // 6. Score + corroborate
+                // 5. Score + corroborate
                 var matchScore = 0f
                 var alertLevel = AlertManager.NO_MATCH
 
                 if (matchIdx != null) {
                     val crop = detections[matchIdx].crop
-                    val detReid = reid?.compare(crop) ?: 0f
-                    val detFace = face?.compare(crop) ?: 0f
+                    // findMatch already embedded this crop: its score is reused, not recomputed.
+                    val detReid = reidScore
+                    val detFace = 0f
 
                     // Collect extra signal scores from configurable matchers
                     val extraSignals = mutableMapOf<String, Float>()
@@ -733,22 +664,6 @@ class SearchPipeline(
                         if (heightScore > 0f) extraSignals["height_ratio"] = heightScore
                     }
 
-                    // OSNet ReID
-                    val osnetCfg = signalConfigs["osnet_reid"]
-                    if (osnetCfg != null && osnetCfg.enabled && osnetReIDMatcher?.isAvailable == true
-                        && osnetReIDMatcher?.hasTarget == true) {
-                        val osnetScore = osnetReIDMatcher?.compare(crop) ?: 0f
-                        if (osnetScore > 0f) extraSignals["osnet_reid"] = osnetScore
-                    }
-
-                    // InsightFace R18
-                    val ifaceCfg = signalConfigs["insightface"]
-                    if (ifaceCfg != null && ifaceCfg.enabled && insightFaceMatcher?.isAvailable == true
-                        && insightFaceMatcher?.hasTarget == true) {
-                        val ifaceScore = insightFaceMatcher?.compare(crop) ?: 0f
-                        if (ifaceScore > 0f) extraSignals["insightface"] = ifaceScore
-                    }
-
                     // Use MatchScorer for proper weighted combination with
                     // dynamic weight redistribution for missing signals
                     val scored = scorer.score(
@@ -758,12 +673,6 @@ class SearchPipeline(
                     )
                     matchScore = scored.combinedScore
                     alertLevel = scorer.alertLevel(scored)
-
-                    // Face-only promotion: if face is strong but combined is weak
-                    if (alertLevel == AlertManager.NO_MATCH && detFace >= faceThreshold) {
-                        alertLevel = AlertManager.POSSIBLE_MATCH
-                        matchScore = maxOf(matchScore, detFace)
-                    }
 
                     // Find the tracked detection with highest IoU to our match
                     val matchedBbox = detections[matchIdx].bbox
@@ -819,7 +728,7 @@ class SearchPipeline(
 
                             val location = locationProvider.getCurrentLocation()
 
-                            val matchType = if (faceScore > reidScore && faceMatchIdx != null) "face" else "reid"
+                            val matchType = "reid"
                             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
                             val llmAvailable = llmSelector.isLlmAvailable
 

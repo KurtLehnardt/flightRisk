@@ -2,7 +2,7 @@ package com.flightrisk.app.ui.quality
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.media.FaceDetector
+import com.flightrisk.app.vision.FrameBox
 import kotlin.math.sqrt
 
 /**
@@ -11,7 +11,7 @@ import kotlin.math.sqrt
  * Port of `flightrisk/vision/quality.py` to Kotlin using Android's
  * native Bitmap API (no OpenCV dependency). Quality checks include
  * blur detection, brightness/contrast analysis, resolution validation,
- * and face presence detection.
+ * and whether the photo shows one whole person ([PersonVisibility]).
  *
  * @property overallScore Quality score 0.0-1.0.
  * @property grade Letter grade A-F derived from [overallScore].
@@ -33,8 +33,9 @@ data class QualityReport(
 }
 
 /**
- * Scores the quality of a target reference photo for person ReID and
- * face matching.
+ * Scores the quality of a target reference photo for appearance matching
+ * (person re-identification). No face detection is used: matching compares
+ * clothing and build, so the photo is checked for one whole person.
  *
  * This is a Bitmap-based port of `flightrisk/vision/quality.py`. Since
  * OpenCV is not available on Android without a native library, blur
@@ -46,7 +47,8 @@ data class QualityReport(
  * - **Brightness**: penalizes too dark (mean < 50) or too bright (> 200)
  * - **Contrast**: standard deviation of pixel luminance
  * - **Resolution**: penalizes images below 200x200
- * - **Face**: bonus if Android FaceDetector finds at least one face
+ * - **Person**: one person, the whole body in the photo, large enough
+ *   ([PersonVisibility], from the person detector's boxes)
  */
 object ImageQualityScorer {
 
@@ -60,9 +62,11 @@ object ImageQualityScorer {
      * Analyze a bitmap and return a [QualityReport].
      *
      * @param bitmap The target photo to analyze.
+     * @param persons The person detector's boxes in [bitmap]'s pixels, or null
+     *   when the detector could not run.
      * @return Quality report with score, grade, issues, and suggestions.
      */
-    fun analyze(bitmap: Bitmap): QualityReport {
+    fun analyze(bitmap: Bitmap, persons: List<FrameBox>?): QualityReport {
         val issues = mutableListOf<String>()
         val suggestions = mutableListOf<String>()
 
@@ -70,7 +74,7 @@ object ImageQualityScorer {
         val brightnessScore = analyzeBrightness(bitmap)
         val contrastScore = analyzeContrast(bitmap)
         val resolutionScore = analyzeResolution(bitmap)
-        val faceScore = analyzeFacePresence(bitmap)
+        val person = PersonVisibility.assess(persons, bitmap.width, bitmap.height)
 
         if (blurScore < 0.5f) {
             issues.add("Too blurry")
@@ -88,18 +92,16 @@ object ImageQualityScorer {
             issues.add("Low resolution")
             suggestions.add("Use a higher-resolution photo (at least 200x200 pixels)")
         }
-        if (faceScore < 0.5f) {
-            issues.add("Face not detected")
-            suggestions.add("Use a photo where the face is clearly visible and facing the camera")
-        }
+        issues.addAll(person.issues)
+        suggestions.addAll(person.suggestions)
 
-        // Weighted average: face detection is most important for matching
+        // Weighted average: a whole, single person matters most for appearance matching
         val overallScore = (
             blurScore * 0.20f +
                 brightnessScore * 0.15f +
                 contrastScore * 0.15f +
                 resolutionScore * 0.15f +
-                faceScore * 0.35f
+                person.score * 0.35f
             )
 
         val grade = when {
@@ -247,51 +249,6 @@ object ImageQualityScorer {
             minDim >= 100 -> 0.5f + (minDim - 100f) / 100f * 0.5f
             minDim >= 50 -> 0.2f + (minDim - 50f) / 50f * 0.3f
             else -> 0.1f
-        }
-    }
-
-    // -------------------------------------------------------------------
-    // Face presence check
-    // -------------------------------------------------------------------
-
-    /**
-     * Check for face presence using Android's built-in [FaceDetector].
-     *
-     * Note: [FaceDetector] requires [Bitmap.Config.RGB_565] format.
-     *
-     * @return 1.0 if at least one face is detected, 0.0 otherwise.
-     */
-    private fun analyzeFacePresence(bitmap: Bitmap): Float {
-        return try {
-            val scaled = scaledBitmap(bitmap, 480)
-            // FaceDetector requires even width
-            val evenW = scaled.width and 0x7FFFFFFE
-            val evenH = scaled.height and 0x7FFFFFFE
-            if (evenW < 2 || evenH < 2) return 0f
-
-            val cropped = if (evenW != scaled.width || evenH != scaled.height) {
-                Bitmap.createBitmap(scaled, 0, 0, evenW, evenH)
-            } else {
-                scaled
-            }
-
-            val rgb565 = if (cropped.config != Bitmap.Config.RGB_565) {
-                cropped.copy(Bitmap.Config.RGB_565, false) ?: return 0f
-            } else {
-                cropped
-            }
-
-            val detector = FaceDetector(rgb565.width, rgb565.height, 1)
-            val faces = arrayOfNulls<FaceDetector.Face>(1)
-            val count = detector.findFaces(rgb565, faces)
-
-            if (rgb565 !== cropped) rgb565.recycle()
-            if (cropped !== scaled) cropped.recycle()
-            if (scaled !== bitmap) scaled.recycle()
-
-            if (count > 0) 1f else 0f
-        } catch (e: Exception) {
-            0f
         }
     }
 

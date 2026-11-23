@@ -294,7 +294,7 @@ class MissionFormatTest {
 
     @Test
     fun `reasoning off cloud allowed and no key`() {
-        assertEquals("Reasoning off: matches use ReID and face scores only", reasoning("off").statusText)
+        assertEquals("Reasoning off: matches are scored without an AI check", reasoning("off").statusText)
         val allowed = reasoning("cloud_allowed")
         assertEquals("Cloud allowed", allowed.cloudBadge)
         assertTrue(allowed.unavailableNotes.isEmpty())

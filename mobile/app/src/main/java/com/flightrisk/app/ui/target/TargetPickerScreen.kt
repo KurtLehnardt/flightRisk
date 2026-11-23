@@ -61,7 +61,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.privacy.TempCameraPhotos
-import com.flightrisk.app.ui.quality.ImageQualityScorer
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.flightrisk.app.ui.quality.TargetPhotoCheck
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.MatchGreen
@@ -73,7 +78,7 @@ private const val TAG = "TargetPickerScreen"
  *
  * Allows the user to select or take a photo of the child they are
  * searching for. The selected photo is analyzed for quality (blur,
- * brightness, contrast, resolution, face detection) and a quality
+ * brightness, contrast, resolution, and whether it shows one whole person) and a quality
  * report is displayed.
  *
  * The "Use This Photo" button is only enabled when quality is
@@ -102,6 +107,19 @@ fun TargetPickerScreen(
     var qualityReport by remember { mutableStateOf(savedQualityReport) }
     var photoConfirmed by remember { mutableStateOf(savedBitmap != null) }
 
+    // The check runs the person detector, so it runs off the main thread; until it
+    // finishes there is no report and the photo cannot be confirmed.
+    val checkScope = rememberCoroutineScope()
+    var checkJob by remember { mutableStateOf<Job?>(null) }
+    val checkPhoto: (Bitmap) -> Unit = { bitmap ->
+        checkJob?.cancel()
+        qualityReport = null
+        checkJob = checkScope.launch {
+            val report = withContext(Dispatchers.Default) { TargetPhotoCheck.analyze(context.applicationContext, bitmap) }
+            if (selectedBitmap === bitmap) qualityReport = report
+        }
+    }
+
     // Photo picker launcher
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -110,7 +128,7 @@ fun TargetPickerScreen(
             val bitmap = loadBitmapFromUri(context, it)
             if (bitmap != null) {
                 selectedBitmap = bitmap
-                qualityReport = ImageQualityScorer.analyze(bitmap)
+                checkPhoto(bitmap)
                 photoConfirmed = false
             }
         }
@@ -140,7 +158,7 @@ fun TargetPickerScreen(
                     val bitmap = loadBitmapFromUri(context, uri)
                     if (bitmap != null) {
                         selectedBitmap = bitmap
-                        qualityReport = ImageQualityScorer.analyze(bitmap)
+                        checkPhoto(bitmap)
                         photoConfirmed = false
                     }
                 }

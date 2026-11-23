@@ -66,12 +66,24 @@ fun FlightControlsOverlay(
     onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
     onEmergencyStop: () -> Unit,
+    obstacleAvoidance: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Shown before take-off and in flight: whether the pattern flight avoids obstacles.
+        if (obstacleAvoidance != null) {
+            Text(
+                text = obstacleAvoidance,
+                color = HudWhite,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .background(Color(0xCC000000), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
         // Collapse/expand toggle bar
         Row(
             modifier = Modifier

@@ -68,7 +68,7 @@ class EdgeEmbeddingAuditTest {
      */
     private val policyClaimsThatNoEmbeddingIsSent = listOf(
         // Section 2: on-device processing.
-        "Face embeddings and appearance feature vectors never leave your phone under any setting",
+        "Appearance feature vectors never leave your phone under any setting",
         "No biometric templates or embeddings are transmitted",
         // Section 3: biometric data handling.
         "transmitted over the network, or shared with any party",

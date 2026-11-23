@@ -116,8 +116,9 @@ encoded, split into pieces, or inside a container format the guard does not
 recognise is not detected. Code review of what goes into the app folders and
 the app's dependencies remains the control for that.
 
-The app integration PRs remove the code that loads the forbidden models; this
-pipeline provides the replacements and the guard.
+The Android app loads only the installed models: the code that loaded the
+forbidden ones is gone, and `StoreModelAuditTest` fails if it comes back. The
+iOS app still has to be integrated (see "App integration").
 
 ## Licence table
 
@@ -195,6 +196,15 @@ release build's guard.
    last, so an interrupted install leaves a folder that lists nothing, which
    the guard refuses. Then it runs the licence guard over both folders.
 
+For Android, `install` can also write into a folder outside the source tree
+(`install --targets android --android <folder>`), which Gradle then adds to the
+app's assets with `-Pflightrisk.modelAssetsDir=<folder>`. A release build
+(`assembleRelease`, `bundleRelease`) fails when neither
+`mobile/app/src/main/assets` nor that folder holds an installed
+`mobile-models.json` naming both models (`checkReleaseModels`;
+`-Pflightrisk.allowReleaseWithoutModels=true` skips the check for a build that
+cannot detect anyone).
+
 `--allow-unpinned-tools` lets `convert` and `verify` run with other tool
 versions; the build is then recorded as unpinned (`tools_pinned: false` in
 `build.json`, `verify.json` and `mobile-models.json`), and `install` refuses it
@@ -252,12 +262,44 @@ Each iOS package records how it must be loaded as its
 `--ios-detector fp16` must read it and load the detector with
 `MLModelConfiguration.computeUnits = .cpuAndGPU`.
 
-### For the app integration PRs
+### App integration
 
-- iOS: done; see "The iOS app" below.
-- Android: load the files with the contracts below, show `model-notices.md` in
-  full on the licences screen, remove the YOLO, InsightFace, MobileCLIP and
-  OSNet code paths, and test each stage against the golden fixtures.
+**Android (done).** The app loads `yolox_s.onnx` and
+`clip_vit_b16_laion2b.onnx` from its assets with the contracts below
+(`YoloxContract`, `ClipContract` and `CropRule` in
+`mobile/app/src/main/java/com/flightrisk/app/vision`). The `.onnx` assets are
+stored uncompressed and memory-mapped. `ImageResize` reproduces the two
+resizes of the contracts in Kotlin: Pillow 13's bicubic filter exactly, and
+OpenCV 5.1's bilinear `INTER_LINEAR` as the pinned build computes it (rows
+first, then columns, each pass rounded to 8 bits; the 2 x 2 mean when both
+sides halve), which is exact for the golden frame and for 1280 x 720,
+720 x 1280 and 960 x 720 frames. The face (SCRFD, ArcFace, InsightFace R18),
+OSNet and old YOLO and CLIP code paths and the LiteRT runtime are removed;
+matching is by appearance only. The phone camera feeds the detector through
+CameraX `ImageAnalysis` (RGBA_8888, `ImageProxy.toBitmap()`, turned upright),
+and Settings > Licences shows `model-notices.md` in full. The detection size
+filter is now `DetectionSizeFilter.AERIAL` (see Follow-ups). The tests are
+listed under "Golden fixtures for the apps' unit tests".
+
+**Android: bring your own detector.** Settings has an optional import of a
+person detector the user supplies (off by default), for users who hold a YOLO
+licence (AGPL-3.0 or the Ultralytics Enterprise License). A notice explains
+both licences and links to ultralytics.com/license, and the user must tick "I
+have the right to use this model. FlightRisk does not supply or license YOLO."
+before the system file picker opens. Nothing is pre-filled, and FlightRisk
+never bundles, hosts or logs such a model; it is not in any store build, so the
+licence guard does not apply to it. The file is copied into the app's private
+storage (`files/byo_detector`, excluded from backup) and checked
+(`ByoDetectorChecks`): at most 100 MB, input `[1, 3, 640, 640]`, output
+`[1, 84, N]` (YOLOv8 and YOLO11 exports) or `[1, 300, 6]` (end-to-end
+exports), class 0 "person" when the export names its classes, and at least one
+person at 0.25 or more on a drawn check scene (`CheckScene`, made in code, no
+photograph). Its SHA-256 is shown. It runs with the common Ultralytics
+letterbox (centred, padded with 114, RGB, 0..1) and per-class NMS at IoU 0.45.
+Turning the setting off deletes the file, and searches use YOLOX-S again.
+
+**iOS (done).** See "The iOS app" below. Its Release build fails without the models
+unless the CI override is set (see "Licence guard" above and the iOS section).
 
 ## Preprocessing contracts
 
@@ -304,6 +346,9 @@ Output name `detections`, shape **`[1, 8400, 85]`**, float32. Each row is
 - Then drop rows under the score threshold and run non-maximum suppression per
   class at IoU 0.45, as upstream's `yolox.utils.postprocess` does. The apps
   choose their own score threshold; `verify` compares detections at 0.25.
+  Note that Ultralytics' own `predict` default NMS IoU is 0.7, so a
+  bring-your-own Ultralytics model run under this contract (0.45) gives
+  different results from `yolo predict`.
 
 ### From a detection to the embedder's crop
 
@@ -320,6 +365,10 @@ detector input, exactly as the ground does (`flightrisk/vision/detector.py`,
 
 `mobile_preprocess.crop_box` is this rule; `mobile-models.json` carries it as
 `contract.embedder.crop_from_detection`.
+
+Matching scores only crops at least 40 px tall (configurable with
+`FLIGHTRISK_PHONE_MATCH_MIN_CROP_HEIGHT`), and at most 5 crops per frame.
+Smaller people are still detected and published; they are just not matched.
 
 ### Appearance embedder: open_clip ViT-B-16 `laion2b_s34b_b88k`
 
@@ -343,8 +392,16 @@ model. Send it through `ReidEmbedding.toWire` as before (it normalises again
 and rounds to float32), with the model id `ReidEmbedding.MODEL_ID`.
 
 Resampling differs slightly between Pillow, Android and Core Graphics. The
-parity figures below use Pillow, as the ground does; an app's own resize adds
-a small, separate difference that the app PRs should measure on a device.
+parity figures below use Pillow, as the ground does. The Android app does not
+use Android's bitmap scaler for either model: its own Kotlin resize matches
+Pillow (and, for the detector, the pinned OpenCV) exactly. Core Graphics on iOS
+will add a small, separate difference that the iOS PR should measure.
+
+The phone's resize matches Pillow 13.0.0 (bicubic, including its pass order)
+and OpenCV 5.1.0 (bilinear) exactly. The ground's venv currently has Pillow
+12.3.0, so the ground's and the phone's embeddings of large crops that are
+shrunk a long way can differ slightly. Pinning Pillow 13 on the ground is a
+follow-up.
 
 ### Golden fixtures for the apps' unit tests
 
@@ -363,7 +420,29 @@ frame, not a photograph (`make_models.silhouette_scene`: person-like figures
 | `golden.json` | SHA-256 and shape of each file, the detections, the letterbox ratio, the crop box (float and integer), the contract and the tolerances |
 
 An app test decodes `frame.png` the way the app decodes a camera frame, runs
-its own preprocessing, model and crop code, and compares each stage. The
+its own preprocessing, model and crop code, and compares each stage.
+
+The Android tests (`mobile/app/src/test/java/com/flightrisk/app/vision`):
+
+- `GoldenParityTest` always runs on numbers exported from the fixtures into
+  `mobile/app/src/test/resources/golden/golden-numbers.json` by
+  `mobile/scripts/export_golden_numbers.py` (no images: the letterbox ratio,
+  the detections, the crop box, every detector output row with a best score of
+  0.05 or more, and the embedding). Decoding PyTorch's rows gives the golden
+  detections exactly, the crop rule gives the golden crop box, and the golden
+  embedding passes `ReidEmbedding.toWire` under `ReidEmbedding.MODEL_ID`. With
+  the full fixtures in `build/mobile_models/golden` (or
+  `-Pflightrisk.goldenDir`), it also checks the app's letterboxed tensor
+  (identical to `detector_input.f32`), its crop of `frame.png` (identical to
+  `crop.png`) and its embedder input (within 1e-5 of `embedder_input.f32`).
+- `ModelParityTest` runs the installed models through the app's own code on
+  the desktop ONNX Runtime, with
+  `./gradlew :app:testDebugUnitTest -Pflightrisk.modelTestDir=<folder>` (the
+  folder `make_models.py install --targets android --android <folder>` wrote).
+  Measured: YOLOX-S's largest score difference from PyTorch 3.5e-6, the app's
+  detections on `frame.png` identical to the golden ones (IoU 1.0, score
+  difference 0), and the app's embedding of the golden crop at cosine 0.99972
+  with PyTorch's (the weight-only int8 embedder). The
 frame's colours are lopsided on purpose: feeding it as RGB instead of BGR
 moves the detector's scores by 0.42, and feeding the crop as BGR instead of
 RGB drops the embedding's cosine to 0.957 (`golden.json`,
@@ -687,11 +766,10 @@ ground's dependencies:
 - **HERIDAL fine-tune.** Fine-tune the detector on HERIDAL (aerial
   search-and-rescue imagery; `scripts/finetune_heridal.py` and
   `docs/altitude-benchmark.md`) after checking the dataset's licence.
-- **Loosen the 12% / 0.8% box filters on Android**
-  (`mobile/app/src/main/java/com/flightrisk/app/vision/PersonDetector.kt`:
-  `MIN_BBOX_HEIGHT_RATIO = 0.12f` and `MIN_BBOX_AREA_RATIO = 0.008f`). They
-  drop people who are small in the frame, the normal case from altitude. iOS
-  uses `PersonBoxFilter.aerial` (above); Android should match it.
+- **Both apps share the aerial box filter.** iOS `PersonBoxFilter.aerial` and
+  Android `DetectionSizeFilter.AERIAL` keep a box at least 1% of the frame
+  height and 0.005% of its area, from 1:10 to 4:1 wide. Android's old values
+  (12% and 0.8%) are `DetectionSizeFilter.LEGACY`.
 - **Pin the ground's embedder download.** `flightrisk/vision/reid.py` calls
   `open_clip.create_model_and_transforms(..., pretrained="laion2b_s34b_b88k")`,
   which downloads from Hugging Face without a pinned revision or a digest
@@ -706,13 +784,20 @@ ground's dependencies:
 - **Neural Engine accuracy for the detector** (mixed precision or
   quantisation-aware conversion), so the smaller fp16 package can use the
   Neural Engine.
+- **Recalibrate the ReID threshold.** The 0.55 match threshold was set for the
+  ground's earlier embedder. It must be recalibrated for ViT-B-16, using
+  separate target photos, before field use.
+- **Pin Pillow 13 on the ground.** See "From a detection to the embedder's
+  crop": the phone matches Pillow 13.0.0 exactly, the ground venv has 12.3.0.
 - **On-device checks.** The Android fp16 detector and every model's speed and
-  memory on real phones are unmeasured.
-- **Android app PR.** Load these files with these contracts (test against the
-  golden fixtures), remove the YOLO, InsightFace, MobileCLIP and OSNet code
-  paths, show `model-notices.md` on the licences screen, and update the
-  privacy disclosures for sending embeddings (`docs/mobile-followups.md`,
-  "Embeddings for phone-as-edge"). The iOS app is done (above).
+  memory on real phones are unmeasured, and the Android app has not run its
+  camera search on a phone. The detector's score threshold is still the
+  ground's 0.4 (`VisionConfig.detectorConfidence`); measure YOLOX-S's scores on
+  small people from altitude before changing it.
+- **Android edge embeddings.** The Android app runs the ground's embedder for
+  its own matching, but the phone-as-edge link still sends no embedding: a
+  provider around it and the privacy changes are needed first
+  (`docs/mobile-followups.md`, "Embeddings for phone-as-edge").
 - **iOS on a device.** Speed, memory and heat of both models on a real
   iPhone, the Neural Engine path of the fp32 detector, and the import of a
   user's model on iOS 17 itself (the simulator runs Core ML on the CPU only,
@@ -724,8 +809,6 @@ ground's dependencies:
   ratios (including 1920 x 1080) and differs by at most one level at others,
   such as 4:3, 800 x 480 and the Tello. Porting Android's
   `ImageResize.bilinearCv` is a follow-up for those sources.
-- **Pin the ground's Pillow.** The ground venv may have an older Pillow than
-  the 13.0.0 the Swift port matches; pin it in `requirements-ground.txt`.
 
 ## Legal questions
 

@@ -130,7 +130,47 @@ mkdir -p run0 && cd run0 && ../ardupilot/build/sitl/bin/arducopter --model + --s
     --home 40.7608,-111.8910,1288,0 -I0
 ```
 
-SITL accepts one client on the port and exits when it disconnects, so start a fresh instance for every run. The health flags turn true about 20 s after boot and a takeoff is accepted after about 45 s.
+SITL accepts one client on the port. On Cygwin (Windows) builds it exits when that client disconnects, so start a fresh instance for every run; Linux and macOS builds accept a new client instead. The health flags turn true about 20 s after boot and a takeoff is accepted after about 45 s.
+
+### Windows
+
+This route is documented from the tool layout and the code paths, not from a run: nothing here was executed on a Windows machine.
+
+- SITL: use the prebuilt Cygwin ArduCopter build that Mission Planner downloads, from `https://firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable`. The server holds the executable as `ArduCopter.elf`; save it as `ArduCopter.exe`. Fetch exactly these 10 Cygwin DLLs next to it, each with the `.dll` extension: `cygatomic-1`, `cyggcc_s-1`, `cyggcc_s-seh-1`, `cyggomp-1`, `cygiconv-2`, `cygintl-8`, `cygquadmath-0`, `cygssp-0`, `cygstdc++-6` (URL-encoded as `cygstdc%2B%2B-6.dll`) and `cygwin1`. There is no Docker or `sim_vehicle.py` step. In PowerShell:
+
+```powershell
+$d = "$env:USERPROFILE\sitl"; New-Item -ItemType Directory -Force $d | Out-Null; cd $d
+$b = "https://firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable"
+Invoke-WebRequest "$b/ArduCopter.elf" -OutFile ArduCopter.exe
+"cygatomic-1","cyggcc_s-1","cyggcc_s-seh-1","cyggomp-1","cygiconv-2","cygintl-8","cygquadmath-0","cygssp-0","cygwin1" | % { Invoke-WebRequest "$b/$_.dll" -OutFile "$_.dll" }
+Invoke-WebRequest "$b/cygstdc%2B%2B-6.dll" -OutFile "cygstdc++-6.dll"
+```
+
+- Parameters: `copter.parm` is required. Fetch the `copter.parm` of the same ArduPilot version as the SITL build, from `https://raw.githubusercontent.com/ArduPilot/ardupilot/<tag>/Tools/autotest/default_params/copter.parm` (the `master` branch may be newer than the build, so use the tag that matches). Read the firmware version from the SITL banner that `ArduCopter.exe` prints at start-up, and use the matching `Copter-x.y.z` tag. Save it as `copter.parm` in the `sitl` folder. Also save a `sitl.parm` there with the stream rates plus `SYSID_THISMAV 1` from the native section above, and with the failsafe parameters listed in "Run the tests and the CLI path" below for the CLI path.
+- Command: make one folder per instance under `sitl`, so that each instance keeps its own `eeprom.bin` and logs, and run SITL from inside it. For instance 0:
+
+```powershell
+cd $env:USERPROFILE\sitl; mkdir run0 -Force | Out-Null; cd run0
+..\ArduCopter.exe -M+ -I0 -s1 --serial0 tcp:0 --defaults ..\copter.parm,..\sitl.parm --home 40.7608,-111.8910,1288,0
+```
+
+  For a second instance, use a `run1` folder and `-I1`. The `-M+` flag selects the quad model; without a model SITL prints "You must specify a vehicle model" and exits at once. This is the command Mission Planner runs.
+- Ports: instance N listens on TCP `5760 + 10 * N`, so `-I0` is `tcpout://127.0.0.1:5760` and `-I1` is `tcpout://127.0.0.1:5770`. SITL accepts one client per instance and exits when it disconnects.
+- MAVSDK pin: in a separate virtual environment, run `pip install mavsdk==3.17.2`, then `pip check`. The Windows installer does not use `requirements.txt`, so the pin is given here. MAVSDK-Python 4 and later is a native binding without `mavsdk_server`, and the link refuses it at `connect()` with a message that says so. The link looks for `mavsdk_server.exe` inside `mavsdk/bin` on Windows.
+- Process lifetime: on Windows the link starts `mavsdk_server.exe` and assigns it to a Windows Job Object created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so Windows ends it when the edge process ends, even after a crash. If the assignment is refused (a parent job that sets UI limits, or a job hierarchy Windows cannot nest, logged as a warning), the server is stopped only by an `atexit` hook, which covers a clean exit but not a crash. That is the remaining gap; it has not been exercised on a real Windows machine.
+- Do not probe port 5760 with a plain TCP connection (for example `Test-NetConnection` or a socket connect-and-close) to see whether SITL is running. The probe becomes SITL's one client and then disconnects, and a Cygwin SITL exits when its client disconnects, so the probe kills it. Check for the `ArduCopter` process instead.
+- Check for leftovers after every run, and kill any you find:
+
+```powershell
+Get-Process mavsdk_server -ErrorAction SilentlyContinue
+Stop-Process -Name mavsdk_server -Force
+```
+
+A leftover server keeps heartbeating to the autopilot and holds its port, so a restarted edge cannot connect.
+
+### MAVSDK address form
+
+MAVSDK 2 and later dropped `udp://` for listening. Use `udpin://0.0.0.0:14540` (listen for an autopilot or router sending to that port) in place of the old `udp://:14540`; `tests/integration/test_sitl.py` uses the new form.
 
 ### Run the tests and the CLI path
 
