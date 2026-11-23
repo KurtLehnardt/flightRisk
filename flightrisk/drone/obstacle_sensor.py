@@ -128,6 +128,21 @@ OBSTACLE_SIDESTEPS_RANGE = (0, 4)
 #: back to the lane: the range within which the depth cue is expected to see
 #: an obstacle (the calibration target of hardware item H1).
 OBSTACLE_SIDESTEP_PASS_CM = 150
+#: Wall-clock seconds the re-look and the sidestep may spend on one blocked
+#: gate. Once they are spent, no further re-look round, sidestep attempt or
+#: step beside the lane is started, and the lane is cut as it would be without
+#: them (a drone beside the lane flies back to it first). The edge's default;
+#: ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S`` changes it.
+OBSTACLE_AVOID_BUDGET_S = 45.0
+#: Allowed ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S``.
+OBSTACLE_AVOID_BUDGET_RANGE_S = (10.0, 300.0)
+#: Re-look rounds allowed on one lane. A lane that keeps reading blocked is
+#: not looked at again for ever: once its rounds are used, a blocked gate on it
+#: goes straight to the sidestep (if one is allowed) or is cut.
+OBSTACLE_RELOOKS_PER_LANE = 3
+#: The executor reports at most this many of the latest offset segments
+#: (steps flown beside the lane) in ``TELEMETRY_AVOID`` (12 numbers).
+MAX_OFFSETS_LISTED = 4
 
 # ---------------------------------------------------------------------------
 # Environment variables read by ``edge_device`` (all ``FLIGHTRISK_`` prefixed)
@@ -146,6 +161,7 @@ ENV_OBSTACLE_CLEAR_VOTES = "FLIGHTRISK_OBSTACLE_CLEAR_VOTES"
 ENV_OBSTACLE_RELOOK = "FLIGHTRISK_OBSTACLE_RELOOK"
 ENV_OBSTACLE_SIDESTEP_CM = "FLIGHTRISK_OBSTACLE_SIDESTEP_CM"
 ENV_OBSTACLE_SIDESTEPS = "FLIGHTRISK_OBSTACLE_SIDESTEPS"
+ENV_OBSTACLE_AVOID_BUDGET_S = "FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S"
 #: Fake drone only: the plan-frame y (cm) at which the fake sensor reports blocked.
 ENV_FAKE_OBSTACLE_Y_CM = "FLIGHTRISK_FAKE_OBSTACLE_Y_CM"
 
@@ -213,6 +229,11 @@ CONFIRM_REFLIGHT_CUT_REASONS = frozenset({CUT_PERSON})
 #: Segment reasons that are not cut reasons.
 SEGMENT_SKIPPED = "skipped"
 SEGMENT_TOO_SHORT = "too_short"
+#: A stretch of a lane that a sidestep flew beside the lane instead of on it
+#: (``lane_avoid``): the drone looked along a line ``obstacle_sidestep_cm``
+#: away from the planned one, so the ground offers it for a re-flight like a
+#: cut segment (``TELEMETRY_AVOID``'s ``AVOID_OFFSETS_KEY``).
+SEGMENT_OFFSET = "offset"
 
 # ---------------------------------------------------------------------------
 # Sensing modes and states in telemetry (design section 6)
@@ -252,9 +273,12 @@ PERSON_CUE_DOWN_KEY = "person_cue_down"
 PERSON_CUE_AGE_KEY = "detection_age_s"
 #: What the re-look and the sidestep at blocked gates did in the current plan,
 #: for an edge that has either switched on (``lane_avoid``): an object with
-#: the counts ``AVOID_COUNT_KEYS`` and ``AVOID_PHASE_KEY``, the step under way
-#: (``relook``, ``sidestep``, ``return`` or null). One field holds all of it,
-#: to keep the telemetry's field count down (``fleet_protocol.MAX_FIELDS``).
+#: the counts ``AVOID_COUNT_KEYS``, ``AVOID_PHASE_KEY`` (the step under way:
+#: ``relook``, ``sidestep``, ``return``, ``held`` while the drone hovers under
+#: manual control because it could not get back to its lane, or null) and
+#: ``AVOID_OFFSETS_KEY``. One field holds all of it, to keep the telemetry's
+#: field count down (``fleet_protocol.MAX_FIELDS``), and it is left out until
+#: the plan has something to report (a count above 0, a phase or an offset).
 TELEMETRY_AVOID = "obstacle_avoid"
 #: Counts in ``TELEMETRY_AVOID``: re-look rounds started, re-look rounds that
 #: let the step fly, sidestep attempts, and sidesteps that got past.
@@ -268,6 +292,13 @@ AVOID_PHASE_KEY = "phase"
 AVOID_PHASE_RELOOK = "relook"
 AVOID_PHASE_SIDESTEP = "sidestep"
 AVOID_PHASE_RETURN = "return"
+AVOID_PHASE_HELD = "held"
+#: In ``TELEMETRY_AVOID``: the plan's latest offset segments (steps flown
+#: beside the lane), oldest first, as a flat list ``[lane, from_cm, length_cm,
+#: ...]`` of at most ``MAX_OFFSETS_LISTED`` triples. ``from_cm`` is how far
+#: along the lane the segment starts, measured from where the drone started
+#: the lane; left out while there is none.
+AVOID_OFFSETS_KEY = "offsets"
 TELEMETRY_FIELDS = (
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -386,6 +417,13 @@ class ObstacleSensor(Protocol):
     ``unavailable`` result. It may also raise; the executor treats an exception
     like ``unavailable`` with ``REASON_ERROR``. ``status()`` returns a small
     JSON friendly dict for telemetry and logs (for example ``calibrated``).
+
+    A sensor whose ``sense`` also takes the keyword ``person_wait`` is passed
+    ``person_wait=True`` by the gates of the re-look and the sidestep
+    (``lane_avoid``): it should then wait, within ``timeout_s``, for a fresh
+    person detection even when the depth cue already blocks, so that its
+    ``person_cue`` is ``clear`` or ``blocked`` rather than ``unknown``. The
+    camera sensor does; a sensor without the keyword is called as before.
     """
 
     def sense(self, after: float, timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S) -> SenseResult: ...
@@ -468,7 +506,9 @@ class FakeObstacleSensor:
 
     ``pose_provider`` returns an object with ``x_cm``, ``y_cm`` and
     ``heading_deg`` (a ``RelativePose``). ``blocked`` lists ``BlockedZone``
-    entries; the first one matching the current pose blocks the view.
+    entries; the first one matching the current pose blocks the view. Its
+    simulated person detector always answers: a zone with ``cue="person"``
+    reports ``person_cue`` ``blocked``, every other view ``clear``.
 
     ``queue(*overrides)`` scripts the next calls, one entry per call, ahead of
     the zones: ``"stale"`` and ``"timeout"`` return an ``unavailable`` result
@@ -524,11 +564,12 @@ class FakeObstacleSensor:
             if zone.matches(x, y, heading):
                 result = SenseResult.make_blocked(
                     zone.cue, latency_ms=self.latency_ms,
+                    person_cue=PERSON_CUE_BLOCKED if zone.cue == CUE_PERSON else PERSON_CUE_CLEAR,
                     detail={"x_cm": x, "y_cm": y, "heading_deg": heading},
                 )
                 record(STATE_BLOCKED, result)
                 return result
-        result = SenseResult.make_clear(cue=CUE_FAKE, latency_ms=self.latency_ms)
+        result = SenseResult.make_clear(cue=CUE_FAKE, latency_ms=self.latency_ms, person_cue=PERSON_CUE_CLEAR)
         record(STATE_CLEAR, result)
         return result
 

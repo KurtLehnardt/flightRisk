@@ -127,6 +127,7 @@ from flightrisk.drone.obstacle_sensor import (
     CHANNEL_ORDER_RGB,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_MAX_DECODE_LAG_S,
+    ENV_OBSTACLE_AVOID_BUDGET_S,
     ENV_OBSTACLE_CLEAR_VOTES,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
@@ -140,6 +141,8 @@ from flightrisk.drone.obstacle_sensor import (
     EVENT_SETTING_NON_DEFAULT,
     MAX_DECODE_LAG_RANGE_S,
     MAX_DECODE_LAG_S,
+    OBSTACLE_AVOID_BUDGET_RANGE_S,
+    OBSTACLE_AVOID_BUDGET_S,
     OBSTACLE_CLEAR_VOTES,
     OBSTACLE_CLEAR_VOTES_RANGE,
     OBSTACLE_MIN_SAFE_DEPTH,
@@ -1753,7 +1756,7 @@ class ObstacleWiring:
         turn: bool = True,
         holder: LatestFrame | None = None,
         settle_s: float = OBSTACLE_SETTLE_S,
-        avoid: dict[str, int] | None = None,
+        avoid: dict[str, Any] | None = None,
     ):
         self.sensor = sensor
         self.sensor_error = sensor_error
@@ -1779,6 +1782,9 @@ class ObstacleWiring:
             kwargs["obstacle_turn"] = self.turn
             if self.settle_s > OBSTACLE_SETTLE_S:
                 kwargs["obstacle_sense_timeout_s"] = sense_timeout_for_settle(self.settle_s)
+            if self.settle_s != OBSTACLE_SETTLE_S:
+                # The gates' freshness floor uses the sensor's own settle time.
+                kwargs["obstacle_settle_s"] = self.settle_s
             if self.avoid:
                 kwargs.update(self.avoid)
         return kwargs
@@ -1836,7 +1842,7 @@ class ObstacleSettings:
 
     ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
     ``_PERSON_FRACTION``, ``_SETTLE_S``, ``_CLEAR_VOTES``, ``_RELOOK``, ``_SIDESTEP_CM``,
-    ``_SIDESTEPS``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
+    ``_SIDESTEPS``, ``_AVOID_BUDGET_S``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
     decoder reads it itself, ``tello_bound.max_decode_lag_s``) and
     ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
     whatever the mode, the drone kind or the video source, so a malformed value
@@ -1877,6 +1883,9 @@ class ObstacleSettings:
         self.sidesteps = _obstacle_number(
             ENV_OBSTACLE_SIDESTEPS, OBSTACLE_SIDESTEPS, *OBSTACLE_SIDESTEPS_RANGE, environ, integer=True,
         )
+        self.avoid_budget_s = _obstacle_number(
+            ENV_OBSTACLE_AVOID_BUDGET_S, OBSTACLE_AVOID_BUDGET_S, *OBSTACLE_AVOID_BUDGET_RANGE_S, environ,
+        )
         self.non_default: list[tuple[str, Any, Any]] = [
             (name, value, default)
             for name, value, default in (
@@ -1892,17 +1901,19 @@ class ObstacleSettings:
                 (ENV_OBSTACLE_RELOOK, self.relook, OBSTACLE_RELOOK),
                 (ENV_OBSTACLE_SIDESTEP_CM, self.sidestep_cm, OBSTACLE_SIDESTEP_CM),
                 (ENV_OBSTACLE_SIDESTEPS, self.sidesteps, OBSTACLE_SIDESTEPS),
+                (ENV_OBSTACLE_AVOID_BUDGET_S, self.avoid_budget_s, OBSTACLE_AVOID_BUDGET_S),
             )
             if value != default
         ]
 
-    def avoid_kwargs(self) -> dict[str, int]:
+    def avoid_kwargs(self) -> dict[str, Any]:
         """The ``LaneExecutor`` keyword arguments of the clear votes, the re-look and the sidestep."""
         return {
             "obstacle_clear_votes": self.clear_votes,
             "obstacle_relook": self.relook,
             "obstacle_sidestep_cm": self.sidestep_cm,
             "obstacle_sidesteps": self.sidesteps,
+            "obstacle_avoid_budget_s": self.avoid_budget_s,
         }
 
     def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:

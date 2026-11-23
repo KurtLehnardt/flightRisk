@@ -125,8 +125,11 @@ from flightrisk.drone.lane_steps import (
     uncovered_segments,
 )
 from flightrisk.drone.obstacle_sensor import (
+    OBSTACLE_AVOID_BUDGET_S,
     OBSTACLE_SENSE_TIMEOUT_S,
     OBSTACLE_SENSOR_DOWN_S,
+    OBSTACLE_SETTLE_RANGE_S,
+    OBSTACLE_SETTLE_S,
     OBSTACLE_STEP_CM,
     PERSON_CUE_AGE_KEY,
     PERSON_CUE_DOWN_KEY,
@@ -271,6 +274,8 @@ class LaneExecutor(
         obstacle_relook: int = 0,
         obstacle_sidestep_cm: int = 0,
         obstacle_sidesteps: int = 0,
+        obstacle_avoid_budget_s: float = OBSTACLE_AVOID_BUDGET_S,
+        obstacle_settle_s: float = OBSTACLE_SETTLE_S,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -309,6 +314,13 @@ class LaneExecutor(
           (``flightrisk.drone.lane_avoid``); all 0, the defaults, cut the
           lane at once as before. The edge passes
           ``FLIGHTRISK_OBSTACLE_RELOOK``, ``_SIDESTEP_CM`` and ``_SIDESTEPS``.
+        * *obstacle_avoid_budget_s*: the wall-clock seconds the re-look and
+          the sidestep may spend on one blocked gate (10 to 300); the edge
+          passes ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S``.
+        * *obstacle_settle_s*: the settle time the sensor waits after a move
+          before a frame counts (``FLIGHTRISK_OBSTACLE_SETTLE_S``, which the
+          edge passes). A gate's ``after`` is the gate's start less this, so
+          the sensor never judges a frame older than the gate.
         """
         self.drone = drone
         self.envelope = envelope
@@ -455,7 +467,12 @@ class LaneExecutor(
         self._obstacle_turn = bool(obstacle_turn)
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
-        self._init_avoid(obstacle_clear_votes, obstacle_relook, obstacle_sidestep_cm, obstacle_sidesteps)
+        settle_lo, settle_hi = OBSTACLE_SETTLE_RANGE_S
+        if not is_finite_number(obstacle_settle_s) or not settle_lo <= obstacle_settle_s <= settle_hi:
+            raise ValueError(f"obstacle_settle_s must be from {settle_lo:g} to {settle_hi:g} s")
+        self.obstacle_settle_s = float(obstacle_settle_s)
+        self._init_avoid(obstacle_clear_votes, obstacle_relook, obstacle_sidestep_cm, obstacle_sidesteps,
+                         obstacle_avoid_budget_s)
         # Cuts of the current plan in the order they happened (all of them;
         # telemetry lists the last MAX_CUTS_LISTED). Kept across a re-task
         # that continues the plan, cleared when another plan is accepted.
@@ -652,7 +669,10 @@ class LaneExecutor(
         * ``obstacle_avoid``: with stepped sensing and the re-look or the
           sidestep switched on (``lane_avoid``), what they did in the plan:
           ``{"relooks", "relook_clears", "sidesteps", "sidestep_passes":
-          counts, "phase": "relook", "sidestep", "return" or null}``.
+          counts, "phase": "relook", "sidestep", "return", "held" or null,
+          "offsets": [lane, from_cm, length_cm, ...]}`` (``offsets`` only
+          once a step was flown beside a lane). Left out until the plan has
+          something to report.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps

@@ -150,8 +150,9 @@ def test_tello_builds_a_camera_sensor_on_a_frame_holder():
     kwargs = wiring.executor_kwargs()
     assert kwargs == {
         "obstacle_sensor": sensor, "obstacle_step_cm": 50, "obstacle_turn": True,
-        # The edge's defaults: two clear votes, two re-looks, 50 cm sidesteps, two per lane.
+        # The edge's defaults: two clear votes, two re-looks, 50 cm sidesteps, two per lane, 45 s per blocked gate.
         "obstacle_clear_votes": 2, "obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2,
+        "obstacle_avoid_budget_s": 45.0,
     }
 
 

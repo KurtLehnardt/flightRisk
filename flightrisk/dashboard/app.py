@@ -536,9 +536,11 @@ LAND_ALL_TIMEOUT_S = 2.0
 LAND_ALL_PATHS_DEADLINE_S = 35.0
 
 #: ``fleet_event`` kinds after which the browsers get a fresh ``fleet_status`` at once, because the obstacle
-#: segments it carries changed: the obstacle cut and the five re-flight transitions.
+#: segments it carries changed: the obstacle cut, a stretch flown beside a lane by a sidestep, and the five
+#: re-flight transitions.
 OBSTACLE_PLAN_EVENTS = frozenset({
-    "lane_blocked", "reflight_offered", "reflight_accepted", "reflight_done", "reflight_blocked", "reflight_failed",
+    "lane_blocked", "lane_offset", "reflight_offered", "reflight_accepted", "reflight_done", "reflight_blocked",
+    "reflight_failed",
 })
 
 #: Interval of the fleet monitor, which refreshes ``fleet_status`` and

@@ -274,7 +274,18 @@ class ForwardCameraSensor:
 
     # -- protocol -----------------------------------------------------------
 
-    def sense(self, after: float, timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S) -> SenseResult:
+    def sense(
+        self, after: float, timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S, *, person_wait: bool = False,
+    ) -> SenseResult:
+        """Judge a view captured at or after ``after + settle_s`` within ``timeout_s`` (see the class docstring).
+
+        The person cue waits for a fresh detection only while the depth cue
+        does not block, unless *person_wait* asks for it anyway: the gates of
+        the re-look and the sidestep (``lane_avoid``) need a person cue that
+        is known on a blocked view too, because a sidestep is allowed only
+        when it is ``clear``. The wait is the same ``detection_wait_s`` and
+        never runs past the call's budget.
+        """
         started = self._clock()
         budget_end = started + max(0.0, float(timeout_s))
 
@@ -341,7 +352,7 @@ class ForwardCameraSensor:
             detail = {"degenerate": check.get("degenerate_reason")} if check.get("degenerate") else None
             return self._failed(REASON_ERROR, latency(), problem, detail=detail)
 
-        person = self._person_cue(after, wait=not depth_blocked, budget_end=budget_end)
+        person = self._person_cue(after, wait=person_wait or not depth_blocked, budget_end=budget_end)
         self._note_person_cue(person)
         detail = {
             "depth_action": check.get("action"),

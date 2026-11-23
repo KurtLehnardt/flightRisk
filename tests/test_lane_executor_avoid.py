@@ -32,6 +32,7 @@ from flightrisk.drone.obstacle_sensor import (
     CUE_PERSON,
     CUT_OBSTACLE,
     CUT_PERSON,
+    ENV_OBSTACLE_AVOID_BUDGET_S,
     ENV_OBSTACLE_CLEAR_VOTES,
     ENV_OBSTACLE_RELOOK,
     ENV_OBSTACLE_SIDESTEP_CM,
@@ -39,6 +40,7 @@ from flightrisk.drone.obstacle_sensor import (
     EVENT_OBSTACLE_GATE,
     EVENT_OBSTACLE_RELOOK,
     EVENT_OBSTACLE_SIDESTEP,
+    MAX_OFFSETS_LISTED,
     OBSTACLE_SETTLE_S,
     TELEMETRY_AVOID,
     TELEMETRY_PERSON_CUE,
@@ -83,8 +85,12 @@ AVOID = {"obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps":
 SIDESTEP_ONLY = {"obstacle_relook": 0, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2}
 
 
+#: ``obstacle_avoid`` before anything happened: the edge leaves the field out until then.
+NOTHING_YET = {"relooks": 0, "relook_clears": 0, "sidesteps": 0, "sidestep_passes": 0, "phase": None}
+
+
 def avoid(rig) -> dict:
-    return rig.executor.obstacle_status()[TELEMETRY_AVOID]
+    return rig.executor.obstacle_status().get(TELEMETRY_AVOID) or dict(NOTHING_YET)
 
 
 def counts(rig) -> tuple[int, int, int, int]:
@@ -476,9 +482,20 @@ def test_a_way_back_that_is_not_cleared_holds_under_manual_control_and_cuts_noth
     assert at(rig.executor.envelope.pose_snapshot())[:2] == (50.0, 300.0)
     assert rig.executor.obstacle_cuts == []
     assert phases(rig, EVENT_OBSTACLE_SIDESTEP)[-1] == "held"
-    assert avoid(rig)["phase"] is None
+    # The telemetry tells the ground, which announces it to the operator (``sidestep_held``).
+    assert avoid(rig)["phase"] == "held"
+    blocked = events(rig, "edge_resume_search_blocked")
+    assert [b["reason"] for b in blocked] == [CUT_OBSTACLE]
     assert_invariants(rig)
     assert_never_landed(rig)
+    # Resume search flies back to the point on the lane; the phase is no longer held.
+    rig.sensor.blocked = [POLE]
+    send(rig.executor, fp.make_resume_search(cmd_id="m2", fence=FENCE))
+    assert answered(rig, "m2")["type"] == "ack"
+    assert wait_for(lambda: finished(rig))
+    assert avoid(rig)["phase"] is None
+    assert rig.executor.obstacle_cuts == []
+    assert at(assert_invariants(rig, unsensed_directions=())) == (200.0, 400.0, 0.0)
 
 
 def test_land_all_during_a_relook_lands_and_sends_no_move(rigs):
@@ -583,11 +600,18 @@ def test_a_blocked_reading_never_lands_the_drone(rigs, settings):
 # ---------------------------------------------------------------------------
 
 
-def test_the_avoid_field_is_reported_only_when_the_relook_or_the_sidestep_is_on(rigs):
+def test_the_avoid_field_is_reported_only_once_the_relook_or_the_sidestep_did_something(rigs):
     assert TELEMETRY_AVOID not in rigs().executor.obstacle_status()
     assert TELEMETRY_AVOID not in rigs(obstacle_clear_votes=3).executor.obstacle_status()
     rig = rigs(**AVOID)
-    assert avoid(rig) == {"relooks": 0, "relook_clears": 0, "sidesteps": 0, "sidestep_passes": 0, "phase": None}
+    # Switched on but nothing happened yet: the field is left out, so the telemetry keeps its field count.
+    assert TELEMETRY_AVOID not in rig.executor.obstacle_status()
+    assert TELEMETRY_AVOID not in rig.executor.telemetry()
+    rig.sensor.queue(SenseResult.make_blocked())
+    fly(rig, LANES)
+    assert rig.executor.obstacle_status()[TELEMETRY_AVOID] == {
+        "relooks": 1, "relook_clears": 1, "sidesteps": 0, "sidestep_passes": 0, "phase": None,
+    }
     assert TELEMETRY_AVOID in rig.executor.telemetry()
 
 
@@ -613,11 +637,21 @@ def test_the_worst_case_telemetry_with_the_avoid_field_stays_under_the_cap():
                       **AVOID)
     ex._v2_telemetry = True
     ex._obstacle_state, ex._obstacle_latency_ms = "clear", 210.0
+    # The worst case: every count, a phase and the most offsets listed, next to eight cuts.
+    ex._avoid_counts = {"relooks": 9, "relook_clears": 3, "sidesteps": 4, "sidestep_passes": 2}
+    ex._avoid_phase = "sidestep"
+    ex._avoid_offsets = [[lane, 150, 150] for lane in range(6)]
+    ex._cuts = [Cut(lane, 250, CUT_OBSTACLE) for lane in range(9)]
     sent = []
     edge_device._with_profile_status(sent.append, _runner(True))(ex.telemetry())
     msg = sent[0]
     assert {TELEMETRY_AVOID, TELEMETRY_PERSON_CUE, "lat"} <= set(msg)
+    assert len(msg[TELEMETRY_AVOID]["offsets"]) == 3 * MAX_OFFSETS_LISTED
     assert len(msg) <= fp.MAX_FIELDS - 5, len(msg)
+    # Fields other open branches add once merged: PR #198's ``temp_preflight`` and the incident
+    # branch's ``move_refusals_total`` and ``move_refusal_last``. Together they still leave headroom.
+    pending = 3
+    assert len(msg) + pending <= fp.MAX_FIELDS - 3, len(msg) + pending
     assert fp.validate_message(fp.shape_for_peer(msg, 2), proto=2) == "telemetry"
 
 
@@ -629,6 +663,7 @@ def test_the_edge_defaults_are_two_votes_two_relooks_and_two_50_cm_sidesteps():
     settings = _settings()
     assert settings.avoid_kwargs() == {
         "obstacle_clear_votes": 2, "obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2,
+        "obstacle_avoid_budget_s": 45.0,
     }
     assert settings.non_default == []
 
@@ -636,13 +671,15 @@ def test_the_edge_defaults_are_two_votes_two_relooks_and_two_50_cm_sidesteps():
 def test_the_edge_reads_and_reports_the_avoid_settings():
     settings = _settings(**{
         ENV_OBSTACLE_CLEAR_VOTES: "1", ENV_OBSTACLE_RELOOK: "0", ENV_OBSTACLE_SIDESTEP_CM: "0",
-        ENV_OBSTACLE_SIDESTEPS: "4",
+        ENV_OBSTACLE_SIDESTEPS: "4", ENV_OBSTACLE_AVOID_BUDGET_S: "90",
     })
     assert settings.avoid_kwargs() == {
         "obstacle_clear_votes": 1, "obstacle_relook": 0, "obstacle_sidestep_cm": 0, "obstacle_sidesteps": 4,
+        "obstacle_avoid_budget_s": 90.0,
     }
     assert {name for name, _, _ in settings.non_default} == {
         ENV_OBSTACLE_CLEAR_VOTES, ENV_OBSTACLE_RELOOK, ENV_OBSTACLE_SIDESTEP_CM, ENV_OBSTACLE_SIDESTEPS,
+        ENV_OBSTACLE_AVOID_BUDGET_S,
     }
     assert _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "100"}).sidestep_cm == 100
     assert _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "20"}).sidestep_cm == 20
@@ -658,6 +695,9 @@ def test_the_edge_reads_and_reports_the_avoid_settings():
     (ENV_OBSTACLE_SIDESTEP_CM, "101"),
     (ENV_OBSTACLE_SIDESTEP_CM, "fifty"),
     (ENV_OBSTACLE_SIDESTEPS, "5"),
+    (ENV_OBSTACLE_AVOID_BUDGET_S, "9"),
+    (ENV_OBSTACLE_AVOID_BUDGET_S, "301"),
+    (ENV_OBSTACLE_AVOID_BUDGET_S, "nan"),
 ])
 def test_a_bad_avoid_setting_refuses_to_start(name, raw):
     with pytest.raises(SystemExit, match=name):
@@ -671,6 +711,8 @@ def test_the_executor_defaults_fly_as_before_and_bad_values_are_refused():
             executor.obstacle_sidesteps) == (1, 0, 0, 0)
     for bad in ({"obstacle_clear_votes": 0}, {"obstacle_clear_votes": 6}, {"obstacle_relook": 6},
                 {"obstacle_sidestep_cm": 10}, {"obstacle_sidesteps": 5}, {"obstacle_relook": True},
-                {"obstacle_sidestep_cm": 50.0}):
+                {"obstacle_sidestep_cm": 50.0}, {"obstacle_avoid_budget_s": 9.9},
+                {"obstacle_avoid_budget_s": 300.5}, {"obstacle_avoid_budget_s": float("inf")},
+                {"obstacle_avoid_budget_s": True}, {"obstacle_settle_s": 0.05}):
         with pytest.raises(ValueError):
             LaneExecutor(_drone(), envelope, "drone-1", send=lambda m: None, **bad)

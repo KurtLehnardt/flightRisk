@@ -1664,6 +1664,15 @@ const socket = io();
             showFleetBanner(laneBlockedText(ev), 15000);
             return;
         }
+        if (kind === 'sidestep_held') {
+            // The drone could not get back to its lane after a sidestep: it hovers under manual control.
+            showFleetBanner('SIDESTEP HELD: ' + (ev.detail || ev.drone_id || ''), 30000);
+            return;
+        }
+        if (kind === 'lane_offset') {
+            showFleetBanner('LANE FLOWN BESIDE:' + who + (ev.detail ? ' ' + ev.detail : ''), 15000);
+            return;
+        }
         if (kind && kind.indexOf('reflight_') === 0 && reflightBannerText(kind, ev)) {
             showFleetBanner(reflightBannerText(kind, ev), 15000);
             return;

@@ -9,26 +9,38 @@ cue), ``lane_flight._prepare_step`` holds the cut back and calls
 1. **Look again.** ``obstacle_relook`` times (``FLIGHTRISK_OBSTACLE_RELOOK``,
    2 on the edge) the drone hovers ``obstacle_retry_pause_s`` and runs the
    whole gate again, with its clear votes and its retries, on frames captured
-   after that gate started. The step is flown only when every one of these
-   gates is clear, so overriding a blocked view takes more clear views than
-   clearing a step ever does. A person seen at any of them cuts the lane with
-   reason ``person``, a sensor down for ``OBSTACLE_SENSOR_DOWN_S`` cuts it
-   with ``sensor_down``, and a sensor that cannot look cuts it with
-   ``obstacle`` (the obstacle was seen) without a sidestep.
+   after that gate started. These gates ask the sensor to wait for a fresh
+   person detection even when the depth cue blocks (``person_wait``), so the
+   person cue is known rather than ``unknown``. The step is flown only when
+   every one of these gates is clear, so overriding a blocked view takes more
+   clear views than clearing a step ever does. A person seen at any of them
+   cuts the lane with reason ``person``, a sensor down for
+   ``OBSTACLE_SENSOR_DOWN_S`` cuts it with ``sensor_down``, and a sensor that
+   cannot look cuts it with ``obstacle`` (the obstacle was seen) without a
+   sidestep. One lane gets at most ``OBSTACLE_RELOOKS_PER_LANE`` re-look
+   rounds; after that a blocked gate on it is not looked at again.
 2. **Sidestep.** Only while the lane is still blocked by the depth cue, only
-   for a drone that turns nose first and does not measure its own heading
-   (the Tello and the fake drone), at most ``obstacle_sidesteps`` attempts per
-   lane (``FLIGHTRISK_OBSTACLE_SIDESTEPS``, 2 on the edge), each
-   ``obstacle_sidestep_cm`` sideways (``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``, 50
-   on the edge). The side the depth guard calls clearer is tried first, else
-   the side with more room. A side is tried only when the point beside the
-   drone and the end of the next lane step beside the lane both lie inside
-   the geofence and inside the box around the drone's own planned and flown
-   path (``_plan_area_locked``). The ground gives every drone a region that
-   holds its whole path and keeps regions apart (``fleet_patterns``,
-   "Separation rule"), so a sidestep never takes a drone toward another
-   drone's lanes; the altitude never changes, so the slot and the ceiling
-   are untouched. An attempt:
+   for a drone that turns nose first, does not measure its own heading and
+   does not fly the field envelope (the Tello and the fake drone, never a
+   MAVLink drone), and only when the blocked view's person cue is ``clear``
+   (a fresh detection that saw no close person) and the sensor does not
+   report its person cue down. At most ``obstacle_sidesteps`` attempts per
+   lane (``FLIGHTRISK_OBSTACLE_SIDESTEPS``, 2 on the edge; a re-task that
+   continues the plan keeps the count), each ``obstacle_sidestep_cm``
+   sideways (``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``, 50 on the edge). The side
+   the depth guard calls clearer is tried first, else the side with more
+   room. A side is tried only when the point beside the drone and the end of
+   the next lane step beside the lane both lie inside the geofence and inside
+   the drone's own area (``_plan_area_locked``): the box around its planned
+   and flown path, cut down to the ``zone`` rectangle of its plan when the
+   plan carries one. The ground gives every drone a region that holds its
+   whole path and keeps regions apart (``fleet_patterns``, "Separation
+   rule"), so a sidestep stays in the drone's own region. A re-task or a
+   re-flight can send another drone's path within ``gap_cm`` of this region,
+   and a sidestep then takes up to ``obstacle_sidestep_cm`` of that margin;
+   the ground's re-task separation check adds the sidestep to the gap it
+   keeps for that reason (``coordinator.SIDESTEP_MARGIN_CM``). The altitude
+   never changes, so the slot and the ceiling are untouched. An attempt:
 
    a. records the point on the lane where the drone stopped as the point the
       plan continues from (``_resume_target``, the same field a
@@ -36,27 +48,56 @@ cue), ``lane_flight._prepare_step`` holds the cut back and calls
       takeover during the sidestep brings the drone back there before the
       plan goes on (``lane_manual._finish_return`` and the hold point);
    b. turns to face the side and flies the sideways move after a clear gate
-      (a person there, or anything else that is not clear, refuses that
-      side with nothing moved);
+      (anything that is not clear refuses that side with nothing moved);
    c. turns back to the lane heading and flies the lane's own next steps on
       the offset line, each after a clear gate and only while it stays
-      inside the geofence and the box, for up to
+      inside the geofence and the area, for up to
       ``OBSTACLE_SIDESTEP_PASS_CM``; each step flown advances the plan and
-      the point on the lane;
+      the point on the lane, and the stretch flown this way is reported to
+      the ground as an offset segment (``obstacle_avoid`` ``offsets``), which
+      it offers for a re-flight like a cut segment;
    d. flies back to the lane, sensed like the way back of a
       ``resume_search`` (``lane_flight._fly_return_sensed``).
 
-   When at least one step was flown beside the obstacle, the plan goes on
-   from the lane with its next gate. Otherwise the other side is tried, if
-   an attempt is left, and then the lane is cut.
+   Every gate of b, c and d asks the sensor to wait for a person detection
+   and clears only on a fresh ``clear`` person cue: an ``unknown`` cue is not
+   a view for a sidestep (``lane_flight._look``'s ``need_person``). When at
+   least one step was flown beside the obstacle, the plan goes on from the
+   lane with its next gate. Otherwise the other side is tried, if an attempt
+   is left (the sides are worked out again from where the way back ended),
+   and then the lane is cut.
 3. **Cut** as before, where the drone stopped on the lane.
 
-Nothing here ever lands the drone. Every sideways and offset move is checked
-against the geofence before it is sent, so the geofence landing of a lane
-step can never be reached from a sidestep. A way back to the lane that a
-gate does not clear cuts nothing: the drone hovers under manual control
-with the point on the lane as its hold point
-(``lane_manual._end_blocked_return``), and the operator decides. A landing
+**A person or a sensor down seen during a sidestep.** When any gate of the
+sideways move, the steps beside the lane or the way back sees a person, or
+the sensor has been down for ``OBSTACLE_SENSOR_DOWN_S``, the lane is cut at
+once with that reason at the plan's progress, which is the point on the lane
+level with the drone, whatever was already flown beside it. The drone then
+flies back to that point, sensed, and the plan goes on with the next lane. A
+person cut therefore still needs the operator's ``confirm_reflight`` before
+another drone re-flies it, and the reason is never lost to a hold, a re-task
+that continues the plan or a way back that does not clear.
+
+**Time budget.** The re-look and the sidestep of one blocked gate may take
+``obstacle_avoid_budget_s`` seconds of wall-clock time
+(``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S``, 45 s by default, 10 to 300). Once it
+is spent no further re-look round, sidestep attempt or step beside the lane
+is started; a drone beside the lane flies back to it, and the lane is cut
+as it would be without them (or, after a step past the obstacle, the plan
+goes on). Every ``edge_obstacle_relook`` and ``edge_obstacle_sidestep`` log
+carries ``elapsed_s`` since the blocked gate.
+
+**Never land.** Nothing here calls a landing. Every sideways and offset move is
+checked against the geofence before it is sent, so the geofence landing of a
+lane step can never be reached from a sidestep. A way back to the lane that a
+gate does not clear cuts nothing (unless it saw a person or a sensor down,
+above): the drone hovers under manual control with the point on the lane as
+its hold point (``lane_manual._end_blocked_return``), its telemetry reports
+``obstacle_avoid`` phase ``held``, the ground announces it to the operator
+(fleet event ``sidestep_held``), and the operator decides. If nobody takes
+control or presses Resume search, the ground's orphan countdown
+(``FLIGHTRISK_MANUAL_ORPHAN_LAND_S``, 120 s by default,
+``docs/manual-takeover.md``) lands the drone where it hovers. A landing
 (``LAND ALL``, a ground ``land``, the link-loss, battery and ceiling
 landings) stops a re-look or a sidestep before its next move, exactly as it
 stops a lane. A controller error on one of the extra turns or moves still
@@ -69,6 +110,7 @@ with a ``phase``; the gates as ``edge_obstacle_gate`` with ``source``
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -77,6 +119,8 @@ from flightrisk.drone.lane_flight import _AGAIN, _CUT, _GO, _STOP
 from flightrisk.drone.lane_steps import plan_heading, replay_lanes, shortest_rotation
 from flightrisk.drone.obstacle_sensor import (
     AVOID_COUNT_KEYS,
+    AVOID_OFFSETS_KEY,
+    AVOID_PHASE_HELD,
     AVOID_PHASE_KEY,
     AVOID_PHASE_RELOOK,
     AVOID_PHASE_RETURN,
@@ -90,19 +134,26 @@ from flightrisk.drone.obstacle_sensor import (
     CUT_SENSOR_DOWN,
     EVENT_OBSTACLE_RELOOK,
     EVENT_OBSTACLE_SIDESTEP,
+    MAX_OFFSETS_LISTED,
+    OBSTACLE_AVOID_BUDGET_RANGE_S,
+    OBSTACLE_AVOID_BUDGET_S,
     OBSTACLE_CLEAR_VOTES_RANGE,
     OBSTACLE_RELOOK_RANGE,
+    OBSTACLE_RELOOKS_PER_LANE,
     OBSTACLE_SIDESTEP_PASS_CM,
     OBSTACLE_SIDESTEPS_RANGE,
+    PERSON_CUE_CLEAR,
+    PERSON_CUE_DOWN_KEY,
     SenseResult,
 )
-from flightrisk.drone.safety import ROOM_LIMITS, RelativePose
+from flightrisk.drone.safety import FIELD_LIMITS, ROOM_LIMITS, RelativePose
 
 __all__ = [
     "SOURCE_RELOOK",
     "SOURCE_SIDESTEP",
     "SOURCE_SIDESTEP_RETURN",
     "ObstacleAvoidMixin",
+    "PlanArea",
 ]
 
 #: ``source`` of the gate logs of a re-look, a sidestep and its way back to the lane.
@@ -117,12 +168,19 @@ _PASSED = "passed"  # flew at least one step beside the obstacle, back on the la
 _REPLANNED = "replanned"  # a re-task replaced the step; back on the lane
 _STOPPED = "stopped"  # a landing, a hold or a link-loss hold stopped the sequence
 _HELD = "held"  # the way back was not cleared: the drone hovers under manual control
+# ``_sidestep``'s verdict when the lane was already cut there (a person or a
+# sensor down seen during the sidestep) and the drone is back on the lane.
+_CUT_MADE = "cut_made"
+# Gate reasons that end the lane wherever they are seen during a sidestep.
+_STOPPING_REASONS = (CUT_PERSON, CUT_SENSOR_DOWN)
 
 # Unit vector (x, y) of each plan direction in the plan frame (``flightrisk.drone.safety``).
 _UNIT: dict[str, tuple[int, int]] = {"forward": (0, 1), "back": (0, -1), "right": (1, 0), "left": (-1, 0)}
 _DIRECTION_AT: dict[int, str] = {0: "forward", 90: "right", 180: "back", 270: "left"}
 # Two points closer than this are the same point.
 _SAME_POINT_CM = 1e-6
+# ``_zone_area_locked`` when the plan carries no zone: the box alone limits a sidestep.
+_NO_ZONE = object()
 
 
 def _direction_at(heading_deg: float) -> str:
@@ -138,7 +196,7 @@ def _whole(name: str, value: Any, lo: int, hi: int) -> int:
 
 @dataclass(frozen=True)
 class PlanArea:
-    """The box around a drone's planned and flown path, in the dead-reckoned pose frame."""
+    """The area a sidestep must stay in, in the dead-reckoned pose frame."""
 
     x_min: float
     x_max: float
@@ -152,20 +210,32 @@ class PlanArea:
         )
 
     def room(self, x_cm: float, y_cm: float, direction: str) -> float:
-        """How far the box reaches from ``(x_cm, y_cm)`` in plan *direction* (0 outside it)."""
+        """How far the area reaches from ``(x_cm, y_cm)`` in plan *direction* (0 outside it)."""
         ux, uy = _UNIT[direction]
         if ux:
             return max(0.0, (self.x_max - x_cm) if ux > 0 else (x_cm - self.x_min))
         return max(0.0, (self.y_max - y_cm) if uy > 0 else (y_cm - self.y_min))
 
+    def intersect(self, other: PlanArea) -> PlanArea | None:
+        """The part of this area inside *other*, or None when they do not overlap."""
+        x_min, x_max = max(self.x_min, other.x_min), min(self.x_max, other.x_max)
+        y_min, y_max = max(self.y_min, other.y_min), min(self.y_max, other.y_max)
+        if x_min > x_max + _SAME_POINT_CM or y_min > y_max + _SAME_POINT_CM:
+            return None
+        return PlanArea(x_min, x_max, y_min, y_max)
+
 
 class ObstacleAvoidMixin:
     """Re-look and sidestep at a blocked lane gate for ``LaneExecutor`` (see the module docstring)."""
 
-    def _init_avoid(self, clear_votes: Any, relook: Any, sidestep_cm: Any, sidesteps: Any) -> None:
+    def _init_avoid(
+        self, clear_votes: Any, relook: Any, sidestep_cm: Any, sidesteps: Any,
+        budget_s: Any = OBSTACLE_AVOID_BUDGET_S,
+    ) -> None:
         """Validate and store the avoidance settings. Raises ``ValueError``.
 
         *sidestep_cm* is 0 (no sidestep) or a move the envelope allows.
+        *budget_s* is the time budget of one blocked gate, in seconds.
         """
         self.obstacle_clear_votes = _whole("obstacle_clear_votes", clear_votes, *OBSTACLE_CLEAR_VOTES_RANGE)
         self.obstacle_relook = _whole("obstacle_relook", relook, *OBSTACLE_RELOOK_RANGE)
@@ -179,11 +249,32 @@ class ObstacleAvoidMixin:
                 f"{limits.max_move_cm:g}, got {sidestep_cm!r}"
             )
         self.obstacle_sidestep_cm = sidestep_cm
+        lo, hi = OBSTACLE_AVOID_BUDGET_RANGE_S
+        if (
+            isinstance(budget_s, bool) or not isinstance(budget_s, (int, float))
+            or not math.isfinite(budget_s) or not lo <= budget_s <= hi
+        ):
+            raise ValueError(f"obstacle_avoid_budget_s must be a number of seconds from {lo:g} to {hi:g}, "
+                             f"got {budget_s!r}")
+        self.obstacle_avoid_budget_s = float(budget_s)
         self._avoid_counts: dict[str, int] = dict.fromkeys(AVOID_COUNT_KEYS, 0)
         self._avoid_phase: str | None = None
-        # (plan generation, lane index) of the lane the sidestep count is for.
-        self._sidestep_key: tuple[int, int] | None = None
+        # The lane the sidestep attempts and the re-look rounds are counted
+        # for, by lane index: a re-task that continues the plan keeps the
+        # lanes flown so far, and their indexes, so it keeps the counts too.
+        self._sidestep_lane: int | None = None
         self._sidestep_used = 0
+        self._relook_lane: int | None = None
+        self._relook_used = 0
+        # Offset segments of the plan: [lane, from_cm, length_cm], one per sidestep that passed.
+        self._avoid_offsets: list[list[int]] = []
+        # The manual control a sidestep's blocked way back put the drone under
+        # (``AVOID_PHASE_HELD`` while it is still the one in force).
+        self._avoid_held_manual: Any = None
+        # Edge clock time when the blocked gate being avoided was seen, for ``elapsed_s``.
+        self._avoid_started: float | None = None
+        # The gate result of the last way back that cut the lane (``_back_to_lane``).
+        self._last_return_block: tuple[str, SenseResult] | None = None
 
     # ------------------------------------------------------------------
     # Settings, telemetry and the plan
@@ -194,34 +285,55 @@ class ObstacleAvoidMixin:
         return self.obstacle_relook > 0 or (self.obstacle_sidestep_cm > 0 and self.obstacle_sidesteps > 0)
 
     def _sidestep_enabled(self) -> bool:
-        """True when this executor may sidestep: switched on, a sensor, nose first, no measured heading.
+        """True when this executor may sidestep: switched on, a sensor, nose first, no autopilot.
 
-        A drone that measures its own heading is an autopilot with its own
-        position hold and the field step; its sidestep has not been designed
-        or tested, so it only looks again.
+        A drone that measures its own heading, or one flying the field
+        envelope, is an autopilot with its own position hold and the field
+        step (MAVLink); its sidestep has not been designed or tested, so it
+        only looks again.
         """
+        limits = getattr(self.envelope, "limits", ROOM_LIMITS)
         return (
             self.obstacle_sidestep_cm > 0
             and self.obstacle_sidesteps > 0
             and self._obstacle_sensor is not None
             and self._turns_to_face()
             and not callable(getattr(self.drone, "measured_heading_deg", None))
+            and getattr(limits, "name", None) != FIELD_LIMITS.name
         )
 
     def _avoid_status(self) -> dict[str, Any] | None:
-        """The ``obstacle_avoid`` telemetry object, or None while the re-look and the sidestep are off."""
+        """The ``obstacle_avoid`` telemetry object, or None while there is nothing to report.
+
+        Nothing is reported while the re-look and the sidestep are off, nor
+        before the plan's first re-look or sidestep, so the telemetry of a
+        drone that met no obstacle keeps its field count.
+        """
         if not self._avoid_configured():
             return None
         with self._lock:
-            status: dict[str, Any] = dict(self._avoid_counts)
-            status[AVOID_PHASE_KEY] = self._avoid_phase
+            counts = dict(self._avoid_counts)
+            phase = self._avoid_phase
+            held = self._avoid_held_manual
+            if phase is None and held is not None and self._manual is held and self._is_flying():
+                phase = AVOID_PHASE_HELD
+            offsets = [number for segment in self._avoid_offsets[-MAX_OFFSETS_LISTED:] for number in segment]
+        if phase is None and not offsets and not any(counts.values()):
+            return None
+        status: dict[str, Any] = counts
+        status[AVOID_PHASE_KEY] = phase
+        if offsets:
+            status[AVOID_OFFSETS_KEY] = offsets
         return status
 
     def _reset_avoid_plan_locked(self) -> None:
-        """Forget the counts of the plan being replaced. Caller holds ``_lock``."""
+        """Forget the counts and the offsets of the plan being replaced. Caller holds ``_lock``."""
         self._avoid_counts = dict.fromkeys(AVOID_COUNT_KEYS, 0)
-        self._sidestep_key = None
+        self._sidestep_lane = None
         self._sidestep_used = 0
+        self._relook_lane = None
+        self._relook_used = 0
+        self._avoid_offsets = []
 
     def _avoid_note(self, phase: str | None, count: str | None = None) -> None:
         with self._lock:
@@ -244,7 +356,10 @@ class ObstacleAvoidMixin:
 
     def _avoid_log(self, event: str, step: tuple[int, int, str, int], phase: str, **fields: Any) -> None:
         pose = self.envelope.pose_snapshot()
-        log = self._log.warning if phase in ("held",) else self._log.info
+        started = self._avoid_started
+        if started is not None:
+            fields.setdefault("elapsed_s", round(self._clock() - started, 2))
+        log = self._log.warning if phase in ("held", "cut", "not_cut", "budget") else self._log.info
         log(
             event,
             drone_id=self.drone_id,
@@ -257,6 +372,13 @@ class ObstacleAvoidMixin:
             heading_deg=round(pose.heading_deg, 1),
             **fields,
         )
+
+    def _budget_spent(self, deadline: float, event: str, step: tuple[int, int, str, int]) -> bool:
+        """True (and logged) once the blocked gate's time budget is spent."""
+        if self._clock() < deadline:
+            return False
+        self._avoid_log(event, step, "budget", budget_s=self.obstacle_avoid_budget_s)
+        return True
 
     # ------------------------------------------------------------------
     # The blocked gate
@@ -276,15 +398,21 @@ class ObstacleAvoidMixin:
         ``_GO`` flies *step* now (every re-look was clear); ``_AGAIN`` reads
         the plan again (a sidestep got past, a re-task, or a hold that the
         top of the plan loop stops for); ``_STOP`` ends the sequence; ``_CUT``
-        is returned after *cut* was called under ``_lock`` for a step that was
-        still *current*, with the reason it ends on.
+        is returned once the lane is cut: by *cut*, called under ``_lock``
+        for a step that was still *current*, or during a sidestep that saw a
+        person or a sensor down (``_cut_for_seen``).
         """
+        started = self._clock()
+        deadline = started + self.obstacle_avoid_budget_s
+        self._avoid_started = started
         try:
-            verdict, why, may_sidestep = self._relook(step, current, first)
+            verdict, why, may_sidestep = self._relook(step, current, first, deadline)
             if verdict != _CUT:
                 return verdict
             if may_sidestep and self._sidestep_enabled():
-                verdict, why = self._sidestep(step, gen, current, why)
+                verdict, why = self._sidestep(step, gen, current, why, deadline)
+                if verdict == _CUT_MADE:
+                    return _CUT
                 if verdict != _CUT:
                     return verdict
             with self._lock:
@@ -294,24 +422,41 @@ class ObstacleAvoidMixin:
             return _CUT
         finally:
             self._avoid_note(None)
+            self._avoid_started = None
 
     def _relook(
-        self, step: tuple[int, int, str, int], current: Callable[[], bool], first: SenseResult,
+        self, step: tuple[int, int, str, int], current: Callable[[], bool], first: SenseResult, deadline: float,
     ) -> tuple[str, tuple[str, SenseResult], bool]:
         """The re-look: ``(verdict, (reason, result), may_sidestep)``.
 
         ``_GO`` when every re-look gate cleared; ``_CUT`` with the reason the
         lane would be cut for and whether a sidestep may still be tried;
         ``_AGAIN`` or ``_STOP`` as the gate returns them (a re-task, a hold, a
-        landing). Without re-looks it is ``_CUT`` with *first* at once.
+        landing). Without re-looks, or once the lane has used its
+        ``OBSTACLE_RELOOKS_PER_LANE`` rounds, it is ``_CUT`` with *first* at
+        once and a sidestep may follow. A spent time budget cuts without a
+        sidestep.
         """
         why: tuple[str, SenseResult] = (CUT_OBSTACLE, first)
         rounds = self.obstacle_relook
         if rounds <= 0:
             return _CUT, why, True
+        lane_index = step[0]
+        with self._lock:
+            if self._relook_lane != lane_index:
+                self._relook_lane, self._relook_used = lane_index, 0
+            allowed = self._relook_used < OBSTACLE_RELOOKS_PER_LANE
+            if allowed:
+                self._relook_used += 1
+        if not allowed:
+            self._avoid_log(EVENT_OBSTACLE_RELOOK, step, "refused", reason="lane_limit",
+                            relooks_per_lane=OBSTACLE_RELOOKS_PER_LANE)
+            return _CUT, why, True
         self._avoid_note(AVOID_PHASE_RELOOK, AVOID_RELOOKS_KEY)
         self._avoid_log(EVENT_OBSTACLE_RELOOK, step, "start", rounds=rounds, depth_score=first.depth_score)
         for attempt in range(1, rounds + 1):
+            if self._budget_spent(deadline, EVENT_OBSTACLE_RELOOK, step):
+                return _CUT, why, False
             # Hover, then stop here for a landing, a hold, manual control or a
             # link-loss hold: nothing was cut, so the step is gated afresh later.
             if self._abort.wait(self.obstacle_retry_pause_s) or not self._pause_point():
@@ -319,7 +464,7 @@ class ObstacleAvoidMixin:
                 return _STOP, why, False
             seen: list[tuple[str, SenseResult]] = []
             verdict = self._look(step, current, lambda reason, result, seen=seen: seen.append((reason, result)),
-                                 source=SOURCE_RELOOK)
+                                 source=SOURCE_RELOOK, person_wait=True)
             if verdict == _GO:
                 continue
             if verdict != _CUT:
@@ -327,8 +472,8 @@ class ObstacleAvoidMixin:
                 return verdict, why, False
             reason, result = seen[-1]
             self._avoid_log(EVENT_OBSTACLE_RELOOK, step, "blocked", attempt=attempt, rounds=rounds, reason=reason,
-                            depth_score=result.depth_score)
-            if reason in (CUT_PERSON, CUT_SENSOR_DOWN):
+                            depth_score=result.depth_score, person_cue=result.person_cue)
+            if reason in _STOPPING_REASONS:
                 return _CUT, (reason, result), False
             if reason == CUT_OBSTACLE:
                 return _CUT, (reason, result), True
@@ -342,15 +487,42 @@ class ObstacleAvoidMixin:
     # The sidestep
     # ------------------------------------------------------------------
 
+    def _zone_area_locked(self) -> Any:
+        """The plan's ``zone`` rectangle in the pose frame, ``_NO_ZONE`` without one, None when unreadable.
+
+        The zone is on the shared grid and the drone's lanes, pose and
+        telemetry are relative to its takeoff point, which the zone carries
+        as ``takeoff_x_cm``/``takeoff_y_cm`` (else its near-left corner, as
+        ``coordinator.ZoneAssignment.origin`` says). Caller holds ``_lock``.
+        """
+        zone = getattr(self, "_zone", None)
+        if zone is None:
+            return _NO_ZONE
+        if not isinstance(zone, dict):
+            return None
+        try:
+            x, y, w, h = (float(zone[key]) for key in ("x_cm", "y_cm", "w_cm", "h_cm"))
+            if zone.get("takeoff_x_cm") is not None and zone.get("takeoff_y_cm") is not None:
+                ox, oy = float(zone["takeoff_x_cm"]), float(zone["takeoff_y_cm"])
+            else:
+                ox, oy = x, y
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) for v in (x, y, w, h, ox, oy)) or w < 0 or h < 0:
+            return None
+        return PlanArea(x - ox, x + w - ox, y - oy, y + h - oy)
+
     def _plan_area_locked(self, step: tuple[int, int, str, int]) -> PlanArea | None:
-        """The box around the planned and flown path of the current plan, in the pose frame, or None. Caller holds ``_lock``.
+        """The area a sidestep of the current plan must stay in, in the pose frame, or None. Caller holds ``_lock``.
 
         The replay of the plan with its cuts (``lane_steps.replay_lanes``)
         gives where each lane is planned and where it is flown, relative to
         the start of the lane list; the drone stands on *step*'s lane, as far
         along it as the plan's progress says, which places that start in the
-        pose frame. None when the plan cannot be replayed, which refuses
-        every sidestep.
+        pose frame. The box around those points is cut down to the plan's
+        ``zone`` (``_zone_area_locked``) when it carries one. None when the
+        plan cannot be replayed, the zone cannot be read or the two do not
+        overlap, which refuses every sidestep.
         """
         lane_index, _, direction, _ = step
         try:
@@ -358,7 +530,7 @@ class ObstacleAvoidMixin:
             replay = replay_lanes(self._lanes, self._cuts, limits.min_move_cm)
             if not 0 <= lane_index < len(replay.path) - 1:
                 return None
-            flown = sum(move[3] for move in self._moves[: self._step] if move[0] == lane_index)
+            flown = self._lane_flown_locked(lane_index)
             start = replay.path[lane_index]
             ux, uy = _UNIT[direction]
             pose = self.envelope.pose_snapshot()
@@ -369,7 +541,34 @@ class ObstacleAvoidMixin:
             return None
         xs = [p[0] + origin_x for p in points]
         ys = [p[1] + origin_y for p in points]
-        return PlanArea(min(xs), max(xs), min(ys), max(ys))
+        box = PlanArea(min(xs), max(xs), min(ys), max(ys))
+        zone = self._zone_area_locked()
+        if zone is _NO_ZONE:
+            return box
+        if zone is None:
+            return None
+        return box.intersect(zone)
+
+    def _lane_flown_locked(self, lane_index: int) -> int:
+        """How far the plan's progress is along lane *lane_index* (its moves before ``_step``). Caller holds ``_lock``."""
+        flown = 0
+        k = self._step - 1
+        while k >= 0 and self._moves[k][0] == lane_index:
+            flown += self._moves[k][3]
+            k -= 1
+        return flown
+
+    def _lane_step_now_locked(self, step: tuple[int, int, str, int], gen: int) -> tuple[int, int, str, int] | None:
+        """The plan's next move when it is still on *step*'s lane of the plan *gen* continues, else None.
+
+        Caller holds ``_lock``. That move is where the plan's progress
+        stands: a cut of it records the point on the lane level with the
+        drone, however far a sidestep got beside it.
+        """
+        if not (self._plan_gen == gen or gen in self._linked_gens) or self._step >= len(self._moves):
+            return None
+        now = self._moves[self._step]
+        return now if now[0] == step[0] else None
 
     def _sidestep_sides(
         self, step: tuple[int, int, str, int], result: SenseResult, area: PlanArea | None,
@@ -409,63 +608,138 @@ class ObstacleAvoidMixin:
                 allowed.append(side)
         return allowed, refused
 
+    def _sidestep_refusal(self, result: SenseResult) -> str | None:
+        """Why no sidestep may be tried after the blocked view *result*, or None.
+
+        The view must have a fresh person detection that saw no close person
+        (``person_cue`` ``clear``; ``unknown`` refuses), and the sensor must
+        not report its person cue down.
+        """
+        if result.person_cue != PERSON_CUE_CLEAR:
+            return f"person_cue_{result.person_cue}"
+        status = self._person_cue_status()
+        if status is not None and status.get(PERSON_CUE_DOWN_KEY):
+            return "person_cue_down"
+        return None
+
     def _sidestep(
         self,
         step: tuple[int, int, str, int],
         gen: int,
         current: Callable[[], bool],
         why: tuple[str, SenseResult],
+        deadline: float,
     ) -> tuple[str, tuple[str, SenseResult]]:
-        """Try the allowed sides: ``(verdict, why)``; ``_CUT`` when the lane is still to be cut for *why*."""
+        """Try the allowed sides: ``(verdict, why)``.
+
+        ``_CUT`` when the lane is still to be cut for *why*; ``_CUT_MADE``
+        when a sidestep already cut it (a person or a sensor down, with that
+        reason as *why*) and the drone is back on the lane; ``_AGAIN`` or
+        ``_STOP`` otherwise.
+        """
         lane_index = step[0]
+        refusal = self._sidestep_refusal(why[1])
         with self._lock:
             if not current():
                 return _AGAIN, why
             busy = self._resume_target is not None
-            area = None if busy else self._plan_area_locked(step)
-            key = (gen, lane_index)
-            if self._sidestep_key != key:
-                self._sidestep_key, self._sidestep_used = key, 0
+            if self._sidestep_lane != lane_index:
+                self._sidestep_lane, self._sidestep_used = lane_index, 0
             left = self.obstacle_sidesteps - self._sidestep_used
         if busy:
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", reason="returning")
+            return _CUT, why
+        if refusal is not None:
+            self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", reason=refusal)
             return _CUT, why
         if left <= 0:
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", reason="attempts",
                             attempts=self.obstacle_sidesteps)
             return _CUT, why
-        allowed, refused = self._sidestep_sides(step, why[1], area)
-        for side, reason in refused:
-            self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", side=side, reason=reason,
-                            sidestep_cm=self.obstacle_sidestep_cm)
-        for side in allowed:
+        tried: set[str] = set()
+        logged: set[tuple[str, str]] = set()
+        while True:
+            if self._budget_spent(deadline, EVENT_OBSTACLE_SIDESTEP, step):
+                break
             with self._lock:
                 if not current():
                     return _AGAIN, why
                 if self._sidestep_used >= self.obstacle_sidesteps:
                     break
+                # Worked out again before every attempt, from where the drone
+                # is now: a way back that skipped a component under the
+                # minimum move leaves it a little off the point it left.
+                area = self._plan_area_locked(step)
+            allowed, refused = self._sidestep_sides(step, why[1], area)
+            for side, reason in refused:
+                if (side, reason) not in logged:
+                    logged.add((side, reason))
+                    self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", side=side, reason=reason,
+                                    sidestep_cm=self.obstacle_sidestep_cm)
+            untried = [side for side in allowed if side not in tried]
+            if not untried:
+                break
+            side = untried[0]
+            tried.add(side)
+            with self._lock:
                 self._sidestep_used += 1
                 attempt = self._sidestep_used
             self._avoid_note(AVOID_PHASE_SIDESTEP, AVOID_SIDESTEPS_KEY)
-            outcome, seen = self._try_sidestep(step, gen, side, area, attempt)
-            if outcome == _PASSED:
-                self._avoid_note(None, AVOID_SIDESTEP_PASSES_KEY)
+            outcome, seen, cut_made = self._try_sidestep(step, gen, side, area, attempt, deadline)
+            if cut_made:
+                return (_STOP if outcome in (_STOPPED, _HELD) else _CUT_MADE), seen
+            if outcome in (_PASSED, _REPLANNED):
                 return _AGAIN, why
             if outcome in (_STOPPED, _HELD):
                 return _STOP, why
-            if outcome == _REPLANNED:
+            if seen is not None and seen[0] in _STOPPING_REASONS:
+                # Seen, but the plan no longer has this lane (``_cut_for_seen``
+                # logged it): the plan that replaced it is gated afresh.
                 return _AGAIN, why
-            if seen is not None and seen[0] in (CUT_PERSON, CUT_SENSOR_DOWN):
-                # Never past a person, and a sensor down ends the lanes.
-                return _CUT, seen
             if seen is not None and seen[0] != CUT_OBSTACLE:
-                break  # the sensor could not look: no further side
+                break  # the sensor could not look, or could not rule a person out: no further side
         return _CUT, why
+
+    def _cut_for_seen(
+        self, step: tuple[int, int, str, int], gen: int, seen: tuple[str, SenseResult] | None,
+    ) -> bool:
+        """Cut the blocked lane at once for a person or a sensor down seen during a sidestep: True when cut.
+
+        The cut is made at the plan's progress (``_lane_step_now_locked``),
+        the point on the lane level with the drone, before the drone flies
+        back to it, so a hold, a re-task that continues the plan or a way
+        back that does not clear can never lose the reason. Nothing is cut
+        for any other reason, after a landing (the plan has ended), or when
+        the plan no longer has the lane (a re-task replaced it), which is
+        logged.
+        """
+        if seen is None or seen[0] not in _STOPPING_REASONS:
+            return False
+        reason, result = seen
+        target = None
+        with self._lock:
+            if self._abort.is_set():
+                return False
+            target = self._lane_step_now_locked(step, gen)
+            if target is not None:
+                self._cut_lane_locked(target, reason, result=result)
+        if target is None:
+            self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "not_cut", reason=reason,
+                            detail="the plan no longer has this lane")
+            return False
+        self._avoid_log(EVENT_OBSTACLE_SIDESTEP, target, "cut", reason=reason)
+        return True
 
     def _try_sidestep(
         self, step: tuple[int, int, str, int], gen: int, side: str, area: PlanArea | None, attempt: int,
-    ) -> tuple[str, tuple[str, SenseResult] | None]:
-        """One sidestep attempt to *side*: ``(outcome, why)``, *why* the gate result that ended it, if any."""
+        deadline: float,
+    ) -> tuple[str, tuple[str, SenseResult] | None, bool]:
+        """One sidestep attempt to *side*: ``(outcome, why, cut_made)``.
+
+        *why* is the gate result that ended it, if any; *cut_made* is True
+        when a person or a sensor down seen on the way cut the lane
+        (``_cut_for_seen``).
+        """
         lane_direction = step[2]
         heading = plan_heading(lane_direction)
         size = self.obstacle_sidestep_cm
@@ -473,73 +747,111 @@ class ObstacleAvoidMixin:
         line = RelativePose(pose.x_cm, pose.y_cm, heading)
         with self._lock:
             if not self._is_active() or self._abort.is_set():
-                return _STOPPED, None
+                return _STOPPED, None, False
             self._resume_target = line
         self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "start", side=side, sidestep_cm=size, attempt=attempt,
                         attempts=self.obstacle_sidesteps)
         body = "right" if side == _direction_at(heading + 90.0) else "left"
         turn = shortest_rotation(pose.heading_deg, heading)
         path = ([("rotate", turn)] if turn else []) + [(body, size)]
-        outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP)
+        # TODO(fix/tello-climb-freshness-guards): once that branch is merged,
+        # fly this sideways move and its turn through ``_retry_refusal``, as a
+        # sensed lane step is, so a transient Tello refusal (for example
+        # "error No valid imu") is retried after a hover instead of landing
+        # the drone through the executor's fail-safe.
+        outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP, person=True)
         if outcome == "stopped":
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "stopped", side=side)
-            return _STOPPED, None
+            return _STOPPED, None, False
+        cut_made = self._cut_for_seen(step, gen, blocked)
         moved = self._away_from(line)
         if outcome != "done" and not moved:
             with self._lock:
                 if self._resume_target is line:
                     self._resume_target = None
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "refused", side=side,
-                            reason=None if blocked is None else blocked[0])
-            return _REFUSED, blocked
+                            reason=None if blocked is None else blocked[0],
+                            person_cue=None if blocked is None else blocked[1].person_cue)
+            return _REFUSED, blocked, cut_made
         seen: tuple[str, SenseResult] | None = blocked
         passed_cm = 0
         replanned = False
         if outcome == "done":
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "moved", side=side, sidestep_cm=size)
-            pass_outcome, seen, passed_cm, line, replanned = self._pass_beside(step, gen, line, area)
+            pass_outcome, seen, passed_cm, pass_from, line, replanned = self._pass_beside(step, gen, line, area,
+                                                                                        deadline)
+            if passed_cm > 0:
+                # Counted however the pass ended (a hold or a landing may follow).
+                self._note_pass(step[0], gen, pass_from, passed_cm)
+            if not cut_made:
+                cut_made = self._cut_for_seen(step, gen, seen)
             if pass_outcome == _STOPPED:
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "stopped", side=side, passed_cm=passed_cm)
-                return _STOPPED, None
-        back = self._back_to_lane(step, line, seen)
+                return _STOPPED, seen, cut_made
+        back, back_cut = self._back_to_lane(step, gen, line, cut_made)
+        if back_cut:
+            cut_made, seen = True, self._last_return_block
         if back != "done":
-            return back, None
+            return back, seen, cut_made
+        if cut_made:
+            self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "returned", side=side, passed_cm=passed_cm,
+                            reason=None if seen is None else seen[0])
+            return _RETURNED, seen, True
         if passed_cm > 0:
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "passed", side=side, passed_cm=passed_cm)
-            return _PASSED, None
+            return _PASSED, seen, False
         self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "returned", side=side,
                         reason=None if seen is None else seen[0])
-        return (_REPLANNED if replanned else _RETURNED), seen
+        return (_REPLANNED if replanned else _RETURNED), seen, False
+
+    def _note_pass(self, lane_index: int, gen: int, from_cm: int, length_cm: int) -> None:
+        """Count a pass and record the stretch of lane *lane_index* it flew beside the lane (``offsets``).
+
+        Nothing is recorded for a plan that a re-task replaced meanwhile: a
+        plan that does not continue this one has its own counts and offsets.
+        """
+        with self._lock:
+            if not (self._plan_gen == gen or gen in self._linked_gens):
+                return
+            self._avoid_phase = AVOID_PHASE_SIDESTEP
+            self._avoid_counts[AVOID_SIDESTEP_PASSES_KEY] = self._avoid_counts.get(AVOID_SIDESTEP_PASSES_KEY, 0) + 1
+            self._avoid_offsets.append([int(lane_index), int(from_cm), int(length_cm)])
 
     def _away_from(self, point: RelativePose) -> bool:
         pose = self.envelope.pose_snapshot()
         return abs(pose.x_cm - point.x_cm) > _SAME_POINT_CM or abs(pose.y_cm - point.y_cm) > _SAME_POINT_CM
 
     def _pass_beside(
-        self, step: tuple[int, int, str, int], gen: int, line: RelativePose, area: PlanArea | None,
-    ) -> tuple[str, tuple[str, SenseResult] | None, int, RelativePose, bool]:
-        """Fly the lane's next steps beside it: ``(outcome, why, passed_cm, line, replanned)``.
+        self, step: tuple[int, int, str, int], gen: int, line: RelativePose, area: PlanArea | None, deadline: float,
+    ) -> tuple[str, tuple[str, SenseResult] | None, int, int, RelativePose, bool]:
+        """Fly the lane's next steps beside it: ``(outcome, why, passed_cm, from_cm, line, replanned)``.
 
         *outcome* is ``_STOPPED`` or ``"done"``; *why* is the gate result that
-        ended the pass, if one did; *line* is the point on the lane level
-        with the drone, which follows every step flown; *replanned* is True
-        when a re-task replaced the step. Each step must still be a step of
-        the blocked lane in this plan, stay inside the geofence and *area*,
-        face the lane heading and pass a gate.
+        ended the pass, if one did; *passed_cm* is how far it flew beside the
+        lane, starting *from_cm* along the lane; *line* is the point on the
+        lane level with the drone, which follows every step flown;
+        *replanned* is True when a re-task replaced the step. Each step must
+        still be a step of the blocked lane in this plan, stay inside the
+        geofence and *area*, face the lane heading and pass a gate that saw
+        no person, and the time budget must not be spent.
         """
         lane_index, _, lane_direction, _ = step
         heading = plan_heading(lane_direction)
         fx, fy = _UNIT[lane_direction]
         passed_cm = 0
+        with self._lock:
+            from_cm = self._lane_flown_locked(lane_index)
         why: list[tuple[str, SenseResult]] = []
 
         def stop(reason: str, result: SenseResult) -> None:
             why.append((reason, result))
 
         def ended(outcome: str, replanned: bool = False):
-            return outcome, (why[-1] if why else None), passed_cm, line, replanned
+            return outcome, (why[-1] if why else None), passed_cm, from_cm, line, replanned
 
         while passed_cm < OBSTACLE_SIDESTEP_PASS_CM:
+            if self._budget_spent(deadline, EVENT_OBSTACLE_SIDESTEP, step):
+                return ended("done")
             with self._lock:
                 if not self._is_active() or self._abort.is_set():
                     return ended(_STOPPED)
@@ -565,7 +877,7 @@ class ObstacleAvoidMixin:
                 return ended(_STOPPED)
             if verdict is not None:
                 return ended("done")
-            verdict = self._look(beside, still, stop, source=SOURCE_SIDESTEP)
+            verdict = self._look(beside, still, stop, source=SOURCE_SIDESTEP, person_wait=True, need_person=True)
             if verdict == _STOP:
                 return ended(_STOPPED)
             if verdict == _AGAIN:
@@ -582,6 +894,9 @@ class ObstacleAvoidMixin:
                 return ended("done")
             if not self.envelope.check_move("forward", beside[3]):
                 return ended("done")
+            # TODO(fix/tello-climb-freshness-guards): route this single sensed
+            # move through ``_retry_refusal`` once that branch is merged, so a
+            # transient Tello refusal is retried instead of landing the drone.
             if not self._command_move("forward", beside[3], record=True):
                 return ended(_STOPPED)
             moved_line = RelativePose(line.x_cm + fx * beside[3], line.y_cm + fy * beside[3], heading)
@@ -605,41 +920,65 @@ class ObstacleAvoidMixin:
         return ended("done")
 
     def _back_to_lane(
-        self, step: tuple[int, int, str, int], line: RelativePose, why: tuple[str, SenseResult] | None,
-    ) -> str:
-        """Fly back to the point *line* on the lane: ``"done"``, ``_STOPPED`` or ``_HELD``.
+        self, step: tuple[int, int, str, int], gen: int, line: RelativePose, cut_made: bool,
+    ) -> tuple[str, bool]:
+        """Fly back to the point *line* on the lane: ``(outcome, cut_here)``.
 
-        Sensed like the way back of a ``resume_search``. A way back that a
-        gate does not clear, or that has no path inside the geofence, cuts
-        nothing and never lands: the drone hovers under manual control with
-        *line* as its hold point. A landing or a hold stops it before its
-        next move, with *line* kept as the point the plan continues from.
+        *outcome* is ``"done"``, ``_STOPPED`` or ``_HELD``. Sensed like the
+        way back of a ``resume_search``, with the sidestep's person rule. A
+        way back that a gate does not clear, or that has no path inside the
+        geofence, never lands: the drone hovers under manual control with
+        *line* as its hold point (``_avoid_held_manual``; its telemetry phase
+        is ``held``). When that gate saw a person or a sensor down, the lane
+        is also cut for it unless *cut_made* says it already is; *cut_here*
+        is True then, and the gate's result is in ``_last_return_block``. A
+        landing or a hold stops it before its next move, with *line* kept as
+        the point the plan continues from.
         """
+        self._last_return_block = None
         if self._away_from(line):
             self._avoid_note(AVOID_PHASE_RETURN)
             with self._lock:
-                path = self._return_path_locked(line) if self._resume_target is line else None
                 ours = self._resume_target is line
+                path = self._return_path_locked(line) if ours else None
             if not ours:
-                return _STOPPED
+                return _STOPPED, False
             if path is None:
                 with self._lock:
-                    if self._is_active() and not self._abort.is_set():
+                    held = self._is_active() and not self._abort.is_set()
+                    if held:
                         self._hold_short_of_return_locked()
+                        self._avoid_held_manual = self._manual
+                    lane_index = self.lane_index
+                if not held:
+                    return _STOPPED, False
+                self._log.warning(
+                    "edge_resume_search_blocked", drone_id=self.drone_id, reason="geofence", sensor_reason=None,
+                    cause=None, target_x_cm=round(line.x_cm, 1), target_y_cm=round(line.y_cm, 1),
+                    lane_index=lane_index, control_mode=self.control_mode, **self._pose_fields(),
+                )
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "held", reason="geofence",
                                 control_mode=self.control_mode)
-                return _HELD
-            outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP_RETURN)
+                return _HELD, False
+            # TODO(fix/tello-climb-freshness-guards): route these single sensed
+            # moves and turns through ``_retry_refusal`` once that branch is merged.
+            outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP_RETURN, person=True)
             if outcome == "stopped":
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "stopped", reason="return")
-                return _STOPPED
+                return _STOPPED, False
             if outcome == "blocked" and blocked is not None:
+                cut_here = not cut_made and self._cut_for_seen(step, gen, blocked)
+                if cut_here:
+                    self._last_return_block = blocked
                 self._end_blocked_return(line, *blocked)
+                with self._lock:
+                    if self._manual is not None:
+                        self._avoid_held_manual = self._manual
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "held", reason=blocked[0],
-                                control_mode=self.control_mode)
-                return _HELD
+                                person_cue=blocked[1].person_cue, control_mode=self.control_mode)
+                return _HELD, cut_here
         with self._lock:
             if self._resume_target is line:
                 self._resume_target = None
         self._avoid_note(AVOID_PHASE_SIDESTEP)
-        return "done"
+        return "done", False

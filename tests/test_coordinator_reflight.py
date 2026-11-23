@@ -292,7 +292,7 @@ def test_lanes_the_cutting_drone_is_given_after_it_finished_are_still_checked():
     more = list(LANES) + [{"direction": "left", "distance_cm": 100}, {"direction": "forward", "distance_cm": 300}]
     with fleet.coord._lock:
         assert fleet.coord._too_close("drone-2", lanes, {"drone-1": more}, flown=("drone-1", len(LANES))) == (
-            "come within 0 cm of drone-1, below the 100 cm gap")
+            "come within 0 cm of drone-1, below the 100 cm gap and the 50 cm sidestep margin")
         assert fleet.coord._too_close("drone-2", lanes, {}, flown=("drone-1", len(LANES))) is None
 
 
@@ -1060,3 +1060,94 @@ def test_a_real_edge_blocked_again_on_the_reversed_segment(real_receiver):
     ]
     # The edge's own cut is not offered again.
     assert len(coord._reflights) == 1
+
+
+# ---------------------------------------------------------------------------
+# Sidesteps (``lane_avoid``): offset segments, a held drone and the separation margin
+# ---------------------------------------------------------------------------
+
+
+def avoid_fields(phase=None, offsets=None, **counts):
+    status = {"relooks": 0, "relook_clears": 0, "sidesteps": 1, "sidestep_passes": 1, "phase": phase, **counts}
+    if offsets is not None:
+        status["offsets"] = offsets
+    return {"obstacle_avoid": status}
+
+
+def fleet_events(fleet, kind):
+    return [p for name, p in fleet.events if name == "fleet_event" and p.get("event") == kind]
+
+
+def test_an_offset_segment_is_announced_listed_and_offered_like_a_cut():
+    fleet = Fleet()
+    # drone-1 flew 150 cm of lane 0, from 150 cm on, 50 cm beside the lane.
+    fleet.tel("drone-1", lane_index=0, rel_x_cm=0, rel_y_cm=300, **avoid_fields(offsets=[0, 150, 150]))
+    (event,) = fleet_events(fleet, "lane_offset")
+    assert (event["drone_id"], event["lane_index"], event["x_cm"], event["y_cm"], event["unflown_cm"]) == (
+        "drone-1", 0, 0, 150, 150)
+    assert "beside the lane" in event["detail"]
+    # Listed with the uncovered segments, waiting for drone-1 to finish, like a cut segment.
+    assert [(s["index"], s["reason"], ends(s), s["status"], s["cut_seq"]) for s in fleet.segments()] == [
+        (0, "offset", (0, 150, 0, 300), "waiting", None),
+    ]
+    # The same offset again is not announced again.
+    fleet.tel("drone-1", lane_index=1, **avoid_fields(offsets=[0, 150, 150]))
+    assert len(fleet_events(fleet, "lane_offset")) == 1
+    fleet.done("drone-2")
+    fleet.done("drone-1")
+    offer = fleet.assigns("drone-2")[-1]
+    # Re-flown reversed, from its far end back toward where the sidestep began.
+    assert offer["lanes"][-1] == {"direction": "back", "distance_cm": 150}
+    offered = fleet.reflight_events("reflight_offered")[0]
+    assert offered["reason"] == "offset" and offered["cut_seq"] is None
+    assert "offset segment" in offered["detail"]
+    assert {(s["reason"], s["status"], s["receiver"]) for s in fleet.segments()} == {("offset", "acked", "drone-2")}
+
+
+def test_offsets_count_toward_the_reflight_limit_and_a_cut_still_works_beside_them():
+    fleet = Fleet()
+    offsets = [0, 0, 50, 0, 100, 50, 0, 200, 50, 2, 0, 50]
+    fleet.tel("drone-1", lane_index=2, **avoid_fields(offsets=offsets))
+    fleet.cut("drone-1", [(2, 100)], CUT_OBSTACLE, lane_index=3, **avoid_fields(offsets=offsets))
+    chunks = [c for c in fleet.coord._reflights if c.lost_id == "drone-1"]
+    assert len(chunks) == MAX_REFLIGHTS_PER_DRONE
+    assert sum(1 for c in chunks if c.offset is not None) == MAX_REFLIGHTS_PER_DRONE
+    # The cut is still announced and listed, only not offered.
+    assert [p["lane_index"] for p in fleet_events(fleet, "lane_blocked")] == [2]
+
+
+def test_offsets_from_before_the_plan_was_acked_are_ignored():
+    fleet = Fleet(edge_kwargs={"drone-1": {"auto_ack": False}})
+    state = fleet.coord._drones["drone-1"]
+    with fleet.coord._lock:
+        state.acked = False
+    fleet.tel("drone-1", **avoid_fields(offsets=[0, 150, 150]))
+    assert fleet_events(fleet, "lane_offset") == [] and fleet.segments() == []
+
+
+def test_a_drone_held_after_a_sidestep_is_announced_once():
+    fleet = Fleet()
+    fleet.tel("drone-1", rel_x_cm=50, rel_y_cm=300, control_mode="manual", **avoid_fields(phase="held"))
+    fleet.tel("drone-1", rel_x_cm=50, rel_y_cm=300, control_mode="held", **avoid_fields(phase="held"))
+    (event,) = fleet_events(fleet, "sidestep_held")
+    assert event["drone_id"] == "drone-1"
+    assert "(50, 300) cm" in event["detail"] and "Resume search" in event["detail"]
+    # Back under its plan, then held again: announced again.
+    fleet.tel("drone-1", **avoid_fields(phase=None))
+    fleet.tel("drone-1", **avoid_fields(phase="held"))
+    assert len(fleet_events(fleet, "sidestep_held")) == 2
+
+
+def test_the_separation_check_keeps_a_sidestep_margin_beyond_the_gap():
+    # drone-1's path along y = 0 ends 120 cm from drone-2's takeoff point at x = 350.
+    near = [{"direction": "right", "distance_cm": 230}]
+    fleet = Fleet()
+    lanes = fleet.coord.lanes("drone-2")
+    with fleet.coord._lock:
+        assert fleet.coord._too_close("drone-2", lanes, {"drone-1": near}) == (
+            "come within 120 cm of drone-1, below the 100 cm gap and the 50 cm sidestep margin")
+    exact = Fleet(sidestep_margin_cm=0)
+    with exact.coord._lock:
+        assert exact.coord._too_close("drone-2", lanes, {"drone-1": near}) is None
+    with pytest.raises(ValueError, match="sidestep_margin_cm"):
+        Fleet(sidestep_margin_cm=-1)
