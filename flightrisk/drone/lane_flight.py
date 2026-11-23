@@ -895,10 +895,15 @@ class FlightSequenceMixin:
         else:
             outcome = f"{limit} retries used, landing"
         text = f"{command} answered {reply!r}: {outcome}"
+        now = self._clock()
         with self._lock:
-            self._move_refusals += 1
-            self._move_refusal_last = text[:MAX_TEXT_LEN]
-            total = self._move_refusals
+            total = (self._move_refusals or {}).get("total", 0) + 1
+            self._move_refusals = {
+                "total": total,
+                "last_reason": str(reply)[:MAX_TEXT_LEN],
+                "last_cmd": command[:MAX_TEXT_LEN],
+                "last_at": round(now, 3),
+            }
         self._log.warning(
             EVENT_MOVE_REFUSED,
             drone_id=self.drone_id,

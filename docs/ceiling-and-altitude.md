@@ -135,7 +135,7 @@ move to the slot (`flightrisk/drone/flight_guards.py`):
   flown. A sensed lane step goes back through its sense gate with a new view first. An unsensed
   lane move, a turn and a manual step are never retried. When no retry is left the drone lands
   as before (`executor_error`). Every such refusal is logged (`edge_move_refused`) and counted in
-  telemetry (`move_refusals_total`, `move_refusal_last`), and the drone card shows
+  telemetry (one object field, `move_refusals`), and the drone card shows
   `DRONE REFUSED n moves`. A drone that keeps refusing needs a check (IMU calibration in the Tello
   app, light, floor texture) before it flies again; neither reply is in the Tello SDK
   documentation.

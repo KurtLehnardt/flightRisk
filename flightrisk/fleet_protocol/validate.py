@@ -223,10 +223,29 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
         _require_choice(msg, "control_mode", CONTROL_MODES)
     # Optional on every version: moves the drone refused with a transient
     # refusal (``flightrisk/drone/flight_guards.py``), present after the first.
-    if "move_refusals_total" in msg:
-        _require_int_range(msg, "move_refusals_total", 0, 2**31 - 1)
-    if msg.get("move_refusal_last") is not None:
-        _require_text(msg, "move_refusal_last")
+    # One object, so it costs one field of MAX_FIELDS.
+    if "move_refusals" in msg:
+        _validate_move_refusals(msg["move_refusals"])
+
+
+def _validate_move_refusals(value: Any) -> None:
+    """``move_refusals``: ``{total, last_reason, last_cmd, last_at}``; ``total`` at least 1, the rest optional."""
+    what = "'telemetry' field 'move_refusals'"
+    if not isinstance(value, Mapping):
+        raise ProtocolError(f"{what} must be an object, got {_short(value)}")
+    total = value.get("total")
+    if not _is_int(total) or not 1 <= total <= 2**31 - 1:
+        raise ProtocolError(f"{what} needs 'total', a whole number of at least 1, got {_short(total)}")
+    for key in ("last_reason", "last_cmd"):
+        text = value.get(key)
+        if text is not None and not (isinstance(text, str) and 0 < len(text) <= MAX_TEXT_LEN and text.isprintable()):
+            raise ProtocolError(
+                f"{what} field {key!r} must be printable text of 1 to {MAX_TEXT_LEN} characters or null, "
+                f"got {_short(text)}"
+            )
+    at = value.get("last_at")
+    if at is not None and not _is_number(at):
+        raise ProtocolError(f"{what} field 'last_at' must be a number or null, got {_short(at)}")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:

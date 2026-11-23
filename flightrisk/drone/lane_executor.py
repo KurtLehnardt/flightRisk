@@ -485,11 +485,10 @@ class LaneExecutor(
         self._short_stop: tuple[int, str] | None = None
         self._guards = flight_guards if flight_guards is not None else FlightGuards()
         # Moves the drone refused with a transient refusal (``flight_guards``)
-        # since the edge started, and the last one as operator text, for
-        # telemetry (``move_refusals_total``, ``move_refusal_last``). Never
-        # reset, so a drone that keeps refusing stays visible.
-        self._move_refusals = 0
-        self._move_refusal_last: str | None = None
+        # since the edge started, for telemetry (``move_refusals``): None
+        # until the first, then ``{total, last_reason, last_cmd, last_at}``.
+        # Never reset, so a drone that keeps refusing stays visible.
+        self._move_refusals: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Introspection
@@ -696,19 +695,19 @@ class LaneExecutor(
         return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
 
     def refusal_status(self) -> dict[str, Any]:
-        """The optional telemetry fields for moves the drone refused (``flight_guards``), or nothing.
+        """The optional telemetry field for moves the drone refused (``flight_guards``), or nothing.
 
-        ``move_refusals_total`` counts every transient refusal since the edge
-        started (retried or not) and ``move_refusal_last`` describes the last
-        one, such as ``down 60 answered 'error No valid imu' (retry 1 of 2)``.
-        Empty until the first refusal, so the telemetry of a drone that never
-        refused is unchanged.
+        One object field, ``move_refusals``, so it costs one of the
+        protocol's ``MAX_FIELDS``: ``total`` counts every transient refusal
+        since the edge started (retried or not), ``last_reason`` is the last
+        reply (such as ``error No valid imu``), ``last_cmd`` the command it
+        answered (such as ``down 60``) and ``last_at`` when, on the edge
+        clock of ``takeoff_at_local_s``. Empty until the first refusal, so
+        the telemetry of a drone that never refused is unchanged.
         """
         with self._lock:
-            total, last = self._move_refusals, self._move_refusal_last
-        if not total:
-            return {}
-        return {"move_refusals_total": total, "move_refusal_last": last}
+            refusals = None if self._move_refusals is None else dict(self._move_refusals)
+        return {} if refusals is None else {"move_refusals": refusals}
 
     def _obstacle_unavailable_detail(self) -> str:
         """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""

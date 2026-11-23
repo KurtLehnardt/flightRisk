@@ -190,11 +190,13 @@ const socket = io();
     // The drone card badge for moves the drone refused ("error No valid imu", "error Not joystick"), or null.
     // A drone that keeps refusing needs a check (IMU calibration, light, floor texture) before it flies again.
     function refusalBadge(d) {
-        const n = d && d.move_refusals_total;
+        const r = d && d.move_refusals;
+        const n = r && typeof r === 'object' ? r.total : null;
         if (typeof n !== 'number' || n < 1) return null;
+        const last = r.last_cmd && r.last_reason ? 'Last: ' + r.last_cmd + ' answered "' + r.last_reason + '". '
+            : (r.last_reason ? 'Last: ' + r.last_reason + '. ' : '');
         return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
-            title: (d.move_refusal_last ? 'Last: ' + d.move_refusal_last + '. ' : '')
-                + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
+            title: last + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
     }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;

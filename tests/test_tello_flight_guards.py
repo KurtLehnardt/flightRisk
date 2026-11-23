@@ -331,8 +331,10 @@ def test_a_refused_slot_move_is_retried_from_a_new_settled_height(guarded):
     (refused,) = events(log, EVENT_MOVE_REFUSED)
     assert (refused["reply"], refused["retry"], refused["retries"], refused["hold_s"]) == ("error No valid imu", 1, 2, 0.5)
     telemetry = executor.telemetry()
-    assert telemetry["move_refusals_total"] == 1
-    assert telemetry["move_refusal_last"] == "up 60 answered 'error No valid imu': retry 1 of 2 after 0.5 s"
+    assert telemetry["move_refusals"] == {
+        "total": 1, "last_reason": "error No valid imu", "last_cmd": "up 60", "last_at": pytest.approx(1000.0),
+    }
+    assert "move_refusals_total" not in telemetry  # one grouped field, not several
     fp.validate_edge_to_ground(telemetry, proto=2)
     assert "executor_error" not in land_reasons(log)
 
@@ -345,9 +347,9 @@ def test_refusals_beyond_the_retries_land_and_stay_visible(guarded):
     assert moves(drone) == ["down 50", "down 50", "down 50"]
     assert [e["retry"] for e in events(log, EVENT_MOVE_REFUSED)] == [1, 2, None]
     assert land_reasons(log) == ["executor_error"]
-    telemetry = executor.telemetry()
-    assert telemetry["move_refusals_total"] == 3
-    assert telemetry["move_refusal_last"].endswith("2 retries used, landing")
+    refusals = executor.telemetry()["move_refusals"]
+    assert (refusals["total"], refusals["last_cmd"], refusals["last_reason"]) == (3, "down 50", "error No valid imu")
+    assert events(log, EVENT_MOVE_REFUSED)[-1]["detail"].endswith("2 retries used, landing")
 
 
 def test_retries_can_be_turned_off(guarded):
@@ -358,7 +360,7 @@ def test_retries_can_be_turned_off(guarded):
     take_off(executor)
     assert moves(drone) == ["down 50"]
     assert land_reasons(log) == ["executor_error"]
-    assert executor.telemetry()["move_refusals_total"] == 1
+    assert executor.telemetry()["move_refusals"]["total"] == 1
 
 
 def test_any_other_refusal_lands_at_once_and_is_not_counted(guarded):
@@ -367,7 +369,7 @@ def test_any_other_refusal_lands_at_once_and_is_not_counted(guarded):
     assert moves(drone) == ["down 50"]
     assert not events(log, EVENT_MOVE_REFUSED)
     assert land_reasons(log) == ["executor_error"]
-    assert "move_refusals_total" not in executor.telemetry()
+    assert "move_refusals" not in executor.telemetry()
 
 
 def test_a_landing_during_the_hold_ends_the_retry(guarded):
@@ -430,7 +432,7 @@ def test_a_refused_sensed_lane_step_is_retried_through_a_new_gate():
         ]
         (refused,) = events(log, EVENT_MOVE_REFUSED)
         assert refused["lane_index"] == 0 and refused["retry"] == 1
-        assert executor.telemetry()["move_refusals_total"] == 1
+        assert executor.telemetry()["move_refusals"]["total"] == 1
     finally:
         executor.shutdown(timeout=WAIT_S)
     validate_sent(sent)
@@ -451,7 +453,7 @@ def test_an_unsensed_lane_move_is_never_retried():
         assert moves(drone) == ["forward 200"]
         (refused,) = events(log, EVENT_MOVE_REFUSED)
         assert refused["retry"] is None and "not retried" in refused["detail"]
-        assert executor.telemetry()["move_refusals_total"] == 1
+        assert executor.telemetry()["move_refusals"]["total"] == 1
     finally:
         executor.shutdown(timeout=WAIT_S)
 
@@ -808,11 +810,13 @@ def test_refusal_telemetry_is_validated():
     base = {"type": "telemetry", "drone_id": "drone-2", "battery": 78, "height_cm": 80, "is_flying": True,
             "rel_x_cm": 0.0, "rel_y_cm": 0.0, "heading_deg": 0.0, "lane_index": 0, "lanes_total": 1,
             "link_age_s": 0.1, "takeoff_at_local_s": 1.0}
-    fp.validate_edge_to_ground({**base, "move_refusals_total": 2, "move_refusal_last": "down 30 answered x"}, proto=1)
-    with pytest.raises(fp.ProtocolError):
-        fp.validate_edge_to_ground({**base, "move_refusals_total": -1}, proto=1)
-    with pytest.raises(fp.ProtocolError):
-        fp.validate_edge_to_ground({**base, "move_refusals_total": 1, "move_refusal_last": 5}, proto=1)
+    good = {"total": 2, "last_reason": "error No valid imu", "last_cmd": "down 30", "last_at": 1234.5}
+    fp.validate_edge_to_ground({**base, "move_refusals": good}, proto=1)
+    fp.validate_edge_to_ground({**base, "move_refusals": {"total": 1}}, proto=1)
+    for bad in (5, {"total": 0}, {"total": True}, {**good, "last_reason": 5}, {**good, "last_cmd": ""},
+                {**good, "last_at": "now"}, {**good, "last_reason": "error " * 40}):
+        with pytest.raises(fp.ProtocolError, match="move_refusals"):
+            fp.validate_edge_to_ground({**base, "move_refusals": bad}, proto=1)
 
 
 NODE = shutil.which("node")
@@ -827,8 +831,8 @@ def test_drone_card_shows_refused_moves(tmp_path):
     harness.write_text(
         "const src = require('fs').readFileSync(process.argv[2], 'utf8');\n"
         "const f = new Function('fmt', src + '; return {refusalBadge};')((v) => v);\n"
-        "console.log(JSON.stringify([f.refusalBadge({}), f.refusalBadge({move_refusals_total: 1}),\n"
-        "  f.refusalBadge({move_refusals_total: 3, move_refusal_last: 'down 30 answered x'})]));\n"
+        "console.log(JSON.stringify([f.refusalBadge({}), f.refusalBadge({move_refusals: {total: 1}}),\n"
+        "  f.refusalBadge({move_refusals: {total: 3, last_cmd: 'down 30', last_reason: 'error No valid imu'}})]));\n"
     )
     src = tmp_path / "block.js"
     src.write_text(block)
@@ -836,4 +840,5 @@ def test_drone_card_shows_refused_moves(tmp_path):
     none, one, three = json.loads(out.stdout)
     assert none is None
     assert one["text"] == "DRONE REFUSED 1 move" and one["cls"] == "held"
-    assert three["text"] == "DRONE REFUSED 3 moves" and three["title"].startswith("Last: down 30 answered x.")
+    assert three["text"] == "DRONE REFUSED 3 moves"
+    assert three["title"].startswith('Last: down 30 answered "error No valid imu".')
