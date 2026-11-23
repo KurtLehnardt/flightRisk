@@ -17,10 +17,9 @@ def _is_sourced(source: str) -> bool:
 
 
 def test_builtins_present():
-    assert {"tello", "tello_edu", "generic_multirotor", "dji_msdk_slot"} <= set(MODELS)
+    assert {"tello", "tello_edu", "generic_multirotor"} <= set(MODELS)
     assert MODELS["tello_edu"].profile == "tello"
     assert set(cat.ADAPTER_SPECS) == set(cat.ADAPTERS)
-    assert cat.ADAPTER_SPECS["dji_msdk"].slot
 
 
 @pytest.mark.parametrize("model", list(MODELS.values()), ids=lambda m: m.id)
@@ -40,7 +39,7 @@ def test_every_field_is_set(model):
         assert cam.stream_w_px > 0 and cam.stream_h_px > 0 and cam.hfov_deg > 0 and cam.fps > 0
 
 
-@pytest.mark.parametrize("model", [m for m in MODELS.values() if m.support != "slot"], ids=lambda m: m.id)
+@pytest.mark.parametrize("model", list(MODELS.values()), ids=lambda m: m.id)
 def test_every_fact_is_complete_and_sourced(model):
     assert set(model.facts) == set(cat.CONSERVATIVE_FACTS)
     for group in (model.envelope, model.safety, model.facts):
@@ -75,8 +74,16 @@ def test_coverage_camera_takes_the_given_pitch_and_rejects_unknown_camera():
         MODELS["tello"].coverage_camera("rear", 0.0)
 
 
+_NO_FACTS = cat.DroneModel(
+    id="no_facts_fixture", name="Fixture drone with no stated facts", maker="Test", support="supported", scale="field",
+    adapter="mavlink", frame_path="capture_source", cameras=(), positioning="gps",
+    envelope={}, link="radio", safety={}, profile="generic_multirotor",
+    sources=("ASSUMPTION: test fixture",), facts={},
+)
+
+
 def test_missing_fact_is_most_conservative_and_unverified():
-    slot = MODELS["dji_msdk_slot"]
+    slot = _NO_FACTS
     for name, value in cat.CONSERVATIVE_FACTS.items():
         fact = slot.fact(name)
         assert fact.value == value and fact.status == "unverified", name
