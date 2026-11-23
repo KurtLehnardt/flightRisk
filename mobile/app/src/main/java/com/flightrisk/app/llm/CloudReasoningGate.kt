@@ -80,13 +80,49 @@ class CloudReasoningGate(
     @Volatile
     private var keyRejected = false
 
+    private val keyLock = Any()
+
     /**
-     * Records that Anthropic rejected the saved key (401 or 403). The gate then yields no key,
-     * so nothing more is uploaded, until [saveKey] or [removeKey] runs. Main-safe.
+     * Counts key changes: it goes up whenever a key is saved or removed. A request notes it
+     * before it reads the key, so a late answer can be tied to the key that was sent.
      */
-    fun markKeyInvalid() {
+    @Volatile
+    var keyGeneration: Long = 0L
+        private set
+
+    private val keyChangeListeners = java.util.concurrent.CopyOnWriteArrayList<Runnable>()
+
+    /** Registers [listener], called after a key was saved or removed (on the calling thread). */
+    fun addKeyChangeListener(listener: Runnable) {
+        keyChangeListeners.add(listener)
+    }
+
+    /** Removes a listener added with [addKeyChangeListener]. */
+    fun removeKeyChangeListener(listener: Runnable) {
+        keyChangeListeners.remove(listener)
+    }
+
+    /** Starts a new key generation and gives the next key a fresh try. */
+    private fun keyChanged() {
+        synchronized(keyLock) {
+            keyGeneration++
+            keyRejected = false
+        }
+    }
+
+    private fun notifyKeyChanged() = keyChangeListeners.forEach { it.run() }
+
+    /**
+     * Records that Anthropic rejected the key sent under [generation] (401 or 403). The gate then
+     * yields no key, so nothing more is uploaded, until [saveKey] or [removeKey] runs. If the key
+     * was saved or removed since [generation] was read, the answer is about an old key and is
+     * ignored (returns false). Main-safe.
+     */
+    fun markKeyInvalid(generation: Long): Boolean = synchronized(keyLock) {
+        if (generation != keyGeneration) return false
         keyRejected = true
         keyState = ClaudeKeyState.INVALID
+        true
     }
 
     /** Main-safe: true while the opt-in is on, Cloud Claude is selected and no key removal is running. */
@@ -131,9 +167,10 @@ class CloudReasoningGate(
         if (!settings.cloudOptIn) return false
         val key = ReasoningSettings.normalizedKey(input) ?: return false
         val saved = keys.save(key)
-        // A new key gets a fresh try.
-        if (saved) keyRejected = false
+        // A new key gets a fresh try, and failures recorded for the old key are forgotten.
+        if (saved) keyChanged()
         refreshKeyState()
+        if (saved) notifyKeyChanged()
         return saved
     }
 
@@ -144,14 +181,18 @@ class CloudReasoningGate(
      */
     fun removeKey(): Boolean {
         removalsInProgress.incrementAndGet()
-        keyRejected = false
+        // Starts a new generation now, so a 401 for the old key that lands during or after the
+        // removal cannot mark the state invalid when no key is saved.
+        keyChanged()
         try {
             settings.notifyGateMayHaveClosed(keyRemoved = true)
             return keys.remove()
         } finally {
+            keyChanged()
             refreshKeyState()
             removalsInProgress.decrementAndGet()
             settings.notifyGateMayHaveClosed(keyRemoved = true)
+            notifyKeyChanged()
         }
     }
 
