@@ -106,9 +106,30 @@ class ReasoningVerdictTest {
         assertEquals(VerdictKind.NOT_RUN, AlertVerdicts.kindOf(false, ReasoningConfidence.of("unavailable")))
         assertEquals(VerdictKind.OTHER, AlertVerdicts.kindOf(true, ReasoningConfidence.of("very sure")))
         assertEquals("very sure", ReasoningConfidence.of("very sure").raw)
+        // An unknown word is not a verdict, so the model's reason never goes with it.
+        assertFalse(AlertVerdicts.showsRationale(VerdictKind.OTHER))
         assertNull(AlertVerdicts.kindOf(true, null))
         assertFalse(AlertVerdicts.isFinal(VerdictKind.PENDING))
         assertTrue(AlertVerdicts.isFinal(VerdictKind.ERROR))
+    }
+
+    @Test
+    fun anUnknownConfidenceWordIsCutTo64Characters() {
+        val long = "x".repeat(10_000)
+        val c = ReasoningConfidence.of(long)
+        assertEquals(ReasoningConfidence.MAX_RAW_CHARS, c.raw.length)
+        assertEquals(64, ReasoningConfidence.MAX_RAW_CHARS)
+        // A surrogate pair at the cut is dropped whole, never split.
+        val emoji = "a".repeat(63) + "\uD83D\uDE00" + "tail"
+        val cut = ReasoningConfidence.of(emoji).raw
+        assertEquals("a".repeat(63), cut)
+        // Through the decoder too: reasoning_result and match_alert.
+        val r = ServerEvents.decode("reasoning_result", """{"alert_id":"a","type":"analyze","result":{"match":true,"confidence":"$long"}}""") as ReasoningResult
+        assertEquals(64, r.confidence!!.raw.length)
+        val a = ServerEvents.decode("match_alert", """{"alert_id":"a","gemma_confidence":"$long"}""") as MatchAlert
+        assertEquals(64, a.gemmaConfidence!!.raw.length)
+        // The known words are untouched.
+        assertEquals(ReasoningConfidence.High, ReasoningConfidence.of("high"))
     }
 
     @Test

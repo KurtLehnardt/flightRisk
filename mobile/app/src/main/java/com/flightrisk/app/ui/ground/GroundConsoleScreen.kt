@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 /** The callbacks of the Ground screen, so the content can be drawn (and tested) without a ViewModel. */
@@ -234,18 +235,10 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
                     Text("APPEARANCE ONLY", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
                 Row(modifier = Modifier.weight(1f)) {}
-                // Always visible, always enabled, one tap, no confirmation. It sits outside the scrolling text.
-                Button(
-                    onClick = actions.onLandAll,
-                    enabled = true,
-                    colors = ButtonDefaults.buttonColors(containerColor = GroundColors.ChipRed, contentColor = Color.White),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .heightIn(min = 52.dp)
-                        .testTag("ground.landAll")
-                        .semantics { contentDescription = "Land all drones" },
-                ) { Text("LAND ALL", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium) }
+                if (!state.demo) LandAllButton(state, actions, Modifier)
             }
+            // In demo mode the longer "LAND ALL (demo)" takes its own full-width row, where it wraps and is never cut.
+            if (state.demo) LandAllButton(state, actions, Modifier.fillMaxWidth())
             // The messages scroll inside a limited area; the buttons below them never scroll away.
             val feedback = state.landAll
             if (state.demo || state.demoProblem != null || state.link != GroundLink.Connected || feedback != null) {
@@ -257,6 +250,11 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
                         Text(DemoText.GROUND_LINK, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("ground.demoNote"))
                     } else if (state.link != GroundLink.Connected) {
                         ConnectionText(state.link)
+                    }
+                    if (!state.demo) {
+                        state.demoEndedNote?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("ground.demoEnded"))
+                        }
                     }
                     state.demoProblem?.let { WarningText(it, Modifier.fillMaxWidth().testTag("ground.demoProblem")) }
                     if (feedback != null) {
@@ -283,7 +281,9 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
                         OutlinedButton(onClick = actions.onRetry, modifier = Modifier.testTag("ground.retry")) { Text(retryLabel) }
                     }
                     if (feedback?.offersRetry == true) {
-                        OutlinedButton(onClick = actions.onLandAll, modifier = Modifier.testTag("ground.landAllAgain")) { Text("Send LAND ALL again") }
+                        OutlinedButton(onClick = actions.onLandAll, modifier = Modifier.testTag("ground.landAllAgain")) {
+                            Text(LandAllSemantics.againLabel(state.demo))
+                        }
                     }
                     if (feedback?.canDismiss == true) {
                         TextButton(onClick = actions.onDismissLandAll, modifier = Modifier.testTag("ground.landAllDismiss")) { Text("Dismiss") }
@@ -292,6 +292,40 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
             }
         }
     }
+}
+
+/** Always visible, always enabled, one tap, no confirmation. It sits outside the scrolling text. */
+@Composable
+private fun LandAllButton(state: GroundUiState, actions: GroundActions, modifier: Modifier) {
+    Button(
+        onClick = actions.onLandAll,
+        enabled = true,
+        colors = ButtonDefaults.buttonColors(containerColor = GroundColors.ChipRed, contentColor = Color.White),
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier
+            .heightIn(min = 52.dp)
+            .testTag("ground.landAll")
+            .semantics { contentDescription = LandAllSemantics.description(state.demo) },
+    ) {
+        Text(
+            LandAllSemantics.label(state.demo),
+            fontWeight = FontWeight.ExtraBold,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** The words of the LAND ALL button. In demo mode it says that only the simulated drones land. */
+object LandAllSemantics {
+    const val LABEL = "LAND ALL"
+
+    fun label(demo: Boolean): String = if (demo) DemoText.LAND_ALL_LABEL else LABEL
+
+    /** What TalkBack reads for the button. */
+    fun description(demo: Boolean): String = if (demo) DemoText.LAND_ALL_DESCRIPTION else DemoText.LAND_ALL_DESCRIPTION_REAL
+
+    fun againLabel(demo: Boolean): String = if (demo) "Send LAND ALL (demo) again" else "Send LAND ALL again"
 }
 
 @Composable

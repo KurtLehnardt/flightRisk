@@ -27,7 +27,9 @@ class SharedPrefsGroundSettings(context: Context) : GroundSettingsStore {
     override var enabled: Boolean
         get() = prefs.getBoolean(KEY_ENABLED, false)
         set(value) {
-            prefs.edit().putBoolean(KEY_ENABLED, value).apply()
+            // Written at once (the caller is off the main thread): demo mode switches the link off when it
+            // starts, and a restart moments later must not find it still on and reconnect.
+            prefs.edit().putBoolean(KEY_ENABLED, value).commit()
         }
 
     private companion object {

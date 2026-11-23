@@ -10,6 +10,7 @@ import com.flightrisk.app.ui.ground.DemoFixtures
 import com.flightrisk.app.ui.ground.GroundConsoleViewModel
 import com.flightrisk.contract.AlertUpgrade
 import com.flightrisk.contract.CeilingSettings
+import com.flightrisk.contract.ControlModeDisplay
 import com.flightrisk.contract.DetectionProfiles
 import com.flightrisk.contract.DroneRecord
 import com.flightrisk.contract.FleetEvent
@@ -137,23 +138,105 @@ class DemoGroundPortTest {
         }
     }
 
+    private fun Session.fleet(id: String) = client.board.value.drones[id] as? DroneRecord.Fleet
+
     @Test
-    fun `a per-drone Land is acknowledged for that drone and the drone reads as on the ground`() = runBlocking {
+    fun `a per-drone Land is acknowledged for that drone, which lands where it is and stops moving`() = runBlocking {
         Session().use { s ->
             eventually("connected") { s.client.connection.value is ConnectionStatus.Connected }
             s.play(8_000)
             eventually("flying") { s.client.board.value.drones.values.filterIsInstance<DroneRecord.Fleet>().count { it.drone.isFlying == true } == 2 }
-            s.client.landDrone("drone-2")
+            s.client.landDrone("demo-drone-2")
             eventually("acknowledged") { s.all<ManualReply>().size == 2 }
-            assertTrue(s.all<ManualReply>().all { it.droneId == "drone-2" && it.ok == true })
+            assertTrue(s.all<ManualReply>().all { it.droneId == "demo-drone-2" && it.ok == true })
             assertEquals(listOf(ManualReply.Kind.ACK, ManualReply.Kind.RESULT), s.all<ManualReply>().map { it.kind })
-            s.play(4_000)
-            eventually("drone-2 on the ground") {
-                val drones = s.client.board.value.drones
-                (drones["drone-2"] as? DroneRecord.Fleet)?.drone?.isFlying == false && (drones["drone-1"] as? DroneRecord.Fleet)?.drone?.isFlying == true
+            eventually("demo-drone-2 on the ground") { s.fleet("demo-drone-2")?.drone?.isFlying == false }
+            val landedAt = s.fleet("demo-drone-2")!!.drone.let { it.relXCm to it.relYCm }
+            val other = s.fleet("demo-drone-1")!!.drone.let { it.relXCm to it.relYCm }
+            s.play(12_000)
+            eventually("later statuses replayed") { s.fleet("demo-drone-1")!!.drone.let { it.relXCm to it.relYCm } != other }
+            // The landed drone stays where it landed; the other one flies on.
+            assertEquals(landedAt, s.fleet("demo-drone-2")!!.drone.let { it.relXCm to it.relYCm })
+            assertEquals(false, s.fleet("demo-drone-2")!!.drone.isFlying)
+            assertEquals(0.0, s.fleet("demo-drone-2")!!.drone.heightCm)
+            assertEquals(true, s.fleet("demo-drone-1")!!.drone.isFlying)
+            // demo-drone-1 is not held: Resume search is refused as the real ground refuses it.
+            s.client.resumeHeldDrone("demo-drone-1")
+            eventually("refused") { s.all<ManualReply>().any { it.droneId == "demo-drone-1" && it.ok == false } }
+            assertEquals("not_manual", s.all<ManualReply>().first { it.droneId == "demo-drone-1" }.reason?.raw)
+            assertEquals(listOf("drone_command"), s.connection.acknowledged)
+        }
+    }
+
+    @Test
+    fun `the held drone can be resumed and stays resumed`() = runBlocking {
+        Session().use { s ->
+            val held = DemoFixtures.scenario.held!!
+            eventually("connected") { s.client.connection.value is ConnectionStatus.Connected }
+            s.play(held.fromMs + 500)
+            eventually("held") { s.client.board.value.controlMode(held.droneId) is ControlModeDisplay.Held }
+            assertTrue(s.client.board.value.canResumeSearch(held.droneId))
+            s.client.resumeHeldDrone(held.droneId)
+            eventually("resumed") {
+                s.all<ManualReply>().any { it.droneId == held.droneId && it.kind == ManualReply.Kind.RESULT && it.ok == true }
             }
-            s.client.resumeHeldDrone("drone-1")
-            eventually("resume acknowledged") { s.connection.acknowledged == listOf("drone_command", "manual_resume_search") }
+            eventually("flying its plan") { s.client.board.value.controlMode(held.droneId) == ControlModeDisplay.Autonomous(true) }
+            // The replayed statuses still say held; the demo keeps the operator's resume.
+            s.play(8_000)
+            assertEquals(ControlModeDisplay.Autonomous(true), s.client.board.value.controlMode(held.droneId))
+            assertEquals(listOf("manual_resume_search"), s.connection.acknowledged)
+            // A state request during the demo is answered with the current manual state, not the one from the start.
+            assertFalse(s.client.board.value.canResumeSearch(held.droneId))
+        }
+    }
+
+    @Test
+    fun `after the replay, and after LAND ALL, the current fleet status keeps coming`() = runBlocking {
+        Session().use { s ->
+            eventually("connected") { s.client.connection.value is ConnectionStatus.Connected }
+            s.play(DemoFixtures.scenario.durationMs + 1_000)
+            eventually("replay finished") { s.connection.finished }
+            val before = s.all<FleetStatus>().size
+            s.play(DemoGroundPort.STATUS_EVERY_MS * 5)
+            eventually("statuses keep coming") { s.all<FleetStatus>().size >= before + 4 }
+        }
+        Session().use { s ->
+            eventually("connected") { s.client.connection.value is ConnectionStatus.Connected }
+            s.play(8_000)
+            s.client.landAll()
+            eventually("acknowledged") { s.all<LandAllAck>().isNotEmpty() }
+            // The replay notices LAND ALL when its next step is due (a step every 4 s at most).
+            s.play(DemoGroundPort.STATUS_EVERY_MS + 1_000)
+            eventually("replay ended by LAND ALL") { s.connection.finished }
+            val before = s.all<FleetStatus>().size
+            s.play(DemoGroundPort.STATUS_EVERY_MS * 5)
+            eventually("statuses keep coming") { s.all<FleetStatus>().size >= before + 4 }
+            assertTrue(s.client.board.value.drones.values.filterIsInstance<DroneRecord.Fleet>().all { it.drone.isFlying == false })
+        }
+    }
+
+    @Test
+    fun `no replayed status that flies arrives after the landed status of a demo LAND ALL`() = runBlocking {
+        // The replay runs on its own while LAND ALL is answered from the client's send; both put frames in the
+        // outbox under one lock, so the fleet is always read in the order its state changed.
+        repeat(12) { round ->
+            Session().use { s ->
+                eventually("connected") { s.client.connection.value is ConnectionStatus.Connected }
+                s.play(6_000)
+                val replay = launch(Dispatchers.Default) { s.play(DemoFixtures.scenario.durationMs) }
+                delay((round % 4).toLong())
+                s.client.landAll()
+                replay.join()
+                eventually("acknowledged") { s.all<LandAllAck>().isNotEmpty() }
+                s.play(1_000)
+                val events = s.events.toList()
+                val ackAt = events.indexOfFirst { it is LandAllAck }
+                val after = events.drop(ackAt).filterIsInstance<FleetStatus.Fleet>()
+                assertTrue(after.isNotEmpty())
+                for (status in after) {
+                    assertTrue("round $round: a flying status came after LAND ALL", status.drones.values.none { it.isFlying == true })
+                }
+            }
         }
     }
 

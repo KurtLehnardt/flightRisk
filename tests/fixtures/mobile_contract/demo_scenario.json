@@ -1,9 +1,9 @@
 {
   "_meta": {
-    "description": "A timed two-drone mission for the phones' demo mode: the fleet on the ground, the plan, the start, the drones flying their lanes, an obstacle cut, a detection, a person-match alert that later gets a reasoning verdict and an upgrade, the operator's confirm on the laptop, LAND ALL and the landing. Every payload comes from the real ground code or from another fixture file.",
-    "duration_ms": 58000,
+    "description": "A timed two-drone mission for the phones' demo mode: the fleet on the ground, the plan, the start, the drones flying their lanes, an obstacle cut, a detection, a person-match alert that later gets a reasoning verdict and an upgrade, the operator's confirm on the laptop, a drone left HELD when the laptop's browser went away, LAND ALL and the landing. Every payload comes from the real ground code or from another fixture file; every id starts with demo-.",
+    "duration_ms": 66000,
     "file": "demo_scenario.json",
-    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "generated_at_commit": "1dfd8e1b7e5af315ab1b03f489bf4c4873ef3003",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "FleetSupervisor.handle_control",
@@ -21,17 +21,22 @@
   "cases": {
     "scenario": {
       "direction": "reference",
-      "notes": "Demo mode only. A phone replays steps in order on its own clock (at_ms from the start of the demo), each as if the ground had sent that Socket.IO event. It answers get_detection_profiles, get_ceiling_settings, get_reasoning_provider and get_manual_status from state, and get_fleet_status with the latest fleet_status and fleet_plan it replayed. It answers land_all, drone_command and manual_resume_search locally with the events in replies (drone_command and manual_resume_search with drone_id replaced by the commanded drone). After the last step, or after a demo LAND ALL, landed_fleet_status is the fleet at rest. In demo mode a phone never opens a network connection and never sends a command anywhere.",
+      "notes": "Demo mode only. A phone replays steps in order on its own clock (at_ms from the start of the demo), each as if the ground had sent that Socket.IO event. It answers get_detection_profiles, get_ceiling_settings, get_reasoning_provider and get_manual_status from state, and get_fleet_status with the latest fleet_status and fleet_plan it replayed. It answers land_all, drone_command and manual_resume_search locally with the events in replies (drone_command and manual_resume_search with drone_id replaced by the commanded drone). held names the drone that hovers HELD with nobody controlling it, from from_ms until LAND ALL at until_ms, so Resume search can be tried. After the last step, or after a demo LAND ALL, landed_fleet_status is the fleet at rest, and a phone keeps sending the current fleet status. Every drone, alert and track id starts with demo-, so it can never be taken for a real one. In demo mode a phone never opens a network connection and never sends a command anywhere.",
       "payload": {
+        "held": {
+          "drone_id": "demo-drone-2",
+          "from_ms": 34000,
+          "until_ms": 54000
+        },
         "landed_fleet_status": {
           "drones": {
-            "drone-1": {
+            "demo-drone-1": {
               "acked": true,
               "alt_cm": 100,
               "battery": 87,
               "connected": true,
               "control_mode": "autonomous",
-              "drone_id": "drone-1",
+              "drone_id": "demo-drone-1",
               "drone_link_detail": null,
               "drone_link_ok": true,
               "edge_control_mode": "autonomous",
@@ -63,13 +68,13 @@
               "synced": true,
               "uncovered_cm": 600
             },
-            "drone-2": {
+            "demo-drone-2": {
               "acked": true,
               "alt_cm": 130,
               "battery": 87,
               "connected": true,
               "control_mode": "autonomous",
-              "drone_id": "drone-2",
+              "drone_id": "demo-drone-2",
               "drone_link_detail": null,
               "drone_link_ok": true,
               "edge_control_mode": "autonomous",
@@ -80,12 +85,17 @@
               "lanes_total": null,
               "link_age_s": 0.1,
               "lost": false,
-              "manual_last": null,
+              "manual_last": {
+                "action": "take_control",
+                "detail": null,
+                "ok": true,
+                "reason": null
+              },
               "manual_supported": true,
               "offset_ms": 250.0,
               "orphan_land_in_s": null,
-              "rel_x_cm": 325.0,
-              "rel_y_cm": 300.0,
+              "rel_x_cm": 290.0,
+              "rel_y_cm": 400.0,
               "rtt_ms": 0.0,
               "skew_ms": null,
               "synced": true
@@ -99,7 +109,7 @@
               "cut_seq": 1,
               "direction": "forward",
               "distance_cm": 300,
-              "drone_id": "drone-1",
+              "drone_id": "demo-drone-1",
               "end_x_cm": 0,
               "end_y_cm": 400,
               "index": 0,
@@ -113,7 +123,7 @@
               "cut_seq": 1,
               "direction": "back",
               "distance_cm": 300,
-              "drone_id": "drone-1",
+              "drone_id": "demo-drone-1",
               "end_x_cm": 75,
               "end_y_cm": 400,
               "index": 2,
@@ -132,7 +142,7 @@
               "payload": {
                 "action": "land",
                 "detail": null,
-                "drone_id": "drone-1",
+                "drone_id": "demo-drone-1",
                 "ok": true,
                 "reason": null
               }
@@ -142,7 +152,7 @@
               "payload": {
                 "action": "land",
                 "detail": null,
-                "drone_id": "drone-1",
+                "drone_id": "demo-drone-1",
                 "ok": true,
                 "reason": null
               }
@@ -172,7 +182,7 @@
               "payload": {
                 "action": "resume_search",
                 "detail": null,
-                "drone_id": "drone-2",
+                "drone_id": "demo-drone-2",
                 "ok": true,
                 "reason": null
               }
@@ -183,7 +193,7 @@
                 "action": "resume_search",
                 "control_mode": "autonomous",
                 "detail": null,
-                "drone_id": "drone-2",
+                "drone_id": "demo-drone-2",
                 "ok": true,
                 "reason": null
               }
@@ -196,7 +206,7 @@
             "drones": [
               {
                 "default_slot_cm": 100,
-                "drone_id": "drone-1",
+                "drone_id": "demo-drone-1",
                 "edge": {
                   "ceiling_cm": 200.0,
                   "flying": false,
@@ -214,7 +224,7 @@
               },
               {
                 "default_slot_cm": 130,
-                "drone_id": "drone-2",
+                "drone_id": "demo-drone-2",
                 "edge": {
                   "ceiling_cm": 200.0,
                   "flying": false,
@@ -249,11 +259,11 @@
             "controls_enabled": false,
             "controls_note": "This ground station is the standby. Edges take detection profile changes only from the leader ground; change them there.",
             "drones": {
-              "drone-1": {
+              "demo-drone-1": {
                 "active": "default",
                 "desired": null,
                 "detector_ok": null,
-                "drone_id": "drone-1",
+                "drone_id": "demo-drone-1",
                 "fallback": false,
                 "fallback_reason": null,
                 "flying": false,
@@ -316,14 +326,14 @@
           "manual_status": {
             "controlled": null,
             "drones": {
-              "drone-1": {
+              "demo-drone-1": {
                 "control_mode": "autonomous",
                 "edge_control_mode": "autonomous",
                 "manual_last": null,
                 "manual_supported": true,
                 "orphan_land_in_s": null
               },
-              "drone-2": {
+              "demo-drone-2": {
                 "control_mode": "autonomous",
                 "edge_control_mode": "autonomous",
                 "manual_last": null,
@@ -366,13 +376,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": false,
                   "alt_cm": null,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -393,13 +403,13 @@
                   "skew_ms": null,
                   "synced": false
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": false,
                   "alt_cm": null,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -442,7 +452,7 @@
               "zones": [
                 {
                   "alt_cm": 100,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "h_cm": 400,
                   "lanes": [
                     {
@@ -465,7 +475,7 @@
                 },
                 {
                   "alt_cm": 130,
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "h_cm": 400,
                   "lanes": [
                     {
@@ -494,13 +504,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": false,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -521,13 +531,13 @@
                   "skew_ms": null,
                   "synced": true
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": false,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -567,13 +577,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -594,13 +604,13 @@
                   "skew_ms": null,
                   "synced": true
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -632,13 +642,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -670,13 +680,13 @@
                   "synced": true,
                   "uncovered_cm": 0
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -708,13 +718,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -746,13 +756,13 @@
                   "synced": true,
                   "uncovered_cm": 0
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -783,8 +793,8 @@
             "at_ms": 14000,
             "event": "fleet_event",
             "payload": {
-              "detail": "drone-1: lane 0 stopped at (0, 100) cm, 300 cm not searched (obstacle)",
-              "drone_id": "drone-1",
+              "detail": "demo-drone-1: lane 0 stopped at (0, 100) cm, 300 cm not searched (obstacle)",
+              "drone_id": "demo-drone-1",
               "event": "lane_blocked",
               "lane_index": 0,
               "reason": "obstacle",
@@ -798,13 +808,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -836,13 +846,13 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -872,14 +882,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -887,14 +897,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -906,13 +916,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -944,13 +954,13 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -980,14 +990,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -995,14 +1005,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1014,13 +1024,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1052,13 +1062,13 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1088,14 +1098,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1103,14 +1113,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1122,9 +1132,9 @@
             "event": "fleet_detection",
             "payload": {
               "count": 1,
-              "drone_id": "drone-2",
+              "drone_id": "demo-drone-2",
               "drone_ids": [
-                "drone-2"
+                "demo-drone-2"
               ],
               "id": 1,
               "rel_x_cm": 250.0,
@@ -1139,13 +1149,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1177,13 +1187,13 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1213,14 +1223,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1228,14 +1238,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1246,7 +1256,7 @@
             "at_ms": 26500,
             "event": "match_alert",
             "payload": {
-              "alert_id": "00000000000040008000000000000038",
+              "alert_id": "demo-alert-1",
               "alert_level": "possible_match",
               "face_score": 0.0,
               "gemma_confidence": "pending",
@@ -1256,8 +1266,71 @@
               "score": 0.86,
               "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
               "time": "10:00:21",
-              "track_id": "8_7",
+              "track_id": "demo-track-1",
               "type": "edge"
+            }
+          },
+          {
+            "at_ms": 30000,
+            "event": "manual_status",
+            "payload": {
+              "controlled": "demo-drone-2",
+              "drones": {
+                "demo-drone-1": {
+                  "control_mode": "autonomous",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                },
+                "demo-drone-2": {
+                  "control_mode": "manual",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                }
+              }
+            }
+          },
+          {
+            "at_ms": 30000,
+            "event": "manual_result",
+            "payload": {
+              "action": "take_control",
+              "control_mode": "manual",
+              "detail": null,
+              "drone_id": "demo-drone-2",
+              "ok": true,
+              "reason": null
+            }
+          },
+          {
+            "at_ms": 30000,
+            "event": "manual_status",
+            "payload": {
+              "controlled": "demo-drone-2",
+              "drones": {
+                "demo-drone-1": {
+                  "control_mode": "autonomous",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                },
+                "demo-drone-2": {
+                  "control_mode": "manual",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                }
+              }
             }
           },
           {
@@ -1265,13 +1338,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1303,16 +1376,16 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "control_mode": "manual",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
+                  "edge_control_mode": "manual",
                   "heading_deg": 0.0,
                   "height_cm": 100,
                   "is_flying": true,
@@ -1320,18 +1393,23 @@
                   "lanes_total": 3,
                   "link_age_s": 0.1,
                   "lost": false,
-                  "manual_last": null,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
                   "manual_supported": true,
                   "offset_ms": 250.0,
                   "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
+                  "rel_x_cm": 290.0,
                   "rel_y_cm": 400.0,
                   "rtt_ms": 0.0,
                   "skew_ms": null,
                   "synced": true
                 }
               },
-              "manual_controlled": null,
+              "manual_controlled": "demo-drone-2",
               "net": "station",
               "synced": true,
               "uncovered": [
@@ -1339,14 +1417,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1354,14 +1432,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1372,13 +1450,13 @@
             "at_ms": 32500,
             "event": "reasoning_result",
             "payload": {
-              "alert_id": "00000000000040008000000000000038",
+              "alert_id": "demo-alert-1",
               "result": {
                 "confidence": "high",
                 "match": true,
                 "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo."
               },
-              "track_id": "8_7",
+              "track_id": "demo-track-1",
               "type": "analyze"
             }
           },
@@ -1386,10 +1464,38 @@
             "at_ms": 32600,
             "event": "alert_upgrade",
             "payload": {
-              "alert_id": "00000000000040008000000000000038",
+              "alert_id": "demo-alert-1",
               "new_level": "confirmed_match",
               "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo.",
-              "track_id": "8_7"
+              "track_id": "demo-track-1"
+            }
+          },
+          {
+            "at_ms": 34000,
+            "event": "manual_status",
+            "payload": {
+              "controlled": null,
+              "drones": {
+                "demo-drone-1": {
+                  "control_mode": "autonomous",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                },
+                "demo-drone-2": {
+                  "control_mode": "held",
+                  "edge_control_mode": "manual",
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "orphan_land_in_s": 120
+                }
+              }
             }
           },
           {
@@ -1397,13 +1503,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1435,29 +1541,34 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "control_mode": "held",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
+                  "edge_control_mode": "held",
                   "heading_deg": 0.0,
                   "height_cm": 100,
                   "is_flying": true,
-                  "lane_index": 2,
+                  "lane_index": 1,
                   "lanes_total": 3,
                   "link_age_s": 0.1,
                   "lost": false,
-                  "manual_last": null,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
                   "manual_supported": true,
                   "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 350.0,
+                  "orphan_land_in_s": 120,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
                   "rtt_ms": 0.0,
                   "skew_ms": null,
                   "synced": true
@@ -1471,14 +1582,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1486,14 +1597,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1505,13 +1616,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1543,29 +1654,34 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "control_mode": "held",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
+                  "edge_control_mode": "held",
                   "heading_deg": 0.0,
                   "height_cm": 100,
                   "is_flying": true,
-                  "lane_index": 2,
+                  "lane_index": 1,
                   "lanes_total": 3,
                   "link_age_s": 0.1,
                   "lost": false,
-                  "manual_last": null,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
                   "manual_supported": true,
                   "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 300.0,
+                  "orphan_land_in_s": 116,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
                   "rtt_ms": 0.0,
                   "skew_ms": null,
                   "synced": true
@@ -1579,14 +1695,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1594,14 +1710,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1613,13 +1729,13 @@
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -1651,29 +1767,34 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "control_mode": "held",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
+                  "edge_control_mode": "held",
                   "heading_deg": 0.0,
                   "height_cm": 100,
                   "is_flying": true,
-                  "lane_index": 2,
+                  "lane_index": 1,
                   "lanes_total": 3,
                   "link_age_s": 0.1,
                   "lost": false,
-                  "manual_last": null,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
                   "manual_supported": true,
                   "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 300.0,
+                  "orphan_land_in_s": 112,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
                   "rtt_ms": 0.0,
                   "skew_ms": null,
                   "synced": true
@@ -1687,14 +1808,14 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
                   "kind": "segment",
                   "reason": "obstacle",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 0,
                   "y_cm": 100
                 },
@@ -1702,14 +1823,14 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,
                   "kind": "segment",
                   "reason": "skipped",
                   "status": "waiting",
-                  "waiting_for": "drone-1",
+                  "waiting_for": "demo-drone-1",
                   "x_cm": 75,
                   "y_cm": 100
                 }
@@ -1721,10 +1842,10 @@
             "event": "match_alert_resolved",
             "payload": {
               "action": "confirm",
-              "alert_id": "00000000000040008000000000000038",
+              "alert_id": "demo-alert-1",
               "ok": true,
               "state": {
-                "alert_id": "00000000000040008000000000000038",
+                "alert_id": "demo-alert-1",
                 "phase": "resolved",
                 "renotify_count": 0,
                 "resolution": "confirmed"
@@ -1733,6 +1854,260 @@
           },
           {
             "at_ms": 46000,
+            "event": "fleet_status",
+            "payload": {
+              "drones": {
+                "demo-drone-1": {
+                  "acked": true,
+                  "alt_cm": 100,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-1",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 100,
+                  "is_flying": true,
+                  "lane_index": 2,
+                  "lanes_total": 3,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "obstacle_latency_ms": 220,
+                  "obstacle_person_cue": null,
+                  "obstacle_sensing": "stepped",
+                  "obstacle_sensor_ok": true,
+                  "obstacle_state": "clear",
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "reflights": {
+                    "blocked_again": 0,
+                    "offered": 0,
+                    "reflown": 0
+                  },
+                  "rel_x_cm": 75.0,
+                  "rel_y_cm": 10.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true,
+                  "uncovered_cm": 600
+                },
+                "demo-drone-2": {
+                  "acked": true,
+                  "alt_cm": 130,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "held",
+                  "drone_id": "demo-drone-2",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "held",
+                  "heading_deg": 0.0,
+                  "height_cm": 100,
+                  "is_flying": true,
+                  "lane_index": 1,
+                  "lanes_total": 3,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": 108,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true
+                }
+              },
+              "manual_controlled": null,
+              "net": "station",
+              "synced": true,
+              "uncovered": [
+                {
+                  "cut_seq": 1,
+                  "direction": "forward",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 0,
+                  "end_y_cm": 400,
+                  "index": 0,
+                  "kind": "segment",
+                  "reason": "obstacle",
+                  "status": "waiting",
+                  "waiting_for": "demo-drone-1",
+                  "x_cm": 0,
+                  "y_cm": 100
+                },
+                {
+                  "cut_seq": 1,
+                  "direction": "back",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 75,
+                  "end_y_cm": 400,
+                  "index": 2,
+                  "kind": "segment",
+                  "reason": "skipped",
+                  "status": "waiting",
+                  "waiting_for": "demo-drone-1",
+                  "x_cm": 75,
+                  "y_cm": 100
+                }
+              ]
+            }
+          },
+          {
+            "at_ms": 50000,
+            "event": "fleet_status",
+            "payload": {
+              "drones": {
+                "demo-drone-1": {
+                  "acked": true,
+                  "alt_cm": 100,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-1",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 100,
+                  "is_flying": true,
+                  "lane_index": 2,
+                  "lanes_total": 3,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "obstacle_latency_ms": 220,
+                  "obstacle_person_cue": null,
+                  "obstacle_sensing": "stepped",
+                  "obstacle_sensor_ok": true,
+                  "obstacle_state": "clear",
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "reflights": {
+                    "blocked_again": 0,
+                    "offered": 0,
+                    "reflown": 0
+                  },
+                  "rel_x_cm": 75.0,
+                  "rel_y_cm": 10.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true,
+                  "uncovered_cm": 600
+                },
+                "demo-drone-2": {
+                  "acked": true,
+                  "alt_cm": 130,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "held",
+                  "drone_id": "demo-drone-2",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "held",
+                  "heading_deg": 0.0,
+                  "height_cm": 100,
+                  "is_flying": true,
+                  "lane_index": 1,
+                  "lanes_total": 3,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": 104,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true
+                }
+              },
+              "manual_controlled": null,
+              "net": "station",
+              "synced": true,
+              "uncovered": [
+                {
+                  "cut_seq": 1,
+                  "direction": "forward",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 0,
+                  "end_y_cm": 400,
+                  "index": 0,
+                  "kind": "segment",
+                  "reason": "obstacle",
+                  "status": "waiting",
+                  "waiting_for": "demo-drone-1",
+                  "x_cm": 0,
+                  "y_cm": 100
+                },
+                {
+                  "cut_seq": 1,
+                  "direction": "back",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 75,
+                  "end_y_cm": 400,
+                  "index": 2,
+                  "kind": "segment",
+                  "reason": "skipped",
+                  "status": "waiting",
+                  "waiting_for": "demo-drone-1",
+                  "x_cm": 75,
+                  "y_cm": 100
+                }
+              ]
+            }
+          },
+          {
+            "at_ms": 54000,
+            "event": "manual_status",
+            "payload": {
+              "controlled": null,
+              "drones": {
+                "demo-drone-1": {
+                  "control_mode": "autonomous",
+                  "edge_control_mode": "autonomous",
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                },
+                "demo-drone-2": {
+                  "control_mode": "held",
+                  "edge_control_mode": "held",
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "orphan_land_in_s": null
+                }
+              }
+            }
+          },
+          {
+            "at_ms": 54000,
             "event": "fleet_event",
             "payload": {
               "detail": "sent to all",
@@ -1740,12 +2115,12 @@
             }
           },
           {
-            "at_ms": 50000,
+            "at_ms": 58000,
             "event": "fleet_event",
             "payload": {
               "cut_seq": 1,
-              "detail": "drone-1's blocked segment (cut 1) not re-flown: LAND ALL issued",
-              "drone_id": "drone-1",
+              "detail": "demo-drone-1's blocked segment (cut 1) not re-flown: LAND ALL issued",
+              "drone_id": "demo-drone-1",
               "event": "reflight_failed",
               "lanes": [
                 {
@@ -1771,229 +2146,17 @@
             }
           },
           {
-            "at_ms": 50000,
-            "event": "fleet_status",
-            "payload": {
-              "drones": {
-                "drone-1": {
-                  "acked": true,
-                  "alt_cm": 100,
-                  "battery": 87,
-                  "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-1",
-                  "drone_link_detail": null,
-                  "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
-                  "heading_deg": 0.0,
-                  "height_cm": 0,
-                  "is_flying": false,
-                  "lane_index": null,
-                  "lanes_total": null,
-                  "link_age_s": 0.1,
-                  "lost": false,
-                  "manual_last": null,
-                  "manual_supported": true,
-                  "obstacle_latency_ms": 220,
-                  "obstacle_person_cue": null,
-                  "obstacle_sensing": "stepped",
-                  "obstacle_sensor_ok": true,
-                  "obstacle_state": "clear",
-                  "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "reflights": {
-                    "blocked_again": 0,
-                    "offered": 0,
-                    "reflown": 0
-                  },
-                  "rel_x_cm": 75.0,
-                  "rel_y_cm": 10.0,
-                  "rtt_ms": 0.0,
-                  "skew_ms": null,
-                  "synced": true,
-                  "uncovered_cm": 600
-                },
-                "drone-2": {
-                  "acked": true,
-                  "alt_cm": 130,
-                  "battery": 87,
-                  "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
-                  "drone_link_detail": null,
-                  "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
-                  "heading_deg": 0.0,
-                  "height_cm": 0,
-                  "is_flying": false,
-                  "lane_index": null,
-                  "lanes_total": null,
-                  "link_age_s": 0.1,
-                  "lost": false,
-                  "manual_last": null,
-                  "manual_supported": true,
-                  "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 300.0,
-                  "rtt_ms": 0.0,
-                  "skew_ms": null,
-                  "synced": true
-                }
-              },
-              "manual_controlled": null,
-              "net": "station",
-              "synced": true,
-              "uncovered": [
-                {
-                  "cut_seq": 1,
-                  "direction": "forward",
-                  "distance_cm": 300,
-                  "drone_id": "drone-1",
-                  "end_x_cm": 0,
-                  "end_y_cm": 400,
-                  "index": 0,
-                  "kind": "segment",
-                  "reason": "LAND ALL issued",
-                  "status": "failed",
-                  "x_cm": 0,
-                  "y_cm": 100
-                },
-                {
-                  "cut_seq": 1,
-                  "direction": "back",
-                  "distance_cm": 300,
-                  "drone_id": "drone-1",
-                  "end_x_cm": 75,
-                  "end_y_cm": 400,
-                  "index": 2,
-                  "kind": "segment",
-                  "reason": "LAND ALL issued",
-                  "status": "failed",
-                  "x_cm": 75,
-                  "y_cm": 100
-                }
-              ]
-            }
-          },
-          {
-            "at_ms": 54000,
-            "event": "fleet_status",
-            "payload": {
-              "drones": {
-                "drone-1": {
-                  "acked": true,
-                  "alt_cm": 100,
-                  "battery": 87,
-                  "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-1",
-                  "drone_link_detail": null,
-                  "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
-                  "heading_deg": 0.0,
-                  "height_cm": 0,
-                  "is_flying": false,
-                  "lane_index": null,
-                  "lanes_total": null,
-                  "link_age_s": 0.1,
-                  "lost": false,
-                  "manual_last": null,
-                  "manual_supported": true,
-                  "obstacle_latency_ms": 220,
-                  "obstacle_person_cue": null,
-                  "obstacle_sensing": "stepped",
-                  "obstacle_sensor_ok": true,
-                  "obstacle_state": "clear",
-                  "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "reflights": {
-                    "blocked_again": 0,
-                    "offered": 0,
-                    "reflown": 0
-                  },
-                  "rel_x_cm": 75.0,
-                  "rel_y_cm": 10.0,
-                  "rtt_ms": 0.0,
-                  "skew_ms": null,
-                  "synced": true,
-                  "uncovered_cm": 600
-                },
-                "drone-2": {
-                  "acked": true,
-                  "alt_cm": 130,
-                  "battery": 87,
-                  "connected": true,
-                  "control_mode": "autonomous",
-                  "drone_id": "drone-2",
-                  "drone_link_detail": null,
-                  "drone_link_ok": true,
-                  "edge_control_mode": "autonomous",
-                  "heading_deg": 0.0,
-                  "height_cm": 0,
-                  "is_flying": false,
-                  "lane_index": null,
-                  "lanes_total": null,
-                  "link_age_s": 0.1,
-                  "lost": false,
-                  "manual_last": null,
-                  "manual_supported": true,
-                  "offset_ms": 250.0,
-                  "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 300.0,
-                  "rtt_ms": 0.0,
-                  "skew_ms": null,
-                  "synced": true
-                }
-              },
-              "manual_controlled": null,
-              "net": "station",
-              "synced": true,
-              "uncovered": [
-                {
-                  "cut_seq": 1,
-                  "direction": "forward",
-                  "distance_cm": 300,
-                  "drone_id": "drone-1",
-                  "end_x_cm": 0,
-                  "end_y_cm": 400,
-                  "index": 0,
-                  "kind": "segment",
-                  "reason": "LAND ALL issued",
-                  "status": "failed",
-                  "x_cm": 0,
-                  "y_cm": 100
-                },
-                {
-                  "cut_seq": 1,
-                  "direction": "back",
-                  "distance_cm": 300,
-                  "drone_id": "drone-1",
-                  "end_x_cm": 75,
-                  "end_y_cm": 400,
-                  "index": 2,
-                  "kind": "segment",
-                  "reason": "LAND ALL issued",
-                  "status": "failed",
-                  "x_cm": 75,
-                  "y_cm": 100
-                }
-              ]
-            }
-          },
-          {
             "at_ms": 58000,
             "event": "fleet_status",
             "payload": {
               "drones": {
-                "drone-1": {
+                "demo-drone-1": {
                   "acked": true,
                   "alt_cm": 100,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -2025,13 +2188,13 @@
                   "synced": true,
                   "uncovered_cm": 600
                 },
-                "drone-2": {
+                "demo-drone-2": {
                   "acked": true,
                   "alt_cm": 130,
                   "battery": 87,
                   "connected": true,
                   "control_mode": "autonomous",
-                  "drone_id": "drone-2",
+                  "drone_id": "demo-drone-2",
                   "drone_link_detail": null,
                   "drone_link_ok": true,
                   "edge_control_mode": "autonomous",
@@ -2042,12 +2205,17 @@
                   "lanes_total": null,
                   "link_age_s": 0.1,
                   "lost": false,
-                  "manual_last": null,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
                   "manual_supported": true,
                   "offset_ms": 250.0,
                   "orphan_land_in_s": null,
-                  "rel_x_cm": 325.0,
-                  "rel_y_cm": 300.0,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
                   "rtt_ms": 0.0,
                   "skew_ms": null,
                   "synced": true
@@ -2061,7 +2229,7 @@
                   "cut_seq": 1,
                   "direction": "forward",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 0,
                   "end_y_cm": 400,
                   "index": 0,
@@ -2075,7 +2243,229 @@
                   "cut_seq": 1,
                   "direction": "back",
                   "distance_cm": 300,
-                  "drone_id": "drone-1",
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 75,
+                  "end_y_cm": 400,
+                  "index": 2,
+                  "kind": "segment",
+                  "reason": "LAND ALL issued",
+                  "status": "failed",
+                  "x_cm": 75,
+                  "y_cm": 100
+                }
+              ]
+            }
+          },
+          {
+            "at_ms": 62000,
+            "event": "fleet_status",
+            "payload": {
+              "drones": {
+                "demo-drone-1": {
+                  "acked": true,
+                  "alt_cm": 100,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-1",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 0,
+                  "is_flying": false,
+                  "lane_index": null,
+                  "lanes_total": null,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "obstacle_latency_ms": 220,
+                  "obstacle_person_cue": null,
+                  "obstacle_sensing": "stepped",
+                  "obstacle_sensor_ok": true,
+                  "obstacle_state": "clear",
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "reflights": {
+                    "blocked_again": 0,
+                    "offered": 0,
+                    "reflown": 0
+                  },
+                  "rel_x_cm": 75.0,
+                  "rel_y_cm": 10.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true,
+                  "uncovered_cm": 600
+                },
+                "demo-drone-2": {
+                  "acked": true,
+                  "alt_cm": 130,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-2",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 0,
+                  "is_flying": false,
+                  "lane_index": null,
+                  "lanes_total": null,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true
+                }
+              },
+              "manual_controlled": null,
+              "net": "station",
+              "synced": true,
+              "uncovered": [
+                {
+                  "cut_seq": 1,
+                  "direction": "forward",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 0,
+                  "end_y_cm": 400,
+                  "index": 0,
+                  "kind": "segment",
+                  "reason": "LAND ALL issued",
+                  "status": "failed",
+                  "x_cm": 0,
+                  "y_cm": 100
+                },
+                {
+                  "cut_seq": 1,
+                  "direction": "back",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 75,
+                  "end_y_cm": 400,
+                  "index": 2,
+                  "kind": "segment",
+                  "reason": "LAND ALL issued",
+                  "status": "failed",
+                  "x_cm": 75,
+                  "y_cm": 100
+                }
+              ]
+            }
+          },
+          {
+            "at_ms": 66000,
+            "event": "fleet_status",
+            "payload": {
+              "drones": {
+                "demo-drone-1": {
+                  "acked": true,
+                  "alt_cm": 100,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-1",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 0,
+                  "is_flying": false,
+                  "lane_index": null,
+                  "lanes_total": null,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": null,
+                  "manual_supported": true,
+                  "obstacle_latency_ms": 220,
+                  "obstacle_person_cue": null,
+                  "obstacle_sensing": "stepped",
+                  "obstacle_sensor_ok": true,
+                  "obstacle_state": "clear",
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "reflights": {
+                    "blocked_again": 0,
+                    "offered": 0,
+                    "reflown": 0
+                  },
+                  "rel_x_cm": 75.0,
+                  "rel_y_cm": 10.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true,
+                  "uncovered_cm": 600
+                },
+                "demo-drone-2": {
+                  "acked": true,
+                  "alt_cm": 130,
+                  "battery": 87,
+                  "connected": true,
+                  "control_mode": "autonomous",
+                  "drone_id": "demo-drone-2",
+                  "drone_link_detail": null,
+                  "drone_link_ok": true,
+                  "edge_control_mode": "autonomous",
+                  "heading_deg": 0.0,
+                  "height_cm": 0,
+                  "is_flying": false,
+                  "lane_index": null,
+                  "lanes_total": null,
+                  "link_age_s": 0.1,
+                  "lost": false,
+                  "manual_last": {
+                    "action": "take_control",
+                    "detail": null,
+                    "ok": true,
+                    "reason": null
+                  },
+                  "manual_supported": true,
+                  "offset_ms": 250.0,
+                  "orphan_land_in_s": null,
+                  "rel_x_cm": 290.0,
+                  "rel_y_cm": 400.0,
+                  "rtt_ms": 0.0,
+                  "skew_ms": null,
+                  "synced": true
+                }
+              },
+              "manual_controlled": null,
+              "net": "station",
+              "synced": true,
+              "uncovered": [
+                {
+                  "cut_seq": 1,
+                  "direction": "forward",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
+                  "end_x_cm": 0,
+                  "end_y_cm": 400,
+                  "index": 0,
+                  "kind": "segment",
+                  "reason": "LAND ALL issued",
+                  "status": "failed",
+                  "x_cm": 0,
+                  "y_cm": 100
+                },
+                {
+                  "cut_seq": 1,
+                  "direction": "back",
+                  "distance_cm": 300,
+                  "drone_id": "demo-drone-1",
                   "end_x_cm": 75,
                   "end_y_cm": 400,
                   "index": 2,

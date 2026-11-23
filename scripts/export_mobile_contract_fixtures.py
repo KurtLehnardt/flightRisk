@@ -38,6 +38,7 @@ import copy
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1272,6 +1273,29 @@ def build_alert_verdicts() -> dict[str, Any]:
 #: sends fewer so the scenario stays small, and a phone keeps each one well inside its 30 s freshness limit).
 DEMO_STATUS_EVERY_MS = 4000
 
+#: Every id the demo sends starts with this, so a demo drone or alert can never be taken for a real one
+#: (the iOS demo uses the same ids).
+DEMO_ID_PREFIX = "demo-"
+DEMO_ALERT_ID = "demo-alert-1"
+DEMO_TRACK_ID = "demo-track-1"
+
+
+def _demo_ids(value: Any, exact: Mapping[str, str]) -> Any:
+    """*value* with the fixture ids renamed for the demo.
+
+    Strings (and dict keys) equal to a key of *exact* become its value; ``drone-1`` and ``drone-2`` inside a
+    longer text (a fleet_event detail, for example) become ``demo-drone-1`` and ``demo-drone-2``.
+    """
+    if isinstance(value, dict):
+        return {_demo_ids(key, exact): _demo_ids(item, exact) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_demo_ids(item, exact) for item in value]
+    if isinstance(value, str):
+        if value in exact:
+            return exact[value]
+        return re.sub(r"(?<![\w-])drone-([12])(?![\w])", DEMO_ID_PREFIX + r"drone-\1", value)
+    return value
+
 
 def build_demo_scenario(files: Mapping[str, dict]) -> dict:
     """A short two-drone mission, every payload from the real fleet supervisor and alert path.
@@ -1279,6 +1303,7 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
     The phone app replays ``steps`` on its own clock in demo mode; nothing here is typed by hand except the
     telemetry inputs (positions along the planned lanes) and the scripted reasoning reply.
     """
+    from flightrisk import fleet_protocol as fp
     from flightrisk.dashboard import recovery as recovery_module
     from flightrisk.edge import Detection, DetectionMessage
 
@@ -1290,7 +1315,7 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
     def payload_of(file_name: str, case_name: str) -> Any:
         return copy.deepcopy(files[file_name]["cases"][case_name]["payload"])
 
-    supervisor, _transport, sio, clock = _supervisor()
+    supervisor, transport, sio, clock = _supervisor()
     sensing = {"obstacle_sensing": "stepped", "obstacle_sensor_ok": True, "obstacle_state": "clear",
                "obstacle_latency_ms": 220}
 
@@ -1305,11 +1330,11 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
             add(at_ms, "fleet_status", supervisor.status_payload())
 
     def telemetry(drone_id: str, lane: int | None, x_cm: float, y_cm: float, *, flying: bool = True,
-                  height_cm: float = 100, **extra: Any) -> dict:
+                  height_cm: float = 100, mode: str = "autonomous", **extra: Any) -> dict:
         return _telemetry(
             drone_id, is_flying=flying, height_cm=height_cm if flying else 0, lane_index=lane,
             lanes_total=3 if lane is not None else None, rel_x_cm=float(x_cm), rel_y_cm=float(y_cm),
-            control_mode="autonomous", drone_link_ok=True, drone_link_age_s=0.2, drone_link_detail=None, **extra,
+            control_mode=mode, drone_link_ok=True, drone_link_age_s=0.2, drone_link_detail=None, **extra,
         )
 
     # On the ground, connected: the status a phone gets on connect, then the fleet.
@@ -1332,26 +1357,37 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
     emitted(since, 4000)
 
     # The drones fly their lanes. drone-1 meets an obstacle on lane 0 at 100 cm, sidesteps and flies on.
+    # drone-2 sees a person; at tick 6 the operator takes manual control of it on the laptop to look closer,
+    # and at tick 7 the laptop's browser goes away: drone-2 hovers HELD with the orphan countdown, nobody
+    # controls it, so a phone may resume its search (manual_resume_search) until LAND ALL lands it.
     cut = {"obstacle_seq": 1, "obstacle_cuts": [0, 100], "obstacle_cuts_total": 1, "obstacle_cut_reasons": "obstacle"}
     track = [
-        # (drone-1 lane, x, y, extra), (drone-2 lane, x, y)
-        ((0, 0, 0, sensing), (0, 0, 0)),
-        ((0, 0, 50, sensing), (0, 0, 100)),
-        ((0, 0, 100, dict(sensing, obstacle_state="blocked", **cut)), (0, 0, 200)),
-        ((1, 40, 100, dict(sensing, **cut)), (0, 0, 300)),
-        ((1, 75, 100, dict(sensing, **cut)), (0, 0, 400)),
-        ((2, 75, 70, dict(sensing, **cut)), (1, 40, 400)),
-        ((2, 75, 40, dict(sensing, **cut)), (1, 75, 400)),
-        ((2, 75, 20, dict(sensing, **cut)), (2, 75, 350)),
-        ((2, 75, 10, dict(sensing, **cut)), (2, 75, 300)),
-        ((2, 75, 10, dict(sensing, **cut)), (2, 75, 300)),
+        # (drone-1 lane, x, y, extra), (drone-2 lane, x, y, control mode)
+        ((0, 0, 0, sensing), (0, 0, 0, "autonomous")),
+        ((0, 0, 50, sensing), (0, 0, 100, "autonomous")),
+        ((0, 0, 100, dict(sensing, obstacle_state="blocked", **cut)), (0, 0, 200, "autonomous")),
+        ((1, 40, 100, dict(sensing, **cut)), (0, 0, 300, "autonomous")),
+        ((1, 75, 100, dict(sensing, **cut)), (0, 0, 400, "autonomous")),
+        ((2, 75, 70, dict(sensing, **cut)), (1, 40, 400, "autonomous")),
+        ((2, 75, 40, dict(sensing, **cut)), (1, 40, 400, "manual")),
+        ((2, 75, 20, dict(sensing, **cut)), (1, 40, 400, "held")),
+        ((2, 75, 10, dict(sensing, **cut)), (1, 40, 400, "held")),
+        ((2, 75, 10, dict(sensing, **cut)), (1, 40, 400, "held")),
+        ((2, 75, 10, dict(sensing, **cut)), (1, 40, 400, "held")),
+        ((2, 75, 10, dict(sensing, **cut)), (1, 40, 400, "held")),
     ]
     at_ms = 6000
     tick_ms: list[int] = []
-    for (lane_1, x_1, y_1, extra_1), (lane_2, x_2, y_2) in track:
+    for (lane_1, x_1, y_1, extra_1), (lane_2, x_2, y_2, mode_2) in track:
         clock.now += DEMO_STATUS_EVERY_MS / 1000.0
         since = len(sio.events)
-        supervisor.handle_control(telemetry("drone-2", lane_2, x_2, y_2))
+        if mode_2 == "manual":
+            supervisor.manual.take_control("drone-2", sid="laptop-browser")
+            hold = transport.sent_of("drone-2", "manual_hold")[-1]
+            supervisor.handle_control(fp.make_manual_ack("manual_hold", "drone-2", hold["cmd_id"], control_mode="manual"))
+        elif mode_2 == "held" and supervisor.manual.status()["controlled"] == "drone-2":
+            supervisor.manual.controller_disconnected("laptop-browser")
+        supervisor.handle_control(telemetry("drone-2", lane_2, x_2, y_2, mode=mode_2))
         supervisor.handle_control(telemetry("drone-1", lane_1, x_1, y_1, **extra_1))
         status_now(since, at_ms)
         tick_ms.append(at_ms)
@@ -1385,15 +1421,26 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
     since = len(sio.events)
     supervisor.land_all()
     emitted(since, at_ms)
+    held_from_ms = next(t for t, (_, (_, _, _, mode)) in zip(tick_ms, track) if mode == "held")
+    held_until_ms = at_ms
     for _ in range(3):
         at_ms += DEMO_STATUS_EVERY_MS
         clock.now += DEMO_STATUS_EVERY_MS / 1000.0
         since = len(sio.events)
-        supervisor.handle_control(telemetry("drone-2", None, 75, 300, flying=False))
+        supervisor.handle_control(telemetry("drone-2", None, 40, 400, flying=False))
         supervisor.handle_control(telemetry("drone-1", None, 75, 10, flying=False, **dict(sensing, **cut)))
         status_now(since, at_ms)
     landed = supervisor.status_payload()
     steps.sort(key=lambda step: step["at_ms"])  # stable: events at the same time keep their order
+    alert_step = next(step for step in steps if step["event"] == "match_alert")
+    demo_ids = {
+        "drone-1": DEMO_ID_PREFIX + "drone-1",
+        "drone-2": DEMO_ID_PREFIX + "drone-2",
+        alert_step["payload"]["alert_id"]: DEMO_ALERT_ID,
+    }
+    track_id = next((step["payload"].get("track_id") for step in steps if step["event"] == "reasoning_result"), None)
+    if track_id is not None:
+        demo_ids[str(track_id)] = DEMO_TRACK_ID
 
     scenario = {
         "steps": steps,
@@ -1418,12 +1465,15 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
             ],
         },
         "landed_fleet_status": landed,
+        "held": {"drone_id": "drone-2", "from_ms": held_from_ms, "until_ms": held_until_ms},
     }
+    scenario = _demo_ids(scenario, demo_ids)
     return document(
         "A timed two-drone mission for the phones' demo mode: the fleet on the ground, the plan, the start, the "
         "drones flying their lanes, an obstacle cut, a detection, a person-match alert that later gets a reasoning "
-        "verdict and an upgrade, the operator's confirm on the laptop, LAND ALL and the landing. Every payload "
-        "comes from the real ground code or from another fixture file.",
+        "verdict and an upgrade, the operator's confirm on the laptop, a drone left HELD when the laptop's browser "
+        "went away, LAND ALL and the landing. Every payload comes from the real ground code or from another "
+        "fixture file; every id starts with demo-.",
         ["FleetSupervisor.plan", "FleetSupervisor.start", "FleetSupervisor.handle_control",
          "FleetSupervisor.status_payload", "FleetSupervisor.handle_detections", "FleetSupervisor.land_all",
          "flightrisk.dashboard.app._edge_process_and_emit", "flightrisk.dashboard.alerts._gemma_worker",
@@ -1436,9 +1486,12 @@ def build_demo_scenario(files: Mapping[str, dict]) -> dict:
                 "get_ceiling_settings, get_reasoning_provider and get_manual_status from state, and "
                 "get_fleet_status with the latest fleet_status and fleet_plan it replayed. It answers land_all, "
                 "drone_command and manual_resume_search locally with the events in replies (drone_command and "
-                "manual_resume_search with drone_id replaced by the commanded drone). After the last step, or "
-                "after a demo LAND ALL, landed_fleet_status is the fleet at rest. In demo mode a phone never opens "
-                "a network connection and never sends a command anywhere.",
+                "manual_resume_search with drone_id replaced by the commanded drone). held names the drone that "
+                "hovers HELD with nobody controlling it, from from_ms until LAND ALL at until_ms, so Resume search "
+                "can be tried. After the last step, or after a demo LAND ALL, landed_fleet_status is the fleet at "
+                "rest, and a phone keeps sending the current fleet status. Every drone, alert and track id starts "
+                "with demo-, so it can never be taken for a real one. In demo mode a phone never opens a network "
+                "connection and never sends a command anywhere.",
             ),
         },
         duration_ms=steps[-1]["at_ms"],

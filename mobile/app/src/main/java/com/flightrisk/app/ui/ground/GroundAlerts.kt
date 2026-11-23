@@ -55,9 +55,12 @@ data class GroundAlertRow(
     val reminderText: String?,
     /** What the ground's AI check concluded, or null when the ground reported no check for this alert. */
     val verdict: VerdictKind? = null,
-    /** "AI check: likely the same person (high confidence)", a neutral note for an error or a skipped check, or null. */
+    /**
+     * "AI check: likely the same person (high confidence)", a neutral note for an error, a skipped check
+     * or a confidence word the app does not know ("AI check: unclear"), or null.
+     */
     val verdictText: String? = null,
-    /** True for a note (running, error, skipped, not run) rather than a conclusion: drawn in a muted colour, never as an error. */
+    /** True for a note (running, error, skipped, not run, unclear) rather than a conclusion: drawn in a muted colour, never as an error. */
     val verdictIsNote: Boolean = false,
     /** The model's reason, short and cleaned, for the row. Never shown for an error or a skipped check. */
     val rationaleText: String? = null,
@@ -67,6 +70,11 @@ data class GroundAlertRow(
     val confidenceText: String? = null,
     /** "Raised to Strong match by the AI check.", or null when the check did not raise the level. */
     val levelRaisedText: String? = null,
+    /**
+     * The full key of the alert in the log (the ground's whole `alert_id`, never the shortened [id]), so
+     * two alerts whose ids start alike keep their own expanded state on the screen.
+     */
+    val stateKey: String = id,
 ) {
     val accessibilitySummary: String
         get() = buildList {
@@ -110,7 +118,11 @@ class GroundAlertsLog {
 
         val verdict: VerdictKind? get() = AlertVerdicts.kindOf(verdictMatch, verdictConfidence)
 
-        fun setVerdict(match: Boolean?, confidence: ReasoningConfidence?, reasoning: String?) {
+        fun setVerdict(match: Boolean?, received: ReasoningConfidence?, reasoning: String?) {
+            // An unknown word is kept only cut short; it is never shown, but it must not pile up either.
+            val confidence = (received as? ReasoningConfidence.Unknown)?.let {
+                ReasoningConfidence.of(it.value.take(ReasoningConfidence.MAX_RAW_CHARS))
+            } ?: received
             val next = AlertVerdicts.kindOf(match, confidence) ?: return
             // A final verdict is never replaced by "running": a late reminder may still carry the pending copy.
             if (next == VerdictKind.PENDING && AlertVerdicts.isFinal(verdict)) return
@@ -207,6 +219,9 @@ class GroundAlertsLog {
         anonymous = 0
     }
 
+    /** The confidence word kept for the alert [key], for tests. */
+    internal fun storedConfidence(key: String): ReasoningConfidence? = entries[key]?.verdictConfidence
+
     val size: Int get() = entries.size
 
     /** Newest first. [stateStale] adds the "Not live" note. */
@@ -249,8 +264,13 @@ class GroundAlertsLog {
             verdictIsNote = verdict != null && !AlertVerdicts.showsRationale(verdict),
             rationaleText = rationale?.let { GroundText.shorten(it, MAX_ROW_RATIONALE) },
             detailRationaleText = rationale,
-            confidenceText = if (AlertVerdicts.showsRationale(verdict)) e.verdictConfidence?.let { "Confidence: " + GroundText.shorten(it.raw, 40) } else null,
+            confidenceText = if (AlertVerdicts.showsRationale(verdict)) {
+                e.verdictConfidence?.let { c -> GroundText.rationale(c.raw, 40)?.let { "Confidence: $it" } }
+            } else {
+                null
+            },
             levelRaisedText = if (e.raisedByCheck && e.level != null) "Raised to ${level(e.level)} by the AI check." else null,
+            stateKey = key,
         )
     }
 
@@ -268,7 +288,13 @@ class GroundAlertsLog {
         const val VERDICT_SKIPPED = "AI check skipped: the alert was answered first."
         const val VERDICT_NOT_RUN = "AI check not run for this alert."
 
-        /** The verdict line of a row, or null without a verdict. Errors and skipped checks read as neutral notes. */
+        /** A confidence word this app does not know: a neutral note, never the word and never a verdict. */
+        const val VERDICT_UNCLEAR = "AI check: unclear"
+
+        /**
+         * The verdict line of a row, or null without a verdict. Errors, skipped checks and unknown
+         * confidence words read as neutral notes; the ground's own words are never shown here.
+         */
         fun verdictText(kind: VerdictKind?, confidence: ReasoningConfidence?): String? {
             val suffix = when (confidence) {
                 ReasoningConfidence.High -> " (high confidence)"
@@ -285,7 +311,7 @@ class GroundAlertsLog {
                 VerdictKind.ERROR -> VERDICT_ERROR
                 VerdictKind.SKIPPED -> VERDICT_SKIPPED
                 VerdictKind.NOT_RUN -> VERDICT_NOT_RUN
-                VerdictKind.OTHER -> "AI check: " + GroundText.shorten(confidence?.raw, 40)
+                VerdictKind.OTHER -> VERDICT_UNCLEAR
             }
         }
 

@@ -188,13 +188,63 @@ class GroundAlertsVerdictTest {
     }
 
     @Test
-    fun `an unknown confidence word is shown by name`() {
+    fun `an unknown confidence word is a neutral unclear note, never a verdict`() {
         val log = log()
         log.onAlert(awaiting)
-        log.onReasoningResult(result("match").copy(confidence = ReasoningConfidence.of("fairly sure")))
+        log.onReasoningResult(result("match").copy(confidence = ReasoningConfidence.of("CONFIRMED MATCH 100%")))
         val row = log.row()
         assertEquals(VerdictKind.OTHER, row.verdict)
-        assertEquals("AI check: fairly sure", row.verdictText)
+        assertEquals("AI check: unclear", row.verdictText)
+        assertEquals(GroundAlertsLog.VERDICT_UNCLEAR, row.verdictText)
+        assertTrue("drawn as a muted note", row.verdictIsNote)
+        // Neither the word nor the model's reason is shown with it.
+        assertNull(row.rationaleText)
+        assertNull(row.detailRationaleText)
+        assertNull(row.confidenceText)
+        assertFalse(row.accessibilitySummary.contains("CONFIRMED"))
+        assertFalse(row.toString().contains("CONFIRMED MATCH"))
+    }
+
+    @Test
+    fun `an unknown confidence word is kept cut to 64 characters`() {
+        val log = log()
+        log.onAlert(awaiting)
+        val long = "w".repeat(50_000)
+        // Built directly, so the log's own cut is tested and not only the decoder's.
+        log.onReasoningResult(result("match").copy(confidence = ReasoningConfidence.Unknown(long)))
+        val stored = log.storedConfidence(awaiting.alertId!!)
+        assertEquals(ReasoningConfidence.MAX_RAW_CHARS, stored!!.raw.length)
+        assertEquals(GroundAlertsLog.VERDICT_UNCLEAR, log.row().verdictText)
+        // And from the wire: the decoder cuts the word too.
+        val wire = ServerEvents.decode(
+            "reasoning_result", """{"alert_id":"${awaiting.alertId}","type":"analyze","result":{"match":true,"confidence":"$long"}}""",
+        ) as ReasoningResult
+        assertEquals(ReasoningConfidence.MAX_RAW_CHARS, wire.confidence!!.raw.length)
+    }
+
+    @Test
+    fun `line and paragraph separators and C1 controls are folded out of shown text`() {
+        val hostile = "Same\u2028jacket\u2029and\u0085bag\u009b31m"
+        val r = GroundText.rationale(hostile)!!
+        assertEquals("Same jacket and bag 31m", r)
+        val s = GroundText.shorten(hostile)
+        for (c in listOf('\u2028', '\u2029', '\u0085', '\u009b')) {
+            assertFalse("rationale keeps U+%04X".format(c.code), r.contains(c))
+            assertFalse("shorten keeps U+%04X".format(c.code), s.contains(c))
+        }
+    }
+
+    @Test
+    fun `each row keeps the full alert id as its expanded-state key`() {
+        val log = log()
+        val prefix = "a".repeat(60)
+        log.onAlert(awaiting.copy(alertId = prefix + "-one"))
+        log.onAlert(awaiting.copy(alertId = prefix + "-two"))
+        val rows = log.ui(stateStale = false).rows
+        assertEquals(2, rows.size)
+        // The shown ids are cut short and look alike; the keys are the whole ids and differ.
+        assertEquals(rows[0].id, rows[1].id)
+        assertEquals(setOf(prefix + "-one", prefix + "-two"), rows.map { it.stateKey }.toSet())
     }
 
     @Test

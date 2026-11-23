@@ -19,7 +19,10 @@ import kotlinx.serialization.json.JsonPrimitive
  *   `reasoning_provider`, `manual_status`), keyed by event name;
  * - [replies]: the events the demo answers each operator command with, keyed by the command's event
  *   name (`land_all`, `drone_command`, `manual_resume_search`);
- * - [landedFleetStatus]: the fleet status once every drone has landed.
+ * - [landedFleetStatus]: the fleet status once every drone has landed;
+ * - [held]: the drone that hovers HELD with nobody controlling it, and when, so Resume search can be tried.
+ *
+ * Every drone, alert and track id in it starts with `demo-`, so a demo id can never be taken for a real one.
  *
  * Every payload is a contract payload, so the demo drives the same client, decoders and screens a real
  * ground does. Nothing here is ever sent anywhere.
@@ -29,7 +32,11 @@ class DemoScenario(
     val state: Map<String, JsonObject>,
     val replies: Map<String, List<Reply>>,
     val landedFleetStatus: JsonObject?,
+    val held: Held? = null,
 ) {
+    /** [droneId] hovers HELD from [fromMs] until LAND ALL at [untilMs] (times after the demo connects). */
+    data class Held(val droneId: String, val fromMs: Long, val untilMs: Long)
+
     /** One replayed event. */
     data class Step(val atMs: Long, val event: String, val payload: JsonObject)
 
@@ -87,7 +94,18 @@ class DemoScenario(
                     Reply(event, o["payload"] as? JsonObject ?: return@mapNotNull null)
                 }
             }
-            return DemoScenario(steps, state, replies, payload["landed_fleet_status"] as? JsonObject)
+            return DemoScenario(steps, state, replies, payload["landed_fleet_status"] as? JsonObject, held(payload["held"]))
+        }
+
+        private fun held(element: kotlinx.serialization.json.JsonElement?): Held? {
+            val o = element as? JsonObject ?: return null
+            val id = (o["drone_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: return null
+            fun time(key: String): Long? =
+                (o[key] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toDoubleOrNull()
+                    ?.takeIf { it.isFinite() && it >= 0 && it <= MAX_AT_MS && it == Math.floor(it) }?.toLong()
+            val from = time("from_ms") ?: return null
+            val until = time("until_ms") ?: return null
+            return if (from < until) Held(id, from, until) else null
         }
     }
 }

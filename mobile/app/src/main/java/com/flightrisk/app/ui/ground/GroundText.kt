@@ -37,16 +37,18 @@ object GroundText {
     fun shortId(id: String): String = shorten(id, MAX_ID_TEXT)
 
     // Bidirectional overrides and isolates could make a model's reason read differently from what it says.
-    private val BIDI_CONTROLS = Regex("[\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]")
+    // The line and paragraph separators (U+2028, U+2029) and NEL (U+0085) are line breaks the white space
+    // pattern below does not match, so they are folded here too.
+    private val BIDI_CONTROLS = Regex("[\\u0085\\u061C\\u200E\\u200F\\u2028\\u2029\\u202A-\\u202E\\u2066-\\u2069]")
 
     // An Anthropic API key, should a ground ever put one in an error text.
     private val CLAUDE_KEY = Regex("sk-ant-[A-Za-z0-9_-]+")
     private val SPACES = Regex("\\s+")
 
     /**
-     * The reason an AI check gave, made safe to show as plain text: cut to [max] characters, control and
-     * bidirectional override characters replaced, credentials and API keys removed, runs of white space
-     * folded. Null when nothing is left.
+     * The reason an AI check gave, made safe to show as plain text: cut to [max] characters, control,
+     * line separator and bidirectional override characters replaced, credentials and API keys removed,
+     * runs of white space folded. Null when nothing is left.
      */
     fun rationale(text: String?, max: Int = MAX_SERVER_TEXT): String? {
         if (text.isNullOrBlank()) return null

@@ -1,14 +1,23 @@
 package com.flightrisk.app.ui.demo
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -18,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -25,6 +35,8 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.flightrisk.app.demo.DemoText
 
@@ -50,7 +62,73 @@ fun DemoBanner(modifier: Modifier = Modifier) {
             .testTag("demo.banner"),
     ) {
         Text(DemoText.BANNER, color = DemoInk, fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleSmall)
-        Text(DemoText.BANNER_DETAIL, color = DemoInk, style = MaterialTheme.typography.labelSmall)
+        // At most two lines, so at a large font size the banner never pushes LAND ALL far down. The whole
+        // text is in the banner's description for TalkBack.
+        Text(
+            DemoText.BANNER_DETAIL,
+            color = DemoInk,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = BANNER_DETAIL_MAX_LINES,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** The most lines the banner's detail takes. */
+const val BANNER_DETAIL_MAX_LINES = 2
+
+/**
+ * The app's frame: the demo banner (while [demo] is on) above [content], which it pushes down and never
+ * covers. The banner takes the status bar's space itself, so the content then skips that inset.
+ */
+@Composable
+fun DemoFrame(demo: Boolean, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    Column(modifier = modifier.fillMaxSize()) {
+        if (demo) DemoBanner()
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .then(if (demo) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+            content = content,
+        )
+    }
+}
+
+/**
+ * The Target tab in demo mode: the drawn placeholder target and "Leave demo mode to choose a photo." It
+ * has no photo picker and no camera button, so nothing outside the demo can be opened from it.
+ */
+@Composable
+fun DemoTargetPlaceholder(target: Bitmap?, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+            .testTag("target.demoPlaceholder"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (target != null) {
+            Image(
+                bitmap = target.asImageBitmap(),
+                contentDescription = "Demo target: a drawn placeholder figure",
+                modifier = Modifier.size(200.dp),
+            )
+        }
+        Text(
+            DemoText.TARGET_PLACEHOLDER,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.testTag("target.demoPlaceholder.text"),
+        )
+        Text(
+            DemoText.TARGET_PLACEHOLDER_DETAIL,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -72,9 +150,9 @@ fun DemoModeSection(active: Boolean, onToggle: (Boolean) -> Unit, modifier: Modi
     }
 }
 
-/** Asks before demo mode closes a real ground link. */
+/** Asks before demo mode switches a real ground link off and closes it. */
 @Composable
-fun DemoDisconnectDialog(host: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+fun DemoDisconnectDialog(host: String?, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(DemoText.CONFIRM_TITLE) },

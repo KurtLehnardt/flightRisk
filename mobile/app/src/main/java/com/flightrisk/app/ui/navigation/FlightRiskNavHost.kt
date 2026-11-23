@@ -42,6 +42,7 @@ import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
+import com.flightrisk.app.ui.demo.DemoTargetPlaceholder
 import com.flightrisk.app.ui.ground.GroundConsoleRoute
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreen
@@ -256,11 +257,16 @@ fun FlightRiskNavHost(
             }
 
             composable(NavDestination.Target.route) {
-                TargetPickerScreen(
-                    onPhotoSelected = onPhotoSelected,
-                    savedBitmap = targetBitmap,
-                    savedQualityReport = targetQualityReport,
-                )
+                if (demoActive) {
+                    // No photo picker and no camera in demo mode: only the drawn placeholder target.
+                    DemoTargetPlaceholder(target = targetBitmap)
+                } else {
+                    TargetPickerScreen(
+                        onPhotoSelected = onPhotoSelected,
+                        savedBitmap = targetBitmap,
+                        savedQualityReport = targetQualityReport,
+                    )
+                }
             }
 
             composable(NavDestination.Ground.route) {

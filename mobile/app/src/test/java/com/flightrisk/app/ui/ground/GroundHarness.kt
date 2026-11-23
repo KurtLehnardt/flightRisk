@@ -56,6 +56,10 @@ class GroundHarness(
     /** Makes every real client and every health probe fail the test: demo mode must never reach them. */
     private val forbidRealNetwork: Boolean = false,
     demoScenario: (suspend () -> com.flightrisk.app.demo.DemoScenario?)? = if (demo) ({ DemoFixtures.scenario }) else null,
+    /** The saved settings of an earlier harness, to model the app starting again after its process died. */
+    sharedSettings: GroundSettingsStore? = null,
+    /** The secure storage of an earlier harness, for the same reason. */
+    sharedStorage: TestStorage? = null,
 ) {
     val port = FakePort()
 
@@ -69,11 +73,11 @@ class GroundHarness(
     val realNetworkCalls = java.util.concurrent.atomic.AtomicInteger(0)
     val clientClock = FakeClock()
     val vmClock = FakeClock()
-    val storage = TestStorage(if (key != null) mapOf(SecretName.DASHBOARD_API_KEY.storageKey to key) else emptyMap(), broken)
+    val storage = sharedStorage ?: TestStorage(if (key != null) mapOf(SecretName.DASHBOARD_API_KEY.storageKey to key) else emptyMap(), broken)
     val secrets = SecretStore(storage, isMainThread = { Thread.currentThread().name == "fake-main" })
     /** The thread names the settings were read or written on. */
     val settingsThreads = java.util.concurrent.CopyOnWriteArrayList<String>()
-    val settings = object : GroundSettingsStore {
+    val settings: GroundSettingsStore = sharedSettings ?: object : GroundSettingsStore {
         private var savedAddress = address
         private var savedEnabled = enabled
         override var address: String?

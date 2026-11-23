@@ -72,6 +72,14 @@ class DemoScenarioTest {
         assertEquals(listOf("manual_ack", "manual_result"), s.replies["drone_command"]!!.map { it.event })
         assertEquals(listOf("manual_ack", "manual_result"), s.replies["manual_resume_search"]!!.map { it.event })
         assertTrue(s.durationMs in 30_000..120_000)
+        // Every id starts with demo- (as on iOS), and one drone is held long enough to try Resume search.
+        val ids = s.steps.flatMap { step -> (step.payload["drones"] as? JsonObject)?.keys.orEmpty() }.toSet()
+        assertEquals(setOf("demo-drone-1", "demo-drone-2"), ids)
+        assertEquals("demo-alert-1", alert.payload["alert_id"]?.jsonPrimitive?.content)
+        assertEquals("demo-track-1", alert.payload["track_id"]?.jsonPrimitive?.content)
+        val held = s.held!!
+        assertEquals("demo-drone-2", held.droneId)
+        assertTrue(held.untilMs - held.fromMs >= 12_000)
     }
 
     @Test
@@ -105,5 +113,6 @@ class DemoScenarioTest {
         assertEquals(listOf(1L to "warning", 5L to "status"), mixed.steps.map { it.atMs to it.event })
         assertEquals(listOf("land_all_ack"), mixed.replies["land_all"]!!.map { it.event })
         assertNull(mixed.landedFleetStatus)
+        assertNull(mixed.held)
     }
 }

@@ -403,6 +403,45 @@ def test_demo_scenario_is_a_timed_mission_of_contract_events():
     assert set(scenario["replies"]) <= handled
 
 
+
+def test_demo_scenario_ids_are_demo_ids_and_a_drone_is_held():
+    """Every id the demo sends starts with demo- (as on iOS), and one drone hovers HELD so Resume search can be tried."""
+    scenario = _load(FIXTURES / "demo_scenario.json")["cases"]["scenario"]["payload"]
+    steps = scenario["steps"]
+    drone_ids = set()
+    for step in steps:
+        payload = step["payload"]
+        drone_ids.update((payload.get("drones") or {}).keys())
+        if isinstance(payload.get("drone_id"), str):
+            drone_ids.add(payload["drone_id"])
+    drone_ids.update(scenario["landed_fleet_status"]["drones"])
+    drone_ids.update(scenario["state"]["manual_status"]["drones"])
+    assert drone_ids == {"demo-drone-1", "demo-drone-2"}
+    for name in ("match_alert", "reasoning_result", "alert_upgrade", "match_alert_resolved"):
+        step = next(step for step in steps if step["event"] == name)
+        assert step["payload"]["alert_id"] == "demo-alert-1", name
+    for name in ("reasoning_result", "alert_upgrade"):
+        assert next(step for step in steps if step["event"] == name)["payload"]["track_id"] == "demo-track-1"
+    text = json.dumps(scenario)
+    assert re.search(r'(?<![\w-])drone-[0-9]', text) is None, "a fixture drone id was not renamed"
+    held = scenario["held"]
+    assert held["drone_id"] == "demo-drone-2" and held["from_ms"] < held["until_ms"]
+    assert held["until_ms"] - held["from_ms"] >= 12_000, "the hold must be long enough to try Resume search"
+    statuses = [step for step in steps if step["event"] == "fleet_status"]
+    in_hold = [s for s in statuses if held["from_ms"] <= s["at_ms"] < held["until_ms"]]
+    assert len(in_hold) >= 3
+    for step in in_hold:
+        drone = step["payload"]["drones"]["demo-drone-2"]
+        assert drone["control_mode"] == "held" and drone["is_flying"] is True and drone["orphan_land_in_s"] > 0
+        assert step["payload"]["manual_controlled"] is None, "nobody controls the held drone, so a phone may resume it"
+    land_all_at = next(step["at_ms"] for step in steps
+                       if step["event"] == "fleet_event" and step["payload"]["event"] == "land_all")
+    assert land_all_at == held["until_ms"]
+    after = [s for s in statuses if s["at_ms"] > land_all_at]
+    assert after and all(d["control_mode"] == "autonomous" and d["orphan_land_in_s"] is None
+                         for s in after for d in s["payload"]["drones"].values())
+
+
 def test_the_android_demo_asset_is_the_fixture():
     """The Android app ships a copy of demo_scenario.json; it must be the fixture (copy it after a regenerate)."""
     assert DEMO_ASSET.is_file(), f"missing {DEMO_ASSET}; copy tests/fixtures/mobile_contract/demo_scenario.json there"

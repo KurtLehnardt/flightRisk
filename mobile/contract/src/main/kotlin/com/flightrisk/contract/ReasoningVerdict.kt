@@ -8,7 +8,8 @@ import kotlinx.serialization.json.JsonObject
  * ground adds `pending` (a check is queued), `error` (the check failed), `skipped` (the alert was
  * answered before the check ran), `off` (reasoning was switched off) and `unavailable` (the model was
  * not loaded or the queue was full). `unknown` is what the ground writes when it could not read the
- * model's reply. Any other word is kept by name (docs/mobile-contract.md, "Unknown values are text").
+ * model's reply. Any other word is kept by name (docs/mobile-contract.md, "Unknown values are text"),
+ * cut to [MAX_RAW_CHARS] characters, and is never shown as a verdict (see [VerdictKind.OTHER]).
  */
 sealed class ReasoningConfidence(override val raw: String) : WireValue {
     data object High : ReasoningConfidence("high")
@@ -22,6 +23,9 @@ sealed class ReasoningConfidence(override val raw: String) : WireValue {
     data class Unknown(val value: String) : ReasoningConfidence(value)
 
     companion object {
+        /** The longest confidence word kept. A longer word from the ground is cut, so it cannot pile up in memory. */
+        const val MAX_RAW_CHARS = 64
+
         fun of(raw: String): ReasoningConfidence = when (raw) {
             "high" -> High
             "medium" -> Medium
@@ -31,7 +35,15 @@ sealed class ReasoningConfidence(override val raw: String) : WireValue {
             "skipped" -> Skipped
             "off" -> Off
             "unavailable" -> Unavailable
-            else -> Unknown(raw)
+            else -> Unknown(cut(raw))
+        }
+
+        /** [raw] cut to [MAX_RAW_CHARS] characters, without splitting a surrogate pair. */
+        private fun cut(raw: String): String {
+            if (raw.length <= MAX_RAW_CHARS) return raw
+            var end = MAX_RAW_CHARS
+            if (Character.isHighSurrogate(raw[end - 1])) end--
+            return raw.substring(0, end)
         }
     }
 }
@@ -120,7 +132,10 @@ enum class VerdictKind {
     /** Reasoning was off or not available, so no check ran. */
     NOT_RUN,
 
-    /** A confidence word this app does not know, shown by name. */
+    /**
+     * A confidence word this app does not know. It is not a verdict: a phone shows the neutral note
+     * "AI check: unclear", never the word itself and never the model's reason.
+     */
     OTHER,
 }
 
@@ -154,9 +169,13 @@ object AlertVerdicts {
         is ReasoningConfidence.Unknown -> if (confidence.value == "unknown") VerdictKind.UNCERTAIN else VerdictKind.OTHER
     }
 
-    /** Whether the model's reason may be shown with this verdict. Error and skipped notes never show the ground's text. */
+    /**
+     * Whether the model's reason may be shown with this verdict. Error and skipped notes never show the
+     * ground's text, and neither does an unknown confidence word ([VerdictKind.OTHER]), whose reply the
+     * app cannot read as a verdict.
+     */
     fun showsRationale(kind: VerdictKind?): Boolean =
-        kind == VerdictKind.MATCH || kind == VerdictKind.NO_MATCH || kind == VerdictKind.UNCERTAIN || kind == VerdictKind.OTHER
+        kind == VerdictKind.MATCH || kind == VerdictKind.NO_MATCH || kind == VerdictKind.UNCERTAIN
 
     /** True for a verdict that ends the check. A pending state never replaces a final one. */
     fun isFinal(kind: VerdictKind?): Boolean = kind != null && kind != VerdictKind.PENDING

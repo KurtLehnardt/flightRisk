@@ -15,18 +15,11 @@ import com.flightrisk.app.ui.ground.GroundConsoleViewModel
 import com.flightrisk.app.demo.DemoArt
 import com.flightrisk.app.demo.DemoImages
 import com.flightrisk.app.demo.DemoText
-import com.flightrisk.app.ui.demo.DemoBanner
+import com.flightrisk.app.ui.demo.DemoFrame
 import com.flightrisk.app.ui.demo.DemoBlockedDialog
 import com.flightrisk.app.ui.demo.DemoDisconnectDialog
 import com.flightrisk.app.ui.search.BoundingBox
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.Modifier
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.activity.result.contract.ActivityResultContracts
@@ -127,7 +120,7 @@ class MainActivity : ComponentActivity() {
     private var realTargetQualityReport: QualityReport? = null
 
     private sealed interface DemoDialog {
-        data class ConfirmDisconnect(val host: String) : DemoDialog
+        data class ConfirmDisconnect(val host: String?) : DemoDialog
         data class Blocked(val text: String) : DemoDialog
     }
 
@@ -301,9 +294,15 @@ class MainActivity : ComponentActivity() {
             groundConsoleViewModel.uiState.map { it.demo }.distinctUntilChanged().collect { applyDemo(it) }
         }
         lifecycleScope.launch {
-            // The mission is packaged with the app, so this is rare; say so instead of doing nothing.
-            groundConsoleViewModel.uiState.map { it.demoProblem }.distinctUntilChanged().collect { problem ->
-                if (problem != null) demoDialog = DemoDialog.Blocked(problem)
+            // A refusal (the real ground needs the operator, or the mission could not be loaded) or a request
+            // to confirm the link switch-off: shown as a dialog, never dropped silently.
+            groundConsoleViewModel.uiState.map { it.demoNotice }.distinctUntilChanged().collect { notice ->
+                when (notice) {
+                    is GroundConsoleViewModel.DemoNotice.ConfirmDisconnect -> demoDialog = DemoDialog.ConfirmDisconnect(notice.host)
+                    is GroundConsoleViewModel.DemoNotice.Blocked -> demoDialog = DemoDialog.Blocked(notice.text)
+                    null -> Unit
+                }
+                if (notice != null) groundConsoleViewModel.dismissDemoNotice()
             }
         }
 
@@ -320,66 +319,59 @@ class MainActivity : ComponentActivity() {
         setContent {
             FlightRiskTheme {
                 val groundUi by groundConsoleViewModel.uiState.collectAsState()
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // The demo banner sits above every screen and pushes it down, so it never covers LAND ALL.
-                    if (groundUi.demo) DemoBanner()
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .then(if (groundUi.demo) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
-                    ) {
-                        if (!noticeAcknowledged) {
-                            PrivacyNoticeScreen(
-                                onAccept = {
-                                    PrivacyNoticeGate.acknowledge(privacyPrefs)
-                                    noticeAcknowledged = true
-                                    requestPermissionsIfNeeded()
-                                },
-                            )
-                        } else if (!onboardingComplete && !groundUi.demo) {
-                            OnboardingScreen(
-                                onComplete = { bitmap ->
-                                    targetBitmap = bitmap
-                                    onboardingComplete = true
-                                },
-                                // "Set up a search later": the tabs open with no target photo, and
-                                // Search shows "No search target yet" until one is chosen.
-                                onSkip = { onboardingComplete = true },
-                                onTryDemo = ::requestDemo,
-                            )
-                        } else {
-                            FlightRiskNavHost(
-                                searchState = searchState,
-                                settingsState = settingsState,
-                                targetBitmap = targetBitmap,
-                                targetQualityReport = targetQualityReport,
-                                onStartSearch = ::handleStartSearch,
-                                onStopSearch = ::handleStopSearch,
-                                onDismissAlert = ::handleDismissAlert,
-                                onNotMyChild = ::handleNotMyChild,
-                                onPhotoSelected = ::handlePhotoSelected,
-                                onPresetSelected = ::handlePresetSelected,
-                                onThresholdChanged = ::handleThresholdChanged,
-                                onReasoningAction = ::handleReasoningAction,
-                                onLocalModelDownload = ::handleLocalModelDownload,
-                                onLocalModelDelete = ::handleLocalModelDelete,
-                                droneState = currentDroneState,
-                                frameSourceMode = frameSourceMode,
-                                latestDroneFrame = latestDroneFrame,
-                                onDismissDroneAlert = ::handleDismissDroneAlert,
-                                onDroneConnect = ::handleDroneConnect,
-                                onDroneDisconnect = ::handleDroneDisconnect,
-                                onTakeoff = ::handleTakeoff,
-                                onLand = ::handleLand,
-                                onDroneMove = ::handleDroneMove,
-                                onDroneRotate = ::handleDroneRotate,
-                                onEmergencyStop = ::handleEmergencyStop,
-                                selectedSearchPattern = selectedSearchPattern,
-                                onSearchPatternChanged = { selectedSearchPattern = it },
-                                demoActive = groundUi.demo,
-                                onDemoToggle = { on -> if (on) requestDemo() else groundConsoleViewModel.exitDemo() },
-                            )
-                        }
+                // The demo banner sits above every screen and pushes it down, so it never covers LAND ALL.
+                DemoFrame(demo = groundUi.demo) {
+                    if (!noticeAcknowledged) {
+                        PrivacyNoticeScreen(
+                            onAccept = {
+                                PrivacyNoticeGate.acknowledge(privacyPrefs)
+                                noticeAcknowledged = true
+                                requestPermissionsIfNeeded()
+                            },
+                        )
+                    } else if (!onboardingComplete && !groundUi.demo) {
+                        OnboardingScreen(
+                            onComplete = { bitmap ->
+                                targetBitmap = bitmap
+                                onboardingComplete = true
+                            },
+                            // "Set up a search later": the tabs open with no target photo, and
+                            // Search shows "No search target yet" until one is chosen.
+                            onSkip = { onboardingComplete = true },
+                            onTryDemo = ::requestDemo,
+                        )
+                    } else {
+                        FlightRiskNavHost(
+                            searchState = searchState,
+                            settingsState = settingsState,
+                            targetBitmap = targetBitmap,
+                            targetQualityReport = targetQualityReport,
+                            onStartSearch = ::handleStartSearch,
+                            onStopSearch = ::handleStopSearch,
+                            onDismissAlert = ::handleDismissAlert,
+                            onNotMyChild = ::handleNotMyChild,
+                            onPhotoSelected = ::handlePhotoSelected,
+                            onPresetSelected = ::handlePresetSelected,
+                            onThresholdChanged = ::handleThresholdChanged,
+                            onReasoningAction = ::handleReasoningAction,
+                            onLocalModelDownload = ::handleLocalModelDownload,
+                            onLocalModelDelete = ::handleLocalModelDelete,
+                            droneState = currentDroneState,
+                            frameSourceMode = frameSourceMode,
+                            latestDroneFrame = latestDroneFrame,
+                            onDismissDroneAlert = ::handleDismissDroneAlert,
+                            onDroneConnect = ::handleDroneConnect,
+                            onDroneDisconnect = ::handleDroneDisconnect,
+                            onTakeoff = ::handleTakeoff,
+                            onLand = ::handleLand,
+                            onDroneMove = ::handleDroneMove,
+                            onDroneRotate = ::handleDroneRotate,
+                            onEmergencyStop = ::handleEmergencyStop,
+                            selectedSearchPattern = selectedSearchPattern,
+                            onSearchPatternChanged = { selectedSearchPattern = it },
+                            demoActive = groundUi.demo,
+                            onDemoToggle = { on -> if (on) requestDemo() else groundConsoleViewModel.exitDemo() },
+                        )
                     }
                 }
                 when (val dialog = demoDialog) {
@@ -387,7 +379,12 @@ class MainActivity : ComponentActivity() {
                         host = dialog.host,
                         onConfirm = {
                             demoDialog = null
-                            groundConsoleViewModel.enterDemo(disconnectConfirmed = true)
+                            // Checked again: the ground ViewModel re-checks its own refusals before it starts.
+                            if (demoBlockedHere()) {
+                                demoDialog = DemoDialog.Blocked(DemoText.BLOCKED_BY_SEARCH)
+                            } else {
+                                groundConsoleViewModel.enterDemo(disconnectConfirmed = true)
+                            }
                         },
                         onDismiss = { demoDialog = null },
                     )
@@ -404,20 +401,20 @@ class MainActivity : ComponentActivity() {
 
     /**
      * "Try demo" on the first onboarding screen and the Settings switch. Demo mode never starts while a
-     * search runs or a drone is connected here, and it asks before it closes a real ground link.
+     * search runs or a drone is connected here. The ground ViewModel decides the rest: it refuses while the
+     * real ground's state needs the operator, and it asks (through its demo notice) before it switches a
+     * real ground link off.
      */
     private fun requestDemo() {
-        if (searchState.isSearching || droneManager != null) {
+        if (demoBlockedHere()) {
             demoDialog = DemoDialog.Blocked(DemoText.BLOCKED_BY_SEARCH)
             return
         }
-        when (val request = groundConsoleViewModel.demoRequest()) {
-            GroundConsoleViewModel.DemoRequest.Ready -> groundConsoleViewModel.enterDemo()
-            is GroundConsoleViewModel.DemoRequest.NeedsDisconnect -> demoDialog = DemoDialog.ConfirmDisconnect(request.host)
-            GroundConsoleViewModel.DemoRequest.AlreadyOn -> Unit
-            GroundConsoleViewModel.DemoRequest.Unavailable -> demoDialog = DemoDialog.Blocked(DemoText.UNAVAILABLE)
-        }
+        groundConsoleViewModel.enterDemo(disconnectConfirmed = false)
     }
+
+    /** A search runs or a Tello drone is connected on the Search tab. */
+    private fun demoBlockedHere(): Boolean = searchState.isSearching || droneManager != null
 
     /** Follows the demo switch: the drawn placeholder target in, the real one out, and back again. */
     private fun applyDemo(on: Boolean) {
@@ -839,6 +836,11 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     private fun handlePhotoSelected(bitmap: Bitmap, report: QualityReport) {
+        // The Target tab offers no picker in demo mode; a late result must not replace the drawn placeholder.
+        if (demoActive) {
+            Log.i(TAG, "Target photo ignored: demo mode is on")
+            return
+        }
         targetBitmap = bitmap
         targetQualityReport = report
         Log.i(TAG, "Target photo selected: grade=${report.grade}, score=${report.overallScore}")

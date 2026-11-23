@@ -1,5 +1,6 @@
 package com.flightrisk.app.ui.ground
 
+import com.flightrisk.app.demo.DemoText
 import com.flightrisk.app.ground.GroundSnapshot
 import com.flightrisk.contract.ConnectionState
 import com.flightrisk.contract.DroneBoard
@@ -158,12 +159,25 @@ data class DroneCardUi(
     val landFeedbackText: String?,
     val resumeFeedbackText: String?,
     val alertText: String?,
+    /** True for a simulated drone of demo mode: its texts start with "DEMO:" and TalkBack says it is simulated. */
+    val isDemo: Boolean = false,
 ) {
     /** The id as shown: cut short when the ground sent a very long one. Commands still carry the real [id]. */
     val displayId: String get() = GroundText.shortId(id)
 
     /** "Land again" once a land failed or got no answer. */
     val landTitle: String get() = if (landFeedback?.offersRetry == true) "Land again" else "Land"
+
+    /** What TalkBack reads for the drone's name: in demo mode, that it is a simulated drone. */
+    val titleDescription: String get() = if (isDemo) DemoText.droneDescription(displayId) else displayId
+
+    /** What TalkBack reads for the Land button. */
+    val landDescription: String
+        get() = if (isDemo) DemoText.landDescription(landTitle, displayId) else "$landTitle $displayId"
+
+    /** What TalkBack reads for the Resume search button. */
+    val resumeDescription: String
+        get() = if (isDemo) DemoText.resumeDescription(displayId) else "Resume the search of $id"
 }
 
 /** Whether a dashboard key is saved. Never the key itself. */
@@ -217,6 +231,10 @@ data class GroundUiState(
     val demo: Boolean = false,
     /** Why demo mode could not start, or null. */
     val demoProblem: String? = null,
+    /** A dialog about demo mode the app shows (a refusal or a confirmation), or null. */
+    val demoNotice: GroundConsoleViewModel.DemoNotice? = null,
+    /** "Demo ended. The ground link is off; …", shown after the demo until the link is turned on, or null. */
+    val demoEndedNote: String? = null,
 )
 
 /** The visible result of one detection profile selection on the profiles card. */

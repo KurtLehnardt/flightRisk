@@ -10,7 +10,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -34,17 +35,20 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun GroundAlertsCard(ui: GroundAlertsUi) {
     if (ui.rows.isEmpty()) return
-    var expanded by remember { mutableStateOf(emptySet<String>()) }
+    // Keyed by each alert's full id, and saved: the card is a lazy list item, so it keeps which rows are open
+    // when it scrolls out of view and back (and across a configuration change).
+    var expanded by rememberSaveable(stateSaver = ExpandedSaver) { mutableStateOf(emptySet<String>()) }
     MissionCard("Match alerts", "ground.alerts", ui.notLiveNote) {
         Text(GroundAlertsLog.NOTE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ui.rows.forEachIndexed { index, row ->
-            val open = row.id in expanded
+            val key = row.stateKey
+            val open = key in expanded
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
                         if (row.hasDetail) {
-                            Modifier.clickable { expanded = if (open) expanded - row.id else expanded + row.id }
+                            Modifier.clickable { expanded = if (open) expanded - key else expanded + key }
                         } else {
                             Modifier
                         },
@@ -54,7 +58,7 @@ fun GroundAlertsCard(ui: GroundAlertsUi) {
                         if (row.hasDetail) {
                             stateDescription = if (open) "Details shown" else "Tap for details"
                             onClick(label = if (open) "Hide details" else "Show details") {
-                                expanded = if (open) expanded - row.id else expanded + row.id
+                                expanded = if (open) expanded - key else expanded + key
                                 true
                             }
                         }
@@ -104,3 +108,6 @@ fun GroundAlertsCard(ui: GroundAlertsUi) {
         }
     }
 }
+
+/** Saves the set of open rows as a list, which a saved instance state can hold. */
+private val ExpandedSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
