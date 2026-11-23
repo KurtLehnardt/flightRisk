@@ -15,7 +15,7 @@ Identifiers (from the code):
 5. [ ] Upload builds. iOS: archive, upload, higher build number each time, then TestFlight. Android: signed release app bundle (see `docs/android-release-signing.md`). Merge the model integration PRs first, or the Search tab shows "Person detection unavailable" and review will reject it.
 6. [ ] Paste the texts: `app-store-listing.md` and `app-review-notes.md` into App Store Connect; `play-listing.md` into Play Console (listing, App access, Ads, content rating).
 7. [ ] Complete App Privacy (Apple) and Data Safety (Google) from `privacy-answers.md` (written separately).
-8. [ ] Screenshots (to be generated): iPhone 6.9-inch or 6.5-inch per App Store Connect's current list, no iPad set; Android phone screenshots, plus the feature graphic and icon for Play. Use demo mode so no real person appears.
+8. [ ] Screenshots (captured, see "Screenshots" below; the rest of this item still applies): iPhone 6.9-inch or 6.5-inch per App Store Connect's current list, no iPad set; Android phone screenshots, plus the feature graphic and icon for Play. Use demo mode so no real person appears.
 9. [ ] Submit for review.
 
 ## OWNER must confirm personally
@@ -32,3 +32,12 @@ Identifiers (from the code):
 ## Wording rule
 
 FlightRisk is a search aid, not a certified rescue system. Do not add words like "guaranteed", "certified" or "finds your child". Neither phone app does face detection or face recognition.
+
+## Screenshots
+
+Captured files are in `docs/store-submission/screenshots/ios/` and `docs/store-submission/screenshots/android/`.
+
+- Leave out `01-search.png` on both platforms. It shows only a placeholder.
+- The iOS ground and settings shots are cut off at the bottom by the tab bar.
+- You may prefer new shots once the apps run on a real device with a drone.
+- Demo timings differ by platform. iOS replays a scenario of about 37 s with its own timings; Android replays the 66 s scenario file. The review notes use each platform's own timings.

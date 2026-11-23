@@ -40,7 +40,7 @@ GROUND CONSOLE FOR A DRONE SEARCH (OPTIONAL)
 - The link to your ground station is on your local network and is not encrypted unless you use a wss:// or https:// address. Use a network you trust.
 
 TRY IT WITHOUT A DRONE
-- Tap "Try demo" on the first screen. A short simulated search with two simulated drones shows how the Ground tab works. The demo uses no camera, no photo and no network.
+- Tap "Try demo" on the first screen. A simulated mission of about a minute, with two simulated drones, shows how the Ground tab works. The demo uses no camera, no photo and no network.
 
 CLOUD REASONING (OPTIONAL, OFF BY DEFAULT)
 - If you turn it on, add your own Claude API key and choose Cloud Claude, the app sends the reference photo, the cropped image of each possible match and your description to Anthropic for a second opinion. These images can show faces.
@@ -72,11 +72,11 @@ Answer: **All functionality is available without special access**, through demo 
 ```
 FlightRisk has no accounts or login. Real use needs a drone and a laptop ground station, so reviewers should use demo mode, which needs no drone, no ground station, no photo and no network.
 1. Open the app and tap "I Understand" on the privacy notice.
-2. On the first screen tap "Try demo". (Or: Settings > Demo mode.)
-3. A yellow "DEMO – no real drones" banner shows at the top of every screen.
-4. Open the Ground tab. Two simulated drones, demo-drone-1 and demo-drone-2, replay a search of about a minute: fleet status, the search plan, drones flying lanes, an obstacle that cuts one lane short, a possible person match that an AI check later rates as a strong match, demo-drone-2 left hovering ("HELD"), and the landing. Tap a match alert to see the AI check details.
-5. "LAND ALL (demo)", Land and Resume search are answered on the phone. Nothing is sent anywhere; every result starts with "DEMO:". To try Resume search, tap it on demo-drone-2's card while it says HELD (about 34 s to 54 s into the demo).
-6. The Search tab shows a drawn scene and the Target tab a drawn placeholder instead of the camera and a photo.
+2. Onboarding step 1 is the privacy notice. Tap "I Understand". Then answer the camera and location permission prompts; denying both is fine. Step 2 is the "Important / Call 911" screen. Tap "Try demo" there. (Or: Settings > Demo mode.)
+3. An amber "DEMO – no real drones" banner shows at the top of every screen.
+4. Open the Ground tab. Two simulated drones, demo-drone-1 and demo-drone-2, replay a scripted scenario of about 66 seconds. Fleet status and the search plan appear in the first seconds, and the drones start their lanes (shown as lane 1/3 and so on) at about 4 s. An obstacle cuts a lane short at about 14 s. A possible person match alert appears at about 26 s and may be below the visible area, so scroll down the Ground tab to find it. At about 32 s an AI check rates it a strong match; tap the alert to see the AI check details. The simulated operator confirms it at about 42 s.
+5. From about 34 s to 54 s demo-drone-2 hovers with the status HELD and a "Resume search" button. Tap it to try it. At about 54 s the scenario lands the drones. You can also tap "LAND ALL (demo)" or a drone's Land button at any time. These are answered on the phone. Nothing is sent anywhere; every result starts with "DEMO:".
+6. The Search tab shows "Connect to Drone" and runs no demo search. The Target tab shows a drawn placeholder instead of a photo. A live search needs a real drone and a camera.
 7. Turn demo mode off in Settings to clear everything the demo showed.
 Cloud reasoning is off by default and not needed.
 ```
