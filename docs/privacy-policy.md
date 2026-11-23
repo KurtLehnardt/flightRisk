@@ -1,7 +1,7 @@
 # FlightRisk Mobile -- Privacy Policy
 
 **Effective Date:** September 4, 2026
-**Last Updated:** October 30, 2026
+**Last Updated:** November 22, 2026
 **Contact:** krlehnardt@gmail.com
 
 ---
@@ -14,7 +14,7 @@ FlightRisk is an AI-powered tool designed to help parents and guardians locate a
 
 ## 2. On-Device Processing
 
-All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device using ONNX Runtime and/or CoreML. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
+All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device: on iPhone with Apple's Core ML, and on Android with ONNX Runtime. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
 
 - Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.

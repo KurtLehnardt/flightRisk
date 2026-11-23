@@ -368,9 +368,28 @@ enum PrivacyNotice {
     static let acknowledgedKey = "flightrisk_privacy_notice_acknowledged"
     static let legacyOnboardingCompleteKey = "flightrisk_onboarding_complete"
 
-    /// Stand-in location of the policy until a hosted page exists. It is the
-    /// public repository copy of `docs/privacy-policy.md`.
-    static let policyURL = URL(string: "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md")!
+    /// The Info.plist key that holds the policy address. project.yml fills it from the
+    /// `FLIGHTRISK_PRIVACY_POLICY_URL` build setting, so the address is changed in one place.
+    static let policyURLInfoKey = "FlightRiskPrivacyPolicyURL"
+
+    /// Used when the Info.plist value is missing, empty, an unexpanded build setting or not
+    /// an https address. It is the public repository copy of `docs/privacy-policy.md`, a
+    /// stand-in until a hosted page exists.
+    static let defaultPolicyURL = URL(string: "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md")!
+
+    /// The privacy policy the notice links to. Every in-app link to the policy uses this.
+    static let policyURL: URL = policyURL(fromInfoValue: Bundle.main.object(forInfoDictionaryKey: policyURLInfoKey))
+
+    /// The policy address from an Info.plist value: an https URL with a host, or the default.
+    static func policyURL(fromInfoValue value: Any?) -> URL {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty,
+              let url = URL(string: text),
+              url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty
+        else { return defaultPolicyURL }
+        return url
+    }
 
     /// The ground station bullet.
     static let groundLinkText =
