@@ -1,0 +1,10 @@
+# Safety-value files need a review from the repository owner.
+# A change to any of these also needs an entry in
+# docs/design/hardware-profiles/safety-value-changes.md.
+/flightrisk/params/table.py @KurtLehnardt
+/tests/golden/flight_params.json @KurtLehnardt
+/tests/param_literal_allowlist.py @KurtLehnardt
+/flightrisk/drone/rth/ @KurtLehnardt
+/flightrisk/dashboard/roles.py @KurtLehnardt
+/flightrisk/dashboard/devices.py @KurtLehnardt
+/flightrisk/fleet_protocol/constants.py @KurtLehnardt
