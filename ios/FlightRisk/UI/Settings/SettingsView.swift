@@ -46,6 +46,7 @@ struct SettingsView: View {
             sensitivitySection
             llmSection
             GroundSettingsSection(viewModel: .live)
+            DemoSettingsSection(viewModel: .live)
             matchingAlgorithmsSection
             advancedSection
             aboutSection
@@ -551,6 +552,8 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            // The only link to the policy once onboarding is over.
+            Link("Privacy Policy", destination: PrivacyNotice.policyURL)
         } header: {
             Text("About")
         }

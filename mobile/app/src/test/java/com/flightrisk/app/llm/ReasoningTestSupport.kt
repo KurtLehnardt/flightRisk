@@ -102,7 +102,7 @@ fun fakeBitmap(): Bitmap {
 }
 
 /** One request the stub server received. */
-data class StubRequest(val requestLine: String, val apiKey: String?, val body: String)
+data class StubRequest(val requestLine: String, val apiKey: String?, val body: String, val beta: String? = null)
 
 /**
  * A stand-in for the Messages API on 127.0.0.1. It answers with a fixed match,
@@ -122,7 +122,7 @@ class StubClaudeServer(
         val head = readRequestHead(input)
         val length = headerValue(head, "Content-Length")?.toIntOrNull() ?: 0
         val body = ByteArray(length).also { DataInputStream(input).readFully(it) }
-        requests += StubRequest(head.first(), headerValue(head, "x-api-key"), String(body, Charsets.UTF_8))
+        requests += StubRequest(head.first(), headerValue(head, "x-api-key"), String(body, Charsets.UTF_8), headerValue(head, "anthropic-beta"))
         if (hold) {
             // Wait for the client to close the connection (a cancelled call).
             while (input.read() >= 0) Unit
@@ -168,12 +168,19 @@ class CloudHarness(
     /** Runs inside the image encoder, between the first and the second gate check. */
     @Volatile var duringEncode: (() -> Unit)? = null
 
+    /** How many bitmaps were encoded. */
+    val encodeCount = java.util.concurrent.atomic.AtomicInteger()
+
+    /** The clock the failure breaker reads; tests move it forward. */
+    @Volatile var nowMs: Long = 1_000_000L
+
     val backend = CloudClaudeLlmBackend(
         gate = gate,
         isOnline = online,
         apiUrl = server.url,
         timeoutMs = 10_000,
-        encodeImage = { duringEncode?.invoke(); "aW1hZ2U=" },
+        nowMs = { nowMs },
+        encodeImage = { encodeCount.incrementAndGet(); duringEncode?.invoke(); "aW1hZ2U=" },
         log = { logs += it },
     )
     val local = FakeLocalBackend(usable = localUsable)

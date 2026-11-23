@@ -116,6 +116,9 @@ class LocalLlmBackend(
             } catch (e: Exception) {
                 Log.w(TAG, "Auto-load failed: ${e.message}")
                 false
+            } catch (e: LinkageError) {
+                Log.w(TAG, "Auto-load failed: the on-device runtime is not available")
+                false
             }
         }
         return false
@@ -139,6 +142,9 @@ class LocalLlmBackend(
         } catch (e: Exception) {
             Log.e(TAG, "Inference failed", e)
             errorResult("Local inference failed: ${e.message}")
+        } catch (e: LinkageError) {
+            Log.e(TAG, "On-device runtime is not available", e)
+            errorResult("Local inference failed: the on-device runtime is not available")
         }
     }
 
