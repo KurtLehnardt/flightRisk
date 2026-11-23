@@ -512,8 +512,8 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        // Camera frames are kept from now on; the Search screen binds the camera's frame
-        // analysis together with its preview while the search runs.
+        // Camera frames are kept from now on; the camera is bound below, with its frame
+        // analysis and preview, to the Activity while the search runs.
         if (frameSourceMode == FrameSourceMode.CAMERA && !demoActive) {
             cameraFrameSource.start()
             // Bound to the Activity for the whole search, so detection goes on on other tabs.

@@ -353,6 +353,9 @@ Output name `detections`, shape **`[1, 8400, 85]`**, float32. Each row is
 - Then drop rows under the score threshold and run non-maximum suppression per
   class at IoU 0.45, as upstream's `yolox.utils.postprocess` does. The apps
   choose their own score threshold; `verify` compares detections at 0.25.
+  Note that Ultralytics' own `predict` default NMS IoU is 0.7, so a
+  bring-your-own Ultralytics model run under this contract (0.45) gives
+  different results from `yolo predict`.
 
 ### From a detection to the embedder's crop
 
@@ -369,6 +372,10 @@ detector input, exactly as the ground does (`flightrisk/vision/detector.py`,
 
 `mobile_preprocess.crop_box` is this rule; `mobile-models.json` carries it as
 `contract.embedder.crop_from_detection`.
+
+Matching scores only crops at least 40 px tall (configurable with
+`FLIGHTRISK_PHONE_MATCH_MIN_CROP_HEIGHT`), and at most 5 crops per frame.
+Smaller people are still detected and published; they are just not matched.
 
 ### Appearance embedder: open_clip ViT-B-16 `laion2b_s34b_b88k`
 
@@ -396,6 +403,12 @@ parity figures below use Pillow, as the ground does. The Android app does not
 use Android's bitmap scaler for either model: its own Kotlin resize matches
 Pillow (and, for the detector, the pinned OpenCV) exactly. Core Graphics on iOS
 will add a small, separate difference that the iOS PR should measure.
+
+The phone's resize matches Pillow 13.0.0 (bicubic, including its pass order)
+and OpenCV 5.1.0 (bilinear) exactly. The ground's venv currently has Pillow
+12.3.0, so the ground's and the phone's embeddings of large crops that are
+shrunk a long way can differ slightly. Pinning Pillow 13 on the ground is a
+follow-up.
 
 ### Golden fixtures for the apps' unit tests
 
@@ -614,6 +627,11 @@ ground's dependencies:
 - **Neural Engine accuracy for the detector** (mixed precision or
   quantisation-aware conversion), so the smaller fp16 package can use the
   Neural Engine.
+- **Recalibrate the ReID threshold.** The 0.55 match threshold was set for the
+  ground's earlier embedder. It must be recalibrated for ViT-B-16, using
+  separate target photos, before field use.
+- **Pin Pillow 13 on the ground.** See "From a detection to the embedder's
+  crop": the phone matches Pillow 13.0.0 exactly, the ground venv has 12.3.0.
 - **On-device checks.** The Android fp16 detector and every model's speed and
   memory on real phones are unmeasured, and the Android app has not run its
   camera search on a phone. The detector's score threshold is still the

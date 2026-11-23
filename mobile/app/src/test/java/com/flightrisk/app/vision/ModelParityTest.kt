@@ -55,7 +55,7 @@ class ModelParityTest {
                 }
             }
             println("YOLOX-S vs PyTorch on the golden input: largest score difference $scoreDiff")
-            assertTrue("largest score difference $scoreDiff", scoreDiff <= 1e-3f)
+            assertTrue("largest score difference $scoreDiff", scoreDiff <= 1e-4f)
             val dets = YoloxContract.decodeAllClasses(out.values, goldenLetterbox(), 0.25f)
             val expected = GoldenFixtures.goldenDetections()
             assertEquals(expected.map { it.classId }, dets.map { it.classId })
@@ -72,8 +72,8 @@ class ModelParityTest {
             val expected = GoldenFixtures.goldenDetections().filter { d -> d.classId == COCO_PERSON }
             assertEquals(expected.size, persons.size)
             for ((e, a) in expected.zip(persons)) {
-                assertTrue("IoU ${Nms.iou(e, a.box)}", Nms.iou(e, a.box) >= 0.99)
-                assertEquals(e.score, a.box.score, 0.01f)
+                assertTrue("IoU ${Nms.iou(e, a.box)}", Nms.iou(e, a.box) >= 0.999)
+                assertEquals(e.score, a.box.score, 1e-4f)
             }
             println("app detector on the golden frame: IoU " + expected.zip(persons).map { (e, a) -> "%.5f".format(Nms.iou(e, a.box)) } +
                 ", score difference " + expected.zip(persons).map { (e, a) -> "%.5f".format(kotlin.math.abs(e.score - a.box.score)) })
@@ -93,7 +93,7 @@ class ModelParityTest {
             val direct = ClipContract.l2Normalize(model.run(GoldenFixtures.floats("embedder_input.f32"), ClipContract.INPUT_SHAPE).values)
             val cosDirect = ClipContract.cosine(golden, direct)
             println("embedder vs PyTorch on the golden input: cosine $cosDirect")
-            assertTrue("cosine $cosDirect", cosDirect >= 0.995)
+            assertTrue("cosine $cosDirect", cosDirect >= 0.999)
         }
         // The app's whole path: crop rule on the frame, preprocessing, model, normalisation.
         val (frame, w, _) = GoldenFixtures.png("frame.png")
@@ -103,7 +103,7 @@ class ModelParityTest {
             val e = engine.embed(crop, px[2] - px[0], px[3] - px[1])
             val cos = ClipContract.cosine(golden, e)
             println("app embedder path on the golden frame: cosine $cos")
-            assertTrue("cosine $cos", cos >= 0.995)
+            assertTrue("cosine $cos", cos >= 0.999)
             // It goes on the wire unchanged, under the ground's model id.
             assertEquals(ReidEmbedding.DIMENSION, ReidEmbedding.toWire(e).size)
         }

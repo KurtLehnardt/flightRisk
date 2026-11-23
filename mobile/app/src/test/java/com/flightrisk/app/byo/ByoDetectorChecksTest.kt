@@ -148,7 +148,8 @@ class ByoDetectorChecksTest {
     @Test
     fun `the imported model stays in app-private storage that backup excludes`() {
         val store = read("com/flightrisk/app/byo/ByoDetectorStore.kt")
-        assertTrue(store.contains("File(appContext.filesDir, FOLDER)"))
+        assertTrue(store.contains("File(filesDir, FOLDER)"))
+        assertTrue(store.contains("context.applicationContext.filesDir"))
         assertTrue(store.contains("const val FOLDER = \"byo_detector\""))
         assertTrue(store.contains("const val PREFS_NAME = \"flightrisk_byo_detector\""))
     }

@@ -65,7 +65,8 @@ class BackupRulesTest {
         val src = java.io.File("src/main/java/com/flightrisk/app/byo/ByoDetectorStore.kt").readText()
         assertTrue(src.contains("const val FOLDER = \"byo_detector\""))
         assertTrue(src.contains("const val PREFS_NAME = \"flightrisk_byo_detector\""))
-        assertTrue(src.contains("File(appContext.filesDir, FOLDER)"))
+        assertTrue(src.contains("File(filesDir, FOLDER)"))
+        assertTrue(src.contains("context.applicationContext.filesDir"))
     }
 
     @Test fun groundSettingsFileNameMatchesTheCode() {

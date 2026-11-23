@@ -72,12 +72,17 @@ object Nms {
     fun keep(boxes: List<FrameBox>, iouThreshold: Float = DETECTOR_NMS_IOU): List<Int> {
         if (boxes.isEmpty()) return emptyList()
         // sortedByDescending is stable, like numpy's argsort(-scores, kind="stable").
-        val order = boxes.indices.sortedByDescending { boxes[it].score }.toMutableList()
+        val order = boxes.indices.sortedByDescending { boxes[it].score }
+        val suppressed = BooleanArray(boxes.size)
         val kept = mutableListOf<Int>()
-        while (order.isNotEmpty()) {
-            val i = order.removeAt(0)
+        for (n in order.indices) {
+            val i = order[n]
+            if (suppressed[i]) continue
             kept += i
-            order.removeAll { j -> iou(boxes[i], boxes[j]) > iouThreshold }
+            for (m in n + 1 until order.size) {
+                val j = order[m]
+                if (!suppressed[j] && iou(boxes[i], boxes[j]) > iouThreshold) suppressed[j] = true
+            }
         }
         return kept
     }
@@ -93,8 +98,8 @@ object Nms {
         return if (union > 0.0) inter / union else 0.0
     }
 
-    /** At most this many candidates (the highest scores) go into suppression, so a hostile or noisy output cannot make it quadratic in 8400 rows. */
-    const val MAX_CANDIDATES = 1000
+    /** At most this many candidates (the highest scores) go into suppression, so a hostile or noisy output cannot make it quadratic in 8400 rows (NMS sees only the top 300). */
+    const val MAX_CANDIDATES = 300
 
     /** At most this many detections come out of a frame. */
     const val MAX_DETECTIONS = 300

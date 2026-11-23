@@ -65,19 +65,24 @@ class StoreModelAuditTest {
     }
 
     @Test
-    fun `the camera's frame analysis is bound with the preview and feeds the pipeline`() {
+    fun `the camera's frame analysis is bound to the Activity for the search and feeds the pipeline`() {
         val screen = File(app, "src/main/java/com/flightrisk/app/ui/search/SearchScreen.kt").readText()
-        assertTrue(screen.contains("provider.bindToLifecycle(lifecycleOwner, cameraSelector, p, a)"))
-        assertTrue(screen.contains("frameSource?.buildImageAnalysis("))
+        // The screen no longer binds the camera; the Activity does, for the whole search.
+        assertTrue(!screen.contains("bindToLifecycle") && !screen.contains("buildImageAnalysis("))
         val source = File(app, "src/main/java/com/flightrisk/app/camera/CameraXFrameSource.kt").readText()
+        assertTrue(source.contains("p.bindToLifecycle(owner, selector, previewCase, analysisCase)"))
+        assertTrue(source.contains("FrameHandOff<ImageProxy, Bitmap>()"))
+        assertTrue(source.contains("handOff.take()"))
         assertTrue(source.contains("OUTPUT_IMAGE_FORMAT_RGBA_8888"))
-        assertTrue(source.contains("image.toBitmap()"))
-        assertTrue(source.contains("image.imageInfo.rotationDegrees"))
+        assertTrue(source.contains("it.toBitmap()"))
+        assertTrue(source.contains("it.imageInfo.rotationDegrees"))
         assertTrue(!source.contains("NV21") && !source.contains("YuvImage"))
         val activity = File(app, "src/main/java/com/flightrisk/app/MainActivity.kt").readText()
         assertTrue(activity.contains("cameraFrameSource.start()"))
         assertTrue(activity.contains("cameraFrameSource.takeNewFrame()"))
+        assertTrue(activity.contains("cameraFrameSource.bind(this, this, rotation)"))
         assertTrue(activity.contains("cameraFrameSource.stop()"))
+        assertTrue(activity.contains("cameraFrameSource.unbind()"))
         assertTrue(activity.contains("cameraFrameSource = cameraFrameSource"))
     }
 
