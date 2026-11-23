@@ -80,7 +80,7 @@ from tests.test_lane_executor_obstacle import (  # noqa: F401 - ``rigs`` is a fi
 POLE = BlockedZone(heading_deg=0.0, x_min=-10, x_max=10, y_min=150, y_max=250)
 #: A wall across lane 0 and the line beside it (x up to 60) from y 250.
 WIDE_WALL = BlockedZone(heading_deg=0.0, x_max=60, y_min=250)
-#: Re-look twice, sidestep 50 cm, two sidesteps per lane: the edge's defaults.
+#: Re-look twice, sidestep 50 cm, two sidesteps per lane: the edge's defaults except the sidestep, which is off by default and set explicitly here.
 AVOID = {"obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2}
 SIDESTEP_ONLY = {"obstacle_relook": 0, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2}
 
@@ -663,22 +663,33 @@ def _settings(**env):
     return ObstacleSettings("tello", SafetyEnvelope.from_env(alt_slot_cm=100, environ={}), env)
 
 
-def test_the_edge_defaults_are_two_votes_two_relooks_and_two_50_cm_sidesteps():
+def test_the_edge_defaults_are_two_votes_two_relooks_and_the_sidestep_off():
     settings = _settings()
     assert settings.avoid_kwargs() == {
-        "obstacle_clear_votes": 2, "obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2,
+        "obstacle_clear_votes": 2, "obstacle_relook": 2, "obstacle_sidestep_cm": 0, "obstacle_sidesteps": 2,
         "obstacle_avoid_budget_s": 45.0,
     }
     assert settings.non_default == []
+    assert settings.sidestep_cm == 0
+
+
+def test_an_edge_on_its_defaults_reports_no_sidestep_so_the_ground_keeps_no_margin(rigs):
+    rig = rigs(**{k: v for k, v in _settings().avoid_kwargs().items() if k != "obstacle_avoid_budget_s"})
+    assert rig.executor.obstacle_sidestep_cm == 0 and not rig.executor._sidestep_enabled()
+    # The re-look is on, so the field appears only once it has something to report, and then with sidestep_cm 0.
+    assert TELEMETRY_AVOID not in rig.executor.obstacle_status()
+    rig.sensor.queue(SenseResult.make_blocked())
+    fly(rig, LANES)
+    assert rig.executor.obstacle_status()[TELEMETRY_AVOID]["sidestep_cm"] == 0
 
 
 def test_the_edge_reads_and_reports_the_avoid_settings():
     settings = _settings(**{
-        ENV_OBSTACLE_CLEAR_VOTES: "1", ENV_OBSTACLE_RELOOK: "0", ENV_OBSTACLE_SIDESTEP_CM: "0",
+        ENV_OBSTACLE_CLEAR_VOTES: "1", ENV_OBSTACLE_RELOOK: "0", ENV_OBSTACLE_SIDESTEP_CM: "50",
         ENV_OBSTACLE_SIDESTEPS: "4", ENV_OBSTACLE_AVOID_BUDGET_S: "90",
     })
     assert settings.avoid_kwargs() == {
-        "obstacle_clear_votes": 1, "obstacle_relook": 0, "obstacle_sidestep_cm": 0, "obstacle_sidesteps": 4,
+        "obstacle_clear_votes": 1, "obstacle_relook": 0, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 4,
         "obstacle_avoid_budget_s": 90.0,
     }
     assert {name for name, _, _ in settings.non_default} == {
@@ -686,6 +697,10 @@ def test_the_edge_reads_and_reports_the_avoid_settings():
         ENV_OBSTACLE_AVOID_BUDGET_S,
     }
     assert _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "100"}).sidestep_cm == 100
+    # 0 is the default (sidestep off), so it is not flagged; 50 is not the default, so it is.
+    assert _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "0"}).non_default == []
+    assert [name for name, _, _ in _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "50"}).non_default] == [
+        ENV_OBSTACLE_SIDESTEP_CM]
     assert _settings(**{ENV_OBSTACLE_SIDESTEP_CM: "20"}).sidestep_cm == 20
 
 
