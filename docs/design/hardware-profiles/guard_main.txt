@@ -1,5 +1,5 @@
-files in scope: 76; findings: 522; distinct keys: 512; files with findings: 57
-by kind: {'argparse_default': 2, 'assign': 341, 'compare': 32, 'default': 65, 'env_default': 4, 'kwarg': 74, 'safety_default': 2, 'safety_literal': 2}
+files in scope: 76; findings: 524; distinct keys: 514; files with findings: 57
+by kind: {'argparse_default': 2, 'assign': 343, 'compare': 32, 'default': 65, 'env_default': 4, 'kwarg': 74, 'safety_default': 2, 'safety_literal': 2}
     44 flightrisk/drone/tello.py
     40 flightrisk/drone/obstacle_sensor.py
     26 flightrisk/drone/safety.py
@@ -14,8 +14,8 @@ by kind: {'argparse_default': 2, 'assign': 341, 'compare': 32, 'default': 65, 'e
     19 flightrisk/launcher/settings.py
     18 flightrisk/drone/fleet_scale.py
     17 flightrisk/dashboard/app.py
+    12 flightrisk/dashboard/manual_control.py
     11 flightrisk/drone/lane_executor.py
-    10 flightrisk/dashboard/manual_control.py
     10 flightrisk/launcher/processes.py
      9 flightrisk/drone/coverage_sim.py
      9 flightrisk/drone/fleet_plan_check.py
@@ -74,28 +74,30 @@ flightrisk/dashboard/app.py:573 [assign] scope=<module> target=FLEET_RETASK_WAIT
 flightrisk/dashboard/app.py:764 [default] scope=<module>.FleetSupervisor target=__init__ name=area_cm value=400
 flightrisk/dashboard/app.py:764 [default] scope=<module>.FleetSupervisor target=__init__ name=area_cm value=400
 flightrisk/dashboard/app.py:765 [default] scope=<module>.FleetSupervisor target=__init__ name=strip_cm value=75
-flightrisk/dashboard/app.py:1218 [default] scope=<module>.FleetSupervisor target=start name=lead_s value=2.0
-flightrisk/dashboard/app.py:1794 [kwarg] scope=<module>._init_pipeline target=DetectionTracker name=max_age value=30
-flightrisk/dashboard/app.py:1794 [kwarg] scope=<module>._init_pipeline target=DetectionTracker name=iou_threshold value=0.3
-flightrisk/dashboard/app.py:3022 [assign] scope=<module> target=SINGLE_PLAN_AREA_CM name=SINGLE_PLAN_AREA_CM value=400
-flightrisk/dashboard/app.py:3022 [assign] scope=<module> target=SINGLE_PLAN_AREA_CM name=SINGLE_PLAN_AREA_CM value=400
-flightrisk/dashboard/app.py:3323 [assign] scope=<module>.on_start_search._execute_search target=MAX_AVOIDANCE_RETRIES name=MAX_AVOIDANCE_RETRIES value=5
+flightrisk/dashboard/app.py:1225 [default] scope=<module>.FleetSupervisor target=start name=lead_s value=2.0
+flightrisk/dashboard/app.py:1807 [kwarg] scope=<module>._init_pipeline target=DetectionTracker name=max_age value=30
+flightrisk/dashboard/app.py:1807 [kwarg] scope=<module>._init_pipeline target=DetectionTracker name=iou_threshold value=0.3
+flightrisk/dashboard/app.py:3035 [assign] scope=<module> target=SINGLE_PLAN_AREA_CM name=SINGLE_PLAN_AREA_CM value=400
+flightrisk/dashboard/app.py:3035 [assign] scope=<module> target=SINGLE_PLAN_AREA_CM name=SINGLE_PLAN_AREA_CM value=400
+flightrisk/dashboard/app.py:3336 [assign] scope=<module>.on_start_search._execute_search target=MAX_AVOIDANCE_RETRIES name=MAX_AVOIDANCE_RETRIES value=5
 flightrisk/dashboard/ceiling.py:87 [assign] scope=<module> target=MAX_DRONES name=MAX_DRONES value=64
 flightrisk/dashboard/ceiling.py:89 [assign] scope=<module> target=REPLY_TIMEOUT_S name=REPLY_TIMEOUT_S value=5.0
 flightrisk/dashboard/ceiling.py:91 [assign] scope=<module> target=RECONNECT_GAP_S name=RECONNECT_GAP_S value=5.0
 flightrisk/dashboard/detection_profiles.py:64 [assign] scope=<module> target=MAX_DRONES name=MAX_DRONES value=64
 flightrisk/dashboard/detection_profiles.py:66 [assign] scope=<module> target=REPLY_TIMEOUT_S name=REPLY_TIMEOUT_S value=20.0
 flightrisk/dashboard/detection_profiles.py:68 [assign] scope=<module> target=RECONNECT_GAP_S name=RECONNECT_GAP_S value=5.0
-flightrisk/dashboard/manual_control.py:111 [assign] scope=<module> target=DEFAULT_ORPHAN_LAND_S name=DEFAULT_ORPHAN_LAND_S value=120.0
-flightrisk/dashboard/manual_control.py:112 [assign] scope=<module> target=MIN_ORPHAN_LAND_S name=MIN_ORPHAN_LAND_S value=30.0
-flightrisk/dashboard/manual_control.py:140 [assign] scope=<module> target=MANUAL_REPLY_TIMEOUT_S name=MANUAL_REPLY_TIMEOUT_S value=4.0
-flightrisk/dashboard/manual_control.py:141 [assign] scope=<module> target=_TAKEOFF_REPLY_TIMEOUT_S name=_TAKEOFF_REPLY_TIMEOUT_S value=20.0
-flightrisk/dashboard/manual_control.py:142 [assign] scope=<module> target=_RESUME_REPLY_TIMEOUT_S name=_RESUME_REPLY_TIMEOUT_S value=6.0
-flightrisk/dashboard/manual_control.py:145 [assign] scope=<module> target=_RELEASE_GRACE_S name=_RELEASE_GRACE_S value=3.0
-flightrisk/dashboard/manual_control.py:146 [assign] scope=<module> target=DEFAULT_STEP_CM name=DEFAULT_STEP_CM value=30
-flightrisk/dashboard/manual_control.py:147 [assign] scope=<module> target=DEFAULT_ROTATE_DEG name=DEFAULT_ROTATE_DEG value=30
-flightrisk/dashboard/manual_control.py:149 [assign] scope=<module> target=_ORPHAN_LAND_RETRY_S name=_ORPHAN_LAND_RETRY_S value=2.0
-flightrisk/dashboard/manual_control.py:575 [kwarg] scope=<module>.ManualControl._run_worker target=get name=timeout value=30.0
+flightrisk/dashboard/manual_control.py:126 [assign] scope=<module> target=DEFAULT_ORPHAN_LAND_S name=DEFAULT_ORPHAN_LAND_S value=120.0
+flightrisk/dashboard/manual_control.py:127 [assign] scope=<module> target=MIN_ORPHAN_LAND_S name=MIN_ORPHAN_LAND_S value=30.0
+flightrisk/dashboard/manual_control.py:133 [assign] scope=<module> target=DEFAULT_LOST_IDLE_S name=DEFAULT_LOST_IDLE_S value=30.0
+flightrisk/dashboard/manual_control.py:134 [assign] scope=<module> target=MIN_LOST_IDLE_S name=MIN_LOST_IDLE_S value=5.0
+flightrisk/dashboard/manual_control.py:176 [assign] scope=<module> target=MANUAL_REPLY_TIMEOUT_S name=MANUAL_REPLY_TIMEOUT_S value=4.0
+flightrisk/dashboard/manual_control.py:177 [assign] scope=<module> target=_TAKEOFF_REPLY_TIMEOUT_S name=_TAKEOFF_REPLY_TIMEOUT_S value=20.0
+flightrisk/dashboard/manual_control.py:178 [assign] scope=<module> target=_RESUME_REPLY_TIMEOUT_S name=_RESUME_REPLY_TIMEOUT_S value=6.0
+flightrisk/dashboard/manual_control.py:181 [assign] scope=<module> target=_RELEASE_GRACE_S name=_RELEASE_GRACE_S value=3.0
+flightrisk/dashboard/manual_control.py:182 [assign] scope=<module> target=DEFAULT_STEP_CM name=DEFAULT_STEP_CM value=30
+flightrisk/dashboard/manual_control.py:183 [assign] scope=<module> target=DEFAULT_ROTATE_DEG name=DEFAULT_ROTATE_DEG value=30
+flightrisk/dashboard/manual_control.py:185 [assign] scope=<module> target=_ORPHAN_LAND_RETRY_S name=_ORPHAN_LAND_RETRY_S value=2.0
+flightrisk/dashboard/manual_control.py:687 [kwarg] scope=<module>.ManualControl._run_worker target=get name=timeout value=30.0
 flightrisk/dashboard/map_tiles.py:89 [kwarg] scope=<module> target=TileProvider name=max_zoom value=16
 flightrisk/dashboard/map_tiles.py:101 [kwarg] scope=<module> target=TileProvider name=max_zoom value=16
 flightrisk/dashboard/map_tiles.py:110 [kwarg] scope=<module> target=TileProvider name=max_zoom value=19
@@ -164,12 +166,12 @@ flightrisk/drone/coordinator.py:167 [assign] scope=<module> target=MAX_OFFSET_RE
 flightrisk/drone/coordinator.py:189 [assign] scope=<module> target=SIDESTEP_MARGIN_MAX_CM name=SIDESTEP_MARGIN_MAX_CM value=500
 flightrisk/drone/coordinator.py:192 [assign] scope=<module> target=LOST_OBSTACLE_S name=LOST_OBSTACLE_S value=20.0
 flightrisk/drone/coordinator.py:218 [assign] scope=<module> target=_FENCE_TOLERANCE_CM name=_FENCE_TOLERANCE_CM value=1e-06
-flightrisk/drone/coordinator.py:831 [default] scope=<module>.FleetCoordinator target=__init__ name=dedup_radius_cm value=80
-flightrisk/drone/coordinator.py:890 [assign] scope=<module>.FleetCoordinator.__init__ target=_next_detection_id name=_next_detection_id value=1
-flightrisk/drone/coordinator.py:1171 [assign] scope=<module>.FleetCoordinator._install_plan target=_next_detection_id name=_next_detection_id value=1
-flightrisk/drone/coordinator.py:1231 [default] scope=<module>.FleetCoordinator target=sync name=timeout_s value=1.0
-flightrisk/drone/coordinator.py:1304 [default] scope=<module>.FleetCoordinator target=start name=lead_s value=2.0
-flightrisk/drone/coordinator.py:2525 [kwarg] scope=<module>.FleetCoordinator.on_detection target=FleetDetection name=count value=1
+flightrisk/drone/coordinator.py:838 [default] scope=<module>.FleetCoordinator target=__init__ name=dedup_radius_cm value=80
+flightrisk/drone/coordinator.py:899 [assign] scope=<module>.FleetCoordinator.__init__ target=_next_detection_id name=_next_detection_id value=1
+flightrisk/drone/coordinator.py:1180 [assign] scope=<module>.FleetCoordinator._install_plan target=_next_detection_id name=_next_detection_id value=1
+flightrisk/drone/coordinator.py:1240 [default] scope=<module>.FleetCoordinator target=sync name=timeout_s value=1.0
+flightrisk/drone/coordinator.py:1313 [default] scope=<module>.FleetCoordinator target=start name=lead_s value=2.0
+flightrisk/drone/coordinator.py:2638 [kwarg] scope=<module>.FleetCoordinator.on_detection target=FleetDetection name=count value=1
 flightrisk/drone/coverage.py:23 [assign] scope=<module> target=MAX_ALT_M name=MAX_ALT_M value=120.0
 flightrisk/drone/coverage.py:26 [assign] scope=<module> target=DEFAULT_SWAP_TIME_S name=DEFAULT_SWAP_TIME_S value=180.0
 flightrisk/drone/coverage.py:58 [kwarg] scope=<module> target=CameraModel name=hfov_deg value=82.6
