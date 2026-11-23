@@ -391,3 +391,45 @@ def test_a_fleet_takes_the_intersection_and_the_safer_default():
     })
     got = custom.fleet_bounds({"hex-1": G, "hex-2": wide})["separation.base_cm"]
     assert (got.bound.lo, got.bound.hi, got.default) == (200, 900, 250)
+
+
+# Critic round 1, F3: a NaN or infinite end must never widen a custom model's bound.
+NAN, INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize("bounds", [
+    {"battery.critical_pct": {"lo": NAN, "hi": 50}},
+    {"battery.critical_pct": {"lo": 10, "hi": NAN}},
+    {CEILING: {"lo": 150, "hi": NAN}},
+    {CEILING: {"lo": -INF, "hi": 200}},
+    {CEILING: {"lo": 150, "hi": INF}},
+    {CEILING: {"lo": 150, "hi": 10 ** 400}},
+])
+def test_a_custom_bound_with_a_non_finite_end_is_refused(bounds):
+    with pytest.raises(ParamRefused) as err:
+        custom.custom_model("my-tello", {"extends": "tello", "param_bounds": bounds})
+    assert err.value.message.startswith("Custom model my-tello is refused: ")
+
+
+@pytest.mark.parametrize("record", [
+    {"param_defaults": {CEILING: NAN}},
+    {"name": "x", "mounts": [{"weight_g": INF}]},
+])
+def test_a_non_finite_number_anywhere_in_a_custom_model_is_refused(record):
+    with pytest.raises(ParamRefused):
+        custom.custom_model("my-tello", {"extends": "tello", **record})
+
+
+def test_the_critics_nan_model_is_refused():
+    with pytest.raises(ParamRefused):
+        custom.custom_model("my-tello", {"extends": "tello", "param_bounds": {
+            "battery.critical_pct": {"lo": NAN, "hi": 50}, CEILING: {"lo": 150, "hi": NAN}}})
+
+
+@pytest.mark.parametrize("param_id,value", [("battery.critical_pct", -100), (CEILING, 99999)])
+def test_an_inventory_value_outside_the_base_bound_is_refused_on_a_custom_model(param_id, value):
+    model = custom.custom_model("my-tello", {"extends": "tello", "param_bounds": {
+        "battery.critical_pct": {"lo": 10, "hi": 50}, CEILING: {"lo": 150, "hi": 1000}}})
+    with pytest.raises(ParamRefused):
+        resolve_unit(model, "t-1", {Source.INVENTORY: {param_id: value}},
+                     confirmations={param_id: str(value)})
