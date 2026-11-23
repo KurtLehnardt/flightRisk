@@ -224,6 +224,8 @@ final class PersonDetector {
         customDisabled = false
         _customFailureNotice = nil
         lock.unlock()
+        // The load finished or the model was switched off; the Search tab badge re-reads the state.
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Self.customDetectorFailed, object: self) }
     }
 
     /// The loaded backend: the user's model, or the bundled one. Never loads.

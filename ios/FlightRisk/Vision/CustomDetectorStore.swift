@@ -51,7 +51,7 @@ struct CustomDetectorInfo: Codable, Equatable, Sendable {
         layout = try c.decode(CustomHeadLayout.self, forKey: .layout)
         testPictureScore = try c.decode(Float.self, forKey: .testPictureScore)
         importedAt = try c.decode(Date.self, forKey: .importedAt)
-        attestationVersion = try c.decodeIfPresent(Int.self, forKey: .attestationVersion) ?? Self.currentAttestationVersion
+        attestationVersion = try c.decodeIfPresent(Int.self, forKey: .attestationVersion) ?? 1
         attestedAt = try c.decodeIfPresent(Date.self, forKey: .attestedAt) ?? importedAt
     }
 }
@@ -316,16 +316,18 @@ final class CustomDetectorStore: @unchecked Sendable {
         }
         let hadModel = fm.fileExists(atPath: modelURL.path)
         let hadInfo = fm.fileExists(atPath: infoURL.path)
+        var backedUpModel = false, backedUpInfo = false, placedModel = false, placedInfo = false
         do {
-            if hadModel { try fm.moveItem(at: modelURL, to: backupModel) }
-            if hadInfo { try fm.moveItem(at: infoURL, to: backupInfo) }
-            try fm.moveItem(at: stagedModel, to: modelURL)
-            try fm.moveItem(at: stagedInfo, to: infoURL)
+            if hadModel { try fm.moveItem(at: modelURL, to: backupModel); backedUpModel = true }
+            if hadInfo { try fm.moveItem(at: infoURL, to: backupInfo); backedUpInfo = true }
+            try fm.moveItem(at: stagedModel, to: modelURL); placedModel = true
+            try fm.moveItem(at: stagedInfo, to: infoURL); placedInfo = true
         } catch {
-            try? fm.removeItem(at: modelURL)
-            try? fm.removeItem(at: infoURL)
-            if hadModel { try? fm.moveItem(at: backupModel, to: modelURL) }
-            if hadInfo { try? fm.moveItem(at: backupInfo, to: infoURL) }
+            // Undo only the steps that happened: remove what was placed, restore what was moved aside.
+            if placedInfo { try? fm.removeItem(at: infoURL) }
+            if placedModel { try? fm.removeItem(at: modelURL) }
+            if backedUpModel { try? fm.moveItem(at: backupModel, to: modelURL) }
+            if backedUpInfo { try? fm.moveItem(at: backupInfo, to: infoURL) }
             throw CustomModelError.storageFailed
         }
     }

@@ -46,7 +46,7 @@ final class CustomDetectorStoreTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let info = try decoder.decode(CustomDetectorInfo.self, from: try JSONSerialization.data(withJSONObject: object))
-        XCTAssertEqual(info.attestationVersion, CustomDetectorInfo.currentAttestationVersion)
+        XCTAssertEqual(info.attestationVersion, 1)
         XCTAssertEqual(info.attestedAt, info.importedAt)
     }
 

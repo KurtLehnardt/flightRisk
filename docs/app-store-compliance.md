@@ -198,7 +198,7 @@ Declared in `mobile/app/src/main/AndroidManifest.xml`.
 
 | Permission | Rationale |
 |-----------|-----------|
-| `android.permission.CAMERA` | Real-time person detection and face matching to locate a missing child, and taking the reference photo. Detection runs on the device. Not requested on a device without a camera. |
+| `android.permission.CAMERA` | Real-time person detection and appearance matching (no face recognition) to locate a missing child, and taking the reference photo. Detection runs on the device. Not requested on a device without a camera. |
 | `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Reads the location (through Google Play services, `FusedLocationProviderClient`) when a match is detected so the user can navigate back to that location. Kept in memory only; the database has no location fields. |
 | `android.permission.INTERNET` | Needed for the paths the user starts: the connection to the ground station address the user enters (dashboard link on port 5555 by default, and the optional phone-as-edge link on port 9000 by default), the optional cloud reasoning request to Anthropic after the opt-in, and the optional on-device model download. |
 | `android.permission.ACCESS_NETWORK_STATE` | Used to check that a network is available before a cloud reasoning request (`NET_CAPABILITY_VALIDATED`) and to check that the phone is on Wi-Fi when it looks for a Tello drone. |
@@ -233,6 +233,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 - **Search video is not recorded by default.** Settings has "Record search video" (off by default). Only while it is on, each search is saved as an MP4 of the camera view with the detection boxes (`files/recordings`), and match pictures are saved as JPEG files (`files/snapshots`).
 - Every search saves a row in the Room database: start and end time, frame, detection and match counts, the typed description, and for each match its scores, type, time and the reasoning text. There are no location fields. The reference photo is kept in memory only; a reference photo taken with the camera is deleted from the cache as soon as it is decoded.
 - Backup and device transfer exclude the database, `files/recordings`, `files/snapshots`, the secret store, the consents and the settings files (`backup_rules.xml`, `data_extraction_rules.xml`). Nothing the app saves about a search is copied off the phone by Android backup.
+- **No face data at all.** Neither phone app runs a face detection or face recognition model, and the reference photo is checked only for a visible whole person using the on-device YOLOX-S person detector. The Android app matches by appearance: the open_clip ViT-B-16 image embedder makes a 512-number description of how a person looks (clothing, colours, build) from each detected person's crop and from the reference photo, compares them on the phone, and keeps them in memory only. They are not sent anywhere (the phone-as-edge link sends no embedding; `EdgeEmbeddingAuditTest`).
 - GPS coordinates are kept in memory only. Location comes through Google Play services (`FusedLocationProviderClient`), which is a Google component on the phone; the owner should consider whether to name it on the form.
 
 **Delete controls that exist** (all in the app, no account needed):
@@ -263,7 +264,7 @@ The reference photo has no delete control: a photo taken with the camera is writ
 | Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
 | Location (precise) | No. It is read only on the device and kept in memory; Google's definition of "collected" is data transmitted off the device, so this is "not collected" | No | -- | -- |
 | Photos/Videos | Provisional: with "Record search video" on (off by default), search video and match pictures are saved in private storage, not sent by the app and not backed up; with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | Provisional: sent images are not kept by the app; saved recordings stay until deleted | App functionality |
-| Personal info (all types, including name, email and user IDs) | No. Google Play has no "face" or "biometric" data type. Face embeddings and templates stay on the device in memory, so they are not collected; face images that go to Anthropic are declared under Photos/Videos above | No | -- | -- |
+| Personal info (all types, including name, email and user IDs) | No. Google Play has no "face" or "biometric" data type. The Android app makes no face embeddings or templates; its appearance embeddings stay on the device in memory, so they are not collected; images that go to Anthropic, which can show a face, are declared under Photos/Videos above | No | -- | -- |
 | Device or other IDs | No | No | -- | -- |
 | App activity > Other user-generated content | Provisional: with cloud reasoning on, the typed description is sent to Anthropic (the same data the iOS privacy manifest declares as Other User Content) | Provisional | Provisional: not kept by the app | App functionality |
 | App activity | No | No | -- | -- |
@@ -277,8 +278,8 @@ The reference photo has no delete control: a photo taken with the camera is writ
 
 ### Face matching description
 
-- **No separate Play declaration.** The Play Console has no "face detection declaration" form, so none is claimed here. The Data Safety data types also have no face or biometric type. The wording below is for the Data Safety form, the store listing and the review notes, and the owner should confirm it against the current Play policy text.
-- **Suggested text (provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
+- **No face detection or face recognition.** The Android app ships no face model: InsightFace (SCRFD, ArcFace) weights are licensed for non-commercial research only, so they were removed, and matching is by appearance only, as on iPhone (`docs/mobile-models.md`). The reference photo is checked only for a visible whole person, using the on-device person detector. The Play Console has no "face detection declaration" form and the Data Safety data types have no face or biometric type, so nothing is declared for it. The wording below is for the Data Safety form, the store listing and the review notes, and the owner should confirm it against the current Play policy text.
+- **Suggested text (provisional):** "This app detects people on the device and compares how they look (clothing, colours, build) with a reference photo provided by the user. It does not use face recognition. The appearance descriptions are computed on the device, kept only in memory for the active search, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. Search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
 
 ### Age Rating (IARC)
 
@@ -296,7 +297,7 @@ The reference photo has no delete control: a photo taken with the camera is writ
 
 Include in the app description or "About this app" section, after the owner and a lawyer have reviewed it:
 
-> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Search video is not recorded unless you turn on Record search video, and you can delete saved sessions and recordings in Settings. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
+> Person detection and matching run on your device. The app compares how people look and does not use face recognition, and nothing it computes about a person's appearance is sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Search video is not recorded unless you turn on Record search video, and you can delete saved sessions and recordings in Settings. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
@@ -333,7 +334,7 @@ These steps cannot be done in code:
 - [ ] **Play Console app and Play App Signing.** Create the app, choose a Google-generated app signing key, and upload the first signed bundle to an internal testing track.
 - [ ] **Hosted privacy policy.** Host `docs/privacy-policy.md` as a public web page, build with `-Pflightrisk.privacyPolicyUrl=<that address>`, and enter the same address in Play Console.
 - [ ] **Data Safety form.** Decide the provisional answers above, ideally with a lawyer.
-- [ ] **Content rating** questionnaire (17+ or equivalent). Google Play has no separate face detection declaration.
+- [ ] **Content rating** questionnaire (17+ or equivalent). Google Play has no separate face detection declaration, and neither phone app does face detection or face recognition.
 - [ ] **Target audience and content**: adults only; not designed for children.
 - [ ] **Store listing**: title, short and full description (see "Store Listing Notes"), the 512 x 512 icon (`branding/play_store_icon_512.png`), a 1024 x 500 feature graphic, and at least two phone screenshots. None of the last two exist yet.
 - [ ] **Test on real devices.** No device or emulator has run the app. At least: the privacy notice and onboarding (including "Set up a search later"), the Search screen with and without a target photo, edge-to-edge layout on Android 15 and 16 (status bar, navigation bar, a display cutout in landscape), predictive back, the camera preview, a device or emulator without a camera, and a 16 KB page size emulator image.

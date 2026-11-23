@@ -170,6 +170,10 @@ extension SearchPipeline {
             return false
         }
         self.targetPhoto = image
+        // A message-less post clears an earlier "photo could not be used" notice.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: SearchPipeline.targetPhotoRejected, object: nil)
+        }
         return true
     }
 

@@ -47,7 +47,6 @@ final class CustomDetectorSettingsModel {
 
     init(store: CustomDetectorStore = .shared) {
         self.store = store
-        refresh()
     }
 
     func refresh() {
@@ -89,19 +88,13 @@ final class CustomDetectorSettingsModel {
 
 /// The Settings section for the optional bring-your-own detector.
 struct CustomDetectorSection: View {
-    /// Built once, on first appearance. `@State(initialValue:)` with an `@Observable` would
-    /// construct (and read the disk for) a throwaway model on every parent re-render.
-    @State private var model: CustomDetectorSettingsModel?
+    /// The model's init is cheap; it reads the disk in `refresh()`, which `.task` calls. The
+    /// section therefore always renders, including its off switch.
+    @State private var model = CustomDetectorSettingsModel()
 
     var body: some View {
-        Group {
-            if let model {
-                CustomDetectorSectionContent(model: model)
-            }
-        }
-        .onAppear {
-            if model == nil { model = CustomDetectorSettingsModel() }
-        }
+        CustomDetectorSectionContent(model: model)
+            .task { model.refresh() }
     }
 }
 

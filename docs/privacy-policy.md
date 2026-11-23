@@ -8,15 +8,15 @@
 
 ## 1. Overview
 
-FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device person detection and appearance matching via the phone camera. The iPhone app does not use face recognition: it matches people by their appearance (clothing, colours and build). This privacy policy explains what data the app processes, how it is handled, and your rights.
+FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device appearance matching via the phone camera. Neither the iPhone app nor the Android app does face detection or face recognition: both match people by how they look (clothing, colours, build) only, and the reference photo is checked only for a visible whole person, using the on-device person detector. This privacy policy explains what data the app processes, how it is handled, and your rights.
 
 ---
 
 ## 2. On-Device Processing
 
-All person detection and matching runs on your device: on iPhone with Apple's Core ML, and on Android with ONNX Runtime. On iPhone, matching uses appearance only (CLIP ReID); the iPhone app has no face detection or face recognition model and makes no face embeddings. The Android app may also run face detection and face recognition. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
+All person detection and matching runs on your device: on iPhone with Apple's Core ML and on Android with ONNX Runtime, in both cases person detection with YOLOX-S and appearance matching with the open_clip ViT-B-16 image model. Neither app does face detection or face recognition. **Appearance feature vectors never leave your phone under any setting.** Specifically:
 
-- Where face recognition is used (Android), face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
+- The apps compute no face embeddings and run no face detection or face recognition. The reference photo is checked only for a visible whole person, using the on-device person detector.
 - Body detection and appearance feature extraction happen locally.
 - No biometric templates or embeddings are transmitted to any server, cloud service, or third party.
 - **Images are different from templates.** With the default settings, no image of any person leaves your device. Images leave the phone in two cases only, both optional and off by default. First, if you turn on cloud reasoning, save a Claude API key and select Cloud Claude (Section 5), the reference photo you provided and the cropped image of each candidate person are sent for analysis. Second, on Android with phone-as-edge turned on (Section 5B), a small picture of the whole camera view, which can show people, is sent to the ground station you entered when that ground station asks for video. Those images can show a face.
@@ -27,7 +27,7 @@ All person detection and matching runs on your device: on iPhone with Apple's Co
 
 ### Ephemeral Processing
 
-All biometric templates (face embeddings and appearance features) are **session-scoped and ephemeral**:
+All appearance features (numerical descriptions of how a person looks, not of the face) are **session-scoped and ephemeral**:
 
 - They are created in memory when you start a search session.
 - They are discarded when the session ends or the app is closed.
@@ -126,7 +126,7 @@ This section applies to the Android app. Everything in Section 5 about cloud rea
 
 ## 7. Camera Usage
 
-- The camera is used solely for real-time person detection and matching to help locate a missing child (appearance matching on iPhone; on Android, face matching too).
+- The camera is used solely for real-time person detection and matching to help locate a missing child: by appearance only, on both iPhone and Android, with no face detection or face recognition.
 - On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, a search is recorded as a video of the camera view in the app's private storage, and match images are saved as files, only if you turn on "Record search video" in Settings (off by default; Section 4). Camera frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole camera view sent to your ground station when it asks for video (Section 5B).
 
 ---
