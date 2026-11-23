@@ -2,9 +2,8 @@ import CoreGraphics
 
 /// Common interface for a single matching signal used by `MatchScorer`.
 ///
-/// Each signal (clothing color, height ratio, ReID embedding, face
-/// embedding, ...) can independently store a target reference and score
-/// detection crops against it.
+/// Each signal (clothing color, height ratio, ReID embedding, ...) can
+/// independently store a target reference and score detection crops against it.
 protocol MatchingSignal: AnyObject {
     /// Whether a target has been set for this signal.
     var hasTarget: Bool { get }

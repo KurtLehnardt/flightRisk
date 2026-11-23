@@ -30,7 +30,8 @@ object PrivacyNoticeText {
         ),
         Item(
             "On-Device Processing",
-            "Person detection and matching run on your device. Camera frames are not uploaded, except in the optional cases described below. " +
+            "Person detection and matching run on your device. Matching compares how people look (clothing, colours, build); " +
+                "the app uses no face recognition. Camera frames are not uploaded, except in the optional cases described below. " +
                 "Search video is not recorded unless you turn on Record search video in Settings. " +
                 "Cloud reasoning, a ground station and a Tello drone are described below.",
         ),

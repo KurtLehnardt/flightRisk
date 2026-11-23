@@ -46,7 +46,7 @@ No system boot time API (`systemUptime`, `mach_absolute_time`) and no active key
 | `NSPrivacyCollectedDataTypePhotosorVideos` (reference photo and person crops) | Yes | No | App Functionality |
 | `NSPrivacyCollectedDataTypeOtherUserContent` (the typed description) | Yes | No | App Functionality |
 
-"Linked" is declared because each request carries the user's own Anthropic API key, so Anthropic can associate the images with the user's Anthropic account. The owner can revisit this. Not declared, because they do not leave the device: face embeddings and appearance features (computed and kept in memory on the phone), camera frames, location (attached to on-screen match alerts only), and the ground station key (sent only to the user's own ground station, which is not a third party). The ground station link carries commands and status, not user data. The model download from Hugging Face sends no user data.
+"Linked" is declared because each request carries the user's own Anthropic API key, so Anthropic can associate the images with the user's Anthropic account. The owner can revisit this. Not declared, because they do not leave the device: appearance features (computed and kept in memory on the phone), camera frames, location (attached to on-screen match alerts only), and the ground station key (sent only to the user's own ground station, which is not a third party). The ground station link carries commands and status, not user data. The model download from Hugging Face sends no user data.
 
 ### Export compliance
 
@@ -100,7 +100,8 @@ The draft below matches the privacy manifest. Apple's definition of "collected" 
 **Summary for App Store Connect:**
 - The app has no server of the developer's own and sends the developer nothing. The owner confirms the questionnaire answers.
 - Photos or Videos and Other User Content are collected only after the user turns on the cloud opt-in. They are linked to the user (each request carries the user's own Anthropic API key), not used for tracking, and used for App Functionality.
-- Camera frames, location and face embeddings stay on the device and are not declared as collected.
+- Camera frames, location and appearance features stay on the device and are not declared as collected. Neither phone app does face detection or face recognition, so no face data is made.
+- A person detector the user imports (Settings > Person Detector, optional and off by default) is a model file, not user data: it stays in the app's storage, excluded from backups, and is never sent anywhere, so it is not declared.
 - Commands to the ground station address typed in Settings and the Hugging Face model download are not declared as collected data; the model download reveals the IP address to Hugging Face.
 - No advertising or tracking SDKs.
 
@@ -108,8 +109,8 @@ The draft below matches the privacy manifest. Apple's definition of "collected" 
 
 #### Guideline 5.1.1 -- Data Collection and Storage
 
-- **Compliance:** The app uses camera frames and location solely for core functionality (locating a missing child), and both stay on the device. Face embeddings are computed and kept on the device too. Three user-started network paths exist. First, the ground station link: the app connects to the address the user enters in Settings and sends land, resume-search and detection-profile commands and status requests, never camera frames, crops or the reference photo. The app refuses a ws:// or http:// address unless it resolves to a local network address; an encrypted wss:// or https:// address is allowed anywhere, and the app does not pin certificates. Second, the optional cloud reasoning feature, which is off by default and sends the cropped person images, the reference photo and the typed description to Anthropic only after the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. That is the only data the app collects in Apple's sense: Photos or Videos and Other User Content, collected only after the cloud opt-in, linked to the user, not used for tracking, for App Functionality, as the privacy manifest declares. Third, the on-device model download from Hugging Face, which sends no user data (the host sees the IP address). No user accounts are created.
-- **Documentation to provide:** Link to privacy policy. Description of the on-device processing architecture and of the three user-started network paths above. Explanation of ephemeral biometric data handling.
+- **Compliance:** The app uses camera frames and location solely for core functionality (locating a missing child), and both stay on the device. Appearance features are computed and kept on the device too; the app does no face detection or face recognition, and the reference photo is checked only for a visible whole person. Three user-started network paths exist. First, the ground station link: the app connects to the address the user enters in Settings and sends land, resume-search and detection-profile commands and status requests, never camera frames, crops or the reference photo. The app refuses a ws:// or http:// address unless it resolves to a local network address; an encrypted wss:// or https:// address is allowed anywhere, and the app does not pin certificates. Second, the optional cloud reasoning feature, which is off by default and sends the cropped person images, the reference photo and the typed description to Anthropic only after the opt-in toggle is on, a Claude API key is saved and Cloud Claude is selected. That is the only data the app collects in Apple's sense: Photos or Videos and Other User Content, collected only after the cloud opt-in, linked to the user, not used for tracking, for App Functionality, as the privacy manifest declares. Third, the on-device model download from Hugging Face, which sends no user data (the host sees the IP address). No user accounts are created.
+- **Documentation to provide:** Link to privacy policy. Description of the on-device processing architecture (YOLOX-S person detection and an appearance embedder, no face detection or recognition) and of the three user-started network paths above. Explanation of how the appearance features are handled (in memory, never sent).
 
 #### Guideline 5.1.2 -- Data Use and Sharing
 
@@ -122,7 +123,7 @@ The draft below matches the privacy manifest. Apple's definition of "collected" 
 
 #### Guideline 2.5.13 -- Face ID / Biometric Authentication (Not Applicable)
 
-- The app does not use Face ID or Touch ID for authentication. It uses its own on-device face recognition pipeline for person matching, which does not invoke system biometric APIs.
+- The app does not use Face ID or Touch ID for authentication. It does no face detection or face recognition: matching is by appearance only, and the reference photo is checked only for a visible whole person using the on-device person detector. It invokes no system biometric APIs.
 
 ### Age Rating
 
@@ -139,7 +140,9 @@ The draft below matches the privacy manifest. Apple's definition of "collected" 
 
 Include the following in the "Notes" field during submission:
 
-> FlightRisk is a tool for parents and guardians to locate a missing child. Person detection and appearance matching run on the device using CoreML. The app has no accounts and no analytics.
+> FlightRisk is a tool for parents and guardians to locate a missing child. Person detection and appearance matching run on the device using CoreML; the app does no face recognition. The app has no accounts and no analytics.
+>
+> Settings > Person Detector can import a person detection model the user already has (a Core ML file chosen with the system file picker). It is off by default, the app neither includes nor downloads such a model, and the screen asks the user to confirm they have the right to use it (YOLO models are AGPL-3.0 or need an Ultralytics Enterprise licence). The imported model stays on the device. Reviewers can ignore it; the built-in detector needs nothing.
 >
 > Local network permission: the Ground tab can connect to a "ground station", a computer the user runs on their own network. The user types its address in Settings (for example ws://192.168.1.20:5555) and a key, which is stored in the Keychain. The app connects to that address and to no other ground station. To test this without a ground station, leave the address empty; the app then makes no local network connection and the permission prompt does not appear.
 >
@@ -159,14 +162,16 @@ The code changes above do not finish the submission. These steps need the owner,
 
 - [ ] **A release Xcode with the Metal Toolchain.** The MLX packages need the Metal Toolchain component (`xcodebuild -downloadComponent MetalToolchain`). Archive with a release (non-beta) Xcode: an app built with a beta Xcode cannot be submitted for App Store review.
 - [ ] **Team ID and bundle ID.** Put the team ID in `ios/Config/Signing.local.xcconfig` (never committed), and register the bundle ID `com.flightrisk.app` in the developer account, or change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` first.
-- [ ] **The on-device models.** The models are decided (`docs/mobile-models.md`): YOLOX-S (Apache-2.0) is the person detector and the image tower of open_clip ViT-B-16 `laion2b_s34b_b88k` (MIT) is the appearance embedder; no face detection or face recognition model ships. They are not committed: on the release build machine, `scripts/mobile_models/make_models.py all` downloads the pinned weights, converts and verifies them and installs `YOLOXs.mlpackage` and `CLIPViTB16LAION.mlpackage` into `ios/FlightRisk/Models`, and the Release build's licence guard phase fails a build that carries any other model. The app does not load them yet: the app integration PR must add the installed packages to the target (`project.yml` excludes `Models/**` today), load them with the documented preprocessing and remove the YOLO, InsightFace, MobileCLIP and OSNet code paths. Until then the Search tab shows "Person detection unavailable", and review will reject an app whose main feature does not work, so do not submit before that PR.
+- [ ] **Install the on-device models before archiving.** YOLOX-S (Apache-2.0) is the person detector and the image tower of open_clip ViT-B-16 `laion2b_s34b_b88k` (MIT) is the appearance embedder; no face detection or face recognition model ships, and the app has no YOLO (Ultralytics), InsightFace, MobileCLIP or OSNet code path. The models are not committed: on the release build machine, run `scripts/mobile_models/make_models.py all --targets ios` (`docs/mobile-models.md`), which installs `YOLOXs.mlpackage`, `CLIPViTB16LAION.mlpackage`, `mobile-models.json` and `model-notices.md` into `ios/FlightRisk/Models`. The build phase "Core ML models (optional)" compiles them into the app, and the Release build's licence guard phase fails a build that carries any other model. A build without them still succeeds (with a warning in Release), but its Search tab shows "Person detection unavailable" and review will reject an app whose main feature does not work: check that the archive log has no "is not in ios/FlightRisk/Models" warning and that Settings > About > Model licences shows the notices.
+- [ ] **The model licence notices.** Settings > About > Model licences shows `model-notices.md` (the Apache-2.0 and MIT texts for the models) in full. The owner confirms this meets the notice conditions (`docs/mobile-models.md`, "Legal questions").
+- [ ] **Your own person detector.** Settings > Person Detector can import a user's own YOLO model (off by default, behind a licence screen and the user's statement; never bundled, hosted, downloaded or logged). The owner decides whether to keep it in the store build and how to describe it to review (the App Review note above is a draft).
 - [ ] **A hosted privacy policy.** Host `docs/privacy-policy.md` at a public HTTPS address, set `FLIGHTRISK_PRIVACY_POLICY_URL` to it and enter the same address in App Store Connect.
 - [ ] **The App Store Connect record and App Privacy answers.** Create the app record and answer the App Privacy questionnaire. The draft under "Privacy Nutrition Labels" matches the privacy manifest; the owner confirms it, including the "Linked" answer.
 - [ ] **Screenshots.** iPhone screenshots for the required display sizes (6.9-inch or 6.5-inch, per App Store Connect's current list). No iPad screenshots are needed, because the app does not declare iPad support.
 - [ ] **iPad compatibility mode.** The app can be installed on an iPad. Run it on an iPad (or the iPad simulator) in compatibility mode and check that onboarding, the camera and the Ground tab work and that nothing is cut off.
 - [ ] **Mac availability.** Decide in App Store Connect (Pricing and Availability) whether the iPhone app is offered on Apple silicon Macs. If it is, test it there; the camera, location and local network behaviour were not checked on a Mac.
 - [ ] **Build number per upload.** Each upload needs a higher build number. See `ios/README.md`, "Build number".
-- [ ] **A device test.** No physical iPhone has run the app. Test the camera, onboarding, the Ground tab against a real ground station (including the reconnect when the app comes back to the foreground), the banner when a model is missing, and the icon on the home screen, then send a TestFlight build.
+- [ ] **A device test.** No physical iPhone has run the app. Test the camera, onboarding, person detection and matching with the installed models (speed, memory and heat on a real iPhone are unmeasured; the models were checked only in the simulator), importing your own detector, the Ground tab against a real ground station (including the reconnect when the app comes back to the foreground), the banner when a model is missing, and the icon on the home screen, then send a TestFlight build.
 
 ---
 
@@ -179,9 +184,10 @@ The Android answers below describe what the code does. **The Data Safety answers
 | Requirement | State in the code |
 |---|---|
 | Target API level 36 (Android 16), required for new apps and updates from 2026-08-31 | `compileSdk = 36`, `targetSdk = 36` in `mobile/app/build.gradle.kts` |
-| 16 KB memory pages (64-bit native libraries) | Every `arm64-v8a` and `x86_64` library is 16 KB aligned and stored on 16 KB boundaries: CameraX 1.4.2, ONNX Runtime 1.23.2, LiteRT 1.4.2 (which replaced TensorFlow Lite 2.16.1) and MediaPipe tasks-genai 0.10.22. Check a build with `mobile/scripts/check-16kb-alignment.sh`. |
+| 16 KB memory pages (64-bit native libraries) | Every `arm64-v8a` and `x86_64` library is 16 KB aligned and stored on 16 KB boundaries: CameraX 1.4.2, ONNX Runtime 1.23.2 and MediaPipe tasks-genai 0.10.22. LiteRT (TensorFlow Lite) was removed with the OSNet and InsightFace models it ran. Check a build with `mobile/scripts/check-16kb-alignment.sh`. |
 | Android App Bundle, signed with the upload key, Play App Signing | `./gradlew bundleRelease`. Signing is read from `mobile/keystore.properties` or environment variables; without them the bundle is unsigned and Gradle warns. See `docs/android-release-signing.md`. |
-| Release build with R8 | `isMinifyEnabled = true`; keep rules for ONNX Runtime, LiteRT, MediaPipe and protobuf are in `mobile/app/proguard-rules.pro`. |
+| Release build with R8 | `isMinifyEnabled = true`; keep rules for ONNX Runtime, MediaPipe and protobuf are in `mobile/app/proguard-rules.pro`. |
+| On-device models | Not committed. Before every release build, `scripts/mobile_models/make_models.py install` copies YOLOX-S (`yolox_s.onnx`, Apache-2.0), the open_clip ViT-B-16 image embedder (`clip_vit_b16_laion2b.onnx`, MIT), `mobile-models.json` and `model-notices.md` into `mobile/app/src/main/assets` (or into a folder passed with `-Pflightrisk.modelAssetsDir`). A release build fails without them (`checkReleaseModels`), and the licence guard (`licenceGuardReleaseApk`, `licenceGuardReleaseBundle`) fails any APK or bundle that carries another model. The `.onnx` assets are stored uncompressed and memory-mapped. No face detection or face recognition model ships. See `docs/mobile-models.md`. |
 | Launcher and store icon | Adaptive icon with a monochrome layer, legacy mipmaps, and `branding/play_store_icon_512.png`, all generated from `branding/flightRiskIcon.png` by `branding/generate_android_icons.py`. |
 | Edge-to-edge (enforced from target 35) | `MainActivity` calls `enableEdgeToEdge()`. The navigation shell pads for the system bars and display cutouts and consumes them; the privacy notice and onboarding, which are shown before it, pad themselves. |
 
@@ -193,7 +199,7 @@ Declared in `mobile/app/src/main/AndroidManifest.xml`.
 
 | Permission | Rationale |
 |-----------|-----------|
-| `android.permission.CAMERA` | Real-time person detection and face matching to locate a missing child, and taking the reference photo. Detection runs on the device. Not requested on a device without a camera. |
+| `android.permission.CAMERA` | Real-time person detection and appearance matching (no face recognition) to locate a missing child, and taking the reference photo. Detection runs on the device. Not requested on a device without a camera. |
 | `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Reads the location (through Google Play services, `FusedLocationProviderClient`) when a match is detected so the user can navigate back to that location. Kept in memory only; the database has no location fields. |
 | `android.permission.INTERNET` | Needed for the paths the user starts: the connection to the ground station address the user enters (dashboard link on port 5555 by default, and the optional phone-as-edge link on port 9000 by default), the optional cloud reasoning request to Anthropic after the opt-in, and the optional on-device model download. |
 | `android.permission.ACCESS_NETWORK_STATE` | Used to check that a network is available before a cloud reasoning request (`NET_CAPABILITY_VALIDATED`) and to check that the phone is on Wi-Fi when it looks for a Tello drone. |
@@ -212,7 +218,7 @@ Found by searching `mobile/app/src/main/java` for connection-opening code. A uni
 4. `https://storage.googleapis.com/mediapipe-models/...` through `HttpURLConnection`, only when the user taps "Download Model" for the on-device Gemma model. It is a plain GET for a file; no photo, crop, description or location is sent. Google sees the phone's IP address and the requested file. Its handling is outside this project and was not reviewed. (The iOS app downloads from Hugging Face instead.)
 5. The Tello drone on its own Wi-Fi network (UDP), when the user flies a Tello from the Android app. This is a local link to the drone; video is received, not sent.
 
-The privacy policy link in the privacy notice is opened in the browser; the app itself opens no connection to it.
+The privacy policy link in the privacy notice, and the Ultralytics licensing page linked from "Bring your own detector", are opened in the browser; the app itself opens no connection to them. Importing a detector reads a file the user picks with the system file picker; nothing is downloaded.
 
 ### Cleartext policy
 
@@ -227,7 +233,9 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 - With the ground station link on, commands and status requests go to the address the user entered. With the phone-as-edge link on, box positions and scores go to that address, and a small picture of the whole camera view when the ground asks for video. The user's own ground station is not a third party the developer runs, but Google's rules on "shared" and "collected" data may still treat these as data transmitted off the device. The owner decides.
 - **Search video is not recorded by default.** Settings has "Record search video" (off by default). Only while it is on, each search is saved as an MP4 of the camera view with the detection boxes (`files/recordings`), and match pictures are saved as JPEG files (`files/snapshots`).
 - Every search saves a row in the Room database: start and end time, frame, detection and match counts, the typed description, and for each match its scores, type, time and the reasoning text. There are no location fields. The reference photo is kept in memory only; a reference photo taken with the camera is deleted from the cache as soon as it is decoded.
-- Backup and device transfer exclude the database, `files/recordings`, `files/snapshots`, the secret store, the consents and the settings files (`backup_rules.xml`, `data_extraction_rules.xml`). Nothing the app saves about a search is copied off the phone by Android backup.
+- Backup and device transfer exclude the database, `files/recordings`, `files/snapshots`, the secret store, the consents, the settings files and an imported detector (`files/byo_detector` and `flightrisk_byo_detector.xml`) (`backup_rules.xml`, `data_extraction_rules.xml`). Nothing the app saves about a search is copied off the phone by Android backup.
+- **No face data at all.** Neither phone app runs a face detection or face recognition model, and the reference photo is checked only for a visible whole person using the on-device YOLOX-S person detector. The Android app matches by appearance: the open_clip ViT-B-16 image embedder makes a 512-number description of how a person looks (clothing, colours, build) from each detected person's crop and from the reference photo, compares them on the phone, and keeps them in memory only. They are not sent anywhere (the phone-as-edge link sends no embedding; `EdgeEmbeddingAuditTest`).
+- **A detector the user imports** ("Bring your own detector", off by default) is a file the user picks; it is copied into the app's private storage, excluded from backup, never uploaded, and deleted when the setting is turned off.
 - GPS coordinates are kept in memory only. Location comes through Google Play services (`FusedLocationProviderClient`), which is a Google component on the phone; the owner should consider whether to name it on the form.
 
 **Delete controls that exist** (all in the app, no account needed):
@@ -239,6 +247,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 | Remove saved token | Settings > Ground station link | The edge token. |
 | Remove saved key | Ground tab > connection card | The dashboard key. |
 | Delete Model | Settings > AI Reasoning (on-device model) | The downloaded Gemma model file. |
+| Turn off "Bring your own detector" | Settings > Bring your own detector | The imported detector file, its SHA-256 and the licence attestation. |
 | Clear storage or uninstall | Android system settings | Everything the app stored. |
 
 The reference photo has no delete control: a photo taken with the camera is written to a temporary cache file that is deleted as soon as it has been decoded (`TargetPickerScreen`), a photo from the picker is never copied, and the decoded bitmap is held in memory only, so it is gone when the app process ends.
@@ -258,7 +267,7 @@ The reference photo has no delete control: a photo taken with the camera is writ
 | Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
 | Location (precise) | No. It is read only on the device and kept in memory; Google's definition of "collected" is data transmitted off the device, so this is "not collected" | No | -- | -- |
 | Photos/Videos | Provisional: with "Record search video" on (off by default), search video and match pictures are saved in private storage, not sent by the app and not backed up; with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | Provisional: sent images are not kept by the app; saved recordings stay until deleted | App functionality |
-| Personal info (all types, including name, email and user IDs) | No. Google Play has no "face" or "biometric" data type. Face embeddings and templates stay on the device in memory, so they are not collected; face images that go to Anthropic are declared under Photos/Videos above | No | -- | -- |
+| Personal info (all types, including name, email and user IDs) | No. Google Play has no "face" or "biometric" data type. The Android app makes no face embeddings or templates; its appearance embeddings stay on the device in memory, so they are not collected; images that go to Anthropic, which can show a face, are declared under Photos/Videos above | No | -- | -- |
 | Device or other IDs | No | No | -- | -- |
 | App activity > Other user-generated content | Provisional: with cloud reasoning on, the typed description is sent to Anthropic (the same data the iOS privacy manifest declares as Other User Content) | Provisional | Provisional: not kept by the app | App functionality |
 | App activity | No | No | -- | -- |
@@ -270,10 +279,10 @@ The reference photo has no delete control: a photo taken with the camera is writ
 - No analytics, advertising or tracking SDKs are included.
 - Camera and location are used for core functionality only.
 
-### Face matching description
+### Appearance matching description
 
-- **No separate Play declaration.** The Play Console has no "face detection declaration" form, so none is claimed here. The Data Safety data types also have no face or biometric type. The wording below is for the Data Safety form, the store listing and the review notes, and the owner should confirm it against the current Play policy text.
-- **Suggested text (provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
+- **No face detection or face recognition.** The Android app ships no face model: InsightFace (SCRFD, ArcFace) weights are licensed for non-commercial research only, so they were removed, and matching is by appearance only, as on iPhone (`docs/mobile-models.md`). The reference photo is checked only for a visible whole person, using the on-device person detector. The Play Console has no "face detection declaration" form and the Data Safety data types have no face or biometric type, so nothing is declared for it. The wording below is for the Data Safety form, the store listing and the review notes, and the owner should confirm it against the current Play policy text.
+- **Suggested text (provisional):** "This app detects people on the device and compares how they look (clothing, colours, build) with a reference photo provided by the user. It does not use face recognition. The appearance descriptions are computed on the device, kept only in memory for the active search, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. Search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
 
 ### Age Rating (IARC)
 
@@ -291,7 +300,7 @@ The reference photo has no delete control: a photo taken with the camera is writ
 
 Include in the app description or "About this app" section, after the owner and a lawyer have reviewed it:
 
-> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Search video is not recorded unless you turn on Record search video, and you can delete saved sessions and recordings in Settings. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
+> Person detection and matching run on your device. The app compares how people look and does not use face recognition, and nothing it computes about a person's appearance is sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Search video is not recorded unless you turn on Record search video, and you can delete saved sessions and recordings in Settings. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
@@ -317,21 +326,19 @@ What the code guarantees (checked by unit tests in `mobile/app/src/test/java/com
 
 ### Store checklist (Android): what still needs the owner
 
-The Android app is not ready to submit. Two functional gaps remain in code, and further steps cannot be done in code:
+The Android app is not ready to submit; the steps below cannot be done in code. The model integration is done: the app loads YOLOX-S and the open_clip ViT-B-16 embedder with the contracts of `docs/mobile-models.md` (checked against the golden fixtures in unit tests), the face, OSNet and old YOLO code paths are removed, the phone camera's frames reach the detector (CameraX `ImageAnalysis`, RGBA_8888, bound with the preview), and Settings > Licences shows `model-notices.md` in full.
 
-- [ ] **The models are built but not loaded yet, so detection does nothing.** The store-safe models are decided (`docs/mobile-models.md`): YOLOX-S (Apache-2.0) is the person detector and the image tower of open_clip ViT-B-16 `laion2b_s34b_b88k` (MIT) is the appearance embedder; no face model ships. On the release build machine `scripts/mobile_models/make_models.py all` installs `yolox_s.onnx` and `clip_vit_b16_laion2b.onnx` into `mobile/app/src/main/assets`, and the release build's licence guard fails any APK or bundle that carries another model. The app code still loads the old names (`yolo11n.onnx`, `scrfd_500m.onnx`, `arcface_mobilefacenet.onnx`, `clip_visual.onnx`, `osnet_x1_0.tflite`, `insightface_r18.tflite`), which must not ship; the app integration PR switches it to the new files and removes those paths. Until then a search finds no one.
-- [ ] **Phone-camera analysis is not wired.** The CameraX `ImageAnalysis` use case has no caller, so the phone camera shows a preview but no frames reach the pipeline. It must be wired together with the model integration PR.
-
-These steps cannot be done in code:
+- [ ] **Install the models before every release build.** From a fresh clone (or after `git clean -fdX mobile/app/src/main/assets`), run `scripts/mobile_models/make_models.py all` on the release build machine (`docs/mobile-models.md`, "Building the models before a release build"), or `install --targets android --android <folder>` from a verified build and pass `-Pflightrisk.modelAssetsDir=<folder>` to Gradle. `./gradlew bundleRelease` then fails without the models (`checkReleaseModels`) and the licence guard checks the bundle. Never commit the models.
+- [ ] **Decide the obstacle guard's MiDaS model.** `ObstacleGuard` loads `midas_small.onnx`, which `make_models.py` does not make, so a release build that carries it fails the licence guard (`docs/mobile-models.md`, follow-ups). Without it the guard is off.
 
 - [ ] **Upload key.** Create it and keep it safe, then sign the bundle with it (`docs/android-release-signing.md`). Never commit the keystore or its password.
 - [ ] **Play Console app and Play App Signing.** Create the app, choose a Google-generated app signing key, and upload the first signed bundle to an internal testing track.
 - [ ] **Hosted privacy policy.** Host `docs/privacy-policy.md` as a public web page, build with `-Pflightrisk.privacyPolicyUrl=<that address>`, and enter the same address in Play Console.
 - [ ] **Data Safety form.** Decide the provisional answers above, ideally with a lawyer.
-- [ ] **Content rating** questionnaire (17+ or equivalent). Google Play has no separate face detection declaration.
+- [ ] **Content rating** questionnaire (17+ or equivalent). Google Play has no separate face detection declaration, and neither phone app does face detection or face recognition.
 - [ ] **Target audience and content**: adults only; not designed for children.
 - [ ] **Store listing**: title, short and full description (see "Store Listing Notes"), the 512 x 512 icon (`branding/play_store_icon_512.png`), a 1024 x 500 feature graphic, and at least two phone screenshots. None of the last two exist yet.
-- [ ] **Test on real devices.** No device or emulator has run the app. At least: the privacy notice and onboarding (including "Set up a search later"), the Search screen with and without a target photo, edge-to-edge layout on Android 15 and 16 (status bar, navigation bar, a display cutout in landscape), predictive back, the camera preview, a device or emulator without a camera, and a 16 KB page size emulator image.
+- [ ] **Test on real devices.** No device or emulator has run the app. At least: a camera search that detects a person and raises a match (frame rate, memory and heat with the two models; portrait and landscape), "Bring your own detector" (import, the SHA-256 shown, a refused file, turning it off), Settings > Licences, the privacy notice and onboarding (including "Set up a search later"), the Search screen with and without a target photo, edge-to-edge layout on Android 15 and 16 (status bar, navigation bar, a display cutout in landscape), predictive back, the camera preview, a device or emulator without a camera, and a 16 KB page size emulator image.
 - [ ] **A real cloud reasoning call** with a Claude key, to confirm `claude-sonnet-5-5` answers in the MATCH / CONFIDENCE / REASONING format at high effort, and to measure how long a call takes against the 120 s read timeout (only a stub server was used).
 - [ ] **Versioning.** Raise `versionCode` for every upload.
 - [ ] **Model download host.** Decide whether the on-device model download (Google storage) is named in the privacy policy and the Data Safety form.

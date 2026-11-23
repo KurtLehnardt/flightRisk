@@ -64,6 +64,9 @@ class CloudPathAuditTest {
         val hosts = sources().flatMap { (path, text) -> https.findAll(text).map { path to it.value.trim('"') }.toList() }
         val expected = setOf(
             "com/flightrisk/app/llm/CloudClaudeLlmBackend.kt" to "https://api.anthropic.com/v1/messages",
+            // The licensing page shown before a detector is imported; it is only handed to a
+            // browser, and the app opens no connection to it.
+            "com/flightrisk/app/byo/ByoDetectorText.kt" to "https://www.ultralytics.com/license",
             // The privacy policy link comes from BuildConfig (set in app/build.gradle.kts), so
             // it is not a literal here; the app only hands it to a browser and opens no connection to it.
         )

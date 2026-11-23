@@ -47,11 +47,11 @@ struct MatchAlertCardView: View {
                             "Match score: \(Int(matchEntry.score * 100)) percent"
                         )
 
-                    Text("ReID: \(Int(matchEntry.reidScore * 100))% | Face: \(Int(matchEntry.faceScore * 100))%")
+                    Text("Appearance: \(Int(matchEntry.reidScore * 100))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .accessibilityLabel(
-                            "ReID score: \(Int(matchEntry.reidScore * 100)) percent, Face score: \(Int(matchEntry.faceScore * 100)) percent"
+                            "Appearance score: \(Int(matchEntry.reidScore * 100)) percent"
                         )
 
                     // GPS coordinates

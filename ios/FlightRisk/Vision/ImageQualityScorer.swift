@@ -1,5 +1,4 @@
 import CoreGraphics
-import CoreImage
 import Vision
 import os
 
@@ -9,8 +8,9 @@ import os
 ///
 /// Port of Android `ImageQualityScorer.kt` to Swift using CoreGraphics
 /// and Vision framework. Quality checks include blur detection,
-/// brightness/contrast analysis, resolution validation, and face
-/// presence detection via `VNDetectFaceRectanglesRequest`.
+/// brightness/contrast analysis, resolution validation, and whether a
+/// person's body is visible (`VNDetectHumanRectanglesRequest`, the whole
+/// body). Matching is by appearance only, so no face is detected.
 struct QualityReport {
     /// Quality score 0.0-1.0.
     let overallScore: Float
@@ -28,8 +28,8 @@ struct QualityReport {
 
 // MARK: - ImageQualityScorer
 
-/// Scores the quality of a target reference photo for person ReID and
-/// face matching.
+/// Scores the quality of a target reference photo for appearance matching
+/// (person ReID).
 ///
 /// This is a CoreGraphics-based port of the Android `ImageQualityScorer`.
 /// Blur detection uses a simplified Laplacian-like edge variance metric
@@ -40,7 +40,7 @@ struct QualityReport {
 /// - **Brightness** (0.15): penalizes too dark (<50 mean) or too bright (>200 mean)
 /// - **Contrast** (0.15): standard deviation of pixel luminance
 /// - **Resolution** (0.15): penalizes images below 200x200
-/// - **Face** (0.35): bonus if Vision detects at least one face
+/// - **Person** (0.35): bonus if Vision finds at least one person's body
 enum ImageQualityScorer {
 
     private static let logger = Logger(
@@ -68,7 +68,7 @@ enum ImageQualityScorer {
         let brightnessScore = analyzeBrightness(image: image)
         let contrastScore = analyzeContrast(image: image)
         let resolutionScore = analyzeResolution(image: image)
-        let faceScore = analyzeFacePresence(image: image)
+        let personScore = analyzePersonPresence(image: image)
 
         if blurScore < 0.5 {
             issues.append("Too blurry")
@@ -86,18 +86,18 @@ enum ImageQualityScorer {
             issues.append("Low resolution")
             suggestions.append("Use a higher-resolution photo (at least 200x200 pixels)")
         }
-        if faceScore < 0.5 {
-            issues.append("Face not detected")
-            suggestions.append("Use a photo where the face is clearly visible and facing the camera")
+        if personScore < 0.5 {
+            issues.append("Person not detected")
+            suggestions.append("Use a photo that shows the whole person, with their clothing clearly visible")
         }
 
-        // Weighted average: face detection is most important for matching
+        // Weighted average: a visible person matters most for appearance matching
         let overallScore =
             blurScore * 0.20 +
             brightnessScore * 0.15 +
             contrastScore * 0.15 +
             resolutionScore * 0.15 +
-            faceScore * 0.35
+            personScore * 0.35
 
         let grade: String
         switch overallScore {
@@ -251,35 +251,25 @@ enum ImageQualityScorer {
         }
     }
 
-    // MARK: - Face Presence Check
+    // MARK: - Person Presence Check
 
-    /// Check for face presence using Vision framework's
-    /// `VNDetectFaceRectanglesRequest`, falling back to `CIDetector`
-    /// when Vision is unavailable (e.g. certain Simulator configurations).
+    /// Check that a person is visible using Vision's
+    /// `VNDetectHumanRectanglesRequest` on the whole body (not the face).
     ///
-    /// - Returns: 1.0 if at least one face is detected, 0.0 otherwise.
-    private static func analyzeFacePresence(image: CGImage) -> Float {
-        let request = VNDetectFaceRectanglesRequest()
+    /// - Returns: 1.0 if at least one person is found, 0.0 otherwise.
+    private static func analyzePersonPresence(image: CGImage) -> Float {
+        let request = VNDetectHumanRectanglesRequest()
+        request.upperBodyOnly = false
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
-
         do {
             try handler.perform([request])
             if let results = request.results, !results.isEmpty {
                 return 1
             }
         } catch {
-            logger.debug("VNDetectFaceRectanglesRequest unavailable, using CIDetector fallback")
+            logger.debug("VNDetectHumanRectanglesRequest unavailable")
         }
-
-        // CIDetector fallback
-        let ciImage = CIImage(cgImage: image)
-        guard let detector = CIDetector(
-            ofType: CIDetectorTypeFace,
-            context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-        ) else { return 0 }
-        let faces = detector.features(in: ciImage)
-        return faces.isEmpty ? 0 : 1
+        return 0
     }
 
     // MARK: - Utilities

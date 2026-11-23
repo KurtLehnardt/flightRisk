@@ -1,3 +1,4 @@
+import PersonVision
 import XCTest
 @testable import FlightRisk
 
@@ -10,9 +11,7 @@ final class FlightRiskConfigTests: XCTestCase {
         XCTAssertEqual(config.vision.detectorConfidence, 0.4)
         XCTAssertEqual(config.vision.reidThreshold, 0.55)
         XCTAssertEqual(config.vision.reidModel, "ViT-B-16")
-        XCTAssertEqual(config.vision.faceDetSize.0, 640)
-        XCTAssertEqual(config.vision.faceDetSize.1, 640)
-        XCTAssertEqual(config.vision.faceMatchThreshold, 0.45)
+        XCTAssertEqual(config.vision.personBoxFilter, .aerial)
         XCTAssertEqual(config.vision.scorerMatchThreshold, 0.45)
         XCTAssertEqual(config.vision.scorerReidWeight, 0.35)
         XCTAssertEqual(config.vision.scorerFaceWeight, 0.40)
@@ -65,7 +64,6 @@ final class FlightRiskConfigTests: XCTestCase {
         config.applyPreset(.moreAlerts)
         XCTAssertEqual(config.vision.reidThreshold, 0.40)
         XCTAssertEqual(config.vision.scorerMatchThreshold, 0.35)
-        XCTAssertEqual(config.vision.faceMatchThreshold, 0.30)
     }
 
     func testApplyPresetBalanced() {
@@ -75,7 +73,6 @@ final class FlightRiskConfigTests: XCTestCase {
         config.applyPreset(.balanced)
         XCTAssertEqual(config.vision.reidThreshold, 0.55)
         XCTAssertEqual(config.vision.scorerMatchThreshold, 0.45)
-        XCTAssertEqual(config.vision.faceMatchThreshold, 0.45)
     }
 
     func testApplyPresetFewerAlerts() {
@@ -83,7 +80,6 @@ final class FlightRiskConfigTests: XCTestCase {
         config.applyPreset(.fewerAlerts)
         XCTAssertEqual(config.vision.reidThreshold, 0.70)
         XCTAssertEqual(config.vision.scorerMatchThreshold, 0.60)
-        XCTAssertEqual(config.vision.faceMatchThreshold, 0.55)
     }
 
     func testApplyPresetDoesNotAffectOtherSettings() {
@@ -106,10 +102,6 @@ final class FlightRiskConfigTests: XCTestCase {
         XCTAssertEqual(SensitivityPreset.moreAlerts.scorerMatchThreshold, 0.35)
         XCTAssertEqual(SensitivityPreset.balanced.scorerMatchThreshold, 0.45)
         XCTAssertEqual(SensitivityPreset.fewerAlerts.scorerMatchThreshold, 0.60)
-
-        XCTAssertEqual(SensitivityPreset.moreAlerts.faceMatchThreshold, 0.30)
-        XCTAssertEqual(SensitivityPreset.balanced.faceMatchThreshold, 0.45)
-        XCTAssertEqual(SensitivityPreset.fewerAlerts.faceMatchThreshold, 0.55)
     }
 
     func testSensitivityPresetRawValues() {
@@ -135,5 +127,36 @@ final class FlightRiskConfigTests: XCTestCase {
         XCTAssertEqual(MatchScorer.decimal(config.vision.scorerFaceWeight), scorer.faceWeight)
         XCTAssertEqual(MatchScorer.decimal(config.vision.scorerReasoningWeight), scorer.reasoningWeight)
         XCTAssertEqual(MatchScorer.decimal(config.vision.scorerMatchThreshold), scorer.matchThreshold)
+    }
+
+    // MARK: - Appearance only, aerial box filter
+
+    func testThereAreNoFaceSignals() {
+        let names = FlightRiskConfig.SignalConfig.allSignalNames
+        XCTAssertEqual(names, ["reid", "clothingColor", "heightRatio", "reasoning"])
+        let shown = FlightRiskConfig.SignalConfig.categories.map(\.name)
+            + FlightRiskConfig.SignalConfig.displayNames.values
+        for text in shown {
+            for banned in ["Face", "ArcFace", "InsightFace", "OSNet"] {
+                XCTAssertFalse(text.contains(banned), "\(text) names \(banned)")
+            }
+        }
+    }
+
+    func testTheBoxFilterIsLooseForAerialSearchAndCanBeOverridden() throws {
+        let config = FlightRiskConfig()
+        XCTAssertLessThan(config.vision.personBoxFilter.minHeightRatio, 0.12)
+        XCTAssertLessThan(config.vision.personBoxFilter.minAreaRatio, 0.008)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "flightrisk_config"))
+        defaults.set(Float(0.05), forKey: "FLIGHTRISK_MIN_BOX_HEIGHT_RATIO")
+        defaults.set(Float(2.0), forKey: "FLIGHTRISK_MAX_BOX_ASPECT_RATIO")
+        defer {
+            defaults.removeObject(forKey: "FLIGHTRISK_MIN_BOX_HEIGHT_RATIO")
+            defaults.removeObject(forKey: "FLIGHTRISK_MAX_BOX_ASPECT_RATIO")
+        }
+        config.loadOverrides()
+        XCTAssertEqual(config.vision.personBoxFilter.minHeightRatio, 0.05)
+        XCTAssertEqual(config.vision.personBoxFilter.maxAspectRatio, 2.0)
+        XCTAssertEqual(config.vision.personBoxFilter.minAreaRatio, PersonBoxFilter.aerial.minAreaRatio)
     }
 }

@@ -257,11 +257,16 @@ struct CameraCaptureView: UIViewControllerRepresentable {
 
 // MARK: - UIImage Normalization
 
-private extension UIImage {
+extension UIImage {
     /// Redraw into a standard sRGB bitmap, normalizing orientation and pixel format
-    /// so Vision's face detector always sees correctly-oriented, standard-format pixels.
+    /// so Vision's person detector and the appearance embedder always see correctly-oriented, standard-format pixels.
     var normalizedCGImage: CGImage? {
-        let renderer = UIGraphicsImageRenderer(size: size)
+        // Scale 1 and the standard range keep the output 8-bit sRGB at the photo's pixel size. The
+        // default format would give a 16-bit extended sRGB bitmap at screen scale for a P3 photo.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.preferredRange = .standard
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { _ in
             draw(in: CGRect(origin: .zero, size: size))
         }.cgImage
