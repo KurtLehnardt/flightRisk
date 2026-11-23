@@ -286,8 +286,30 @@ def spec_for(param_id: str) -> Optional[ParamSpec]:
     return _BY_ID.get(param_id)
 
 
+def _is_numeric(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """True for a finite int or float that converts to a float; an oversized int is not a number."""
+    if not _is_numeric(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _finite(value: Any, raw: Any) -> Any:
+    """Return ``value`` if every number in it is finite; raises ``_WrongType`` otherwise.
+
+    This is the one finiteness check every layer passes after the last conversion step (parse, unit
+    scale and rounding), so a metre value that overflows to infinity once scaled is refused.
+    """
+    items = value if isinstance(value, tuple) else (value,)
+    if any(_is_numeric(item) and not _is_number(item) for item in items):
+        raise _WrongType(raw)
+    return value
 
 
 def _whole(value: float) -> Union[int, float]:
@@ -477,6 +499,9 @@ def _outside_range(value: Any, rng: TodayRange) -> Optional[str]:
     """``"lo"`` or ``"hi"`` when a number (or any item of a pair or list) passes that end of ``rng``."""
     items = value if isinstance(value, tuple) else (value,)
     for item in items:
+        if _is_numeric(item) and not _is_number(item):
+            # A non-finite or oversized number is never inside a range.
+            return "lo" if item < 0 else "hi"
         if not _is_number(item):
             continue
         if rng.lo is not None and (item < rng.lo or (rng.lo_open and item == rng.lo)):
@@ -563,9 +588,17 @@ def _entries(source: Source, layer: Mapping[str, Any], scale: str, model: DroneM
 
 
 def _value_of(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) -> tuple[Any, bool]:
-    """The typed value and whether it is the row's off value; raises ``_WrongType``."""
+    """The typed value and whether it is the row's off value; raises ``_WrongType``.
+
+    Every layer's value passes ``_finite`` after its last conversion step.
+    """
     if _off_match(spec, raw):
         return spec.off_value, True
+    value, is_off = _converted(spec, raw, source, name)
+    return _finite(value, raw), is_off
+
+
+def _converted(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) -> tuple[Any, bool]:
     if source in _NAME_LAYERS:
         text = raw if isinstance(raw, str) else str(raw)
         if isinstance(raw, bool) or (raw is not None and not isinstance(raw, (str, int, float))):

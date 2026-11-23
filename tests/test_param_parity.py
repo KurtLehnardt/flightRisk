@@ -202,10 +202,10 @@ _ROOM_ATTR = {"GEOFENCE_CM": "geofence_cm", "CEILING_CM": "ceiling_cm", "CEILING
 _FIELD_ATTR = {"geofence_m": "envelope.geofence_cm", "ceiling_m": "envelope.ceiling_cm",
                "ceiling_margin_m": "envelope.ceiling_margin_cm", "alt_slot_m": "envelope.alt_slot_cm"}
 _FIELD_INPUTS = {
-    "geofence_m": _numbers(-1, 0, 4.99, 5, 30, 500, 500.01, 1.234),
-    "ceiling_m": _numbers(9.99, 10, 30, 120, 120.01, 12.345),
-    "ceiling_margin_m": _numbers(2.99, 3, 5, 30, 30.01),
-    "alt_slot_m": _numbers(9.99, 10, 15, 120, 120.01),
+    "geofence_m": _numbers(-1, 0, 4.99, 5, 30, 500, 500.01, 1.234, 1e307),
+    "ceiling_m": _numbers(9.99, 10, 30, 120, 120.01, 12.345, 1e307),
+    "ceiling_margin_m": _numbers(2.99, 3, 5, 30, 30.01, 1e307),
+    "alt_slot_m": _numbers(9.99, 10, 15, 120, 120.01, 1e307),
 }
 _FIELD_FLAG = {"geofence_m": "--geofence-m", "ceiling_m": "--ceiling-m", "ceiling_margin_m": "--ceiling-margin-m",
                "alt_slot_m": "--alt-slot-m"}
@@ -217,7 +217,7 @@ def _probes() -> list[Probe]:
     # so that the ceiling-minus-margin cross check (a constraint, not parity) does not bite.
     room = {
         "GEOFENCE_CM": (_numbers(-5, 0, 1, 39, 40, 500, 5000, 5001, 100000), {}),
-        "CEILING_CM": (_numbers(149, 150, 200, 1000, 1001, 150.5), {}),
+        "CEILING_CM": (_numbers(149, 150, 200, 1000, 1001, 150.5, 1e308), {}),
         "CEILING_MARGIN_CM": (_numbers(29, 30, 60, 500, 501, 900), {G + "CEILING_CM": "1000"}),
     }
     for short, (inputs, companions) in room.items():
@@ -324,10 +324,10 @@ def _more_probes() -> list[Probe]:
     out.append(Probe("--fleet-area-cm", T, "plan.area_cm", dashboard_main._parse_area, area, flag=True))
     out.append(Probe("--takeoff-alt-m", F, "takeoff.height_cm",
                      lambda raw: MavlinkFleetOptions(takeoff_alt_m=_flag_value("--takeoff-alt-m", raw))
-                     .takeoff_alt_m * 100.0, _numbers(-1, 0, 1.99, 2, 5, 20, 20.01, "abc", "nan"), flag=True))
+                     .takeoff_alt_m * 100.0, _numbers(-1, 0, 1.99, 2, 5, 20, 20.01, 1e307, "abc", "nan"), flag=True))
     out.append(Probe("--speed-mps", F, "move.speed_cm_s",
                      lambda raw: MavlinkFleetOptions(speed_mps=_flag_value("--speed-mps", raw))
-                     .speed_mps * 100.0, _numbers(-1, 0, 0.49, 0.5, 3, 15, 15.01, "abc", "nan"), flag=True))
+                     .speed_mps * 100.0, _numbers(-1, 0, 0.49, 0.5, 3, 15, 15.01, 1e307, "abc", "nan"), flag=True))
     return out
 
 

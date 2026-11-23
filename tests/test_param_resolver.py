@@ -283,3 +283,36 @@ def test_read_only_everywhere_id_in_params_file_is_refused(tmp_path):
     ro = next(s for s in TABLE if set(e.value for e in s.edit.values()) == {"read_only"})
     with pytest.raises(ParamRefused):
         files.load_params_file(_write(tmp_path, {"version": 1, "defaults": {ro.id: ro.defaults[G]}}))
+
+
+# Critic round 1, F1: a value that overflows to infinity after unit scaling must be refused, as today.
+@pytest.mark.parametrize("source,name,text", [
+    (Source.ENV, "FLIGHTRISK_FIELD_CEILING_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_GEOFENCE_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_CEILING_MARGIN_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_ALT_SLOT_M", "1e307"),
+    (Source.CLI, "--ceiling-m", "1e307"),
+    (Source.CLI, "--geofence-m", "1e307"),
+    (Source.CLI, "--ceiling-margin-m", "1e307"),
+    (Source.CLI, "--alt-slot-m", "1e307"),
+    (Source.CLI, "--speed-mps", "1e307"),
+    (Source.CLI, "--takeoff-alt-m", "1e307"),
+])
+def test_a_metre_value_that_overflows_once_scaled_is_refused(source, name, text):
+    with pytest.raises(ParamRefused):
+        _resolve(G, {source: {name: text}}, scale="field")
+
+
+@pytest.mark.parametrize("text", ["1e308", "1e309"])
+def test_a_centimetre_value_near_the_float_limit_is_refused(text):
+    # Today's room envelope refuses both (1e309 parses as inf); the geofence has no upper end today.
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.ENV: {"FLIGHTRISK_CEILING_CM": text}})
+
+
+def test_a_non_finite_number_is_never_inside_a_range():
+    from flightrisk.params.resolver import TodayRange, _outside_range
+    assert _outside_range(float("inf"), TodayRange(None, None)) == "hi"
+    assert _outside_range(float("-inf"), TodayRange(None, None)) == "lo"
+    assert _outside_range(float("nan"), TodayRange(0, 10)) is not None
+    assert _outside_range(10 ** 400, TodayRange(None, None)) == "hi"
