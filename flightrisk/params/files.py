@@ -83,7 +83,8 @@ def parse_params(data: Any, name: str = DEFAULT_NAME) -> ParamsFile:
     """Check parsed ``params.json`` data; raises ``ParamRefused``."""
     if not isinstance(data, dict):
         raise _refuse(f"{name} must be a JSON object.")
-    if data.get("version") != SCHEMA_VERSION:
+    version = data.get("version")
+    if type(version) is not int or version != SCHEMA_VERSION:
         raise _refuse(f"{name} must have \"version\": {SCHEMA_VERSION}.")
     extra = sorted(set(data) - set(SECTIONS) - {"version"})
     if extra:
@@ -99,7 +100,7 @@ def parse_params(data: Any, name: str = DEFAULT_NAME) -> ParamsFile:
 def load_params_file(path: Union[str, Path]) -> ParamsFile:
     """Read and check ``params.json``; a missing file is an empty layer."""
     path = Path(path)
-    if not path.exists():
+    if not (path.is_symlink() or path.exists()):
         return ParamsFile(name=path.name)
     try:
         text = path.read_text(encoding="utf-8")
@@ -107,6 +108,9 @@ def load_params_file(path: Union[str, Path]) -> ParamsFile:
         raise _refuse(f"{path.name} exists but cannot be read ({type(exc).__name__}).") from None
     try:
         data = json.loads(text)
-    except ValueError as exc:
+    except json.JSONDecodeError as exc:
         raise _refuse(f"{path.name} exists but cannot be parsed ({exc.msg}, line {exc.lineno}).") from None
+    except (ValueError, RecursionError) as exc:
+        # Python's integer digit limit raises a plain ValueError; deep nesting raises RecursionError.
+        raise _refuse(f"{path.name} exists but cannot be parsed ({type(exc).__name__}).") from None
     return parse_params(data, name=path.name)

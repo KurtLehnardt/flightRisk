@@ -32,8 +32,8 @@ from flightrisk.dashboard import __main__ as dashboard_main
 from flightrisk.dashboard import manual_control
 from flightrisk.drone import plan_edit, safety, temp_preflight
 from flightrisk.drone.mavlink_fleet import MavlinkFleetOptions
-from flightrisk.params.resolver import ParamRefused, resolve, resolve_unit, today_accepts_from_golden
-from flightrisk.params.spec import Source
+from flightrisk.params.resolver import ParamRefused, resolve, resolve_unit, spec_for, today_accepts_from_golden
+from flightrisk.params.spec import Edit, Source
 
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "flight_params.json").read_text())
 TODAY = today_accepts_from_golden(GOLDEN)
@@ -418,3 +418,35 @@ UNCOMPARED = {
 
 def test_uncompared_list_is_small_and_explicit() -> None:
     assert len(UNCOMPARED) == 3
+
+
+#: Test-adapter fact overrides that today's ObstacleSettings honours on any MAVLink drone and that the
+#: resolver ignores on a production (not simulated) MAVLink unit, by N-10 and FACT-3. This is a behaviour
+#: change at adoption, pinned here so A3 records it in design section 27.
+IGNORED_ON_PRODUCTION_UNIT = frozenset({
+    (F, G + "OBSTACLE_STEP_CM"),
+    (F, G + "OBSTACLE_TURN"),
+    (F, G + "OBSTACLE_SETTLE_S"),
+    (F, G + "OBSTACLE_MIN_SAFE_DEPTH"),
+    (F, G + "OBSTACLE_PERSON_FRACTION"),
+    (F, G + "OBSTACLE_CLEAR_VOTES"),
+    (F, G + "OBSTACLE_RELOOK"),
+    (F, G + "OBSTACLE_SIDESTEP_CM"),
+    (F, G + "OBSTACLE_SIDESTEPS"),
+})
+
+
+def test_fact_overrides_ignored_on_a_production_mavlink_unit_are_pinned() -> None:
+    found = set()
+    for probe, raw in CASES:
+        if probe.model != F or not probe.simulated or probe.flag or not raw.strip():
+            continue
+        if spec_for(probe.param_id).edit.get(F) is not Edit.FACT:
+            continue
+        if _today(lambda: probe.read(raw)) == REFUSED:
+            continue
+        out = resolve(F, "drone-1", {Source.ENV: {**probe.companions, probe.name: raw}},
+                      simulated=False, today_accepts=TODAY)
+        if out[probe.param_id].source is Source.PROFILE:
+            found.add((probe.model, probe.name))
+    assert found == IGNORED_ON_PRODUCTION_UNIT

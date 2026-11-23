@@ -479,7 +479,8 @@ def _refusal(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, detai
     profile = model.profile
     if spec.is_fact(profile):
         log.warning("refused test-adapter override %s=%r for %s on %s", detail, value, spec.id, unit_id)
-        return ParamRefused(FACT_OVERRIDE_REFUSED, param_id=spec.id, source=source)
+        # A fact refusal carries no param_id, so no caller can render the fact's id (design 7.5).
+        return ParamRefused(FACT_OVERRIDE_REFUSED, source=source)
     lo, hi = bound if bound else (None, None)
     target = spec.bounds.get(profile)
     if target is not None:
@@ -716,7 +717,9 @@ def resolve(
     where it came from; the launcher layer may also hold the reserved
     ``confirmed`` object), ``env`` to a copy of the environment and ``cli`` to
     ``{flag: value}``. ``scale`` is ``room`` or ``field`` and defaults to the
-    model's scale. ``simulated`` is true only for a verified simulated unit.
+    model's scale. ``simulated`` is true only for a verified simulated unit
+    (CAP-6, N-15): it must come from board evidence, and never from the
+    environment, a flag, a file or the inventory.
     ``confirmations`` maps an id to the value a ``--confirm-less-safe`` flag
     names; ``resolve`` only accepts it, and ``resolve_unit`` checks it.
     ``features`` are the unit's inventory feature switches. Raises
@@ -765,7 +768,7 @@ def resolve(
             edit = spec.edit.get(profile)
             if source in _ID_LAYERS and edit in (Edit.FACT, Edit.READ_ONLY):
                 if edit is Edit.FACT:
-                    raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), param_id=param_id, source=source)
+                    raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), source=source)
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source)
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)

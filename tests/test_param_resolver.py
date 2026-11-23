@@ -390,3 +390,31 @@ def test_an_open_today_range_is_backed_by_a_cited_reader():
             assert (read_today(name) or spec.bounds.get(profile) is not None
                     or _new_name_without_bound(spec, profile, name)
                     or spec.kind.value in ("bool", "enum")), (name, profile)
+
+
+# Critic round 1, F5 and F8: oversized numbers and loader gaps are refused cleanly.
+def test_an_oversized_integer_in_a_json_layer_is_refused_cleanly():
+    with pytest.raises(ParamRefused):
+        files.parse_params({"version": 1, "defaults": {"battery.critical_pct": 10 ** 400}})
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.FILE: {"battery.critical_pct": 10 ** 400}})
+
+
+def test_a_params_file_with_a_huge_integer_is_refused_cleanly(tmp_path):
+    path = tmp_path / "params.json"
+    path.write_text('{"version": 1, "defaults": {"battery.critical_pct": ' + "9" * 5000 + "}}", encoding="utf-8")
+    with pytest.raises(ParamRefused):
+        files.load_params_file(path)
+
+
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_a_params_file_version_must_be_the_integer_1(version):
+    with pytest.raises(ParamRefused):
+        files.parse_params({"version": version})
+
+
+def test_a_dangling_params_symlink_is_refused_not_treated_as_missing(tmp_path):
+    path = tmp_path / "params.json"
+    path.symlink_to(tmp_path / "missing.json")
+    with pytest.raises(ParamRefused):
+        files.load_params_file(path)

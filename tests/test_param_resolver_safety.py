@@ -486,3 +486,9 @@ def test_a_narrowed_bound_is_enforced_for_a_flag():
 def test_a_value_inside_both_today_and_the_narrowed_bound_is_accepted():
     out = resolve(_low_ceiling(), "t-1", {Source.ENV: {"FLIGHTRISK_CEILING_CM": "180"}}, today_accepts=TODAY)
     assert (out[CEILING].value, out[CEILING].lo, out[CEILING].hi) == (180, 150, 200)
+
+
+def test_a_fact_refusal_carries_no_param_id():
+    with pytest.raises(ParamRefused) as err:
+        resolve("tello", "drone-1", {Source.FILE: {"sensing.step_cm": 40}})
+    assert err.value.param_id is None
