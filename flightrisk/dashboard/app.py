@@ -561,6 +561,11 @@ FLEET_TAKEOFF_GRACE_S = 15.0
 #: their new lanes before the ``retask`` event is sent. Later answers are
 #: reported in further ``retask`` or ``retask_failed`` events.
 FLEET_RETASK_WAIT_S = 2.0
+#: Why a drone's unflown lanes wait for the operator (``FleetCoordinator.on_drone_lost(confirm=...)``)
+#: when the ground's orphan countdown landed it: nobody was controlling it.
+ORPHAN_LANDED_CONFIRM = "landed by the ground with no controller"
+#: The same for a drone lost while that countdown ran (it was held with no controller).
+ORPHAN_LOST_CONFIRM = "lost while held with no controller"
 
 
 def fleet_geofence_cm() -> float:
@@ -1162,6 +1167,8 @@ class FleetSupervisor:
                 self._landed_early.clear()
                 self._start_t_ground_s = None
                 self._landed_all = False
+            if self.manual is not None:
+                self.manual.forget_orphan_landings()
         self.emit_plan()
         self.emit_status()
         return plan
@@ -1246,6 +1253,24 @@ class FleetSupervisor:
         self.emit_status()
         return ok, detail
 
+    def confirm_retask(self, drone_id: str) -> tuple[bool, str]:
+        """The operator confirms the re-task of a drone's waiting lanes (``FleetCoordinator.confirm_retask``).
+
+        Such lanes belong to a drone that was landed, or lost, while nobody
+        controlled it. Logged as a ``retask_confirmed`` flight-safety event;
+        the fleet status that follows shows the drones' new lanes.
+        """
+        with self._lock:
+            landed_all = self._landed_all
+        if landed_all:
+            return False, "LAND ALL was pressed; nothing is re-tasked"
+        ok, detail = self.coordinator.confirm_retask(drone_id)
+        obs_events.flight_safety("retask_confirmed" if ok else "retask_confirm_refused", reason="operator",
+                                 drone_id=drone_id, detail=detail,
+                                 level=logging.WARNING if ok else logging.INFO)
+        self.emit_status()
+        return ok, detail
+
     def land_all(self) -> dict:
         """Send ``emergency_land_all`` to every drone through the coordinator.
 
@@ -1273,6 +1298,16 @@ class FleetSupervisor:
         to ``retask_wait_s`` for the drones' answers. Returns the drones declared
         lost by this call. The check is skipped while ``plan()`` or
         ``start()`` runs, so it never marks a drone of a new plan lost.
+
+        A drone held for manual control is not lost for landing or for not
+        flying its lanes, only for a lost link, with one exception: a drone
+        the orphan countdown landed (nobody controlled it) is lost once it
+        reports landed with lanes left, although it stays held. For such a
+        drone, and for a held drone lost while its countdown ran, the lanes
+        are not offered at once: they wait for the operator's
+        ``confirm_retask`` (``ORPHAN_LANDED_CONFIRM``,
+        ``ORPHAN_LOST_CONFIRM``), so no drone flies into the area it was held
+        over without a person deciding so.
         """
         if not self._busy.acquire(blocking=False):
             return []
@@ -1298,18 +1333,33 @@ class FleetSupervisor:
             entry = status.get(drone_id) or {}
             if entry.get("lost"):
                 continue
+            # A drone the orphan countdown landed is out of the mission like any
+            # drone that landed with lanes left, even though it stays held.
+            landed_by_ground = self.manual is not None and self.manual.orphan_landed(drone_id)
             reason = self._loss_reason(
                 links.get(drone_id), drone_id in flown, drone_id in landed_early, now - start_t,
-                paused=self.manual is not None and self.manual.paused(drone_id),
+                paused=self.manual is not None and self.manual.paused(drone_id) and not landed_by_ground,
             )
             if reason is None:
                 continue
             with self._lock:
                 if self._landed_all:
                     break
-            log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
-            obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
-            self.coordinator.on_drone_lost(drone_id)
+            confirm = None
+            if landed_by_ground:
+                confirm = ORPHAN_LANDED_CONFIRM
+            elif self.manual is not None and self.manual.orphaned(drone_id):
+                confirm = f"{ORPHAN_LOST_CONFIRM} ({reason})"
+            if confirm is not None:
+                # Nobody was controlling it: no other drone flies into the area it
+                # was held over until the operator confirms it.
+                log.warning("Fleet drone %s lost (%s); its lanes wait for the operator: %s", drone_id, reason, confirm)
+                obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason,
+                                         retask="needs_confirmation")
+            else:
+                log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
+                obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
+            self.coordinator.on_drone_lost(drone_id, confirm=confirm)
             if self.manual is not None:
                 self.manual.cancel_orphan(drone_id, "lost")
             lost.append(drone_id)
@@ -2699,6 +2749,37 @@ def on_confirm_reflight(data=None):
                                                   "detail": detail}, to=sid)
 
     threading.Thread(target=_work, daemon=True, name="fleet-confirm-reflight").start()
+
+
+@socketio.on("confirm_retask")
+def on_confirm_retask(data=None):
+    """The operator confirms that a drone's waiting lanes may be offered to another drone.
+
+    They wait when the drone was landed, or lost, while nobody controlled it
+    (``FleetSupervisor.check_losses``): no other drone flies into the area it
+    was held over without a person deciding so. ``{"drone_id"}`` names the
+    drone (from its lanes' ``needs_confirmation`` entries). Runs on a worker
+    thread, because the offers it may send must never hold up other socket
+    events such as ``land_all``; the answer is a ``retask_confirm_result``
+    event to this browser.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Re-tasking needs fleet mode (--source edge --fleet ...)"})
+        return
+    data = data if isinstance(data, dict) else {}
+    drone_id = str(data.get("drone_id"))
+    sid = _sid()
+
+    def _work():
+        try:
+            ok, detail = supervisor.confirm_retask(drone_id)
+        except Exception as exc:  # noqa: BLE001 - reported to the operator
+            log.error("Re-task confirmation failed", exc_info=True)
+            ok, detail = False, f"re-task confirmation failed: {exc}"
+        socketio.emit("retask_confirm_result", {"drone_id": drone_id, "ok": ok, "detail": detail}, to=sid)
+
+    threading.Thread(target=_work, daemon=True, name="fleet-confirm-retask").start()
 
 
 @socketio.on("get_manual_status")

@@ -1608,11 +1608,14 @@ const socket = io();
                 // A settled segment's reason is the re-flight outcome, which the sentence already says.
                 const cut = REFLIGHT_SETTLED.indexOf(e.status) !== -1 ? '' : (e.reason || 'obstacle');
                 why = cut && sentence ? cut + '; ' + sentence : (cut || sentence || 'not searched');
+            } else if (e.status === 'needs_confirmation') {
+                why = (e.reason || 'landed with no controller') + '; not offered to another drone unless you confirm it';
             } else {
                 why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
             }
             const row = el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why);
             if (e.seg && e.status === 'needs_confirmation') row.appendChild(reflightConfirmButton(e));
+            if (!e.seg && e.status === 'needs_confirmation') row.appendChild(retaskConfirmButton(e));
             box.appendChild(row);
         });
     }
@@ -1637,6 +1640,27 @@ const socket = io();
         showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
         if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
     });
+    // The lanes of a drone that was landed (or lost) while nobody controlled it are never handed to another drone on
+    // their own: the operator decides whether another drone flies into the area it was held over.
+    function retaskConfirmButton(e) {
+        const button = el('button', 'btn reflight-confirm', 'Re-task');
+        button.type = 'button';
+        button.title = 'Offer all of ' + e.lost_id + "'s unflown lanes to another drone";
+        button.addEventListener('click', () => {
+            const question = e.lost_id + ' was ' + (e.reason || 'landed with no controller') + '. Another drone would '
+                + 'fly its unflown lanes, over the area where it was held for manual control. Offer them only if that '
+                + 'area is safe to fly. Re-task its lanes?';
+            if (!window.confirm(question)) return;
+            button.disabled = true;
+            socket.emit('confirm_retask', { drone_id: e.lost_id });
+        });
+        return button;
+    }
+    socket.on('retask_confirm_result', (r) => {
+        if (!r) return;
+        showFleetBanner('RE-TASK ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
+        if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
+    });
     // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
     // the box and to the map; re-tasked lanes of a lost drone are kept as they are.
     let lastSegmentsJson = '';
@@ -1658,6 +1682,12 @@ const socket = io();
             markLanes(ev.drone_id, ev.lanes, 'uncovered');
             renderUncovered();
             showFleetBanner('RETASK FAILED: ' + (ev.detail || ev.drone_id || ''));
+            return;
+        }
+        if (kind === 'retask_needs_confirmation') {
+            markLanes(ev.drone_id, ev.lanes, 'needs_confirmation');
+            renderUncovered();
+            showFleetBanner('RE-TASK NEEDS YOUR CONFIRMATION: ' + (ev.detail || ev.drone_id || ''), 15000);
             return;
         }
         if (kind === 'lane_blocked') {
@@ -1771,7 +1801,9 @@ const socket = io();
         // Start is allowed only while the map shows exactly the plan the server holds.
         const inSync = mapPlan ? mapPlan.onFleetPlan(plan || {}) : true;
         uncoveredLanes = {};
-        ((plan && plan.uncovered) || []).forEach((u) => { if (u && u.kind !== 'area' && u.kind !== 'segment') markLanes(u.drone_id, [u], 'uncovered'); });
+        ((plan && plan.uncovered) || []).forEach((u) => {
+            if (u && u.kind !== 'area' && u.kind !== 'segment') markLanes(u.drone_id, [u], u.status === 'needs_confirmation' ? 'needs_confirmation' : 'uncovered');
+        });
         applyUncovered((plan && plan.uncovered) || [], true);
         const ids = {};
         ((plan && plan.zones) || []).forEach((z) => { if (z && z.drone_id) ids[z.drone_id] = true; });

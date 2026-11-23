@@ -200,6 +200,10 @@ class ManualControl:
             MIN_ORPHAN_LAND_S, float(orphan_land_s)
         )
         self._orphans: dict[str, float] = {}
+        # Drones the orphan countdown has landed since the last
+        # ``forget_orphan_landings`` (a new plan): the supervisor makes their
+        # lanes wait for the operator (``orphan_landed``).
+        self._orphan_landed: set[str] = set()
         # When each drone's last ``resume_search`` was acknowledged (ground
         # clock): telemetry this soon after may predate the edge's release.
         self._resumed_at: dict[str, float] = {}
@@ -285,8 +289,26 @@ class ManualControl:
         self._emit_status()
         return True
 
+    def orphan_landed(self, drone_id: str) -> bool:
+        """True once the orphan countdown has sent *drone_id* its landing, until ``forget_orphan_landings``."""
+        with self._lock:
+            return drone_id in self._orphan_landed
+
+    def orphaned(self, drone_id: str) -> bool:
+        """True while *drone_id*'s orphan countdown runs, and once it has landed the drone (``orphan_landed``)."""
+        with self._lock:
+            return drone_id in self._orphans or drone_id in self._orphan_landed
+
+    def forget_orphan_landings(self) -> None:
+        """Forget which drones the orphan countdown landed; the supervisor calls it for a new plan."""
+        with self._lock:
+            self._orphan_landed.clear()
+
     def check_orphans(self) -> list[str]:
-        """Land every held drone whose controller has been gone for ``orphan_land_s``; returns their ids."""
+        """Land every held drone whose controller has been gone for ``orphan_land_s``; returns their ids.
+
+        Each drone whose landing was sent is remembered (``orphan_landed``).
+        """
         now = self._clock()
         with self._lock:
             due = [drone_id for drone_id, deadline in self._orphans.items() if now >= deadline]
@@ -307,6 +329,8 @@ class ManualControl:
             # other commands: a landing must not wait.
             try:
                 self._send(drone_id, msg)
+                with self._lock:
+                    self._orphan_landed.add(drone_id)
             except Exception as exc:  # noqa: BLE001 - retried, never raised into the monitor
                 with self._lock:
                     self._pending.pop((drone_id, msg["cmd_id"]), None)

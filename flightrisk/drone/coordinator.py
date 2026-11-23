@@ -410,9 +410,11 @@ class _Chunk:
     flown_by: str | None = None
     offered_to: list[str] = field(default_factory=list)
     announced: tuple[str, str | None] | None = None
-    # Re-flight only. True while the chunk waits for the operator to confirm
-    # it (a cut whose reason is in ``CONFIRM_REFLIGHT_CUT_REASONS``, a person):
-    # it is never offered until ``confirm_reflight`` clears it.
+    # True while the chunk waits for the operator to confirm it: a re-flight
+    # of a cut whose reason is in ``CONFIRM_REFLIGHT_CUT_REASONS`` (a person),
+    # until ``confirm_reflight``, or a lost drone's lanes re-tasked with
+    # ``on_drone_lost(confirm=...)``, until ``confirm_retask``. It is never
+    # offered before that.
     confirm: bool = False
     # Re-flight only. True once the receiver flew the appended lanes, or
     # some of them, and the chunk ended without re-flying every segment
@@ -483,12 +485,19 @@ class _Offer:
 
 @dataclass(eq=False)
 class _Retask:
-    """The re-tasking of one lost drone's unflown lanes."""
+    """The re-tasking of one lost drone's unflown lanes.
+
+    ``confirm`` is set when the lanes wait for the operator before any drone
+    is offered them (``on_drone_lost(confirm=...)``): why they wait, as the
+    operator reads it. Its chunks are marked ``confirm`` until
+    ``confirm_retask``.
+    """
 
     lost_id: str
     chunks: list[_Chunk]
     settled: threading.Event = field(default_factory=threading.Event)
     reported: bool = False
+    confirm: str | None = None
 
 
 @dataclass
@@ -809,7 +818,9 @@ class FleetCoordinator:
         ``_own_lanes_left_locked``) is listed in the same shape with
         ``status`` ``waiting`` and the waiting text as its ``reason``; a
         fleet without obstacle fields never has one, so its list is
-        unchanged.
+        unchanged. A lost drone's lane that waits for the operator's
+        ``confirm_retask`` is listed in the same shape with ``status``
+        ``needs_confirmation`` and why it waits as its ``reason``.
         """
         with self._lock:
             if self._plan is None:
@@ -830,6 +841,12 @@ class FleetCoordinator:
                 for retask in self._retasks
                 for chunk in retask.chunks
                 if chunk.status == "queued" and chunk.held
+                for entry in chunk.lane_entries()
+            ] + [
+                dict(entry, drone_id=chunk.lost_id, reason=retask.confirm, status="needs_confirmation")
+                for retask in self._retasks
+                for chunk in retask.chunks
+                if chunk.status == "queued" and chunk.confirm
                 for entry in chunk.lane_entries()
             ] + [dict(area) for area in self._plan.uncovered_areas]
             out["uncovered"] += self._obstacle_uncovered_locked()
@@ -1842,6 +1859,49 @@ class FleetCoordinator:
             return True, f"{drone_id}'s cut {cut_seq} confirmed; it is offered once a drone can take it"
         return True, f"{drone_id}'s cut {cut_seq} confirmed and offered to {receiver}"
 
+    def confirm_retask(self, drone_id: str) -> tuple[bool, str]:
+        """The operator confirms that the lost *drone_id*'s waiting lanes may be offered to another drone.
+
+        Only lanes re-tasked with ``on_drone_lost(confirm=...)`` and not yet
+        confirmed can be confirmed. From then on they are handled exactly like
+        a lost drone's lanes: each chunk goes to the nearest drone that can
+        take it, waits for one, or fails with the reason. The offers, if any,
+        are sent before this returns, so do not call it on a link's delivery
+        thread. A ``retask`` event lists the lanes offered or still waiting,
+        and a ``retask_failed`` event those no drone can take. Returns
+        ``(ok, detail)``: what happens next, or why nothing was confirmed.
+        """
+        with self._lock:
+            chunks = [
+                chunk for retask in self._retasks if retask.lost_id == drone_id
+                for chunk in retask.chunks if chunk.confirm and chunk.status == "queued"
+            ]
+            if not chunks:
+                return False, f"{drone_id} has no lanes waiting for confirmation"
+            for chunk in chunks:
+                chunk.confirm = False
+            count = sum(len(chunk.lanes) for chunk in chunks)
+            logger.warning("Operator confirmed the re-task of %s's %d unflown lanes", drone_id, count)
+            messages = self._dispatch_locked()
+            events = self._settle_and_collect_locked()
+            pending = [chunk for chunk in chunks if chunk.status in ("queued", "offered")]
+            if pending:
+                events.append(("fleet_event", self._retask_payload(drone_id, [], pending)))
+            offered = sorted({chunk.receiver for chunk in chunks if chunk.status == "offered"})
+            waiting = sum(len(chunk.lanes) for chunk in chunks if chunk.status == "queued")
+            reasons = list(dict.fromkeys(chunk.reason for chunk in chunks if chunk.status == "failed"))
+        self._emit_all(events)
+        self._send_offers(messages)
+        parts = []
+        if offered:
+            parts.append(f"offered to {', '.join(offered)}")
+        if waiting:
+            parts.append(f"{waiting} lanes are offered once a drone can take them")
+        if reasons:
+            lead = "some cannot be re-tasked" if offered or waiting else "no drone can take them"
+            parts.append(f"{lead}: {'; '.join(reasons)}")
+        return True, f"{drone_id}'s {count} unflown lanes confirmed; " + "; ".join(parts)
+
     def _reflight_counts_locked(self, drone_id: str) -> dict[str, int]:
         """The re-flights *drone_id* received: offered to it, re-flown by it and blocked again on it."""
         return {
@@ -2010,7 +2070,9 @@ class FleetCoordinator:
     # Loss recovery
     # ------------------------------------------------------------------
 
-    def on_drone_lost(self, drone_id: str, wait_s: float | None = None) -> dict[str, list[dict]]:
+    def on_drone_lost(
+        self, drone_id: str, wait_s: float | None = None, *, confirm: str | None = None,
+    ) -> dict[str, list[dict]]:
         """Mark a drone lost and offer its unflown lanes to the remaining drones.
 
         The unflown lanes start at the ``lane_index`` from the drone's last
@@ -2059,6 +2121,20 @@ class FleetCoordinator:
         Like ``sync()``, this call must not run on the thread that delivers
         the links' incoming messages.
 
+        With *confirm* (why, in the operator's words), the unflown lanes are
+        not offered to any drone until the operator confirms it with
+        ``confirm_retask``. Like a person cut's re-flight, they are then
+        handled exactly as above. Until then they are listed in
+        ``current_plan()["uncovered"]`` with ``status``
+        ``needs_confirmation`` and *confirm* as their ``reason``, and the
+        call emits one ``retask_needs_confirmation`` event listing them
+        instead of a ``retask`` event, without waiting. The ground uses this
+        for a drone it landed because nobody controlled it
+        (``FleetSupervisor``): the operator decides whether another drone
+        flies into the area that drone was held over. Everything else
+        (``drone_lost``, the best-effort ``land``, the lost drone's
+        re-flights) is as without *confirm*.
+
         Returns the lanes appended to each drone that accepted re-tasked
         lanes by the time the call returns.
         """
@@ -2084,7 +2160,12 @@ class FleetCoordinator:
                 if full_path[index:]:
                     chunks = self._lost_chunks_locked(drone_id, full_path, index)
                     if chunks:
-                        retask = _Retask(drone_id, chunks)
+                        retask = _Retask(drone_id, chunks, confirm=confirm)
+                        if confirm is not None:
+                            for chunk in chunks:
+                                chunk.confirm = True
+                            logger.warning("%s's unflown lanes are offered to another drone only once the operator "
+                                           "confirms it: %s", drone_id, confirm)
                         self._retasks.append(retask)
             messages = self._dispatch_locked()
             events = self._settle_and_collect_locked()
@@ -2095,7 +2176,7 @@ class FleetCoordinator:
         self._send_offers(messages)
         if retask is None:
             return {}
-        if wait_s > 0:
+        if wait_s > 0 and retask.confirm is None:
             retask.settled.wait(wait_s)
         with self._lock:
             events, appended = self._summarise_locked(retask)
@@ -2302,6 +2383,8 @@ class FleetCoordinator:
                 if self._landed_all:
                     self._fail_locked(chunk, "LAND ALL issued")
                     continue
+                if chunk.confirm:
+                    continue  # only the operator's confirm_retask lets it be offered
                 fits = []
                 waiting = False
                 unfit: dict[str, str] = {}
@@ -2565,10 +2648,13 @@ class FleetCoordinator:
         retask.reported = True
         acked = [c for c in retask.chunks if c.status == "acked"]
         failed = [c for c in retask.chunks if c.status == "failed"]
-        pending = [c for c in retask.chunks if c.status in ("queued", "offered")]
+        unconfirmed = [c for c in retask.chunks if c.status == "queued" and c.confirm]
+        pending = [c for c in retask.chunks if c.status in ("queued", "offered") and not c.confirm]
         events = []
         if acked or pending:
             events.append(("fleet_event", self._retask_payload(retask.lost_id, acked, pending)))
+        if unconfirmed:
+            events.append(("fleet_event", self._confirm_payload(retask, unconfirmed)))
         if failed:
             events.append(("fleet_event", self._failed_payload(retask.lost_id, failed)))
         for chunk in acked + failed:
@@ -2609,6 +2695,18 @@ class FleetCoordinator:
             payload["awaiting"] = awaiting
         payload["detail"] = "; ".join(parts)
         return payload
+
+    @staticmethod
+    def _confirm_payload(retask: _Retask, chunks: list[_Chunk]) -> dict:
+        """A ``retask_needs_confirmation`` event: the lanes that wait for the operator's ``confirm_retask``."""
+        lanes = [dict(entry, reason=retask.confirm) for chunk in chunks for entry in chunk.lane_entries()]
+        return {
+            "event": "retask_needs_confirmation",
+            "drone_id": retask.lost_id,
+            "detail": (f"{retask.lost_id}: {retask.confirm}; its {len(lanes)} unflown lanes are offered to another "
+                       "drone only once you confirm it"),
+            "lanes": lanes,
+        }
 
     @staticmethod
     def _failed_payload(lost_id: str, failed: list[_Chunk]) -> dict:
