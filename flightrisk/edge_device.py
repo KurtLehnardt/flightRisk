@@ -117,6 +117,32 @@ from collections import deque
 from typing import Any, Callable, Iterable, TextIO
 
 from flightrisk import fleet_protocol as fp
+from flightrisk.drone.flight_guards import (
+    DEFAULT_REFUSAL_HOLD_S,
+    DEFAULT_REFUSAL_RETRIES,
+    DEFAULT_REFUSALS_PER_FLIGHT,
+    DEFAULT_SETTLE_SAMPLES,
+    DEFAULT_SETTLE_TIMEOUT_S,
+    DEFAULT_SETTLE_TOLERANCE_CM,
+    DEFAULT_TAKEOFF_LATE_S,
+    ENV_HOVER_TEST,
+    ENV_REFUSAL_HOLD_S,
+    ENV_REFUSAL_RETRIES,
+    ENV_REFUSALS_PER_FLIGHT,
+    ENV_SETTLE_SAMPLES,
+    ENV_SETTLE_TIMEOUT_S,
+    ENV_SETTLE_TOLERANCE_CM,
+    ENV_TAKEOFF_LATE_S,
+    EVENT_GUARD_SETTING_NON_DEFAULT,
+    REFUSAL_HOLD_RANGE_S,
+    REFUSAL_RETRIES_RANGE,
+    REFUSALS_PER_FLIGHT_RANGE,
+    SETTLE_SAMPLES_RANGE,
+    SETTLE_TIMEOUT_RANGE_S,
+    SETTLE_TOLERANCE_RANGE_CM,
+    TAKEOFF_LATE_RANGE_S,
+    FlightGuards,
+)
 from flightrisk.drone.lane_executor import (
     CONTROL_TYPES,
     MANUAL_CONTROL_TYPES,
@@ -1945,6 +1971,71 @@ def _obstacle_sidestep_cm(environ: Any) -> int:
     return value
 
 
+def _flight_guards(environ: Any) -> FlightGuards:
+    """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
+
+    ``FLIGHTRISK_TELLO_SETTLE_SAMPLES``, ``_SETTLE_TOLERANCE_CM``,
+    ``_SETTLE_TIMEOUT_S``, ``_TAKEOFF_LATE_S``, ``_REFUSAL_RETRIES``,
+    ``_REFUSAL_HOLD_S`` and ``_REFUSALS_PER_FLIGHT``, each in its range, and
+    ``FLIGHTRISK_HOVER_TEST`` (``1`` takes off and hovers: no move to the
+    slot, no lane, nudge, manual step or way back; ``0``, the default, flies
+    normally). Read whatever the drone kind, so a malformed value always
+    refuses to start.
+    """
+    raw = (environ.get(ENV_HOVER_TEST) or "").strip().lower()
+    if raw in ("", "0", "false", "no", "off"):
+        hover_test = False
+    elif raw in ("1", "true", "yes", "on"):
+        hover_test = True
+    else:
+        raise SystemExit(f"edge_device: {ENV_HOVER_TEST}={raw!r} must be 0 or 1. Refusing to start.")
+    return FlightGuards(
+        settle_samples=_obstacle_number(
+            ENV_SETTLE_SAMPLES, DEFAULT_SETTLE_SAMPLES, *SETTLE_SAMPLES_RANGE, environ, integer=True
+        ),
+        settle_tolerance_cm=_obstacle_number(
+            ENV_SETTLE_TOLERANCE_CM, DEFAULT_SETTLE_TOLERANCE_CM, *SETTLE_TOLERANCE_RANGE_CM, environ
+        ),
+        settle_timeout_s=_obstacle_number(ENV_SETTLE_TIMEOUT_S, DEFAULT_SETTLE_TIMEOUT_S, *SETTLE_TIMEOUT_RANGE_S, environ),
+        takeoff_late_s=_obstacle_number(ENV_TAKEOFF_LATE_S, DEFAULT_TAKEOFF_LATE_S, *TAKEOFF_LATE_RANGE_S, environ),
+        refusal_retries=_obstacle_number(
+            ENV_REFUSAL_RETRIES, DEFAULT_REFUSAL_RETRIES, *REFUSAL_RETRIES_RANGE, environ, integer=True
+        ),
+        refusal_hold_s=_obstacle_number(ENV_REFUSAL_HOLD_S, DEFAULT_REFUSAL_HOLD_S, *REFUSAL_HOLD_RANGE_S, environ),
+        refusals_per_flight=_obstacle_number(
+            ENV_REFUSALS_PER_FLIGHT, DEFAULT_REFUSALS_PER_FLIGHT, *REFUSALS_PER_FLIGHT_RANGE, environ, integer=True
+        ),
+        hover_test=hover_test,
+    )
+
+
+def _warn_flight_guards(guards: FlightGuards, log: StructuredLogger, drone_id: str | None) -> None:
+    """Log every flight guard setting that is not its default once, and the hover-only test loudly."""
+    defaults = FlightGuards()
+    for name, field in (
+        (ENV_SETTLE_SAMPLES, "settle_samples"),
+        (ENV_SETTLE_TOLERANCE_CM, "settle_tolerance_cm"),
+        (ENV_SETTLE_TIMEOUT_S, "settle_timeout_s"),
+        (ENV_TAKEOFF_LATE_S, "takeoff_late_s"),
+        (ENV_REFUSAL_RETRIES, "refusal_retries"),
+        (ENV_REFUSAL_HOLD_S, "refusal_hold_s"),
+        (ENV_REFUSALS_PER_FLIGHT, "refusals_per_flight"),
+    ):
+        value, default = getattr(guards, field), getattr(defaults, field)
+        if value != default:
+            log.warning(
+                EVENT_GUARD_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
+                detail=f"{name}={value!r} is not the default ({default!r})",
+            )
+    if guards.hover_test:
+        log.warning(
+            "edge_hover_test_mode", drone_id=drone_id, variable=ENV_HOVER_TEST,
+            detail=(f"{ENV_HOVER_TEST}=1: this drone takes off and hovers. It does not move to its altitude slot "
+                    "and flies no lane, nudge, manual step or resume_search way back until the edge is restarted "
+                    "without it."),
+        )
+
+
 def _obstacle_turn(environ: Any) -> bool:
     """``FLIGHTRISK_OBSTACLE_TURN``: 1 (the default) turns nose first; 0 is the bring-up kill switch."""
     raw = (environ.get(ENV_OBSTACLE_TURN) or "").strip().lower()
@@ -2392,6 +2483,7 @@ def _run_flight_edge(
     if envelope is None:
         envelope = _startup_envelope(args)
     temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
+    guards = _flight_guards(os.environ)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
     if kind == "mavlink":
@@ -2420,8 +2512,9 @@ def _run_flight_edge(
     transport = _build_transport(args, runner, token)
     flight = LaneExecutor(
         drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
-        temp_limits=temp_limits, **obstacle.executor_kwargs(),
+        temp_limits=temp_limits, flight_guards=guards, **obstacle.executor_kwargs(),
     )
+    _warn_flight_guards(guards, log, args.drone_id)
     bind_executor = getattr(transport, "bind_executor", None)
     if callable(bind_executor):
         bind_executor(flight)

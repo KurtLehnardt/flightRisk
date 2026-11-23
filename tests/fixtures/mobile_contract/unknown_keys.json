@@ -76,7 +76,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20,
+          "min_slot_cm": 50,
           "x_future_field": "ignore me"
         },
         "load_error": null,

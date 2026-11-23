@@ -45,6 +45,7 @@ from flightrisk.drone.safety import (
     MAX_ALT_SLOT_CM,
     MIN_ALT_SLOT_CM,
     slot_above_ceiling,
+    slot_below_minimum,
     validate_ceiling,
 )
 from flightrisk.drone.temp_preflight import TempLimits
@@ -387,6 +388,11 @@ def validate(
         if not endpoint.startswith(("http://", "https://")):
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
+    env_all = os.environ if environ is None else environ
+    if (env_all.get("FLIGHTRISK_HOVER_TEST") or "").strip().lower() in ("1", "true", "yes", "on"):
+        warn("environ", "FLIGHTRISK_HOVER_TEST=1 is inherited: every edge started here runs the hover-only test. "
+             "Each drone takes off and hovers, and flies no slot move, lane, nudge or manual step until the edges "
+             "are restarted without it")
     _validate_obstacle(settings, os.environ if environ is None else environ, err, warn)
     _validate_temp_limits(settings, os.environ if environ is None else environ, err)
 
@@ -574,7 +580,9 @@ def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable
         if drone.source not in SOURCES:
             err(f"{name}.source", f"{label}: source must be tello or fake, got {drone.source!r}")
         if not MIN_ALT_SLOT_CM <= drone.alt_slot_cm <= MAX_ALT_SLOT_CM:
-            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm")
+            low = slot_below_minimum(drone.alt_slot_cm)
+            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+                + (f" ({low})" if low else ""))
         elif ceiling_ok:
             reason = slot_above_ceiling(drone.alt_slot_cm, settings.ceiling_cm, settings.margin_cm)
             if reason is not None:
@@ -686,7 +694,10 @@ def builtin_presets() -> dict[str, LauncherSettings]:
         "Layout A (edges on this computer)": LauncherSettings(
             role="edges", ground_host=DEFAULT_CABLE_ADDRESS, ground_port=DEFAULT_EDGE_PORT,
             # The same slots as scripts/demo_edge_pair.ps1. The adapter of each drone is chosen in the window.
-            drones=_two("tello", run_here=True, slots=(50, 80)),
+            # drone-1 at 60 cm, not the 50 cm minimum: at the minimum a descent
+            # from the takeoff hover needs a downward distance at least the
+            # height, on every settled packet (flight_guards), or it lands.
+            drones=_two("tello", run_here=True, slots=(60, 80)),
         ),
         "Layout B (everything here)": LauncherSettings(
             # Two real Tellos from one computer need one Wi-Fi adapter each, chosen in the window.

@@ -92,6 +92,7 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
+from flightrisk.drone.flight_guards import FlightGuards
 from flightrisk.drone.lane_avoid import ObstacleAvoidMixin
 from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
@@ -287,6 +288,7 @@ class LaneExecutor(
         obstacle_avoid_budget_s: float = OBSTACLE_AVOID_BUDGET_S,
         obstacle_settle_s: float = OBSTACLE_SETTLE_S,
         temp_limits: TempLimits | None = None,
+        flight_guards: FlightGuards | None = None,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -337,6 +339,11 @@ class LaneExecutor(
         check before every takeoff (``temp_preflight``; the defaults when
         None). Only a drone with ``state_temperature()`` (the Tello) is
         checked: see ``_takeoff_temp_refusal``.
+
+        *flight_guards* (``flightrisk.drone.flight_guards``): how a Tello's
+        height must settle before a move to its altitude slot, how late its
+        takeoff reply may be, how often a transient refusal is retried, and
+        the hover-only test. The defaults apply when it is None.
         """
         self.drone = drone
         self.envelope = envelope
@@ -537,6 +544,16 @@ class LaneExecutor(
         # Set by ``_command_move`` when the autopilot stopped a lane move
         # short (``STOPPED_SHORT``): the centimetres flown and the detail.
         self._short_stop: tuple[int, str] | None = None
+        self._guards = flight_guards if flight_guards is not None else FlightGuards()
+        # Moves the drone refused with a transient refusal (``flight_guards``)
+        # since the edge started, for telemetry (``move_refusals``): None
+        # until the first, then ``{total, last_reason, last_cmd, last_at}``.
+        # Never reset, so a drone that keeps refusing stays visible.
+        self._move_refusals: dict[str, Any] | None = None
+        # Transient refusals of this flight (``_retry_refusal``), reset at
+        # every takeoff. The lane distance they may have flown shrinks the
+        # geofence in the envelope (``SafetyEnvelope.fence_margin_cm``).
+        self._flight_refusals = 0
 
     # ------------------------------------------------------------------
     # Introspection
@@ -752,6 +769,30 @@ class LaneExecutor(
         if not is_finite_number(age) or age < 0:
             age = None
         return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
+
+    def refusal_status(self) -> dict[str, Any]:
+        """The optional flight guard telemetry field (``flight_guards``), or nothing.
+
+        One object field, ``move_refusals``, so it costs one of the
+        protocol's ``MAX_FIELDS``: ``total`` counts every transient refusal
+        since the edge started (retried or not), ``last_reason`` is the last
+        reply (such as ``error No valid imu``), ``last_cmd`` the command it
+        answered (such as ``down 60``) and ``last_at`` when, on the edge
+        clock of ``takeoff_at_local_s``. ``hover_test`` is true while the
+        edge runs the hover-only test (``total`` is then 0 until a refusal).
+        ``fence_margin_cm``, while above 0, is how much the geofence is shrunk
+        on this flight after refused lane steps.
+        Empty for a drone that never refused and is not in the hover-only
+        test, so its telemetry is unchanged.
+        """
+        with self._lock:
+            refusals = None if self._move_refusals is None else dict(self._move_refusals)
+        if self._guards.hover_test:
+            refusals = {"total": 0, **(refusals or {}), "hover_test": True}
+        margin = self.envelope.fence_margin_cm
+        if refusals is not None and margin > 0:
+            refusals["fence_margin_cm"] = round(margin, 1)
+        return {} if refusals is None else {"move_refusals": refusals}
 
     def _obstacle_unavailable_detail(self) -> str:
         """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""

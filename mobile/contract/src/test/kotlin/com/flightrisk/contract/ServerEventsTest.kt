@@ -283,7 +283,7 @@ class ServerEventsTest {
         assertTrue(s.available)
         assertEquals(180.0, s.ceilingCm)
         assertEquals(50.0, s.marginCm)
-        assertEquals(CeilingLimits(150.0, 1000.0, 30.0, 20.0, 500.0), s.limits)
+        assertEquals(CeilingLimits(150.0, 1000.0, 30.0, 50.0, 500.0), s.limits)
         assertEquals(listOf("drone-1", "drone-2"), s.drones.map { it.droneId })
         val edge = s.drones[1].edge!!
         assertEquals(false, edge.inSync)

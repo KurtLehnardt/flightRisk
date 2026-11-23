@@ -612,6 +612,12 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_start_refused": ("start_refused", None),
     "edge_fail_safe_idle": ("fail_safe", None),
     "edge_altitude_unknown": ("altitude_unknown", "height_unknown"),
+    # Flight guards (flightrisk/drone/flight_guards.py), logged by the edge.
+    "edge_height_unsettled": ("height_unsettled", "height_unsettled"),
+    "edge_descent_refused": ("descent_refused", "tof_clearance"),
+    "edge_takeoff_late": ("takeoff_late", "takeoff_late"),
+    "edge_move_refused": ("move_refused", None),
+    "edge_hover_test": ("hover_test", None),
     "edge_local_land_key": ("manual_land", "land_key"),
     "edge_sigint_land": ("manual_land", "sigint"),
     "edge_local_land_error": ("land_failed", "land_key"),

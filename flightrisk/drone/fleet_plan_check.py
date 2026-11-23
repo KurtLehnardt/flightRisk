@@ -101,7 +101,9 @@ from flightrisk.drone.safety import (
     DEFAULT_GEOFENCE_CM,
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
+    MIN_ALT_SLOT_CM,
     MIN_MOVE_CM,
+    slot_below_minimum,
 )
 from flightrisk.fleet_protocol import MAX_LANES as _PROTOCOL_MAX_LANES
 from flightrisk.fleet_protocol import MAX_MESSAGE_BYTES as _PROTOCOL_MAX_MESSAGE_BYTES
@@ -200,7 +202,8 @@ flown from there; the limit also bounds the floor the operator must keep clear."
 _MAX_SWEEP_CM = 2 * MAX_AREA_SIDE_CM
 _MAX_PLACEMENT_TOLERANCE_CM = 500
 _MAX_STAGGER_S = 60.0
-_MIN_ALT_SLOT_CM = MIN_MOVE_CM
+# The room profile's (the Tello's) lowest slot (``safety.MIN_ALT_SLOT_CM``).
+_MIN_ALT_SLOT_CM = MIN_ALT_SLOT_CM
 _MAX_ALT_SLOT_CM = MAX_MOVE_CM
 _FROM_PLAN: Any = object()
 
@@ -270,7 +273,11 @@ def _slots(alt_slots_cm: Sequence[int]) -> list[int]:
         raise ValueError("alt_slots_cm must contain at least one altitude")
     for slot in slots:
         if not _MIN_ALT_SLOT_CM <= slot <= _MAX_ALT_SLOT_CM:
-            raise ValueError(f"altitude slot must be within {_MIN_ALT_SLOT_CM}-{_MAX_ALT_SLOT_CM} cm, got {slot}")
+            low = slot_below_minimum(slot)
+            raise ValueError(
+                f"altitude slot must be within {_MIN_ALT_SLOT_CM}-{_MAX_ALT_SLOT_CM} cm, got {slot}"
+                + (f": {low}" if low else "")
+            )
     return slots
 
 
@@ -639,7 +646,8 @@ def _check(
         lane_problems = _lane_problems(drone)
         problems.extend(lane_problems)
         if not _MIN_ALT_SLOT_CM <= drone.alt_cm <= _MAX_ALT_SLOT_CM:
-            problems.append(f"{drone.drone_id}: altitude slot {drone.alt_cm} cm is out of range")
+            low = slot_below_minimum(drone.alt_cm)
+            problems.append(f"{drone.drone_id}: altitude slot {drone.alt_cm} cm is out of range" + (f" ({low})" if low else ""))
         if drone.lanes and lane_problems:  # a drone with no lanes at all is not "broken lanes"
             broken = True
             continue

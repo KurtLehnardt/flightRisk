@@ -248,7 +248,7 @@
               "max_slot_cm": 500,
               "min_ceiling_cm": 150,
               "min_margin_cm": 30,
-              "min_slot_cm": 20
+              "min_slot_cm": 50
             },
             "load_error": null,
             "locked_reason": null,
