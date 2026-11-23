@@ -217,6 +217,8 @@ class CommandRefusedError(RuntimeError):
         super().__init__(message)
         self.command = command
         self.reply = reply
+        # Set once the lane executor has counted this refusal in telemetry.
+        self.counted = False
 
 
 @dataclass(frozen=True)
@@ -227,13 +229,17 @@ class SettledHeight:
     steady. ``tof_cm`` is the lowest downward time-of-flight distance of
     that run, or None when any packet of it had no usable distance.
     ``samples`` is the number of packets in the run and ``waited_s`` how
-    long the wait took.
+    long the wait took. ``vgx_cm_s`` and ``vgy_cm_s`` are the largest
+    horizontal speeds of the run (None when not reported): the settle judges
+    vertical steadiness only, and these are logged for calibration.
     """
 
     height_cm: int
     tof_cm: int | None
     samples: int
     waited_s: float
+    vgx_cm_s: int | None = None
+    vgy_cm_s: int | None = None
 
 
 def command_result(value: Any, command: str) -> CommandResult:

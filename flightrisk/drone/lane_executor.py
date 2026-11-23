@@ -489,6 +489,11 @@ class LaneExecutor(
         # until the first, then ``{total, last_reason, last_cmd, last_at}``.
         # Never reset, so a drone that keeps refusing stays visible.
         self._move_refusals: dict[str, Any] | None = None
+        # Transient refusals of this flight, and the lane distance they may
+        # have flown, which shrinks the geofence (``_retry_refusal``). Reset
+        # at every takeoff.
+        self._flight_refusals = 0
+        self._refused_cm = 0.0
 
     # ------------------------------------------------------------------
     # Introspection
@@ -695,18 +700,22 @@ class LaneExecutor(
         return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
 
     def refusal_status(self) -> dict[str, Any]:
-        """The optional telemetry field for moves the drone refused (``flight_guards``), or nothing.
+        """The optional flight guard telemetry field (``flight_guards``), or nothing.
 
         One object field, ``move_refusals``, so it costs one of the
         protocol's ``MAX_FIELDS``: ``total`` counts every transient refusal
         since the edge started (retried or not), ``last_reason`` is the last
         reply (such as ``error No valid imu``), ``last_cmd`` the command it
         answered (such as ``down 60``) and ``last_at`` when, on the edge
-        clock of ``takeoff_at_local_s``. Empty until the first refusal, so
-        the telemetry of a drone that never refused is unchanged.
+        clock of ``takeoff_at_local_s``. ``hover_test`` is true while the
+        edge runs the hover-only test (``total`` is then 0 until a refusal).
+        Empty for a drone that never refused and is not in the hover-only
+        test, so its telemetry is unchanged.
         """
         with self._lock:
             refusals = None if self._move_refusals is None else dict(self._move_refusals)
+        if self._guards.hover_test:
+            refusals = {"total": 0, **(refusals or {}), "hover_test": True}
         return {} if refusals is None else {"move_refusals": refusals}
 
     def _obstacle_unavailable_detail(self) -> str:

@@ -198,6 +198,13 @@ const socket = io();
         return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
             title: last + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
     }
+    // The drone card badge of an edge in the hover-only test (FLIGHTRISK_HOVER_TEST=1), or null.
+    function hoverTestBadge(d) {
+        const r = d && d.move_refusals;
+        if (!r || typeof r !== 'object' || r.hover_test !== true) return null;
+        return { text: 'HOVER TEST', cls: 'held',
+            title: 'This edge runs the hover-only test: the drone takes off and hovers, and flies no slot move, lane, nudge or manual step. Land it to end the test.' };
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -286,7 +293,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), refusalBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), refusalBadge(d), hoverTestBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;

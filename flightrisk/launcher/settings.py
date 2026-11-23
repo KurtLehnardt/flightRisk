@@ -368,6 +368,11 @@ def validate(
         if not endpoint.startswith(("http://", "https://")):
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
+    env_all = os.environ if environ is None else environ
+    if (env_all.get("FLIGHTRISK_HOVER_TEST") or "").strip().lower() in ("1", "true", "yes", "on"):
+        warn("environ", "FLIGHTRISK_HOVER_TEST=1 is inherited: every edge started here runs the hover-only test. "
+             "Each drone takes off and hovers, and flies no slot move, lane, nudge or manual step until the edges "
+             "are restarted without it")
     if settings.role == "ground" and settings.llm:
         env = os.environ if environ is None else environ
         provider = (env.get("FLIGHTRISK_REASONING_PROVIDER") or "").strip().lower()
@@ -550,7 +555,10 @@ def builtin_presets() -> dict[str, LauncherSettings]:
         "Layout A (edges on this computer)": LauncherSettings(
             role="edges", ground_host=DEFAULT_CABLE_ADDRESS, ground_port=DEFAULT_EDGE_PORT,
             # The same slots as scripts/demo_edge_pair.ps1. The adapter of each drone is chosen in the window.
-            drones=_two("tello", run_here=True, slots=(50, 80)),
+            # drone-1 at 60 cm, not the 50 cm minimum: at the minimum a descent
+            # from the takeoff hover needs a downward distance at least the
+            # height, on every settled packet (flight_guards), or it lands.
+            drones=_two("tello", run_here=True, slots=(60, 80)),
         ),
         "Layout B (everything here)": LauncherSettings(
             # Two real Tellos from one computer need one Wi-Fi adapter each, chosen in the window.

@@ -229,13 +229,16 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
 
 
 def _validate_move_refusals(value: Any) -> None:
-    """``move_refusals``: ``{total, last_reason, last_cmd, last_at}``; ``total`` at least 1, the rest optional."""
+    """``move_refusals``: ``{total, last_reason, last_cmd, last_at, hover_test}``; ``total`` required, the rest optional."""
     what = "'telemetry' field 'move_refusals'"
     if not isinstance(value, Mapping):
         raise ProtocolError(f"{what} must be an object, got {_short(value)}")
     total = value.get("total")
-    if not _is_int(total) or not 1 <= total <= 2**31 - 1:
-        raise ProtocolError(f"{what} needs 'total', a whole number of at least 1, got {_short(total)}")
+    if not _is_int(total) or not 0 <= total <= 2**31 - 1:
+        raise ProtocolError(f"{what} needs 'total', a whole number of at least 0, got {_short(total)}")
+    hover_test = value.get("hover_test")
+    if hover_test is not None and not isinstance(hover_test, bool):
+        raise ProtocolError(f"{what} field 'hover_test' must be true, false or null, got {_short(hover_test)}")
     for key in ("last_reason", "last_cmd"):
         text = value.get(key)
         if text is not None and not (isinstance(text, str) and 0 < len(text) <= MAX_TEXT_LEN and text.isprintable()):

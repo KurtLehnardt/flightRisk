@@ -136,6 +136,16 @@ _TIME_BETWEEN_COMMANDS_S = 0.1
 _REPLY_POLL_S = 0.01
 # How often ``settled_height`` looks at the state packets again.
 _SETTLE_POLL_S = 0.05
+# The packets of a settled height must be spread over time as the Tello
+# sends them (about ten a second): the run spans at least this much per gap
+# between its packets, half the Tello's state period, and no two of them
+# arrive closer than _SETTLE_BURST_GAP_S. A backlog of packets that queued
+# while the receiver was busy and are then processed within a few ms of each
+# other would otherwise pass as "fresh and steady" (review of PR #207). A
+# stream that is delayed steadily, without a burst, cannot be told apart this
+# way.
+_SETTLE_MIN_GAP_S = 0.05
+_SETTLE_BURST_GAP_S = 0.01
 # A land is sent up to this many times. Repeating a land is always safe.
 _LAND_ATTEMPTS = 3
 # How long each confirming land waits for a fresh reply before it is sent
@@ -316,6 +326,8 @@ class _StateReading(NamedTuple):
     height: int | None  # ``h``: cm above (or, negative, below) the takeoff point
     tof: int | None  # ``tof``: downward time-of-flight distance in cm
     motor_s: int | None  # ``time``: whole seconds the motors have run
+    vgx: int | None = None  # ``vgx``: speed along x (only logged with a settled height)
+    vgy: int | None = None  # ``vgy``: speed along y
 
 
 class _TakeoffAnswer(NamedTuple):
@@ -707,6 +719,9 @@ class TelloController:
         # so it is never taken as the takeoff's (see _TAKEOFF_CONFIRM_S).
         self._takeoff_replies_read = 0
         self._replies_before_land: int | None = None
+        # Seconds from putting the last takeoff on the wire to reading the
+        # reply that decided it, or None (``last_takeoff_reply_s``).
+        self._takeoff_reply_s: float | None = None
         self._lift_guard_until = 0.0
         self._reply_guard_until = 0.0
         self._zero_height_count = 0
@@ -781,7 +796,8 @@ class TelloController:
         """Record when a state packet arrived and the fields landing reads from it."""
         if isinstance(state, dict):
             reading = _StateReading(
-                time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time")
+                time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time"),
+                _state_int(state, "vgx"), _state_int(state, "vgy"),
             )
         else:
             reading = _StateReading(time.monotonic(), None, None, None)
@@ -1885,6 +1901,7 @@ class TelloController:
                     self._takeoff_answered_ok = False
                     self._takeoff_replies_read = 0
                     self._replies_before_land = None
+                    self._takeoff_reply_s = None
                     self._takeoff_sent_at = time.monotonic()
                     self._lift_guard_until = 0.0
                     self._reply_guard_until = 0.0
@@ -1903,10 +1920,14 @@ class TelloController:
                     raise
             if is_takeoff:
                 reply, accepted, interrupted = self._await_takeoff_reply(responses, timeout_s, rearm_after_land)
+                if self._takeoff_sent_at is not None:
+                    self._takeoff_reply_s = time.monotonic() - self._takeoff_sent_at
                 if interrupted:
                     # A land sent its stop while the takeoff waited, and the
                     # reply read may answer that stop or land: the takeoff is
-                    # not decided by it (see _TAKEOFF_CONFIRM_S).
+                    # not decided by it (see _TAKEOFF_CONFIRM_S). A reply
+                    # arrived, so the link works.
+                    self._note_command_outcome(None)
                     return False
             else:
                 reply = self._await_flight_reply(responses, timeout_s, command)
@@ -2221,16 +2242,22 @@ class TelloController:
         distance (missing, not positive, or the out-of-range reading).
         A ``tof`` that varies by more than *tolerance_cm* means the drone is
         drifting over an edge or still moving, so it does not count as
-        settled. None when that does not happen within *timeout_s*, or when
-        *abort* is set or a land starts first.
+        settled. Every packet of the run must also show the drone off its
+        takeoff point (``_lifted``), and the run must be spread over time as
+        the Tello sends it (``_SETTLE_MIN_GAP_S``, ``_SETTLE_BURST_GAP_S``),
+        so a backlog processed in one burst is not taken for steady state.
+        This checks vertical steadiness only: the horizontal speeds
+        (``vgx``, ``vgy``) are reported for calibration, not judged. None
+        when that does not happen within *timeout_s*, or when *abort* is set
+        or a land starts first.
         """
         started = time.monotonic()
         deadline = started + timeout_s
         while True:
             reading = self._settled_window(started, samples, tolerance_cm)
             if reading is not None:
-                height, tof = reading
-                return SettledHeight(height, tof, samples, round(time.monotonic() - started, 3))
+                height, tof, vgx, vgy = reading
+                return SettledHeight(height, tof, samples, round(time.monotonic() - started, 3), vgx, vgy)
             if self._landing or time.monotonic() >= deadline:
                 return None
             if abort is not None:
@@ -2239,25 +2266,45 @@ class TelloController:
             else:
                 time.sleep(_SETTLE_POLL_S)
 
-    def _settled_window(self, since: float, samples: int, tolerance_cm: float) -> tuple[int, int | None] | None:
-        """``(h, lowest tof)`` of the last *samples* height packets after *since* if they show a steady height, else None."""
+    def _settled_window(
+        self, since: float, samples: int, tolerance_cm: float
+    ) -> tuple[int, int | None, int | None, int | None] | None:
+        """``(h, lowest tof, largest |vgx|, largest |vgy|)`` of the last *samples* height packets after *since*.
+
+        None unless they show a steady height (see ``settled_height``).
+        """
         readings = [r for r in self._height_readings() if r.at > since]
         if samples < 1 or len(readings) < samples:
             return None
         window = readings[-samples:]
         if time.monotonic() - window[-1].at > _STATE_FRESH_S:
             return None
-        if any(later.at - earlier.at > _STATE_FRESH_S for earlier, later in pairwise(window)):
+        gaps = [later.at - earlier.at for earlier, later in pairwise(window)]
+        if any(gap > _STATE_FRESH_S or gap < _SETTLE_BURST_GAP_S for gap in gaps):
+            return None
+        if window[-1].at - window[0].at < (samples - 1) * _SETTLE_MIN_GAP_S:
+            return None
+        if not all(_lifted(r) for r in window):
             return None
         heights = [r.height for r in window]
         if max(heights) - min(heights) > tolerance_cm:
             return None
+        vgx = max((abs(r.vgx) for r in window if r.vgx is not None), default=None)
+        vgy = max((abs(r.vgy) for r in window if r.vgy is not None), default=None)
         tofs = [r.tof for r in window]
         if all(_tof_valid(t) and t < _TOF_OUT_OF_RANGE_CM for t in tofs):
             if max(tofs) - min(tofs) > tolerance_cm:
                 return None
-            return window[-1].height, min(tofs)
-        return window[-1].height, None
+            return window[-1].height, min(tofs), vgx, vgy
+        return window[-1].height, None, vgx, vgy
+
+    def last_takeoff_reply_s(self) -> float | None:
+        """Seconds from putting the last takeoff on the wire to reading the reply that decided it, or None.
+
+        Measured from the send itself, so time spent waiting for the
+        command channel (a keepalive holding it) does not count.
+        """
+        return self._takeoff_reply_s
 
     def read_height_cm(self) -> int | None:
         """Height above takeoff in cm from the latest state packet, or None if unknown."""

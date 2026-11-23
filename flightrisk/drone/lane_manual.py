@@ -87,6 +87,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from flightrisk.drone.controller import command_result
+from flightrisk.drone.flight_guards import HOVER_TEST_DETAIL
 from flightrisk.drone.lane_flight import MoveNotExecutedError
 from flightrisk.drone.lane_plan import split_lane_moves
 from flightrisk.drone.safety import (
@@ -479,6 +480,10 @@ class ManualControlMixin:
             elif self._worker_alive():
                 refusal = "busy"
                 fields["detail"] = "the previous step is still being flown"
+            elif self._guards.hover_test:
+                # The hover-only test flies no move at all (flight_guards).
+                refusal = "busy"
+                fields["detail"] = HOVER_TEST_DETAIL
             else:
                 limit = self._manual_limit(direction, amount, height)
                 if limit is not None:
@@ -651,6 +656,10 @@ class ManualControlMixin:
                 refusal = "landing"
             elif self._worker_alive():
                 refusal, detail = "busy", "a manual step or takeoff is still being flown"
+            elif self._guards.hover_test and flying:
+                # The hover-only test flies no way back (flight_guards); the
+                # drone stays under manual control, hovering.
+                refusal, detail = "busy", HOVER_TEST_DETAIL
             elif not (self._plan_valid and self._step < len(self._moves)):
                 self._release_manual_locked()
                 released, detail = True, "no_plan"

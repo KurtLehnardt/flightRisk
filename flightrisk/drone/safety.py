@@ -585,12 +585,12 @@ class SafetyEnvelope:
 
     # --- Geofence ---
 
-    def check_move(self, direction: str, distance_cm: float) -> bool:
+    def check_move(self, direction: str, distance_cm: float, margin_cm: float = 0.0) -> bool:
         """Return True if a lane move may be flown from the current pose.
 
         Refuses vertical moves (lanes never change altitude), distances the
         Tello cannot fly exactly, and any move whose dead-reckoned endpoint
-        leaves the geofence.
+        leaves the geofence shrunk by *margin_cm* (``inside_fence``).
         """
         if direction not in HORIZONTAL_DIRECTIONS:
             return False
@@ -598,17 +598,22 @@ class SafetyEnvelope:
             return False
         with self._lock:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)
-        return self.inside_fence(x_cm, y_cm)
+        return self.inside_fence(x_cm, y_cm, margin_cm)
 
     def move_endpoint(self, direction: str, distance_cm: float) -> tuple[float, float]:
         """The dead-reckoned ``(x_cm, y_cm)`` a horizontal move from the current pose would reach."""
         with self._lock:
             return self.pose.endpoint(direction, distance_cm)
 
-    def inside_fence(self, x_cm: float, y_cm: float) -> bool:
-        """True if a point lies inside the geofence square around takeoff."""
+    def inside_fence(self, x_cm: float, y_cm: float, margin_cm: float = 0.0) -> bool:
+        """True if a point lies inside the geofence square around takeoff, shrunk by *margin_cm* on every side.
+
+        The margin is how far the dead-reckoned pose may be wrong, for
+        example by lane steps the drone refused but may have partly flown
+        (``flightrisk.drone.flight_guards``).
+        """
         # A small tolerance absorbs floating-point error from rotated moves.
-        limit = self.geofence_cm + 1e-6
+        limit = self.geofence_cm - max(0.0, float(margin_cm)) + 1e-6
         return abs(x_cm) <= limit and abs(y_cm) <= limit
 
     def record_move(self, direction: str, distance_cm: float) -> None:

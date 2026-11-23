@@ -120,6 +120,7 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.drone.flight_guards import (
     DEFAULT_REFUSAL_HOLD_S,
     DEFAULT_REFUSAL_RETRIES,
+    DEFAULT_REFUSALS_PER_FLIGHT,
     DEFAULT_SETTLE_SAMPLES,
     DEFAULT_SETTLE_TIMEOUT_S,
     DEFAULT_SETTLE_TOLERANCE_CM,
@@ -127,12 +128,15 @@ from flightrisk.drone.flight_guards import (
     ENV_HOVER_TEST,
     ENV_REFUSAL_HOLD_S,
     ENV_REFUSAL_RETRIES,
+    ENV_REFUSALS_PER_FLIGHT,
     ENV_SETTLE_SAMPLES,
     ENV_SETTLE_TIMEOUT_S,
     ENV_SETTLE_TOLERANCE_CM,
     ENV_TAKEOFF_LATE_S,
+    EVENT_GUARD_SETTING_NON_DEFAULT,
     REFUSAL_HOLD_RANGE_S,
     REFUSAL_RETRIES_RANGE,
+    REFUSALS_PER_FLIGHT_RANGE,
     SETTLE_SAMPLES_RANGE,
     SETTLE_TIMEOUT_RANGE_S,
     SETTLE_TOLERANCE_RANGE_CM,
@@ -1900,11 +1904,12 @@ def _flight_guards(environ: Any) -> FlightGuards:
     """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
 
     ``FLIGHTRISK_TELLO_SETTLE_SAMPLES``, ``_SETTLE_TOLERANCE_CM``,
-    ``_SETTLE_TIMEOUT_S``, ``_TAKEOFF_LATE_S``, ``_REFUSAL_RETRIES`` and
-    ``_REFUSAL_HOLD_S``, each in its range, and ``FLIGHTRISK_HOVER_TEST``
-    (``1`` takes off and hovers: no move to the slot and no lane; ``0``, the
-    default, flies normally). Read whatever the drone kind, so a malformed
-    value always refuses to start.
+    ``_SETTLE_TIMEOUT_S``, ``_TAKEOFF_LATE_S``, ``_REFUSAL_RETRIES``,
+    ``_REFUSAL_HOLD_S`` and ``_REFUSALS_PER_FLIGHT``, each in its range, and
+    ``FLIGHTRISK_HOVER_TEST`` (``1`` takes off and hovers: no move to the
+    slot, no lane, nudge, manual step or way back; ``0``, the default, flies
+    normally). Read whatever the drone kind, so a malformed value always
+    refuses to start.
     """
     raw = (environ.get(ENV_HOVER_TEST) or "").strip().lower()
     if raw in ("", "0", "false", "no", "off"):
@@ -1926,6 +1931,9 @@ def _flight_guards(environ: Any) -> FlightGuards:
             ENV_REFUSAL_RETRIES, DEFAULT_REFUSAL_RETRIES, *REFUSAL_RETRIES_RANGE, environ, integer=True
         ),
         refusal_hold_s=_obstacle_number(ENV_REFUSAL_HOLD_S, DEFAULT_REFUSAL_HOLD_S, *REFUSAL_HOLD_RANGE_S, environ),
+        refusals_per_flight=_obstacle_number(
+            ENV_REFUSALS_PER_FLIGHT, DEFAULT_REFUSALS_PER_FLIGHT, *REFUSALS_PER_FLIGHT_RANGE, environ, integer=True
+        ),
         hover_test=hover_test,
     )
 
@@ -1940,18 +1948,20 @@ def _warn_flight_guards(guards: FlightGuards, log: StructuredLogger, drone_id: s
         (ENV_TAKEOFF_LATE_S, "takeoff_late_s"),
         (ENV_REFUSAL_RETRIES, "refusal_retries"),
         (ENV_REFUSAL_HOLD_S, "refusal_hold_s"),
+        (ENV_REFUSALS_PER_FLIGHT, "refusals_per_flight"),
     ):
         value, default = getattr(guards, field), getattr(defaults, field)
         if value != default:
             log.warning(
-                EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
+                EVENT_GUARD_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
                 detail=f"{name}={value!r} is not the default ({default!r})",
             )
     if guards.hover_test:
         log.warning(
             "edge_hover_test_mode", drone_id=drone_id, variable=ENV_HOVER_TEST,
             detail=(f"{ENV_HOVER_TEST}=1: this drone takes off and hovers. It does not move to its altitude slot "
-                    "and flies no lane until the edge is restarted without it."),
+                    "and flies no lane, nudge, manual step or resume_search way back until the edge is restarted "
+                    "without it."),
         )
 
 

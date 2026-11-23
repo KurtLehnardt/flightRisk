@@ -44,7 +44,7 @@ def test_dry_run_prints_both_edges_with_ips_slots_and_no_token():
     assert result.returncode == 0, result.stderr
     lines = result.stdout.strip().splitlines()
     assert len(lines) == 2
-    assert "--tello-local-ip 192.168.10.2 --tello-ifindex 12 --drone-id drone-1 --alt-slot 50" in lines[0]
+    assert "--tello-local-ip 192.168.10.2 --tello-ifindex 12 --drone-id drone-1 --alt-slot 60" in lines[0]
     assert "--tello-local-ip 192.168.10.50 --tello-ifindex 23 --drone-id drone-2 --alt-slot 80" in lines[1]
     for line in lines:
         assert "--source tello --tello-host 192.168.10.1" in line
@@ -65,7 +65,8 @@ def test_without_ifindex_no_ifindex_flag_is_passed():
         (("-LocalIp1", "0.0.0.0", "-LocalIp2", "192.168.10.50"), "IPv4 address of one Wi-Fi adapter"),
         (("-LocalIp1", "192.168.10.2", "-LocalIp2", "wifi"), "IPv4 address of one Wi-Fi adapter"),
         (("-LocalIp1", "192.168.10.2", "-LocalIp2", "192.168.10.50", "-DroneId2", "drone-1"), "different drone ids"),
-        (("-LocalIp1", "192.168.10.2", "-LocalIp2", "192.168.10.50", "-Slot1", "5"), "at least 10"),
+        (("-LocalIp1", "192.168.10.2", "-LocalIp2", "192.168.10.50", "-Slot1", "5"), "at least 50"),
+        (("-LocalIp1", "192.168.10.2", "-LocalIp2", "192.168.10.50", "-Slot1", "49"), "at least 50"),
         (("-LocalIp1", "192.168.10.2", "-LocalIp2", "192.168.10.50", "-IfIndex1", "7", "-IfIndex2", "7"),
          "each adapter has its own index"),
     ],

@@ -25,8 +25,13 @@ on 2026-10-28. The lane executor now:
   the slot is computed again from a new settled height (never resent with
   its old distance, which the drone may have partly flown), and a sensed
   lane step goes back through its sense gate. Every other move lands as
-  before. Each refusal is logged and counted in telemetry;
-* with ``hover_test``, takes off and hovers: no move to the slot, no lane.
+  before. A flight that has been refused more than ``refusals_per_flight``
+  times lands at the next refusal, whatever the step, and a refused lane step
+  counts as possibly flown for the geofence (the fence shrinks by its
+  length), so the dead-reckoning error cannot grow past the fence. Each
+  refusal is logged and counted in telemetry;
+* with ``hover_test``, takes off and hovers: no move to the slot, no lane,
+  and no manual step, nudge or ``resume_search`` way back.
 
 Only a controller with ``settled_height`` (the Tello) is settled, bounded by
 ``tof`` and held to ``takeoff_late_s``; the others keep their single height
@@ -38,8 +43,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from flightrisk.drone.safety import MIN_ALT_SLOT_CM
+from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
 __all__ = [
+    "DEFAULT_REFUSALS_PER_FLIGHT",
     "DEFAULT_REFUSAL_HOLD_S",
     "DEFAULT_REFUSAL_RETRIES",
     "DEFAULT_SETTLE_SAMPLES",
@@ -48,12 +55,16 @@ __all__ = [
     "DEFAULT_TAKEOFF_LATE_S",
     "DESCENT_CLEARANCE_CM",
     "ENV_HOVER_TEST",
+    "ENV_REFUSALS_PER_FLIGHT",
     "ENV_REFUSAL_HOLD_S",
     "ENV_REFUSAL_RETRIES",
     "ENV_SETTLE_SAMPLES",
     "ENV_SETTLE_TIMEOUT_S",
     "ENV_SETTLE_TOLERANCE_CM",
     "ENV_TAKEOFF_LATE_S",
+    "EVENT_GUARD_SETTING_NON_DEFAULT",
+    "HOVER_TEST_DETAIL",
+    "REFUSALS_PER_FLIGHT_RANGE",
     "REFUSAL_HOLD_RANGE_S",
     "REFUSAL_RETRIES_RANGE",
     "SETTLE_SAMPLES_RANGE",
@@ -62,6 +73,7 @@ __all__ = [
     "TAKEOFF_LATE_RANGE_S",
     "TRANSIENT_REFUSALS",
     "FlightGuards",
+    "reply_text",
     "transient_refusal",
 ]
 
@@ -71,6 +83,7 @@ ENV_SETTLE_TIMEOUT_S = "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S"
 ENV_TAKEOFF_LATE_S = "FLIGHTRISK_TELLO_TAKEOFF_LATE_S"
 ENV_REFUSAL_RETRIES = "FLIGHTRISK_TELLO_REFUSAL_RETRIES"
 ENV_REFUSAL_HOLD_S = "FLIGHTRISK_TELLO_REFUSAL_HOLD_S"
+ENV_REFUSALS_PER_FLIGHT = "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT"
 ENV_HOVER_TEST = "FLIGHTRISK_HOVER_TEST"
 
 # The Tello sends about ten state packets a second, so five is about half a
@@ -99,6 +112,16 @@ DEFAULT_REFUSAL_RETRIES = 2
 REFUSAL_RETRIES_RANGE = (0, 3)
 DEFAULT_REFUSAL_HOLD_S = 2.5
 REFUSAL_HOLD_RANGE_S = (0.5, 5.0)
+# A flight retries at most this many refusals in all, across its steps: a
+# drone that refuses every step (drone-2 on 2026-11-22) lands rather than
+# retry each one. Reset at every takeoff.
+DEFAULT_REFUSALS_PER_FLIGHT = 2
+REFUSALS_PER_FLIGHT_RANGE = (0, 6)
+
+#: Logged once per flight guard setting that is not its default, at startup.
+EVENT_GUARD_SETTING_NON_DEFAULT = "edge_flight_guard_setting_non_default"
+#: Operator text of a nudge, manual step or way back refused in the hover-only test.
+HOVER_TEST_DETAIL = "hover-only test (FLIGHTRISK_HOVER_TEST=1): this drone only hovers; land it to end the test"
 
 # The lowest a descent to the slot may bring the drone above whatever its
 # downward distance sensor sees: the room profile's lowest altitude slot
@@ -113,6 +136,18 @@ DESCENT_CLEARANCE_CM = MIN_ALT_SLOT_CM
 # that keeps giving them needs attention, which is why each one is counted
 # in telemetry rather than retried silently.
 TRANSIENT_REFUSALS = ("error no valid imu", "error not joystick")
+
+
+def reply_text(value: object) -> str | None:
+    """*value* as printable text with its whitespace collapsed, at most ``MAX_TEXT_LEN`` characters, or None.
+
+    A drone's reply goes into telemetry and logs this way only, so a reply
+    with control characters or odd spacing cannot make a message invalid.
+    """
+    if value is None:
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in str(value)).split())
+    return text[:MAX_TEXT_LEN] or None
 
 
 def transient_refusal(reply: object) -> bool:
@@ -133,6 +168,7 @@ class FlightGuards:
     takeoff_late_s: float = DEFAULT_TAKEOFF_LATE_S
     refusal_retries: int = DEFAULT_REFUSAL_RETRIES
     refusal_hold_s: float = DEFAULT_REFUSAL_HOLD_S
+    refusals_per_flight: int = DEFAULT_REFUSALS_PER_FLIGHT
     hover_test: bool = False
 
     def __post_init__(self) -> None:
@@ -143,11 +179,12 @@ class FlightGuards:
             ("takeoff_late_s", self.takeoff_late_s, TAKEOFF_LATE_RANGE_S),
             ("refusal_retries", self.refusal_retries, REFUSAL_RETRIES_RANGE),
             ("refusal_hold_s", self.refusal_hold_s, REFUSAL_HOLD_RANGE_S),
+            ("refusals_per_flight", self.refusals_per_flight, REFUSALS_PER_FLIGHT_RANGE),
         )
         for name, value, (lo, hi) in checks:
             # One ValueError for a wrong type or range, as the envelope's own checks raise.
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not lo <= value <= hi:
                 raise ValueError(f"{name} must be from {lo:g} to {hi:g}, got {value!r}")
-        for name in ("settle_samples", "refusal_retries"):
+        for name in ("settle_samples", "refusal_retries", "refusals_per_flight"):
             if not isinstance(getattr(self, name), int):
                 raise ValueError(f"{name} must be a whole number, got {getattr(self, name)!r}")  # noqa: TRY004

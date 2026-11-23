@@ -68,6 +68,7 @@ from typing import Any, Protocol
 
 from flightrisk.drone.command_cache import DONE, MISMATCH, NEW, PENDING
 from flightrisk.drone.controller import command_result
+from flightrisk.drone.flight_guards import HOVER_TEST_DETAIL
 from flightrisk.drone.safety import HORIZONTAL_DIRECTIONS
 from flightrisk.fleet_protocol import (
     MAX_EPOCH,
@@ -425,10 +426,14 @@ class FleetCommandMixin:
         direction = msg.get("direction")
         distance = msg.get("distance_cm")
         refusal = None
+        detail = None
         with self._lock:
             flying = self._is_flying()
             if direction not in HORIZONTAL_DIRECTIONS or not _is_nudge_distance(distance):
                 refusal = "invalid"
+            elif self._guards.hover_test:
+                # The hover-only test flies no move at all (flight_guards).
+                refusal, detail = "busy", HOVER_TEST_DETAIL
             elif self._landing_wanted_locked():
                 refusal = "landing"
             elif not flying:
@@ -441,8 +446,9 @@ class FleetCommandMixin:
             elif not self._launch("nudge", cmd=msg, nudge=(direction, distance, self._held)):
                 refusal = "busy" if self._closed else "landing"
         if refusal is not None:
-            self._log.warning("edge_nudge_refused", drone_id=self.drone_id, reason=refusal, cmd_id=msg.get("cmd_id"))
-            self._nack(msg, refusal)
+            self._log.warning("edge_nudge_refused", drone_id=self.drone_id, reason=refusal, cmd_id=msg.get("cmd_id"),
+                              detail=detail)
+            self._nack(msg, refusal, **({"detail": detail} if detail else {}))
             return False
         return True
 

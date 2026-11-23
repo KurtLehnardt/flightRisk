@@ -114,39 +114,67 @@ move to the slot (`flightrisk/drone/flight_guards.py`):
 - **A settled height.** Nothing is computed from a height read before the takeoff reply. The edge
   waits for `FLIGHTRISK_TELLO_SETTLE_SAMPLES` (default 5) state packets received after the reply,
   each fresh, whose `h` and `tof` vary by at most `FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM` (default
-  10 cm). A `tof` that jumps, as over a desk edge, is not settled. If that does not happen within
-  `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S` (default 5 s), nothing is sent and the drone lands (landing
-  reason `height_unsettled`, event `edge_height_unsettled`).
+  10 cm), and that all show the drone off its takeoff point. The packets must also be spread as
+  the Tello sends them, about ten a second: together they span at least 0.05 s per gap, and no
+  two arrive within 0.01 s of each other, so a backlog that is processed in one burst is not taken
+  for steady state. A stream that is delayed steadily, without a burst, cannot be told apart this
+  way. If no such run arrives within `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S` (default 5 s), nothing is
+  sent and the drone lands (landing reason `height_unsettled`, event `edge_height_unsettled`).
+  The settle checks vertical steadiness only. The horizontal speeds (`vgx`, `vgy`) are logged
+  with the settled height (`edge_height_settled`) for calibration, but not judged. A `tof` that
+  jumps resets the run: a drone that drifts off a desk edge settles about 0.5 s after the edge,
+  on the distance to the floor, and a descent is then bounded by that distance.
 - **A descent bounded by `tof`.** A descent to the slot must leave at least 50 cm (the lowest slot)
   between the drone and what its downward distance sensor sees. A descent that would go further,
   or one with no usable distance, is not flown part of the way: the drone lands instead (landing
   reason `tof_clearance`, event `edge_descent_refused`), because flying lanes at another height
-  than its slot would break the altitude separation.
+  than its slot would break the altitude separation. At a slot of exactly 50 cm this needs a
+  downward distance at least the height on every settled packet; the presets use 60 cm for the
+  lower drone for that reason.
 - **A late takeoff reply.** A takeoff answered later than `FLIGHTRISK_TELLO_TAKEOFF_LATE_S`
-  (default 10 s) after it was sent lands instead of moving to the slot (landing reason
-  `takeoff_late`, event `edge_takeoff_late`). A Tello lifts within about 2 s and hovers within
-  about 5 s; with two edges on one laptop the reply has taken 4.7 to 6.7 s, 8.8 s three times and
-  once 16 s. A reply within the limit is covered by the settled height. Set the limit lower, for
-  example 3, for a first test flight.
+  (default 10 s) after it was put on the wire lands instead of moving to the slot (landing reason
+  `takeoff_late`, event `edge_takeoff_late`). The Tello controller measures it from the send
+  itself, so a keepalive that held the command channel before the takeoff does not count. A Tello
+  lifts within about 2 s and hovers within about 5 s; with two edges on one laptop the reply has
+  taken 4.7 to 6.7 s, 8.8 s three times and once 16 s. A reply within the limit is covered by
+  the settled height. Set the limit lower, for example 3, for a first test flight.
 - **Transient refusals.** A move answered `error No valid imu` or `error Not joystick` is retried
   at most `FLIGHTRISK_TELLO_REFUSAL_RETRIES` times (default 2, 0 turns retries off) after a hover
   of `FLIGHTRISK_TELLO_REFUSAL_HOLD_S` (default 2.5 s). A move to the slot is computed again from
   a new settled height, never resent with its old distance, which the drone may have partly
   flown. A sensed lane step goes back through its sense gate with a new view first. An unsensed
-  lane move, a turn and a manual step are never retried. When no retry is left the drone lands
-  as before (`executor_error`). Every such refusal is logged (`edge_move_refused`) and counted in
-  telemetry (one object field, `move_refusals`), and the drone card shows
-  `DRONE REFUSED n moves`. A drone that keeps refusing needs a check (IMU calibration in the Tello
-  app, light, floor texture) before it flies again; neither reply is in the Tello SDK
+  lane move, a turn, a manual step, a nudge and a step of the `resume_search` way back are never
+  retried. A flight retries at most `FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT` refusals in all
+  (default 2, counted from each takeoff): the next one lands, whatever the step, so a drone that
+  refuses every step lands instead of retrying each one. A refused lane step may have been partly
+  flown, so from then on the geofence is checked as if all of it had been: the fence shrinks by
+  the length of every refused lane step of the flight (`edge_geofence_refused` then carries
+  `refused_margin_cm`). When no retry is left the drone lands as before (`executor_error`). A hold,
+  a landing or a lost ground link during the hover stops the retry. Every such refusal, retried or
+  not, is logged (`edge_move_refused`) and counted in telemetry (the object field
+  `move_refusals`, whose `last_reason` is the reply as plain printable text), and the drone card
+  shows `DRONE REFUSED n moves`. A drone that keeps refusing needs a check (IMU calibration in
+  the Tello app, light, floor texture) before it flies again; neither reply is in the Tello SDK
   documentation.
 - **The hover-only test.** `FLIGHTRISK_HOVER_TEST=1` on an edge makes its drone take off and
-  hover: no move to the slot and no lane (event `edge_hover_test`). Obstacle sensing stays
-  required, and a start's probe look still runs before the takeoff. The drone still lands if its
-  height does not settle. It hovers until LAND, LAND ALL, a hold, the link-loss failsafe or the
-  battery ends the flight. The edge logs `edge_hover_test_mode` at startup.
+  hover: no move to the slot and no lane (event `edge_hover_test`). Nudges, manual steps and the
+  `resume_search` way back are refused with the reason `busy` and a detail that names the test,
+  so the drone flies nothing but its takeoff. Obstacle sensing stays required, and a start's
+  probe look still runs before the takeoff. The drone still lands if its height does not settle.
+  It hovers until LAND, LAND ALL, the link-loss failsafe or the battery lands it; a hold or a
+  manual takeover only keeps it hovering. The edge logs `edge_hover_test_mode` at startup, its
+  telemetry carries `hover_test: true` in `move_refusals`, the drone card shows `HOVER TEST`, and
+  the launcher warns when `FLIGHTRISK_HOVER_TEST=1` is inherited.
 
 Only a Tello is settled, bounded by `tof` and held to the late-reply limit; other drones keep
-their single height read. A bad value of any of these settings refuses to start the edge.
+their single height read. A bad value of any of these settings refuses to start the edge, and
+each one that is not its default is logged once at startup
+(`edge_flight_guard_setting_non_default`).
+
+Saved dashboard settings from before the lowest slot was raised may hold a slot below 50 cm. The
+dashboard keeps the saved ceiling, margin and other slots, drops only those slots (the drones then
+fly their zone's default slot), logs `ceiling_slots_dropped` and shows the change in the
+"Ceiling and altitude" section until the settings are saved again.
 
 ## The `set_ceiling` command
 

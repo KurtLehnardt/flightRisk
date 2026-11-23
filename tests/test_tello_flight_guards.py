@@ -52,6 +52,7 @@ from flightrisk.drone.flight_guards import (
     ENV_REFUSAL_RETRIES,
     ENV_SETTLE_SAMPLES,
     ENV_TAKEOFF_LATE_S,
+    HOVER_TEST_DETAIL,
     FlightGuards,
     transient_refusal,
 )
@@ -68,11 +69,14 @@ from flightrisk.drone.obstacle_sensor import FakeObstacleSensor
 from flightrisk.drone.safety import MIN_ALT_SLOT_CM, SafetyEnvelope, slot_below_minimum
 from flightrisk.edge_device import _flight_guards
 from tests.lane_executor_support import (
+    FENCE,
     FakeClock,
     QuietLogger,
     SteppedTello,
     assign,
+    hold,
     make_v2_executor,
+    nudge,
     reply_for,
     send,
     start_at,
@@ -82,6 +86,8 @@ from tests.lane_executor_support import (
 )
 
 WAIT_S = 10.0
+# The Tello sends a state packet about every 0.1 s; the wire tests stream at that rate.
+TELLO_STATE_S = 0.1
 # Short holds so the retry tests run quickly (the smallest allowed).
 FAST = FlightGuards(refusal_hold_s=0.5)
 
@@ -99,8 +105,9 @@ class GuardedTello(SteppedTello):
     ``settled_height`` call takes the next entry of ``settled`` (None: the
     drone did not settle). ``refusals`` maps a command (``"down 30"``) or a
     direction (``"forward"``) to the replies its next attempts are refused
-    with. ``takeoff_s`` advances the fake clock during the takeoff, as a late
-    takeoff reply does. Every takeoff, settle and move is written to
+    with; a None entry lets that attempt fly, and ``"rotate"`` scripts the
+    turns. ``takeoff_s`` advances the fake clock during the takeoff, as a late
+    takeoff reply does. Every takeoff, settle, turn and move is written to
     ``timeline`` in order.
     """
 
@@ -135,11 +142,21 @@ class GuardedTello(SteppedTello):
         command = f"{direction} {distance_cm}"
         self.timeline.append(("move", command))
         queue = self.refusals.get(command) or self.refusals.get(direction)
-        if queue:
-            reply = queue.pop(0)
+        reply = queue.pop(0) if queue else None
+        if reply is not None:
             raise CommandRefusedError(f"[{self.name}] '{command}' answered {reply!r} (not retried)",
                                       command=command, reply=reply)
         return super().move(direction, distance_cm)
+
+    def rotate(self, degrees: int) -> bool:
+        command = f"{'cw' if degrees > 0 else 'ccw'} {abs(int(degrees))}"
+        self.timeline.append(("rotate", command))
+        queue = self.refusals.get("rotate")
+        reply = queue.pop(0) if queue else None
+        if reply is not None:
+            raise CommandRefusedError(f"[{self.name}] '{command}' answered {reply!r} (not retried)",
+                                      command=command, reply=reply)
+        return super().rotate(degrees)
 
     def land(self) -> None:
         self.timeline.append(("land",))
@@ -397,21 +414,29 @@ class TimelineSensor(FakeObstacleSensor):
         return super().sense(after, timeout_s)
 
 
-def _sensed_executor(timeline: list, refusals: dict[str, list[str]], turn: bool = True):
+def _sensed_executor(timeline: list, refusals: dict[str, list[str]], turn: bool = True, geofence_cm: float = 500,
+                     guards: FlightGuards = FAST):
     clock = FakeClock()
     holder: dict[str, Any] = {}
     sensor = TimelineSensor(timeline, lambda: holder["envelope"].pose_snapshot())
     drone = GuardedTello(clock=clock, settled=[settled(100, 200)], refusals=refusals, timeline=timeline)
     drone.connect()
-    envelope = SafetyEnvelope(alt_slot_cm=100, geofence_cm=500, clock=clock)
+    envelope = SafetyEnvelope(alt_slot_cm=100, geofence_cm=geofence_cm, clock=clock)
     holder["envelope"] = envelope
     log = QuietLogger()
     sent: list[dict] = []
     executor = LaneExecutor(drone, envelope, "drone-1", send=sent.append, clock=clock, logger=log, fleet_v2=True,
                             obstacle_sensor=sensor, obstacle_takeoff_probe=False, obstacle_turn=turn,
-                            flight_guards=FAST)
+                            flight_guards=guards)
     executor.handle_clock({"type": "clock", "offset_s": 0.0})
     return executor, drone, clock, log, sent
+
+
+def _start_lanes(executor: LaneExecutor, clock: FakeClock, lanes: list[dict[str, Any]]) -> None:
+    send(executor, assign(lanes=lanes))
+    t = clock() + 0.5
+    send(executor, start_at(t))
+    clock.set(t)
 
 
 def test_a_refused_sensed_lane_step_is_retried_through_a_new_gate():
@@ -458,6 +483,138 @@ def test_an_unsensed_lane_move_is_never_retried():
         executor.shutdown(timeout=WAIT_S)
 
 
+def test_a_drone_that_refuses_every_step_lands_at_the_flights_cap():
+    """The critic's probe: every forward step refused once. Per-step retries alone would fly the whole plan."""
+    timeline: list = []
+    executor, drone, clock, log, sent = _sensed_executor(timeline, {"forward": ["error No valid imu", None] * 4})
+    try:
+        _start_lanes(executor, clock, [{"direction": "forward", "distance_cm": 200}])
+        assert wait_for(lambda: "executor_error" in land_reasons(log))
+        assert not events(log, "edge_lanes_complete")
+        # Steps 1 and 2 are retried; the third refusal of the flight lands.
+        assert moves(drone) == ["forward 50"] * 5
+        refused = events(log, EVENT_MOVE_REFUSED)
+        assert [(e["retry"], e["flight_refusals"]) for e in refused] == [(1, 1), (1, 2), (None, 3)]
+        assert refused[-1]["detail"].endswith("refusal 3 of this flight, above 2, landing")
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+    validate_sent(sent)
+
+
+def test_a_refused_lane_step_shrinks_the_geofence_by_its_length():
+    """The refused step may have been flown: a 200 cm fence then refuses the step that would reach 200 cm."""
+    timeline: list = []
+    executor, drone, clock, log, sent = _sensed_executor(
+        timeline, {"forward": ["error No valid imu"]}, geofence_cm=200,
+    )
+    try:
+        _start_lanes(executor, clock, [{"direction": "forward", "distance_cm": 200}])
+        assert wait_for(lambda: "geofence" in land_reasons(log))
+        # Refused, retried, then two more steps to 150 cm; the step to 200 cm is refused by the shrunk fence.
+        assert moves(drone) == ["forward 50"] * 4
+        (fence,) = events(log, "edge_geofence_refused")
+        assert fence["refused_margin_cm"] == 50 and fence["y_cm"] == 150
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+    validate_sent(sent)
+
+
+def test_without_a_refusal_the_same_lane_reaches_the_fence():
+    timeline: list = []
+    executor, drone, clock, log, _sent = _sensed_executor(timeline, {}, geofence_cm=200)
+    try:
+        _start_lanes(executor, clock, [{"direction": "forward", "distance_cm": 200}])
+        assert wait_for(lambda: events(log, "edge_lanes_complete"))
+        assert moves(drone) == ["forward 50"] * 4
+        assert not events(log, "edge_geofence_refused")
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+
+
+def test_the_flights_refusal_budget_and_fence_margin_reset_at_takeoff(guarded):
+    executor, drone, _sent, _clock, log = guarded(
+        settled=[settled(100, 200)] * 2, refusals={"down": ["error No valid imu"]},
+    )
+    executor._flight_refusals, executor._refused_cm = 5, 150.0  # left over from an earlier flight
+    take_off(executor)
+    assert moves(drone) == ["down 50", "down 50"]  # the refusal was retried: the budget started again
+    assert executor._refused_cm == 0.0
+    assert events(log, EVENT_MOVE_REFUSED)[0]["flight_refusals"] == 1
+
+
+def test_a_refused_turn_is_counted_and_lands():
+    """Turns are never retried, but a transient refusal of one is still logged and counted."""
+    timeline: list = []
+    executor, _drone, clock, log, sent = _sensed_executor(timeline, {"rotate": ["error No valid imu"]})
+    try:
+        _start_lanes(executor, clock, [{"direction": "right", "distance_cm": 100}])
+        assert wait_for(lambda: "executor_error" in land_reasons(log))
+        assert [e for e in timeline if e[0] in ("rotate", "move")] == [("rotate", "cw 90")]
+        (refused,) = events(log, EVENT_MOVE_REFUSED)
+        assert refused["command"] == "cw 90" and refused["detail"].endswith("not retried, landing")
+        assert executor.telemetry()["move_refusals"]["total"] == 1
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+    validate_sent(sent)
+
+
+def test_a_refusal_reply_is_stored_as_clean_text(guarded):
+    executor, _drone, _sent, _clock, _log = guarded(
+        settled=[settled(100, 200)] * 2, refusals={"down": ["error  No\tvalid   imu\r\n"]},
+    )
+    take_off(executor)
+    refusals = executor.telemetry()["move_refusals"]
+    assert refusals["last_reason"] == "error No valid imu"
+    fp.validate_edge_to_ground(executor.telemetry(), proto=2)
+
+
+def test_a_hold_during_the_retry_hover_stops_the_retry(guarded):
+    executor, drone, _sent, _clock, log = guarded(
+        FlightGuards(refusal_hold_s=2.0), settled=[settled(100, 200)] * 2, refusals={"down": ["error No valid imu"]},
+    )
+    send(executor, takeoff(cmd_id="t1"))
+    assert wait_for(lambda: events(log, EVENT_MOVE_REFUSED))
+    send(executor, hold(cmd_id="h1"))
+    assert wait_for(lambda: not executor.is_busy)
+    assert moves(drone) == ["down 50"]
+    assert "edge_hold_stopped" in log.names()
+    assert drone.state.is_flying and not land_reasons(log)
+
+
+def test_a_link_loss_during_the_retry_hover_lands_without_the_retry(guarded):
+    executor, drone, _sent, clock, log = guarded(
+        FlightGuards(refusal_hold_s=3.0), settled=[settled(100, 200)] * 2, refusals={"down": ["error No valid imu"]},
+    )
+    send(executor, takeoff(cmd_id="t1"))
+    assert wait_for(lambda: events(log, EVENT_MOVE_REFUSED))
+    clock.advance(10.0)  # no ground message for longer than the link-loss limit
+    executor.tick()
+    assert wait_for(lambda: not executor.is_busy)
+    assert moves(drone) == ["down 50"]
+    assert "link_loss" in land_reasons(log)
+
+
+class _MeasuredTello(GuardedTello):
+    """A Tello that measures its own takeoff reply time (``last_takeoff_reply_s``)."""
+
+    def last_takeoff_reply_s(self) -> float:
+        return 2.0
+
+
+def test_the_late_check_uses_the_controllers_own_reply_time(guarded):
+    """A keepalive that held the channel made the takeoff call slow, but the reply itself came 2 s after the send."""
+    clock = FakeClock()
+    drone = _MeasuredTello(clock=clock, settled=[settled(80, 90)], takeoff_s=12.0)
+    executor, drone, _sent, clock, log = make_v2_executor(drone, clock, alt_slot_cm=50, flight_guards=FAST)
+    try:
+        take_off(executor)
+        assert not events(log, EVENT_TAKEOFF_LATE)
+        assert events(log, "edge_takeoff")[0]["reply_s"] == 2.0
+        assert moves(drone) == ["down 30"]
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+
+
 # ---------------------------------------------------------------------------
 # Hover-only test
 # ---------------------------------------------------------------------------
@@ -500,6 +657,39 @@ def test_hover_test_still_lands_a_drone_that_does_not_settle(guarded):
     take_off(executor)
     assert moves(drone) == []
     assert land_reasons(log) == ["height_unsettled"]
+
+
+def test_hover_test_refuses_nudges_manual_steps_and_the_way_back(guarded):
+    executor, drone, sent, _clock, _log = guarded(FlightGuards(hover_test=True), settled=[settled(80, 90)])
+    take_off(executor)
+    telemetry = executor.telemetry()
+    assert telemetry["move_refusals"] == {"total": 0, "hover_test": True}
+    fp.validate_edge_to_ground(telemetry, proto=2)
+    send(executor, nudge("left", 50, cmd_id="n1"))
+    nack = reply_for(sent, "n1")
+    assert (nack["type"], nack["reason"], nack["detail"]) == ("nack", "busy", HOVER_TEST_DETAIL)
+    send(executor, fp.make_manual_hold(cmd_id="m1", fence=FENCE))
+    assert wait_for(lambda: reply_for(sent, "m1") is not None)
+    assert reply_for(sent, "m1")["type"] == "ack"
+    send(executor, fp.make_manual_move("forward", distance_cm=30, cmd_id="m2", fence=FENCE))
+    assert wait_for(lambda: reply_for(sent, "m2") is not None)
+    refused = reply_for(sent, "m2")
+    assert (refused["type"], refused["reason"], refused["detail"]) == ("nack", "busy", HOVER_TEST_DETAIL)
+    send(executor, fp.make_resume_search(cmd_id="m3", fence=FENCE))
+    assert wait_for(lambda: reply_for(sent, "m3") is not None)
+    refused = reply_for(sent, "m3")
+    assert (refused["type"], refused["reason"], refused["detail"]) == ("nack", "busy", HOVER_TEST_DETAIL)
+    assert moves(drone) == [] and drone.state.is_flying
+
+
+def test_the_launcher_warns_about_an_inherited_hover_test():
+    from flightrisk.launcher.settings import WARNING, builtin_presets, validate
+
+    rehearsal = builtin_presets()["Rehearsal with fake drones"]
+    issues = validate(rehearsal, adapters=[], environ={"FLIGHTRISK_HOVER_TEST": "1"})
+    (warned,) = [i for i in issues if i.field == "environ"]
+    assert warned.level == WARNING and "hover-only test" in warned.message
+    assert not [i for i in validate(rehearsal, adapters=[], environ={}) if i.field == "environ"]
 
 
 # ---------------------------------------------------------------------------
@@ -577,39 +767,30 @@ def _airborne_controller(tello_on_wire, **wire_kwargs):
 def test_settled_height_counts_only_packets_after_the_call(tello_on_wire):
     ctrl, wire = _airborne_controller(tello_on_wire)
     wire.tof_cm = 90
-    wire.start_state(100)
+    wire.start_state(100, interval_s=TELLO_STATE_S)
     time.sleep(0.3)
     wire.stop_state()  # the cached 100 cm is stale from now on
     started = time.monotonic()
     assert ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=0.6) is None
     assert time.monotonic() - started >= 0.55
-    wire.start_state(80)
+    wire.start_state(80, interval_s=TELLO_STATE_S)
     reading = ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=2.0)
     assert reading is not None and (reading.height_cm, reading.tof_cm, reading.samples) == (80, 90, 5)
 
 
 def test_settled_height_waits_out_a_drift_over_an_edge(tello_on_wire):
-    """A tof that jumps (the drone drifting off a desk edge) is not settled."""
-    ctrl, wire = _airborne_controller(tello_on_wire)
-    wire.tof_cm = 45
-    wire.start_state(100)
-    flip = threading.Event()
-
-    def drift() -> None:
-        while not flip.wait(0.05):
-            wire.tof_cm = 160 if wire.tof_cm == 45 else 45
-
-    threading.Thread(target=drift, daemon=True).start()
-    try:
-        assert ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=0.8) is None
-    finally:
-        flip.set()
+    """A tof that keeps jumping (the drone drifting back and forth over a desk edge) never settles."""
+    ctrl, _wire = _airborne_controller(tello_on_wire)
+    thread, out = _settle_in_background(ctrl, timeout_s=0.9)
+    _feed(ctrl, [(100, 45), (100, 160)] * 5, gap_s=TELLO_STATE_S)
+    thread.join(WAIT_S)
+    assert out == [None]
 
 
 def test_settled_height_reports_no_tof_for_an_out_of_range_reading(tello_on_wire):
     ctrl, wire = _airborne_controller(tello_on_wire)
     wire.tof_cm = 6553
-    wire.start_state(90)
+    wire.start_state(90, interval_s=TELLO_STATE_S)
     reading = ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=2.0)
     assert reading is not None and reading.height_cm == 90 and reading.tof_cm is None
 
@@ -621,6 +802,100 @@ def test_settled_height_stops_on_abort(tello_on_wire):
     started = time.monotonic()
     assert ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=5.0, abort=abort) is None
     assert time.monotonic() - started < 1.0
+
+
+def _feed(ctrl, readings: list[tuple[int, int]], gap_s: float) -> None:
+    """Deliver state packets ``(h, tof)`` to the controller *gap_s* apart, as its state receiver would."""
+    for height, tof in readings:
+        ctrl._note_state_packet({"h": str(height), "tof": str(tof), "time": "5", "vgx": "3", "vgy": "-4"})
+        if gap_s:
+            time.sleep(gap_s)
+
+
+def _settle_in_background(ctrl, timeout_s: float) -> tuple[threading.Thread, list]:
+    out: list = []
+    thread = threading.Thread(
+        target=lambda: out.append(ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=timeout_s)), daemon=True,
+    )
+    thread.start()
+    time.sleep(0.05)
+    return thread, out
+
+
+def test_a_backlog_burst_is_not_a_settled_height(tello_on_wire):
+    """The critic's probe: five packets processed within a few ms passed as steady state."""
+    ctrl, _wire = _airborne_controller(tello_on_wire)
+    thread, out = _settle_in_background(ctrl, timeout_s=0.6)
+    _feed(ctrl, [(100, 110)] * 5, gap_s=0.001)
+    thread.join(WAIT_S)
+    assert out == [None]
+
+
+def test_packets_spread_like_a_tello_stream_settle(tello_on_wire):
+    ctrl, _wire = _airborne_controller(tello_on_wire)
+    thread, out = _settle_in_background(ctrl, timeout_s=3.0)
+    _feed(ctrl, [(100, 110)] * 5, gap_s=TELLO_STATE_S)
+    thread.join(WAIT_S)
+    (reading,) = out
+    assert reading is not None and (reading.height_cm, reading.tof_cm) == (100, 110)
+    assert (reading.vgx_cm_s, reading.vgy_cm_s) == (3, 4)
+
+
+def test_a_drone_still_on_its_takeoff_point_does_not_settle(tello_on_wire):
+    """Every packet must show the drone lifted (h above 10 cm, tof above 30 cm)."""
+    ctrl, _wire = _airborne_controller(tello_on_wire)
+    thread, out = _settle_in_background(ctrl, timeout_s=1.0)
+    _feed(ctrl, [(5, 10)] * 6, gap_s=TELLO_STATE_S)
+    thread.join(WAIT_S)
+    assert out == [None]
+
+
+def test_a_single_tof_jump_at_a_desk_edge_resets_the_settle(tello_on_wire):
+    """Over the desk tof reads 45 cm; past its edge, 160 cm. The settle restarts at the jump and settles on the floor.
+
+    The settle judges vertical steadiness only: once the drone is past the
+    edge it settles about 0.5 s later, and the descent is then bounded by the
+    distance to the floor.
+    """
+    ctrl, wire = _airborne_controller(tello_on_wire)
+    wire.tof_cm = 45
+    wire.start_state(100, interval_s=TELLO_STATE_S)
+    started = time.monotonic()
+    threading.Timer(0.25, lambda: setattr(wire, "tof_cm", 160)).start()
+    reading = ctrl.settled_height(samples=5, tolerance_cm=10, timeout_s=3.0)
+    assert reading is not None and reading.tof_cm == 160 and reading.height_cm == 100
+    assert time.monotonic() - started >= 0.25 + 4 * TELLO_STATE_S
+
+
+def test_vgx_and_vgy_are_logged_with_the_settled_height(guarded):
+    executor, _drone, _sent, _clock, log = guarded(settled=[SettledHeight(80, 90, 5, 0.5, 12, 7)])
+    take_off(executor)
+    (settle,) = events(log, EVENT_HEIGHT_SETTLED)
+    assert (settle["vgx_cm_s"], settle["vgy_cm_s"]) == (12, 7)
+
+
+def test_an_ok_queued_before_the_lands_stop_is_still_the_takeoffs(tello_on_wire):
+    """The race the full suite caught, pinned: the land marks the replies queued before its stop.
+
+    The takeoff's own "ok" was already queued when the land sent its stop,
+    so it is accepted; the stop's own reply after it is not taken.
+    """
+    ctrl, _wire = tello_on_wire()
+    responses = ctrl.tello.get_own_udp_object()["responses"]
+    del responses[:]
+    land_seq = ctrl._land_seq
+    with ctrl._wire_lock:
+        ctrl._takeoff_in_flight = True
+        ctrl._takeoff_replies_read = 0
+        ctrl._replies_before_land = None
+        ctrl._takeoff_sent_at = time.monotonic()
+    responses.append(b"ok")  # the takeoff's own answer
+    ctrl._send_land_raw("stop")  # the wire answers the stop "ok" too
+    assert ctrl._replies_before_land == 1
+    first = ctrl._await_takeoff_reply(responses, 1.0, land_seq)
+    assert first.accepted and not first.interrupted
+    second = ctrl._await_takeoff_reply(responses, 1.0, land_seq)
+    assert second.interrupted and not second.accepted
 
 
 def _wire_executor(ctrl, alt_slot_cm: float = 50):
@@ -643,13 +918,13 @@ def test_incident_replay_on_the_wire_no_down_before_a_settled_read(tello_on_wire
     """
     monkeypatch.setattr(tello_module, "_LAND_DEADLINE_S", 5.0)
     ctrl, wire = _airborne_controller(tello_on_wire, delays={"takeoff": 8.8})
-    wire.start_state(0)
+    wire.start_state(0, interval_s=TELLO_STATE_S)
     marks: dict[str, float] = {}
 
     def resume_with_truth() -> None:
         wire.height_cm, wire.tof_cm = 40, 50
         marks["fresh"] = time.monotonic()
-        wire.start_state()
+        wire.start_state(interval_s=TELLO_STATE_S)
 
     def on_send(command: str) -> None:
         if command == "takeoff":
@@ -681,7 +956,7 @@ def test_desk_replay_on_the_wire_lands_instead_of_descending(tello_on_wire, monk
     """Steady h 100 cm with 45 cm below (over a desk): 'down 50' would leave 0 cm of clearance. It lands."""
     monkeypatch.setattr(tello_module, "_LAND_DEADLINE_S", 5.0)
     ctrl, wire = _airborne_controller(tello_on_wire, delays={"takeoff": 1.0})
-    wire.start_state(0)
+    wire.start_state(0, interval_s=TELLO_STATE_S)
 
     def on_send(command: str) -> None:
         if command == "takeoff":
@@ -813,7 +1088,8 @@ def test_refusal_telemetry_is_validated():
     good = {"total": 2, "last_reason": "error No valid imu", "last_cmd": "down 30", "last_at": 1234.5}
     fp.validate_edge_to_ground({**base, "move_refusals": good}, proto=1)
     fp.validate_edge_to_ground({**base, "move_refusals": {"total": 1}}, proto=1)
-    for bad in (5, {"total": 0}, {"total": True}, {**good, "last_reason": 5}, {**good, "last_cmd": ""},
+    fp.validate_edge_to_ground({**base, "move_refusals": {"total": 0, "hover_test": True}}, proto=1)
+    for bad in (5, {"total": -1}, {"total": True}, {"total": 0, "hover_test": "yes"}, {**good, "last_reason": 5}, {**good, "last_cmd": ""},
                 {**good, "last_at": "now"}, {**good, "last_reason": "error " * 40}):
         with pytest.raises(fp.ProtocolError, match="move_refusals"):
             fp.validate_edge_to_ground({**base, "move_refusals": bad}, proto=1)
@@ -830,15 +1106,54 @@ def test_drone_card_shows_refused_moves(tmp_path):
     harness = tmp_path / "h.js"
     harness.write_text(
         "const src = require('fs').readFileSync(process.argv[2], 'utf8');\n"
-        "const f = new Function('fmt', src + '; return {refusalBadge};')((v) => v);\n"
+        "const f = new Function('fmt', src + '; return {refusalBadge, hoverTestBadge};')((v) => v);\n"
         "console.log(JSON.stringify([f.refusalBadge({}), f.refusalBadge({move_refusals: {total: 1}}),\n"
-        "  f.refusalBadge({move_refusals: {total: 3, last_cmd: 'down 30', last_reason: 'error No valid imu'}})]));\n"
+        "  f.refusalBadge({move_refusals: {total: 3, last_cmd: 'down 30', last_reason: 'error No valid imu'}}),\n"
+        "  f.refusalBadge({move_refusals: {total: 0, hover_test: true}}),\n"
+        "  f.hoverTestBadge({move_refusals: {total: 0, hover_test: true}}), f.hoverTestBadge({})]));\n"
     )
     src = tmp_path / "block.js"
     src.write_text(block)
     out = subprocess.run([NODE, str(harness), str(src)], capture_output=True, text=True, check=True)
-    none, one, three = json.loads(out.stdout)
+    none, one, three, hover_refusal, hover, no_hover = json.loads(out.stdout)
+    assert hover_refusal is None and no_hover is None
+    assert hover["text"] == "HOVER TEST" and hover["cls"] == "held"
     assert none is None
     assert one["text"] == "DRONE REFUSED 1 move" and one["cls"] == "held"
     assert three["text"] == "DRONE REFUSED 3 moves"
     assert three["title"].startswith('Last: down 30 answered "error No valid imu".')
+
+
+# ---------------------------------------------------------------------------
+# Saved ceiling settings with a slot below the new minimum
+# ---------------------------------------------------------------------------
+
+
+def test_a_saved_low_slot_is_dropped_and_the_saved_ceiling_kept(tmp_path):
+    from flightrisk.dashboard.ceiling import CeilingBoard, CeilingStore
+
+    path = tmp_path / "ceiling.json"
+    path.write_text(json.dumps({"version": 1, "ceiling_cm": 180, "margin_cm": 40,
+                                "slots_cm": {"drone-1": 20, "drone-2": 120}}))
+    store = CeilingStore(path)
+    settings, error = store.load()
+    assert error is None
+    assert (settings.ceiling_cm, settings.margin_cm, dict(settings.slots_cm)) == (180, 40, {"drone-2": 120})
+    assert "drone-1 20 cm" in store.load_warning and "50 cm" in store.load_warning
+    log = QuietLogger()
+    board = CeilingBoard(CeilingStore(path), logger=log)
+    payload = board.payload()
+    assert (payload["ceiling_cm"], payload["margin_cm"], payload["load_error"]) == (180, 40, None)
+    assert "drone-1 20 cm" in payload["load_warning"]
+    assert "ceiling_slots_dropped" in log.names()
+
+
+def test_a_saved_file_that_is_invalid_for_another_reason_still_falls_back(tmp_path):
+    from flightrisk.dashboard.ceiling import CeilingStore
+
+    path = tmp_path / "ceiling.json"
+    path.write_text(json.dumps({"version": 1, "ceiling_cm": 120, "margin_cm": 40, "slots_cm": {"drone-1": 20}}))
+    store = CeilingStore(path)
+    settings, error = store.load()
+    assert error is not None and store.load_warning is None
+    assert settings.ceiling_cm == 200  # the defaults, refused for flight until saved, as before
