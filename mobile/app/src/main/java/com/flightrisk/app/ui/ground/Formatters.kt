@@ -266,7 +266,7 @@ object MissionFormat {
     // -------------------------------------------------------------- reasoning
 
     data class ReasoningCardUi(
-        /** "Gemma (gemma4:latest)", or "Reasoning off: matches use ReID and face scores only". */
+        /** "Gemma (gemma4:latest)", or "Reasoning off: matches are scored without an AI check". */
         val statusText: String,
         /** "Available: Gemma, Off", or null when the ground listed none. */
         val availableText: String?,
@@ -299,7 +299,7 @@ object MissionFormat {
     fun reasoningCard(r: ReasoningProvider?): ReasoningCardUi? {
         if (r == null) return null
         val status = when {
-            r.provider == ReasoningProviderKind.Off -> "Reasoning off: matches use ReID and face scores only"
+            r.provider == ReasoningProviderKind.Off -> "Reasoning off: matches are scored without an AI check"
             r.provider == null -> "Provider not reported"
             else -> {
                 val label = r.label?.takeIf { it.isNotEmpty() }?.let { GroundText.shorten(it, 80) } ?: providerName(r.provider!!)

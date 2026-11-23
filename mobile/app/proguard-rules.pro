@@ -3,16 +3,10 @@
 # ONNX Runtime - the JNI library finds its Java classes, fields, constructors
 # and methods by name (for example ai/onnxruntime/OnnxTensor and OrtException),
 # so nothing in the package may be renamed or removed. The AAR ships no rules.
-# No -dontwarn is needed: R8 reports no missing class for ai.onnxruntime or
-# org.tensorflow.lite (checked by building without one; AGP wrote no missing_rules.txt entry).
+# No -dontwarn is needed: R8 reports no missing class for ai.onnxruntime
+# (checked by building without one; AGP wrote no missing_rules.txt entry).
 -keep class ai.onnxruntime.** { *; }
 -keepclassmembers class ai.onnxruntime.** { *; }
-
-# LiteRT (org.tensorflow.lite) - the JNI library calls back into the Java
-# interpreter, tensor and delegate classes by name. The AAR's own rules only
-# keep classes annotated @UsedByReflection, so keep the whole API.
--keep class org.tensorflow.lite.** { *; }
--keep interface org.tensorflow.lite.** { *; }
 
 # MediaPipe LLM Inference (tasks-genai) - the AAR ships no consumer rules. The
 # native engine calls Java callbacks and reads the option protos by name.

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Download and convert OSNet + InsightFace models for FlightRisk.
+# Download and convert OSNet + InsightFace models for FlightRisk (ground and iOS legacy outputs).
+#
+# The Android app does not use these models. It ships YOLOX-S and CLIP
+# ViT-B-16 from scripts/mobile_models/make_models.py instead, so this script
+# writes nothing into mobile/app/src/main/assets.
 #
 # Creates an isolated Python venv, installs dependencies, and runs both
 # conversion scripts to produce ONNX, CoreML, and TFLite model files.
@@ -12,8 +16,6 @@
 #   models/insightface_r18.onnx                          (Face recognition)
 #   ios/FlightRisk/Models/OSNetReID.mlpackage             (iOS)
 #   ios/FlightRisk/Models/InsightFaceR18.mlpackage        (iOS)
-#   mobile/app/src/main/assets/osnet_x1_0.tflite          (Android)
-#   mobile/app/src/main/assets/insightface_r18.tflite     (Android)
 
 set -euo pipefail
 
@@ -78,7 +80,7 @@ echo "------------------------------------------------------------"
 echo "  Converting OSNet x1.0 (Person Re-ID)"
 echo "------------------------------------------------------------"
 echo ""
-python3 scripts/convert_osnet.py || {
+python3 scripts/convert_osnet.py --skip-tflite || {
     echo ""
     echo "WARNING: OSNet conversion failed (see errors above)"
     echo ""
@@ -89,7 +91,7 @@ echo "------------------------------------------------------------"
 echo "  Converting InsightFace buffalo_sc (Face Recognition)"
 echo "------------------------------------------------------------"
 echo ""
-python3 scripts/convert_insightface.py || {
+python3 scripts/convert_insightface.py --skip-tflite || {
     echo ""
     echo "WARNING: InsightFace conversion failed (see errors above)"
     echo ""
@@ -130,8 +132,6 @@ list_file "$REPO_ROOT/models/osnet_x1_0.onnx"                            "OSNet 
 list_file "$REPO_ROOT/models/insightface_r18.onnx"                       "InsightFace ONNX (Python)"
 list_file "$REPO_ROOT/ios/FlightRisk/Models/OSNetReID.mlpackage"          "OSNet CoreML (iOS)"
 list_file "$REPO_ROOT/ios/FlightRisk/Models/InsightFaceR18.mlpackage"     "InsightFace CoreML (iOS)"
-list_file "$REPO_ROOT/mobile/app/src/main/assets/osnet_x1_0.tflite"      "OSNet TFLite (Android)"
-list_file "$REPO_ROOT/mobile/app/src/main/assets/insightface_r18.tflite"  "InsightFace TFLite (Android)"
 
 echo ""
 echo "============================================================"

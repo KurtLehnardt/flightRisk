@@ -1,6 +1,13 @@
 package com.flightrisk.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import com.flightrisk.app.drone.ObstacleAvoidanceText
+import com.flightrisk.app.drone.ObstacleGuard
+import com.flightrisk.app.model.OnnxModelLoader
 import com.flightrisk.app.ui.demo.DemoModeSection
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,7 +88,6 @@ import com.flightrisk.app.ui.theme.MatchGreen
  * @property activePreset Currently selected sensitivity preset, or null
  *   if manual thresholds override a preset.
  * @property reidThreshold Current ReID threshold (0.0-1.0).
- * @property faceThreshold Current face match threshold (0.0-1.0).
  * @property scorerThreshold Current scorer match threshold (0.0-1.0).
  * @property reasoning The reasoning section: selected and active provider, cloud
  *   opt-in, saved-key state, pending consent and messages. It holds no key.
@@ -89,7 +95,6 @@ import com.flightrisk.app.ui.theme.MatchGreen
 data class SettingsScreenState(
     val activePreset: SensitivityPreset? = SensitivityPreset.BALANCED,
     val reidThreshold: Float = 0.55f,
-    val faceThreshold: Float = 0.45f,
     val scorerThreshold: Float = 0.45f,
     val reasoning: ReasoningUiState = ReasoningUiState(),
     val signalConfigs: Map<String, SignalConfig> = emptyMap(),
@@ -106,7 +111,7 @@ data class SettingsScreenState(
  * @param state Current settings state.
  * @param onPresetSelected Callback when a sensitivity preset is selected.
  * @param onThresholdChanged Callback when a raw threshold is changed.
- *   Params: (name, value) where name is "reid", "face", or "scorer".
+ *   Params: (name, value) where name is "reid" or "scorer".
  * @param onReasoningAction Callback for every action in the reasoning section.
  * @param droneState Current drone connection and telemetry state, or null.
  * @param frameSourceMode Current frame source (camera or drone).
@@ -193,6 +198,13 @@ fun SettingsScreen(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
+            // ----- Detector: built-in YOLOX-S, or one the user imports (off by default) -----
+            ByoDetectorSection(searchActive = searchActive)
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
             // ----- Ground station link (phone as an edge) -----
             GroundLinkSection()
 
@@ -222,10 +234,16 @@ fun SettingsScreen(
             // ----- Advanced section -----
             AdvancedSection(
                 reidThreshold = state.reidThreshold,
-                faceThreshold = state.faceThreshold,
                 scorerThreshold = state.scorerThreshold,
                 onThresholdChanged = onThresholdChanged,
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Licences: the notices of the on-device models, in full -----
+            LicencesSection()
         }
     }
 }
@@ -814,6 +832,21 @@ private fun DroneSection(
             },
         )
 
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Store builds carry no depth model, so pattern flights do not avoid obstacles: say so.
+        val appContext = LocalContext.current.applicationContext
+        val depthModelInstalled by produceState<Boolean?>(initialValue = null) {
+            value = withContext(Dispatchers.IO) { OnnxModelLoader.hasAsset(appContext, ObstacleGuard.MODEL_FILE) }
+        }
+        depthModelInstalled?.let { installed ->
+            Text(
+                text = ObstacleAvoidanceText.forSettings(installed),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (installed) MaterialTheme.colorScheme.onSurfaceVariant else AlertOrange,
+            )
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
 
         // Connection state indicator
@@ -884,7 +917,7 @@ private fun DroneSection(
 
 /**
  * Matching algorithm configuration with per-signal toggles and weight sliders.
- * Signals are grouped by category: Face Recognition, Person Re-ID, Appearance, Other.
+ * Signals are grouped by category: Person Re-ID, Appearance, Other.
  */
 @Composable
 private fun MatchingAlgorithmsSection(
@@ -1177,7 +1210,6 @@ private fun WeightSlider(
 @Composable
 private fun AdvancedSection(
     reidThreshold: Float,
-    faceThreshold: Float,
     scorerThreshold: Float,
     onThresholdChanged: (String, Float) -> Unit,
     modifier: Modifier = Modifier,
@@ -1239,14 +1271,6 @@ private fun AdvancedSection(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 ThresholdSlider(
-                    label = "Face Threshold",
-                    value = faceThreshold,
-                    onValueChange = { onThresholdChanged("face", it) },
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ThresholdSlider(
                     label = "Scorer Threshold",
                     value = scorerThreshold,
                     onValueChange = { onThresholdChanged("scorer", it) },
@@ -1264,7 +1288,6 @@ private fun AdvancedSection(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "ReID: ${"%.2f".format(reidThreshold)} | " +
-                        "Face: ${"%.2f".format(faceThreshold)} | " +
                         "Scorer: ${"%.2f".format(scorerThreshold)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

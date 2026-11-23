@@ -60,8 +60,12 @@ import com.flightrisk.app.ui.privacy.PrivacyNoticeScreen
 import com.flightrisk.app.pipeline.SearchPipeline
 import com.flightrisk.app.transport.GroundLink
 import com.flightrisk.app.recording.SessionRecorder
+import com.flightrisk.app.byo.ByoDetectorText
+import com.flightrisk.app.drone.ObstacleAvoidanceText
+import com.flightrisk.app.drone.ObstacleGuard
+import com.flightrisk.app.model.OnnxModelLoader
 import com.flightrisk.app.vision.Detection
-import com.flightrisk.app.vision.FaceRecognizer
+import com.flightrisk.app.vision.DetectorFactory
 import com.flightrisk.app.vision.PersonDetector
 import com.flightrisk.app.vision.PersonReID
 
@@ -80,6 +84,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Entry point activity for FlightRisk.
@@ -162,14 +167,20 @@ class MainActivity : ComponentActivity() {
     // AI pipeline state
     private var searchPipeline: SearchPipeline? = null
     private var personDetector: PersonDetector? = null
+    /** The [DetectorFactory.wantedKey] the current detector was built for (never logged: it names an imported model). */
+    private var personDetectorKey: String? = null
     private var personReID: PersonReID? = null
-    private var faceRecognizer: FaceRecognizer? = null
     private var alertManager: AlertManager? = null
     private var pipelineEventJob: Job? = null
     private var pipelineSetupJob: Job? = null
     private var llmSelector: LlmSelector? = null
     private var locationProvider: LocationProvider? = null
-    private var cameraFrameSource: CameraXFrameSource? = null
+    /** Said on the Search screen while the imported detector could not be opened and YOLOX-S is used. */
+    @Volatile
+    private var detectorNotice: String? = null
+
+    /** The phone camera's frames for the search pipeline; bound with the preview while a camera search runs. */
+    private val cameraFrameSource = CameraXFrameSource()
     private var sessionRepository: SessionRepository? = null
     private var sessionRecorder: SessionRecorder? = null
 
@@ -219,7 +230,6 @@ class MainActivity : ComponentActivity() {
         settingsState = SettingsScreenState(
             activePreset = SensitivityPreset.BALANCED,
             reidThreshold = config.vision.reidThreshold.toFloat(),
-            faceThreshold = config.vision.faceMatchThreshold.toFloat(),
             scorerThreshold = config.vision.scorerMatchThreshold.toFloat(),
         )
 
@@ -354,6 +364,7 @@ class MainActivity : ComponentActivity() {
                             onSearchPatternChanged = { selectedSearchPattern = it },
                             demoActive = groundUi.demo,
                             onDemoToggle = { on -> if (on) requestDemo() else groundConsoleViewModel.exitDemo() },
+                            cameraFrameSource = cameraFrameSource,
                         )
                     }
                 }
@@ -406,6 +417,10 @@ class MainActivity : ComponentActivity() {
     /** Follows the demo switch: the drawn placeholder target in, the real one out, and back again. */
     private fun applyDemo(on: Boolean) {
         if (on == demoActive) return
+        // The ground console can switch the demo on while a real search runs. That search is
+        // stopped the normal way first (setup and pipeline stopped, camera unbound), so the
+        // camera does not stay on behind the demo with no Stop button to turn it off.
+        if (on && realSearchRunning()) stopRealSearch()
         demoActive = on
         if (on) {
             realTargetBitmap = targetBitmap
@@ -501,6 +516,16 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // Camera frames are kept from now on; the camera is bound below, with its frame
+        // analysis and preview, to the Activity while the search runs.
+        if (frameSourceMode == FrameSourceMode.CAMERA && !demoActive) {
+            cameraFrameSource.start()
+            // Bound to the Activity for the whole search, so detection goes on on other tabs.
+            @Suppress("DEPRECATION")
+            val rotation = windowManager.defaultDisplay.rotation
+            cameraFrameSource.bind(this, this, rotation)
+        }
+
         // Update UI immediately so button toggles without waiting for model load
         if (frameSourceMode == FrameSourceMode.DRONE) {
             searchState = searchState.copy(
@@ -525,49 +550,37 @@ class MainActivity : ComponentActivity() {
         pipelineSetupJob = lifecycleScope.launch(Dispatchers.Default) {
             // --- Instantiate vision components (if not already created) ---
 
-            if (personDetector == null) {
-                try {
-                    personDetector = PersonDetector(ctx)
-                    Log.i(TAG, "PersonDetector loaded")
-                } catch (e: Exception) {
-                    Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
-                } catch (e: LinkageError) {
-                    // The native runtime did not load (UnsatisfiedLinkError, or
-                    // ExceptionInInitializerError from the library's static init). Search
-                    // goes on without this model, as when the model file is missing.
-                    Log.w(TAG, "PersonDetector: native library did not load", e)
+            // The detector is YOLOX-S, or the detector the user imported in Settings (off by
+            // default). A change of that setting applies from the next search.
+            // The detector is rebuilt only when that choice changes; a fallback to YOLOX-S is
+            // kept for the same choice, so YOLOX-S is not reloaded for every search.
+            val wantedDetector = DetectorFactory.wantedKey(ctx)
+            if (personDetectorKey != wantedDetector) {
+                try { personDetector?.close() } catch (e: Exception) {
+                    Log.w(TAG, "Error closing PersonDetector", e)
                 }
+                personDetector = null
+                val selection = DetectorFactory.createDetector(ctx, config)
+                personDetector = selection.detector
+                personDetectorKey = wantedDetector
+                detectorNotice = if (selection.choice == DetectorFactory.Choice.IMPORTED_FAILED) {
+                    ByoDetectorText.SEARCH_FALLBACK
+                } else {
+                    null
+                }
+                Log.i(TAG, "Person detector: ${personDetector ?: "not loaded (models not installed?)"}")
+            }
+            withContext(Dispatchers.Main) {
+                if (searchState.isSearching) searchState = searchState.copy(detectorNotice = detectorNotice)
             }
 
             if (personReID == null) {
-                try {
-                    personReID = PersonReID(ctx)
-                    Log.i(TAG, "PersonReID loaded")
-                } catch (e: Exception) {
-                    Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
-                } catch (e: LinkageError) {
-                    // The native runtime did not load (UnsatisfiedLinkError, or
-                    // ExceptionInInitializerError from the library's static init). Search
-                    // goes on without this model, as when the model file is missing.
-                    Log.w(TAG, "PersonReID: native library did not load", e)
-                }
+                personReID = DetectorFactory.createEmbedder(ctx, config)
+                Log.i(TAG, "Appearance embedder ${if (personReID != null) "loaded" else "not loaded (models not installed?)"}")
             }
 
-            if (faceRecognizer == null) {
-                try {
-                    faceRecognizer = FaceRecognizer(ctx)
-                    Log.i(TAG, "FaceRecognizer loaded")
-                } catch (e: Exception) {
-                    Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
-                } catch (e: LinkageError) {
-                    // The native runtime did not load (UnsatisfiedLinkError, or
-                    // ExceptionInInitializerError from the library's static init). Search
-                    // goes on without this model, as when the model file is missing.
-                    Log.w(TAG, "FaceRecognizer: native library did not load", e)
-                }
-            }
-
-            // --- Set target photo on vision components ---
+            // --- Set target photo on the embedder ---
+            // Matching is by appearance only: the app ships no face detection or face recognition model.
 
             if (target != null) {
                 try {
@@ -575,17 +588,8 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to set ReID target", e)
                 }
-                try {
-                    faceRecognizer?.setTarget(target)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to set face target", e)
-                }
-            }
-
-            // --- Create camera frame source for camera mode ---
-
-            if (currentFrameSourceMode == FrameSourceMode.CAMERA && cameraFrameSource == null) {
-                cameraFrameSource = CameraXFrameSource(1920, 1080)
+            } else {
+                personReID?.clearTarget()
             }
 
             // --- Create SearchPipeline ---
@@ -619,12 +623,13 @@ class MainActivity : ComponentActivity() {
             val reasoning = ls.awaitKeyChecked()
             pipeline.adaptWeightsForBackend(reasoning.active == ReasoningProvider.LOCAL)
 
-            // Wire frame source: pull from drone or camera based on active mode
+            // Wire frame source: pull from drone or camera based on active mode. Each camera
+            // frame is handed out once, so a frame is never detected (or corroborated) twice.
             pipeline.frameSource = SearchPipeline.FrameSource {
                 if (frameSourceMode == FrameSourceMode.DRONE) {
                     droneManager?.frameSource?.getLatestFrame()
                 } else {
-                    cameraFrameSource?.getLatestFrame()
+                    cameraFrameSource.takeNewFrame()
                 }
             }
 
@@ -660,34 +665,6 @@ class MainActivity : ComponentActivity() {
                         } else {
                             null
                         }
-                    }
-
-                    override fun compare(crop: Bitmap): Float {
-                        return reid.compare(crop)
-                    }
-                }
-            }
-
-            // Wire face callback (delegates to FaceRecognizer)
-            val face = faceRecognizer
-            if (face != null) {
-                pipeline.faceCallback = object : SearchPipeline.FaceCallback {
-                    override val hasTarget: Boolean get() = face.hasTarget
-
-                    override val matchThreshold: Float =
-                        config.vision.faceMatchThreshold.toFloat()
-
-                    override fun findMatch(detections: List<Detection>): Pair<Int, Float>? {
-                        val result = face.findMatch(detections)
-                        return if (result.first != null) {
-                            Pair(result.first!!, result.second)
-                        } else {
-                            null
-                        }
-                    }
-
-                    override fun compare(crop: Bitmap): Float {
-                        return face.compare(crop)
                     }
                 }
             }
@@ -775,23 +752,41 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleStopSearch() {
+        // A real search is stopped whatever the demo state, so Stop always turns the camera off.
+        if (!demoActive || realSearchRunning()) stopRealSearch()
         if (demoActive) {
-            searchState = searchState.copy(isSearching = false, boxes = emptyList(), cameraFrame = null, fps = 0f, personsDetected = 0, highestMatchScore = 0f)
+            searchState = searchState.copy(isSearching = false, boxes = emptyList(), cameraFrame = null, fps = 0f, personsDetected = 0, highestMatchScore = 0f, activeAlert = null)
             return
         }
+        searchState = searchState.copy(isSearching = false, activeAlert = null)
+        Log.i(TAG, "Search stopped")
+    }
+
+    /** A camera or drone search is set up, running, or holds the camera. */
+    private fun realSearchRunning(): Boolean =
+        pipelineSetupJob != null || searchPipeline != null ||
+            cameraFrameSource.status != CameraXFrameSource.Status.IDLE
+
+    /**
+     * The stop path of a real search: the model setup and the pipeline stop, the camera
+     * stops keeping frames and is unbound, a drone stops its pattern (and lands in drone
+     * mode), and alerts are dismissed. It changes no search state; callers do.
+     */
+    private fun stopRealSearch() {
         pipelineSetupJob?.cancel()
         pipelineSetupJob = null
         pipelineEventJob?.cancel()
         pipelineEventJob = null
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
+        cameraFrameSource.stop()
+        cameraFrameSource.unbind()
         droneManager?.stopSearchPattern()
         if (frameSourceMode == FrameSourceMode.DRONE) {
             lifecycleScope.launch { droneManager?.land() }
         }
         alertManager?.dismissAll()
-        searchState = searchState.copy(isSearching = false, activeAlert = null)
-        Log.i(TAG, "Search stopped")
+        Log.i(TAG, "Real search stopped")
     }
 
     private fun handleDismissAlert() {
@@ -841,7 +836,6 @@ class MainActivity : ComponentActivity() {
         settingsState = settingsState.copy(
             activePreset = preset,
             reidThreshold = preset.reidThreshold.toFloat(),
-            faceThreshold = preset.faceMatchThreshold.toFloat(),
             scorerThreshold = preset.scorerMatchThreshold.toFloat(),
         )
         Log.i(TAG, "Preset selected: $preset")
@@ -851,7 +845,6 @@ class MainActivity : ComponentActivity() {
     private fun handleThresholdChanged(name: String, value: Float) {
         settingsState = when (name) {
             "reid" -> settingsState.copy(activePreset = null, reidThreshold = value)
-            "face" -> settingsState.copy(activePreset = null, faceThreshold = value)
             "scorer" -> settingsState.copy(activePreset = null, scorerThreshold = value)
             else -> settingsState
         }
@@ -918,6 +911,13 @@ class MainActivity : ComponentActivity() {
 
         // Collect drone state immediately so CONNECTING/ERROR states are visible
         droneStateJob = lifecycleScope.launch {
+            launch {
+                // Pattern flights go on without obstacle avoidance; the flight controls say so.
+                val depthModel = withContext(Dispatchers.IO) { OnnxModelLoader.hasAsset(applicationContext, ObstacleGuard.MODEL_FILE) }
+                manager.obstacleAvoidanceOn.collect { on ->
+                    searchState = searchState.copy(obstacleAvoidance = ObstacleAvoidanceText.forDrone(on, depthModel))
+                }
+            }
             manager.droneState.collect { state ->
                 currentDroneState = state
             }
@@ -1101,14 +1101,11 @@ class MainActivity : ComponentActivity() {
             Log.w(TAG, "Error closing PersonDetector", e)
         }
         personDetector = null
+        personDetectorKey = null
         try { personReID?.close() } catch (e: Exception) {
             Log.w(TAG, "Error closing PersonReID", e)
         }
         personReID = null
-        try { faceRecognizer?.close() } catch (e: Exception) {
-            Log.w(TAG, "Error closing FaceRecognizer", e)
-        }
-        faceRecognizer = null
 
         // Clean up reasoning: cancel any cloud request still in flight.
         reasoningStateJob?.cancel()
@@ -1130,8 +1127,7 @@ class MainActivity : ComponentActivity() {
         alertManager = null
         locationProvider?.stopUpdates()
         locationProvider = null
-        cameraFrameSource?.stop()
-        cameraFrameSource = null
+        cameraFrameSource.release()
 
         // Clean up drone
         droneManager?.onActivityDestroy()
