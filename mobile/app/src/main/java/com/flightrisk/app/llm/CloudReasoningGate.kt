@@ -19,7 +19,12 @@ sealed interface ClaudeKeyLookup {
 }
 
 /** What the app last learned about the saved key. Holds no key material. */
-enum class ClaudeKeyState { UNKNOWN, FOUND, MISSING, UNAVAILABLE }
+enum class ClaudeKeyState {
+    UNKNOWN, FOUND, MISSING, UNAVAILABLE,
+
+    /** A key is saved but Anthropic rejected it (HTTP 401 or 403). Cleared when a key is saved or removed. */
+    INVALID,
+}
 
 /**
  * Where the Claude key lives. Every method may block on the Keystore and
@@ -71,6 +76,55 @@ class CloudReasoningGate(
     var keyState: ClaudeKeyState = ClaudeKeyState.UNKNOWN
         private set
 
+    /** Set when Anthropic rejected the saved key; no request is sent with it until a new key is saved. */
+    @Volatile
+    private var keyRejected = false
+
+    private val keyLock = Any()
+
+    /**
+     * Counts key changes: it goes up whenever a key is saved or removed. A request notes it
+     * before it reads the key, so a late answer can be tied to the key that was sent.
+     */
+    @Volatile
+    var keyGeneration: Long = 0L
+        private set
+
+    private val keyChangeListeners = java.util.concurrent.CopyOnWriteArrayList<Runnable>()
+
+    /** Registers [listener], called after a key was saved or removed (on the calling thread). */
+    fun addKeyChangeListener(listener: Runnable) {
+        keyChangeListeners.add(listener)
+    }
+
+    /** Removes a listener added with [addKeyChangeListener]. */
+    fun removeKeyChangeListener(listener: Runnable) {
+        keyChangeListeners.remove(listener)
+    }
+
+    /** Starts a new key generation and gives the next key a fresh try. */
+    private fun keyChanged() {
+        synchronized(keyLock) {
+            keyGeneration++
+            keyRejected = false
+        }
+    }
+
+    private fun notifyKeyChanged() = keyChangeListeners.forEach { it.run() }
+
+    /**
+     * Records that Anthropic rejected the key sent under [generation] (401 or 403). The gate then
+     * yields no key, so nothing more is uploaded, until [saveKey] or [removeKey] runs. If the key
+     * was saved or removed since [generation] was read, the answer is about an old key and is
+     * ignored (returns false). Main-safe.
+     */
+    fun markKeyInvalid(generation: Long): Boolean = synchronized(keyLock) {
+        if (generation != keyGeneration) return false
+        keyRejected = true
+        keyState = ClaudeKeyState.INVALID
+        true
+    }
+
     /** Main-safe: true while the opt-in is on, Cloud Claude is selected and no key removal is running. */
     fun isAllowedBySettings(): Boolean = removalsInProgress.get() == 0 && settings.cloudAllowedBySettings
 
@@ -87,6 +141,10 @@ class CloudReasoningGate(
      */
     fun keyIfOpen(): String? {
         if (!isAllowedBySettings()) return null
+        if (keyRejected) {
+            keyState = ClaudeKeyState.INVALID
+            return null
+        }
         val lookup = keys.lookup()
         keyState = lookup.toState()
         val key = (lookup as? ClaudeKeyLookup.Found)?.key?.takeIf { it.isNotBlank() } ?: return null
@@ -96,7 +154,7 @@ class CloudReasoningGate(
 
     /** Re-reads whether a key is saved (not whether cloud is allowed). Blocking. */
     fun refreshKeyState(): ClaudeKeyState {
-        val state = keys.lookup().toState()
+        val state = keys.lookup().toState().let { if (keyRejected && it == ClaudeKeyState.FOUND) ClaudeKeyState.INVALID else it }
         keyState = state
         return state
     }
@@ -109,7 +167,10 @@ class CloudReasoningGate(
         if (!settings.cloudOptIn) return false
         val key = ReasoningSettings.normalizedKey(input) ?: return false
         val saved = keys.save(key)
+        // A new key gets a fresh try, and failures recorded for the old key are forgotten.
+        if (saved) keyChanged()
         refreshKeyState()
+        if (saved) notifyKeyChanged()
         return saved
     }
 
@@ -120,13 +181,18 @@ class CloudReasoningGate(
      */
     fun removeKey(): Boolean {
         removalsInProgress.incrementAndGet()
+        // Starts a new generation now, so a 401 for the old key that lands during or after the
+        // removal cannot mark the state invalid when no key is saved.
+        keyChanged()
         try {
             settings.notifyGateMayHaveClosed(keyRemoved = true)
             return keys.remove()
         } finally {
+            keyChanged()
             refreshKeyState()
             removalsInProgress.decrementAndGet()
             settings.notifyGateMayHaveClosed(keyRemoved = true)
+            notifyKeyChanged()
         }
     }
 

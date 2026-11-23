@@ -69,6 +69,10 @@ class OSNetReIDMatcher(
         } catch (e: Exception) {
             Log.w(TAG, "OSNet model not available: ${e.message}")
             isAvailable = false
+        } catch (e: LinkageError) {
+            // Native LiteRT library failed to load: degrade to "model not loaded".
+            Log.w(TAG, "OSNet native library did not load: ${e.javaClass.simpleName}")
+            isAvailable = false
         }
     }
 

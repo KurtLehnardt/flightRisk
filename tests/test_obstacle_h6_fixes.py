@@ -212,6 +212,7 @@ def test_live_and_replay_paths_give_midas_the_same_tensor(midas, tmp_path):
     out = tmp_path / "rec"
     meta = obstacle_record.record(recorder_drone, out, 0.1)
     assert meta["frames_written"] >= 1
+    assert meta["height_cm"] is None
     midas.tensors.clear()
     midas.images.clear()
     results = obstacle_replay.run_replay(None, 1, 0.35, frames_dir=str(out))
@@ -308,11 +309,12 @@ def test_recorder_writes_exactly_the_frames_the_sensor_holds_with_their_capture_
     def sleep(_s):
         clock.advance(0.05)
 
-    meta = obstacle_record.record(drone, out, 0.2, label="plant 150 cm", clock=clock, sleep=sleep)
+    meta = obstacle_record.record(drone, out, 0.2, label="plant 150 cm", height_cm=130.0, clock=clock, sleep=sleep)
     assert meta["frames_written"] == 2
     assert meta["stale_frames_refused"] == 1 and meta["last_stale_cause"] == STALE_DECODER_BACKLOG
     assert meta["capture_stamps"] is True and meta["channel_order"] == "bgr"
     assert json.loads((out / "meta.json").read_text())["label"] == "plant 150 cm"
+    assert json.loads((out / "meta.json").read_text())["height_cm"] == 130.0
     with open(out / "frames.csv", newline="") as f:
         rows = list(csv.DictReader(f))
     assert [float(r["captured_at_s"]) for r in rows] == [49.8, 49.9]

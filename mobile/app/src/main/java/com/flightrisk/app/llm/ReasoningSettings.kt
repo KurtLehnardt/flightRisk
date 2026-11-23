@@ -72,6 +72,7 @@ object ReasoningReason {
         "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic;"
     const val CLOUD_BLOCKED = "$CLOUD_BLOCKED_PREFIX turn on \"Allow cloud reasoning\" to opt in."
     const val CLAUDE_KEY_MISSING = "No Claude API key is saved on this device."
+    const val CLAUDE_KEY_REJECTED = "Anthropic rejected the saved Claude API key. Save a valid key in Settings."
     const val CHECKING_KEY = "Checking the saved Claude API key…"
     const val SECURE_STORAGE_UNAVAILABLE = "Secure storage unavailable on this device"
     const val OFFLINE = "No internet connection."

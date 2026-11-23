@@ -1,0 +1,13 @@
+// Signing settings for the FlightRisk app and its unit tests.
+//
+// The development team is not committed. To sign the app, copy
+// Signing.local.xcconfig.example to Signing.local.xcconfig in this folder and put your
+// ten-character Apple Developer team ID in it. Signing.local.xcconfig is gitignored.
+// See ios/README.md, section "Signing".
+//
+// project.yml attaches this file to both targets, so a value set in the local file
+// also overrides the project-level build settings, such as FLIGHTRISK_PRIVACY_POLICY_URL.
+
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"
