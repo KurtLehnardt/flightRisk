@@ -628,7 +628,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)"
+          "today_ref_reason": "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)"
         }
       }
     },
@@ -4840,7 +4840,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant"
+          "today_ref_reason": "the Tello frame shape (the Tello SDK stream size; FakeTelloController in drone/tello.py:2725 mirrors it), unverified (drone/coverage.py:104); no constant"
         },
         "generic_multirotor": null
       }
@@ -7183,7 +7183,7 @@
       "row": 8,
       "id": "envelope.max_altitude_cm",
       "profile": "generic_multirotor",
-      "reason": "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)"
+      "reason": "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)"
     },
     {
       "row": 17,
@@ -7267,7 +7267,7 @@
       "row": 110,
       "id": "tello_sdk.video_size_px",
       "profile": "tello",
-      "reason": "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant"
+      "reason": "the Tello frame shape (the Tello SDK stream size; FakeTelloController in drone/tello.py:2725 mirrors it), unverified (drone/coverage.py:104); no constant"
     },
     {
       "row": 129,
