@@ -1073,6 +1073,8 @@ class SearchPipeline(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Reasoning worker error", e)
+            } catch (e: LinkageError) {
+                Log.e(TAG, "Reasoning worker error: a native library could not be loaded", e)
             }
         }
     }

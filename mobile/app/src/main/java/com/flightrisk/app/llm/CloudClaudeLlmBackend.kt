@@ -5,9 +5,12 @@ import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -30,6 +33,8 @@ import java.io.IOException
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * LLM backend that calls the Anthropic Messages API (Claude) for visual
@@ -148,8 +153,12 @@ class CloudClaudeLlmBackend(
         if (keyRemoved || !gate.isAllowedBySettings()) cancelAllRequests()
     }
 
+    /** A key was saved or removed: failures recorded for the old key say nothing about the new one. */
+    private val keyChangeListener = Runnable { resetHealth() }
+
     init {
         gate.addListener(gateListener)
+        gate.addKeyChangeListener(keyChangeListener)
     }
 
     /**
@@ -164,6 +173,8 @@ class CloudClaudeLlmBackend(
     fun cancelAllRequests() {
         val calls = synchronized(lock) {
             generation++
+            // The reference photo belongs to the search that was just stopped.
+            cachedReference = null
             inFlight.toList().also { inFlight.clear() }
         }
         calls.forEach { it.cancel() }
@@ -176,6 +187,7 @@ class CloudClaudeLlmBackend(
     /** Stops listening to the gate and cancels everything. */
     fun close() {
         gate.removeListener(gateListener)
+        gate.removeKeyChangeListener(keyChangeListener)
         cancelAllRequests()
     }
 
@@ -225,21 +237,40 @@ class CloudClaudeLlmBackend(
     private fun encodeReference(bitmap: Bitmap): String {
         synchronized(lock) {
             val cached = cachedReference
-            if (cached != null && cached.first.get() === bitmap) return cached.second
+            if (cached != null) {
+                if (cached.first.get() === bitmap) return cached.second
+                // The bitmap it was made for is gone (or replaced): drop the encoded copy too.
+                cachedReference = null
+            }
         }
         val encoded = encodeImage(bitmap)
         synchronized(lock) { cachedReference = java.lang.ref.WeakReference(bitmap) to encoded }
         return encoded
     }
 
-    /** Records one failed request and opens the breaker after [FAILURE_LIMIT] in a row. */
+    /** Forgets the failure state (notice, failure count, breaker) because the saved key changed. */
+    private fun resetHealth() {
+        synchronized(lock) {
+            consecutiveFailures = 0
+            breakerOpenUntil = 0L
+            lastProblem.set(null)
+            cachedReference = null
+        }
+        healthListener?.invoke()
+    }
+
+    /**
+     * Records one failed request and opens the breaker after [FAILURE_LIMIT] in a row.
+     * After the cool-off the breaker is half-open: the count stays at one below the limit,
+     * so a single failed probe opens it again at once, while a success closes it.
+     */
     private fun recordFailure(problemText: String) {
         synchronized(lock) {
             consecutiveFailures++
             lastProblem.set(problemText)
             if (consecutiveFailures >= FAILURE_LIMIT) {
                 breakerOpenUntil = nowMs() + COOL_OFF_MS
-                consecutiveFailures = 0
+                consecutiveFailures = FAILURE_LIMIT - 1
                 log("Cloud reasoning paused for ${COOL_OFF_MS / 1000} s after $FAILURE_LIMIT failed requests in a row")
             }
         }
@@ -258,15 +289,17 @@ class CloudClaudeLlmBackend(
     }
 
     /** Sends one Messages API request and parses the structured answer. Blocking. */
-    private fun callApi(contentBlocks: List<JsonObject>): ReasoningResult {
+    private suspend fun callApi(contentBlocks: List<JsonObject>): ReasoningResult {
         val body = requestBody(model, contentBlocks)
 
         // Read the generation first, so a cancellation from here on drops this request.
         val generationAtStart = synchronized(lock) { generation }
 
         // Second gate check, immediately before sending. This local value is the
-        // only copy of the key: it is checked here and placed in the header.
+        // only copy of the key: it is checked here and placed in the header. The key
+        // generation is read first, so a 401 can be tied to the key that was sent.
         if (!isOnline()) return BLOCKED
+        val keyGeneration = gate.keyGeneration
         val key = gate.keyIfOpen() ?: return BLOCKED
         if (!isHeaderSafe(key)) {
             log("Cloud request not sent: the saved Claude key contains characters a header cannot carry")
@@ -293,7 +326,7 @@ class CloudClaudeLlmBackend(
         }
 
         return try {
-            call.execute().use { response ->
+            call.await().use { response ->
                 if (response.code != 200) {
                     // Redirects (3xx) are not followed and count as errors. The error
                     // body is not logged: it is not needed and could echo request data.
@@ -302,7 +335,12 @@ class CloudClaudeLlmBackend(
                         401, 403 -> {
                             // The key is wrong, revoked or not allowed. Stop using it until the
                             // user saves a new one; the status code is shown, never the key.
-                            gate.markKeyInvalid()
+                            if (!gate.markKeyInvalid(keyGeneration)) {
+                                // The key was saved or removed while this request was in flight, so the
+                                // answer is about a key that is no longer the saved one.
+                                log("Ignored a late HTTP ${response.code} for a key that has since changed")
+                                return BLOCKED
+                            }
                             recordFailure("Claude rejected the saved API key (HTTP ${response.code}). Save a valid key in Settings.")
                             "Claude rejected the saved API key (HTTP ${response.code})"
                         }
@@ -326,6 +364,9 @@ class CloudClaudeLlmBackend(
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            // The search was stopped: the call is cancelled by [await], nothing to record.
+            throw e
         } catch (e: IOException) {
             if (call.isCanceled()) {
                 log("Cloud request cancelled because cloud reasoning was turned off or the key was removed")
@@ -407,6 +448,21 @@ class CloudClaudeLlmBackend(
 
     override fun toString(): String = "CloudClaudeLlmBackend(model=$model, available=$isAvailable)"
 
+    /** Suspends until the response head arrives; cancelling the coroutine cancels the HTTP call. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resume(response) { response.close() }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWithException(e)
+            }
+        })
+        continuation.invokeOnCancellation { cancel() }
+    }
+
     /** Counts the network attempts of one call. */
     private class AttemptCounter {
         val attempts = AtomicInteger()
@@ -460,7 +516,10 @@ class CloudClaudeLlmBackend(
         internal const val READ_TIMEOUT_MS = 120_000L
         internal const val CALL_TIMEOUT_MS = 150_000L
 
-        /** After this many failed requests in a row the breaker opens (same as the desktop agent). */
+        /**
+         * After this many failed requests in a row the breaker opens. The desktop agent's
+         * breaker is in PR #191, which is not merged yet, so this is not claimed to match it.
+         */
         internal const val FAILURE_LIMIT = 3
 
         /** How long the breaker stays open. */
@@ -472,16 +531,14 @@ class CloudClaudeLlmBackend(
         /** The reasoning text for a refusal; a refusal does not count as a failure for the breaker. */
         private const val REFUSAL_TEXT = "Claude declined to compare these images"
 
-        /**
-         * No server-side refusal fallback (the `server-side-fallback-2026-07-01` beta and
-         * `"fallbacks": "default"` that the desktop agent sends for this model). The
-         * desktop is updated with the server, but a shipped app is not: if Anthropic
-         * retired the beta, every request from an old install would fail until the user
-         * updated. For Claude Sonnet 5.5 the default fallback also retries only `cyber`
-         * and `frontier_llm` declines, which comparing two photos of people by clothing
-         * should not trigger. A decline is reported as an error and counted in the
-         * notice instead. Revisit if real traffic shows declines.
-         */
+        // No server-side refusal fallback (the `server-side-fallback-2026-07-01` beta and
+        // `"fallbacks": "default"` that the desktop agent sends for this model). The
+        // desktop is updated with the server, but a shipped app is not: if Anthropic
+        // retired the beta, every request from an old install would fail until the user
+        // updated. For Claude Sonnet 5.5 the default fallback also retries only `cyber`
+        // and `frontier_llm` declines, which comparing two photos of people by clothing
+        // should not trigger. A decline is reported as an error and counted in the
+        // notice instead. Revisit if real traffic shows declines.
         private const val JPEG_QUALITY = 85
         private const val TAG = "CloudClaudeLlm"
         private val JSON = "application/json".toMediaType()
