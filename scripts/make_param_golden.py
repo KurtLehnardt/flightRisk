@@ -13,7 +13,9 @@ force flag. To regenerate after the base moved, delete the file by hand and say 
 
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
 import json
 import re
 import sys
@@ -39,10 +41,21 @@ CO = "flightrisk.drone.coordinator"
 MC = "flightrisk.dashboard.manual_control"
 DS = "flightrisk.dashboard.safety"
 LP = "flightrisk.drone.lane_plan"
+LF = "flightrisk.drone.lane_flight"
+FS = "flightrisk.drone.fleet_scale"
+FPC = "flightrisk.drone.fleet_plan_check"
+FP = "flightrisk.drone.fleet_patterns"
+PP = "flightrisk.drone.plan_paths"
 OPT = MF + ":MavlinkFleetOptions."
+# Modules read without importing them (the dashboard app pulls in Flask; scripts are not a package).
+APP = "ast:flightrisk/dashboard/app.py:"
+GROUND = "ast:scripts/field_fleet_ground.py:"
 
 # Row id -> (tello ref, generic ref). A ref is "module:dotted.name", optionally "[i]" for a tuple item
-# and "*scale" to convert metres to centimetres. None means no single importable constant.
+# and "*scale" to convert metres to centimetres. "module:callable(param)" reads a parameter default;
+# "ast:path:NAME" reads a module-level literal, and "ast:path:--flag" an argparse default, without
+# importing the file; "~code=registry" renames an enum value; " & " joins refs into a list.
+# None means no single runtime source, and the entry must then be listed in DOC_ONLY_TODAY.
 TODAY_REFS = {
     "envelope.geofence_cm": (SAF + ":DEFAULT_GEOFENCE_CM", SAF + ":FIELD_LIMITS.default_geofence_cm"),
     "envelope.ceiling_cm": (SAF + ":DEFAULT_CEILING_CM", SAF + ":FIELD_LIMITS.default_ceiling_cm"),
@@ -87,13 +100,13 @@ TODAY_REFS = {
     "sensing.sense_retries": (OBS + ":OBSTACLE_SENSE_RETRIES", OBS + ":OBSTACLE_SENSE_RETRIES"),
     "sensing.sensor_down_s": (OBS + ":OBSTACLE_SENSOR_DOWN_S", OBS + ":OBSTACLE_SENSOR_DOWN_S"),
     "sensing.person_wait_s": (OBS + ":OBSTACLE_DETECTION_WAIT_S", OBS + ":OBSTACLE_DETECTION_WAIT_S"),
-    "move.heading_tolerance_deg": (MF + ":_HEADING_TOLERANCE_DEG", MF + ":_HEADING_TOLERANCE_DEG"),
+    "move.heading_tolerance_deg": (LF + ":HEADING_TOLERANCE_DEG", MF + ":_HEADING_TOLERANCE_DEG"),
     "avoid.clear_votes": (OBS + ":OBSTACLE_CLEAR_VOTES", OBS + ":OBSTACLE_CLEAR_VOTES"),
     "avoid.relook": (OBS + ":OBSTACLE_RELOOK", OBS + ":OBSTACLE_RELOOK"),
     "avoid.sidestep_cm": (OBS + ":OBSTACLE_SIDESTEP_CM", OBS + ":OBSTACLE_SIDESTEP_CM"),
     "avoid.sidesteps": (OBS + ":OBSTACLE_SIDESTEPS", OBS + ":OBSTACLE_SIDESTEPS"),
     "avoid.sidestep_pass_cm": (OBS + ":OBSTACLE_SIDESTEP_PASS_CM", OBS + ":OBSTACLE_SIDESTEP_PASS_CM"),
-    "plan.alt_slots_cm": (SAF + ":DEFAULT_ALT_SLOTS_CM", None),
+    "plan.alt_slots_cm": (SAF + ":DEFAULT_ALT_SLOTS_CM", GROUND + "--slots-m*100"),
     "manual.step_cm": (MC + ":DEFAULT_STEP_CM", MC + ":DEFAULT_STEP_CM"),
     "manual.rotate_deg": (MC + ":DEFAULT_ROTATE_DEG", MC + ":DEFAULT_ROTATE_DEG"),
     "move.speed_cm_s": (None, OPT + "speed_mps*100"),
@@ -131,7 +144,62 @@ TODAY_REFS = {
     "retask.window_s": (LP + ":DEFAULT_HOVER_TIMEOUT_S", LP + ":DEFAULT_HOVER_TIMEOUT_S"),
     "stranded.lost_idle_s": (MC + ":DEFAULT_LOST_IDLE_S", MC + ":DEFAULT_LOST_IDLE_S"),
     "tello.refusals_per_flight": (FG + ":DEFAULT_REFUSALS_PER_FLIGHT", None),
-    "lost.flying_window_s": (CO + ":LOST_OBSTACLE_S", None),
+    "lost.flying_window_s": (CO + ":LOST_OBSTACLE_S", CO + ":LOST_OBSTACLE_S"),
+    "envelope.max_geofence_cm": ("ast:flightrisk/launcher/settings.py:MAX_GEOFENCE_CM", SAF + ":FIELD_LIMITS.max_geofence_cm"),
+    "battery.display_warn_pct": (DS + ":SafetyPolicy.battery_warn_pct", DS + ":SafetyPolicy.battery_warn_pct"),
+    "battery.display_critical_pct": (DS + ":SafetyPolicy.battery_critical_pct", DS + ":SafetyPolicy.battery_critical_pct"),
+    "link.loss_action": (None, OPT + "failsafe_action~rtl=return"),
+    "sensing.retry_pause_s": (LF + ":OBSTACLE_RETRY_PAUSE_S", LF + ":OBSTACLE_RETRY_PAUSE_S"),
+    "plan.strip_cm": ("flightrisk.drone.plan_edit:DEFAULT_STRIP_CM", None),
+    "plan.area_cm": (APP + "SINGLE_PLAN_AREA_CM", None),
+    "plan.zone_gap_cm": (CO + ":DEFAULT_ZONE_GAP_CM", FS + ":field_scale(zone_gap_m)*100"),
+    "separation.base_cm": (FPC + ":DEFAULT_MIN_SEPARATION_CM", FPC + ":DEFAULT_MIN_SEPARATION_CM"),
+    "plan.placement_tolerance_cm": (FPC + ":DEFAULT_PLACEMENT_TOLERANCE_CM", FPC + ":DEFAULT_PLACEMENT_TOLERANCE_CM"),
+    "plan.altitude_tolerance_cm": (FPC + ":ALTITUDE_TOLERANCE_CM", FPC + ":ALTITUDE_TOLERANCE_CM"),
+    "plan.placement_offset_cm": (FP + ":DEFAULT_PLACEMENT_OFFSET_CM", FP + ":DEFAULT_PLACEMENT_OFFSET_CM"),
+    "plan.takeoff_stagger_s": (FP + ":DEFAULT_TAKEOFF_STAGGER_S", FP + ":DEFAULT_TAKEOFF_STAGGER_S"),
+    "plan.min_slot_separation_cm": (None, FS + ":MIN_SLOT_SEPARATION_M*100"),
+    "plan.dedup_radius_cm": (CO + ":FleetCoordinator(dedup_radius_cm)", CO + ":FleetCoordinator(dedup_radius_cm)"),
+    "plan.lost_obstacle_s": (CO + ":LOST_OBSTACLE_S", CO + ":LOST_OBSTACLE_S"),
+    "plan.snap_target_cm": (PP + ":SNAP_TARGET_CM & " + PP + ":SNAP_TOLERANCE_CM", None),
+    "plan.field_fence_margin_cm": (None, FS + ":_FENCE_MARGIN_M*100"),
+    "airspace.close_band_floor_cm": (None, GROUND + "--slots-m[0]*100"),
+    "airspace.band_gap_cm": (None, FS + ":MIN_SLOT_SEPARATION_M*100"),
+    "search.required_overlap_pct": (None, FS + ":field_scale(overlap)*100"),
+    "link.ground_loss_timeout_s": (APP + "FLEET_LOSS_TIMEOUT_S", APP + "FLEET_LOSS_TIMEOUT_S"),
+}
+
+# (row, profile) -> why today's value has no single runtime source. This is the one list of today values
+# that are taken from parameters.md and not checked against code; the golden file repeats it under
+# "doc_only_today". Any other today value without a ref stops the generator.
+T, G = PROFILES
+DOC_ONLY_TODAY = {
+    (8, T): "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)",
+    (8, G): "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)",
+    (17, T): "the Tello lands as soon as the link-loss watchdog fires; no constant holds the 0 s wait",
+    (18, T): "behaviour: the Tello edge lands in place on link loss; no constant",
+    (33, T): "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant",
+    (33, G): "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant",
+    (39, T): "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant",
+    (39, G): "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant",
+    (40, T): "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant",
+    (40, G): "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant",
+    (59, G): "derived marker: field lane spacing is computed from the camera swath (drone/fleet_scale.py)",
+    (60, G): "per-mission marker: the field area comes with each mission",
+    (70, T): "unset marker: no camera footprint is set today; the strip width is used",
+    (70, G): "unset marker: no camera footprint is set today; the strip width is used",
+    (71, G): "deferred marker: the field has no snap target today",
+    (110, T): "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant",
+    (129, T): "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant",
+    (129, G): "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant",
+    (143, T): "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference",
+    (143, G): "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference",
+    (158, T): "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant",
+    (158, G): "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant",
+    (159, T): "behaviour: a finished task lands when no on_complete is given; no constant",
+    (159, G): "behaviour: a finished task lands when no on_complete is given; no constant",
+    (160, G): "behaviour: field failsafes use autopilot RTL (drone/mavlink_fleet.py:1196-1236); no constant",
+    (162, T): "derived at runtime: the sum of refused step lengths (drone/safety.py); no single value",
 }
 
 # Row id -> {profile: (lo ref, hi ref, policy)}. None for a side means that side is not bounded by a
@@ -177,11 +245,14 @@ CELL_OVERRIDES = {
     (1, "tello"): {"default": 500, "pending": {"pr": "C5", "item": 29, "value": 450}},
     (12, "generic_multirotor"): {"default": 15, "pending": {"pr": "B4", "item": 8, "value": "autopilot_critical_level"}},
     (137, "generic_multirotor"): {"default": 20, "pending": {"pr": "D5", "item": 37, "value": 30}},
-    (144, "tello"): {"default": {"derived": "detect + wait + margin"}, "pending": {"pr": "C7", "item": 34, "value": 15}},
-    (144, "generic_multirotor"): {"default": {"derived": "detect + wait + margin"}, "pending": {"pr": "D2", "item": 15, "value": 15}},
+    # Rows 129, 144 and 145 keep today's value; the later value is pending with the PR that brings it.
+    (129, "tello"): {"default": "land_all", "pending": {"pr": "E1", "item": 38, "value": "keep_watch"}},
+    (129, "generic_multirotor"): {"default": "land_all", "pending": {"pr": "E1", "item": 38, "value": "keep_watch"}},
+    (144, "tello"): {"default": 5.0, "pending": {"pr": "C7", "item": 34, "value": {"derived": "detect + wait + margin"}}},
+    (144, "generic_multirotor"): {"default": 5.0, "pending": {"pr": "D2", "item": 15, "value": {"derived": "detect + wait + margin"}}},
     (145, "tello"): {"default": 20, "pending": {"pr": "C7", "item": 46, "value": {"derived": "20 s floor"}}},
-    (145, "generic_multirotor"): {"default": {"derived": "detect + wait + stall bound + GCS timeout + time home + landing + margin"},
-                                  "pending": {"pr": "D2", "item": 18, "value": None}},
+    (145, "generic_multirotor"): {"default": 20.0, "pending": {"pr": "D2", "item": 18, "value": {
+        "derived": "detect + wait + stall bound + GCS timeout + time home + landing + margin"}}},
 }
 
 
@@ -288,7 +359,38 @@ def read_rows(lines):
     return rows
 
 
+def _ast_value(path: str, name: str):
+    """A module-level literal, or the default of an argparse flag, read from source without importing it."""
+    tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    if name.startswith("--"):
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_argument"
+                    and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == name):
+                for kw in node.keywords:
+                    if kw.arg == "default":
+                        return ast.literal_eval(kw.value)
+    else:
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return ast.literal_eval(node.value)
+    raise LookupError(f"{name} not found in {path}")
+
+
+def _scaled(value, scale):
+    if scale == 1 or isinstance(value, bool):
+        return value
+    out = value * scale
+    return round(out, 6) if isinstance(out, float) else out
+
+
 def resolve(ref: str):
+    """Read the runtime value a ref names (see TODAY_REFS for the syntax)."""
+    if " & " in ref:
+        return [resolve(part) for part in ref.split(" & ")]
+    rename = {}
+    if "~" in ref:
+        ref, pairs = ref.split("~", 1)
+        rename = dict(pair.split("=", 1) for pair in pairs.split(","))
     scale = 1
     if "*" in ref:
         ref, s = ref.rsplit("*", 1)
@@ -297,17 +399,50 @@ def resolve(ref: str):
     m = re.match(r"^(.*)\[(\d+)\]$", ref)
     if m:
         ref, index = m.group(1), int(m.group(2))
-    module, path = ref.split(":")
-    obj = importlib.import_module(module)
-    for part in path.split("."):
-        obj = getattr(obj, part)
+    if ref.startswith("ast:"):
+        _, path, name = ref.split(":", 2)
+        obj = _ast_value(path, name)
+    else:
+        module, path = ref.split(":")
+        param = None
+        m = re.match(r"^(.*)\((\w+)\)$", path)
+        if m:
+            path, param = m.group(1), m.group(2)
+        obj = importlib.import_module(module)
+        for part in path.split("."):
+            obj = getattr(obj, part)
+        if param:
+            obj = inspect.signature(obj).parameters[param].default
     if index is not None:
         obj = obj[index]
     if isinstance(obj, (tuple, list)):
-        return [x for x in obj]
+        return [_scaled(x, scale) for x in obj]
     if isinstance(obj, float) and obj == float("inf"):
         return None
-    return obj * scale if scale != 1 else obj
+    obj = _scaled(obj, scale)
+    return rename.get(obj, obj)
+
+
+def alias_scale(name: str, refs) -> tuple:
+    """The factor that turns a value given under ``name`` into the registry unit, and where it comes from.
+
+    A CLI flag whose argparse destination is the attribute a today_ref reads (``--speed-mps`` feeds
+    ``MavlinkFleetOptions.speed_mps``) converts by that ref's factor, so the scale is taken from the code.
+    Otherwise a metre or metre-per-second name is scaled by 100, and every other name by 1.
+    """
+    suffix = 100 if name.lower().endswith(("_m", "-m", "_mps", "-mps")) else 1
+    if name.startswith("--"):
+        dest = name[2:].replace("-", "_")
+        for ref in refs:
+            if not ref or "*" not in ref:
+                continue
+            base, factor = ref.rsplit("*", 1)
+            if re.split(r"[.:]", base)[-1] == dest:
+                scale = float(factor) if "." in factor else int(factor)
+                if scale != suffix:
+                    raise ValueError(f"{name}: scale {scale} from {ref} disagrees with its name")
+                return scale, ref
+    return suffix, "name"
 
 
 def range_entry(refs):
@@ -325,6 +460,7 @@ def build():
     sec1 = text.split("## 1. Registry rows", 1)[1].split("### 1.1", 1)[0]
     sec11 = text.split("### 1.1", 1)[1].split("\n## 2.", 1)[0]
     rows_out = []
+    doc_only = []
     for cells in read_rows(sec1.splitlines()):
         n = int(cells[0])
         ids = re.findall(r"`([a-z_0-9.]+)`", cells[1])
@@ -332,15 +468,16 @@ def build():
         unit = cells[4]
         notes = cells[15]
         aliases = []
-        for name in re.findall(r"`((?:FLIGHTRISK_[A-Z0-9_]+)|(?:--[a-z0-9-]+))`", notes):
+        refs = TODAY_REFS.get(pid, (None, None))
+        # Environment names and flags are named in the Notes column, and for a few rows in the Today column.
+        for name in re.findall(r"`((?:FLIGHTRISK_[A-Z0-9_]+)|(?:--[a-z0-9-]+))`", notes + " " + cells[3]):
             if name not in [a["name"] for a in aliases]:
-                scale = 100 if (name.endswith("_M") or name.endswith("-m")) else 1
-                aliases.append({"name": name, "scale": scale})
+                scale, scale_from = alias_scale(name, refs)
+                aliases.append({"name": name, "scale": scale, "scale_from": scale_from})
         today_text = clean(cells[3])
         default_cells = {"tello": clean(cells[7]), "generic_multirotor": clean(cells[8])}
         bound_cells = {"tello": clean(cells[9]), "generic_multirotor": clean(cells[10])}
         edits = parse_edit(cells[13])
-        refs = TODAY_REFS.get(pid, (None, None))
         profiles = {}
         for i, prof in enumerate(PROFILES):
             dcell = default_cells[prof]
@@ -386,11 +523,14 @@ def build():
                         f"row {n} {pid} {prof}: table default {default!r} differs from {ref} = {value!r}")
                 entry["origin"] = "today"
                 entry["today_ref"] = ref
-            elif today_text.lower() not in ("none", ""):
+            elif (n, prof) in DOC_ONLY_TODAY:
                 entry["origin"] = "today"
-                entry["today_ref_reason"] = "no single importable constant; today's value is the table's Today column"
-            elif n >= 111 or today_text.lower() == "none":
-                entry["origin"] = "new"
+                entry["today_ref_reason"] = DOC_ONLY_TODAY[(n, prof)]
+                doc_only.append({"row": n, "id": pid, "profile": prof, "reason": DOC_ONLY_TODAY[(n, prof)]})
+            elif n < 111 and today_text.lower() not in ("none", ""):
+                # Rows 111 to 162 are new surfaces whose Today column describes related behaviour; they are
+                # today values only with a ref or a DOC_ONLY_TODAY entry.
+                raise ValueError(f"row {n} {pid} {prof}: a today value needs a TODAY_REFS ref or a DOC_ONLY_TODAY reason")
             profiles[prof] = entry
         accepts = {}
         for prof, spec in RANGES.get(pid, {}).items():
@@ -400,6 +540,7 @@ def build():
         for a in aliases:
             alias_out[a["name"]] = {
                 "scale": a["scale"],
+                "scale_from": a["scale_from"],
                 "today_accepts": accepts or None,
                 "today_accepts_reason": None if accepts else "no importable range constant for this row",
             }
@@ -418,8 +559,11 @@ def build():
         m = re.match(r"^\| (K-\d+) \| (.*) \| ([^|]*) \|$", line)
         if m:
             constraints.append({"id": m.group(1), "text": clean(m.group(2)), "where": clean(m.group(3))})
+    unused = set(DOC_ONLY_TODAY) - {(d["row"], d["profile"]) for d in doc_only}
+    if unused:
+        raise ValueError(f"DOC_ONLY_TODAY entries not used: {sorted(unused)}")
     return {"schema": 1, "source": "docs/design/hardware-profiles/parameters.md",
-            "rows": rows_out, "constraints": constraints}
+            "rows": rows_out, "constraints": constraints, "doc_only_today": doc_only}
 
 
 def main(argv):

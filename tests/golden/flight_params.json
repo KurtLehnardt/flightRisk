@@ -14,6 +14,7 @@
       "env_aliases": {
         "FLIGHTRISK_GEOFENCE_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": null,
@@ -34,6 +35,7 @@
         },
         "FLIGHTRISK_FIELD_GEOFENCE_M": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": null,
@@ -54,6 +56,7 @@
         },
         "--geofence-m": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": null,
@@ -126,6 +129,7 @@
       "env_aliases": {
         "FLIGHTRISK_CEILING_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 150,
@@ -146,6 +150,7 @@
         },
         "FLIGHTRISK_FIELD_CEILING_M": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 150,
@@ -166,6 +171,7 @@
         },
         "--ceiling-m": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 150,
@@ -232,6 +238,7 @@
       "env_aliases": {
         "FLIGHTRISK_CEILING_MARGIN_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 30,
@@ -252,6 +259,7 @@
         },
         "FLIGHTRISK_FIELD_CEILING_MARGIN_M": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 30,
@@ -272,6 +280,7 @@
         },
         "--ceiling-margin-m": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 30,
@@ -338,6 +347,7 @@
       "env_aliases": {
         "--alt-slot": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 50,
@@ -358,6 +368,7 @@
         },
         "--alt-slot-m": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 50,
@@ -378,6 +389,7 @@
         },
         "FLIGHTRISK_FIELD_ALT_SLOT_M": {
           "scale": 100,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 50,
@@ -479,8 +491,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:scripts/field_fleet_ground.py:--slots-m*100"
         }
       }
     },
@@ -600,7 +611,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)"
         },
         "generic_multirotor": {
           "default": 12000,
@@ -617,7 +628,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)"
         }
       }
     },
@@ -693,6 +704,7 @@
       "env_aliases": {
         "FLIGHTRISK_MIN_TAKEOFF_BATTERY": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 15,
@@ -765,6 +777,7 @@
       "env_aliases": {
         "FLIGHTRISK_LAND_BATTERY": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -835,8 +848,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.dashboard.safety:SafetyPolicy.battery_warn_pct"
         },
         "generic_multirotor": {
           "default": 20,
@@ -852,8 +864,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.dashboard.safety:SafetyPolicy.battery_warn_pct"
         }
       }
     },
@@ -882,8 +893,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.dashboard.safety:SafetyPolicy.battery_critical_pct"
         },
         "generic_multirotor": {
           "default": 10,
@@ -899,8 +909,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.dashboard.safety:SafetyPolicy.battery_critical_pct"
         }
       }
     },
@@ -946,6 +955,7 @@
       "env_aliases": {
         "FLIGHTRISK_LINK_LOSS_LAND_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -997,16 +1007,19 @@
       "env_aliases": {
         "FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         },
         "--link-loss-hold-s": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         },
         "FLIGHTRISK_LINK_LOSS_WAIT_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1039,7 +1052,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "the Tello lands as soon as the link-loss watchdog fires; no constant holds the 0 s wait"
         },
         "generic_multirotor": {
           "default": 10,
@@ -1078,11 +1091,13 @@
       "env_aliases": {
         "FLIGHTRISK_FAILSAFE_ACTION": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         },
         "--failsafe-action": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1113,7 +1128,7 @@
             "return",
             "land"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: the Tello edge lands in place on link loss; no constant"
         },
         "generic_multirotor": {
           "default": "return",
@@ -1129,12 +1144,11 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
+          "today_ref": "flightrisk.drone.mavlink_fleet:MavlinkFleetOptions.failsafe_action~rtl=return",
           "choices": [
             "return",
             "land"
-          ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          ]
         }
       }
     },
@@ -1274,6 +1288,7 @@
       "env_aliases": {
         "FLIGHTRISK_MANUAL_ORPHAN_LAND_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 30.0,
@@ -1385,6 +1400,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_TAKEOFF_LATE_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1421,6 +1437,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_SETTLE_SAMPLES": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 2,
@@ -1465,6 +1482,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1501,6 +1519,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1537,6 +1556,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_REFUSAL_RETRIES": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0,
@@ -1581,6 +1601,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_REFUSAL_HOLD_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1647,6 +1668,7 @@
       "env_aliases": {
         "--takeoff-alt-m": {
           "scale": 100,
+          "scale_from": "flightrisk.drone.mavlink_fleet:MavlinkFleetOptions.takeoff_alt_m*100",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1698,6 +1720,7 @@
       "env_aliases": {
         "FLIGHTRISK_HOVER_TEST": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1722,7 +1745,7 @@
             "false",
             "true"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant"
         },
         "generic_multirotor": {
           "default": false,
@@ -1743,7 +1766,7 @@
             "false",
             "true"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant"
         }
       }
     },
@@ -1849,6 +1872,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_TEMP_WARN_C": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 40,
@@ -1893,6 +1917,7 @@
       "env_aliases": {
         "FLIGHTRISK_TELLO_TEMP_REFUSE_C": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 40,
@@ -1937,6 +1962,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_TURN": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -1961,7 +1987,7 @@
             "true",
             "false"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant"
         },
         "generic_multirotor": {
           "default": true,
@@ -1982,7 +2008,7 @@
             "true",
             "false"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant"
         }
       }
     },
@@ -1998,6 +2024,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_SENSING": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -2022,7 +2049,7 @@
             "required",
             "off"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant"
         },
         "generic_multirotor": {
           "default": "required",
@@ -2043,7 +2070,7 @@
             "required",
             "off"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant"
         }
       }
     },
@@ -2059,6 +2086,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_STEP_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 20,
@@ -2125,6 +2153,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_SETTLE_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0.1,
@@ -2191,6 +2220,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0.05,
@@ -2257,6 +2287,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_PERSON_FRACTION": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0.2,
@@ -2323,6 +2354,7 @@
       "env_aliases": {
         "FLIGHTRISK_MAX_DECODE_LAG_S": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0.1,
@@ -2605,8 +2637,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.lane_flight:OBSTACLE_RETRY_PAUSE_S"
         },
         "generic_multirotor": {
           "default": 0.5,
@@ -2622,8 +2653,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.lane_flight:OBSTACLE_RETRY_PAUSE_S"
         }
       }
     },
@@ -2652,7 +2682,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": "flightrisk.drone.mavlink_fleet:_HEADING_TOLERANCE_DEG"
+          "today_ref": "flightrisk.drone.lane_flight:HEADING_TOLERANCE_DEG"
         },
         "generic_multirotor": {
           "default": 10,
@@ -2684,6 +2714,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_CLEAR_VOTES": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 1,
@@ -2750,6 +2781,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_RELOOK": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0,
@@ -2816,6 +2848,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_SIDESTEP_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 20,
@@ -2882,6 +2915,7 @@
       "env_aliases": {
         "FLIGHTRISK_OBSTACLE_SIDESTEPS": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": {
             "tello": {
               "lo": 0,
@@ -2993,11 +3027,13 @@
       "env_aliases": {
         "FLIGHTRISK_FLEET_STRIP_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         },
         "--fleet-strip-cm": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -3017,8 +3053,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.plan_edit:DEFAULT_STRIP_CM"
         },
         "generic_multirotor": {
           "default": {
@@ -3037,7 +3072,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "derived marker: field lane spacing is computed from the camera swath (drone/fleet_scale.py)"
         }
       }
     },
@@ -3053,11 +3088,13 @@
       "env_aliases": {
         "FLIGHTRISK_FLEET_AREA_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         },
         "--fleet-area-cm": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -3080,8 +3117,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:flightrisk/dashboard/app.py:SINGLE_PLAN_AREA_CM"
         },
         "generic_multirotor": {
           "default": {
@@ -3100,7 +3136,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "per-mission marker: the field area comes with each mission"
         }
       }
     },
@@ -3129,8 +3165,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:DEFAULT_ZONE_GAP_CM"
         },
         "generic_multirotor": {
           "default": 0,
@@ -3146,8 +3181,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_scale:field_scale(zone_gap_m)*100"
         }
       }
     },
@@ -3176,8 +3210,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:DEFAULT_MIN_SEPARATION_CM"
         },
         "generic_multirotor": {
           "default": 150,
@@ -3199,8 +3232,7 @@
           ],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:DEFAULT_MIN_SEPARATION_CM"
         }
       }
     },
@@ -3229,8 +3261,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:DEFAULT_PLACEMENT_TOLERANCE_CM"
         },
         "generic_multirotor": {
           "default": 10,
@@ -3246,8 +3277,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:DEFAULT_PLACEMENT_TOLERANCE_CM"
         }
       }
     },
@@ -3276,8 +3306,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:ALTITUDE_TOLERANCE_CM"
         },
         "generic_multirotor": {
           "default": 10,
@@ -3293,8 +3322,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_plan_check:ALTITUDE_TOLERANCE_CM"
         }
       }
     },
@@ -3323,8 +3351,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_patterns:DEFAULT_PLACEMENT_OFFSET_CM"
         },
         "generic_multirotor": {
           "default": 50,
@@ -3340,8 +3367,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_patterns:DEFAULT_PLACEMENT_OFFSET_CM"
         }
       }
     },
@@ -3370,8 +3396,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_patterns:DEFAULT_TAKEOFF_STAGGER_S"
         },
         "generic_multirotor": {
           "default": 2.0,
@@ -3387,8 +3412,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_patterns:DEFAULT_TAKEOFF_STAGGER_S"
         }
       }
     },
@@ -3418,8 +3442,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_scale:MIN_SLOT_SEPARATION_M*100"
         }
       }
     },
@@ -3448,8 +3471,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:FleetCoordinator(dedup_radius_cm)"
         },
         "generic_multirotor": {
           "default": 80,
@@ -3465,8 +3487,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:FleetCoordinator(dedup_radius_cm)"
         }
       }
     },
@@ -3495,8 +3516,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:LOST_OBSTACLE_S"
         },
         "generic_multirotor": {
           "default": 20,
@@ -3512,8 +3532,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:LOST_OBSTACLE_S"
         }
       }
     },
@@ -3529,6 +3548,7 @@
       "env_aliases": {
         "FLIGHTRISK_CAMERA_FOOTPRINT_CM": {
           "scale": 1,
+          "scale_from": "name",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -3551,7 +3571,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "unset marker: no camera footprint is set today; the strip width is used"
         },
         "generic_multirotor": {
           "default": {
@@ -3570,7 +3590,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "unset marker: no camera footprint is set today; the strip width is used"
         }
       }
     },
@@ -3603,8 +3623,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.plan_paths:SNAP_TARGET_CM & flightrisk.drone.plan_paths:SNAP_TOLERANCE_CM"
         },
         "generic_multirotor": {
           "default": {
@@ -3623,7 +3642,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "deferred marker: the field has no snap target today"
         }
       }
     },
@@ -3653,8 +3672,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "new",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_scale:_FENCE_MARGIN_M*100"
         }
       }
     },
@@ -3759,7 +3777,8 @@
       "applies": "next_start",
       "env_aliases": {
         "--speed-mps": {
-          "scale": 1,
+          "scale": 100,
+          "scale_from": "flightrisk.drone.mavlink_fleet:MavlinkFleetOptions.speed_mps*100",
           "today_accepts": null,
           "today_accepts_reason": "no importable range constant for this row"
         }
@@ -4049,8 +4068,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:flightrisk/launcher/settings.py:MAX_GEOFENCE_CM"
         },
         "generic_multirotor": {
           "default": 50000,
@@ -4822,7 +4840,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant"
         },
         "generic_multirotor": null
       }
@@ -5304,8 +5322,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:scripts/field_fleet_ground.py:--slots-m[0]*100"
         }
       }
     },
@@ -5337,8 +5354,7 @@
           "pending": [],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_scale:MIN_SLOT_SEPARATION_M*100"
         }
       }
     },
@@ -5510,10 +5526,9 @@
             "PROPOSED"
           ],
           "pending": [],
-          "origin": "today",
+          "origin": "new",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": null
         },
         "generic_multirotor": {
           "default": 500,
@@ -5529,10 +5544,9 @@
             "PROPOSED"
           ],
           "pending": [],
-          "origin": "today",
+          "origin": "new",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": null
         }
       }
     },
@@ -5580,7 +5594,7 @@
       "env_aliases": {},
       "profiles": {
         "tello": {
-          "default": "keep_watch",
+          "default": "land_all",
           "lo": null,
           "hi": null,
           "bound_text": "{keep_watch, return_all, land_all}",
@@ -5590,7 +5604,13 @@
           "off_value": null,
           "safety_switch": false,
           "marks": [],
-          "pending": [],
+          "pending": [
+            {
+              "pr": "E1",
+              "item": 38,
+              "value": "keep_watch"
+            }
+          ],
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
@@ -5599,10 +5619,10 @@
             "return_all",
             "land_all"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant"
         },
         "generic_multirotor": {
-          "default": "keep_watch",
+          "default": "land_all",
           "lo": null,
           "hi": null,
           "bound_text": "same",
@@ -5612,11 +5632,17 @@
           "off_value": null,
           "safety_switch": false,
           "marks": [],
-          "pending": [],
+          "pending": [
+            {
+              "pr": "E1",
+              "item": 38,
+              "value": "keep_watch"
+            }
+          ],
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant"
         }
       }
     },
@@ -5964,10 +5990,9 @@
           "safety_switch": false,
           "marks": [],
           "pending": [],
-          "origin": "today",
+          "origin": "new",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": null
         },
         "generic_multirotor": {
           "default": 20,
@@ -5989,8 +6014,7 @@
           ],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.fleet_scale:field_scale(overlap)*100"
         }
       }
     },
@@ -6170,7 +6194,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference"
         },
         "generic_multirotor": {
           "default": 2,
@@ -6187,7 +6211,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference"
         }
       }
     },
@@ -6203,9 +6227,7 @@
       "env_aliases": {},
       "profiles": {
         "tello": {
-          "default": {
-            "derived": "detect + wait + margin"
-          },
+          "default": 5.0,
           "lo": null,
           "hi": null,
           "bound_text": "derived",
@@ -6219,18 +6241,17 @@
             {
               "pr": "C7",
               "item": 34,
-              "value": 15
+              "value": {
+                "derived": "detect + wait + margin"
+              }
             }
           ],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:flightrisk/dashboard/app.py:FLEET_LOSS_TIMEOUT_S"
         },
         "generic_multirotor": {
-          "default": {
-            "derived": "detect + wait + margin"
-          },
+          "default": 5.0,
           "lo": null,
           "hi": null,
           "bound_text": "derived",
@@ -6244,13 +6265,14 @@
             {
               "pr": "D2",
               "item": 15,
-              "value": 15
+              "value": {
+                "derived": "detect + wait + margin"
+              }
             }
           ],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "ast:flightrisk/dashboard/app.py:FLEET_LOSS_TIMEOUT_S"
         }
       }
     },
@@ -6290,9 +6312,7 @@
           "today_ref": "flightrisk.drone.coordinator:LOST_OBSTACLE_S"
         },
         "generic_multirotor": {
-          "default": {
-            "derived": "detect + wait + stall bound + GCS timeout + time home + landing + margin"
-          },
+          "default": 20.0,
           "lo": null,
           "hi": null,
           "bound_text": "derived",
@@ -6306,13 +6326,14 @@
             {
               "pr": "D2",
               "item": 18,
-              "value": null
+              "value": {
+                "derived": "detect + wait + stall bound + GCS timeout + time home + landing + margin"
+              }
             }
           ],
           "origin": "today",
           "bounds_origin": "today",
-          "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref": "flightrisk.drone.coordinator:LOST_OBSTACLE_S"
         }
       }
     },
@@ -6745,7 +6766,29 @@
       "unit": "s",
       "today_text": "30 (FLIGHTRISK_MANUAL_LOST_IDLE_S, dashboard/manual_control.py:132-134, #212; below 5 raised to 5)",
       "applies": "next_start",
-      "env_aliases": {},
+      "env_aliases": {
+        "FLIGHTRISK_MANUAL_LOST_IDLE_S": {
+          "scale": 1,
+          "scale_from": "name",
+          "today_accepts": {
+            "tello": {
+              "lo": 5.0,
+              "hi": null,
+              "lo_ref": "flightrisk.dashboard.manual_control:MIN_LOST_IDLE_S",
+              "hi_ref": null,
+              "policy": "clamp"
+            },
+            "generic_multirotor": {
+              "lo": 5.0,
+              "hi": null,
+              "lo_ref": "flightrisk.dashboard.manual_control:MIN_LOST_IDLE_S",
+              "hi_ref": null,
+              "policy": "clamp"
+            }
+          },
+          "today_accepts_reason": null
+        }
+      },
       "profiles": {
         "tello": {
           "default": 30,
@@ -6817,7 +6860,7 @@
             "land",
             "return"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant"
         },
         "generic_multirotor": {
           "default": "land",
@@ -6844,7 +6887,7 @@
             "land",
             "return"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant"
         }
       }
     },
@@ -6885,7 +6928,7 @@
             "hover",
             "return"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a finished task lands when no on_complete is given; no constant"
         },
         "generic_multirotor": {
           "default": "land",
@@ -6913,7 +6956,7 @@
             "hover",
             "return"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: a finished task lands when no on_complete is given; no constant"
         }
       }
     },
@@ -6954,7 +6997,7 @@
             "autopilot_rtl",
             "edge_guided"
           ],
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "behaviour: field failsafes use autopilot RTL (drone/mavlink_fleet.py:1196-1236); no constant"
         }
       }
     },
@@ -6967,7 +7010,22 @@
       "unit": "count",
       "today_text": "2 (FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT, incident flight_guards.py:87,119-120, #207)",
       "applies": "next_start",
-      "env_aliases": {},
+      "env_aliases": {
+        "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT": {
+          "scale": 1,
+          "scale_from": "name",
+          "today_accepts": {
+            "tello": {
+              "lo": 0,
+              "hi": 6,
+              "lo_ref": "flightrisk.drone.flight_guards:REFUSALS_PER_FLIGHT_RANGE[0]",
+              "hi_ref": "flightrisk.drone.flight_guards:REFUSALS_PER_FLIGHT_RANGE[1]",
+              "policy": "refuse"
+            }
+          },
+          "today_accepts_reason": null
+        }
+      },
       "profiles": {
         "tello": {
           "default": 2,
@@ -7016,7 +7074,7 @@
           "origin": "today",
           "bounds_origin": "today",
           "today_ref": null,
-          "today_ref_reason": "no single importable constant; today's value is the table's Today column"
+          "today_ref_reason": "derived at runtime: the sum of refused step lengths (drone/safety.py); no single value"
         },
         "generic_multirotor": null
       }
@@ -7112,6 +7170,164 @@
       "id": "K-18",
       "text": "A custom model never sets environment or indoor_profile_measured, never widens a bound, never changes scale, adapter or frame path",
       "where": "A2 loader"
+    }
+  ],
+  "doc_only_today": [
+    {
+      "row": 8,
+      "id": "envelope.max_altitude_cm",
+      "profile": "tello",
+      "reason": "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)"
+    },
+    {
+      "row": 8,
+      "id": "envelope.max_altitude_cm",
+      "profile": "generic_multirotor",
+      "reason": "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)"
+    },
+    {
+      "row": 17,
+      "id": "link.loss_wait_s",
+      "profile": "tello",
+      "reason": "the Tello lands as soon as the link-loss watchdog fires; no constant holds the 0 s wait"
+    },
+    {
+      "row": 18,
+      "id": "link.loss_action",
+      "profile": "tello",
+      "reason": "behaviour: the Tello edge lands in place on link loss; no constant"
+    },
+    {
+      "row": 33,
+      "id": "mode.hover_test",
+      "profile": "tello",
+      "reason": "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant"
+    },
+    {
+      "row": 33,
+      "id": "mode.hover_test",
+      "profile": "generic_multirotor",
+      "reason": "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant"
+    },
+    {
+      "row": 39,
+      "id": "sensing.turn",
+      "profile": "tello",
+      "reason": "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant"
+    },
+    {
+      "row": 39,
+      "id": "sensing.turn",
+      "profile": "generic_multirotor",
+      "reason": "FLIGHTRISK_OBSTACLE_TURN unset reads as on in its reader (edge_device.py:2040); no default constant"
+    },
+    {
+      "row": 40,
+      "id": "sensing.mode",
+      "profile": "tello",
+      "reason": "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant"
+    },
+    {
+      "row": 40,
+      "id": "sensing.mode",
+      "profile": "generic_multirotor",
+      "reason": "FLIGHTRISK_OBSTACLE_SENSING unset reads as required in its reader (edge_device.py:1835); no default constant"
+    },
+    {
+      "row": 59,
+      "id": "plan.strip_cm",
+      "profile": "generic_multirotor",
+      "reason": "derived marker: field lane spacing is computed from the camera swath (drone/fleet_scale.py)"
+    },
+    {
+      "row": 60,
+      "id": "plan.area_cm",
+      "profile": "generic_multirotor",
+      "reason": "per-mission marker: the field area comes with each mission"
+    },
+    {
+      "row": 70,
+      "id": "plan.camera_footprint_cm",
+      "profile": "tello",
+      "reason": "unset marker: no camera footprint is set today; the strip width is used"
+    },
+    {
+      "row": 70,
+      "id": "plan.camera_footprint_cm",
+      "profile": "generic_multirotor",
+      "reason": "unset marker: no camera footprint is set today; the strip width is used"
+    },
+    {
+      "row": 71,
+      "id": "plan.snap_target_cm",
+      "profile": "generic_multirotor",
+      "reason": "deferred marker: the field has no snap target today"
+    },
+    {
+      "row": 110,
+      "id": "tello_sdk.video_size_px",
+      "profile": "tello",
+      "reason": "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant"
+    },
+    {
+      "row": 129,
+      "id": "find.on_find_policy",
+      "profile": "tello",
+      "reason": "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant"
+    },
+    {
+      "row": 129,
+      "id": "find.on_find_policy",
+      "profile": "generic_multirotor",
+      "reason": "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant"
+    },
+    {
+      "row": 143,
+      "id": "link.ground_loss_margin_s",
+      "profile": "tello",
+      "reason": "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference"
+    },
+    {
+      "row": 143,
+      "id": "link.ground_loss_margin_s",
+      "profile": "generic_multirotor",
+      "reason": "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference"
+    },
+    {
+      "row": 158,
+      "id": "stranded.action",
+      "profile": "tello",
+      "reason": "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant"
+    },
+    {
+      "row": 158,
+      "id": "stranded.action",
+      "profile": "generic_multirotor",
+      "reason": "behaviour: a stranded drone lands (dashboard/manual_control.py:58-70); no constant"
+    },
+    {
+      "row": 159,
+      "id": "task.end_action",
+      "profile": "tello",
+      "reason": "behaviour: a finished task lands when no on_complete is given; no constant"
+    },
+    {
+      "row": 159,
+      "id": "task.end_action",
+      "profile": "generic_multirotor",
+      "reason": "behaviour: a finished task lands when no on_complete is given; no constant"
+    },
+    {
+      "row": 160,
+      "id": "return.field_method",
+      "profile": "generic_multirotor",
+      "reason": "behaviour: field failsafes use autopilot RTL (drone/mavlink_fleet.py:1196-1236); no constant"
+    },
+    {
+      "row": 162,
+      "id": "envelope.fence_margin_cm",
+      "profile": "tello",
+      "reason": "derived at runtime: the sum of refused step lengths (drone/safety.py); no single value"
     }
   ]
 }

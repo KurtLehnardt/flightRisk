@@ -8,6 +8,7 @@ here by name.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -27,27 +28,20 @@ def _load():
     return json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 
+def _generator():
+    spec = importlib.util.spec_from_file_location("make_param_golden", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_GEN = _generator()
+
+
 def _resolve(ref: str):
-    """Import the module and read the constant, optionally one tuple item and scaled by a factor."""
-    scale = 1
-    if "*" in ref:
-        ref, factor = ref.rsplit("*", 1)
-        scale = float(factor) if "." in factor else int(factor)
-    index = None
-    match = re.match(r"^(.*)\[(\d+)\]$", ref)
-    if match:
-        ref, index = match.group(1), int(match.group(2))
-    module, path = ref.split(":")
-    obj = importlib.import_module(module)
-    for part in path.split("."):
-        obj = getattr(obj, part)
-    if index is not None:
-        obj = obj[index]
-    if isinstance(obj, (tuple, list)):
-        return list(obj)
-    if obj == float("inf"):
-        return None
-    return obj * scale if scale != 1 else obj
+    """Read the runtime value a ref names, with the generator's reader (module constant, parameter
+    default, or a literal read from source), optionally one tuple item and scaled by a factor."""
+    return _GEN.resolve(ref)
 
 
 def _entries():
@@ -191,3 +185,51 @@ def test_table_defaults_equal_the_constants_they_replace():
             assert default == value, (golden["id"], profile)
             checked += 1
     assert checked > 60
+
+
+def test_every_doc_only_today_value_is_listed_once_with_a_reason():
+    """The today values not checked against code are exactly the generator's DOC_ONLY_TODAY list."""
+    data = _load()
+    found = {
+        (row["row"], profile)
+        for row in data["rows"]
+        for profile, entry in row["profiles"].items()
+        if entry and entry["origin"] == "today" and entry["today_ref"] is None
+    }
+    listed = {(d["row"], d["profile"]) for d in data["doc_only_today"]}
+    assert found == listed == set(_GEN.DOC_ONLY_TODAY)
+    assert all(d["reason"] for d in data["doc_only_today"])
+    assert len(found) == 26
+
+
+def test_rows_111_to_162_are_today_values_only_with_a_ref_or_a_reason():
+    for row in _load()["rows"]:
+        if row["row"] < 111:
+            continue
+        for profile, entry in row["profiles"].items():
+            if entry and entry["origin"] == "today":
+                assert entry["today_ref"] or (row["row"], profile) in _GEN.DOC_ONLY_TODAY, row["id"]
+
+
+def test_ground_loss_margin_is_implicit_today():
+    """Row 143's 2 s is today's ground loss timeout minus the edge's link-loss watchdog."""
+    timeout = _resolve("ast:flightrisk/dashboard/app.py:FLEET_LOSS_TIMEOUT_S")
+    detect = _resolve("flightrisk.drone.safety:DEFAULT_LINK_LOSS_LAND_S")
+    margin = {r["id"]: r for r in _load()["rows"]}["link.ground_loss_margin_s"]["profiles"]
+    assert timeout - detect == margin["tello"]["default"] == margin["generic_multirotor"]["default"]
+
+
+def test_a_cli_scale_taken_from_a_ref_is_the_edge_wiring():
+    """A flag scaled by a today_ref's factor feeds that attribute directly in edge_device.py."""
+    source = (ROOT / "flightrisk" / "edge_device.py").read_text(encoding="utf-8")
+    checked = 0
+    for row in _load()["rows"]:
+        for name, alias in row["env_aliases"].items():
+            if name.startswith("--") and alias["scale_from"] != "name":
+                dest = name[2:].replace("-", "_")
+                assert f'add_argument("{name}"' in source, name
+                assert f"{dest}=args.{dest}" in source, name
+                checked += 1
+    assert checked >= 2
+    speed = {r["id"]: r for r in _load()["rows"]}["move.speed_cm_s"]["env_aliases"]["--speed-mps"]
+    assert speed["scale"] == 100

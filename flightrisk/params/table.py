@@ -1,4 +1,4 @@
-"""The flight parameter registry, rows 1 to 86 of ``parameters.md`` section 1.
+"""The flight parameter registry, the rows of ``parameters.md`` section 1.
 
 Pure data. Every default is the value today's code uses (risk R1): where a
 later PR changes a value, the row keeps today's value and ``PENDING`` records
@@ -72,13 +72,17 @@ PENDING: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "link.loss_action": ({"pr": "C7", "item": 34, "profile": T, "value": "return"},),
     "separation.base_cm": ({"pr": "D1", "item": 9, "profile": G, "value": 500},),
+    "find.on_find_policy": (
+        {"pr": "E1", "item": 38, "profile": T, "value": "keep_watch"},
+        {"pr": "E1", "item": 38, "profile": G, "value": "keep_watch"},
+    ),
     "link.ground_loss_timeout_s": (
-        {"pr": "C7", "item": 34, "profile": T, "value": 15},
-        {"pr": "D2", "item": 15, "profile": G, "value": 15},
+        {"pr": "C7", "item": 34, "profile": T, "value": DERIVED_LOSS_TIMEOUT},
+        {"pr": "D2", "item": 15, "profile": G, "value": DERIVED_LOSS_TIMEOUT},
     ),
     "lost.flying_window_s": (
         {"pr": "C7", "item": 46, "profile": T, "value": DERIVED_LOST_WINDOW_FLOOR},
-        {"pr": "D2", "item": 18, "profile": G, "value": None},
+        {"pr": "D2", "item": 18, "profile": G, "value": DERIVED_LOST_WINDOW_FIELD},
     ),
     "search.required_overlap_pct": ({"pr": "D5", "item": 37, "profile": G, "value": 30},),
     "stranded.action": (
@@ -91,6 +95,20 @@ PENDING: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "return.field_method": ({"pr": "C6", "item": 45, "profile": G, "value": "edge_guided"},),
 }
+
+#: Scale factor of a canonical environment name or CLI flag that is not given in the registry unit,
+#: by name. A name absent here is read in the registry unit. An ``EnvAlias`` carries its own factor.
+NAME_SCALES: dict[str, float] = {
+    "--geofence-m": 100.0,
+    "--ceiling-m": 100.0,
+    "--ceiling-margin-m": 100.0,
+    "--alt-slot-m": 100.0,
+    "FLIGHTRISK_FIELD_ALT_SLOT_M": 100.0,
+    "--takeoff-alt-m": 100.0,
+    # The edge passes --speed-mps to MavlinkFleetOptions.speed_mps in m/s; the registry is in cm/s.
+    "--speed-mps": 100.0,
+}
+
 
 def _p(
     id: str,
@@ -441,7 +459,7 @@ ROWS_111_128: tuple[ParamSpec, ...] = (
 # Rows 129 to 145: find, search, escort and link rows.
 ROWS_129_145: tuple[ParamSpec, ...] = (
     _p("find.on_find_policy", Unit.ENUM, Kind.ENUM, "What the fleet does when a target is found.", _MS,
-       ("keep_watch", "keep_watch"), _NB, Safer.NONE, Confirm.NONE, _UI, _IF,
+       ("land_all", "land_all"), _NB, Safer.NONE, Confirm.NONE, _UI, _IF,
        choices=("keep_watch", "return_all", "land_all")),
     _p("find.converge_count", Unit.COUNT, Kind.INT, "Drones that converge on a find.", _MS,
        (1, 2), _NB, Safer.NONE, Confirm.NONE, _UI, _IF),
@@ -472,9 +490,9 @@ ROWS_129_145: tuple[ParamSpec, ...] = (
     _p("link.ground_loss_margin_s", Unit.S, Kind.FLOAT, "Margin the ground adds before it declares a drone lost.", Scope.GROUND,
        (2, 2), (_B(1, 10), _B(1, 10)), *_LS, _FE, _NS),
     _p("link.ground_loss_timeout_s", Unit.S, Kind.FLOAT, "Time without contact before the ground declares a drone lost.",
-       Scope.GROUND, (DERIVED_LOSS_TIMEOUT, DERIVED_LOSS_TIMEOUT), _NB, Safer.NONE, Confirm.NONE, _RO, _NS),
+       Scope.GROUND, (5.0, 5.0), _NB, Safer.NONE, Confirm.NONE, _RO, _NS),
     _p("lost.flying_window_s", Unit.S, Kind.FLOAT, "Window in which a lost drone's area stays closed.", _MS,
-       (20, DERIVED_LOST_WINDOW_FIELD), _NB, Safer.NONE, Confirm.NONE, _RO, _PL),
+       (20, 20.0), _NB, Safer.NONE, Confirm.NONE, _RO, _PL),
 )
 
 # Rows 146 to 162: airspace, position, return, stranded and test-adapter rows.
@@ -502,7 +520,8 @@ ROWS_146_162: tuple[ParamSpec, ...] = (
     _p("escort.handoff_frames", Unit.COUNT, Kind.INT, "Frames the relief must see the same target.", _MS,
        (None, 5), (None, _B(3, 30)), *_LS, _FE, _PL),
     _p("stranded.lost_idle_s", Unit.S, Kind.FLOAT, "Idle-controller countdown for a lost drone.", Scope.GROUND,
-       (30, 30), (_B(5, 300), _B(5, 300)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+       (30, 30), (_B(5, 300), _B(5, 300)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS,
+       env="FLIGHTRISK_MANUAL_LOST_IDLE_S"),
     _p("stranded.action", Unit.ENUM, Kind.ENUM, "What the stranded countdown does when it ends.", Scope.GROUND,
        ("land", "land"), _NB, Safer.NONE, Confirm.NONE, _FE, _NS, choices=("land", "return")),
     _p("task.end_action", Unit.ENUM, Kind.ENUM, "What a drone does after its last task and the retask window.", _MS,

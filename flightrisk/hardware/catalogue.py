@@ -29,6 +29,9 @@ _TELLO_EDU = "https://core-electronics.com.au/dji-tello-edu.html.md"
 _PI_CAM = "flightrisk/fleet_scale.py:58-75 (Raspberry Pi Camera Module 3 preset)"
 
 # The most conservative value of each fact, used when a model does not state it (CAP-2).
+# None has no safe direction, so it never means "no limit": a consumer that needs a None fact (a sensor
+# height, a command-loss delay, the moves, a top speed, a height, an endurance or a range) must refuse the
+# feature that depends on it.
 CONSERVATIVE_FACTS: Mapping[str, Any] = MappingProxyType({
     "positioning": "dead_reckoning",
     "uncertainty_model": "dead_reckoning_growth",
