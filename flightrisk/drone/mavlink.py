@@ -497,7 +497,11 @@ class MavlinkController:
 
     def connect(self) -> bool:
         """Connect to the MAVLink drone and start telemetry."""
-        check_mavsdk_version()  # raises for mavsdk 4+, which has no gRPC server this controller can use
+        try:
+            check_mavsdk_version()  # mavsdk 4+ has no gRPC server this controller can use
+        except RuntimeError as exc:
+            logger.error("[%s] Connect failed: %s", self.name, exc)
+            return False
         with self._cmd_lock:
             self._running = True
             self._start_loop()

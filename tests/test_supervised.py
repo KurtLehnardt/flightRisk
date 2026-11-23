@@ -132,8 +132,16 @@ def test_mavsdk_4_and_later_is_refused_with_the_reason(version):
 
 
 @pytest.mark.parametrize("version", ["3.17.2", "3.99.0", "2.0.0", None, "", "dev"])
-def test_mavsdk_3_and_unknown_versions_pass(version):
+def test_mavsdk_3_and_unknown_versions_pass(version, monkeypatch):
+    # version=None reads the installed distribution: pin it so the result does not depend on the machine.
+    monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: None)
     link_mod.check_mavsdk_version(version)
+
+
+def test_installed_mavsdk_4_is_refused_when_no_version_is_given(monkeypatch):
+    monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: "4.1.0")
+    with pytest.raises(RuntimeError, match=r"native binding.*mavsdk-grpc.*<4"):
+        link_mod.check_mavsdk_version(None)
 
 
 def test_connect_refuses_real_mavsdk_4(monkeypatch):
@@ -161,14 +169,16 @@ def test_connect_says_not_installed_when_there_is_no_distribution(monkeypatch):
         link_mod.MavsdkAutopilotLink("tcpout://127.0.0.1:1").connect()
 
 
-def test_mavlink_controller_refuses_mavsdk_4(monkeypatch):
+def test_mavlink_controller_refuses_mavsdk_4(monkeypatch, caplog):
     pytest.importorskip("numpy")
     import flightrisk.drone.mavlink as mavlink_mod
 
     monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: "4.2.1")
     controller = mavlink_mod.MavlinkController.__new__(mavlink_mod.MavlinkController)
-    with pytest.raises(RuntimeError, match="mavsdk 4.2.1 is installed"):
-        controller.connect()
+    controller.name = "t"
+    with caplog.at_level("ERROR"):
+        assert controller.connect() is False
+    assert "mavsdk 4.2.1 is installed" in caplog.text
 
 
 @pytest.mark.parametrize("windows, expected", [(False, "mavsdk_server"), (True, "mavsdk_server.exe")])
@@ -373,13 +383,6 @@ def _win_exited(k32, pid: int, timeout_s: float) -> bool:
         k32.CloseHandle(handle)
 
 
-def _win_kill_pid(k32, pid: int) -> None:
-    handle = k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
-    if handle:
-        k32.TerminateProcess(handle, 1)
-        k32.CloseHandle(handle)
-
-
 @windows_only
 def test_windows_real_job_holds_the_child():
     import ctypes
@@ -413,13 +416,18 @@ def test_windows_child_dies_when_the_parent_is_killed():
     )
     parent = subprocess.Popen([sys.executable, "-c", parent_code], stdout=subprocess.PIPE, text=True)
     child_pid = None
+    child_handle = None
     try:
         child_pid = int(parent.stdout.readline())
+        # Hold a handle taken while the child is known alive: it pins the PID, so cleanup cannot hit a reused one.
+        child_handle = k32.OpenProcess(_SYNCHRONIZE | _PROCESS_TERMINATE, False, child_pid)
         assert not _win_exited(k32, child_pid, 0.2), "the child died early"
         parent.kill()  # TerminateProcess: no atexit, no cleanup
         parent.wait(10)
         assert _win_exited(k32, child_pid, 5), "the child outlived its killed parent"
     finally:
         parent.kill()
-        if child_pid is not None:
-            _win_kill_pid(k32, child_pid)
+        if child_handle:
+            if k32.WaitForSingleObject(child_handle, 0) != _WAIT_OBJECT_0:
+                k32.TerminateProcess(child_handle, 1)
+            k32.CloseHandle(child_handle)

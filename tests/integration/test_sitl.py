@@ -115,9 +115,12 @@ def _import_real_mavlink_controller():
             parent_pkg.mavlink = saved_attr
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def sitl_available():
-    """Connect to the SITL named by FLIGHTRISK_SITL_ADDRESS, or skip when it is unset."""
+    """Connect once per module to the SITL named by FLIGHTRISK_SITL_ADDRESS, or skip when it is unset.
+
+    Module scope: Cygwin SITL exits when its one client disconnects, so every test shares one connection.
+    """
     MavlinkController = _import_real_mavlink_controller()
 
     address = _sitl_address()
@@ -257,7 +260,7 @@ class TestSITLCoverageFlight:
         from pathlib import Path
 
         _import_real_mavlink_controller()  # Skips when the real mavsdk is missing.
-        _sitl_address()  # Skips when FLIGHTRISK_SITL_ADDRESS is unset.
+        address = _sitl_address()  # Skips when FLIGHTRISK_SITL_ADDRESS is unset.
         root = Path(__file__).resolve().parents[2]
         spec = importlib.util.spec_from_file_location("sitl_fly_coverage_it", root / "scripts" / "sitl_fly_coverage.py")
         script = importlib.util.module_from_spec(spec)
@@ -280,7 +283,7 @@ class TestSITLCoverageFlight:
             args = script.build_parser().parse_args(["--max-lanes", "2", "--area", "300x300"])
             plan = script.build_plan(args)
             assert len(plan.waypoints) == 4
-            controller = script._make_sitl_controller_class()("sitl-coverage-it", host=script.sitl_address(0))
+            controller = script._make_sitl_controller_class()("sitl-coverage-it", host=address)
             assert controller.connect(), "SITL not reachable (run scripts/start_sitl.sh)"
             try:
                 lines: list[str] = []
