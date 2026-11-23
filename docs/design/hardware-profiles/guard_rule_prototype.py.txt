@@ -1,0 +1,244 @@
+"""Prototype of the issue #197 guard rule (design.md section 22). Read-only; prints findings.
+
+Run: python3 guard_rule_prototype.py.txt <repo root> [-v]
+
+Name words are derived from the parameter ids in parameters.md (every
+dotted, underscore-separated token of length >= 3 that is not a unit, plus a
+fixed list of time and count words). A finding is:
+
+  (A) an int or float literal (not a bool; a unary minus is folded in; 0 and
+      0.0 exempt) that is the whole value, or a numeric element of a tuple
+      value, bound to a unit-named target: an assignment or annotated
+      assignment target, a function parameter default, or a keyword argument;
+  (B) such a literal as an operand of an ordering comparison whose other
+      operand is a unit-named name or attribute;
+  (C) the default= of an add_argument call whose option name is unit-named,
+      including a numeric string such as "75";
+  (D) the default of an environment read: <x>.get("FLIGHTRISK_...", default)
+      or os.getenv("FLIGHTRISK_...", default), numeric or numeric string;
+  (E) the default= of a dataclasses field() call bound to a unit-named target;
+  (F) a bool or str literal that is a definition-time default of a
+      safety-named target (failsafe, require, sensing, hover, avoid, refuse,
+      obstacle, geofence, ceiling, land): a function parameter default, a
+      class-body field, or a module-level DEFAULT_* name; never state flags
+      assigned inside a function, enum members, ENV_/EVENT_ names or texts.
+  (D) is limited to unit-named variable names.
+
+Key = (file, enclosing scope, kind, callee or target, name, value) with exact counts.
+"""
+from __future__ import annotations
+
+import ast
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+UNIT_SUFFIX = r"(?:_|^)(cm|mm|m|km|s|ms|deg|dps|mps|pct|percent|c|hz|cm_s)$"
+UNIT_TOKENS = {"cm", "mm", "m", "km", "s", "ms", "deg", "dps", "mps", "pct", "c", "hz", "per", "list"}
+EXTRA_WORDS = {"timeout", "delay", "interval", "budget", "lag", "retries", "retry", "attempts",
+               "readings", "samples", "votes", "tolerance", "threshold", "radius", "width", "depth",
+               "speed", "distance", "gap", "offset", "height", "alt", "altitude", "fov", "pitch"}
+SAFETY_WORDS = ("failsafe", "require", "sensing", "hover", "avoid", "refuse", "obstacle", "geofence",
+                "ceiling", "land")
+EXEMPT_NAME = re.compile(r"(_px|_bytes|_chars|_len)$|^(max_depth|frame_height|frame_width|match_threshold)$",
+                         re.IGNORECASE)
+EXEMPT_STR_NAME = re.compile(r"^(env_|event_)|(_env|_env_var|_detail|_message|_text|_note|_reason|_reasons|"
+                             r"_label|_key|_keys|_field|_fields|_prefix|_suffix|_title|_help|_doc)$", re.IGNORECASE)
+SCOPE_GLOBS = [
+    "flightrisk/drone/*.py",
+    "flightrisk/edge_device.py",
+    "flightrisk/edge_profiles.py",
+    "flightrisk/launcher/*.py",
+    "flightrisk/dashboard/*.py",
+    "flightrisk/fleet_protocol/constants.py",
+]
+
+
+def words_from_design(design: Path) -> set[str]:
+    ids = re.findall(r"^\| \d+[a-z]? \| `([a-z_.]+)`", design.read_text(encoding="utf-8"), re.MULTILINE)
+    words = set()
+    for pid in ids:
+        for tok in re.split(r"[._]", pid):
+            if len(tok) >= 3 and tok not in UNIT_TOKENS:
+                words.add(tok)
+    return words | EXTRA_WORDS
+
+
+def build_unit_re(words: set[str]) -> re.Pattern:
+    return re.compile(UNIT_SUFFIX + "|" + "|".join(sorted(map(re.escape, words), key=len, reverse=True)),
+                      re.IGNORECASE)
+
+
+def _num(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _num(node.operand)
+        return None if v is None else -v
+    return None
+
+
+def _numstr(node):
+    v = _num(node)
+    if v is not None:
+        return v
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.fullmatch(r"-?\d+(\.\d+)?", node.value):
+        return node.value
+    return None
+
+
+def _nums(node):
+    v = _num(node)
+    if v is not None:
+        return [v]
+    if isinstance(node, ast.Tuple):
+        return [x for x in (_num(e) for e in node.elts) if x is not None]
+    return []
+
+
+def _name(t):
+    if isinstance(t, ast.Name):
+        return t.id
+    if isinstance(t, ast.Attribute):
+        return t.attr
+    return None
+
+
+def _callee(call):
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "?")
+
+
+class Scanner(ast.NodeVisitor):
+    def __init__(self, rel, unit_re):
+        self.rel, self.unit_re, self.scope, self.out = rel, unit_re, ["<module>"], []
+        self.kinds = ["module"]
+
+    def unit(self, name):
+        return bool(name) and bool(self.unit_re.search(name)) and not EXEMPT_NAME.search(name)
+
+    def safety(self, name):
+        low = (name or "").lower()
+        return any(w in low for w in SAFETY_WORDS) and not EXEMPT_STR_NAME.search(low)
+
+    def add(self, kind, target, name, value, line):
+        if value == 0 or value == "0":
+            return
+        self.out.append(((self.rel, ".".join(self.scope), kind, target, name, value), line))
+
+    def _scoped(self, node, kind):
+        self.scope.append(node.name)
+        self.kinds.append(kind)
+        self.generic_visit(node)
+        self.kinds.pop()
+        self.scope.pop()
+
+    def visit_ClassDef(self, node):
+        is_enum = any((_name(b) or "").endswith("Enum") for b in node.bases)
+        self._scoped(node, "enum" if is_enum else "class")
+
+    def visit_FunctionDef(self, node):
+        a = node.args
+        pos = a.posonlyargs + a.args
+        pairs = list(zip(pos[len(pos) - len(a.defaults):], a.defaults))
+        pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+        for arg, d in pairs:
+            if self.unit(arg.arg):
+                for v in _nums(d):
+                    self.add("default", node.name, arg.arg, v, d.lineno)
+            if isinstance(d, ast.Constant) and isinstance(d.value, (bool, str)) and self.safety(arg.arg):
+                self.add("safety_default", node.name, arg.arg, d.value, d.lineno)
+        self._scoped(node, "function")
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def _binding(self, target_name, value, line, where="function"):
+        if self.unit(target_name):
+            for v in _nums(value):
+                self.add("assign", target_name, target_name, v, line)
+            if isinstance(value, ast.Call) and _callee(value) == "field":
+                for kw in value.keywords:
+                    if kw.arg == "default":
+                        for v in _nums(kw.value):
+                            self.add("field", target_name, target_name, v, line)
+        definition = where == "class" or (where == "module" and target_name.upper().startswith("DEFAULT_"))
+        if (definition and isinstance(value, ast.Constant) and isinstance(value.value, (bool, str))
+                and self.safety(target_name)):
+            self.add("safety_literal", target_name, target_name, value.value, line)
+
+    def visit_Assign(self, node):
+        for t in node.targets:
+            n = _name(t)
+            if n:
+                self._binding(n, node.value, node.lineno, self.kinds[-1])
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        n = _name(node.target)
+        if n and node.value is not None:
+            self._binding(n, node.value, node.lineno, self.kinds[-1])
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        callee = _callee(node)
+        for kw in node.keywords:
+            if kw.arg and kw.arg != "default" and self.unit(kw.arg):
+                for v in _nums(kw.value):
+                    self.add("kwarg", callee, kw.arg, v, kw.value.lineno)
+        if callee == "add_argument" and node.args:
+            opt = next((a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)), "")
+            for kw in node.keywords:
+                if kw.arg == "default" and self.unit(opt.lstrip("-").replace("-", "_")):
+                    v = _numstr(kw.value)
+                    if v is not None:
+                        self.add("argparse_default", "add_argument", opt, v, kw.value.lineno)
+        if callee in ("get", "getenv") and len(node.args) >= 2:
+            key = node.args[0]
+            keyname = key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else _name(key)
+            env_like = keyname and ("FLIGHTRISK_" in keyname or keyname.endswith(("_ENV", "_ENV_VAR")) or keyname.startswith("ENV_"))
+            stem = (keyname or "").replace("FLIGHTRISK_", "").replace("_ENV_VAR", "").replace("_ENV", "").replace("ENV_", "")
+            if env_like and self.unit(stem):
+                v = _numstr(node.args[1])
+                if v is not None:
+                    self.add("env_default", callee, keyname, v, node.lineno)
+        self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        ops = [node.left, *node.comparators]
+        if all(isinstance(o, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for o in node.ops):
+            names = [_name(o) for o in ops if isinstance(o, (ast.Name, ast.Attribute))]
+            hit = next((n for n in names if self.unit(n)), None)
+            if hit:
+                for o in ops:
+                    v = _num(o)
+                    if v is not None:
+                        self.add("compare", "<compare>", hit, v, node.lineno)
+        self.generic_visit(node)
+
+
+def main():
+    root = Path(sys.argv[1])
+    verbose = "-v" in sys.argv
+    unit_re = build_unit_re(words_from_design(root / "docs/design/hardware-profiles/parameters.md"))
+    files = sorted({p for g in SCOPE_GLOBS for p in root.glob(g)})
+    found = []
+    for p in files:
+        s = Scanner(str(p.relative_to(root)), unit_re)
+        s.visit(ast.parse(p.read_text(encoding="utf-8")))
+        found += s.out
+    keys = Counter(k for k, _ in found)
+    by_file = Counter(k[0] for k, _ in found)
+    by_kind = Counter(k[2] for k, _ in found)
+    print(f"files in scope: {len(files)}; findings: {len(found)}; distinct keys: {len(keys)}; "
+          f"files with findings: {len(by_file)}")
+    print("by kind:", dict(sorted(by_kind.items())))
+    for f, n in by_file.most_common():
+        print(f"  {n:4d} {f}")
+    if verbose:
+        for (k, line) in found:
+            print(f"{k[0]}:{line} [{k[2]}] scope={k[1]} target={k[3]} name={k[4]} value={k[5]!r}")
+
+
+if __name__ == "__main__":
+    main()
