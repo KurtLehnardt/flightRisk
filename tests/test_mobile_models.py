@@ -736,16 +736,27 @@ class TestLicenceGuardNames:
         script = (ROOT / "scripts" / "download_matching_models.sh").read_text()
         names = {Path(m).name for m in re.findall(r'list_file\s+"\$REPO_ROOT/([^"]+)"', script)}
         names |= {Path(m).name for m in re.findall(r"^#\s+((?:models|ios|mobile)/\S+)", script, re.MULTILINE)}
-        assert len(names) >= 6
+        # PR #214: the script passes --skip-tflite, so it writes only the ONNX and Core ML files.
+        assert names == {
+            "osnet_x1_0.onnx", "insightface_r18.onnx", "OSNetReID.mlpackage", "InsightFaceR18.mlpackage",
+        }
         for name in sorted(names):
             assert lg.check_name(name) is not None, name
 
     def test_every_model_the_apps_load_is_classified(self):
         """A model name in the app code is either forbidden or one this pipeline (or MiDaS) provides."""
         allowed_in_apps = {o.installed_name for o in mm.OUTPUTS} | {"midas_small.onnx"}
+        # detector.onnx is the on-device name of the user's own imported model (ByoDetectorStore); no
+        # model of that name ships in the app or the repo.
+        allowed_in_apps |= {"detector.onnx"}
         allowed_in_apps |= {Path(n).stem for n in allowed_in_apps}
         found: set[str] = set()
-        for src in list((ROOT / "mobile").rglob("*.kt")) + list((ROOT / "ios").rglob("*.swift")):
+        srcs = list((ROOT / "mobile").rglob("*.kt")) + list((ROOT / "ios").rglob("*.swift"))
+        # Only code that ships: unit-test fixtures (src/test, src/androidTest, iOS test targets) use
+        # throwaway names such as bad.onnx and are not models the apps load.
+        test_dirs = {"test", "androidTest", "Tests", "FlightRiskTests", "FlightRiskUITests"}
+        srcs = [s for s in srcs if not test_dirs & set(s.relative_to(ROOT).parts)]
+        for src in srcs:
             text = src.read_text(errors="replace")
             found |= set(re.findall(r'"([A-Za-z0-9_.\-]+\.(?:onnx|tflite|ort))"', text))
             found |= set(re.findall(r'forResource:\s*"([A-Za-z0-9_\-]+)",\s*withExtension:\s*"mlmodelc"', text))
