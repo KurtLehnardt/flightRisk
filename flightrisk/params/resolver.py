@@ -8,20 +8,26 @@ file, inventory, launcher, environment, command-line flag. Every value carries
 its ``source`` and ``source_detail`` (RES-2). Nothing at runtime calls this
 module yet; adoption is A3, A4 and A5.
 
-Bounds (design 7.1, risk R4): until C5 an environment or flag value is checked
-against the range today's code accepts for that name (``today_accepts`` of the
-golden file, with its ``policy``), and a file, inventory or launcher value is
+Bounds (design 7.1, risk R4): until C5 an environment or flag value is read
+exactly as today's code reads it: the same parse, accepted spelling, unit
+conversion, range and clamp or refuse behaviour. The parse comes from the
+name's ``table.TODAY_READS`` entry and the range from ``today_accepts`` of the
+golden file, with its ``policy``. A file, inventory or launcher value is
 checked against the target bound of the model's profile column.
 
 Decisions:
 
 1. Today's ranges are passed in as ``today_accepts`` (see
    ``today_accepts_from_golden``) because they live in the golden file under
-   ``tests/``, which runtime code must not read. A name with no recorded
-   today range (the golden file's "no importable range constant" rows, or
-   ``today_accepts=None``) is checked against the target bound, the safer
-   choice; the parity test reports any such name where that differs from
-   today's reader.
+   ``tests/``, which runtime code must not read. An environment or flag value
+   is checked against today's range only, never the target bound: a name with
+   no recorded today range is open, because today's reader accepts any value
+   its parse accepts (``FLIGHTRISK_LINK_LOSS_LAND_S`` above 0,
+   ``FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`` and ``--link-loss-hold-s`` from 0,
+   ``--speed-mps`` above 0 to 15 m/s). A3 to A5 add the target bounds to
+   these names as a deliberate change recorded in design section 27. Only
+   with ``today_accepts=None`` (no golden data) is an environment or flag
+   value checked against the target bound.
 2. Where today's code clamps (``policy: clamp``, row 23
    ``FLIGHTRISK_MANUAL_ORPHAN_LAND_S``, "min 30, clamped"), the resolver
    clamps to the same end and logs it (risk R5). C5 turns this into a
@@ -51,9 +57,12 @@ Decisions:
 9. A value for a row that does not apply to the model (no default in its
    profile column) is skipped, and the row is absent from the result.
 10. An empty environment value counts as unset, as today's readers treat it.
+    An empty flag value is refused where today's argparse type refuses it
+    (``TodayRead.empty_refused``).
 11. A scaled value keeps fractional centimetres (``1.234`` m is ``123.4``
-    cm), as today's readers multiply floats; an unscaled integer row takes
-    only whole numbers.
+    cm), as today's readers multiply floats. A name read with ``float()``
+    today keeps a fraction on an integer row too; a name with no
+    ``TODAY_READS`` entry on an integer row takes only whole numbers.
 
 Safety (step S7):
 
@@ -88,6 +97,32 @@ Safety (step S7):
     (A3 to A5) call ``resolve_unit``. The split keeps each single-value test of
     the layering step free of the cross-value rules, which today's readers do
     not apply when they read one name.
+
+Today's quirks that A1 reproduces (behaviour-neutral; each is a candidate for
+design section 27, not a fix here):
+
+- ``--alt-slot`` reads a value above 0 and below 10 as metres (``5`` is
+  500 cm, ``1.6`` is 160 cm), and rounds to 0.1 cm
+  (``flightrisk/edge_device.py:1541-1557``).
+- ``FLIGHTRISK_FAILSAFE_ACTION`` and ``--failsafe-action`` spell the return
+  action ``rtl`` and refuse ``return``, the registry's spelling. The
+  environment name is stripped and case-folded; the flag is matched exactly,
+  so ``--failsafe-action RTL`` is refused (``flightrisk/edge_device.py:1608``
+  and ``:1743-1746``).
+- Several integer rows take a fraction from the environment or a flag, as
+  today reads them with ``float()``: ``FLIGHTRISK_CEILING_CM=150.5``,
+  ``FLIGHTRISK_MIN_TAKEOFF_BATTERY=30.5``,
+  ``FLIGHTRISK_MANUAL_ORPHAN_LAND_S=45.5`` and ``--alt-slot 100.5``.
+- The test-adapter integer facts and the obstacle counts take ASCII digits
+  only, so ``+5`` and ``5.0`` are refused, while the decimal facts take a
+  sign and an exponent (``flightrisk/edge_device.py:1846-1866``). The
+  temperature levels take one to three digits
+  (``flightrisk/drone/temp_preflight.py:184``).
+- ``FLIGHTRISK_FLEET_AREA_CM`` and ``--fleet-area-cm`` read one number as a
+  square and ``WxH`` in either case, whole and positive
+  (``flightrisk/dashboard/__main__.py:39-50``).
+- The link-loss detect time, the field hold and ``--speed-mps`` have no
+  target bound at the environment or flag layer (decision 1).
 """
 
 from __future__ import annotations

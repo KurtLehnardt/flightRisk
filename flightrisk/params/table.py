@@ -150,7 +150,7 @@ class TodayRead:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
 
-_ROOM_READ = TodayRead("flightrisk/drone/safety.py:480-487 SafetyEnvelope.from_env _read, float()")
+_ROOM_READ = TodayRead("flightrisk/drone/safety.py:479-486 SafetyEnvelope.from_env _read, float()")
 _FIELD_ENV_READ = TodayRead("flightrisk/edge_device.py:2374-2385 _field_value_m float(), then :2399 round(m * 100, 1)",
                             round_to=1)
 _FIELD_FLAG_READ = TodayRead("flightrisk/edge_device.py:1596-1607 argparse type=float, then :2399 round(m * 100, 1)",
@@ -177,8 +177,8 @@ TODAY_READS: Mapping[str, TodayRead] = MappingProxyType({
     # Values above 0 and below 10 are metres; the result is rounded to 0.1 cm.
     "--alt-slot": TodayRead("flightrisk/edge_device.py:1541-1557 _parse_alt_slot", metres_below=10.0, round_to=1,
                             empty_refused=True),
-    "FLIGHTRISK_MIN_TAKEOFF_BATTERY": TodayRead("flightrisk/drone/safety.py:393-400 min_takeoff_battery_from_env, float()"),
-    "FLIGHTRISK_LINK_LOSS_LAND_S": TodayRead("flightrisk/drone/safety.py:480-493 and flightrisk/edge_device.py:2401-2403, float()"),
+    "FLIGHTRISK_MIN_TAKEOFF_BATTERY": TodayRead("flightrisk/drone/safety.py:382-400 min_takeoff_battery_from_env, float()"),
+    "FLIGHTRISK_LINK_LOSS_LAND_S": TodayRead("flightrisk/drone/safety.py:479-493 and flightrisk/edge_device.py:2401-2403, float()"),
     "FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": TodayRead("flightrisk/edge_device.py:2401-2403 _read, float()"),
     "--link-loss-hold-s": TodayRead("flightrisk/edge_device.py:1590 argparse type=float", empty_refused=True),
     # Today spells the return action rtl and refuses return (flightrisk/edge_device.py:1743-1746).
@@ -187,8 +187,8 @@ TODAY_READS: Mapping[str, TodayRead] = MappingProxyType({
     # argparse choices match the exact text, with no strip and no case folding.
     "--failsafe-action": TodayRead("flightrisk/edge_device.py:1608 argparse choices=('rtl', 'land')", PARSE_CHOICE,
                                    values={"rtl": "return", "land": "land"}, fold=False, empty_refused=True),
-    "FLIGHTRISK_MANUAL_ORPHAN_LAND_S": TodayRead("flightrisk/dashboard/manual_control.py:138-150 _seconds_env, float()"),
-    "FLIGHTRISK_MANUAL_LOST_IDLE_S": TodayRead("flightrisk/dashboard/manual_control.py:138-150 _seconds_env, float()"),
+    "FLIGHTRISK_MANUAL_ORPHAN_LAND_S": TodayRead("flightrisk/dashboard/manual_control.py:137-150 _seconds_env, float()"),
+    "FLIGHTRISK_MANUAL_LOST_IDLE_S": TodayRead("flightrisk/dashboard/manual_control.py:137-150 _seconds_env, float()"),
     "FLIGHTRISK_TELLO_SETTLE_SAMPLES": _OBSTACLE_INT,
     "FLIGHTRISK_TELLO_REFUSAL_RETRIES": _OBSTACLE_INT,
     "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT": _OBSTACLE_INT,
