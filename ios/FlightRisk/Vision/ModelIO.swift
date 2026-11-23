@@ -12,28 +12,36 @@ enum ModelIO {
         case output(String)
     }
 
-    /// The 8-bit RGB pixels of `image`, drawn 1:1 in the image's own RGB colour space so that no
-    /// colour conversion changes them (sRGB when the image has no RGB colour space).
+    /// The 8-bit RGB pixels of `image`.
+    ///
+    /// An 8-bit RGB image in a standard-range colour space is drawn 1:1 in its own space, so no
+    /// colour conversion changes its values (camera frames, the golden PNGs). Anything else (16-bit
+    /// or float pixels, extended-range spaces such as the extended sRGB an iPhone photo of a
+    /// Display P3 scene decodes to, grey or CMYK) is converted to 8-bit sRGB: Core Graphics cannot
+    /// make an 8-bit context in an extended-range space, so drawing in the image's own space would
+    /// fail. `nil` only when no context can be made at all.
     static func rgb(_ image: CGImage) -> RGBImage? {
         let w = image.width, h = image.height
         guard w > 0, h > 0 else { return nil }
-        let space: CGColorSpace
-        if let own = image.colorSpace, own.model == .rgb {
-            space = own
-        } else if let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
-            space = srgb
-        } else {
-            return nil
+        var spaces: [CGColorSpace] = []
+        if let own = image.colorSpace, own.model == .rgb, image.bitsPerComponent == 8, !CGColorSpaceUsesExtendedRange(own) {
+            spaces.append(own)
+        }
+        if let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
+            spaces.append(srgb)
         }
         var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        let drawn = rgba.withUnsafeMutableBytes { buf -> Bool in
-            guard let ctx = CGContext(
-                data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-            ) else { return false }
-            ctx.interpolationQuality = .none
-            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-            return true
+        var drawn = false
+        for space in spaces where !drawn {
+            drawn = rgba.withUnsafeMutableBytes { buf -> Bool in
+                guard let ctx = CGContext(
+                    data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                    space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                ) else { return false }
+                ctx.interpolationQuality = .none
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
         }
         guard drawn else { return nil }
         var rgb = [UInt8](repeating: 0, count: w * h * 3)
@@ -85,47 +93,58 @@ enum ModelIO {
         return buffer
     }
 
-    /// The values of `array` in row-major order of its shape, whatever its strides and its
-    /// float type.
+    /// The values of `array` in row-major order of its shape, whatever its strides (Core ML may pad
+    /// the last axis) and its float type. Strided arrays are read with a raw-pointer copy, element
+    /// by element at `sum(index * stride)`.
     static func floats(_ array: MLMultiArray) -> [Float] {
         let shape = array.shape.map(\.intValue)
         let strides = array.strides.map(\.intValue)
         let count = shape.reduce(1, *)
-        guard count > 0 else { return [] }
+        guard count > 0, !shape.isEmpty else { return [] }
         var contiguous = true
         var expected = 1
         for i in stride(from: shape.count - 1, through: 0, by: -1) {
             if shape[i] > 1 && strides[i] != expected { contiguous = false }
             expected *= shape[i]
         }
-        if contiguous {
-            switch array.dataType {
-            case .float32:
-                return array.withUnsafeBufferPointer(ofType: Float.self) { Array($0.prefix(count)) }
-            case .double:
-                return array.withUnsafeBufferPointer(ofType: Double.self) { $0.prefix(count).map { Float($0) } }
-            #if arch(arm64)
-            case .float16:
-                return array.withUnsafeBufferPointer(ofType: Float16.self) { $0.prefix(count).map { Float($0) } }
-            #endif
-            default:
-                break
+        func read<T>(_ type: T.Type, _ convert: (T) -> Float) -> [Float] {
+            array.withUnsafeBytes { raw in
+                let base = raw.bindMemory(to: T.self)
+                if contiguous {
+                    return (0..<count).map { convert(base[$0]) }
+                }
+                var out = [Float](repeating: 0, count: count)
+                var index = [Int](repeating: 0, count: shape.count)
+                var offset = 0
+                for i in 0..<count {
+                    out[i] = convert(base[offset])
+                    var d = shape.count - 1
+                    while d >= 0 {
+                        index[d] += 1
+                        offset += strides[d]
+                        if index[d] < shape[d] { break }
+                        offset -= strides[d] * shape[d]
+                        index[d] = 0
+                        d -= 1
+                    }
+                }
+                return out
             }
         }
-        // Any other layout or type: walk the logical indices.
-        var out = [Float](repeating: 0, count: count)
-        var index = [Int](repeating: 0, count: shape.count)
-        for i in 0..<count {
-            out[i] = array[index.map { NSNumber(value: $0) }].floatValue
-            var d = shape.count - 1
-            while d >= 0 {
-                index[d] += 1
-                if index[d] < shape[d] { break }
-                index[d] = 0
-                d -= 1
-            }
+        switch array.dataType {
+        case .float32:
+            return read(Float.self) { $0 }
+        case .double:
+            return read(Double.self) { Float($0) }
+        case .int32:
+            return read(Int32.self) { Float($0) }
+        #if arch(arm64)
+        case .float16:
+            return read(Float16.self) { Float($0) }
+        #endif
+        default:
+            return (0..<count).map { array[$0].floatValue }
         }
-        return out
     }
 
     /// A `[1, C, H, W]` float32 array of a channel-major tensor.
@@ -162,10 +181,15 @@ enum BundledModels {
         bundle.url(forResource: name, withExtension: "mlmodelc")
     }
 
-    /// The compute units `mobile-models.json` asks for, for the installed model built from
-    /// `installedName` (`YOLOXs.mlpackage`): `.cpuAndGPU` for the fp16 detector, `.all` otherwise
-    /// and when there is no manifest.
+    /// The compute units a bundled model must be loaded with: its own
+    /// `flightrisk.coreml_compute_units` metadata (in the compiled model's `metadata.json`), or else
+    /// what `mobile-models.json` says for `installedName` (`YOLOXs.mlpackage`); `.cpuAndGPU` for the
+    /// fp16 detector, `.all` otherwise and when neither says.
     static func computeUnits(for installedName: String, in bundle: Bundle = .main) -> MLComputeUnits {
+        let name = (installedName as NSString).deletingPathExtension
+        if let units = metadataComputeUnits(url(name, in: bundle)) {
+            return units == "cpuAndGPU" ? .cpuAndGPU : .all
+        }
         guard let url = bundle.url(forResource: manifestName, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -174,6 +198,17 @@ enum BundledModels {
               let units = entry["coreml_compute_units"] as? String
         else { return .all }
         return units == "cpuAndGPU" ? .cpuAndGPU : .all
+    }
+
+    /// The `flightrisk.coreml_compute_units` value in a compiled model's `metadata.json`.
+    static func metadataComputeUnits(_ compiled: URL?) -> String? {
+        guard let compiled,
+              let data = try? Data(contentsOf: compiled.appendingPathComponent("metadata.json")),
+              let json = try? JSONSerialization.jsonObject(with: data)
+        else { return nil }
+        let entry = (json as? [[String: Any]])?.first ?? (json as? [String: Any])
+        let user = entry?["userDefinedMetadata"] as? [String: Any]
+        return user?["flightrisk.coreml_compute_units"] as? String
     }
 
     /// The licence notices for the bundled models (`model-notices.md`), or `nil` when this build

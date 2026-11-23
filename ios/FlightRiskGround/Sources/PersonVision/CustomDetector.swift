@@ -173,6 +173,7 @@ public enum CustomModelError: Error, Equatable, Sendable {
     case inputNotImage
     case inputSize(width: Int, height: Int)
     case outputNotRecognised
+    case yoloxShapedOutput
     case personNotClassZero(String)
     case noPersonFound
     case storageFailed
@@ -206,6 +207,9 @@ public enum CustomModelError: Error, Equatable, Sendable {
         case .outputNotRecognised:
             return "The model's output is not a YOLOv8 or YOLO11 detection head ([1, 84, 8400] for the 80 COCO classes) "
                 + "or an NMS-free head ([1, N, 6]). Export it without NMS."
+        case .yoloxShapedOutput:
+            return "The model's output has 85 values per anchor, the layout of YOLOX (objectness and 80 classes), "
+                + "not of a YOLOv8 or YOLO11 head. FlightRisk's built-in detector already is YOLOX-S."
         case .personNotClassZero(let name):
             return "Class 0 of this model is \"\(name)\", not \"person\". Only models trained with person as class 0 (as COCO) can be used."
         case .noPersonFound:
@@ -262,7 +266,16 @@ public enum CustomModelValidator {
             return (out.name, layout)
         }
         guard heads.count == 1 else { throw CustomModelError.outputNotRecognised }
-        if let names = classNames(interface.metadata), let first = names[0],
+        let names = classNames(interface.metadata)
+        // [1, 8400, 85] is YOLOX's layout (4 box values, objectness, 80 classes); read as a v8 head
+        // it would treat objectness as class 0. Only a model that names 81 classes may have it.
+        switch heads[0].1 {
+        case .channelsFirst(81), .anchorsFirst(81):
+            guard names?.count == 81 else { throw CustomModelError.yoloxShapedOutput }
+        default:
+            break
+        }
+        if let names, let first = names[0],
            first.trimmingCharacters(in: .whitespaces).lowercased() != "person" {
             throw CustomModelError.personNotClassZero(first)
         }

@@ -1,8 +1,11 @@
-/// Which person boxes the app keeps after NMS, by size and shape relative to the frame.
+/// Which person boxes the app keeps after NMS, by size and shape relative to the frame. It is
+/// applied to the integer crop box (the detection after `CropRule`), as Android's
+/// `DetectionSizeFilter` is.
 ///
 /// The app used to keep only boxes at least 12% of the frame height and 0.8% of its area, which
 /// dropped every person who is small in the frame: the normal case from a drone's altitude. The
-/// defaults are now loose enough for aerial search; each limit can still be changed.
+/// default is now loose enough for aerial search, with the same values as Android's `AERIAL`; each
+/// limit can still be changed.
 public struct PersonBoxFilter: Equatable, Sendable {
     /// Smallest box height, as a fraction of the frame height.
     public var minHeightRatio: Float
@@ -12,35 +15,52 @@ public struct PersonBoxFilter: Equatable, Sendable {
     public var minAspectRatio: Float
     /// Largest width / height.
     public var maxAspectRatio: Float
+    /// Smallest width and height in pixels, whatever the frame size: a crop thinner than this
+    /// cannot be resized into a meaningful embedder input.
+    public var minSidePixels: Int
 
-    public init(minHeightRatio: Float, minAreaRatio: Float, minAspectRatio: Float, maxAspectRatio: Float) {
+    public init(minHeightRatio: Float, minAreaRatio: Float, minAspectRatio: Float, maxAspectRatio: Float, minSidePixels: Int = 2) {
         self.minHeightRatio = minHeightRatio
         self.minAreaRatio = minAreaRatio
         self.minAspectRatio = minAspectRatio
         self.maxAspectRatio = maxAspectRatio
+        self.minSidePixels = minSidePixels
     }
 
-    /// The default for aerial search: a box at least 1% of the frame height (11 pixels of a
-    /// 1080-pixel frame) and 0.01% of its area, and between 0.15 and 3 times as wide as it is
-    /// tall, so that a person lying down, seen from the side or from above, is kept.
+    /// The default for aerial search, Android's `AERIAL`: a box at least 1% of the frame height
+    /// (7 pixels of a 720-pixel frame) and 0.005% of its area (about 7 x 7 pixels at 720p), and
+    /// between 0.1 and 4 times as wide as it is tall, so that a person lying down, seen from the side
+    /// or from above, is kept; and at least 2 pixels on each side.
     public static let aerial = PersonBoxFilter(
-        minHeightRatio: 0.01, minAreaRatio: 0.0001, minAspectRatio: 0.15, maxAspectRatio: 3.0
+        minHeightRatio: 0.01, minAreaRatio: 0.00005, minAspectRatio: 0.1, maxAspectRatio: 4.0
     )
 
     /// The filter the app used before aerial search (12% of the height, 0.8% of the area, 0.15 to
-    /// 1.5 wide per tall). Kept for comparison and tests; it drops small people.
+    /// 1.5 wide per tall; Android's `LEGACY`). Kept for comparison and tests; it drops small people.
     public static let groundLevel = PersonBoxFilter(
         minHeightRatio: 0.12, minAreaRatio: 0.008, minAspectRatio: 0.15, maxAspectRatio: 1.5
     )
 
-    /// Whether a box of `width` x `height` frame pixels passes, in a `frameWidth` x `frameHeight` frame.
-    public func accepts(width: Float, height: Float, frameWidth: Int, frameHeight: Int) -> Bool {
-        guard width > 0, height > 0, frameWidth > 0, frameHeight > 0 else { return false }
-        let aspect = width / height
-        return height >= Float(frameHeight) * minHeightRatio
-            && width * height >= Float(frameWidth) * Float(frameHeight) * minAreaRatio
+    /// Whether an integer crop box of `width` x `height` pixels passes, in a `frameWidth` x
+    /// `frameHeight` frame.
+    public func accepts(width: Int, height: Int, frameWidth: Int, frameHeight: Int) -> Bool {
+        guard width > 0, height > 0, frameWidth > 0, frameHeight > 0,
+              width >= minSidePixels, height >= minSidePixels else { return false }
+        let w = Float(width), h = Float(height)
+        let aspect = w / h
+        return h >= Float(frameHeight) * minHeightRatio
+            && w * h >= Float(frameWidth) * Float(frameHeight) * minAreaRatio
             && aspect >= minAspectRatio
             && aspect <= maxAspectRatio
+    }
+
+    /// `accepts` for the crop box `CropRule` makes of `box`, or `nil` when that box is empty or
+    /// filtered out.
+    public func cropBox(_ box: DetectedBox, frameWidth: Int, frameHeight: Int) -> (x1: Int, y1: Int, x2: Int, y2: Int)? {
+        guard let p = CropRule.pixels(box, frameWidth: frameWidth, frameHeight: frameHeight),
+              accepts(width: p.x2 - p.x1, height: p.y2 - p.y1, frameWidth: frameWidth, frameHeight: frameHeight)
+        else { return nil }
+        return p
     }
 }
 

@@ -1,5 +1,5 @@
 {
- "what": "A subset of the golden fixtures that make_models.py verify writes to build/mobile_models/golden, from a drawn frame (no photograph). Every row of PyTorch's detector output whose best class scores 0.2 or more, the detections upstream's postprocess makes from it at 0.25, the crop the crop rule cuts, and the digest of the embedder input open_clip's transform makes from that crop.",
+ "what": "A subset of the golden fixtures that make_models.py verify writes to build/mobile_models/golden, from a drawn frame (no photograph). Every row of PyTorch's detector output whose score (objectness times its best class score, as upstream's postprocess computes it) is 0.2 or more, the detections upstream's postprocess makes from it at 0.25, the crop the crop rule cuts, and the digest of the embedder input open_clip's transform makes from that crop.",
  "golden_json_sha256": "771aee9bb701cdb86e7ab43a56c0269853c4e15aaa63c42465913d8211c3b665",
  "frame": {
   "width": 800,

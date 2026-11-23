@@ -149,22 +149,42 @@ final class DetectorContractTests: XCTestCase {
         // A person 24 pixels tall and 10 wide in a 1920 x 1080 frame (2.2% of the height).
         XCTAssertTrue(PersonBoxFilter.aerial.accepts(width: 10, height: 24, frameWidth: 1920, frameHeight: 1080))
         XCTAssertFalse(PersonBoxFilter.groundLevel.accepts(width: 10, height: 24, frameWidth: 1920, frameHeight: 1080))
-        // Under 1% of the height is still dropped.
-        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 5, height: 10, frameWidth: 1920, frameHeight: 1080))
+        // 1% of a 720-pixel frame is 7.2 pixels: 8 passes, 7 does not.
+        XCTAssertTrue(PersonBoxFilter.aerial.accepts(width: 7, height: 8, frameWidth: 1280, frameHeight: 720))
+        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 7, height: 7, frameWidth: 1280, frameHeight: 720))
+    }
+
+    func testTheAerialFilterHasAndroidsValues() {
+        XCTAssertEqual(PersonBoxFilter.aerial.minHeightRatio, 0.01)
+        XCTAssertEqual(PersonBoxFilter.aerial.minAreaRatio, 0.00005)
+        XCTAssertEqual(PersonBoxFilter.aerial.minAspectRatio, 0.1)
+        XCTAssertEqual(PersonBoxFilter.aerial.maxAspectRatio, 4.0)
     }
 
     func testTheAerialFilterKeepsAPersonLyingDown() {
-        XCTAssertTrue(PersonBoxFilter.aerial.accepts(width: 90, height: 30, frameWidth: 1920, frameHeight: 1080))
-        XCTAssertFalse(PersonBoxFilter.groundLevel.accepts(width: 90, height: 30, frameWidth: 1920, frameHeight: 1080))
-        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 100, height: 30, frameWidth: 1920, frameHeight: 1080))
-        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 4, height: 30, frameWidth: 1920, frameHeight: 1080))
+        XCTAssertTrue(PersonBoxFilter.aerial.accepts(width: 120, height: 30, frameWidth: 1920, frameHeight: 1080))
+        XCTAssertFalse(PersonBoxFilter.groundLevel.accepts(width: 120, height: 30, frameWidth: 1920, frameHeight: 1080))
+        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 130, height: 30, frameWidth: 1920, frameHeight: 1080))
+        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 2, height: 30, frameWidth: 1920, frameHeight: 1080))
     }
 
-    func testTheFilterIsConfigurable() {
+    func testTheFilterIsConfigurableAndHasAMinimumSide() {
         var f = PersonBoxFilter.aerial
         f.minHeightRatio = 0.05
         XCTAssertFalse(f.accepts(width: 10, height: 24, frameWidth: 1920, frameHeight: 1080))
         XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 0, height: 24, frameWidth: 1920, frameHeight: 1080))
+        // In a small frame the ratios allow a 1-pixel-wide box; the minimum side does not.
+        XCTAssertFalse(PersonBoxFilter.aerial.accepts(width: 1, height: 6, frameWidth: 160, frameHeight: 120))
+        XCTAssertTrue(PersonBoxFilter.aerial.accepts(width: 2, height: 6, frameWidth: 160, frameHeight: 120))
+    }
+
+    func testTheFilterJudgesTheClippedCropBox() {
+        // Mostly outside the frame: 40 pixels tall as detected, 3 pixels inside the frame.
+        let box = DetectedBox(x1: 100, y1: -37.5, x2: 120, y2: 3.9, score: 0.9, classIndex: 0)
+        XCTAssertNil(PersonBoxFilter.aerial.cropBox(box, frameWidth: 1280, frameHeight: 720))
+        let inside = DetectedBox(x1: 100.7, y1: 10.2, x2: 120.9, y2: 50.99, score: 0.9, classIndex: 0)
+        let p = PersonBoxFilter.aerial.cropBox(inside, frameWidth: 1280, frameHeight: 720)
+        XCTAssertEqual(p.map { [$0.x1, $0.y1, $0.x2, $0.y2] }, [100, 10, 120, 50])
     }
 
     // MARK: - Crop rule

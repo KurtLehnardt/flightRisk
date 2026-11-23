@@ -111,6 +111,23 @@ final class CustomModelValidatorTests: XCTestCase {
         )))
     }
 
+    func testAYOLOXShapedOutputIsRefusedUnlessTheModelNames81Classes() throws {
+        for shape in [[1, 8400, 85], [1, 85, 8400]] {
+            XCTAssertThrowsError(try CustomModelValidator.check(.init(inputs: [image640], outputs: [.init(name: "o", shape: shape)]))) {
+                XCTAssertEqual($0 as? CustomModelError, .yoloxShapedOutput)
+            }
+        }
+        let eighty = (0..<80).map { "\($0): 'c\($0)'" }.joined(separator: ", ")
+        XCTAssertThrowsError(try CustomModelValidator.check(.init(
+            inputs: [image640], outputs: [.init(name: "o", shape: [1, 8400, 85])], metadata: ["names": "{0: 'person', \(eighty)}"]
+        ))) { XCTAssertEqual($0 as? CustomModelError, .yoloxShapedOutput) }
+        let eightyOne = (1..<81).map { "\($0): 'c\($0)'" }.joined(separator: ", ")
+        let ok = try CustomModelValidator.check(.init(
+            inputs: [image640], outputs: [.init(name: "o", shape: [1, 8400, 85])], metadata: ["names": "{0: 'person', \(eightyOne)}"]
+        ))
+        XCTAssertEqual(ok.layout, .anchorsFirst(classCount: 81))
+    }
+
     func testClassZeroMustBePersonWhenTheModelNamesItsClasses() {
         let out = [CustomModelInterface.Output(name: "o", shape: [1, 6, 8400])]
         XCTAssertThrowsError(try CustomModelValidator.check(.init(inputs: [image640], outputs: out, metadata: ["names": "{0: 'helmet', 1: 'person'}"]))) {
@@ -163,7 +180,7 @@ final class CustomModelValidatorTests: XCTestCase {
         let all: [CustomModelError] = [
             .notAttested, .unsupportedFile, .empty, .tooLarge(bytes: 1), .archive("x"), .noPackageInArchive, .severalPackagesInArchive,
             .compileFailed, .loadFailed, .inputCount(2), .inputNotImage, .inputSize(width: 1, height: 1),
-            .outputNotRecognised, .personNotClassZero("cat"), .noPersonFound, .storageFailed,
+            .outputNotRecognised, .yoloxShapedOutput, .personNotClassZero("cat"), .noPersonFound, .storageFailed,
         ]
         for e in all {
             XCTAssertFalse(e.message.isEmpty)

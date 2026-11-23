@@ -42,15 +42,15 @@ public enum CLIPPreprocess {
          Int((Double(width - size) / 2).rounded(.toNearestOrEven)))
     }
 
-    /// The `size` x `size` RGB image the embedder sees.
+    /// The `size` x `size` RGB image the embedder sees. Only the centre window of the resize is
+    /// computed (each output pixel depends only on its own weights, so the window is exactly the
+    /// centre of the full resize).
     public static func resizeAndCrop(_ image: RGBImage, size: Int = CLIPContract.inputSize) -> RGBImage {
         let target = resizedSize(width: image.width, height: image.height, size: size)
-        let resized = (target.width == image.width && target.height == image.height)
-            ? image
-            : PillowBicubic.resize(image, width: target.width, height: target.height)
-        let off = cropOffsets(width: resized.width, height: resized.height, size: size)
-        // The offsets are inside the image: the short side is `size` and the long side is longer.
-        return resized.cropped(x1: off.left, y1: off.top, x2: off.left + size, y2: off.top + size)!
+        let off = cropOffsets(width: target.width, height: target.height, size: size)
+        let columns = off.left..<(off.left + size)
+        let rows = off.top..<(off.top + size)
+        return PillowBicubic.resize(image, width: target.width, height: target.height, columns: columns, rows: rows)
     }
 
     /// The `[3, size, size]` float tensor (channel-major, RGB) of a `size` x `size` crop:
@@ -80,9 +80,13 @@ public enum CLIPPreprocess {
 
 /// Pillow's bicubic resampling (`Image.resize(..., Image.BICUBIC)`), 8 bits per channel.
 ///
-/// A port of `src/libImaging/Resample.c`: separable, horizontal pass then vertical pass, each
-/// with the bicubic kernel (`a = -0.5`) widened by the scale when shrinking (antialiasing),
-/// coefficients in fixed point with 22 fractional bits, each pass rounded and clipped to 0..255.
+/// A port of `src/libImaging/Resample.c` as Pillow 13 (the version
+/// `scripts/mobile_models/requirements.lock` pins) has it: separable, each pass with the bicubic
+/// kernel (`a = -0.5`) widened by the scale when shrinking (antialiasing), coefficients in fixed
+/// point with 22 fractional bits, each pass rounded and clipped to 0..255. The rows are resized
+/// first (horizontal pass), unless the height shrinks by more than twice as many pixels as the
+/// width, when the columns go first; the order changes the rounding between the passes. Android's
+/// `ImageResize.bicubicPillow` uses the same rule.
 public enum PillowBicubic {
     static let precisionBits = 32 - 8 - 2
     static let support = 2.0
@@ -152,73 +156,114 @@ public enum PillowBicubic {
 
     /// `image` resized to `width` x `height`.
     public static func resize(_ image: RGBImage, width: Int, height: Int) -> RGBImage {
-        precondition(width > 0 && height > 0, "the output has no pixels")
-        var current = image
-        if width != image.width {
-            current = horizontal(current, to: width)
-        }
-        if height != image.height {
-            current = vertical(current, to: height)
-        }
-        return current
+        resize(image, width: width, height: height, columns: 0..<width, rows: 0..<height)
     }
 
-    static func horizontal(_ image: RGBImage, to outWidth: Int) -> RGBImage {
-        let co = coefficients(inSize: image.width, outSize: outWidth)
-        var out = [UInt8](repeating: 0, count: outWidth * image.height * 3)
+    /// Whether Pillow 13 runs the vertical pass first for this resize.
+    public static func verticalFirst(fromWidth: Int, fromHeight: Int, toWidth: Int, toHeight: Int) -> Bool {
+        (fromHeight - toHeight) > 0 && (fromHeight - toHeight) > (fromWidth - toWidth) * 2
+    }
+
+    /// Columns `columns` and rows `rows` of `image` resized to `width` x `height`, without
+    /// computing the rest: exactly that window of the full resize.
+    public static func resize(_ image: RGBImage, width: Int, height: Int, columns: Range<Int>, rows: Range<Int>) -> RGBImage {
+        precondition(width > 0 && height > 0, "the output has no pixels")
+        precondition(columns.lowerBound >= 0 && columns.upperBound <= width && !columns.isEmpty, "columns outside the output")
+        precondition(rows.lowerBound >= 0 && rows.upperBound <= height && !rows.isEmpty, "rows outside the output")
+        let needH = width != image.width
+        let needV = height != image.height
+        if !needH && !needV {
+            return image.cropped(x1: columns.lowerBound, y1: rows.lowerBound, x2: columns.upperBound, y2: rows.upperBound)!
+        }
+        let hc = coefficients(inSize: image.width, outSize: width)
+        let vc = coefficients(inSize: image.height, outSize: height)
+        if verticalFirst(fromWidth: image.width, fromHeight: image.height, toWidth: width, toHeight: height) {
+            // Vertical pass on the source columns the horizontal pass will read, then horizontal.
+            let src = needH ? sourceRange(hc, columns) : columns
+            let strip = image.cropped(x1: src.lowerBound, y1: 0, x2: src.upperBound, y2: image.height)!
+            let tmp = needV
+                ? vertical(strip, rows: rows, co: vc, sourceOffset: 0)
+                : strip.cropped(x1: 0, y1: rows.lowerBound, x2: strip.width, y2: rows.upperBound)!
+            return needH ? horizontal(tmp, rows: 0..<tmp.height, columns: columns, co: hc, sourceOffset: src.lowerBound) : tmp
+        }
+        // Horizontal pass on the source rows the vertical pass will read, then vertical.
+        let src = needV ? sourceRange(vc, rows) : rows
+        let tmp = needH
+            ? horizontal(image, rows: src, columns: columns, co: hc, sourceOffset: 0)
+            : image.cropped(x1: columns.lowerBound, y1: src.lowerBound, x2: columns.upperBound, y2: src.upperBound)!
+        return needV ? vertical(tmp, rows: rows, co: vc, sourceOffset: src.lowerBound) : tmp
+    }
+
+    /// The input indices the outputs `outputs` read.
+    static func sourceRange(_ co: Coefficients, _ outputs: Range<Int>) -> Range<Int> {
+        var lo = Int.max, hi = 0
+        for o in outputs {
+            let (start, count) = co.bounds[o]
+            lo = min(lo, start)
+            hi = max(hi, start + count)
+        }
+        return lo..<max(hi, lo + 1)
+    }
+
+    /// The horizontal pass for output `columns` of `src`'s rows `rows`. `sourceOffset` is the
+    /// input column `src`'s first column stands for.
+    static func horizontal(_ src: RGBImage, rows: Range<Int>, columns: Range<Int>, co: Coefficients, sourceOffset: Int) -> RGBImage {
+        let outWidth = columns.count
+        var out = [UInt8](repeating: 0, count: outWidth * rows.count * 3)
         let half = 1 << (precisionBits - 1)
-        image.pixels.withUnsafeBufferPointer { src in
+        src.pixels.withUnsafeBufferPointer { s in
             out.withUnsafeMutableBufferPointer { dst in
                 co.weights.withUnsafeBufferPointer { kk in
-                    for y in 0..<image.height {
-                        let rowIn = y * image.width * 3
-                        let rowOut = y * outWidth * 3
-                        for xx in 0..<outWidth {
+                    for (r, y) in rows.enumerated() {
+                        let rowIn = y * src.width * 3
+                        let rowOut = r * outWidth * 3
+                        for (c, xx) in columns.enumerated() {
                             let (start, count) = co.bounds[xx]
                             let k = xx * co.ksize
                             var s0 = half, s1 = half, s2 = half
                             for x in 0..<count {
-                                let p = rowIn + (start + x) * 3
+                                let p = rowIn + (start - sourceOffset + x) * 3
                                 let w = kk[k + x]
-                                s0 += Int(src[p]) * w
-                                s1 += Int(src[p + 1]) * w
-                                s2 += Int(src[p + 2]) * w
+                                s0 += Int(s[p]) * w
+                                s1 += Int(s[p + 1]) * w
+                                s2 += Int(s[p + 2]) * w
                             }
-                            dst[rowOut + xx * 3] = clip8(s0)
-                            dst[rowOut + xx * 3 + 1] = clip8(s1)
-                            dst[rowOut + xx * 3 + 2] = clip8(s2)
+                            dst[rowOut + c * 3] = clip8(s0)
+                            dst[rowOut + c * 3 + 1] = clip8(s1)
+                            dst[rowOut + c * 3 + 2] = clip8(s2)
                         }
                     }
                 }
             }
         }
-        return RGBImage(width: outWidth, height: image.height, pixels: out)
+        return RGBImage(width: outWidth, height: rows.count, pixels: out)
     }
 
-    static func vertical(_ image: RGBImage, to outHeight: Int) -> RGBImage {
-        let co = coefficients(inSize: image.height, outSize: outHeight)
-        let stride = image.width * 3
-        var out = [UInt8](repeating: 0, count: image.width * outHeight * 3)
+    /// The vertical pass for output `rows`, over every column of `src`. `sourceOffset` is the
+    /// input row `src`'s first row stands for.
+    static func vertical(_ src: RGBImage, rows: Range<Int>, co: Coefficients, sourceOffset: Int) -> RGBImage {
+        let stride = src.width * 3
+        var out = [UInt8](repeating: 0, count: stride * rows.count)
         let half = 1 << (precisionBits - 1)
-        image.pixels.withUnsafeBufferPointer { src in
+        src.pixels.withUnsafeBufferPointer { s in
             out.withUnsafeMutableBufferPointer { dst in
                 co.weights.withUnsafeBufferPointer { kk in
-                    for yy in 0..<outHeight {
+                    for (r, yy) in rows.enumerated() {
                         let (start, count) = co.bounds[yy]
                         let k = yy * co.ksize
-                        let rowOut = yy * stride
+                        let rowOut = r * stride
                         for i in 0..<stride {
-                            var s = half
+                            var acc = half
                             for y in 0..<count {
-                                s += Int(src[(start + y) * stride + i]) * kk[k + y]
+                                acc += Int(s[(start - sourceOffset + y) * stride + i]) * kk[k + y]
                             }
-                            dst[rowOut + i] = clip8(s)
+                            dst[rowOut + i] = clip8(acc)
                         }
                     }
                 }
             }
         }
-        return RGBImage(width: image.width, height: outHeight, pixels: out)
+        return RGBImage(width: src.width, height: rows.count, pixels: out)
     }
 }
 
