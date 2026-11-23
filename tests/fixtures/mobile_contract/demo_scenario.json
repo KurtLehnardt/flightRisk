@@ -3,7 +3,7 @@
     "description": "A timed two-drone mission for the phones' demo mode: the fleet on the ground, the plan, the start, the drones flying their lanes, an obstacle cut, a detection, a person-match alert that later gets a reasoning verdict and an upgrade, the operator's confirm on the laptop, a drone left HELD when the laptop's browser went away, LAND ALL and the landing. Every payload comes from the real ground code or from another fixture file; every id starts with demo-.",
     "duration_ms": 66000,
     "file": "demo_scenario.json",
-    "generated_at_commit": "1dfd8e1b7e5af315ab1b03f489bf4c4873ef3003",
+    "generated_at_commit": "3751fba8de9a73a5f4467fd626f8b667bd35e686",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "FleetSupervisor.handle_control",
@@ -349,6 +349,7 @@
               "off"
             ],
             "cloud_allowed": true,
+            "health": null,
             "label": "Gemma",
             "model": "gemma4:latest",
             "provider": "gemma",

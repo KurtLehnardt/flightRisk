@@ -453,7 +453,8 @@ class GroundConsoleViewModel(
     /**
      * Why the real ground's state must stay on screen, or null when demo mode may replace it: a real drone
      * reads as flying (live or kept from before a disconnect), a LAND ALL or a Land waits for its answer, the
-     * last LAND ALL failed or reached only some drones, or a failure banner, a drone alert or a failed Land shows.
+     * last LAND ALL failed or reached only some drones, a failure banner, a drone alert or a failed Land shows,
+     * or the real link is up or switched on but the ground has not reported its drones yet.
      */
     private fun realSafetyBlock(): String? {
         val board = displayBoard()
@@ -467,6 +468,11 @@ class GroundConsoleViewModel(
         if (pendingLegacyLands.isNotEmpty() || landFeedback.values.any { it.isWaiting }) return DemoText.BLOCKED_BY_LAND_WAITING
         if (banners.any { it.isFailure } || droneAlerts.isNotEmpty() || landFeedback.values.any { it.isFailure }) {
             return DemoText.BLOCKED_BY_FAILURE
+        }
+        // The real link is up or wanted, but the ground has not said which drones fly: the phone cannot tell
+        // whether demo mode would hide a drone in the air (the iOS app refuses here too).
+        if ((client != null || enabledSetting) && lastFleetStatusAt == 0L && board.drones.isEmpty()) {
+            return DemoText.BLOCKED_BY_FLEET_UNKNOWN
         }
         return null
     }
@@ -505,9 +511,18 @@ class GroundConsoleViewModel(
      */
     fun enterDemo(disconnectConfirmed: Boolean = false): Job = scope.launch { startDemo(disconnectConfirmed) }
 
-    /** The demo dialog was shown and closed. */
+    /**
+     * The demo dialog was answered (or closed). The notice stays in this ViewModel until then, so the
+     * dialog survives a rotation or any other recreation of the activity.
+     */
     fun dismissDemoNotice() {
         demoNotice = null
+        publish()
+    }
+
+    /** Shows a refusal the app decided itself (a search runs, or a Tello drone is connected on the Search tab). */
+    fun showDemoRefusal(text: String) {
+        demoNotice = DemoNotice.Blocked(text)
         publish()
     }
 
@@ -590,6 +605,12 @@ class GroundConsoleViewModel(
      * Ground screen says so and how to reconnect.
      */
     fun exitDemo() {
+        if (demoLoading) {
+            // Turned off while the mission loads: the start that is under way finds a new token and starts nothing.
+            demoToken++
+            publish()
+            return
+        }
         if (!demoOn) return
         demoToken++
         demo = false
@@ -626,8 +647,15 @@ class GroundConsoleViewModel(
 
     // ---------------------------------------------------------------- commands
 
-    /** LAND ALL. Never disabled, never confirmed, never queued. Always leaves a visible result. */
-    fun landAll(): Job = scope.launch { sendLandAll() }
+    /**
+     * LAND ALL. Never disabled, never confirmed, never queued. Always leaves a visible result. Whether demo
+     * mode was on is recorded at the tap: if it changed before the command goes out, nothing is sent and the
+     * screen says so, so a tap on the real LAND ALL can never be answered by the demo, or the other way round.
+     */
+    fun landAll(): Job {
+        val tappedInDemo = demoOn
+        return scope.launch { sendLandAll(tappedInDemo) }
+    }
 
     /** Lands one drone (`drone_command {command: "land"}`), in every drone state. */
     fun landDrone(id: String): Job = scope.launch { sendDroneCommand(id, isLand = true) }
@@ -694,9 +722,15 @@ class GroundConsoleViewModel(
         return !board.connection(id).isStale
     }
 
-    private suspend fun sendLandAll() {
+    private suspend fun sendLandAll(tappedInDemo: Boolean) {
         val attempt = nextAttempt()
         val started = clock.nowMs()
+        if (tappedInDemo != demoOn) {
+            val text = if (tappedInDemo) DemoText.LAND_ALL_DEMO_ENDED else GroundText.LAND_ALL_NOT_SENT_DEMO_STARTED
+            landAllFeedback = CommandFeedback(attempt, CommandPhase.FAILED, text, startedAtMs = started, updatedAtMs = started)
+            publish()
+            return
+        }
         landAllFeedback = CommandFeedback(attempt, CommandPhase.SENDING, DisplayText.LAND_ALL_SENDING, startedAtMs = started, updatedAtMs = started)
         publish()
         val epochAtSend = lossEpoch

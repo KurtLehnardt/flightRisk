@@ -30,7 +30,7 @@ class DemoSemanticsTest {
     }
 
     @Test
-    fun `demo drone cards say they are simulated and real ones do not`() = harnessTest(demo = true) {
+    fun `demo drone cards say they are simulated and real ones do not`() = harnessTest(demo = true, enabled = false) {
         vm.enterDemo(disconnectConfirmed = true).join()
         eventually("demo fleet") { ui.demo && ui.cards.size == 2 }
         for (card in ui.cards) {

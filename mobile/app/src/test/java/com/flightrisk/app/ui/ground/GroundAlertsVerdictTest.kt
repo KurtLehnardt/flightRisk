@@ -111,7 +111,9 @@ class GroundAlertsVerdictTest {
             assertNull(case, row.detailRationaleText)
             assertNull(case, row.confidenceText)
             assertNull(case, row.reasonText)
-            assertFalse(case, row.toString().contains("declined"))
+            // The ground's own text for the case is never shown, whatever it says.
+            r.reasoning?.takeIf { it.isNotEmpty() }?.let { assertFalse(case, row.toString().contains(it)) }
+            assertFalse(case, row.toString().contains("RuntimeError"))
             assertFalse(case, row.verdictText!!.contains("rror:"))
         }
     }

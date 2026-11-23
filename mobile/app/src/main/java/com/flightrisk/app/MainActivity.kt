@@ -114,15 +114,10 @@ class MainActivity : ComponentActivity() {
 
     // Demo mode. The ground ViewModel owns it; this activity follows it for the Search and Target tabs.
     // The real target is kept aside while the demo shows its drawn placeholder and comes back after.
+    // Its dialogs come from the ViewModel's demo notice, which stays until answered, so they survive a rotation.
     private var demoActive by mutableStateOf(false)
-    private var demoDialog by mutableStateOf<DemoDialog?>(null)
     private var realTargetBitmap: Bitmap? = null
     private var realTargetQualityReport: QualityReport? = null
-
-    private sealed interface DemoDialog {
-        data class ConfirmDisconnect(val host: String?) : DemoDialog
-        data class Blocked(val text: String) : DemoDialog
-    }
 
     /**
      * Whether the device has a camera the search preview can use. The preview binds the
@@ -293,18 +288,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             groundConsoleViewModel.uiState.map { it.demo }.distinctUntilChanged().collect { applyDemo(it) }
         }
-        lifecycleScope.launch {
-            // A refusal (the real ground needs the operator, or the mission could not be loaded) or a request
-            // to confirm the link switch-off: shown as a dialog, never dropped silently.
-            groundConsoleViewModel.uiState.map { it.demoNotice }.distinctUntilChanged().collect { notice ->
-                when (notice) {
-                    is GroundConsoleViewModel.DemoNotice.ConfirmDisconnect -> demoDialog = DemoDialog.ConfirmDisconnect(notice.host)
-                    is GroundConsoleViewModel.DemoNotice.Blocked -> demoDialog = DemoDialog.Blocked(notice.text)
-                    null -> Unit
-                }
-                if (notice != null) groundConsoleViewModel.dismissDemoNotice()
-            }
-        }
 
         // Ground station link (phone as an edge). Off until the user turns it on in
         // Settings; it connects only while a search runs and the app is in view.
@@ -374,21 +357,25 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                when (val dialog = demoDialog) {
-                    is DemoDialog.ConfirmDisconnect -> DemoDisconnectDialog(
-                        host = dialog.host,
+                // A refusal (the real ground needs the operator, or the mission could not be loaded) or a request to
+                // confirm the link switch-off: never dropped silently. The notice is held by the ViewModel until the
+                // dialog is answered, so it is shown again after a rotation.
+                when (val notice = groundUi.demoNotice) {
+                    is GroundConsoleViewModel.DemoNotice.ConfirmDisconnect -> DemoDisconnectDialog(
+                        host = notice.host,
                         onConfirm = {
-                            demoDialog = null
+                            groundConsoleViewModel.dismissDemoNotice()
                             // Checked again: the ground ViewModel re-checks its own refusals before it starts.
                             if (demoBlockedHere()) {
-                                demoDialog = DemoDialog.Blocked(DemoText.BLOCKED_BY_SEARCH)
+                                groundConsoleViewModel.showDemoRefusal(DemoText.BLOCKED_BY_SEARCH)
                             } else {
                                 groundConsoleViewModel.enterDemo(disconnectConfirmed = true)
                             }
                         },
-                        onDismiss = { demoDialog = null },
+                        onDismiss = groundConsoleViewModel::dismissDemoNotice,
                     )
-                    is DemoDialog.Blocked -> DemoBlockedDialog(dialog.text, onDismiss = { demoDialog = null })
+                    is GroundConsoleViewModel.DemoNotice.Blocked ->
+                        DemoBlockedDialog(notice.text, onDismiss = groundConsoleViewModel::dismissDemoNotice)
                     null -> Unit
                 }
             }
@@ -407,7 +394,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun requestDemo() {
         if (demoBlockedHere()) {
-            demoDialog = DemoDialog.Blocked(DemoText.BLOCKED_BY_SEARCH)
+            groundConsoleViewModel.showDemoRefusal(DemoText.BLOCKED_BY_SEARCH)
             return
         }
         groundConsoleViewModel.enterDemo(disconnectConfirmed = false)

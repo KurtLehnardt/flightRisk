@@ -83,6 +83,9 @@ object DemoText {
             "has landed and dismiss the result on the Ground tab before you start demo mode."
     const val BLOCKED_BY_LAND_WAITING =
         "A Land sent to a real drone is still waiting for its answer. Demo mode starts once the Ground tab shows it."
+    /** The same words as the iOS app. */
+    const val BLOCKED_BY_FLEET_UNKNOWN =
+        "The ground has not reported its drones yet. Wait for it, or switch the link off in Settings first."
     const val BLOCKED_BY_FAILURE =
         "The Ground tab shows a failure from the real ground station (a failed command, a drone alert or a failure " +
             "banner). Check it and dismiss it on the Ground tab before you start demo mode."
@@ -115,6 +118,10 @@ object DemoText {
 
     fun resumeAcknowledged(droneId: String): String =
         "Resume search for ${GroundText.shortId(droneId)} was answered on this phone. Nothing was sent."
+
+    /** A LAND ALL (demo) tap whose demo ended before it went out. */
+    const val LAND_ALL_DEMO_ENDED =
+        "LAND ALL (demo) was not sent: demo mode ended after the tap. Nothing was sent to any ground station."
 
     // Target tab
     const val TARGET_PLACEHOLDER = "Leave demo mode to choose a photo."

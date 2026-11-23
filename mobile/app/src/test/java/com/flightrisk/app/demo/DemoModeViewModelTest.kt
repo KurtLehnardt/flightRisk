@@ -9,6 +9,7 @@ import com.flightrisk.app.ui.ground.GroundConsoleViewModel.DemoNotice
 import com.flightrisk.app.ui.ground.GroundConsoleViewModel.DemoRequest
 import com.flightrisk.app.ui.ground.GroundHarness
 import com.flightrisk.app.ui.ground.GroundLink
+import com.flightrisk.app.ui.ground.GroundText
 import com.flightrisk.app.ui.ground.KeyState
 import com.flightrisk.app.ui.ground.harnessTest
 import com.flightrisk.contract.VerdictKind
@@ -62,11 +63,11 @@ class DemoModeViewModelTest {
 
     /**
      * The real transport here fails the test when it is touched: every real client and every health probe
-     * throws and is counted. With a real ground set up and switched on, demo mode runs its whole command
-     * set and every settings action, and the count stays at zero.
+     * throws and is counted. With a real ground set up (address and key saved), demo mode runs its whole
+     * command set and every settings action, switching the link on included, and the count stays at zero.
      */
     @Test
-    fun `demo commands never touch the network`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `demo commands never touch the network`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         foreground()
         play(8_000)
@@ -144,12 +145,12 @@ class DemoModeViewModelTest {
     fun `a confirmation is asked whenever real ground state exists, even with no client`() = harnessTest(demo = true, enabled = false) {
         // The link is off and nothing was ever connected: nothing to switch off or clear.
         assertEquals(DemoRequest.Ready, onMain { vm.demoRequest() })
-        // The link switched on (connecting or not): starting the demo would switch it off.
+        // The link switched on and connected, and the ground reported its drones: starting the demo would
+        // switch the link off, so it asks.
         onMain { vm.setEnabled(true) }
-        vm.awaitIdle()
+        val real = connectWithFleet()
         assertEquals(DemoRequest.NeedsDisconnect(host), onMain { vm.demoRequest() })
         // The link off again, but a real ground's report is still on screen.
-        val real = connect()
         real.fixture("match_alert.json", "edge_match")
         eventually("alert") { ui.alerts.rows.isNotEmpty() }
         onMain { vm.setEnabled(false) }
@@ -226,6 +227,8 @@ class DemoModeViewModelTest {
         // Before the app calls enterDemo, the user switches the link on and it connects.
         onMain { vm.setEnabled(true) }
         val real = connect()
+        real.fleetStatus()
+        eventually("fleet shown") { ui.cards.isNotEmpty() }
         vm.enterDemo(disconnectConfirmed = false).join()
         assertFalse(ui.demo)
         assertEquals("the app shows the disconnect dialog", DemoNotice.ConfirmDisconnect(host), ui.demoNotice)
@@ -234,7 +237,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `the demo plays the mission through the verdict to the landing`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `the demo plays the mission through the verdict to the landing`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         val alertAt = DemoFixtures.scenario.steps.first { it.event == "match_alert" }.atMs
         val verdictAt = DemoFixtures.scenario.steps.first { it.event == "alert_upgrade" }.atMs
@@ -255,7 +258,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `Resume search works on the held demo drone through the ViewModel`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `Resume search works on the held demo drone through the ViewModel`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         val held = DemoFixtures.scenario.held!!
         assertEquals("demo-drone-2", held.droneId)
@@ -277,7 +280,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `demo results do not fade and the demo state never goes not live`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `demo results do not fade and the demo state never goes not live`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         play(8_000)
         vm.landDrone("demo-drone-1").join()
@@ -293,7 +296,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `a profile selection in the demo is answered on the phone`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `a profile selection in the demo is answered on the phone`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         play(1_000)
         eventually("profiles shown") { ui.snapshot.detectionProfiles != null }
@@ -305,7 +308,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `removing the key in the demo keeps the demo and leaves the link off afterwards`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `removing the key in the demo keeps the demo and leaves the link off afterwards`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         onMain { vm.removeKey() }
         vm.awaitIdle()
@@ -321,7 +324,9 @@ class DemoModeViewModelTest {
 
     @Test
     fun `leaving the demo clears everything, leaves the link off and creates no client`() = harnessTest(demo = true) {
+        val before = connectWithFleet()
         startDemo()
+        eventually("real link closed") { before.closed }
         val alertAt = DemoFixtures.scenario.steps.first { it.event == "alert_upgrade" }.atMs
         play(alertAt + 500)
         eventually("demo alert") { ui.alerts.rows.isNotEmpty() }
@@ -343,13 +348,13 @@ class DemoModeViewModelTest {
         // The app comes to the foreground: the link stays off and no real client is created.
         foreground()
         vm.awaitIdle()
-        assertTrue("no real client after the demo", port.opened.isEmpty())
+        assertEquals("no real client after the demo", 1, port.opened.size)
         assertFalse(settings.enabled)
         assertEquals(GroundLink.Off, ui.link)
 
         // Only the user's switch reconnects, and the real ground starts from nothing.
         onMain { vm.setEnabled(true) }
-        val real = port.connection(0)
+        val real = port.connection(1)
         real.server(ContractFixtures.frame("engineio_open"))
         eventually("namespace connect sent") { real.sent.isNotEmpty() }
         real.server(ContractFixtures.frame("socketio_connect_ack"))
@@ -359,7 +364,7 @@ class DemoModeViewModelTest {
     }
 
     @Test
-    fun `leaving and starting the demo again replays it from the start`() = harnessTest(demo = true, forbidRealNetwork = true) {
+    fun `leaving and starting the demo again replays it from the start`() = harnessTest(demo = true, enabled = false, forbidRealNetwork = true) {
         startDemo()
         play(20_000)
         vm.landAll().join()
@@ -381,7 +386,7 @@ class DemoModeViewModelTest {
         val first = GroundHarness(demo = true)
         try {
             runBlocking {
-                first.foreground()
+                first.connectWithFleet()
                 first.startDemo()
                 first.vm.awaitIdle()
                 assertFalse("link off saved at demo start", first.settings.enabled)
@@ -455,17 +460,110 @@ class DemoModeViewModelTest {
         val h = GroundHarness(demo = false, demoScenario = { null })
         try {
             runBlocking {
+                val real = h.connectWithFleet()
                 h.vm.enterDemo(disconnectConfirmed = true).join()
                 assertFalse(h.ui.demo)
                 assertEquals(DemoText.UNAVAILABLE, h.ui.demoProblem)
                 assertEquals(DemoNotice.Blocked(DemoText.UNAVAILABLE), h.ui.demoNotice)
                 h.vm.awaitIdle()
                 assertTrue("the link is switched off only when the demo starts", h.settings.enabled)
-                h.foreground()
-                h.port.connection(0)
+                assertFalse(real.closed)
+                assertEquals(GroundLink.Connected, h.ui.link)
+                assertEquals(2, h.ui.cards.size)
             }
         } finally {
             h.close()
         }
+    }
+
+    @Test
+    fun `the demo is refused while the real ground has not reported its drones`() = harnessTest(demo = true) {
+        // The link is switched on but has not connected (or connected without a fleet status yet).
+        assertEquals(DemoRequest.Blocked(DemoText.BLOCKED_BY_FLEET_UNKNOWN), onMain { vm.demoRequest() })
+        vm.enterDemo(disconnectConfirmed = true).join()
+        assertFalse(ui.demo)
+        assertEquals(DemoNotice.Blocked(DemoText.BLOCKED_BY_FLEET_UNKNOWN), ui.demoNotice)
+        assertEquals(
+            "The ground has not reported its drones yet. Wait for it, or switch the link off in Settings first.",
+            DemoText.BLOCKED_BY_FLEET_UNKNOWN,
+        )
+        // Connected, still no fleet status: still refused, and the real link is untouched.
+        val real = connect()
+        assertEquals(DemoRequest.Blocked(DemoText.BLOCKED_BY_FLEET_UNKNOWN), onMain { vm.demoRequest() })
+        vm.enterDemo(disconnectConfirmed = true).join()
+        assertFalse(ui.demo)
+        assertFalse(real.closed)
+        vm.awaitIdle()
+        assertTrue(settings.enabled)
+        // Once the ground reported its drones (all on the ground), the demo asks for the confirmation.
+        real.fleetStatus()
+        eventually("fleet shown") { ui.cards.isNotEmpty() }
+        assertEquals(DemoRequest.NeedsDisconnect(host), onMain { vm.demoRequest() })
+        // With the link switched off instead, nothing is refused for the unreported fleet.
+        onMain { vm.setEnabled(false) }
+        eventually("closed") { real.closed }
+        assertEquals(DemoRequest.NeedsDisconnect(host), onMain { vm.demoRequest() })
+        assertTrue(demoPorts.isEmpty())
+    }
+
+    @Test
+    fun `the demo dialog stays until it is answered`() = harnessTest(demo = true) {
+        connectWithFleet()
+        vm.enterDemo(disconnectConfirmed = false).join()
+        val notice = DemoNotice.ConfirmDisconnect(host)
+        assertEquals(notice, ui.demoNotice)
+        // Nothing but an answer clears it: a recreated activity reads it again from the ViewModel.
+        play(2_000)
+        vm.awaitIdle()
+        assertEquals(notice, ui.demoNotice)
+        onMain { vm.dismissDemoNotice() }
+        assertNull(ui.demoNotice)
+        onMain { vm.showDemoRefusal(DemoText.BLOCKED_BY_SEARCH) }
+        assertEquals(DemoNotice.Blocked(DemoText.BLOCKED_BY_SEARCH), ui.demoNotice)
+    }
+
+    @Test
+    fun `turning the demo off while the mission loads starts nothing`() {
+        val loading = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val h = GroundHarness(enabled = false, demoScenario = {
+            loading.complete(Unit)
+            gate.await()
+            DemoFixtures.scenario
+        })
+        try {
+            runBlocking {
+                val entering = h.vm.enterDemo(disconnectConfirmed = false)
+                loading.await()
+                h.onMain { h.vm.exitDemo() }
+                gate.complete(Unit)
+                entering.join()
+                h.vm.awaitIdle()
+                assertFalse(h.ui.demo)
+                assertTrue(h.demoPorts.isEmpty())
+                assertNull(h.ui.demoNotice)
+                // A later start works as usual.
+                h.vm.enterDemo(disconnectConfirmed = false).join()
+                eventually("demo connected") { h.ui.demo && h.ui.link == GroundLink.Connected }
+            }
+        } finally {
+            h.close()
+        }
+    }
+
+    @Test
+    fun `a LAND ALL tapped in the demo is not sent once the demo has ended`() = harnessTest(demo = true, enabled = false) {
+        startDemo(confirmed = false)
+        play(8_000)
+        // The tap is recorded in demo mode; the demo ends before the command goes out.
+        onMain {
+            vm.landAll()
+            vm.exitDemo()
+        }
+        eventually("refused") { ui.landAll?.text == DemoText.LAND_ALL_DEMO_ENDED }
+        assertEquals(CommandPhase.FAILED, ui.landAll?.phase)
+        assertTrue(demoPorts.single().connections.single().acknowledged.isEmpty())
+        assertTrue(port.opened.isEmpty())
+        assertTrue(GroundText.LAND_ALL_NOT_SENT_DEMO_STARTED.contains("NOT sent"))
     }
 }

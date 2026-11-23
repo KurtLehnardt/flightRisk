@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -53,7 +55,8 @@ fun DemoBanner(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .background(DemoAmber)
-            .windowInsetsPadding(WindowInsets.statusBars)
+            // The status bar and a display cutout at the top or the sides (landscape) never cover the text.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = DemoText.BANNER + ". " + DemoText.BANNER_DETAIL
@@ -79,7 +82,8 @@ const val BANNER_DETAIL_MAX_LINES = 2
 
 /**
  * The app's frame: the demo banner (while [demo] is on) above [content], which it pushes down and never
- * covers. The banner takes the status bar's space itself, so the content then skips that inset.
+ * covers. The banner takes the top of the safe drawing area (status bar and cutout) itself, so the content
+ * then skips that inset.
  */
 @Composable
 fun DemoFrame(demo: Boolean, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
@@ -88,7 +92,7 @@ fun DemoFrame(demo: Boolean, modifier: Modifier = Modifier, content: @Composable
         Box(
             modifier = Modifier
                 .weight(1f)
-                .then(if (demo) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                .then(if (demo) Modifier.consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)) else Modifier),
             content = content,
         )
     }

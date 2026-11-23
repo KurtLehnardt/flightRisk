@@ -75,6 +75,8 @@ object GroundText {
     const val LAND_ALL_CONNECTION_LOST =
         "LAND ALL: the connection was lost before the ground answered. $LAND_BY_OTHER_MEANS"
     const val LAND_ALL_NO_REPLY_YET = "LAND ALL: no reply from the ground yet. Check the connection."
+    const val LAND_ALL_NOT_SENT_DEMO_STARTED =
+        "LAND ALL was NOT sent: demo mode started after the tap, so this phone is no longer connected to the ground. $LAND_BY_OTHER_MEANS"
 
     const val STALE_AFTER_DISCONNECT = "Last values: not connected to the ground."
     const val STALE_REFRESHING = "Last values: waiting for a fresh fleet status from the ground."

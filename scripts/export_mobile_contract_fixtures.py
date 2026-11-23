@@ -1245,8 +1245,9 @@ def build_alert_verdicts() -> dict[str, Any]:
         sio, _ = fire(_scripted_agent(RuntimeError(VERDICT_AGENT_FAILURE)))
         verdicts["error_with_detail"] = _verdict_case(
             sio,
-            "The model call failed inside the agent, which reports confidence 'error' with the failure text as "
-            "reasoning. A phone shows the same neutral note as for 'error' and never shows this text.",
+            "The model call failed inside the agent, which reports confidence 'error' with a failure note built "
+            "from codes only (never the exception text) as reasoning. A phone shows the same neutral note as for "
+            "'error' and never shows this text.",
         )
         sio, _ = fire(_scripted_agent(VERDICT_REPLIES["match"]),
                       before_worker=lambda latch: latch.dismiss(latch.alert_id))

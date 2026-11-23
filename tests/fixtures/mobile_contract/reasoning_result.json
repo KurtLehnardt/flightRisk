@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'reasoning_result' event: the ground's reasoning verdict (Claude or Gemma) on a match alert, keyed by alert_id. Sent to every Socket.IO client, phones included. It carries no image and no key.",
     "file": "reasoning_result.json",
-    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "generated_at_commit": "3751fba8de9a73a5f4467fd626f8b667bd35e686",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.dashboard.alerts._gemma_worker",
@@ -45,13 +45,13 @@
     "error_with_detail": {
       "direction": "server_to_client",
       "event": "reasoning_result",
-      "notes": "The model call failed inside the agent, which reports confidence 'error' with the failure text as reasoning. A phone shows the same neutral note as for 'error' and never shows this text.",
+      "notes": "The model call failed inside the agent, which reports confidence 'error' with a failure note built from codes only (never the exception text) as reasoning. A phone shows the same neutral note as for 'error' and never shows this text.",
       "payload": {
         "alert_id": "00000000000040008000000000000036",
         "result": {
           "confidence": "error",
           "match": false,
-          "reasoning": "Claude declined this request (policy)"
+          "reasoning": "AI check failed (Claude error: RuntimeError)."
         },
         "track_id": "8_7",
         "type": "analyze"
