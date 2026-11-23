@@ -16,6 +16,10 @@ let package = Package(
             name: "SocketIOMini",
             targets: ["SocketIOMini"]
         ),
+        .library(
+            name: "PersonVision",
+            targets: ["PersonVision"]
+        ),
     ],
     dependencies: [],
     targets: [
@@ -38,6 +42,20 @@ let package = Package(
             name: "SocketIOMiniTests",
             dependencies: ["SocketIOMini"],
             path: "Tests/SocketIOMiniTests"
+        ),
+        // On-device person detection and appearance-embedding preprocessing and postprocessing
+        // (docs/mobile-models.md), and the checks for a detector the user imports. Plain Swift,
+        // no Core ML, so the contracts are tested here against the golden fixtures.
+        .target(
+            name: "PersonVision",
+            dependencies: [],
+            path: "Sources/PersonVision"
+        ),
+        .testTarget(
+            name: "PersonVisionTests",
+            dependencies: ["PersonVision"],
+            path: "Tests/PersonVisionTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
