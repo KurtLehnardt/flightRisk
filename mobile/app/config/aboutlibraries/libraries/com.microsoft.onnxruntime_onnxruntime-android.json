@@ -1,0 +1,6 @@
+{
+  "uniqueId": "com.microsoft.onnxruntime:onnxruntime-android",
+  "licenses": [
+    "onnxruntime-MIT"
+  ]
+}
