@@ -28,9 +28,11 @@ import subprocess
 import pytest
 
 from flightrisk import fleet_protocol as fp
+from flightrisk import obs_events
 from flightrisk.dashboard import app as app_module
-from flightrisk.dashboard.app import ORPHAN_SELF_LANDED_CONFIRM, app, socketio
-from flightrisk.dashboard.manual_control import ORPHAN_LANDED_ITSELF
+from flightrisk.dashboard import manual_control
+from flightrisk.dashboard.app import ORPHAN_LOST_CONFIRM, ORPHAN_SELF_LANDED_CONFIRM, app, socketio
+from flightrisk.dashboard.manual_control import ORPHAN_LANDED_BY_GROUND, ORPHAN_LANDED_ITSELF
 from flightrisk.dashboard.state import app_state
 from flightrisk.drone.coordinator import LOST_OBSTACLE_S, TELEMETRY_FRESH_S
 from tests.test_fleet_dashboard import _started_supervisor, _telemetry
@@ -59,6 +61,34 @@ def _report(drone_id, lanes, *, is_flying, mode, lane_index=1, state=None, **fie
     if state is not None:
         msg["state"] = state
     return msg
+
+
+def _orphan_lands(transport, drone_id=HELD):
+    return [m for m in _sent(transport, drone_id, "land") if m.get("reason") == fp.ORPHAN_LAND_REASON]
+
+
+def _lost_flown_by_hand():
+    """HELD, taken control of and flown by hand, is declared lost for a link blip and comes back still flown by hand."""
+    supervisor, transport, sio, clock, lanes = _held_no_ctrl()
+    supervisor.manual.take_control(HELD, sid="browser-2")
+    _answer(supervisor, HELD, _sent(transport, HELD, fp.MANUAL_HOLD)[-1])
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="manual"))
+    transport.connected[HELD] = False
+    assert supervisor.check_losses() == [HELD]
+    transport.connected[HELD] = True
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="manual"))
+    return supervisor, transport, sio, clock, lanes
+
+
+def _fly_for(supervisor, clock, lanes, seconds, mode="held", step=0.5):
+    """HELD reports flying in *mode* every *step* s for *seconds*, with the monitor's orphan and timeout checks."""
+    elapsed = 0.0
+    while elapsed < seconds:
+        clock.now += step
+        elapsed += step
+        supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode=mode))
+        supervisor.manual.check_orphans()
+        supervisor.manual.check_timeouts()
 
 
 def _plain_lands(transport, drone_id=HELD):
@@ -201,13 +231,103 @@ def test_after_flying_it_by_hand_the_browser_going_away_does_not_land_it_at_once
     transport.connected[HELD] = False
     assert supervisor.check_losses() == [HELD]
     transport.connected[HELD] = True
+    before = len(_plain_lands(transport))  # the land sent at the loss, which the dead link dropped
     supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="manual"))
-    before = len(_plain_lands(transport))
     assert supervisor.manual.controller_disconnected("browser-2") == HELD
     clock.now += 0.5
     supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held"))
     assert len(_plain_lands(transport)) == before and _relanded(sio) == []
     assert supervisor.manual.drone_status(HELD)["orphan_land_in_s"] is not None
+
+
+def test_critic_a_after_a_disconnect_the_countdown_lands_the_lost_drone_and_the_coordinator_sends_nothing():
+    supervisor, transport, _sio, clock, lanes = _lost_flown_by_hand()
+    plain_before = len(_plain_lands(transport))
+    assert supervisor.manual.controller_disconnected("browser-2") == HELD
+    _fly_for(supervisor, clock, lanes, supervisor.manual.orphan_land_s - 1)
+    assert _orphan_lands(transport) == []
+    _fly_for(supervisor, clock, lanes, 2)
+    assert len(_orphan_lands(transport)) == 1
+    assert len(_plain_lands(transport)) == plain_before
+    assert supervisor.manual.orphan_landing(HELD) == ORPHAN_LANDED_BY_GROUND
+
+
+def test_critic_b_switching_tiles_away_from_the_lost_drone_leaves_it_to_the_countdown():
+    supervisor, transport, _sio, clock, lanes = _lost_flown_by_hand()
+    plain_before = len(_plain_lands(transport))
+    supervisor.manual.take_control(OTHER, sid="browser-2")
+    _fly_for(supervisor, clock, lanes, 1.0, mode="manual")  # telemetry from before the switch still says manual
+    _fly_for(supervisor, clock, lanes, supervisor.manual.orphan_land_s + 2)
+    assert len(_plain_lands(transport)) == plain_before
+    assert len(_orphan_lands(transport)) == 1
+
+
+def test_an_idle_tab_that_controls_a_lost_drone_gets_the_countdown_after_the_idle_time():
+    """The tab stays connected but sends nothing: the edge holds the drone, and the ground lands it in the end."""
+    supervisor, transport, sio, clock, lanes = _lost_flown_by_hand()
+    manual = supervisor.manual
+    assert manual.lost_idle_s == manual_control.DEFAULT_LOST_IDLE_S == 30
+    plain_before = len(_plain_lands(transport))
+    _fly_for(supervisor, clock, lanes, manual.lost_idle_s - 1)
+    assert manual.drone_status(HELD)["orphan_land_in_s"] is None
+    _fly_for(supervisor, clock, lanes, 1.5)
+    assert manual.drone_status(HELD)["orphan_land_in_s"] == manual.orphan_land_s
+    assert manual.controlled == HELD
+    # Any manual command cancels it, and the idle time starts again from the next held report.
+    assert manual.command(HELD, "hover", sid="browser-2")["ok"]
+    _answer(supervisor, HELD, _sent(transport, HELD, fp.MANUAL_HOLD)[-1])
+    assert manual.drone_status(HELD)["orphan_land_in_s"] is None
+    _fly_for(supervisor, clock, lanes, manual.lost_idle_s - 1)
+    assert manual.drone_status(HELD)["orphan_land_in_s"] is None
+    _fly_for(supervisor, clock, lanes, 1.5)
+    assert manual.drone_status(HELD)["orphan_land_in_s"] is not None
+    # Left alone, the countdown lands it; the coordinator itself sends nothing.
+    _fly_for(supervisor, clock, lanes, manual.orphan_land_s + 1)
+    assert len(_orphan_lands(transport)) == 1
+    assert len(_plain_lands(transport)) == plain_before and _relanded(sio) == []
+
+
+def test_a_controlled_drone_that_is_not_lost_gets_no_idle_countdown():
+    supervisor, transport, _sio, clock = _started_supervisor()
+    _manual_ready(supervisor, is_flying=True)
+    lanes = len(supervisor.coordinator.lanes(HELD))
+    supervisor.manual.take_control(HELD, sid="browser-1")
+    _answer(supervisor, HELD, _sent(transport, HELD, fp.MANUAL_HOLD)[-1])
+    _fly_for(supervisor, clock, lanes, supervisor.manual.lost_idle_s + 60)
+    assert supervisor.manual.drone_status(HELD)["orphan_land_in_s"] is None
+    assert _orphan_lands(transport) == []
+
+
+# 30 s by default (DEFAULT_LOST_IDLE_S), never below 5 s (MIN_LOST_IDLE_S).
+@pytest.mark.parametrize(("raw", "expected"), [(None, 30.0), ("", 30.0), ("45", 45.0), ("1", 5.0)])
+def test_the_lost_idle_time_comes_from_the_environment(raw, expected):
+    environ = {} if raw is None else {"FLIGHTRISK_MANUAL_LOST_IDLE_S": raw}
+    assert manual_control.manual_lost_idle_s(environ) == expected
+
+
+@pytest.mark.parametrize("raw", ["soon", "nan", "inf"])
+def test_a_lost_idle_time_that_is_not_a_number_is_an_error(raw):
+    with pytest.raises(ValueError, match="FLIGHTRISK_MANUAL_LOST_IDLE_S"):
+        manual_control.manual_lost_idle_s({"FLIGHTRISK_MANUAL_LOST_IDLE_S": raw})
+
+
+def test_critic_d_an_edge_that_leaves_manual_control_while_a_hold_waits_is_landed_once_the_dashboard_lets_go():
+    supervisor, transport, _sio, clock, lanes = _lost_flown_by_hand()
+    plain_before = len(_plain_lands(transport))
+    assert supervisor.manual.command(HELD, "hover", sid="browser-2")["ok"]  # a manual_hold now waits for its answer
+    clock.now += 0.5
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="autonomous"))  # the edge left manual control
+    assert supervisor.manual.controlled == HELD
+    assert len(_plain_lands(transport)) == plain_before
+    for _ in range(8):  # the hold waits up to 4 s for its answer
+        clock.now += 0.5
+        supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="autonomous"))
+        supervisor.manual.check_timeouts()
+    for _ in range(20):
+        clock.now += 0.5
+        supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="autonomous"))
+    assert supervisor.manual.controlled is None
+    assert len(_plain_lands(transport)) == plain_before + 1
 
 
 def test_a_lost_drone_that_leaves_manual_control_for_autonomous_in_the_air_is_landed():
@@ -247,12 +367,38 @@ def test_a_land_that_could_not_be_sent_is_tried_again_on_the_next_report():
     assert len(_plain_lands(transport)) == before + 2
 
 
+def test_the_resent_land_is_logged_after_the_send_with_its_outcome(monkeypatch):
+    supervisor, transport, _sio, clock, lanes = _held_no_ctrl()
+    logged = []
+    real = obs_events.flight_safety
+
+    def record(kind, **fields):
+        if kind == "lost_drone_land_resent":
+            logged.append((fields["outcome"], fields["reason"], len(_plain_lands(transport))))
+        return real(kind, **fields)
+
+    monkeypatch.setattr(obs_events, "flight_safety", record)
+    transport.connected[HELD] = False
+    assert supervisor.check_losses() == [HELD]
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held"))  # the send fails
+    attempts = len(_plain_lands(transport))
+    transport.connected[HELD] = True
+    clock.now += 0.5
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held"))
+    # Each event comes after its attempt is on the wire (the fake transport records every attempt).
+    assert logged == [("not_delivered", "flying_again", attempts), ("sent", "flying_again", attempts + 1)]
+
+
 def test_the_dashboard_shows_why_a_lost_drone_was_landed():
     js = app_module.Path(app_module.__file__).with_name("static").joinpath("ui", "ui.js").read_text()
     handler = js[js.index("socket.on('fleet_event', (ev) => {"):js.index("// ========== PLAN AND START")]
     branch = handler[handler.index("else if (kind === 'lost_drone_relanded') {"):]
     branch = branch[:branch.index("else if (kind === 'land_all')")]
-    assert "showFleetBanner('LANDING LOST DRONE: ' + (ev.detail || ev.drone_id || ''), 15000);" in branch
+    assert ("if (!landAllBannerHeld()) showFleetBanner('LANDING LOST DRONE: ' + (ev.detail || ev.drone_id || ''), "
+            "15000);") in branch
+    # A LAND ALL failure, from the event or the ack, is held on screen; the re-land banner never replaces it.
+    assert js.count("landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;") == 2
+    assert "function landAllBannerHeld() { return Date.now() < landAllBannerUntil; }" in js
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +460,52 @@ def test_a_held_drone_the_operator_lands_is_not_marked():
     assert supervisor.manual.orphan_landing(HELD) is None
 
 
+def test_a_held_drone_the_operator_lands_is_not_marked_when_the_answer_comes_first():
+    supervisor, transport, _sio, clock, lanes = _blocked_way_back_while_landing()
+    assert supervisor.manual.command(HELD, "land")["ok"]
+    land = [m for m in _sent(transport, HELD, "land") if m.get("reason") == fp.MANUAL_LAND_REASON][-1]
+    _answer(supervisor, HELD, land)  # the edge answers once the drone's land command returns
+    clock.now += 0.3
+    supervisor.handle_control(_report(HELD, lanes, is_flying=False, mode="held", battery=8))
+    assert supervisor.manual.orphan_landing(HELD) is None
+
+
+def test_critic_e_land_then_switch_tiles_is_the_operators_landing_not_an_orphan_one():
+    supervisor, transport, _sio, clock = _started_supervisor()
+    _manual_ready(supervisor, is_flying=True)
+    lanes = len(supervisor.coordinator.lanes(HELD))
+    supervisor.manual.take_control(HELD, sid="browser-1")
+    _answer(supervisor, HELD, _sent(transport, HELD, fp.MANUAL_HOLD)[-1])
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="manual"))
+    assert supervisor.manual.command(HELD, "land", sid="browser-1")["ok"]
+    clock.now += 0.5
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="manual", state="landing"))
+    supervisor.manual.take_control(OTHER, sid="browser-1")
+    _answer(supervisor, HELD, _sent(transport, HELD, fp.RESUME_SEARCH)[-1], ok=False, reason="landing")
+    clock.now += 0.5
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held", state="landing"))
+    land = [m for m in _sent(transport, HELD, "land") if m.get("reason") == fp.MANUAL_LAND_REASON][-1]
+    _answer(supervisor, HELD, land)
+    clock.now += 0.3
+    supervisor.handle_control(_report(HELD, lanes, is_flying=False, mode="held"))
+    assert supervisor.manual.orphan_landing(HELD) is None
+    # Once seen on the ground, the operator's land is forgotten: a later unattended landing is marked again.
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held", state="landing"))
+    supervisor.handle_control(_report(HELD, lanes, is_flying=False, mode="held"))
+    assert supervisor.manual.orphan_landing(HELD) == ORPHAN_LANDED_ITSELF
+
+
+def test_critic_f_a_held_landing_drone_lost_before_touchdown_waits_for_the_operator():
+    supervisor, transport, _sio, _clock, lanes = _blocked_way_back_while_landing()
+    offers_before = len(_offers(transport))
+    transport.connected[HELD] = False
+    assert supervisor.check_losses() == [HELD]
+    assert len(_offers(transport)) == offers_before
+    waiting = _waiting(supervisor)
+    assert sorted(u["index"] for u in waiting) == list(range(1, lanes))
+    assert {u["reason"] for u in waiting} == {f"{ORPHAN_LOST_CONFIRM} (disconnected)"}
+
+
 def test_a_drone_this_dashboard_controls_is_not_marked_when_it_lands():
     supervisor, _transport, _sio, _clock, lanes = _blocked_way_back_while_landing()
     supervisor.manual.take_control(HELD, sid="browser-2")
@@ -360,16 +552,37 @@ def test_critic_p2_re_task_stays_refused_after_the_link_drops_again_while_it_fle
     clock.now += TELEMETRY_FRESH_S + 1
     ok, detail = supervisor.confirm_retask(HELD)
     assert not ok
-    assert detail == (f"Land {HELD} first; its last report, 3 s ago, said it was flying, and nothing has come from it "
-                      f"since. Confirm the re-task once it reports landed, or once it has been silent for "
-                      f"{LOST_OBSTACLE_S:g} s.")
+    assert detail == (f"{HELD} may still be in the air: its last report, 3 s ago, said it was flying, and nothing has "
+                      f"come from it since. Wait {LOST_OBSTACLE_S - 3:g} s, or confirm the re-task once it reports "
+                      f"landed.")
     clock.now += LOST_OBSTACLE_S - (TELEMETRY_FRESH_S + 1) - 0.5
-    assert supervisor.confirm_retask(HELD)[0] is False
+    ok, detail = supervisor.confirm_retask(HELD)
+    assert not ok and "Wait 1 s" in detail
     assert len(_offers(transport)) == offers_before
     # LOST_OBSTACLE_S after that report its edge has landed it by itself: the operator may confirm.
     clock.now += 1
     ok, detail = supervisor.confirm_retask(HELD)
     assert ok and "offered to drone-1" in detail
+
+
+def test_critic_g_re_task_waits_as_long_as_the_lost_drone_counts_as_an_obstacle():
+    """Lost by silence 6 s after its last flying report: the wait runs from the loss, as the obstacle check's does."""
+    supervisor, transport, _sio, clock, lanes = _held_no_ctrl()
+    supervisor.handle_control(_report(HELD, lanes, is_flying=True, mode="held", rel_x_cm=50, rel_y_cm=80))
+    last = clock.now
+    clock.now += 6
+    transport.link_age_s[HELD] = 6.0
+    assert supervisor.check_losses() == [HELD]
+    clock.now = last + LOST_OBSTACLE_S + 0.5
+    with supervisor.coordinator._lock:
+        assert supervisor.coordinator._lost_obstacle_locked(HELD) is not None
+    ok, detail = supervisor.confirm_retask(HELD)
+    assert not ok and "Wait 6 s" in detail
+    clock.now = last + 6 + LOST_OBSTACLE_S + 0.5
+    with supervisor.coordinator._lock:
+        assert supervisor.coordinator._lost_obstacle_locked(HELD) is None
+    ok, detail = supervisor.confirm_retask(HELD)
+    assert ok, detail
 
 
 def test_re_task_is_accepted_at_once_when_the_last_report_says_landed():

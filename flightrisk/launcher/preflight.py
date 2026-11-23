@@ -464,14 +464,17 @@ def edge_sensing_mode(settings: LauncherSettings, environ: Mapping[str, str]) ->
     """The ``FLIGHTRISK_OBSTACLE_SENSING`` value the edges started here will read, lower case.
 
     The edges inherit the launcher's environment, so a value set there is what
-    they read; otherwise they use their default, ``required``. *settings* is
-    not read yet: the launcher has no sensing setting of its own. Any value
-    but ``off`` makes a Tello edge without a local IP refuse to start
-    (``edge_device._check_capture_stamps``), and an invalid one makes every
-    edge refuse to start, so both count as required here.
+    they read. Otherwise it is the launcher's own sensing setting when its
+    settings carry one (``obstacle_sensing``), else the edge's default,
+    ``required``. Any value but ``off`` makes a Tello edge without a local IP
+    refuse to start (``edge_device._check_capture_stamps``), and an invalid one
+    makes every edge refuse to start, so both count as required here.
     """
     raw = (environ.get(ENV_OBSTACLE_SENSING) or "").strip().lower()
-    return raw or SENSING_ENV_REQUIRED
+    if raw:
+        return raw
+    window = getattr(settings, "obstacle_sensing", None)
+    return str(window).strip().lower() if window else SENSING_ENV_REQUIRED
 
 
 def _safe_adapter_to_name(

@@ -162,7 +162,7 @@ A DOWN or LOST card shows its values as the last ones received ("No live link: v
 
 **Drone link.** When `drone_link_ok == false`, show "Drone link down: `drone_link_detail` (or 'the edge cannot reach the drone'). Land still works." Show nothing when it is true or absent. `fleet_status` carries `drone_link_ok` and `drone_link_detail` but not `drone_link_age_s`.
 
-**HELD countdown.** `orphan_land_in_s` is the number of whole seconds until the ground lands the held drone because nobody controls it (120 s by default, set on the ground with `FLIGHTRISK_MANUAL_ORPHAN_LAND_S`, never below 30 s). Count it down locally between updates, and replace it with each new value from `fleet_status` or `manual_status`. Resuming the search, someone taking control, the drone landing, or LAND ALL cancels it.
+**HELD countdown.** `orphan_land_in_s` is the number of whole seconds until the ground lands the held drone because nobody controls it (120 s by default, set on the ground with `FLIGHTRISK_MANUAL_ORPHAN_LAND_S`, never below 30 s). It can also run for a lost drone that is under manual control but has had no manual command for `FLIGHTRISK_MANUAL_LOST_IDLE_S` (30 s by default); a manual command for it cancels that countdown. Count it down locally between updates, and replace it with each new value from `fleet_status` or `manual_status`. Resuming the search, someone taking control, the drone landing, or LAND ALL cancels it.
 
 **LAND ALL result.** `reached_any == false` is a failure: show "LAND ALL reached no drone. Land every drone with its local control now." (the server also broadcasts this as `error`). Otherwise show the counts.
 

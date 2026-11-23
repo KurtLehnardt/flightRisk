@@ -1516,9 +1516,11 @@ class FleetCoordinator:
         of, so telemetry that follows it without a gap sends nothing either:
         for example ``held`` after the person's browser went away, where the
         orphan countdown of the manual control lands the drone. Telemetry
-        that still says ``autonomous`` while *by_hand* (sent before the edge
-        took the hold, or the hold never arrived) sends nothing and counts
-        for nothing. A drone nobody here controls that reports ``held`` or
+        that says ``autonomous`` while *by_hand* (sent before the edge took
+        the hold, a hold that never arrived, or an edge that left manual
+        control) sends nothing, but the next flying report once the
+        dashboard has let go of the drone is sent ``land`` (``flying_again``).
+        A drone nobody here controls that reports ``held`` or
         ``autonomous`` control, or no control mode, is sent ``land`` as
         above. Telemetry that keeps arriving from a drone still flying sends
         nothing more. Caller holds the lock; the caller sends the ``land``
@@ -1530,6 +1532,10 @@ class FleetCoordinator:
         if by_hand or mode == "manual":
             if mode in ("manual", "held"):
                 state.relanded = True
+            elif mode == "autonomous":
+                # The edge left manual control while the dashboard still has
+                # it: the first flying report after the dashboard lets go lands it.
+                state.relanded = False
             return None
         gap = state.telemetry_at is None or self._clock() - state.telemetry_at > TELEMETRY_FRESH_S
         if not state.relanded:
@@ -1546,8 +1552,10 @@ class FleetCoordinator:
     def _send_reland(self, drone_id: str, reason: str) -> None:
         """Send lost *drone_id* the ``land`` that ``_reland_lost_locked`` asked for, and tell the operator why.
 
-        The ``lost_drone_relanded`` fleet event names the drone and says why
-        the ground landed it. When the ``land`` cannot be sent, nothing is
+        The ``lost_drone_land_resent`` flight-safety event is logged after
+        the send, with ``outcome`` ``sent`` or ``not_delivered``. The
+        ``lost_drone_relanded`` fleet event names the drone and says why the
+        ground landed it. When the ``land`` cannot be sent, nothing is
         announced and the next telemetry that shows the drone flying tries
         again. Call it without the lock.
         """
@@ -1558,10 +1566,12 @@ class FleetCoordinator:
         }[reason]
         detail = (f"{drone_id} was declared lost and {why}; the ground sent it land, because its unflown lanes "
                   f"are no longer its own")
+        sent = self._send_logged(drone_id, {"type": "land"})
         obs_events.flight_safety(
-            "lost_drone_land_resent", reason=reason, drone_id=drone_id, component="coordinator", detail=detail,
+            "lost_drone_land_resent", reason=reason, drone_id=drone_id, component="coordinator",
+            outcome="sent" if sent else "not_delivered", detail=detail,
         )
-        if not self._send_logged(drone_id, {"type": "land"}):
+        if not sent:
             with self._lock:
                 state = self._drones[drone_id]
                 if state.lost:
@@ -2344,8 +2354,9 @@ class FleetCoordinator:
         Refused, with nothing offered:
 
         * after LAND ALL: the waiting lanes fail with ``LAND ALL issued``;
-        * while the lost drone's last telemetry shows it flying and came
-          less than ``LOST_OBSTACLE_S`` ago, or its telemetry from the last
+        * while the lost drone's last telemetry shows it flying, until
+          ``LOST_OBSTACLE_S`` after the loss or after that report, whichever
+          is later, or while its telemetry from the last
           ``TELEMETRY_FRESH_S`` shows it under autonomous control (it could
           fly those lanes itself): it must be landed, or taken control of,
           first (``_flying_again_locked``).
@@ -2414,10 +2425,12 @@ class FleetCoordinator:
 
         Another drone given those lanes could meet it there:
 
-        * its last telemetry shows it flying and came less than
-          ``LOST_OBSTACLE_S`` ago. Once its link drops again it may still be
-          in the air until its edge lands it by itself, so a silence after a
-          report that it flies does not count as landed;
+        * its last telemetry shows it flying, until ``LOST_OBSTACLE_S``
+          after the loss or after that report, whichever is later: the
+          window ``_lost_obstacle_locked`` keeps its position as an obstacle
+          for. Once its link drops it may still be in the air until its edge
+          lands it by itself, so a silence after a report that it flies
+          does not count as landed;
         * its telemetry from the last ``TELEMETRY_FRESH_S`` shows it under
           autonomous control, which may fly its own lanes. On the ground it
           must be taken control of so it stays there; in the air (or when
@@ -2426,13 +2439,16 @@ class FleetCoordinator:
         state = self._drones[drone_id]
         telemetry = state.telemetry or {}
         if telemetry.get("is_flying") is True and state.telemetry_at is not None:
-            age = self._clock() - state.telemetry_at
+            now = self._clock()
+            age = now - state.telemetry_at
             if age <= TELEMETRY_FRESH_S:
                 return f"Land {drone_id} first; it is flying again. Confirm the re-task once it reports landed."
-            if age < LOST_OBSTACLE_S:
-                return (f"Land {drone_id} first; its last report, {age:.0f} s ago, said it was flying, and nothing "
-                        f"has come from it since. Confirm the re-task once it reports landed, or once it has been "
-                        f"silent for {LOST_OBSTACLE_S:g} s.")
+            since = state.telemetry_at if state.lost_at is None else max(state.lost_at, state.telemetry_at)
+            wait = LOST_OBSTACLE_S - (now - since)
+            if wait > 0:
+                return (f"{drone_id} may still be in the air: its last report, {age:.0f} s ago, said it was flying, "
+                        f"and nothing has come from it since. Wait {math.ceil(wait)} s, or confirm the re-task once "
+                        f"it reports landed.")
         if not self._fresh_locked(state):
             return None
         if telemetry.get("control_mode") == "autonomous":

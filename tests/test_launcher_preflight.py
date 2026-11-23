@@ -318,6 +318,17 @@ def test_an_unknown_sensing_value_counts_as_required():
     assert _by_name(run_preflight(_single(), EdgeToken(None, None), env))["Adapter for drone-1"].status == FAIL
 
 
+def test_the_launchers_own_sensing_setting_applies_unless_the_environment_sets_one():
+    """A launcher whose settings carry the sensing mode passes it to the edges; an inherited value wins."""
+    off = _single()
+    # The launcher's sensing controls add this field to LauncherSettings; it is set directly so that this test
+    # holds with or without them.
+    object.__setattr__(off, "obstacle_sensing", "off")
+    assert _by_name(run_preflight(off, EdgeToken(None, None), _one_adapter()))["Adapter for drone-1"].status == WARN
+    env = _one_adapter(environ={"FLIGHTRISK_OBSTACLE_SENSING": "required"})
+    assert _by_name(run_preflight(off, EdgeToken(None, None), env))["Adapter for drone-1"].status == FAIL
+
+
 def test_no_adapter_in_the_drones_network_says_to_join_its_wifi():
     env = _env(adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "10.0.0.5", 4)])
     row = _by_name(run_preflight(_single(), EdgeToken(None, None), env))["Adapter for drone-1"]
