@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_OFF, SENSING_ENV_REQUIRED
+from flightrisk.drone.temp_preflight import LEVEL_REFUSE, LEVEL_WARN, TempLimits, judge_temperature
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import (
@@ -432,15 +433,37 @@ def run_preflight(
                 continue
             low = result.battery is not None and result.battery < MIN_TAKEOFF_BATTERY
             temp = f", temperature {result.temp}" if result.temp else ""
+            hot = _hot_note(result.temp, env.environ)
             checks.append(Check(
-                f"Drone {drone.drone_id}", WARN if low else PASS,
+                f"Drone {drone.drone_id}", WARN if low or hot else PASS,
                 f"battery {result.battery}%{temp} ({result.detail})"
-                + (f"; below the {MIN_TAKEOFF_BATTERY}% takeoff minimum" if low else ""),
+                + (f"; below the {MIN_TAKEOFF_BATTERY}% takeoff minimum" if low else "") + hot,
                 {"battery": result.battery, "temp": result.temp},
             ))
     elif local_tellos:
         checks.append(Check("Drones", INFO, "not checked; press Check drones"))
     return checks
+
+
+def _hot_note(temp: str | None, environ: Mapping[str, str]) -> str:
+    """The note for a probed drone at or above the edges' warn or refusal level, or "".
+
+    The probe's ``temp?`` runs before any edge starts, so nothing else is on the drone's command
+    channel. The levels are the ones the edges will read (``FLIGHTRISK_TELLO_TEMP_WARN_C`` and
+    ``..._REFUSE_C``; the defaults when a value is bad, which validation already reports). A hot drone
+    is a warning, never a block: the edge judges it again from its state packet before each takeoff.
+    """
+    try:
+        limits = TempLimits.from_env(environ)
+    except ValueError:
+        limits = TempLimits()
+    check = judge_temperature(temp, limits)
+    if check.level == LEVEL_REFUSE:
+        return (f"; at or above the {limits.refuse_c} C refusal level: its edge refuses the takeoff until it cools "
+                "(battery out or on a fan)")
+    if check.level == LEVEL_WARN:
+        return f"; at or above the {limits.warn_c} C warn level: power it on last or set it on a fan"
+    return ""
 
 
 def _weights_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
