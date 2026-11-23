@@ -67,12 +67,28 @@ def _payload(name: str, case: str):
 # ---------------------------------------------------------------------------
 
 
+class _WebSocket(simple_websocket.Client):
+    """A ``simple_websocket.Client`` that does not lose the frames that arrive with the handshake response.
+
+    ``simple_websocket.Client.handshake`` reads the HTTP 101 response with one ``recv`` and takes only the
+    first wsproto event from it. The server sends the Engine.IO open packet right after the 101, so when this
+    thread is slow to read (a loaded machine), both arrive in that one read and the open packet stays unprocessed
+    inside wsproto. The server sends nothing more until the client answers the open packet, so ``receive`` timed
+    out and ``_read_open`` failed with ``None``. Handling the pending events here, before the reader thread
+    starts, delivers that packet.
+    """
+
+    def handshake(self):
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 class RawClient:
     """The protocol subset a phone implements, over one WebSocket, with every frame recorded."""
 
     def __init__(self, port: int, *, headers: dict | None = None, answer_pings: bool = True):
         url = f"ws://127.0.0.1:{port}/socket.io/?EIO=4&transport=websocket"
-        self.ws = simple_websocket.Client.connect(url, headers=headers)
+        self.ws = _WebSocket.connect(url, headers=headers)
         self.frames: list[tuple[str, str]] = []
         self.events: list[tuple[str, object]] = []
         self.acks: list[tuple[int, object]] = []
