@@ -539,7 +539,10 @@ def test_retask_is_never_planned_beyond_the_edges_geofence(executor_fleet, monke
     assert fence == 450
     coord, edges, events = executor_fleet(geofence_cm=fence, edge_fence_cm=450.0)
     plan = coord.plan()
+    before = {d: len(coord.lanes(d)) for d in edges}
     coord.on_drone_lost("drone-4")
+    # The re-task really happened: a survivor took lanes, so the check below is not vacuous.
+    assert any(len(coord.lanes(d)) > before[d] for d in edges if d != "drone-4")
     for drone_id in edges:
         zone = plan.zone_for(drone_id)
         for x, y in walk((zone.x_cm, zone.y_cm), coord.lanes(drone_id)):

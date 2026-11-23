@@ -64,6 +64,7 @@ __all__ = [
     "CEILING_MARGIN_CM_ENV",
     "CeilingError",
     "DEFAULT_ALT_SLOT_CM",
+    "DEFAULT_ALT_SLOTS_CM",
     "DEFAULT_CEILING_CM",
     "DEFAULT_CEILING_MARGIN_CM",
     "DEFAULT_FIELD_LINK_LOSS_HOLD_S",
@@ -104,6 +105,13 @@ CEILING_MARGIN_CM_ENV = "FLIGHTRISK_CEILING_MARGIN_CM"
 
 DEFAULT_LINK_LOSS_LAND_S = 3.0
 DEFAULT_MIN_TAKEOFF_BATTERY = 30
+
+DEFAULT_ALT_SLOTS_CM = (100, 130)
+"""Altitude slots given to drones in turn by the fleet coordinator and the search patterns.
+
+Both must stay at most ``DEFAULT_CEILING_CM - DEFAULT_CEILING_MARGIN_CM`` (140 cm) so every
+default slot passes the room ceiling check; keep them here so the two modules never drift apart.
+"""
 DEFAULT_LAND_BATTERY = 15
 DEFAULT_GEOFENCE_CM = 500
 DEFAULT_ALT_SLOT_CM = 100
@@ -352,7 +360,8 @@ def min_takeoff_battery_from_env(environ: Mapping[str, str] | None = None) -> fl
     when it is set, otherwise ``DEFAULT_MIN_TAKEOFF_BATTERY``. The edges, the
     fleet coordinator and the launcher preflight all call it, so the override
     applies to each of them. Raises ``ValueError`` for a value that is not a
-    number from 0 to 100.
+    number from ``DEFAULT_LAND_BATTERY`` to 100, which is what the edge
+    envelope accepts.
     """
     env = os.environ if environ is None else environ
     raw = (env.get(MIN_TAKEOFF_BATTERY_ENV) or "").strip()
@@ -362,8 +371,13 @@ def min_takeoff_battery_from_env(environ: Mapping[str, str] | None = None) -> fl
         value = float(raw)
     except ValueError as exc:
         raise ValueError(f"{MIN_TAKEOFF_BATTERY_ENV} must be a number, got {raw!r}") from exc
-    if not is_finite_number(value) or not 0 <= value <= 100:
-        raise ValueError(f"{MIN_TAKEOFF_BATTERY_ENV} must be within 0-100, got {raw!r}")
+    if not is_finite_number(value) or not DEFAULT_LAND_BATTERY <= value <= 100:
+        # The envelope refuses a takeoff minimum below its landing level, so a value the edges would
+        # refuse at start must not look valid to the ground or the preflight either.
+        raise ValueError(
+            f"{MIN_TAKEOFF_BATTERY_ENV} must be within {DEFAULT_LAND_BATTERY}-100 "
+            f"(not below the {DEFAULT_LAND_BATTERY}% landing level), got {raw!r}"
+        )
     return value
 
 
@@ -443,7 +457,7 @@ class SafetyEnvelope:
         return cls(
             geofence_cm=_read(GEOFENCE_CM_ENV, DEFAULT_GEOFENCE_CM),
             alt_slot_cm=alt_slot_cm,
-            min_takeoff_battery=_read(MIN_TAKEOFF_BATTERY_ENV, DEFAULT_MIN_TAKEOFF_BATTERY),
+            min_takeoff_battery=min_takeoff_battery_from_env(env),
             land_battery=DEFAULT_LAND_BATTERY,
             link_loss_land_s=_read(LINK_LOSS_LAND_S_ENV, DEFAULT_LINK_LOSS_LAND_S),
             clock=clock,

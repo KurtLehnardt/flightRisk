@@ -84,6 +84,16 @@ def _isolate_ceiling_settings(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_safety_env(monkeypatch):
+    """Clear the settings the edges, the ground and the launcher read from the environment.
+
+    A shell that exports them (the demo scripts do) must not change what a test expects.
+    """
+    monkeypatch.delenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", raising=False)
+    monkeypatch.delenv("FLIGHTRISK_GEOFENCE_CM", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_map_files(tmp_path, monkeypatch):
     """Keep saved plans and cached map tiles in per-test directories.
 

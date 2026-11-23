@@ -124,8 +124,7 @@ from flightrisk.drone.fleet_plan_model import (
     _simplify,  # noqa: F401 - re-exported: tests and callers of the single-module layout use it
     _split_distance,
 )
-from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM as _COORDINATOR_ALT_SLOTS_CM
-from flightrisk.drone.safety import MAX_MOVE_CM, MIN_MOVE_CM
+from flightrisk.drone.safety import DEFAULT_ALT_SLOTS_CM, MAX_MOVE_CM, MIN_MOVE_CM
 
 __all__ = [
     "ALTITUDE_DEADBAND_CM",
@@ -173,9 +172,6 @@ DEFAULT_PLACEMENT_OFFSET_CM = 50
 
 DEFAULT_TAKEOFF_STAGGER_S = 2.0
 """Split square: the second drone starts this much later, because both take off near the LKP."""
-
-DEFAULT_ALT_SLOTS_CM = tuple(_COORDINATOR_ALT_SLOTS_CM)
-"""Altitude slots assigned to drones in turn: the coordinator's, so the two never drift apart."""
 
 # ----------------------------------------------------------------------
 # Shared builder steps

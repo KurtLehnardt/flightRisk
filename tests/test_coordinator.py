@@ -635,3 +635,27 @@ def test_min_start_battery_alias_is_the_default_minimum():
     from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY
 
     assert MIN_START_BATTERY == DEFAULT_MIN_TAKEOFF_BATTERY == 30
+
+
+def test_ground_refuses_to_start_on_a_malformed_takeoff_battery_minimum(monkeypatch):
+    # Fail closed: a ground that cannot read the edges' minimum must not start with its own guess.
+    for bad in ("abc", "10", "150"):
+        monkeypatch.setenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", bad)
+        with pytest.raises(ValueError, match="FLIGHTRISK_MIN_TAKEOFF_BATTERY"):
+            make_fleet(n=2)
+
+
+def test_a_geofence_nack_narrows_the_fence_used_for_later_retasks():
+    coord, edges, clock, _ = make_fleet(n=2)
+    coord._geofence_cm = 500.0
+    coord.sync()
+    coord.plan()
+    assert coord._fence_cm("drone-1") == 500.0
+    nack = {"type": "nack", "for": "assign_lanes", "drone_id": "drone-1", "reason": "geofence",
+            "lanes_total": len(coord.lanes("drone-1")), "geofence_cm": 450.0}
+    coord._on_nack("drone-1", nack)
+    assert coord._fence_cm("drone-1") == 450.0
+    assert coord._fence_cm("drone-2") == 500.0
+    # A larger report never widens it.
+    coord._on_nack("drone-1", {**nack, "geofence_cm": 900.0})
+    assert coord._fence_cm("drone-1") == 450.0

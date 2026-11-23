@@ -402,6 +402,15 @@ def run_preflight(
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
 
+    # Takeoff battery minimum: one value for every edge and the ground, read once from the environment
+    # they inherit. A value the edges would refuse at start fails here, before any process is started.
+    try:
+        takeoff_minimum = min_takeoff_battery_from_env(env.environ)
+        checks.append(Check("Takeoff battery minimum", PASS, f"{takeoff_minimum:g}% (FLIGHTRISK_MIN_TAKEOFF_BATTERY)"))
+    except ValueError as exc:
+        takeoff_minimum = float(DEFAULT_MIN_TAKEOFF_BATTERY)
+        checks.append(Check("Takeoff battery minimum", FAIL, f"{exc}; the edges and the ground refuse to start with it"))
+
     # Each real drone, read-only.
     if probe_drones:
         for drone in local_tellos:
@@ -413,11 +422,7 @@ def run_preflight(
             if not result.ok:
                 checks.append(Check(f"Drone {drone.drone_id}", FAIL, result.detail))
                 continue
-            try:
-                minimum = min_takeoff_battery_from_env(env.environ)
-            except ValueError:
-                # The edges refuse to start with a malformed override; the default is only shown here.
-                minimum = float(DEFAULT_MIN_TAKEOFF_BATTERY)
+            minimum = takeoff_minimum
             low = result.battery is not None and result.battery < minimum
             temp = f", temperature {result.temp}" if result.temp else ""
             checks.append(Check(

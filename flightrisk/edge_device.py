@@ -167,10 +167,9 @@ from flightrisk.drone.safety import (
     CEILING_MARGIN_CM_ENV,
     DEFAULT_FIELD_LINK_LOSS_HOLD_S,
     DEFAULT_LINK_LOSS_LAND_S,
-    DEFAULT_MIN_TAKEOFF_BATTERY,
     LINK_LOSS_LAND_S_ENV,
-    MIN_TAKEOFF_BATTERY_ENV,
     SafetyEnvelope,
+    min_takeoff_battery_from_env,
 )
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_uplink import (
@@ -2244,7 +2243,7 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
             geofence_cm=_cm("geofence_m"),
             ceiling_cm=_cm("ceiling_m"),
             ceiling_margin_cm=_cm("ceiling_margin_m"),
-            min_takeoff_battery=_read(MIN_TAKEOFF_BATTERY_ENV, DEFAULT_MIN_TAKEOFF_BATTERY),
+            min_takeoff_battery=min_takeoff_battery_from_env(env),
             link_loss_land_s=_read(LINK_LOSS_LAND_S_ENV, DEFAULT_LINK_LOSS_LAND_S),
             link_loss_hold_s=(
                 float(args.link_loss_hold_s) if getattr(args, "link_loss_hold_s", None) is not None
