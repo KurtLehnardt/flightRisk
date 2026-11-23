@@ -58,6 +58,8 @@ RUNNERS = {
 def _skip_without_pwsh(platform: str) -> None:
     if platform == "windows" and shutil.which("pwsh") is None:
         pytest.skip("PowerShell not installed")
+    if platform == "macos" and not os.path.exists("/bin/bash"):
+        pytest.skip("/bin/bash not present (the macOS installer is sourced by bash)")
 
 
 @pytest.mark.parametrize("platform", sorted(RUNNERS))
@@ -70,7 +72,7 @@ def test_installs_with_the_venv_python_from_the_app_folder(platform, tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MiDaS depth weights downloaded and checked" in result.stdout
     assert "AFTER_STEP" in result.stdout
-    cwd, args = calls.read_text().strip().split("|")
+    cwd, args = calls.read_text(encoding="utf-8").strip().split("|")
     assert Path(cwd).resolve() == app.resolve()
     assert args == EXPECTED_ARGS
 
@@ -108,14 +110,14 @@ def test_skip_deps_skips_the_step(platform, tmp_path):
 
 
 def test_both_installers_run_the_step_after_the_detector_weights():
-    mac = MACOS_INSTALL.read_text()
+    mac = MACOS_INSTALL.read_text(encoding="utf-8")
     main = mac[mac.index("\nmain() {"):]
     assert main.index("download_weights") < main.index("install_midas_weights") < main.index("create_app")
-    win = WINDOWS_INSTALL.read_text()
+    win = WINDOWS_INSTALL.read_text(encoding="utf-8")
     flow = win[win.index("function Invoke-Install {"):]
     assert flow.index("Get-Weights") < flow.index("Get-MidasWeights") < flow.index("Register-App")
 
 
 def test_developer_scripts_install_the_weights_too():
     for name in ("install_linux.sh", "install_macos.sh", "install_windows.ps1"):
-        assert "-m flightrisk.drone.midas_model install" in (ROOT / "scripts" / name).read_text(), name
+        assert "-m flightrisk.drone.midas_model install" in (ROOT / "scripts" / name).read_text(encoding="utf-8"), name

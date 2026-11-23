@@ -39,8 +39,9 @@ def test_private_permissions_and_content_hash_names(store, monkeypatch):
     sha = fields["sha256"]
     original = store.targets / f"{sha}.jpg"
     thumb = store.targets / f"{sha}.thumb.jpg"
-    assert _mode(store.root) == 0o700 and _mode(store.targets) == 0o700
-    assert _mode(original) == 0o600 and _mode(thumb) == 0o600
+    if os.name != "nt":  # POSIX permission modes do not exist on Windows
+        assert _mode(store.root) == 0o700 and _mode(store.targets) == 0o700
+        assert _mode(original) == 0o600 and _mode(thumb) == 0o600
     assert fields["artifact"] == f"targets/{sha}.jpg"
     assert max(fields["thumb_width"], fields["thumb_height"]) <= 160
     # Same image, same name: stored once.
@@ -116,6 +117,7 @@ def test_preview_disabled_with_port_zero(store, monkeypatch):
     assert "preview_url" not in store.store_target(_img())
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission modes do not exist on Windows")
 def test_preview_key_file_is_private(tmp_path, monkeypatch):
     monkeypatch.delenv("FLIGHTRISK_PREVIEW_SECRET", raising=False)
     s = ArtifactStore(tmp_path / "art2")

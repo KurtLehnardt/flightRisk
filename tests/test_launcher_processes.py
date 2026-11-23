@@ -60,6 +60,11 @@ def _wait(predicate, timeout=15.0):
     return False
 
 
+def _log(m, name):
+    """The child's log text with Windows line endings folded to "\\n", so the waits below read the same on every OS."""
+    return m.read_log(name, 0)[0].replace("\r\n", "\n")
+
+
 def _status(manager, name):
     return {row["name"]: row for row in manager.snapshot()}[name]
 
@@ -145,7 +150,7 @@ def test_log_is_written_and_read_back_without_the_token(manager, tmp_path):
 
 
 def test_restart_replaces_the_process(manager):
-    m = manager()
+    m = manager(windows=False)
     m.start([_spec("edge-drone-1")], wait=True)
     first = _status(m, "edge-drone-1")["pid"]
     m.restart("edge-drone-1")
@@ -189,7 +194,7 @@ def test_stubborn_child_is_terminated_after_the_grace_period(manager):
     )
     m = manager(edge_grace_s=0.5)
     m.start([_spec("edge-drone-1", code=stubborn)], wait=True)
-    assert _wait(lambda: "\nignoring ctrl+c\n" in m.read_log("edge-drone-1", 0)[0])
+    assert _wait(lambda: "\nignoring ctrl+c\n" in _log(m, "edge-drone-1"))
     started = time.monotonic()
     m.stop_all()
     assert time.monotonic() - started < 10
@@ -277,7 +282,7 @@ def _windows(manager, **kwargs):
 
 
 def _up(m, name):
-    return _wait(lambda: "\nedge up\n" in m.read_log(name, 0)[0])
+    return _wait(lambda: "\nedge up\n" in _log(m, name))
 
 
 def test_windows_children_have_no_console_and_edges_get_a_land_key_pipe(manager):
@@ -351,9 +356,9 @@ def test_windows_refuses_to_restart_an_edge_but_restarts_the_ground(manager):
 
 def test_an_edge_that_had_to_be_terminated_is_not_restarted(manager):
     stubborn = "import signal, time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nprint('up', flush=True)\ntime.sleep(60)\n"
-    m = manager(edge_grace_s=0.3)
+    m = manager(edge_grace_s=0.3, windows=False)
     m.start([_spec("edge-drone-1", code=stubborn)], wait=True)
-    assert _wait(lambda: "\nup\n" in m.read_log("edge-drone-1", 0)[0])
+    assert _wait(lambda: "\nup\n" in _log(m, "edge-drone-1"))
     m.restart("edge-drone-1")
     row = _status(m, "edge-drone-1")
     assert row["status"] == STOPPED and "not restarted" in row["message"]
@@ -377,9 +382,9 @@ def test_repeated_stop_signals_each_process_once(manager):
         "print('up', flush=True)\n"
         "time.sleep(60)\n"
     )
-    m = manager(popen=Recording)
+    m = manager(popen=Recording, windows=False)
     m.start([_spec("edge-drone-1", code=slow_exit)], wait=True)
-    assert _wait(lambda: "\nup\n" in m.read_log("edge-drone-1", 0)[0])
+    assert _wait(lambda: "\nup\n" in _log(m, "edge-drone-1"))
     threads = [threading.Thread(target=m.stop_all) for _ in range(3)]
     for t in threads:
         t.start()
@@ -397,7 +402,7 @@ def test_overlapping_restarts_and_restart_during_stop_are_refused(manager):
         "print('up', flush=True)\n"
         "time.sleep(60)\n"
     )
-    m = manager(port_open=lambda host, port: True)
+    m = manager(port_open=lambda host, port: True, windows=False)
     m.start([_spec("ground", "ground", code=slow_exit, ready_ports=(("127.0.0.1", 5800),)),
              _spec("edge-drone-1", code=slow_exit)], wait=True)
     assert _wait(lambda: all(r["status"] == RUNNING for r in m.snapshot()))
@@ -436,7 +441,7 @@ def test_two_launchers_never_share_log_files(tmp_path):
 
 
 def test_restart_writes_a_new_log_file_and_keeps_the_old_one(manager):
-    m = manager()
+    m = manager(windows=False)
     m.start([_spec("edge-drone-1")], wait=True)
     first = Path(_status(m, "edge-drone-1")["log"])
     m.restart("edge-drone-1")
@@ -496,7 +501,7 @@ def test_stop_counts_as_stopping_while_it_waits_behind_a_restart(manager):
     )
     m = manager(port_open=lambda host, port: True)
     m.start([_spec("ground", "ground", code=slow_exit, ready_ports=(("127.0.0.1", 5800),))], wait=True)
-    assert _wait(lambda: "\nup\n" in m.read_log("ground", 0)[0])
+    assert _wait(lambda: "\nup\n" in _log(m, "ground"))
     m.restart("ground", background=True)
     assert _wait(lambda: m._op_lock.locked())
     stopper = threading.Thread(target=m.stop_all)
@@ -534,7 +539,7 @@ def test_stopping_status_is_reported(manager):
     slow_exit = "import signal, sys, time\nsignal.signal(signal.SIGINT, lambda *a: (time.sleep(0.6), sys.exit(0)))\nprint('up', flush=True)\ntime.sleep(60)\n"
     m = manager()
     m.start([_spec("edge-drone-1", code=slow_exit)], wait=True)
-    assert _wait(lambda: "\nup\n" in m.read_log("edge-drone-1", 0)[0])
+    assert _wait(lambda: "\nup\n" in _log(m, "edge-drone-1"))
     stopper = threading.Thread(target=m.stop_all)
     stopper.start()
     assert _wait(lambda: _status(m, "edge-drone-1")["status"] == STOPPING)

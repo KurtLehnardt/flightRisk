@@ -1,6 +1,6 @@
 """Resource counting and error capture for the network and fleet tests.
 
-``snapshot()`` counts open file descriptors, unfinished asyncio tasks (on every
+``snapshot()`` counts open file descriptors (handles on Windows, when psutil is installed), unfinished asyncio tasks (on every
 loop, read from asyncio's own registry of tasks) and keeps the live thread
 objects. Threads are compared as objects, not by name, because the same names
 repeat (``edge-transport-loop`` and ``harness-edge-drone-1`` exist in every
@@ -31,6 +31,14 @@ def _fd_dir() -> str:
 
 
 def open_fds() -> int:
+    """Open descriptors (handles on Windows). Zero when this platform cannot count them, so the delta check never fires."""
+    if sys.platform == "win32":
+        # Windows has no /dev/fd. psutil counts the process's open handles; without it the check is skipped.
+        try:
+            import psutil
+        except ImportError:
+            return 0
+        return psutil.Process().num_handles()
     return len(os.listdir(_fd_dir()))
 
 

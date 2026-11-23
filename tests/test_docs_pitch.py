@@ -67,7 +67,7 @@ def _core(text: str) -> str:
 
 
 def test_pitch_has_at_most_five_slides():
-    text = PITCH.read_text()
+    text = PITCH.read_text(encoding="utf-8")
     headings = re.findall(r"^## (.+)$", text, re.M)
     slides = [h for h in headings if re.match(r"Slide \d+\b", h)]
     assert 4 <= len(slides) <= 5, slides
@@ -78,7 +78,7 @@ def test_pitch_has_at_most_five_slides():
 
 
 def test_pitch_covers_required_topics():
-    text = PITCH.read_text()
+    text = PITCH.read_text(encoding="utf-8")
     for needle in ("Problem", "Solution", "Built this week", "Utah", "$10,000", "$5,000",
                    "altitude_recall.png"):
         assert needle in text, needle
@@ -92,38 +92,38 @@ def test_pitch_covers_required_topics():
 
 def test_every_stat_line_cited_or_assumption():
     offenders = [
-        line for line in PITCH.read_text().splitlines()
+        line for line in PITCH.read_text(encoding="utf-8").splitlines()
         if re.search(r"\d{2,}", line) and "http" not in line and "ASSUMPTION" not in line
     ]
     assert not offenders, offenders
 
 
 def test_pitch_numbers_match_merged_docs():
-    pitch = PITCH.read_text()
-    benchmark = BENCHMARK.read_text()
+    pitch = PITCH.read_text(encoding="utf-8")
+    benchmark = BENCHMARK.read_text(encoding="utf-8")
     for needle in ("0.142", "0.602", "0.832", "0/337", "0.52 to 0.70", "96.8", "0.398",
                    "57.555", "INFEASIBLE"):
         assert needle in pitch, needle
         assert needle in benchmark, needle
-    assert "0.7 s" in pitch and "0.7s after the kill" in FLEET_SCALING.read_text()
+    assert "0.7 s" in pitch and "0.7s after the kill" in FLEET_SCALING.read_text(encoding="utf-8")
 
 
 # R-063: the four questions, verbatim and in order.
 
 
 def test_four_questions_in_order_in_pitch():
-    _assert_in_order(PITCH.read_text(), QUESTIONS, "pitch")
+    _assert_in_order(PITCH.read_text(encoding="utf-8"), QUESTIONS, "pitch")
 
 
 def test_four_questions_in_order_in_demo_script():
-    _assert_in_order(_core(SCRIPT.read_text()), QUESTIONS, "demo script core")
+    _assert_in_order(_core(SCRIPT.read_text(encoding="utf-8")), QUESTIONS, "demo script core")
 
 
 # R-064: the named Utah user, in the "Who needs it?" part of both docs.
 
 
 def test_named_utah_user_with_url():
-    for name, text in (("pitch", PITCH.read_text()), ("demo script core", _core(SCRIPT.read_text()))):
+    for name, text in (("pitch", PITCH.read_text(encoding="utf-8")), ("demo script core", _core(SCRIPT.read_text(encoding="utf-8")))):
         start = text.index(QUESTIONS[2])
         end = text.index(QUESTIONS[3])
         who = text[start:end]
@@ -136,20 +136,20 @@ def test_named_utah_user_with_url():
 
 def test_honest_limits_and_faces_lines():
     for path in (PITCH, PLAN):
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         limit = [ln for ln in lines if "canopy" in ln and "open terrain" in ln and "thermal" in ln]
         assert limit, f"{path.name}: no canopy / open terrain sentence"
         for terrain in ("desert", "canyon", "meadow", "snow"):
             assert terrain in limit[0], f"{path.name}: {terrain}"
     for path in (PITCH, PRIVACY):
-        assert "not resolvable" in path.read_text(), path.name
+        assert "not resolvable" in path.read_text(encoding="utf-8"), path.name
 
 
 # R-041: core, extended, pre-flight, fallback ladder and Q&A.
 
 
 def test_demo_script_core_and_extended():
-    text = SCRIPT.read_text()
+    text = SCRIPT.read_text(encoding="utf-8")
     for needle in ("Core (4:00)", "Extended", "0:00", "4:00", "798f21a", "hackathon/kickoff",
                    "docs/built-this-week.md", "FLIGHTRISK_FLEET_NET", "station", "ap"):
         assert needle in text, needle
@@ -179,25 +179,25 @@ def test_demo_script_core_and_extended():
 
 
 def test_demo_script_preflight_covers_both_paths():
-    preflight = _section(SCRIPT.read_text(), "Pre-flight checklist")
+    preflight = _section(SCRIPT.read_text(encoding="utf-8"), "Pre-flight checklist")
     for needle in ("scripts/tello_hw_check.py", "FLIGHTRISK_FLEET_NET=station",
                    "FLIGHTRISK_FLEET_NET=ap", "FLIGHTRISK_EDGE_TOKEN", "30%", "floor"):
         assert needle in preflight, needle
 
 
 def test_launch_commands_match_fleet_setup():
-    launch = _section(FLEET_SETUP.read_text(), "Launch")
+    launch = _section(FLEET_SETUP.read_text(encoding="utf-8"), "Launch")
     commands = []
     for block in re.findall(r"```\n(.*?)```", launch, re.S):
         commands += [line.strip() for line in block.splitlines() if line.strip()]
     assert len(commands) == 3, commands
-    preflight = _section(SCRIPT.read_text(), "Pre-flight checklist")
+    preflight = _section(SCRIPT.read_text(encoding="utf-8"), "Pre-flight checklist")
     for command in commands:
         assert command in preflight, command
 
 
 def test_demo_script_has_fallback_ladder():
-    text = SCRIPT.read_text()
+    text = SCRIPT.read_text(encoding="utf-8")
     assert "Fallback ladder" in text
     ladder = _section(text, "Fallback ladder")
     for needle in ("--source fake", "fleet.mp4", "SITL"):
@@ -212,7 +212,7 @@ def test_demo_script_has_fallback_ladder():
 
 
 def test_demo_script_has_qa_prep():
-    qa = _section(SCRIPT.read_text(), "Q&A prep")
+    qa = _section(SCRIPT.read_text(encoding="utf-8"), "Q&A prep")
     lines = qa.splitlines()
     questions = [ln for ln in lines if ln.startswith("Q:")]
     answers = [ln for ln in lines if ln.startswith("A:")]
@@ -226,7 +226,7 @@ def test_demo_script_has_qa_prep():
 
 
 def test_backup_video_shot_list_under_120s():
-    shots = _section(SCRIPT.read_text(), "Backup video shot list")
+    shots = _section(SCRIPT.read_text(encoding="utf-8"), "Backup video shot list")
     rows = _table_rows(shots)
     header, body = rows[0], rows[1:]
     col = header.index("Seconds")
@@ -242,7 +242,7 @@ def test_backup_video_shot_list_under_120s():
 
 
 def test_battery_plan():
-    plan = _section(SCRIPT.read_text(), "Battery and rehearsal plan")
+    plan = _section(SCRIPT.read_text(encoding="utf-8"), "Battery and rehearsal plan")
     for needle in ("13 min", "ryzerobotics.com/tello/specs", "6-minute", "spare", "ASSUMPTION",
                    "rehearsal", "Rehearsal 1", "Rehearsal 2"):
         assert needle in plan, needle

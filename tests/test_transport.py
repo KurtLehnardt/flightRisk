@@ -875,9 +875,19 @@ def test_reconnect_retries_forever_when_max_retries_is_none():
     """max_retries=None (the default) means _reconnect() keeps trying."""
 
     async def scenario():
-        et = EdgeTransport(ws_url="ws://localhost:1", base_delay=0.01, max_delay=0.01)
+        et = EdgeTransport(ws_url="ws://127.0.0.1:1", base_delay=0.01, max_delay=0.01)
         assert et._max_retries is None
         et._should_reconnect = True
+
+        # Every attempt is refused at once. A real refused connect is instant on macOS and Linux but takes 1-2 s
+        # on Windows (and "localhost" tries two addresses), so the refusal is stubbed to keep the timing the same.
+        attempts = []
+
+        async def refused():
+            attempts.append(1)
+            raise ConnectionRefusedError("refused")
+
+        et._connect_locked = refused
 
         # Bound the loop from the test side (rather than via max_retries)
         # by cancelling the reconnect coroutine after it has clearly made
@@ -887,7 +897,7 @@ def test_reconnect_retries_forever_when_max_retries_is_none():
             if et._retry_count >= 5:
                 break
             await asyncio.sleep(0.01)
-        assert et._retry_count >= 5
+        assert et._retry_count >= 5 and len(attempts) >= 5
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
