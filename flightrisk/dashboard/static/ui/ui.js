@@ -1535,6 +1535,9 @@ const socket = io();
 
     // ========== FLEET EVENTS, UNCOVERED LANES ==========
     let bannerTimer = null;
+    // Until when a LAND ALL failure (or a LAND ALL that reached only some drones) is held on screen.
+    let landAllBannerUntil = 0;
+    function landAllBannerHeld() { return Date.now() < landAllBannerUntil; }
     function showFleetBanner(text, holdMs) {
         const b = $('fleet-banner');
         b.textContent = text;
@@ -1643,8 +1646,10 @@ const socket = io();
     // Confirmations are asked inline, in two clicks on the same button, never with window.confirm: a modal dialog would
     // block the page, and with it the LAND ALL button and the Shift+L hotkey, while drones fly. The first click arms
     // the button and shows what confirming means; a second click within CONFIRM_ARM_MS sends it. Armed buttons are
-    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed.
+    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed. A click less than
+    // CONFIRM_REPEAT_MS after the arming one is ignored: a double click arms the button, it never confirms.
     const CONFIRM_ARM_MS = 8000;
+    const CONFIRM_REPEAT_MS = 500;
     const armedConfirms = {};  // key -> time (ms) the arming runs out
     function twoStepConfirmButton(key, cls, label, armedLabel, warning, send) {
         const button = el('button', 'btn ' + cls, label);
@@ -1666,6 +1671,8 @@ const socket = io();
                 setTimeout(() => { if (button.isConnected) show(); }, CONFIRM_ARM_MS + 50);
                 return;
             }
+            // Armed less than CONFIRM_REPEAT_MS ago: the second click of a double click, not a confirmation.
+            if (Date.now() < armedConfirms[key] - CONFIRM_ARM_MS + CONFIRM_REPEAT_MS) return;
             delete armedConfirms[key];
             button.disabled = true;
             button.textContent = label;
@@ -1773,10 +1780,17 @@ const socket = io();
             renderUncovered();
             showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
         } else if (kind === 'drone_lost') showFleetBanner(droneLostText(ev.drone_id));
+        else if (kind === 'lost_drone_relanded') {
+            // The ground landed a lost drone that reported flying again; the detail says why. A held LAND ALL
+            // failure stays on screen: it asks the operator to land drones by hand.
+            if (!landAllBannerHeld()) showFleetBanner('LANDING LOST DRONE: ' + (ev.detail || ev.drone_id || ''), 15000);
+        }
         else if (kind === 'land_all') {
             const fb = landAllEventFeedback(ev);
-            if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
-            else showFleetBanner('LAND ALL sent');
+            if (fb) {
+                showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+                landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+            } else showFleetBanner('LAND ALL sent');
         }
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
         else if (kind === 'plan_invalidated') {
@@ -1895,7 +1909,10 @@ const socket = io();
     on('land-all', 'click', landAll);
     socket.on('land_all_ack', (ack) => {
         const fb = landAllAckFeedback(ack);
-        if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+        if (fb) {
+            showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+            landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+        }
     });
 
     // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight control is off and
