@@ -661,6 +661,10 @@ class ProcessManager:
                 if m.status == PENDING:
                     m.status, m.message = NOT_STARTED, "start cancelled"
 
+    def spec(self, name: str) -> ProcessSpec:
+        """The spec *name* was started with (its full environment included). Raises ``ProcessError`` for an unknown name."""
+        return self._managed(name).spec
+
     def _managed(self, name: str) -> Managed:
         with self._lock:
             managed = self._procs.get(name)

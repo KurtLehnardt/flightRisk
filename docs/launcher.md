@@ -98,7 +98,7 @@ ceiling and margin saved in the dashboard (`~/.flightrisk/ceiling.json`) when th
 | Preset | Runs here | Drones | Ports (dashboard, edge link) | Notes |
 | --- | --- | --- | --- | --- |
 | Layout A (ground here) | ground, loopback plus 10.42.0.1 | drone-1, drone-2: tello, edges on the other computer, slots 100 and 130 cm | 5555, 9000 | needs the token |
-| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 at 50 cm, drone-2 at 80 cm (the slots of `scripts/demo_edge_pair.ps1`), adapters chosen in the window | | no adapter address or interface index is stored in the preset; see "Adapters" below |
+| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 at 60 cm, drone-2 at 80 cm (the slots of `scripts/demo_edge_pair.ps1`), adapters chosen in the window | | no adapter address or interface index is stored in the preset; see "Adapters" below |
 | Layout B (everything here) | ground, loopback | drone-1 and drone-2: tello, slots 100 and 130 cm, adapters chosen in the window | 5555, 9000 | same |
 | Single drone | ground, loopback | drone-1, tello, slot 100 cm | 5555, 9000 | |
 | Rehearsal with fake drones | ground, loopback | drone-1, drone-2: fake, slots 100 and 130 cm, geofence 500 cm | 5800, 9800 | other ports, so it can run beside a live ground station; needs no adapter |
@@ -156,6 +156,41 @@ ceiling, the margin and each drone's altitude slot from the window, then starts 
 | Language model | off adds `--no-llm` to the ground (the default) |
 | Ports | the ground's `--port` and `--edge-port`; the dashboard always binds 127.0.0.1 |
 | Observability export | `FLIGHTRISK_OTEL_ENABLED`, `OTEL_ENDPOINT` and `OTEL_RESOURCE_ATTRIBUTES` per process; an endpoint on port 4318 uses OTLP over HTTP, anything else OTLP over gRPC |
+| Obstacle sensing mode | the edges' `FLIGHTRISK_OBSTACLE_SENSING`: `required` (the default) or `off`. Choosing `off` asks first, and every Start with `off` must be confirmed again (see "Obstacle sensing") |
+
+### Obstacle sensing
+
+The obstacle sensing mode reaches only the edges this launcher starts (a ground with every edge on another computer
+does not use it; each edge computer's own launcher does). An edge reads it once, when it starts, so a change
+**applies on the next Start**; the window says so, and while processes run it also shows the mode the running edges
+were started with. The dashboard's `SENSE` badge shows the mode each edge actually uses. The window has no other
+obstacle setting: the depth threshold is not an operator setting, and the launcher neither shows nor sets it.
+
+Precedence: `FLIGHTRISK_OBSTACLE_SENSING` in the launcher's own environment wins over the window, so a shell or
+script that sets it keeps working. The window shows the effective mode and where it comes from, disables the mode
+control and shows the environment's mode in it, and lists the variable among the inherited ones. An inherited mode
+the edge would refuse (anything other than `required` or `off`) is an error that blocks Start. An empty variable
+counts as unset.
+
+Weaker sensing is never started silently, and a confirmation is never replayed. When the effective mode is not
+`required` (from the window or from the environment) and an edge starts here, `POST /api/start` answers 409 with
+`needs_confirmation: "obstacle_sensing"`, the `mode`, a full-sentence warning and a one-time `confirm_nonce`, before
+any drone is probed or any process starts. The window shows that warning and, on the operator's yes, sends the start
+again with `confirm_sensing` set to exactly that mode and `confirm_nonce` echoed. Any other mode, a missing or unknown
+nonce, or a nonce issued for other edges is no confirmation. A nonce is good for one attempt and expires after 5
+minutes, and Stop forgets every outstanding nonce, so a confirm, Start, Stop, Start sequence is asked again. When the
+operator chose `off` in the mode control (which asks first), the next Start skips the second question, but only for
+the same mode and the same edges the 409 names (`edges`); that yes then counts for that Start only, and Stop or loading
+a preset forgets it. The confirmed start is recorded in the window's event log.
+
+Restart follows the same rule. An edge whose environment has `FLIGHTRISK_OBSTACLE_SENSING` other than `required` may be
+restarted only during its confirmed run, from the confirmed Start until Stop (an edge that crashed during the run can be
+restarted). After Stop, Restart of that edge answers 409 "Press Start to confirm sensing off again.", and Start asks
+for the confirmation again.
+
+The edges' takeoff temperature levels are checked too: an inherited `FLIGHTRISK_TELLO_TEMP_WARN_C` or
+`FLIGHTRISK_TELLO_TEMP_REFUSE_C` the edges would refuse (see `docs/fleet-setup.md`, "Takeoff temperature check") is an
+error that blocks Start, when an edge starts here.
 
 The ground also gets `--appearance-only`, `FLIGHTRISK_APPEARANCE_ONLY=1`, `FLIGHTRISK_SAVE_CAPTURES=0`,
 `FLIGHTRISK_GEOFENCE_CM` (the edges' value, so a re-task is never planned beyond the fence an edge enforces)
@@ -178,10 +213,10 @@ All checks are read-only; any FAIL blocks Start.
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |
 | Edge token | set, when the cable address is bound or a non-loopback ground is dialled; only "set" or "missing" is shown |
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
-| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
+| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed. Any other real drone with no local IP, a single Tello included, fails while obstacle sensing is required (`FLIGHTRISK_OBSTACLE_SENSING` unset or `required`), because its edge would refuse to start: without a local IP its video frames carry no capture stamps. The row names an adapter only when exactly one real Tello runs on this computer, exactly one adapter has an address in that Tello's network, that address is not another drone's configured local IP, and the adapter is not the default (internet) route; when the default route cannot be read, no adapter is named. With two or more real Tellos here the row names none and says each Tello needs its own Wi-Fi adapter's local IP (`docs/two-tellos-one-pc.md`). With sensing `off` the same drone is only a warning |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
 | Takeoff battery minimum | `FLIGHTRISK_MIN_TAKEOFF_BATTERY` (30 % by default) is a number from 15 to 100, which is what the edges and the ground accept; otherwise a FAIL, because they refuse to start with it. Shown once for the whole start |
-| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below the takeoff minimum (30 % unless `FLIGHTRISK_MIN_TAKEOFF_BATTERY` is set) is a warning |
+| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery and temperature are shown. A battery below the takeoff minimum (30 % unless `FLIGHTRISK_MIN_TAKEOFF_BATTERY` is set) is a warning, and so is a temperature at or above the edges' warn level (`FLIGHTRISK_TELLO_TEMP_WARN_C`, default 92 C): power that drone on last or set it on a fan |
 
 The drone check sends only `command` (the SDK handshake), `battery?` and `temp?`, from one UDP socket
 bound to the drone's local IP (and pinned to its interface index on Windows), and closes the socket
@@ -214,7 +249,8 @@ then own the drones' command ports.
 - **Restart** stops one process and starts it again with the same settings. It is refused while a stop or
   another restart runs. An edge that had to be terminated without landing is not started again by that
   Restart, because its drone may still be in the air (a Tello lands by itself about 15 s after its
-  commands stop); once the drone is down, Restart again, or Stop and Start. **On Windows, Restart of an
+  commands stop); once the drone is down, Restart again, or Stop and Start. An edge started with obstacle sensing
+  `off` is not restarted after Stop: press Start to confirm it again (see "Obstacle sensing"). **On Windows, Restart of an
   edge is refused** until the Windows stop has been verified on hardware: land it with LAND ALL, then Stop
   and Start.
 - **Quit launcher** asks whether to stop the processes or leave them running. Left running, they keep

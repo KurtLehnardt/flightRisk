@@ -46,7 +46,15 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
-from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM, FleetCoordinator, StartResult
+from flightrisk.drone.coordinator import (
+    DEFAULT_ALT_SLOTS_CM,
+    DEFAULT_ZONE_GAP_CM,
+    SIDESTEP_MARGIN_CM,
+    SIDESTEP_MARGIN_ENV,
+    SIDESTEP_MARGIN_MAX_CM,
+    FleetCoordinator,
+    StartResult,
+)
 from flightrisk.drone import plan_edit
 from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, CHANNEL_ORDER_RGB, to_sensor_frame
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
@@ -58,7 +66,8 @@ from flightrisk.canon import TargetCanon
 from flightrisk.dashboard.obs_hooks import install_http_observability, install_socketio_observability
 from flightrisk.dashboard.ceiling import EVENT as CEILING_EVENT
 from flightrisk.dashboard.ceiling import CeilingBoard, CeilingRefusal, CeilingStore
-from flightrisk.dashboard.manual_control import ManualControl
+from flightrisk.dashboard.manual_control import ORPHAN_LANDED_BY_GROUND, ManualControl
+from flightrisk.dashboard.single_search import single_search_refusal
 from flightrisk.dashboard import map_tiles, plan_store
 
 try:
@@ -536,9 +545,11 @@ LAND_ALL_TIMEOUT_S = 2.0
 LAND_ALL_PATHS_DEADLINE_S = 35.0
 
 #: ``fleet_event`` kinds after which the browsers get a fresh ``fleet_status`` at once, because the obstacle
-#: segments it carries changed: the obstacle cut and the five re-flight transitions.
+#: segments it carries changed: the obstacle cut, a stretch flown beside a lane by a sidestep, and the five
+#: re-flight transitions.
 OBSTACLE_PLAN_EVENTS = frozenset({
-    "lane_blocked", "reflight_offered", "reflight_accepted", "reflight_done", "reflight_blocked", "reflight_failed",
+    "lane_blocked", "lane_offset", "reflight_offered", "reflight_accepted", "reflight_done", "reflight_blocked",
+    "reflight_failed",
 })
 
 #: Interval of the fleet monitor, which refreshes ``fleet_status`` and
@@ -560,6 +571,14 @@ FLEET_TAKEOFF_GRACE_S = 15.0
 #: their new lanes before the ``retask`` event is sent. Later answers are
 #: reported in further ``retask`` or ``retask_failed`` events.
 FLEET_RETASK_WAIT_S = 2.0
+#: Why a drone's unflown lanes wait for the operator (``FleetCoordinator.on_drone_lost(confirm=...)``)
+#: when the ground's orphan countdown landed it: nobody was controlling it.
+ORPHAN_LANDED_CONFIRM = "landed by the ground with no controller"
+#: The same for a held drone that landed by itself (its battery landing, for example) while
+#: that countdown ran.
+ORPHAN_SELF_LANDED_CONFIRM = "landed while held with no controller"
+#: The same for a drone lost while that countdown ran, or while it was held with no controller and no countdown.
+ORPHAN_LOST_CONFIRM = "lost while held with no controller"
 
 
 def fleet_geofence_cm() -> float:
@@ -580,6 +599,24 @@ def fleet_geofence_cm() -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{GEOFENCE_CM_ENV} must be a positive number, got {raw!r}")
     return value
+
+
+def fleet_sidestep_margin_cm() -> int:
+    """The ground's sidestep margin in cm, ``FLIGHTRISK_SIDESTEP_MARGIN_CM`` (``coordinator.SIDESTEP_MARGIN_CM``).
+
+    The re-task separation check and the map plan's path check keep this
+    much more than the gap from the path of a drone that reports it may
+    sidestep an obstacle. Set it to the edges' ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``
+    when they use another sidestep. Raises ``ValueError`` for a value that
+    is not a whole number from 0 to ``SIDESTEP_MARGIN_MAX_CM``.
+    """
+    raw = os.environ.get(SIDESTEP_MARGIN_ENV, "").strip()
+    if not raw:
+        return SIDESTEP_MARGIN_CM
+    if not raw.isascii() or not raw.isdigit() or not 0 <= int(raw) <= SIDESTEP_MARGIN_MAX_CM:
+        raise ValueError(f"{SIDESTEP_MARGIN_ENV} must be a whole number from 0 to {SIDESTEP_MARGIN_MAX_CM}, "
+                         f"got {raw!r}")
+    return int(raw)
 
 
 def _fleet_span(name: str, **attrs):
@@ -736,6 +773,7 @@ class FleetSupervisor:
         geofence_cm: float | None = None,
         retask_wait_s: float = FLEET_RETASK_WAIT_S,
         ceiling: CeilingBoard | None = None,
+        sidestep_margin_cm: int | None = None,
     ):
         self.net = net
         self._ceiling = ceiling
@@ -773,6 +811,9 @@ class FleetSupervisor:
             # A drone held for manual control is never offered a lost
             # drone's lanes; they would wait for the operator.
             retask_excluded=self._held_for_manual,
+            sidestep_margin_cm=fleet_sidestep_margin_cm() if sidestep_margin_cm is None else int(sidestep_margin_cm),
+            # A lost drone a person flies by hand is never sent land again.
+            manually_controlled=self._flown_by_hand,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -787,6 +828,8 @@ class FleetSupervisor:
             ceiling.bind_activity(self.flight_activity)
         self.manual = ManualControl(
             self.links, self._send_manual, self._emit, clock=self._clock, fence=self._manual_fence,
+            # A lost drone never resumes its search: its lanes are no longer its own.
+            lost=self.coordinator.is_lost,
         )
 
     def _send_manual(self, drone_id: str, msg: dict) -> None:
@@ -800,6 +843,11 @@ class FleetSupervisor:
 
     def _held_for_manual(self, drone_id: str) -> bool:
         return self.manual is not None and self.manual.paused(drone_id)
+
+    def _flown_by_hand(self, drone_id: str) -> bool:
+        """True while this dashboard's manual control has *drone_id* (a person flies it by hand)."""
+        manual = getattr(self, "manual", None)
+        return manual is not None and manual.controlled == drone_id
 
     def _paused_drones(self) -> list[str]:
         """Drones whose search is paused for manual control."""
@@ -1064,6 +1112,8 @@ class FleetSupervisor:
             alt_slot_of=slot_of,
             takeoffs=self.layout_takeoffs(),
             footprint_cm=plan_edit.camera_footprint_cm(),
+            # Paths stay this much farther than the gap from a drone that may sidestep.
+            sidestep_margin_of=self.coordinator.sidestep_margin_of,
         )
 
     def mark_plan_edited(self) -> bool:
@@ -1161,6 +1211,8 @@ class FleetSupervisor:
                 self._landed_early.clear()
                 self._start_t_ground_s = None
                 self._landed_all = False
+            if self.manual is not None:
+                self.manual.forget_orphan_landings()
         self.emit_plan()
         self.emit_status()
         return plan
@@ -1228,19 +1280,44 @@ class FleetSupervisor:
         self.emit_status()
         return result
 
-    def confirm_reflight(self, drone_id: str, cut_seq: object) -> tuple[bool, str]:
+    def confirm_reflight(self, drone_id: str, cut_seq: object, offset: object = None) -> tuple[bool, str]:
         """The operator confirms the re-flight of a person cut (``FleetCoordinator.confirm_reflight``).
 
-        Logged as a ``reflight_confirmed`` flight-safety event; the fleet
-        status that follows shows the segment's new state.
+        *offset* ``[lane_index, from_cm]`` names an offset segment whose
+        sidestep saw a person, when it has no cut of its own (*cut_seq*
+        None). Logged as a ``reflight_confirmed`` flight-safety event; the
+        fleet status that follows shows the segment's new state.
         """
         with self._lock:
             landed_all = self._landed_all
         if landed_all:
-            return False, "LAND ALL was pressed; nothing is re-flown"
-        ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+            return False, "LAND ALL was pressed, so nothing is re-flown; make a new plan to search this segment"
+        if offset is None:
+            ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+        else:
+            ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq, offset)
         obs_events.flight_safety("reflight_confirmed" if ok else "reflight_confirm_refused", reason="operator",
                                  drone_id=drone_id, cut_seq=cut_seq, detail=detail,
+                                 level=logging.WARNING if ok else logging.INFO)
+        self.emit_status()
+        return ok, detail
+
+    def confirm_retask(self, drone_id: str) -> tuple[bool, str]:
+        """The operator confirms the re-task of a drone's waiting lanes (``FleetCoordinator.confirm_retask``).
+
+        Such lanes belong to a drone that was landed, or lost, while nobody
+        controlled it. Logged as a ``retask_confirmed`` flight-safety event;
+        the fleet status that follows shows the drones' new lanes.
+        """
+        with self._lock:
+            landed_all = self._landed_all
+        if landed_all:
+            # Checked here, before the coordinator, because LAND ALL marks the
+            # supervisor first: no offer may follow it.
+            return False, "LAND ALL was pressed, so nothing is re-tasked; make a new plan to search these lanes"
+        ok, detail = self.coordinator.confirm_retask(drone_id)
+        obs_events.flight_safety("retask_confirmed" if ok else "retask_confirm_refused", reason="operator",
+                                 drone_id=drone_id, detail=detail,
                                  level=logging.WARNING if ok else logging.INFO)
         self.emit_status()
         return ok, detail
@@ -1272,6 +1349,19 @@ class FleetSupervisor:
         to ``retask_wait_s`` for the drones' answers. Returns the drones declared
         lost by this call. The check is skipped while ``plan()`` or
         ``start()`` runs, so it never marks a drone of a new plan lost.
+
+        A drone held for manual control is not lost for landing or for not
+        flying its lanes, only for a lost link, with one exception: a drone
+        that landed while held with nobody controlling it (the orphan
+        countdown landed it, or it landed by itself while the countdown ran)
+        is lost once it reports landed with lanes left, although it stays
+        held. For such a drone, and for a held drone lost while its countdown
+        ran or while it was held with no controller and no countdown, the
+        lanes are not offered at once: they wait for the operator's
+        ``confirm_retask`` (``ORPHAN_LANDED_CONFIRM``,
+        ``ORPHAN_SELF_LANDED_CONFIRM``, ``ORPHAN_LOST_CONFIRM``), so none of
+        its unflown lanes is given to another drone unless a person confirms
+        it.
         """
         if not self._busy.acquire(blocking=False):
             return []
@@ -1297,18 +1387,41 @@ class FleetSupervisor:
             entry = status.get(drone_id) or {}
             if entry.get("lost"):
                 continue
+            # A drone that landed while held with no controller is out of the
+            # mission like any drone that landed with lanes left, even though it
+            # stays held.
+            orphan_landing = None if self.manual is None else self.manual.orphan_landing(drone_id)
             reason = self._loss_reason(
                 links.get(drone_id), drone_id in flown, drone_id in landed_early, now - start_t,
-                paused=self.manual is not None and self.manual.paused(drone_id),
+                paused=self.manual is not None and self.manual.paused(drone_id) and orphan_landing is None,
             )
             if reason is None:
                 continue
             with self._lock:
                 if self._landed_all:
                     break
-            log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
-            obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
-            self.coordinator.on_drone_lost(drone_id)
+            confirm = None
+            if orphan_landing == ORPHAN_LANDED_BY_GROUND:
+                confirm = ORPHAN_LANDED_CONFIRM
+            elif orphan_landing is not None:
+                confirm = ORPHAN_SELF_LANDED_CONFIRM
+            elif self.manual is not None and (
+                self.manual.orphaned(drone_id)
+                # Held with nobody controlling it and no countdown yet (it was
+                # already landing, for example): nobody watches it either.
+                or (self.manual.paused(drone_id) and self.manual.controlled != drone_id)
+            ):
+                confirm = f"{ORPHAN_LOST_CONFIRM} ({reason})"
+            if confirm is not None:
+                # Nobody was controlling it: none of its unflown lanes is given to
+                # another drone until the operator confirms it.
+                log.warning("Fleet drone %s lost (%s); its lanes wait for the operator: %s", drone_id, reason, confirm)
+                obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason,
+                                         retask="needs_confirmation")
+            else:
+                log.warning("Fleet drone %s lost (%s); re-tasking its lanes", drone_id, reason)
+                obs_events.flight_safety("drone_lost", reason=reason.split(" ")[0], drone_id=drone_id, detail=reason)
+            self.coordinator.on_drone_lost(drone_id, confirm=confirm)
             if self.manual is not None:
                 self.manual.cancel_orphan(drone_id, "lost")
             lost.append(drone_id)
@@ -1522,6 +1635,17 @@ def _reasoning_state() -> dict:
         reason = provider_unavailable_reason(name)
         if reason:
             unavailable[name] = reason
+    # Backends that guard their calls (Claude) report breaker state, open with
+    # seconds left or closed, and calls in the last minute; others report None.
+    health = None
+    health_fn = getattr(agent, "health", None) if agent else None
+    if callable(health_fn):
+        try:
+            health = health_fn()
+        except Exception:
+            health = None
+        if not isinstance(health, dict):
+            health = None
     return {
         "provider": agent.provider if agent else "off",
         "label": agent.label if agent else None,
@@ -1529,6 +1653,7 @@ def _reasoning_state() -> dict:
         "available": [name for name in PROVIDERS if name not in unavailable],
         "unavailable": unavailable,
         "cloud_allowed": cloud_llm_allowed(),
+        "health": health,
     }
 
 
@@ -2676,7 +2801,9 @@ def on_confirm_reflight(data=None):
     A person cut is never offered to another drone on its own: that drone
     would fly toward the same person from the far side. ``{"drone_id",
     "cut_seq"}`` name the cut (from the segment's ``fleet_status.uncovered``
-    entry). Runs on a worker thread, because the offer it may send must never
+    entry); an offset segment whose sidestep saw a person and that has no
+    cut is named by ``{"drone_id", "cut_seq": null, "offset": [index,
+    offset_from_cm]}``. Runs on a worker thread, because the offer it may send must never
     hold up other socket events such as ``land_all``; the answer is a
     ``reflight_confirm_result`` event to this browser.
     """
@@ -2685,12 +2812,15 @@ def on_confirm_reflight(data=None):
         emit("error", {"message": "Re-flights need fleet mode (--source edge --fleet ...)"})
         return
     data = data if isinstance(data, dict) else {}
-    drone_id, cut_seq = str(data.get("drone_id")), data.get("cut_seq")
+    drone_id, cut_seq, offset = str(data.get("drone_id")), data.get("cut_seq"), data.get("offset")
     sid = _sid()
 
     def _work():
         try:
-            ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+            if offset is None:
+                ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+            else:
+                ok, detail = supervisor.confirm_reflight(drone_id, cut_seq, offset)
         except Exception as exc:  # noqa: BLE001 - reported to the operator
             log.error("Re-flight confirmation failed", exc_info=True)
             ok, detail = False, f"re-flight confirmation failed: {exc}"
@@ -2698,6 +2828,37 @@ def on_confirm_reflight(data=None):
                                                   "detail": detail}, to=sid)
 
     threading.Thread(target=_work, daemon=True, name="fleet-confirm-reflight").start()
+
+
+@socketio.on("confirm_retask")
+def on_confirm_retask(data=None):
+    """The operator confirms that a drone's waiting lanes may be offered to another drone.
+
+    They wait when the drone landed, or was lost, while held with nobody
+    controlling it (``FleetSupervisor.check_losses``): none of its unflown
+    lanes is given to another drone unless a person confirms it. ``{"drone_id"}`` names the
+    drone (from its lanes' ``needs_confirmation`` entries). Runs on a worker
+    thread, because the offers it may send must never hold up other socket
+    events such as ``land_all``; the answer is a ``retask_confirm_result``
+    event to this browser.
+    """
+    supervisor = app_state.fleet_supervisor
+    if supervisor is None:
+        emit("error", {"message": "Re-tasking needs fleet mode (--source edge --fleet ...)"})
+        return
+    data = data if isinstance(data, dict) else {}
+    drone_id = str(data.get("drone_id"))
+    sid = _sid()
+
+    def _work():
+        try:
+            ok, detail = supervisor.confirm_retask(drone_id)
+        except Exception as exc:  # noqa: BLE001 - reported to the operator
+            log.error("Re-task confirmation failed", exc_info=True)
+            ok, detail = False, f"re-task confirmation failed: {exc}"
+        socketio.emit("retask_confirm_result", {"drone_id": drone_id, "ok": ok, "detail": detail}, to=sid)
+
+    threading.Thread(target=_work, daemon=True, name="fleet-confirm-retask").start()
 
 
 @socketio.on("get_manual_status")
@@ -3155,6 +3316,17 @@ def on_start_search(data):
     _guard, guard_error = _obstacle_guard_for_search()
     if guard_error is not None:
         emit("error", {"message": f"Search not started: the obstacle guard is unavailable ({guard_error})"})
+        return
+
+    # The drone's state is read last, after the guard (whose first build can
+    # take seconds), with the rules of the fleet start gate: the drone link,
+    # the battery and a current video frame for the obstacle guard
+    # (flightrisk/dashboard/single_search.py).
+    refusal = single_search_refusal(drone)
+    if refusal is not None:
+        obs_events.flight_safety("single_search_refused", reason="start_gate",
+                                 drone_id=getattr(drone, "name", None), detail=refusal)
+        emit("error", {"message": f"Search not started: {refusal}"})
         return
 
     app_state.search_active = True

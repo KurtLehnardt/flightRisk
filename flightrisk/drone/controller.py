@@ -203,6 +203,45 @@ class CommandNotExecutedError(RuntimeError):
         super().__init__(f"{result.command} not executed ({result.outcome.value}){detail}")
 
 
+class CommandRefusedError(RuntimeError):
+    """Raised by a controller when the drone answered a flight command with a refusal.
+
+    ``command`` is the command as sent (for example ``down 80``) and
+    ``reply`` the drone's answer (for example ``error No valid imu``). It is
+    a ``RuntimeError``, so every caller that already treats a refused
+    command as an error keeps doing so; the lane executor reads ``reply`` to
+    tell a transient refusal it may retry from any other.
+    """
+
+    def __init__(self, message: str, *, command: str, reply: str):
+        super().__init__(message)
+        self.command = command
+        self.reply = reply
+        # Set once the lane executor has counted this refusal in telemetry.
+        self.counted = False
+
+
+@dataclass(frozen=True)
+class SettledHeight:
+    """A height the drone held steadily, read from fresh state (``settled_height()``).
+
+    ``height_cm`` is the newest height of the run of packets that showed it
+    steady. ``tof_cm`` is the lowest downward time-of-flight distance of
+    that run, or None when any packet of it had no usable distance.
+    ``samples`` is the number of packets in the run and ``waited_s`` how
+    long the wait took. ``vgx_cm_s`` and ``vgy_cm_s`` are the largest
+    horizontal speeds of the run (None when not reported): the settle judges
+    vertical steadiness only, and these are logged for calibration.
+    """
+
+    height_cm: int
+    tof_cm: int | None
+    samples: int
+    waited_s: float
+    vgx_cm_s: int | None = None
+    vgy_cm_s: int | None = None
+
+
 def command_result(value: Any, command: str) -> CommandResult:
     """Normalize a command's return value to a :class:`CommandResult`.
 
@@ -262,6 +301,30 @@ class DroneLinkStatus:
     age_s: float | None = None
     reason: str | None = None
     detail: str | None = None
+
+
+@dataclass(frozen=True)
+class FrameFreshness:
+    """How current a controller's newest decoded video frame is (read-only, sends nothing).
+
+    A backend that can tell (the Tello controller) exposes it as
+    ``frame_freshness()``; the single-drone search refuses to start on a
+    frame that is not current, because its obstacle guard would check the
+    path on an old picture (``flightrisk/dashboard/single_search.py``).
+
+    * ``decoded``: a frame has been decoded since the video stream started.
+      False while the decoder still hands out its black placeholder.
+    * ``age_s``: seconds since the newest frame was decoded (for a reader
+      that stamps frames, since its first datagram arrived), on the
+      monotonic clock; ``None`` when unknown.
+    * ``stale_cause``: why the newest frame cannot be trusted (the bound
+      reader's ``FrameStamp.stale_cause``, such as ``decoder backlog``), or
+      ``None``.
+    """
+
+    decoded: bool
+    age_s: float | None = None
+    stale_cause: str | None = None
 
 
 def require_executed(value: Any, command: str) -> CommandResult:
@@ -398,16 +461,19 @@ __all__ = [
     "Capability",
     "CommandNotExecutedError",
     "CommandOutcome",
+    "CommandRefusedError",
     "CommandResult",
     "DroneCapabilities",
     "DroneController",
     "DroneLinkStatus",
     "DroneState",
     "FlightControl",
+    "FrameFreshness",
     "GpsDroneController",
     "Lifecycle",
     "Motion",
     "Navigation",
+    "SettledHeight",
     "TelemetrySource",
     "VideoSource",
     "capabilities_of",

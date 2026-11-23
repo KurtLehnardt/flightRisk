@@ -1,6 +1,9 @@
 package com.flightrisk.app.ui.ground
 
 import android.content.Context
+import com.flightrisk.app.demo.DemoGroundPort
+import com.flightrisk.app.demo.DemoScenario
+import com.flightrisk.app.demo.DemoText
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.flightrisk.app.ground.AndroidGroundLog
@@ -14,6 +17,8 @@ import com.flightrisk.app.ground.GroundClock
 import com.flightrisk.app.ground.GroundConsoleClient
 import com.flightrisk.app.ground.GroundEndpoint
 import com.flightrisk.app.ground.GroundEvent
+import com.flightrisk.app.ground.GroundLog
+import com.flightrisk.app.ground.SocketIoPort
 import com.flightrisk.app.ground.GroundSnapshot
 import com.flightrisk.app.ground.HealthProbeResult
 import com.flightrisk.app.ground.NotSentReason
@@ -22,6 +27,7 @@ import com.flightrisk.app.ground.SecretName
 import com.flightrisk.app.config.AppSecrets
 import com.flightrisk.app.ground.SecretStore
 import com.flightrisk.app.ground.SendResult
+import com.flightrisk.contract.AlertUpgrade
 import com.flightrisk.contract.ClientCommand
 import com.flightrisk.contract.CommandAck
 import com.flightrisk.contract.ConnectionState
@@ -41,6 +47,7 @@ import com.flightrisk.contract.MatchAlertResolved
 import com.flightrisk.contract.ManualDroneStatus
 import com.flightrisk.contract.ManualReply
 import com.flightrisk.contract.ManualStatus
+import com.flightrisk.contract.ReasoningResult
 import com.flightrisk.contract.ServerEvent
 import com.flightrisk.contract.ServerMessage
 import kotlinx.coroutines.CoroutineDispatcher
@@ -84,6 +91,18 @@ import kotlinx.coroutines.withContext
  * Threading: everything runs on [mainDispatcher] (Android's main thread in
  * the app); the client is main-thread safe, and the secure storage is read
  * and written only through [SecretStore.load] and [SecretStore.save].
+ *
+ * Demo mode ([enterDemo], [exitDemo]) replaces the ground with [DemoGroundPort], which plays a recorded
+ * mission inside the app. While it is on, no real client is created ([clientFactory] is never called),
+ * no health probe runs ([probe] is never called), and every command is answered by the demo port on the
+ * phone. It never starts while the real ground's state needs the operator: a real drone reads as flying,
+ * a LAND ALL or a Land waits for its answer or failed, or a failure banner or drone alert shows
+ * ([DemoRequest.Blocked]); this is checked again right before it starts. When any real ground state
+ * exists (a client, the link switched on, or anything a ground reported), it starts only after the user
+ * confirmed ([DemoRequest.NeedsDisconnect]); it then switches the real link off, saves that, and closes the
+ * client. Leaving the demo leaves the link off and says so. Turning it on and off clears every drone,
+ * alert, frame and command result, so demo data never mixes with a real ground's, and every demo result
+ * the screen shows starts with "DEMO:".
  */
 class GroundConsoleViewModel(
     private val secrets: SecretStore,
@@ -97,6 +116,12 @@ class GroundConsoleViewModel(
     private val startTicker: Boolean = true,
     private val clientDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val cleanupScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Loads the demo mission, or null when this build has none. Called off the main thread's work, once per demo start. */
+    private val demoScenario: (suspend () -> DemoScenario?)? = null,
+    /** The demo ground's in-process transport. Tests wrap it; it never touches the network. */
+    private val demoPortFactory: (DemoScenario, CoroutineScope) -> SocketIoPort = { s, cs -> DemoGroundPort(s, cs) },
+    /** The clock of the demo client and its replay. */
+    private val demoClock: GroundClock = GroundClock.SYSTEM,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
@@ -114,6 +139,23 @@ class GroundConsoleViewModel(
     private var link: GroundLink = GroundLink.NotConfigured
     private var keyState = KeyState.UNKNOWN
     private var inBackground = true
+
+    // Demo mode. While [demoOn] is true, nothing may start a real client.
+    private var demo = false
+    private var demoProblem: String? = null
+
+    /** A dialog the app must show about demo mode (a refusal or a confirmation), until [dismissDemoNotice]. */
+    private var demoNotice: DemoNotice? = null
+
+    /** "Demo ended. The ground link is off…", shown after the demo until the link is turned on again. */
+    private var demoEndedNote: String? = null
+
+    /** The real ground's address when the demo started, for [demoEndedNote]. */
+    private var demoLinkHost: String? = null
+
+    /** Bumped by every demo start and stop, so a mission that finishes loading late starts nothing. */
+    private var demoToken = 0
+    private val demoOn: Boolean get() = demo
 
     /** Bumped by everything that closes or replaces the client, so a slow key read cannot start a stale one. */
     private var epoch = 0
@@ -210,6 +252,11 @@ class GroundConsoleViewModel(
         // Nothing on the screen can change in the background, so the one second ticker stops.
         tickerJob?.cancel()
         tickerJob = null
+        if (demoOn) {
+            // The demo runs in memory only; it keeps its place while the app is away.
+            publish()
+            return
+        }
         epoch++
         if (client != null) {
             closeClient()
@@ -244,7 +291,12 @@ class GroundConsoleViewModel(
                 settingsLoaded = true
                 addressSetting = normalized
                 scope.launch { withContext(ioDispatcher) { settings.address = normalized } }
-                if (changed) forgetGroundState()
+                if (changed && !demoOn) forgetGroundState()
+                if (changed) {
+                    // A different ground: the demo's "turn it on to reconnect to <host>" no longer applies.
+                    demoEndedNote = null
+                    demoLinkHost = null
+                }
                 message = "Address saved."
                 restart()
             }
@@ -292,20 +344,31 @@ class GroundConsoleViewModel(
             }
             keyState = KeyState.NONE
             message = "Key removed."
-            epoch++
-            closeClient()
-            link = idleLink()
+            if (!demoOn) {
+                epoch++
+                closeClient()
+                link = idleLink()
+            }
             publish()
         }
     }
 
     /** Switches the link on or off. On connects only when an address and a key are saved. */
     fun setEnabled(enabled: Boolean) {
+        if (enabled && demoOn) {
+            // Demo mode switched the real link off; it stays off until the demo ends.
+            message = DemoText.LINK_ON_IN_DEMO
+            publish()
+            return
+        }
         settingsLoaded = true
         enabledSetting = enabled
         scope.launch { withContext(ioDispatcher) { settings.enabled = enabled } }
-        epoch++
-        if (!enabled && client != null) closeClient()
+        if (enabled) demoEndedNote = null
+        if (!demoOn) {
+            epoch++
+            if (!enabled && client != null) closeClient()
+        }
         link = if (client == null) idleLink() else link
         publish()
         if (enabled) scope.launch { connectIfWanted() }
@@ -314,6 +377,12 @@ class GroundConsoleViewModel(
     /** "Test connection": the REST health probe with the saved address and key. The result never contains the key. */
     fun testConnection() {
         if (testing) return
+        if (demoOn) {
+            // The probe would reach the real ground; demo mode sends nothing off the phone.
+            testResult = DemoText.TEST_IN_DEMO
+            publish()
+            return
+        }
         scope.launch {
             testing = true
             testResult = null
@@ -337,10 +406,256 @@ class GroundConsoleViewModel(
         }
     }
 
+    // ---------------------------------------------------------------- demo mode
+
+    /** What turning demo mode on would do now. */
+    sealed interface DemoRequest {
+        /** No real ground state exists: demo mode can start at once. */
+        data object Ready : DemoRequest
+
+        /**
+         * Real ground state exists (a client, the link switched on, or anything a ground reported); starting the
+         * demo switches the link off and clears it, so ask the user first. [host] is the ground's address, if known.
+         */
+        data class NeedsDisconnect(val host: String?) : DemoRequest
+
+        /** The real ground's state needs the operator; demo mode must not hide it. [reason] says what to do. */
+        data class Blocked(val reason: String) : DemoRequest
+
+        data object AlreadyOn : DemoRequest
+
+        /** This build has no demo mission. */
+        data object Unavailable : DemoRequest
+    }
+
+    /** A dialog about demo mode that the app shows until [dismissDemoNotice]. */
+    sealed interface DemoNotice {
+        /** Ask before the demo switches the real link off. */
+        data class ConfirmDisconnect(val host: String?) : DemoNotice
+
+        /** Say why demo mode did not start. */
+        data class Blocked(val text: String) : DemoNotice
+    }
+
+    /** True while demo mode is on. */
+    val isDemo: Boolean get() = demoOn
+
+    /** Guards against a second start while the mission loads. */
+    private var demoLoading = false
+
+    fun demoRequest(): DemoRequest = when {
+        demoOn -> DemoRequest.AlreadyOn
+        demoScenario == null -> DemoRequest.Unavailable
+        else -> realSafetyBlock()?.let { DemoRequest.Blocked(it) }
+            ?: if (hasRealGroundState()) DemoRequest.NeedsDisconnect(realHost()) else DemoRequest.Ready
+    }
+
+    /**
+     * Why the real ground's state must stay on screen, or null when demo mode may replace it: a real drone
+     * reads as flying (live or kept from before a disconnect), a LAND ALL or a Land waits for its answer, the
+     * last LAND ALL failed or reached only some drones, a failure banner, a drone alert or a failed Land shows,
+     * or the real link is up or switched on but the ground has not reported its drones yet.
+     */
+    private fun realSafetyBlock(): String? {
+        val board = displayBoard()
+        val flying = board.drones.values.filter { readsAsFlying(it, board) }.map { it.id }
+        if (flying.isNotEmpty()) return DemoText.blockedByFlying(flying)
+        val all = landAllFeedback
+        if (landAllOutstanding.isNotEmpty() || all?.isWaiting == true) return DemoText.BLOCKED_BY_LAND_ALL_WAITING
+        if (all != null && (all.phase == CommandPhase.FAILED || all.phase == CommandPhase.PARTIAL)) {
+            return DemoText.BLOCKED_BY_LAND_ALL_FAILED
+        }
+        if (pendingLegacyLands.isNotEmpty() || landFeedback.values.any { it.isWaiting }) return DemoText.BLOCKED_BY_LAND_WAITING
+        if (banners.any { it.isFailure } || droneAlerts.isNotEmpty() || landFeedback.values.any { it.isFailure }) {
+            return DemoText.BLOCKED_BY_FAILURE
+        }
+        // The real link is up or wanted, but the ground has not said which drones fly: the phone cannot tell
+        // whether demo mode would hide a drone in the air (the iOS app refuses here too).
+        if ((client != null || enabledSetting) && lastFleetStatusAt == 0L && board.drones.isEmpty()) {
+            return DemoText.BLOCKED_BY_FLEET_UNKNOWN
+        }
+        return null
+    }
+
+    /** A drone the ground reports in the air: flying, held (hovering) or under manual control. */
+    private fun readsAsFlying(record: DroneRecord, board: DroneBoard): Boolean {
+        val mode = board.controlMode(record.id)
+        if (mode is ControlModeDisplay.Held || mode == ControlModeDisplay.Manual) return true
+        return when (record) {
+            is DroneRecord.Fleet -> record.drone.isFlying == true
+            is DroneRecord.Legacy -> record.drone.isFlying == true
+        }
+    }
+
+    /** True when anything of a real ground exists that demo mode would switch off or clear. */
+    private fun hasRealGroundState(): Boolean =
+        client != null || (enabledSetting && addressSetting != null) || displayBoard().drones.isNotEmpty() ||
+            alertsLog.size > 0 || landAllFeedback != null || banners.isNotEmpty() || toasts.isNotEmpty() ||
+            landFeedback.isNotEmpty() || resumeFeedback.isNotEmpty() || droneAlerts.isNotEmpty() ||
+            receivedFrames.isNotEmpty() || retainedSnapshot != null || profileFeedback != null
+
+    /** The real ground's address as `host:port`, or null when none is known. */
+    private fun realHost(): String? =
+        client?.endpoint?.hostHeader
+            ?: (addressSetting?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint?.hostHeader
+            ?: addressSetting
+
+    /**
+     * Turns demo mode on. Nothing happens, and [GroundUiState.demoNotice] says why, while the real ground's
+     * state needs the operator ([DemoRequest.Blocked]) or while real ground state exists and [disconnectConfirmed]
+     * is false (the user has not agreed in a dialog yet). Both are checked again right before the demo starts,
+     * after the mission has loaded. Starting switches the real link off (and saves that, so a restart during the
+     * demo does not reconnect), closes the real client and clears everything the screen showed.
+     * [isDemo] and [GroundUiState.demo] tell whether it started; [GroundUiState.demoProblem] says why not when
+     * the mission could not be loaded.
+     */
+    fun enterDemo(disconnectConfirmed: Boolean = false): Job = scope.launch { startDemo(disconnectConfirmed) }
+
+    /**
+     * The demo dialog was answered (or closed). The notice stays in this ViewModel until then, so the
+     * dialog survives a rotation or any other recreation of the activity.
+     */
+    fun dismissDemoNotice() {
+        demoNotice = null
+        publish()
+    }
+
+    /** Shows a refusal the app decided itself (a search runs, or a Tello drone is connected on the Search tab). */
+    fun showDemoRefusal(text: String) {
+        demoNotice = DemoNotice.Blocked(text)
+        publish()
+    }
+
+    /** Says why the demo did not start, or asks for the confirmation; true when it may start now. */
+    private fun mayStartDemo(disconnectConfirmed: Boolean): Boolean {
+        val blocked = realSafetyBlock()
+        if (blocked != null) {
+            demoNotice = DemoNotice.Blocked(blocked)
+            publish()
+            return false
+        }
+        if (hasRealGroundState() && !disconnectConfirmed) {
+            // Also when a real client connected after the app last asked: never fail silently.
+            demoNotice = DemoNotice.ConfirmDisconnect(realHost())
+            publish()
+            return false
+        }
+        return true
+    }
+
+    private suspend fun startDemo(disconnectConfirmed: Boolean): Boolean {
+        if (demoOn || demoLoading) return demo
+        settingsJob?.join()
+        val loader = demoScenario
+        if (loader == null) {
+            demoProblem = DemoText.UNAVAILABLE
+            demoNotice = DemoNotice.Blocked(DemoText.UNAVAILABLE)
+            publish()
+            return false
+        }
+        if (!mayStartDemo(disconnectConfirmed)) return false
+        val token = ++demoToken
+        demoLoading = true
+        val scenario = try {
+            loader()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } finally {
+            demoLoading = false
+        }
+        if (token != demoToken || demoOn) return false // Left (or restarted) while the mission loaded.
+        if (scenario == null) {
+            demoProblem = DemoText.UNAVAILABLE
+            demoNotice = DemoNotice.Blocked(DemoText.UNAVAILABLE)
+            publish()
+            return false
+        }
+        // The real ground may have changed while the mission loaded: check again, right before anything is cleared.
+        if (!mayStartDemo(disconnectConfirmed)) return false
+        demoNotice = null
+        demoProblem = null
+        demoEndedNote = null
+        demoLinkHost = realHost()
+        // Switch the real link off and save that first, so no real event can arrive once the demo shows and a
+        // restart while the demo runs does not reconnect.
+        settingsLoaded = true
+        enabledSetting = false
+        scope.launch { withContext(ioDispatcher) { settings.enabled = false } }
+        epoch++
+        clearAllGroundState()
+        demo = true
+        attachClient { cs ->
+            GroundConsoleClient(
+                DemoGroundPort.ENDPOINT, null, cs,
+                port = demoPortFactory(scenario, cs),
+                emitPolicy = EMIT_POLICY,
+                clock = demoClock,
+                restClientFactory = { _, _ -> throw IllegalStateException("demo mode makes no REST requests") },
+                logSink = GroundLog.NONE,
+            )
+        }
+        return true
+    }
+
+    /**
+     * Turns demo mode off: the demo ground is closed and every drone, alert, frame, banner and command
+     * result it produced is cleared. The real ground link stays off (demo mode switched it off); the
+     * Ground screen says so and how to reconnect.
+     */
+    fun exitDemo() {
+        if (demoLoading) {
+            // Turned off while the mission loads: the start that is under way finds a new token and starts nothing.
+            demoToken++
+            publish()
+            return
+        }
+        if (!demoOn) return
+        demoToken++
+        demo = false
+        demoProblem = null
+        demoNotice = null
+        epoch++
+        clearAllGroundState()
+        // Name the ground only when turning the link on would reconnect to it (an address and a key are saved).
+        demoEndedNote = if (addressSetting != null || demoLinkHost != null) {
+            DemoText.ended(if (keyState == KeyState.SAVED) demoLinkHost ?: realHost() else null)
+        } else {
+            null
+        }
+        demoLinkHost = null
+        link = idleLink()
+        publish()
+    }
+
+    /** Closes the client and forgets everything any ground (real or demo) reported. */
+    private fun clearAllGroundState() {
+        forgetGroundState()
+        if (client != null) closeClient()
+        retainedBoard = null
+        retainedSnapshot = null
+        landAllFeedback = null
+        toasts = emptyList()
+        banners = emptyList()
+        testResult = null
+        fleetFresh = false
+        freshInThisClient = false
+        noRecentUpdate = false
+        lastFleetStatusAt = 0L
+    }
+
     // ---------------------------------------------------------------- commands
 
-    /** LAND ALL. Never disabled, never confirmed, never queued. Always leaves a visible result. */
-    fun landAll(): Job = scope.launch { sendLandAll() }
+    /**
+     * LAND ALL. Never disabled, never confirmed, never queued. Always leaves a visible result. Whether demo
+     * mode was on is recorded at the tap: if it changed before the command goes out, nothing is sent and the
+     * screen says so, so a tap on the real LAND ALL can never be answered by the demo, or the other way round.
+     */
+    fun landAll(): Job {
+        val tappedInDemo = demoOn
+        return scope.launch { sendLandAll(tappedInDemo) }
+    }
 
     /** Lands one drone (`drone_command {command: "land"}`), in every drone state. */
     fun landDrone(id: String): Job = scope.launch { sendDroneCommand(id, isLand = true) }
@@ -407,9 +722,15 @@ class GroundConsoleViewModel(
         return !board.connection(id).isStale
     }
 
-    private suspend fun sendLandAll() {
+    private suspend fun sendLandAll(tappedInDemo: Boolean) {
         val attempt = nextAttempt()
         val started = clock.nowMs()
+        if (tappedInDemo != demoOn) {
+            val text = if (tappedInDemo) DemoText.LAND_ALL_DEMO_ENDED else GroundText.LAND_ALL_NOT_SENT_DEMO_STARTED
+            landAllFeedback = CommandFeedback(attempt, CommandPhase.FAILED, text, startedAtMs = started, updatedAtMs = started)
+            publish()
+            return
+        }
         landAllFeedback = CommandFeedback(attempt, CommandPhase.SENDING, DisplayText.LAND_ALL_SENDING, startedAtMs = started, updatedAtMs = started)
         publish()
         val epochAtSend = lossEpoch
@@ -631,7 +952,8 @@ class GroundConsoleViewModel(
         landAllFeedback?.let { f ->
             if ((f.phase == CommandPhase.SENDING || f.phase == CommandPhase.HANDED_OVER) && now - f.startedAtMs >= REPLY_TIMEOUT_MS) {
                 landAllFeedback = f.copy(phase = CommandPhase.NO_REPLY_YET, text = GroundText.LAND_ALL_NO_REPLY_YET, updatedAtMs = now)
-            } else if (f.phase == CommandPhase.SUCCEEDED && now - f.updatedAtMs >= SUCCESS_FADE_MS) {
+            } else if (f.phase == CommandPhase.SUCCEEDED && now - f.updatedAtMs >= SUCCESS_FADE_MS && !demoOn) {
+                // In demo mode the demo's answers stay, so a reviewer always sees what the demo did.
                 landAllFeedback = null
             }
         }
@@ -644,7 +966,7 @@ class GroundConsoleViewModel(
         age(landFeedback, GroundText.ACTION_LAND, now)
         age(resumeFeedback, GroundText.ACTION_RESUME, now)
         checkFreshness(now)
-        if (toasts.any { !it.isError && now - it.receivedAtMs >= WARNING_FADE_MS }) {
+        if (!demoOn && toasts.any { !it.isError && now - it.receivedAtMs >= WARNING_FADE_MS }) {
             toasts = toasts.filterNot { !it.isError && now - it.receivedAtMs >= WARNING_FADE_MS }
         }
         publish()
@@ -687,7 +1009,7 @@ class GroundConsoleViewModel(
                     feedback[id] = f.copy(phase = CommandPhase.NO_REPLY_YET, text = GroundText.droneNoReplyYet(id, action), updatedAtMs = now)
                 f.phase == CommandPhase.ACCEPTED && f.awaitsFinalAnswer && sinceUpdate >= REPLY_TIMEOUT_MS + MANUAL_REPLY_TIMEOUT_MS ->
                     feedback[id] = f.copy(phase = CommandPhase.FAILED, text = GroundText.droneNoFinalAnswer(id, action), updatedAtMs = now)
-                f.phase == CommandPhase.SUCCEEDED && sinceUpdate >= DRONE_SUCCESS_FADE_MS -> feedback.remove(id)
+                f.phase == CommandPhase.SUCCEEDED && sinceUpdate >= DRONE_SUCCESS_FADE_MS && !demoOn -> feedback.remove(id)
             }
         }
     }
@@ -755,6 +1077,8 @@ class GroundConsoleViewModel(
             is FleetPlan -> planIsCurrent = true
             is MatchAlert -> alertsLog.onAlert(event)
             is MatchAlertResolved -> alertsLog.onResolved(event)
+            is ReasoningResult -> alertsLog.onReasoningResult(event)
+            is AlertUpgrade -> alertsLog.onAlertUpgrade(event)
             is DetectionProfiles -> onProfilesFromGround()
             is ManualReply -> applyManualReply(event, at)
             is LandAllAck -> applyLandAllAck(event, at)
@@ -959,6 +1283,7 @@ class GroundConsoleViewModel(
 
     /** Connects when an address and a key are saved and the link is on. Never starts a connection otherwise. */
     private suspend fun connectIfWanted() {
+        if (demoOn) return
         if (client != null || !enabledSetting || inBackground) return
         val endpoint = (addressSetting?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
         if (endpoint == null) {
@@ -969,7 +1294,7 @@ class GroundConsoleViewModel(
         val myEpoch = epoch
         // The key goes from the secure storage straight into the client and is not kept here.
         val raw = secrets.load(SecretName.DASHBOARD_API_KEY)
-        if (epoch != myEpoch || client != null || !enabledSetting || inBackground) return
+        if (epoch != myEpoch || client != null || !enabledSetting || inBackground || demoOn) return
         if (raw == null) {
             refreshKeyState()
             return
@@ -987,11 +1312,16 @@ class GroundConsoleViewModel(
     }
 
     private fun startClient(endpoint: GroundEndpoint, key: DashboardApiKey) {
+        if (demoOn) return
+        attachClient { cs -> clientFactory(endpoint, key, cs) }
+    }
+
+    private fun attachClient(build: (CoroutineScope) -> GroundConsoleClient) {
         // The client does its socket IO, parsing and decoding on its own scope (off the main thread);
         // only this view model's collectors below run on the main thread.
         val cs = CoroutineScope(SupervisorJob() + clientDispatcher)
         val collectors = CoroutineScope(SupervisorJob() + mainDispatcher)
-        val c = clientFactory(endpoint, key, cs)
+        val c = build(cs)
         client = c
         clientScope = cs
         collectorScope = collectors
@@ -1050,6 +1380,11 @@ class GroundConsoleViewModel(
     }
 
     private fun restart() {
+        if (demoOn) {
+            // The new settings take effect when demo mode ends.
+            publish()
+            return
+        }
         epoch++
         if (client != null) closeClient()
         link = idleLink()
@@ -1156,16 +1491,18 @@ class GroundConsoleViewModel(
             if (legacy) append(" (no fleet: local drone only)")
             if (stale) append(" (last values)")
         }
+        val inDemo = demoOn
+        fun shown(text: String): String = if (inDemo) DemoText.prefixed(text) else text
         _ui.value = GroundUiState(
             link = link,
             isStateStale = stale,
             staleNote = noteText,
             cards = cards,
             readout = readout,
-            landAll = landAllFeedback,
-            landAllText = landAllFeedback?.let { feedbackText(it, now) },
-            banners = banners,
-            toasts = toasts,
+            landAll = landAllFeedback?.let { f -> if (inDemo) f.copy(text = shown(f.text), detail = f.detail?.let(::shown)) else f },
+            landAllText = landAllFeedback?.let { shown(feedbackText(it, now)) },
+            banners = if (inDemo) banners.map { it.copy(text = shown(it.text)) } else banners,
+            toasts = if (inDemo) toasts.map { it.copy(text = shown(it.text)) } else toasts,
             appearanceOnly = snapshot.status?.appearanceOnly == true,
             connection = ConnectionCardState(
                 savedAddress = addressSetting,
@@ -1175,14 +1512,19 @@ class GroundConsoleViewModel(
                 message = message,
                 testing = testing,
                 testResult = testResult,
+                demo = demoOn,
             ),
             board = board,
             snapshot = snapshot,
             planIsCurrent = planIsCurrent,
-            profileFeedback = profileFeedback,
+            profileFeedback = profileFeedback?.let { f -> if (inDemo) f.copy(text = shown(f.text)) else f },
             videoTiles = VideoTileLogic.makeTiles(receivedFrames, now, snapshot.streamVideo, stale),
             videoOffAtGround = snapshot.streamVideo == false && !stale,
             alerts = alertsLog.ui(stale),
+            demo = demoOn,
+            demoProblem = demoProblem,
+            demoNotice = demoNotice,
+            demoEndedNote = demoEndedNote,
         )
     }
 
@@ -1253,11 +1595,15 @@ class GroundConsoleViewModel(
             landFeedback = land,
             resumeFeedback = resume,
             alert = alert,
-            landFeedbackText = land?.let { feedbackText(it, now) },
-            resumeFeedbackText = resume?.let { feedbackText(it, now) },
-            alertText = alert?.let { feedbackText(it, now) },
+            landFeedbackText = land?.let { demoShown(feedbackText(it, now)) },
+            resumeFeedbackText = resume?.let { demoShown(feedbackText(it, now)) },
+            alertText = alert?.let { demoShown(feedbackText(it, now)) },
+            isDemo = demoOn,
         )
     }
+
+    /** [text] as the screen shows it: with "DEMO: " in front while demo mode is on. */
+    private fun demoShown(text: String): String = if (demoOn) DemoText.prefixed(text) else text
 
     /**
      * The HELD countdown, counted down locally from the latest server value as
@@ -1324,13 +1670,28 @@ class GroundConsoleViewModel(
         private fun defaultClient(endpoint: GroundEndpoint, key: DashboardApiKey, scope: CoroutineScope) =
             GroundConsoleClient(endpoint, key, scope, emitPolicy = EMIT_POLICY, logSink = AndroidGroundLog())
 
+        /** Reads the packaged demo mission off the main thread; null when it is missing or not usable. */
+        suspend fun loadDemoScenario(context: Context): DemoScenario? = withContext(Dispatchers.IO) {
+            try {
+                context.assets.open(DemoScenario.ASSET_PATH).use { input ->
+                    DemoScenario.parse(input.readBytes().decodeToString())
+                }
+            } catch (_: java.io.IOException) {
+                null
+            }
+        }
+
         /** Builds the one app-wide instance (owned by the activity's ViewModel store). */
         fun factory(context: Context): ViewModelProvider.Factory {
             val app = context.applicationContext
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    GroundConsoleViewModel(AppSecrets.store(app), SharedPrefsGroundSettings(app)) as T
+                    GroundConsoleViewModel(
+                        AppSecrets.store(app),
+                        SharedPrefsGroundSettings(app),
+                        demoScenario = { loadDemoScenario(app) },
+                    ) as T
             }
         }
     }

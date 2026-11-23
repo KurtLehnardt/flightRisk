@@ -24,10 +24,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_OFF, SENSING_ENV_REQUIRED
 from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY, min_takeoff_battery_from_env
+from flightrisk.drone.temp_preflight import LEVEL_REFUSE, LEVEL_WARN, TempLimits, judge_temperature
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
-from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
+from flightrisk.launcher.netinfo import (
+    Adapter,
+    DefaultRoute,
+    adapters_for_host,
+    address_owners,
+    default_route_interface,
+    list_adapters,
+)
 from flightrisk.launcher.settings import (
     UNREADABLE_ADAPTERS,
     DroneSettings,
@@ -256,6 +265,8 @@ class PreflightEnv:
     port_free: Callable[[str, int], bool] = _port_free
     tcp_reachable: Callable[[str, int], bool] = _tcp_reachable
     adapters: Callable[[], list[Adapter]] = list_adapters
+    #: The interface of the default (internet) route, or None when unknown; read only when a row would name an adapter.
+    default_route: Callable[[], DefaultRoute | None] = default_route_interface
     weights: Callable[[], list[dict[str, Any]]] = _weights
     ceiling_file: Callable[[], tuple[int, int, str | None, str]] = _ceiling_file
     tello_probe: Callable[[DroneSettings], TelloProbe] = field(
@@ -380,6 +391,12 @@ def run_preflight(
         # Fail closed: with no adapter list, a probe from all addresses could reach another drone.
         ambiguous.add(drone.drone_id)
         checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, UNREADABLE_ADAPTERS))
+    # Any other real drone without a local IP, one Tello on its own included: with obstacle sensing required
+    # its edge refuses to start, so say so here rather than after Start.
+    sensing = edge_sensing_mode(settings, env.environ)
+    for drone in local_tellos:
+        if not drone.local_ip and drone.drone_id not in ambiguous:
+            checks.append(_no_local_ip_check(drone, adapters, sensing, settings, len(local_tellos), env.default_route))
 
     # Claude reasoning: only when this computer runs the ground and the provider is claude.
     if settings.runs_ground and uplink.provider_is_claude(env.environ):
@@ -425,15 +442,37 @@ def run_preflight(
             minimum = takeoff_minimum
             low = result.battery is not None and result.battery < minimum
             temp = f", temperature {result.temp}" if result.temp else ""
+            hot = _hot_note(result.temp, env.environ)
             checks.append(Check(
-                f"Drone {drone.drone_id}", WARN if low else PASS,
+                f"Drone {drone.drone_id}", WARN if low or hot else PASS,
                 f"battery {result.battery}%{temp} ({result.detail})"
-                + (f"; below the {minimum:g}% takeoff minimum" if low else ""),
+                + (f"; below the {minimum:g}% takeoff minimum" if low else "") + hot,
                 {"battery": result.battery, "temp": result.temp},
             ))
     elif local_tellos:
         checks.append(Check("Drones", INFO, "not checked; press Check drones"))
     return checks
+
+
+def _hot_note(temp: str | None, environ: Mapping[str, str]) -> str:
+    """The note for a probed drone at or above the edges' warn or refusal level, or "".
+
+    The probe's ``temp?`` runs before any edge starts, so nothing else is on the drone's command
+    channel. The levels are the ones the edges will read (``FLIGHTRISK_TELLO_TEMP_WARN_C`` and
+    ``..._REFUSE_C``; the defaults when a value is bad, which validation already reports). A hot drone
+    is a warning, never a block: the edge judges it again from its state packet before each takeoff.
+    """
+    try:
+        limits = TempLimits.from_env(environ)
+    except ValueError:
+        limits = TempLimits()
+    check = judge_temperature(temp, limits)
+    if check.level == LEVEL_REFUSE:
+        return (f"; at or above the {limits.refuse_c} C refusal level: its edge refuses the takeoff until it cools "
+                "(battery out or on a fan)")
+    if check.level == LEVEL_WARN:
+        return f"; at or above the {limits.warn_c} C warn level: power it on last or set it on a fan"
+    return ""
 
 
 def _weights_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
@@ -451,6 +490,99 @@ def _weights_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
         return Check(name, FAIL, f"{row['weights']} is missing; the edge would fall back to {row['fallback'] or 'nothing'}. "
                      f"Choose another profile or copy the weights into models/")
     return Check(name, WARN, f"{row['weights']}{override} is not on disk; the first start downloads it, which needs the internet")
+
+
+def edge_sensing_mode(settings: LauncherSettings, environ: Mapping[str, str]) -> str:
+    """The ``FLIGHTRISK_OBSTACLE_SENSING`` value the edges started here will read, lower case.
+
+    The edges inherit the launcher's environment, so a value set there is what
+    they read. Otherwise it is the launcher's own sensing setting when its
+    settings carry one (``obstacle_sensing``), else the edge's default,
+    ``required``. Any value but ``off`` makes a Tello edge without a local IP
+    refuse to start (``edge_device._check_capture_stamps``), and an invalid one
+    makes every edge refuse to start, so both count as required here.
+    """
+    raw = (environ.get(ENV_OBSTACLE_SENSING) or "").strip().lower()
+    if raw:
+        return raw
+    window = getattr(settings, "obstacle_sensing", None)
+    return str(window).strip().lower() if window else SENSING_ENV_REQUIRED
+
+
+def _safe_adapter_to_name(
+    drone: DroneSettings,
+    adapters: list[Adapter],
+    settings: LauncherSettings,
+    default_route: Callable[[], DefaultRoute | None],
+) -> Adapter | None:
+    """The one adapter that is safe to suggest for *drone*, or ``None``.
+
+    Safe means exactly one non-loopback adapter has an address in the drone's
+    network, that address is not another drone's configured local IP, and the
+    adapter is not the default (internet) route. When the default route cannot
+    be determined this fails closed and names nothing.
+    """
+    candidates = adapters_for_host(adapters, drone.tello_host)
+    if len(candidates) != 1:
+        return None
+    adapter = candidates[0]
+    if any(d.local_ip == adapter.ipv4 for d in settings.drones if d is not drone and d.local_ip):
+        return None
+    try:
+        route = default_route()
+    except Exception:  # noqa: BLE001 - an unreadable route only means the adapter is not named
+        return None
+    if route is None or route.is_adapter(adapter):
+        return None
+    return adapter
+
+
+def _no_local_ip_check(
+    drone: DroneSettings,
+    adapters: list[Adapter],
+    sensing: str,
+    settings: LauncherSettings,
+    tello_count: int,
+    default_route: Callable[[], DefaultRoute | None],
+) -> Check:
+    """The row for a real drone flown from here with no local IP: FAIL while obstacle sensing is required, else WARN.
+
+    Without ``--tello-local-ip`` the edge uses djitellopy's video decoder, which
+    gives the frames no capture stamps, so with sensing required the edge
+    refuses to start (docs/two-tellos-one-pc.md applies to one drone as well).
+    An adapter is named only when this is the one real Tello on this computer
+    and the adapter is safe to suggest (see ``_safe_adapter_to_name``).
+    """
+    name = f"Adapter for {drone.drone_id}"
+    if tello_count > 1:
+        fix = (
+            f"give each real Tello on this computer its own Wi-Fi adapter and set that adapter's local IP for it "
+            f"(for {drone.drone_id}, the adapter joined to its network); see docs/two-tellos-one-pc.md"
+        )
+    else:
+        candidates = adapters_for_host(adapters, drone.tello_host)
+        named = _safe_adapter_to_name(drone, adapters, settings, default_route)
+        if named is not None:
+            where = f" ({named.name} {named.ipv4} is the one adapter in its network)"
+        elif not candidates:
+            where = " (no adapter has an address in its network yet: join the drone's Wi-Fi, then refresh adapters)"
+        else:
+            where = " (check which adapter is joined to the drone's Wi-Fi, not the internet or another drone's adapter)"
+        fix = f"set the local IP of the Wi-Fi adapter joined to {drone.drone_id}'s network{where}"
+    if sensing != SENSING_ENV_OFF:
+        return Check(
+            name, FAIL,
+            f"no local IP. Obstacle sensing is required, and a Tello edge without a local IP refuses to start, "
+            f"because its video frames would carry no capture stamps. To fix it, {fix}, or set "
+            f"{ENV_OBSTACLE_SENSING}=off to fly with no obstacle sensing",
+            {"sensing": sensing},
+        )
+    return Check(
+        name, WARN,
+        f"no local IP. The edge starts because obstacle sensing is off, but its video frames carry no capture "
+        f"stamps, so it could not start with sensing on. To fix it, {fix}",
+        {"sensing": sensing},
+    )
 
 
 def _local_ip_check(drone: DroneSettings, adapters: list[Adapter], is_windows: bool) -> Check:

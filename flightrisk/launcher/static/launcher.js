@@ -26,7 +26,12 @@ async function api(path, body) {
   const res = await fetch(path, opts);
   let data = {};
   try { data = await res.json(); } catch (e) { data = { error: "no answer from the launcher" }; }
-  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  if (!res.ok) {
+    const err = new Error(data.error || ("HTTP " + res.status));
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
@@ -143,6 +148,7 @@ function render() {
     "margin_cm", "geofence_cm", "detector_profile", "stream_video", "llm", "otel_enabled", "otel_endpoint"]) {
     setField(key, settings[key]);
   }
+  renderObstacleControls(true);
   $("#drone-count").value = String(settings.drones.length);
   const ground = settings.role === "ground";
   $("#ground-net").hidden = !ground;
@@ -271,6 +277,7 @@ async function runValidate() {
       (res.inherited_env.length ? "\n\n# Also inherited unchanged from the launcher's environment (names only):\n# " +
         res.inherited_env.join(", ") : "");
     renderCeilingFile(res.ceiling_file);
+    renderObstacle(res.obstacle);
     $("#fleet-line").textContent = settings.role === "ground"
       ? "Ground --fleet list: " + (res.fleet.join(",") || "(none)")
       : "Edges dial ws://" + settings.ground_host + ":" + settings.ground_port;
@@ -282,6 +289,124 @@ async function runValidate() {
     updateButtons();
   }
 }
+
+// ---- obstacle sensing ---------------------------------------------------------------
+// BEGIN obstacle-sensing
+// tests/test_launcher_obstacle.py runs this block under Node with stand-ins for $, el, api, ask, changed and settings.
+
+// The weaker obstacle sensing the operator chose and confirmed in the mode control, as { mode, edges } (the edges this
+// launcher would start then, from /api/validate), or null. It only spares the second question at the very next Start,
+// and only for the same mode and the same edges: startRequest takes and clears it before it sends anything, and Stop
+// and loading a preset clear it too, so a confirmation never carries over to a later Start or to other edges. The
+// launcher itself also refuses every such Start until it is confirmed with the one-time nonce of its own refusal.
+let sensingConfirmed = null;
+// The obstacle settings the edges started here will use, from the last /api/validate, or null.
+let lastObstacle = null;
+
+function forgetSensingConfirmation() {
+  sensingConfirmed = null;
+}
+
+function sourceText(source, variable) {
+  return source === "environment" ? variable + " in the launcher's environment, which wins over this window" : "this window";
+}
+
+// The mode control shows the window's mode, unless the launcher's environment sets FLIGHTRISK_OBSTACLE_SENSING: it is
+// then disabled and shows the environment's mode, because the window's would not reach the edges. Without an answer
+// from /api/validate it is enabled and shows the window's mode. Its value is written by render() (all) or when it
+// stops showing the environment's mode.
+function renderObstacleControls(all) {
+  const ob = lastObstacle;
+  const control = $("#obstacle_sensing");
+  const fromEnv = !!ob && ob.mode_source === "environment";
+  if (fromEnv) control.value = ob.mode;
+  else if (all || control.disabled) control.value = settings.obstacle_sensing;
+  control.disabled = fromEnv;
+  control.title = fromEnv ? "Set by " + ob.mode_variable + " in the launcher's environment" : "";
+}
+
+// What the edges started here will use, from /api/validate.
+function renderObstacle(ob) {
+  lastObstacle = ob || null;
+  renderObstacleControls(false);
+  const box = $("#obstacle-effective");
+  box.replaceChildren();
+  if (!ob) return;
+  if (!ob.edges.length) {
+    box.appendChild(el("span", { class: "muted" }, "No edge starts on this computer, so this setting is not used here."));
+    return;
+  }
+  box.appendChild(el("span", { class: ob.downgraded ? "warning" : "" },
+    "Edges started here (" + ob.edges.join(", ") + ") will use obstacle sensing " + ob.mode + " (from " +
+    sourceText(ob.mode_source, ob.mode_variable) + "). Applies on next Start."));
+}
+
+function renderRunningObstacle(ob) {
+  const box = $("#obstacle-running");
+  box.hidden = !ob;
+  if (!ob) return;
+  box.textContent = "Running edges were started with obstacle sensing " + ob.mode + ". A change here applies on the next Start.";
+  box.className = "small " + (ob.downgraded ? "warning" : "muted");
+}
+
+// Choosing a mode other than required asks first, with the launcher's own warning text; Cancel keeps required.
+async function chooseSensing(select) {
+  const mode = select.value;
+  if (mode === "required") {
+    settings.obstacle_sensing = mode;
+    sensingConfirmed = null;
+    changed(false);
+    return;
+  }
+  let text = "The edges started here will fly their lanes with no obstacle protection: nothing stops them for a " +
+    "wall, a plant or a person in the lane. Use this only for bring-up with a safety observer.";
+  let edges = null;  // unknown without an answer: Start then asks again
+  try {
+    const res = await api("/api/validate", { settings: Object.assign({}, settings, { obstacle_sensing: mode }) });
+    if (res.obstacle && res.obstacle.warning) text = res.obstacle.warning;
+    if (res.obstacle && Array.isArray(res.obstacle.edges)) edges = res.obstacle.edges.join(",");
+  } catch (e) { /* keep the built-in text */ }
+  const answer = await ask("Fly with obstacle sensing " + mode + "?", text,
+    [{ label: "Turn sensing " + mode, value: "confirm", cls: "danger" }, { label: "Keep required", value: "cancel" }]);
+  if (answer) {
+    settings.obstacle_sensing = mode;
+    sensingConfirmed = { mode: mode, edges: edges };
+  } else {
+    select.value = settings.obstacle_sensing;
+  }
+  changed(false);
+}
+
+// /api/start refuses weaker obstacle sensing until it is confirmed: 409 with needs_confirmation, the mode, the edges,
+// the warning and a one-time confirm_nonce. The warning is asked unless the operator confirmed that same mode for those
+// same edges in the mode control since the last Start, Stop or preset load; then the start is sent once more with the
+// mode and the nonce. Returns the start's answer, or null when the operator cancelled and nothing was started.
+async function startRequest() {
+  const confirmed = sensingConfirmed;
+  sensingConfirmed = null;  // a confirmation counts for this Start only, whatever the answer
+  try {
+    return await api("/api/start", { settings });
+  } catch (e) {
+    if (!(e.status === 409 && e.data && e.data.needs_confirmation === "obstacle_sensing")) throw e;
+    const sameEdges = !!confirmed && confirmed.edges !== null && Array.isArray(e.data.edges) &&
+      confirmed.edges === e.data.edges.join(",");
+    if (!(confirmed && confirmed.mode === e.data.mode && sameEdges)) {
+      const answer = await ask("Start with obstacle sensing " + e.data.mode + "?", e.data.error,
+        [{ label: "Start with sensing " + e.data.mode, value: "confirm", cls: "danger" }, { label: "Cancel", value: "cancel" }]);
+      if (!answer) return null;
+    }
+    try {
+      return await api("/api/start", { settings, confirm_sensing: e.data.mode, confirm_nonce: e.data.confirm_nonce });
+    } catch (again) {
+      if (again.status === 409 && again.data && again.data.needs_confirmation === "obstacle_sensing") {
+        throw new Error("Not started: the confirmation of obstacle sensing " + e.data.mode +
+          " expired before the start was sent. Press Start again.");
+      }
+      throw again;
+    }
+  }
+}
+// END obstacle-sensing
 
 function renderCeilingFile(c) {
   const box = $("#ceiling-file");
@@ -373,6 +498,7 @@ async function poll() {
     busy = st.busy;
     stopping = st.stopping;
     stopWarning = st.stop_warning;
+    renderRunningObstacle(st.running_obstacle);
     renderProcesses();
     $("#events").textContent = st.events.join("\n");
     updateButtons();
@@ -423,7 +549,12 @@ async function start() {
   message("Checking and starting...");
   $("#start").disabled = true;
   try {
-    const res = await api("/api/start", { settings });
+    const res = await startRequest();
+    if (res === null) {
+      message("Not started: obstacle sensing " + (lastObstacle ? lastObstacle.mode : "off") + " was not confirmed.", "FAIL");
+      poll();
+      return;
+    }
     renderChecks(res.checks);
     if (res.started) {
       logOffsets = {};
@@ -451,6 +582,7 @@ async function stop() {
     [{ label: "Stop processes", value: "stop", cls: "danger" }, { label: "Cancel", value: "cancel" }],
   );
   if (!answer) return;
+  forgetSensingConfirmation();
   try {
     await api("/api/stop", { confirm: true });
     message("Stopping: the edges first, then the ground.", "stopping");
@@ -507,6 +639,7 @@ function loadPreset() {
   if (!p) return;
   settings = JSON.parse(JSON.stringify(p.settings));
   adapterNotes = {};
+  forgetSensingConfirmation();
   changed(true);
   applyAdapterProposals();
 }
@@ -547,8 +680,10 @@ function wire() {
   for (const r of document.querySelectorAll('input[name="network"]')) {
     r.addEventListener("change", () => { settings.network = r.value; changed(true); });
   }
+  $("#obstacle_sensing").addEventListener("change", () => chooseSensing($("#obstacle_sensing")));
   for (const input of document.querySelectorAll("[data-field]")) {
     const key = input.getAttribute("data-field");
+    if (key === "obstacle_sensing") continue;  // chooseSensing asks before a weaker mode is taken
     const evt = input.type === "checkbox" || input.tagName === "SELECT" ? "change" : "input";
     input.addEventListener(evt, () => {
       if (input.type === "checkbox") settings[key] = input.checked;

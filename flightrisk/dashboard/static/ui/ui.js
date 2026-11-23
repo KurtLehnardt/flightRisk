@@ -187,6 +187,26 @@ const socket = io();
         }
         return null;
     }
+    // The drone card badge for moves the drone refused ("error No valid imu", "error Not joystick"), or null.
+    // A drone that keeps refusing needs a check (IMU calibration, light, floor texture) before it flies again.
+    function refusalBadge(d) {
+        const r = d && d.move_refusals;
+        const n = r && typeof r === 'object' ? r.total : null;
+        if (typeof n !== 'number' || n < 1) return null;
+        const last = r.last_cmd && r.last_reason ? 'Last: ' + r.last_cmd + ' answered "' + r.last_reason + '". '
+            : (r.last_reason ? 'Last: ' + r.last_reason + '. ' : '');
+        const fence = typeof r.fence_margin_cm === 'number' && r.fence_margin_cm > 0
+            ? 'The geofence is ' + r.fence_margin_cm + ' cm smaller for the rest of this flight after a refused step. ' : '';
+        return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
+            title: last + fence + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
+    }
+    // The drone card badge of an edge in the hover-only test (FLIGHTRISK_HOVER_TEST=1), or null.
+    function hoverTestBadge(d) {
+        const r = d && d.move_refusals;
+        if (!r || typeof r !== 'object' || r.hover_test !== true) return null;
+        return { text: 'HOVER TEST', cls: 'held',
+            title: 'This edge runs the hover-only test: the drone takes off and hovers, and flies no slot move, lane, nudge or manual step. Land it to end the test.' };
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -247,6 +267,62 @@ const socket = io();
     }
     // END obstacle-display
 
+    // BEGIN temp-display
+    // A drone's temperature (temp_preflight): the live reading of its newest fresh state packet (templ and temph), and
+    // the check its edge made before the drone's last takeoff, both judged against the warn and refusal levels. Else the
+    // plain temperature a local drone reports. These helpers only choose text and classes, and cope with any field
+    // being absent.
+    function tempRange(low, high) {
+        if (typeof high !== 'number') return null;
+        return (typeof low === 'number' && low !== high ? low + '-' : '') + high + ' C';
+    }
+    function tempLevelClass(t, high) {
+        if (typeof high !== 'number') return '';
+        if (typeof t.refuse_c === 'number' && high >= t.refuse_c) return 'bad';
+        if (typeof t.warn_c === 'number' && high >= t.warn_c) return 'warn';
+        return '';
+    }
+    // The Temp item of a drone card's meta row: the live reading, or null.
+    function tempMeta(d) {
+        const t = d && d.temp_preflight;
+        if (t && typeof t === 'object') {
+            return { text: tempRange(t.live_low_c, t.live_high_c) || '--', cls: tempLevelClass(t, t.live_high_c) };
+        }
+        if (d && d.temperature) return { text: d.temperature + ' C', cls: '' };
+        return null;
+    }
+    // The "Temp at takeoff" item: the reading of the check before the last takeoff, or null before the first check.
+    function tempTakeoffMeta(d) {
+        const t = d && d.temp_preflight;
+        if (!t || typeof t !== 'object' || !t.level) return null;
+        const cls = t.level === 'refuse' ? 'bad' : t.level === 'warn' ? 'warn' : '';
+        return { text: tempRange(t.low_c, t.high_c) || '--', cls: cls };
+    }
+    // The badge for a hot drone, a refused takeoff or a temperature that could not be read at the last takeoff; null
+    // when all was well or before the first check.
+    function tempBadge(d) {
+        const t = d && d.temp_preflight;
+        if (!t || typeof t !== 'object') return null;
+        const range = tempRange(t.low_c, t.high_c) || '--';
+        if (t.level === 'refuse') {
+            return { text: 'TOO HOT ' + range + ': takeoff refused', cls: 'held',
+                title: 'At or above the refusal level of ' + t.refuse_c + ' C at the last takeoff. Let it cool with the battery out or on a fan, then start again.' };
+        }
+        if (t.level === 'warn') {
+            return { text: 'HOT ' + range, cls: 'held',
+                title: 'At or above the warn level of ' + t.warn_c + ' C at the last takeoff'
+                    + (typeof t.refuse_c === 'number' ? '; a takeoff is refused at ' + t.refuse_c + ' C' : '; the refusal is off')
+                    + '. A Tello that sits powered on keeps heating and can switch itself off: take off soon or let it cool.' };
+        }
+        if (t.level === 'unknown') {
+            return { text: 'TEMP unknown', cls: 'held',
+                title: 'The temperature could not be read before the last takeoff' + (t.detail ? ' (' + t.detail + ')' : '')
+                    + '; that never holds a takeoff back.' };
+        }
+        return null;
+    }
+    // END temp-display
+
     function renderDroneStatus() {
         const box = $('drone-status');
         clear(box);
@@ -257,7 +333,9 @@ const socket = io();
             d = d || {};
             const card = el('div', 'drone-card');
             const state = connState(d);
-            if (state.key === 'down' || state.key === 'lost') {
+            if (outOfSearch(d)) {
+                card.title = 'Out of the search: it landed with lanes left. Its link is up, so its values are current.';
+            } else if (state.key === 'down' || state.key === 'lost') {
                 card.classList.add('stale');
                 card.title = 'No live link: values are the last ones received';
             }
@@ -271,11 +349,14 @@ const socket = io();
             const alt = d.height_cm !== undefined ? d.height_cm : d.height;
             meta.appendChild(metaItem('Alt', alt === undefined || alt === null ? '--' : fmt(alt) + ' cm'));
             if (typeof d.lane_index === 'number' && typeof d.lanes_total === 'number') meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
-            if (d.temperature) meta.appendChild(metaItem('Temp', d.temperature + ' C'));
+            const temp = tempMeta(d);
+            if (temp) meta.appendChild(metaItem('Temp', temp.text, temp.cls));
+            const atTakeoff = tempTakeoffMeta(d);
+            if (atTakeoff) meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d), refusalBadge(d), hoverTestBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;
@@ -1533,6 +1614,9 @@ const socket = io();
 
     // ========== FLEET EVENTS, UNCOVERED LANES ==========
     let bannerTimer = null;
+    // Until when a LAND ALL failure (or a LAND ALL that reached only some drones) is held on screen.
+    let landAllBannerUntil = 0;
+    function landAllBannerHeld() { return Date.now() < landAllBannerUntil; }
     function showFleetBanner(text, holdMs) {
         const b = $('fleet-banner');
         b.textContent = text;
@@ -1595,10 +1679,30 @@ const socket = io();
         clear(box);
         box.hidden = !keys.length;
         if (!keys.length) return;
-        const awaiting = keys.filter((k) => isAwaiting(uncoveredLanes[k])).length;
-        const failed = keys.length - awaiting;
+        // Lanes and segments that wait for the operator are counted on their own: no drone takes them until you
+        // confirm it, so they are neither uncovered nor awaiting a drone.
+        const confirming = keys.filter((k) => uncoveredLanes[k].status === 'needs_confirmation').length;
+        const awaiting = keys.filter((k) => uncoveredLanes[k].status !== 'needs_confirmation' && isAwaiting(uncoveredLanes[k])).length;
+        const failed = keys.length - awaiting - confirming;
         box.appendChild(el('div', 'uncovered-head', 'NOT SEARCHED: ' + failed + ' lane' + (failed === 1 ? '' : 's')
-            + ' uncovered, ' + awaiting + ' awaiting a drone'));
+            + ' uncovered, ' + awaiting + ' awaiting a drone'
+            + (confirming ? ', ' + confirming + ' waiting for your confirmation' : '')));
+        // One Re-task button per drone whose lanes wait for confirmation: it confirms all of that drone's lanes at once.
+        const retaskDrones = {};
+        keys.forEach((k) => {
+            const e = uncoveredLanes[k];
+            if (!e.seg && e.status === 'needs_confirmation') {
+                const d = retaskDrones[e.lost_id] || (retaskDrones[e.lost_id] = { lost_id: e.lost_id, reason: e.reason, lanes: 0 });
+                d.lanes += 1;
+            }
+        });
+        Object.keys(retaskDrones).sort().forEach((id) => {
+            const d = retaskDrones[id];
+            const row = el('div', 'retask-confirm-row', id + ': ' + d.lanes + ' unflown lane' + (d.lanes === 1 ? '' : 's')
+                + ' wait for your confirmation');
+            row.appendChild(retaskConfirmButton(d));
+            box.appendChild(row);
+        });
         keys.forEach((k) => {
             const e = uncoveredLanes[k];
             const where = '(' + fmt(e.x_cm) + ', ' + fmt(e.y_cm) + ') to (' + fmt(e.end_x_cm) + ', ' + fmt(e.end_y_cm) + ') cm';
@@ -1608,6 +1712,8 @@ const socket = io();
                 // A settled segment's reason is the re-flight outcome, which the sentence already says.
                 const cut = REFLIGHT_SETTLED.indexOf(e.status) !== -1 ? '' : (e.reason || 'obstacle');
                 why = cut && sentence ? cut + '; ' + sentence : (cut || sentence || 'not searched');
+            } else if (e.status === 'needs_confirmation') {
+                why = (e.reason || 'landed with no controller') + '; not offered to another drone unless you confirm it';
             } else {
                 why = e.status === 'uncovered' ? (e.reason || 'no drone can take it') : 'awaiting ' + (e.drone_id || 'a free drone');
             }
@@ -1616,25 +1722,77 @@ const socket = io();
             box.appendChild(row);
         });
     }
+    // Confirmations are asked inline, in two clicks on the same button, never with window.confirm: a modal dialog would
+    // block the page, and with it the LAND ALL button and the Shift+L hotkey, while drones fly. The first click arms
+    // the button and shows what confirming means; a second click within CONFIRM_ARM_MS sends it. Armed buttons are
+    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed. A click less than
+    // CONFIRM_REPEAT_MS after the arming one is ignored: a double click arms the button, it never confirms.
+    const CONFIRM_ARM_MS = 8000;
+    const CONFIRM_REPEAT_MS = 500;
+    const armedConfirms = {};  // key -> time (ms) the arming runs out
+    function twoStepConfirmButton(key, cls, label, armedLabel, warning, send) {
+        const button = el('button', 'btn ' + cls, label);
+        button.type = 'button';
+        button.title = warning;
+        const armed = () => (armedConfirms[key] || 0) > Date.now();
+        const show = () => {
+            const on = armed();
+            button.textContent = on ? armedLabel : label;
+            button.classList.toggle('armed', on);
+            button.title = on ? warning + ' Click again to confirm.' : warning;
+        };
+        show();
+        button.addEventListener('click', () => {
+            if (!armed()) {
+                armedConfirms[key] = Date.now() + CONFIRM_ARM_MS;
+                show();
+                showFleetBanner(warning + ' Click "' + armedLabel + '" again to confirm.', CONFIRM_ARM_MS);
+                setTimeout(() => { if (button.isConnected) show(); }, CONFIRM_ARM_MS + 50);
+                return;
+            }
+            // Armed less than CONFIRM_REPEAT_MS ago: the second click of a double click, not a confirmation.
+            if (Date.now() < armedConfirms[key] - CONFIRM_ARM_MS + CONFIRM_REPEAT_MS) return;
+            delete armedConfirms[key];
+            button.disabled = true;
+            button.textContent = label;
+            button.classList.remove('armed');
+            send();
+        });
+        return button;
+    }
     // A person cut is never re-flown on its own: another drone would fly toward the same person from the far side.
     // The operator may confirm it once the person is known to have moved away.
     function reflightConfirmButton(e) {
-        const button = el('button', 'btn reflight-confirm', 'Re-fly');
-        button.type = 'button';
-        button.title = 'Offer this segment to another drone once ' + e.lost_id + ' has finished its lanes';
-        button.addEventListener('click', () => {
-            const question = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
-                + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away. '
-                + 'Re-fly it?';
-            if (!window.confirm(question)) return;
-            button.disabled = true;
-            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq });
-        });
-        return button;
+        const offset = e.reason === 'offset';
+        const warning = (offset
+            ? 'A person was seen while ' + e.lost_id + ' flew beside lane ' + e.index + ' to pass an obstacle. '
+            : 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. ')
+            + 'Another drone would fly this segment from the far side, toward where the person was. Re-fly it only '
+            + 'if the person has moved away.';
+        // An offset segment held for its own sighting has no cut: it is named by its lane and start.
+        const own = offset && (e.cut_seq === null || e.cut_seq === undefined);
+        const key = 'reflight:' + e.lost_id + ':' + e.cut_seq + ':' + (own ? e.index + ':' + e.offset_from_cm : '');
+        return twoStepConfirmButton(key, 'reflight-confirm', 'Re-fly', 'Confirm re-fly', warning,
+            () => socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq,
+                offset: own ? [e.index, e.offset_from_cm] : null }));
     }
     socket.on('reflight_confirm_result', (r) => {
         if (!r) return;
         showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
+        if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
+    });
+    // The lanes of a drone that landed (or was lost) while held with nobody controlling it are not given to another
+    // drone unless the operator confirms it. One button per drone confirms all of its waiting lanes.
+    function retaskConfirmButton(d) {
+        const warning = d.lost_id + ' was ' + (d.reason || 'landed with no controller') + '. Another drone would fly '
+            + 'its unflown lanes, over the area where it was held for manual control. Re-task them only if that area '
+            + 'is safe to fly and ' + d.lost_id + ' stays on the ground.';
+        return twoStepConfirmButton('retask:' + d.lost_id, 'retask-confirm', 'Re-task', 'Confirm re-task', warning,
+            () => socket.emit('confirm_retask', { drone_id: d.lost_id }));
+    }
+    socket.on('retask_confirm_result', (r) => {
+        if (!r) return;
+        showFleetBanner('RE-TASK ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
         if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
     });
     // The plan's uncovered list (fleet_plan, and the fleet_status that follows while the mission runs): obstacle segments go to
@@ -1650,6 +1808,17 @@ const socket = io();
         if (mapPlan && mapPlan.setUncoveredSegments) mapPlan.setUncoveredSegments(segments);
         renderUncovered();
     }
+    // A drone declared lost because it landed with lanes left while its link is up (for example one landed while held
+    // with no controller) is out of the search, not lost: its card and the banner say so.
+    function outOfSearch(d) { return !!d && d.lost === true && d.connected === true && d.is_flying === false; }
+    function droneLostText(id) {
+        // The fleet_status that marks it lost follows this event, so only its link and flight state are read here.
+        const d = droneInfo[id];
+        if (d && d.connected === true && d.is_flying === false) {
+            return 'OUT OF THE SEARCH: ' + id + ' landed with lanes left; its link is up';
+        }
+        return 'DRONE LOST: ' + (id || '');
+    }
     socket.on('fleet_event', (ev) => {
         if (!ev) return;
         const kind = ev.event || ev.type || ev.kind;
@@ -1660,8 +1829,24 @@ const socket = io();
             showFleetBanner('RETASK FAILED: ' + (ev.detail || ev.drone_id || ''));
             return;
         }
+        if (kind === 'retask_needs_confirmation') {
+            markLanes(ev.drone_id, ev.lanes, 'needs_confirmation');
+            renderUncovered();
+            showFleetBanner('RE-TASK NEEDS YOUR CONFIRMATION: ' + (ev.detail || ev.drone_id || ''), 15000);
+            return;
+        }
         if (kind === 'lane_blocked') {
             showFleetBanner(laneBlockedText(ev), 15000);
+            return;
+        }
+        if (kind === 'sidestep_held') {
+            // The drone could not get back to its lane after a sidestep: it hovers under manual control.
+            showFleetBanner('SIDESTEP HELD: ' + (ev.detail || ev.drone_id || ''), 30000);
+            return;
+        }
+        if (kind === 'lane_offset') {
+            // The detail already names the drone.
+            showFleetBanner('LANE FLOWN BESIDE: ' + (ev.detail || ev.drone_id || ''), 15000);
             return;
         }
         if (kind && kind.indexOf('reflight_') === 0 && reflightBannerText(kind, ev)) {
@@ -1673,11 +1858,18 @@ const socket = io();
             markLanes(ev.drone_id, ev.awaiting, 'awaiting');
             renderUncovered();
             showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
-        } else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
+        } else if (kind === 'drone_lost') showFleetBanner(droneLostText(ev.drone_id));
+        else if (kind === 'lost_drone_relanded') {
+            // The ground landed a lost drone that reported flying again; the detail says why. A held LAND ALL
+            // failure stays on screen: it asks the operator to land drones by hand.
+            if (!landAllBannerHeld()) showFleetBanner('LANDING LOST DRONE: ' + (ev.detail || ev.drone_id || ''), 15000);
+        }
         else if (kind === 'land_all') {
             const fb = landAllEventFeedback(ev);
-            if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
-            else showFleetBanner('LAND ALL sent');
+            if (fb) {
+                showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+                landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+            } else showFleetBanner('LAND ALL sent');
         }
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
         else if (kind === 'plan_invalidated') {
@@ -1771,7 +1963,9 @@ const socket = io();
         // Start is allowed only while the map shows exactly the plan the server holds.
         const inSync = mapPlan ? mapPlan.onFleetPlan(plan || {}) : true;
         uncoveredLanes = {};
-        ((plan && plan.uncovered) || []).forEach((u) => { if (u && u.kind !== 'area' && u.kind !== 'segment') markLanes(u.drone_id, [u], 'uncovered'); });
+        ((plan && plan.uncovered) || []).forEach((u) => {
+            if (u && u.kind !== 'area' && u.kind !== 'segment') markLanes(u.drone_id, [u], u.status === 'needs_confirmation' ? 'needs_confirmation' : 'uncovered');
+        });
         applyUncovered((plan && plan.uncovered) || [], true);
         const ids = {};
         ((plan && plan.zones) || []).forEach((z) => { if (z && z.drone_id) ids[z.drone_id] = true; });
@@ -1794,7 +1988,10 @@ const socket = io();
     on('land-all', 'click', landAll);
     socket.on('land_all_ack', (ack) => {
         const fb = landAllAckFeedback(ack);
-        if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+        if (fb) {
+            showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+            landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+        }
     });
 
     // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight control is off and

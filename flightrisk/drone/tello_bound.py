@@ -587,6 +587,22 @@ class BoundFrameRead:
                     return stamp
         return None
 
+    def newest_stamp(self) -> tuple[float | None, FrameStamp] | None:
+        """``(age_s, stamp)`` of the newest decoded frame (``frame``), or None before the first decode.
+
+        ``age_s`` is how long ago, on ``clock``, the frame's first datagram
+        arrived (its capture stamp), or None when the stamp has no time. The
+        black placeholder ``frame`` holds before the first decode has no
+        stamp, so it gives None.
+        """
+        with self.lock:
+            if not self._stamps or self._stamps[-1][0] is not self._frame:
+                return None
+            stamp = self._stamps[-1][1]
+        captured = stamp.captured_at
+        age = None if captured is None else max(0.0, self._clock() - captured)
+        return age, stamp
+
     def start(self) -> None:
         self.receiver.start()
         self.worker.start()

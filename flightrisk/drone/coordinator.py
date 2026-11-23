@@ -30,7 +30,14 @@ What an obstacle cut leaves unsearched rides on the same machinery: once
 the cutting drone has finished its lanes, the segments of each cut are
 offered once to another drone that senses obstacles, which flies them
 reversed at its own altitude slot (``lane_reflight``); the ``reflight_*``
-events follow each offer to ``reflown`` or ``blocked_again``.
+events follow each offer to ``reflown`` or ``blocked_again``. A stretch a
+drone flew beside its lane to get past an obstacle (an offset segment of a
+sidestep, ``lane_avoid``, reported in ``obstacle_avoid``) is listed, announced
+(``lane_offset``) and offered the same way, except that one tied to a person
+(seen during its sidestep, or a person cut on its lane) waits for the
+operator's confirmation like a person cut. A drone that could not get back
+to its lane after a sidestep and hovers under manual control is announced as
+``sidestep_held``.
 
 Clock convention: the offset of a link is the median over the sync rounds of
 ``((t2 - t1) + (t3 - t4)) / 2``, which is the edge clock minus the ground
@@ -66,6 +73,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
+from flightrisk import obs_events
 from flightrisk.drone.lane_reflight import leg_rest, plan_reflight
 from flightrisk.drone.lane_reflight import transit as _transit
 from flightrisk.drone.lane_steps import (
@@ -77,18 +85,28 @@ from flightrisk.drone.lane_steps import (
     uncovered_segments,  # noqa: F401 - the replay the edge uses; kept importable from here
 )
 from flightrisk.drone.obstacle_sensor import (
+    AVOID_HELD_REASON_KEY,
+    AVOID_OFFSETS_KEY,
+    AVOID_OFFSETS_SEEN_KEY,
+    AVOID_PHASE_HELD,
+    AVOID_PHASE_KEY,
+    AVOID_SIDESTEP_CM_KEY,
     CONFIRM_REFLIGHT_CUT_REASONS,
+    CUT_PERSON,
     CUT_SENSOR_DOWN,
     MAX_CUTS_LISTED,
+    MAX_OFFSETS_LISTED,
     PERSON_CUE_AGE_KEY,
     PERSON_CUE_DOWN_KEY,
     REFLIGHT_CUT_REASONS,
+    SEGMENT_OFFSET,
     SEGMENT_SKIPPED,
     SEGMENT_TOO_SHORT,
     SENSING_AUTOPILOT,
     SENSING_OFF,
     SENSING_STEPPED,
     SENSOR_UNAVAILABLE_DETAIL,
+    TELEMETRY_AVOID,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_CUTS,
     TELEMETRY_CUTS_TOTAL,
@@ -106,7 +124,9 @@ from flightrisk.drone.safety import (
     DEFAULT_MIN_TAKEOFF_BATTERY,
     min_takeoff_battery_from_env,
 )
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
 from flightrisk.drone.search import split_parallel_track_zones
+from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +165,35 @@ MAX_REFLIGHTS_PER_DRONE = 4
 """Most cuts of one drone per plan whose segments are offered to another drone (design section 3.4).
 
 Later cuts are only reported, so a drone with a flapping sensor cannot flood
-the other drones with re-flights."""
+the other drones with re-flights. The offset segments of its sidesteps have
+their own limit (``MAX_OFFSET_REFLIGHTS_PER_DRONE``)."""
+
+MAX_OFFSET_REFLIGHTS_PER_DRONE = 4
+"""Most offset segments of one drone per plan offered to another drone (stretches flown beside a lane).
+
+Kept apart from ``MAX_REFLIGHTS_PER_DRONE``, so poles a drone got past can
+never use up the re-flights of the lanes it had to cut."""
+
+SIDESTEP_MARGIN_CM = 50
+"""Extra distance the re-task separation check keeps from the path of a drone that may sidestep, beyond the gap.
+
+An edge that has the sidestep switched on (it is off by default) may sidestep
+an obstacle by up to ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` inside its own zone
+(``lane_avoid``). This margin is 50 cm, the usual sidestep, and is independent
+of the edge default of 0. Zones are kept
+``gap_cm`` apart, but a re-task or a re-flight can give a drone a path that
+runs ``gap_cm`` from another drone's path outside the zones, and a sidestep of
+that other drone then brings the two closer by the sidestep. The margin is
+kept only from a drone whose telemetry says it may sidestep
+(``obstacle_avoid`` ``sidestep_cm`` above 0). The dashboard reads it from
+``FLIGHTRISK_SIDESTEP_MARGIN_CM`` (``SIDESTEP_MARGIN_ENV``), to match edges set
+to another sidestep."""
+
+SIDESTEP_MARGIN_ENV = "FLIGHTRISK_SIDESTEP_MARGIN_CM"
+"""The ground's sidestep margin in cm (``SIDESTEP_MARGIN_CM`` by default, 0 to ``SIDESTEP_MARGIN_MAX_CM``)."""
+
+SIDESTEP_MARGIN_MAX_CM = 500
+"""Largest ``FLIGHTRISK_SIDESTEP_MARGIN_CM`` accepted."""
 
 LOST_OBSTACLE_S = 20.0
 """How long a lost drone's last reported position stays an obstacle for re-task paths, in seconds.
@@ -414,9 +462,11 @@ class _Chunk:
     flown_by: str | None = None
     offered_to: list[str] = field(default_factory=list)
     announced: tuple[str, str | None] | None = None
-    # Re-flight only. True while the chunk waits for the operator to confirm
-    # it (a cut whose reason is in ``CONFIRM_REFLIGHT_CUT_REASONS``, a person):
-    # it is never offered until ``confirm_reflight`` clears it.
+    # True while the chunk waits for the operator to confirm it: a re-flight
+    # of a cut whose reason is in ``CONFIRM_REFLIGHT_CUT_REASONS`` (a person),
+    # until ``confirm_reflight``, or a lost drone's lanes re-tasked with
+    # ``on_drone_lost(confirm=...)``, until ``confirm_retask``. It is never
+    # offered before that.
     confirm: bool = False
     # Re-flight only. True once the receiver flew the appended lanes, or
     # some of them, and the chunk ended without re-flying every segment
@@ -430,6 +480,16 @@ class _Chunk:
     # failed): the lanes from there on were not flown, so the legs on them
     # are listed whole.
     landed_at: int | None = None
+    # Re-flight of an offset segment only (a stretch a sidestep flew beside
+    # the lane, ``lane_avoid``): ``(lane_index, from_cm)`` of that segment.
+    # Such a chunk has no ``cut_seq`` and keeps the segment it was made with.
+    # It waits for the operator (``confirm``) when a person was seen during
+    # that sidestep (``seen``) or the drone cut the same lane for a person;
+    # ``confirm_cut`` is then that cut's number, whose ``confirm_reflight``
+    # releases it too.
+    offset: tuple[int, int] | None = None
+    seen: str | None = None
+    confirm_cut: int | None = None
 
     @property
     def start(self) -> tuple[int, int]:
@@ -487,12 +547,23 @@ class _Offer:
 
 @dataclass(eq=False)
 class _Retask:
-    """The re-tasking of one lost drone's unflown lanes."""
+    """The re-tasking of one lost drone's unflown lanes.
+
+    ``confirm`` is set when the lanes wait for the operator before any drone
+    is offered them (``on_drone_lost(confirm=...)``): why they wait, as the
+    operator reads it. Its chunks are marked ``confirm`` until
+    ``confirm_retask``, which splits the lanes again for the drones that can
+    take them then: ``path`` is the lost drone's lane list at the loss and
+    ``index`` the first unflown lane in it.
+    """
 
     lost_id: str
     chunks: list[_Chunk]
     settled: threading.Event = field(default_factory=threading.Event)
     reported: bool = False
+    confirm: str | None = None
+    path: list[dict] = field(default_factory=list)
+    index: int = 0
 
 
 @dataclass
@@ -550,6 +621,19 @@ class _DroneState:
     # current plan was installed. A drone that reports it is not flying after
     # that has landed, and one that never flew may still be taking off.
     seen_flying: bool = False
+    # Lost drones only: True once a ``land`` was sent again because the
+    # drone's telemetry showed it flying after the loss, or once telemetry
+    # showed a person flying it by hand (``_reland_lost_locked``). False
+    # again when that ``land`` could not be sent.
+    relanded: bool = False
+    # The offset segments of the current plan the edge reported
+    # (``obstacle_avoid`` ``offsets``): ``(lane_index, from_cm) -> length_cm``
+    # along the lane, in the order they arrived; and whether the edge last
+    # said it holds under manual control after a sidestep (phase ``held``).
+    avoid_offsets: dict[tuple[int, int], int] = field(default_factory=dict)
+    avoid_held: bool = False
+    # The reason a gate of the sidestep stopped for (``offsets_seen``), by offset.
+    avoid_offset_seen: dict[tuple[int, int], str] = field(default_factory=dict)
 
 
 def _number(value: Any) -> float | None:
@@ -631,6 +715,43 @@ def _uncovered_entry(seg: UncoveredSegment, drone_id: str, reason: str, cut_seq:
     return {"kind": "segment", **_segment_entry(seg), "drone_id": drone_id, "reason": reason, "cut_seq": cut_seq}
 
 
+def _chunk_what(chunk: _Chunk) -> str:
+    """How a re-flight chunk is named in events and logs."""
+    if chunk.offset is not None:
+        return f"{chunk.lost_id}'s offset segment (lane {chunk.offset[0]}, flown beside the lane)"
+    return f"{chunk.lost_id}'s blocked segment (cut {chunk.cut_seq})"
+
+
+def _decode_offsets(flat: Any, seen: Any = None) -> list[tuple[int, int, int, str]]:
+    """``(lane_index, from_cm, length_cm, seen)`` of ``obstacle_avoid`` ``offsets``; malformed ones dropped.
+
+    *seen* is ``offsets_seen``: one string per listed triple, the reason a
+    gate of that sidestep stopped for (``person`` or ``sensor_down``) or
+    ``""``. A missing or malformed list leaves every reason ``""``.
+    """
+    if not isinstance(flat, (list, tuple)):
+        return []
+    reasons = list(seen) if isinstance(seen, (list, tuple)) else []
+    out = []
+    for k in range(0, min(len(flat), 3 * MAX_OFFSETS_LISTED) - 2, 3):
+        triple = flat[k:k + 3]
+        if all(isinstance(v, int) and not isinstance(v, bool) for v in triple):
+            lane, start, length = triple
+            reason = reasons[k // 3] if k // 3 < len(reasons) and isinstance(reasons[k // 3], str) else ""
+            if lane >= 0 and start >= 0 and length > 0:
+                out.append((lane, start, length, reason[:MAX_TEXT_LEN]))
+    return out
+
+
+def _offset_key(offset: Any) -> tuple[int, int] | None:
+    """``(lane_index, from_cm)`` from a ``[lane_index, from_cm]`` pair, or None when malformed."""
+    if not isinstance(offset, (list, tuple)) or len(offset) != 2:
+        return None
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in offset):
+        return None
+    return int(offset[0]), int(offset[1])
+
+
 def _segment_key(seg: UncoveredSegment, cut_seq: int) -> tuple:
     """What identifies one shared-grid segment of a drone's replay, whatever its index among the cuts."""
     return (cut_seq, seg.lane_index, seg.direction, seg.x_cm, seg.y_cm, seg.end_x_cm, seg.end_y_cm, seg.reason)
@@ -690,9 +811,10 @@ class FleetCoordinator:
         on_event: Optional callback ``(event_name, payload)`` for the
             dashboard. It receives ``fleet_detection`` for each new merged
             detection and ``fleet_event`` for ``drone_lost``, ``retask``,
-            ``retask_failed``, ``land_all``, ``lane_blocked`` and the
-            re-flight events ``reflight_offered``, ``reflight_accepted``,
-            ``reflight_done``, ``reflight_blocked`` and ``reflight_failed``.
+            ``retask_failed``, ``land_all``, ``lane_blocked``,
+            ``lost_drone_relanded`` and the re-flight events
+            ``reflight_offered``, ``reflight_accepted``, ``reflight_done``,
+            ``reflight_blocked`` and ``reflight_failed``.
             Exceptions it raises are logged and ignored.
         geofence_cm: Half-width of the square geofence each edge keeps
             around its takeoff point (``FLIGHTRISK_GEOFENCE_CM`` on the
@@ -706,10 +828,19 @@ class FleetCoordinator:
             passes the drones held for manual control
             (``docs/manual-takeover.md``), whose lanes would otherwise wait
             for the operator.
+        manually_controlled: Optional ``drone_id -> bool``; True for the
+            drone a person flies by hand from the ground right now. A lost
+            drone that reports flying again is not sent ``land`` again while
+            it returns True (``_reland_lost_locked``). The dashboard passes
+            the drone its manual control has (``docs/manual-takeover.md``).
         retask_separation: Offer re-tasked lanes only to a drone whose new
             path stays the zone gap away from every other drone's path (the
             default). False switches that check off; only tests of the offer
             and refusal mechanics use it.
+        sidestep_margin_cm: How much farther than the zone gap that path
+            must stay from the path of another drone that reports it may
+            sidestep an obstacle toward it (``SIDESTEP_MARGIN_CM``, the edge's
+            default sidestep). 0 keeps exactly the gap.
     """
 
     def __init__(
@@ -729,6 +860,8 @@ class FleetCoordinator:
         alt_slot_of: Callable[[str, int], int] | None = None,
         retask_excluded: Callable[[str], bool] | None = None,
         retask_separation: bool = True,
+        sidestep_margin_cm: int = SIDESTEP_MARGIN_CM,
+        manually_controlled: Callable[[str], bool] | None = None,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -748,6 +881,8 @@ class FleetCoordinator:
             raise ValueError(f"geofence_cm must be a positive number or None, got {geofence_cm!r}")
         if _number(retask_wait_s) is None or retask_wait_s < 0:
             raise ValueError(f"retask_wait_s must not be negative, got {retask_wait_s!r}")
+        if _number(sidestep_margin_cm) is None or sidestep_margin_cm < 0:
+            raise ValueError(f"sidestep_margin_cm must not be negative, got {sidestep_margin_cm!r}")
 
         # The link set is fixed for the coordinator's lifetime, so land_all()
         # can iterate it without taking the state lock.
@@ -766,6 +901,8 @@ class FleetCoordinator:
         self._retask_wait_s = float(retask_wait_s)
         self._retask_excluded = retask_excluded
         self._retask_separation = bool(retask_separation)
+        self._sidestep_margin_cm = int(sidestep_margin_cm)
+        self._manually_controlled = manually_controlled
 
         self._lock = threading.RLock()
         self._drones: dict[str, _DroneState] = {drone_id: _DroneState() for drone_id in self._links}
@@ -803,6 +940,12 @@ class FleetCoordinator:
     def started(self) -> bool:
         return self._started_at is not None
 
+    def is_lost(self, drone_id: str) -> bool:
+        """True once *drone_id* has been declared lost in the current mission (``on_drone_lost``)."""
+        with self._lock:
+            state = self._drones.get(drone_id)
+            return state is not None and state.lost
+
     def lanes(self, drone_id: str) -> list[dict]:
         """The drone's current full lane list, including re-tasked lanes."""
         with self._lock:
@@ -821,7 +964,9 @@ class FleetCoordinator:
         ``_own_lanes_left_locked``) is listed in the same shape with
         ``status`` ``waiting`` and the waiting text as its ``reason``; a
         fleet without obstacle fields never has one, so its list is
-        unchanged.
+        unchanged. A lost drone's lane that waits for the operator's
+        ``confirm_retask`` is listed in the same shape with ``status``
+        ``needs_confirmation`` and why it waits as its ``reason``.
         """
         with self._lock:
             if self._plan is None:
@@ -842,6 +987,12 @@ class FleetCoordinator:
                 for retask in self._retasks
                 for chunk in retask.chunks
                 if chunk.status == "queued" and chunk.held
+                for entry in chunk.lane_entries()
+            ] + [
+                dict(entry, drone_id=chunk.lost_id, reason=retask.confirm, status="needs_confirmation")
+                for retask in self._retasks
+                for chunk in retask.chunks
+                if chunk.status == "queued" and chunk.confirm
                 for entry in chunk.lane_entries()
             ] + [dict(area) for area in self._plan.uncovered_areas]
             out["uncovered"] += self._obstacle_uncovered_locked()
@@ -898,6 +1049,10 @@ class FleetCoordinator:
                     "drone_link_ok": telemetry.get("drone_link_ok"),
                     "drone_link_detail": telemetry.get("drone_link_detail"),
                 }
+                if "move_refusals" in telemetry:
+                    # Moves the drone refused (flightrisk/drone/flight_guards.py),
+                    # only once there was one, so other status is unchanged.
+                    entry["move_refusals"] = telemetry.get("move_refusals")
                 if state.obstacle_cuts or any(key in telemetry for key in TELEMETRY_FIELDS):
                     # Only for a drone that reports obstacle sensing, so the
                     # status of a fleet without it (and the mobile contract
@@ -912,6 +1067,10 @@ class FleetCoordinator:
                         uncovered = self._obstacle_uncovered_locked()
                     entry["uncovered_cm"] = sum(u["distance_cm"] for u in uncovered if u["drone_id"] == drone_id)
                     entry["reflights"] = self._reflight_counts_locked(drone_id)
+                # The temperature check before the drone's last takeoff and the live reading, only from an edge that reports them.
+                temp = temp_status(telemetry.get(TELEMETRY_TEMP))
+                if temp is not None:
+                    entry[TELEMETRY_TEMP] = temp
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:
@@ -1253,6 +1412,16 @@ class FleetCoordinator:
                     # cached value and a start_at would be refused anyway.
                     refusals[drone_id] = _drone_link_refusal(telemetry)
                     continue
+                too_hot = live_refusal(temp_status(telemetry.get(TELEMETRY_TEMP)))
+                if too_hot is not None:
+                    # The drone's live temperature (its newest fresh state
+                    # packet) is at or above its edge's refusal level. A drone
+                    # on the ground would be refused its takeoff by the edge
+                    # anyway; one already in the air (after a manual takeoff)
+                    # is refused here too, so a start never sends a drone that
+                    # hot on its lanes.
+                    refusals[drone_id] = too_hot
+                    continue
                 sensing = telemetry.get(TELEMETRY_SENSING)
                 if telemetry.get(TELEMETRY_SENSOR_OK) is False and sensing not in (SENSING_OFF, SENSING_AUTOPILOT):
                     # The edge needs its sensor (stepped or forward-only
@@ -1302,14 +1471,18 @@ class FleetCoordinator:
         elif msg_type == "telemetry":
             messages: list[tuple[str, dict]] = []
             events: list[tuple[str, dict]] = []
+            # Asked before the lock: the answer comes from the dashboard's manual control.
+            by_hand = self._flown_by_hand(drone_id)
             with self._lock:
                 state = self._drones[drone_id]
                 cue_before = _person_cue((state.telemetry or {}).get(TELEMETRY_PERSON_CUE))
+                reland = self._reland_lost_locked(drone_id, state, msg, by_hand=by_hand)
                 state.telemetry = dict(msg)
                 state.telemetry_at = self._clock()
                 if msg.get("is_flying") is True:
                     state.seen_flying = True
                 events.extend(self._note_cuts_locked(drone_id, state, state.telemetry))
+                events.extend(self._note_avoid_locked(drone_id, state, state.telemetry))
                 # A re-flight this drone flies may have ended, or one of its
                 # own cuts may now be offered (design section 3.4).
                 reflight = self._track_reflights_locked(drone_id, state)
@@ -1323,6 +1496,8 @@ class FleetCoordinator:
                     # edge restart fails its cutter's waiting chunks).
                     for chunk in self._reflights:
                         events.extend(self._reflight_events_locked(chunk))
+            if reland is not None:
+                self._send_reland(drone_id, reland)
             self._emit_all(events)
             self._send_offers(messages)
             self._log_person_cue(drone_id, cue_before, _person_cue(msg.get(TELEMETRY_PERSON_CUE)))
@@ -1330,6 +1505,112 @@ class FleetCoordinator:
             self.on_detection(drone_id, msg)
         else:
             logger.debug("Ignoring %r message from %s", msg_type, drone_id)
+
+    def _flown_by_hand(self, drone_id: str) -> bool:
+        """True while ``manually_controlled`` says a person flies *drone_id* from the ground. Call it without the lock.
+
+        A check that fails counts as False and is logged: the drone's own
+        ``control_mode`` still shows a drone flown by hand
+        (``_reland_lost_locked``).
+        """
+        check = self._manually_controlled
+        if check is None:
+            return False
+        try:
+            return bool(check(drone_id))
+        except Exception:
+            logger.warning("manually_controlled check failed for %s", drone_id, exc_info=True)
+            return False
+
+    def _reland_lost_locked(self, drone_id: str, state: _DroneState, msg: dict, *, by_hand: bool) -> str | None:
+        """Why a ``land`` must be sent again to lost *drone_id*, whose new telemetry *msg* shows it flying, or None.
+
+        A lost drone was sent one best-effort ``land`` (``on_drone_lost``),
+        which a dead link may have dropped. When its link comes back while it
+        is still in the air, it could fly lanes that now belong to another
+        drone, or wait for the operator's Re-task, so it is sent ``land``
+        again, and the reason is returned:
+
+        * ``flying_again``: the first telemetry after the loss that shows it
+          flying;
+        * ``link_back``: such telemetry after a gap longer than
+          ``TELEMETRY_FRESH_S`` (the link came back once more);
+        * ``autonomous_again``: such telemetry that reports autonomous
+          control after one that did not (its edge went back to its search
+          by itself).
+
+        Never while a person flies it by hand: while *msg* reports ``manual``
+        control, or while *by_hand* (it is the drone the ground's manual
+        control has, ``manually_controlled``). A ``land`` then could put it
+        down in the middle of a manoeuvre, over water or a road. Telemetry
+        that reports it ``manual``, or ``held`` while *by_hand* (the edge's
+        dead-man between two steps), counts as the landing being taken care
+        of, so telemetry that follows it without a gap sends nothing either:
+        for example ``held`` after the person's browser went away, where the
+        orphan countdown of the manual control lands the drone. Telemetry
+        that says ``autonomous`` while *by_hand* (sent before the edge took
+        the hold, a hold that never arrived, or an edge that left manual
+        control) sends nothing, but the next flying report once the
+        dashboard has let go of the drone is sent ``land`` (``flying_again``).
+        A drone nobody here controls that reports ``held`` or
+        ``autonomous`` control, or no control mode, is sent ``land`` as
+        above. Telemetry that keeps arriving from a drone still flying sends
+        nothing more. Caller holds the lock; the caller sends the ``land``
+        without it (``_send_reland``).
+        """
+        if not state.lost or msg.get("is_flying") is not True:
+            return None
+        mode = msg.get("control_mode")
+        if by_hand or mode == "manual":
+            if mode in ("manual", "held"):
+                state.relanded = True
+            elif mode == "autonomous":
+                # The edge left manual control while the dashboard still has
+                # it: the first flying report after the dashboard lets go lands it.
+                state.relanded = False
+            return None
+        gap = state.telemetry_at is None or self._clock() - state.telemetry_at > TELEMETRY_FRESH_S
+        if not state.relanded:
+            reason = "flying_again"
+        elif gap:
+            reason = "link_back"
+        elif mode == "autonomous" and (state.telemetry or {}).get("control_mode") != "autonomous":
+            reason = "autonomous_again"
+        else:
+            return None
+        state.relanded = True
+        return reason
+
+    def _send_reland(self, drone_id: str, reason: str) -> None:
+        """Send lost *drone_id* the ``land`` that ``_reland_lost_locked`` asked for, and tell the operator why.
+
+        The ``lost_drone_land_resent`` flight-safety event is logged after
+        the send, with ``outcome`` ``sent`` or ``not_delivered``. The
+        ``lost_drone_relanded`` fleet event names the drone and says why the
+        ground landed it. When the ``land`` cannot be sent, nothing is
+        announced and the next telemetry that shows the drone flying tries
+        again. Call it without the lock.
+        """
+        why = {
+            "flying_again": "reports flying again",
+            "link_back": "reports flying again after its link dropped once more",
+            "autonomous_again": "reports autonomous control again while it flies",
+        }[reason]
+        detail = (f"{drone_id} was declared lost and {why}; the ground sent it land, because its unflown lanes "
+                  f"are no longer its own")
+        sent = self._send_logged(drone_id, {"type": "land"})
+        obs_events.flight_safety(
+            "lost_drone_land_resent", reason=reason, drone_id=drone_id, component="coordinator",
+            outcome="sent" if sent else "not_delivered", detail=detail,
+        )
+        if not sent:
+            with self._lock:
+                state = self._drones[drone_id]
+                if state.lost:
+                    state.relanded = False
+            return
+        self._emit("fleet_event", {"event": "lost_drone_relanded", "drone_id": drone_id, "reason": reason,
+                                   "detail": detail})
 
     @staticmethod
     def _log_person_cue(drone_id: str, before: dict | None, after: dict | None) -> None:
@@ -1502,6 +1783,9 @@ class FleetCoordinator:
         """
         state.obstacle_cuts = {}
         state.obstacle_plan_seq = state.obstacle_key_base + state.obstacle_seq
+        state.avoid_offsets = {}
+        state.avoid_held = False
+        state.avoid_offset_seen = {}
 
     @staticmethod
     def _listed_cuts(telemetry: dict, seq: int) -> list[tuple[int, Cut]]:
@@ -1789,7 +2073,7 @@ class FleetCoordinator:
         """
         if state.zone is None or self._started_at is None:
             return
-        taken = sum(1 for chunk in self._reflights if chunk.lost_id == drone_id)
+        taken = sum(1 for chunk in self._reflights if chunk.lost_id == drone_id and chunk.offset is None)
         for number, cut in new_cuts:
             confirm = cut.reason in CONFIRM_REFLIGHT_CUT_REASONS
             if cut.reason not in REFLIGHT_CUT_REASONS and not confirm:
@@ -1820,32 +2104,264 @@ class FleetCoordinator:
             else:
                 logger.info("%s's cut %d on lane %d waits to be offered to another drone",
                             drone_id, number, cut.lane_index)
+        for number, cut in new_cuts:
+            if cut.reason in CONFIRM_REFLIGHT_CUT_REASONS:
+                self._hold_offsets_for_cut_locked(drone_id, cut.lane_index, number)
         for chunk in self._reflights:
             if chunk.lost_id == drone_id and chunk.status == "queued":
                 self._refresh_reflight_locked(chunk)
 
-    def confirm_reflight(self, drone_id: str, cut_seq: Any) -> tuple[bool, str]:
+    def _hold_offsets_for_cut_locked(self, drone_id: str, lane: int, number: int) -> None:
+        """Make the waiting offset re-flights on *drone_id*'s lane *lane* wait for the person cut *number*.
+
+        A re-flight flies reversed, from the far end of the offset, which is
+        where the sidestep met the person. Confirming the cut
+        (``confirm_reflight``) releases them with it. Caller holds the lock.
+        """
+        for chunk in self._reflights:
+            if (chunk.lost_id == drone_id and chunk.offset is not None and chunk.offset[0] == lane
+                    and chunk.status == "queued"):
+                chunk.confirm = True
+                chunk.confirm_cut = number
+                logger.warning("%s's offset segment on lane %d waits for the operator: the lane was cut for a person",
+                               drone_id, lane)
+
+    def _confirm_cut_on_lane_locked(self, state: _DroneState, lane: int) -> int | None:
+        """The newest cut of the plan on *lane* whose reason needs the operator's confirmation, or None."""
+        numbers = [n for n, cut in state.obstacle_cuts.items()
+                   if cut.lane_index == lane and cut.reason in CONFIRM_REFLIGHT_CUT_REASONS]
+        return max(numbers) if numbers else None
+
+    def _note_avoid_locked(self, drone_id: str, state: _DroneState, telemetry: dict) -> list[tuple[str, dict]]:
+        """Read a drone's ``obstacle_avoid`` (``lane_avoid``): its sidestep hold and its offset segments.
+
+        Returns the fleet events to announce. A ``held`` phase, a drone that
+        could not fly back to its lane after a sidestep and now hovers under
+        manual control, is announced once as ``sidestep_held``, so the
+        operator knows to take control or press Resume search before the
+        dashboard's orphan countdown lands it. Each offset segment, a stretch
+        of a lane the drone flew beside the lane to get past an obstacle, is
+        announced once as ``lane_offset``, listed in
+        ``current_plan()["uncovered"]`` with reason ``offset`` and, like a cut
+        segment (design section 3.4), taken up for a re-flight by another
+        drone. Offsets are read only once the edge acknowledged the current
+        plan, so a message from before that never brings the old plan's.
+
+        A person seen during a sidestep reaches the ground two ways, and
+        either keeps its offset from being offered without the operator's
+        confirmation (a re-flight would start at the far end of the offset,
+        where the person was): the lane's ``person`` cut
+        (``_hold_offsets_for_cut_locked``), or, when the lane had already
+        ended and could not be cut, the offset's own ``offsets_seen``. The
+        ``sidestep_held`` banner also says when the way back stopped for a
+        person (``held_reason``).
+        """
+        avoid = telemetry.get(TELEMETRY_AVOID)
+        if not isinstance(avoid, dict):
+            state.avoid_held = False
+            return []
+        events: list[tuple[str, dict]] = []
+        held = avoid.get(AVOID_PHASE_KEY) == AVOID_PHASE_HELD
+        if held and not state.avoid_held:
+            x_cm, y_cm = _number(telemetry.get("rel_x_cm")), _number(telemetry.get("rel_y_cm"))
+            origin = self._origin(state)
+            where = "" if x_cm is None or y_cm is None else (
+                f" at ({origin[0] + x_cm:g}, {origin[1] + y_cm:g}) cm")
+            held_reason = avoid.get(AVOID_HELD_REASON_KEY)
+            seen = " A person was seen on its way back." if held_reason == CUT_PERSON else ""
+            logger.warning("%s could not fly back to its lane after a sidestep (%s) and hovers under manual control",
+                           drone_id, held_reason or "reason not reported")
+            payload = {
+                "event": "sidestep_held",
+                "drone_id": drone_id,
+                "detail": (
+                    f"{drone_id} could not fly back to its lane after a sidestep and hovers under manual "
+                    f"control{where}.{seen} Take control or press Resume search, or the ground lands it when "
+                    "its manual-control countdown runs out."
+                ),
+            }
+            if isinstance(held_reason, str) and held_reason:
+                payload["reason"] = held_reason[:MAX_TEXT_LEN]
+            events.append(("fleet_event", payload))
+        state.avoid_held = held
+        if not state.acked:
+            return events
+        listed = _decode_offsets(avoid.get(AVOID_OFFSETS_KEY), avoid.get(AVOID_OFFSETS_SEEN_KEY))
+        for lane, start, _length, seen in listed:
+            if seen and (lane, start) in state.avoid_offsets and state.avoid_offset_seen.get((lane, start)) != seen:
+                # The sidestep's way back saw it after the offset was first reported.
+                state.avoid_offset_seen[(lane, start)] = seen
+                self._hold_offset_for_seen_locked(drone_id, lane, start, seen)
+        new = [entry for entry in listed if (entry[0], entry[1]) not in state.avoid_offsets]
+        if not new:
+            return events
+        origin = self._origin(state)
+        for lane, start, length, seen in new:
+            state.avoid_offsets[(lane, start)] = length
+            if seen:
+                state.avoid_offset_seen[(lane, start)] = seen
+            seg = self._offset_segment_locked(state, lane, start, length)
+            if seg is None:
+                logger.warning("%s flew beside lane %d, which its current lanes do not fly; not announced",
+                               drone_id, lane)
+                continue
+            grid = _on_grid(seg, origin)
+            noticed = f"; a {seen.replace('_', ' ')} was seen during that sidestep" if seen == CUT_PERSON else ""
+            payload = {
+                "event": "lane_offset",
+                "drone_id": drone_id,
+                "lane_index": lane,
+                "x_cm": grid.x_cm,
+                "y_cm": grid.y_cm,
+                "unflown_cm": grid.length_cm,
+                "reason": SEGMENT_OFFSET,
+                "detail": (
+                    f"{drone_id}: {grid.length_cm} cm of lane {lane} from ({grid.x_cm:g}, {grid.y_cm:g}) cm "
+                    f"flown beside the lane to pass an obstacle, not on it{noticed}"
+                ),
+            }
+            if seen:
+                payload["seen"] = seen
+            events.append(("fleet_event", payload))
+            self._offset_reflight_locked(drone_id, state, lane, start, grid, seen)
+        return events
+
+    def _hold_offset_for_seen_locked(self, drone_id: str, lane: int, start: int, seen: str) -> None:
+        """Make a waiting offset re-flight wait for the operator once its sidestep is known to have seen a person."""
+        if seen not in CONFIRM_REFLIGHT_CUT_REASONS:
+            return
+        for chunk in self._reflights:
+            if chunk.lost_id == drone_id and chunk.offset == (lane, start) and chunk.status == "queued":
+                chunk.seen = seen
+                chunk.confirm = True
+                logger.warning("%s's offset segment on lane %d waits for the operator: a %s was seen during its "
+                               "sidestep", drone_id, lane, seen)
+
+    def _offset_segment_locked(
+        self, state: _DroneState, lane: int, start: int, length: int,
+    ) -> UncoveredSegment | None:
+        """An offset segment relative to the drone's takeoff point, on the line the lane is flown on, or None.
+
+        The lane starts where the drone's replay says it starts flying it
+        (``LaneReplay.path``, the same replay the edge makes), and the
+        segment runs from *start* to *start* + *length* along it. None when
+        the lanes cannot be replayed or have no such lane.
+        """
+        replay = self._replay_locked(state)
+        if replay is None or not 0 <= lane < len(state.lanes) or lane >= len(replay.path):
+            return None
+        direction = state.lanes[lane].get("direction") if isinstance(state.lanes[lane], dict) else None
+        unit = {"forward": (0, 1), "back": (0, -1), "right": (1, 0), "left": (-1, 0)}.get(direction)
+        if unit is None:
+            return None
+        x0, y0 = replay.path[lane]
+        return UncoveredSegment(
+            lane_index=lane, direction=direction,
+            x_cm=int(x0 + unit[0] * start), y_cm=int(y0 + unit[1] * start),
+            end_x_cm=int(x0 + unit[0] * (start + length)), end_y_cm=int(y0 + unit[1] * (start + length)),
+            length_cm=int(length), reason=SEGMENT_OFFSET, cut=-1,
+        )
+
+    def _offset_reflight_locked(
+        self, drone_id: str, state: _DroneState, lane: int, start: int, grid: UncoveredSegment, seen: str = "",
+    ) -> None:
+        """Queue a re-flight of one offset segment (*grid*, on the shared grid), as for a cut. Caller holds the lock.
+
+        The limits of a cut's (``_on_new_cuts_locked``): only once the mission
+        has started and never for a lane the drone flies to re-fly another
+        drone's segments; offsets have their own
+        ``MAX_OFFSET_REFLIGHTS_PER_DRONE``. The re-flight flies the offset
+        reversed, from its far end, which is where the sidestep met whatever
+        ended it, so it needs the operator's confirmation, exactly like a
+        person cut, when that sidestep saw a person (*seen*) or the drone
+        cut the same lane for a person (the chunk then waits for that cut's
+        ``confirm_reflight``, and a person cut that arrives later holds it
+        the same way, ``_hold_offsets_for_cut_locked``).
+        """
+        if state.zone is None or self._started_at is None:
+            return
+        if self._in_reflight_lanes_locked(drone_id, lane):
+            return
+        taken = sum(1 for chunk in self._reflights if chunk.lost_id == drone_id and chunk.offset is not None)
+        if taken >= MAX_OFFSET_REFLIGHTS_PER_DRONE:
+            logger.warning("%s flew %d cm beside lane %d, but %d of its offset segments are already offered for "
+                           "a re-flight; this one is only reported", drone_id, grid.length_cm, lane,
+                           MAX_OFFSET_REFLIGHTS_PER_DRONE)
+            return
+        plan = plan_reflight([grid])
+        person_cut = self._confirm_cut_on_lane_locked(state, lane)
+        confirm = seen in CONFIRM_REFLIGHT_CUT_REASONS or person_cut is not None
+        chunk = _Chunk(lost_id=drone_id, first_index=lane, lanes=[dict(x) for x in plan.lanes],
+                       points=list(plan.points), kind="reflight", offset=(lane, start), confirm=confirm,
+                       seen=seen or None, confirm_cut=person_cut)
+        chunk.legs = list(plan.legs)
+        chunk.segments = list(plan.segments)
+        chunk.too_short = list(plan.too_short)
+        self._reflights.append(chunk)
+        if confirm:
+            logger.warning("%s's offset segment on lane %d (%d cm) is offered to another drone only once the "
+                           "operator confirms it: a person was seen there", drone_id, lane, grid.length_cm)
+        else:
+            logger.info("%s's offset segment on lane %d (%d cm) waits to be offered to another drone",
+                        drone_id, lane, grid.length_cm)
+
+    def confirm_reflight(self, drone_id: str, cut_seq: Any, offset: Any = None) -> tuple[bool, str]:
         """The operator confirms that *drone_id*'s cut *cut_seq* may be re-flown by another drone.
 
         Only a re-flight still waiting for confirmation (``confirm``: a cut
         whose reason is in ``CONFIRM_REFLIGHT_CUT_REASONS``, a person) can be
-        confirmed. From then on it is handled exactly like an obstacle cut's
-        re-flight: it waits for the cutting drone to finish its lanes, then
-        goes to the nearest drone that can take it, or fails with the reason
-        (``_offer_reflight_locked``). The offer, if any, is sent before this
-        returns, so do not call it on a link's delivery thread. Returns
-        ``(ok, detail)``: what happens next, or why nothing was confirmed.
+        confirmed. Confirming a cut also releases the offset segments held
+        for it (a sidestep on the same lane, ``_hold_offsets_for_cut_locked``).
+        An offset segment whose sidestep saw a person but that has no such
+        cut (the lane had ended) is confirmed on its own: *cut_seq* None and
+        *offset* ``[lane_index, from_cm]`` (its ``uncovered`` entry's
+        ``index`` and ``offset_from_cm``). From then on it is handled exactly
+        like an obstacle cut's re-flight: it waits for the cutting drone to
+        finish its lanes, then goes to the nearest drone that can take it,
+        or fails with the reason (``_offer_reflight_locked``). The offer, if
+        any, is sent before this returns, so do not call it on a link's
+        delivery thread. Returns ``(ok, detail)``: what happens next, or why
+        nothing was confirmed.
         """
+        if cut_seq is None and offset is not None:
+            key = _offset_key(offset)
+            if key is None:
+                return False, f"invalid offset segment {offset!r}"
+            with self._lock:
+                chunk = next((c for c in self._reflights if c.lost_id == drone_id and c.offset == key), None)
+                if chunk is None:
+                    return False, f"{drone_id} has no offset segment at {key[1]} cm on lane {key[0]} to re-fly"
+                if not chunk.confirm or chunk.status != "queued":
+                    return False, f"{_chunk_what(chunk)} needs no confirmation"
+                chunk.confirm = False
+                logger.warning("Operator confirmed the re-flight of %s", _chunk_what(chunk))
+                messages = self._dispatch_locked()
+                events = self._settle_and_collect_locked()
+                status, reason, receiver = chunk.status, chunk.reason, chunk.receiver or chunk.flown_by
+            self._emit_all(events)
+            self._send_offers(messages)
+            what = _chunk_what(chunk)
+            if status == "failed":
+                return True, f"{what} confirmed, but it cannot be re-flown: {reason}"
+            if status == "queued":
+                return True, f"{what} confirmed; it is offered once a drone can take it"
+            return True, f"{what} confirmed and offered to {receiver}"
         if isinstance(cut_seq, bool) or not isinstance(cut_seq, int):
             return False, f"invalid cut number {cut_seq!r}"
         with self._lock:
             chunk = next(
                 (c for c in self._reflights if c.lost_id == drone_id and c.cut_seq == cut_seq), None,
             )
-            if chunk is None:
+            held = [c for c in self._reflights if c.lost_id == drone_id and c.confirm_cut == cut_seq
+                    and c.confirm and c.status == "queued"]
+            if chunk is None and not held:
                 return False, f"{drone_id} has no cut {cut_seq} that could be re-flown"
-            if not chunk.confirm or chunk.status != "queued":
+            if not held and (not chunk.confirm or chunk.status != "queued"):
                 return False, f"{drone_id}'s cut {cut_seq} needs no confirmation"
+            for waiting in held:
+                waiting.confirm = False
+            if chunk is None:
+                chunk = held[0]
             chunk.confirm = False
             logger.warning("Operator confirmed the re-flight of %s's cut %d", drone_id, cut_seq)
             messages = self._dispatch_locked()
@@ -1858,6 +2374,127 @@ class FleetCoordinator:
         if status == "queued":
             return True, f"{drone_id}'s cut {cut_seq} confirmed; it is offered once a drone can take it"
         return True, f"{drone_id}'s cut {cut_seq} confirmed and offered to {receiver}"
+
+    def confirm_retask(self, drone_id: str) -> tuple[bool, str]:
+        """The operator confirms that the lost *drone_id*'s waiting lanes may be offered to another drone.
+
+        Only lanes re-tasked with ``on_drone_lost(confirm=...)`` and not yet
+        confirmed can be confirmed. They are split again into chunks for the
+        drones that can take lanes now (``_lost_chunks_locked``), not for
+        those there were at the loss, and from then on handled exactly like
+        a lost drone's lanes: each chunk goes to the nearest drone that can
+        take it, waits for one, or fails with the reason. The offers, if any,
+        are sent before this returns, so do not call it on a link's delivery
+        thread. A ``retask`` event lists the lanes offered or still waiting,
+        and a ``retask_failed`` event those no drone can take.
+
+        Refused, with nothing offered:
+
+        * after LAND ALL: the waiting lanes fail with ``LAND ALL issued``;
+        * while the lost drone's last telemetry shows it flying, until
+          ``LOST_OBSTACLE_S`` after the loss or after that report, whichever
+          is later, or while its telemetry from the last
+          ``TELEMETRY_FRESH_S`` shows it under autonomous control (it could
+          fly those lanes itself): it must be landed, or taken control of,
+          first (``_flying_again_locked``).
+
+        Returns ``(ok, detail)``: what happens next, or why nothing was
+        confirmed and what to do.
+        """
+        with self._lock:
+            retasks = [
+                retask for retask in self._retasks
+                if retask.lost_id == drone_id and any(c.confirm and c.status == "queued" for c in retask.chunks)
+            ]
+            if not retasks:
+                return False, (f"{drone_id} has no lanes waiting for confirmation; the NOT SEARCHED list shows "
+                               "what happened to its lanes")
+            if self._landed_all:
+                for retask in retasks:
+                    for chunk in retask.chunks:
+                        if chunk.confirm and chunk.status == "queued":
+                            chunk.confirm = False
+                            self._fail_locked(chunk, "LAND ALL issued")
+                # Their re-task was reported at the loss, so this lists them as failed.
+                landed_all_events = self._settle_and_collect_locked()
+            else:
+                landed_all_events = None
+                flying = self._flying_again_locked(drone_id)
+                if flying is not None:
+                    return False, flying
+                chunks: list[_Chunk] = []
+                for retask in retasks:
+                    waiting = [c for c in retask.chunks if c.confirm and c.status == "queued"]
+                    if len(waiting) == len(retask.chunks) and retask.path:
+                        # Split for the drones that can take lanes now.
+                        retask.chunks = self._lost_chunks_locked(drone_id, retask.path, retask.index)
+                        waiting = list(retask.chunks)
+                    for chunk in waiting:
+                        chunk.confirm = False
+                    chunks.extend(waiting)
+                count = sum(len(chunk.lanes) for chunk in chunks)
+                logger.warning("Operator confirmed the re-task of %s's %d unflown lanes", drone_id, count)
+                messages = self._dispatch_locked()
+                events = self._settle_and_collect_locked()
+                pending = [chunk for chunk in chunks if chunk.status in ("queued", "offered")]
+                if pending:
+                    events.append(("fleet_event", self._retask_payload(drone_id, [], pending)))
+                offered = sorted({chunk.receiver for chunk in chunks if chunk.status == "offered"})
+                waiting_lanes = sum(len(chunk.lanes) for chunk in chunks if chunk.status == "queued")
+                reasons = list(dict.fromkeys(chunk.reason for chunk in chunks if chunk.status == "failed"))
+        if landed_all_events is not None:
+            self._emit_all(landed_all_events)
+            return False, "LAND ALL was pressed, so nothing is re-tasked; make a new plan to search these lanes"
+        self._emit_all(events)
+        self._send_offers(messages)
+        parts = []
+        if offered:
+            parts.append(f"offered to {', '.join(offered)}")
+        if waiting_lanes:
+            parts.append(f"{waiting_lanes} lanes are offered once a drone can take them")
+        if reasons:
+            lead = "some cannot be re-tasked" if offered or waiting_lanes else "no drone can take them"
+            parts.append(f"{lead}: {'; '.join(reasons)}")
+        return True, f"{drone_id}'s {count} unflown lanes confirmed; " + "; ".join(parts)
+
+    def _flying_again_locked(self, drone_id: str) -> str | None:
+        """Why the lost *drone_id*'s lanes must not be confirmed now, or None. Caller holds the lock.
+
+        Another drone given those lanes could meet it there:
+
+        * its last telemetry shows it flying, until ``LOST_OBSTACLE_S``
+          after the loss or after that report, whichever is later: the
+          window ``_lost_obstacle_locked`` keeps its position as an obstacle
+          for. Once its link drops it may still be in the air until its edge
+          lands it by itself, so a silence after a report that it flies
+          does not count as landed;
+        * its telemetry from the last ``TELEMETRY_FRESH_S`` shows it under
+          autonomous control, which may fly its own lanes. On the ground it
+          must be taken control of so it stays there; in the air (or when
+          its telemetry does not say) also landed.
+        """
+        state = self._drones[drone_id]
+        telemetry = state.telemetry or {}
+        if telemetry.get("is_flying") is True and state.telemetry_at is not None:
+            now = self._clock()
+            age = now - state.telemetry_at
+            if age <= TELEMETRY_FRESH_S:
+                return f"Land {drone_id} first; it is flying again. Confirm the re-task once it reports landed."
+            since = state.telemetry_at if state.lost_at is None else max(state.lost_at, state.telemetry_at)
+            wait = LOST_OBSTACLE_S - (now - since)
+            if wait > 0:
+                return (f"{drone_id} may still be in the air: its last report, {age:.0f} s ago, said it was flying, "
+                        f"and nothing has come from it since. Wait {math.ceil(wait)} s, or confirm the re-task once "
+                        f"it reports landed.")
+        if not self._fresh_locked(state):
+            return None
+        if telemetry.get("control_mode") == "autonomous":
+            if telemetry.get("is_flying") is False:
+                return (f"{drone_id} reports autonomous control again, so it may fly these lanes itself; take "
+                        f"control of it so it stays on the ground, then confirm the re-task.")
+            return (f"{drone_id} reports autonomous control again, so it may fly these lanes itself; take control "
+                    f"of it and land it, then confirm the re-task.")
+        return None
 
     def _reflight_counts_locked(self, drone_id: str) -> dict[str, int]:
         """The re-flights *drone_id* received: offered to it, re-flown by it and blocked again on it."""
@@ -1901,11 +2538,33 @@ class FleetCoordinator:
                 appended.setdefault(chunk.flown_by, set()).update(range(*span))
         out = []
         for drone_id, state in self._drones.items():
-            if not state.obstacle_cuts:
+            if not state.obstacle_cuts and not state.avoid_offsets:
                 continue
-            numbers, segments = self._obstacle_replay_locked(state)
+            numbers, segments = self._obstacle_replay_locked(state) if state.obstacle_cuts else ([], [])
             origin = self._origin(state)
             reflight_lanes = appended.get(drone_id, set())
+            for (lane, start), length in state.avoid_offsets.items():
+                offset = self._offset_segment_locked(state, lane, start, length)
+                if offset is None or lane in reflight_lanes:
+                    continue
+                grid = _on_grid(offset, origin)
+                held_by = next((c.confirm_cut for c in self._reflights
+                                if c.lost_id == drone_id and c.offset == (lane, start)), None)
+                # ``cut_seq`` names the person cut whose confirmation releases it, if any.
+                entry = _uncovered_entry(grid, drone_id, SEGMENT_OFFSET, held_by)
+                entry["offset_from_cm"] = start
+                if state.avoid_offset_seen.get((lane, start)):
+                    entry["seen"] = state.avoid_offset_seen[(lane, start)]
+                mark = marks.get((drone_id, _segment_key(grid, None)))
+                if mark is not None:
+                    chunk, short = mark
+                    if short:
+                        entry.update(reason=SEGMENT_TOO_SHORT, status=SEGMENT_TOO_SHORT)
+                    elif chunk.status == "reflown" or chunk.flown_rest:
+                        continue
+                    else:
+                        entry.update(self._reflight_fields(chunk))
+                out.append(entry)
             for seg in segments:
                 if seg.lane_index in reflight_lanes:
                     continue
@@ -1931,8 +2590,10 @@ class FleetCoordinator:
     def _reflight_fields(chunk: _Chunk) -> dict:
         """The re-flight fields of an uncovered segment of *chunk* that is still waiting, in flight or failed.
 
-        ``needs_confirmation``: a person cut that waits for the operator's
-        ``confirm_reflight``; it is not offered to any drone before that.
+        ``needs_confirmation``: a person cut, or an offset segment its sidestep
+        or a person cut on its lane tied to a person, that waits for the
+        operator's ``confirm_reflight``; it is not offered to any drone before
+        that.
         ``waiting``: the chunk is queued. ``waiting_for`` is the cutting drone
         while the chunk waits for it to finish its lanes, or while it is
         still in the air too close to the path (then ``detail`` says how
@@ -2027,7 +2688,9 @@ class FleetCoordinator:
     # Loss recovery
     # ------------------------------------------------------------------
 
-    def on_drone_lost(self, drone_id: str, wait_s: float | None = None) -> dict[str, list[dict]]:
+    def on_drone_lost(
+        self, drone_id: str, wait_s: float | None = None, *, confirm: str | None = None,
+    ) -> dict[str, list[dict]]:
         """Mark a drone lost and offer its unflown lanes to the remaining drones.
 
         The unflown lanes start at the ``lane_index`` from the drone's last
@@ -2076,6 +2739,22 @@ class FleetCoordinator:
         Like ``sync()``, this call must not run on the thread that delivers
         the links' incoming messages.
 
+        With *confirm* (why, in the operator's words), the unflown lanes are
+        not offered to any drone until the operator confirms it with
+        ``confirm_retask``. Like a person cut's re-flight, they are then
+        handled exactly as above. Until then they are listed in
+        ``current_plan()["uncovered"]`` with ``status``
+        ``needs_confirmation`` and *confirm* as their ``reason``, and the
+        call emits one ``retask_needs_confirmation`` event listing them
+        instead of a ``retask`` event, without waiting. The ground uses this
+        for a drone that landed, or was lost, while held with nobody
+        controlling it (``FleetSupervisor``): none of its unflown lanes is
+        given to another drone unless the operator confirms it. That is all
+        it holds back. Everything else (``drone_lost``, the best-effort
+        ``land``, the lost drone's re-flights, the other drones' own lanes
+        and the transits to lanes they are given) is as without *confirm*,
+        so another drone may still pass near where it was held.
+
         Returns the lanes appended to each drone that accepted re-tasked
         lanes by the time the call returns.
         """
@@ -2087,7 +2766,12 @@ class FleetCoordinator:
                 return {}
             state.lost = True
             state.lost_at = self._clock()
-            logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
+            state.relanded = False
+            if confirm is None:
+                logger.warning("Drone %s lost; re-tasking its unflown lanes", drone_id)
+            else:
+                logger.warning("Drone %s lost; its unflown lanes wait for the operator's confirmation (%s)",
+                               drone_id, confirm)
             self._fail_lost_receiver_locked(drone_id)
             if state.offer is not None:
                 self._withdraw_offer_locked(drone_id, None)
@@ -2101,7 +2785,11 @@ class FleetCoordinator:
                 if full_path[index:]:
                     chunks = self._lost_chunks_locked(drone_id, full_path, index)
                     if chunks:
-                        retask = _Retask(drone_id, chunks)
+                        retask = _Retask(drone_id, chunks, confirm=confirm,
+                                         path=[dict(lane) for lane in full_path], index=index)
+                        if confirm is not None:
+                            for chunk in chunks:
+                                chunk.confirm = True
                         self._retasks.append(retask)
             messages = self._dispatch_locked()
             events = self._settle_and_collect_locked()
@@ -2112,7 +2800,7 @@ class FleetCoordinator:
         self._send_offers(messages)
         if retask is None:
             return {}
-        if wait_s > 0:
+        if wait_s > 0 and retask.confirm is None:
             retask.settled.wait(wait_s)
         with self._lock:
             events, appended = self._summarise_locked(retask)
@@ -2325,6 +3013,8 @@ class FleetCoordinator:
                 if self._landed_all:
                     self._fail_locked(chunk, "LAND ALL issued")
                     continue
+                if chunk.confirm:
+                    continue  # only the operator's confirm_retask lets it be offered
                 fits = []
                 waiting = False
                 unfit: dict[str, str] = {}
@@ -2448,8 +3138,10 @@ class FleetCoordinator:
         (``_actual_path_locked``): with its cuts, and with lanes a re-task
         appended flown from where the drone actually is. A drone without
         cuts flies its lanes as planned. A lost drone's path is not
-        compared; its last position is, for ``LOST_OBSTACLE_S``
-        (``_near_lost_locked``), and only ever makes the offer wait.
+        compared, because its lanes were taken from it; its position is
+        (``_near_lost_locked``), until ``LOST_OBSTACLE_S`` after the loss or
+        after its last telemetry that showed it flying, whichever is later,
+        and only ever makes the offer wait.
         """
         gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
         if gap <= 0 or not self._retask_separation:
@@ -2464,9 +3156,28 @@ class FleetCoordinator:
                 if len(theirs) < 2:
                     continue
             distance, _, _ = closest_approach(mine, theirs)
-            if distance < gap:
-                return f"come within {distance:.0f} cm of {other_id}, below the {gap} cm gap"
+            # A drone that may sidestep may move toward this path inside its own zone.
+            margin = self._sidestep_margin_locked(other_id)
+            if distance < gap + margin:
+                extra = f" and the {margin} cm sidestep margin" if margin else ""
+                return f"come within {distance:.0f} cm of {other_id}, below the {gap} cm gap{extra}"
         return None
+
+    def _sidestep_margin_locked(self, drone_id: str) -> int:
+        """The sidestep margin to keep from *drone_id*'s path: ``sidestep_margin_cm`` if it may sidestep, else 0.
+
+        A drone may sidestep when its latest telemetry's ``obstacle_avoid``
+        reports a ``sidestep_cm`` above 0 (``lane_avoid``). Caller holds the lock.
+        """
+        state = self._drones.get(drone_id)
+        avoid = (state.telemetry or {}).get(TELEMETRY_AVOID) if state is not None else None
+        sidestep = _number(avoid.get(AVOID_SIDESTEP_CM_KEY)) if isinstance(avoid, dict) else None
+        return self._sidestep_margin_cm if sidestep is not None and sidestep > 0 else 0
+
+    def sidestep_margin_of(self, drone_id: str) -> int:
+        """The sidestep margin a path must keep from *drone_id*'s path (``_sidestep_margin_locked``)."""
+        with self._lock:
+            return self._sidestep_margin_locked(drone_id)
 
     def _fail_locked(self, chunk: _Chunk, reason: str) -> None:
         chunk.status = "failed"
@@ -2588,10 +3299,13 @@ class FleetCoordinator:
         retask.reported = True
         acked = [c for c in retask.chunks if c.status == "acked"]
         failed = [c for c in retask.chunks if c.status == "failed"]
-        pending = [c for c in retask.chunks if c.status in ("queued", "offered")]
+        unconfirmed = [c for c in retask.chunks if c.status == "queued" and c.confirm]
+        pending = [c for c in retask.chunks if c.status in ("queued", "offered") and not c.confirm]
         events = []
         if acked or pending:
             events.append(("fleet_event", self._retask_payload(retask.lost_id, acked, pending)))
+        if unconfirmed:
+            events.append(("fleet_event", self._confirm_payload(retask, unconfirmed)))
         if failed:
             events.append(("fleet_event", self._failed_payload(retask.lost_id, failed)))
         for chunk in acked + failed:
@@ -2632,6 +3346,18 @@ class FleetCoordinator:
             payload["awaiting"] = awaiting
         payload["detail"] = "; ".join(parts)
         return payload
+
+    @staticmethod
+    def _confirm_payload(retask: _Retask, chunks: list[_Chunk]) -> dict:
+        """A ``retask_needs_confirmation`` event: the lanes that wait for the operator's ``confirm_retask``."""
+        lanes = [dict(entry, reason=retask.confirm) for chunk in chunks for entry in chunk.lane_entries()]
+        return {
+            "event": "retask_needs_confirmation",
+            "drone_id": retask.lost_id,
+            "detail": (f"{retask.lost_id}: {retask.confirm}; its {len(lanes)} unflown lanes are offered to another "
+                       "drone only once you confirm it"),
+            "lanes": lanes,
+        }
 
     @staticmethod
     def _failed_payload(lost_id: str, failed: list[_Chunk]) -> dict:
@@ -2821,18 +3547,26 @@ class FleetCoordinator:
 
         A drone declared lost may still be in the air (``LOST_OBSTACLE_S``):
         its last reported position counts until ``LOST_OBSTACLE_S`` after it
-        was declared lost. None for a drone that is not lost, once that time
-        is over, once its telemetry says it is not flying, and for one that
-        never reported a position (nothing to place; its lanes are re-tasked
-        as before).
+        was declared lost, or after its last telemetry that showed it flying
+        if that came later. So a lost drone whose link came back while it is
+        in the air (it is sent ``land`` again, ``_reland_lost_locked``)
+        counts where it reports itself for as long as it keeps reporting
+        that it flies, and for ``LOST_OBSTACLE_S`` after its link drops
+        again. None for a drone that is not lost, once that time is over,
+        once its telemetry says it is not flying, and for one that never
+        reported a position (nothing to place; its lanes are re-tasked as
+        before).
         """
         state = self._drones[drone_id]
         if not state.lost or state.lost_at is None:
             return None
-        if self._clock() - state.lost_at >= LOST_OBSTACLE_S:
-            return None
         telemetry = state.telemetry or {}
         if telemetry.get("is_flying") is False:
+            return None
+        since = state.lost_at
+        if telemetry.get("is_flying") is True and state.telemetry_at is not None:
+            since = max(since, state.telemetry_at)
+        if self._clock() - since >= LOST_OBSTACLE_S:
             return None
         rel_x, rel_y = _number(telemetry.get("rel_x_cm")), _number(telemetry.get("rel_y_cm"))
         if rel_x is None or rel_y is None:
@@ -2889,10 +3623,12 @@ class FleetCoordinator:
         """Why *rid* flying *lanes* would come too close to a lost drone that may still hover, or None.
 
         Every lost drone other than *rid* and *skip* is checked at its last
-        reported position while ``_lost_obstacle_locked`` places it there,
-        that is for at most ``LOST_OBSTACLE_S`` after the loss. Caller holds
-        the lock. A chunk this stops waits (it is never failed for it) and
-        is checked again on the next telemetry of any drone.
+        reported position while ``_lost_obstacle_locked`` places it there:
+        until ``LOST_OBSTACLE_S`` after the loss, or after its last telemetry
+        that showed it flying if that came later, and never once its
+        telemetry says it is not flying. Caller holds the lock. A chunk this
+        stops waits (it is never failed for it) and is checked again on the
+        next telemetry of any drone.
         """
         gap = self._plan.gap_cm if self._plan is not None else self._zone_gap_cm
         if gap <= 0 or not self._retask_separation:
@@ -3022,8 +3758,8 @@ class FleetCoordinator:
         short = [seg for seg in chunk.too_short if seg.lane_index < whole_from]
         if len(kept) == len(chunk.segments) and len(short) == len(chunk.too_short):
             return True
-        logger.info("%s's cut %s: lanes %s are re-tasked whole, so their segments are superseded",
-                    chunk.lost_id, chunk.cut_seq,
+        logger.info("%s: lanes %s are re-tasked whole, so their segments are superseded",
+                    _chunk_what(chunk),
                     ", ".join(str(seg.lane_index) for seg in chunk.segments + chunk.too_short
                               if seg.lane_index >= whole_from))
         if not kept and not short:
@@ -3055,7 +3791,7 @@ class FleetCoordinator:
         chunk.reason = reason
         chunk.crowded = None
         chunk.held = None
-        logger.error("Re-flight of %s's cut %s (lanes %s) failed: %s", chunk.lost_id, chunk.cut_seq,
+        logger.error("Re-flight of %s (lanes %s) failed: %s", _chunk_what(chunk),
                      ", ".join(str(seg.lane_index) for seg in chunk.segments + chunk.too_short), reason)
 
     def _track_reflights_locked(self, drone_id: str, state: _DroneState) -> bool:
@@ -3104,8 +3840,8 @@ class FleetCoordinator:
                 chunk.status = "blocked_again"
                 chunk.reason = f"blocked again by {drone_id}"
                 chunk.flown_rest = True
-                logger.warning("%s was blocked again re-flying %s's cut %s; it is not offered again",
-                               drone_id, chunk.lost_id, chunk.cut_seq)
+                logger.warning("%s was blocked again re-flying %s; it is not offered again",
+                               drone_id, _chunk_what(chunk))
             elif any(cut.reason == CUT_SENSOR_DOWN and cut.lane_index < first for cut in cuts):
                 self._fail_reflight_locked(chunk, f"{drone_id} ended its lanes before it (obstacle sensor down)")
             elif lane_index is not None and lane_index >= end:
@@ -3117,7 +3853,7 @@ class FleetCoordinator:
                         chunk, f"{drone_id} flew it off the planned path, {length} cm not searched")
                 else:
                     chunk.status = "reflown"
-                    logger.info("%s re-flew %s's cut %s", drone_id, chunk.lost_id, chunk.cut_seq)
+                    logger.info("%s re-flew %s", drone_id, _chunk_what(chunk))
             elif telemetry.get("is_flying") is False:
                 # On the ground with appended lanes left and no cut on them:
                 # it will not fly them, so the chunk would stay flying (or
@@ -3188,7 +3924,7 @@ class FleetCoordinator:
         else:
             lanes = chunk.lane_entries()
         length = sum(entry["distance_cm"] for entry in lanes)
-        what = f"{chunk.lost_id}'s blocked segment (cut {chunk.cut_seq})"
+        what = _chunk_what(chunk)
         detail = {
             "offered": f"{what} offered to {receiver} to re-fly: {length} cm",
             "acked": f"{receiver} will re-fly {what} after its lanes",
@@ -3196,14 +3932,17 @@ class FleetCoordinator:
             "blocked_again": f"{what} was blocked again by {receiver}: {length} cm not searched, not offered again",
             "failed": f"{what} not re-flown: {chunk.reason}",
         }[chunk.status]
-        return [("fleet_event", {
+        payload = {
             "event": event,
             "drone_id": chunk.lost_id,
             "receiver": receiver,
             "cut_seq": chunk.cut_seq,
             "lanes": lanes,
             "detail": detail,
-        })]
+        }
+        if chunk.offset is not None:
+            payload["reason"] = SEGMENT_OFFSET
+        return [("fleet_event", payload)]
 
     # ------------------------------------------------------------------
     # Emergency landing

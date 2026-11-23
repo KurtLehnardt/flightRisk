@@ -26,8 +26,10 @@ import asyncio
 import logging
 import math
 import socket
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from flightrisk.async_bridge import AsyncBridge
@@ -42,7 +44,8 @@ _REAL_SYSTEM = System
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ADDRESS_SCHEMES", "MavsdkAutopilotLink", "System", "validate_address"]
+__all__ = ["ADDRESS_SCHEMES", "MavsdkAutopilotLink", "System", "check_mavsdk_version", "locate_server_binary",
+           "server_binary_name", "validate_address"]
 
 #: Connection URL schemes MAVSDK accepts (``mavsdk_server --help``).
 ADDRESS_SCHEMES = ("serial", "udpin", "udpout", "tcpin", "tcpout")
@@ -74,6 +77,70 @@ DEFAULT_COMMAND_TIMEOUT_S = 10.0
 #: Telemetry rate requested for the streams the edge watches, in Hz.
 _TELEMETRY_RATE_HZ = 10.0
 _PROBE_PARAMS = ((ARDUPILOT, "FENCE_ENABLE"), (PX4, "GF_ACTION"))
+
+
+#: The newest MAVSDK-Python major version this link is written for (the 3.x gRPC wrapper).
+_MAX_SUPPORTED_MAJOR = 3
+
+
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _installed_mavsdk_version() -> str | None:
+    """The installed ``mavsdk`` distribution's version, or None when it cannot be determined."""
+    from importlib import metadata
+
+    try:
+        return metadata.version("mavsdk")
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def check_mavsdk_version(version: str | None = None) -> None:
+    """Refuse MAVSDK-Python 4 and later. Raises ``RuntimeError``.
+
+    Version 4 is a native binding: it ships no ``mavsdk/bin/mavsdk_server``
+    and the gRPC wrapper this link uses (``System(port=...,
+    mavsdk_server_address=...)``, ``mavsdk.bin``) moved to the separate
+    ``mavsdk-grpc`` package. An unknown or unparsable version is accepted.
+    """
+    version = _installed_mavsdk_version() if version is None else version
+    if not version:
+        return
+    try:
+        major = int(version.split(".")[0])
+    except ValueError:
+        return
+    if major > _MAX_SUPPORTED_MAJOR:
+        raise RuntimeError(
+            f"mavsdk {version} is installed, but this link needs the 3.x gRPC wrapper: mavsdk 4 and later is a "
+            "native binding that ships no mavsdk_server binary (the gRPC wrapper moved to the mavsdk-grpc package). "
+            "Install it with: pip install 'mavsdk>=3.17,<4'"
+        )
+
+
+def server_binary_name() -> str:
+    """File name of MAVSDK's server binary on this platform."""
+    return "mavsdk_server.exe" if _is_windows() else "mavsdk_server"
+
+
+def locate_server_binary(bin_dir: Any = None) -> Path:
+    """The ``mavsdk_server`` binary inside the ``mavsdk.bin`` package (``mavsdk_server.exe`` on Windows).
+
+    *bin_dir* is a directory (a path or an importlib resource) and defaults to ``mavsdk.bin``.
+    Raises ``FileNotFoundError`` when the binary is not there.
+    """
+    if bin_dir is None:
+        from importlib.resources import files
+
+        import mavsdk.bin as mavsdk_bin
+
+        bin_dir = files(mavsdk_bin)
+    binary = bin_dir / server_binary_name()
+    if not binary.is_file():
+        raise FileNotFoundError(f"{server_binary_name()} not found in {bin_dir}")
+    return Path(str(binary))
 
 
 def _free_local_port() -> int:
@@ -129,7 +196,13 @@ class MavsdkAutopilotLink:
     def connect(self) -> None:
         """Connect, subscribe to telemetry and detect the autopilot. Raises on failure."""
         if System is None:
-            raise RuntimeError("mavsdk is not installed; install it with: pip install mavsdk")
+            installed = _installed_mavsdk_version()
+            if installed:
+                raise RuntimeError(f"mavsdk {installed} is installed but could not be imported; "
+                                   "check that its dependencies are installed (pip check)")
+            raise RuntimeError("mavsdk is not installed; install it with: pip install 'mavsdk>=3.17,<4'")
+        if System is _REAL_SYSTEM:
+            check_mavsdk_version()
         if self._connected:
             return
         self._bridge.start_loop()
@@ -169,16 +242,13 @@ class MavsdkAutopilotLink:
 
         Only for the real MAVSDK. MAVSDK's own launcher kills the server
         only at a clean exit, so a crashed edge would leave it running,
-        heartbeating and holding the serial port.
+        heartbeating and holding the serial port. On Windows the server is
+        tied to the edge by a Job Object (``supervised.spawn_tied_to_parent``).
         """
         if System is not _REAL_SYSTEM or System is None or self._server_address is not None:
             return None
         try:
-            from importlib.resources import files
-
-            import mavsdk.bin as mavsdk_bin
-
-            binary = files(mavsdk_bin) / "mavsdk_server"
+            binary = locate_server_binary()
             from flightrisk.drone.supervised import spawn_tied_to_parent
 
             self._server = spawn_tied_to_parent([str(binary), "-p", str(port), self.address], log_name="mavsdk_server")

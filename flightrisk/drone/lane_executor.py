@@ -48,7 +48,9 @@ Obstacle sensing (``LaneExecutor(obstacle_sensor=..., obstacle_step_cm=...)``,
 design ``.claude/build/obstacle/design.md`` sections 3 and 4): with a sensor
 every lane is flown in sensed steps of at most ``obstacle_step_cm``; the
 drone turns to face each move first, and the sensor must report the view
-clear before each step is sent. A blocked view cuts the lane (the drone
+clear (``obstacle_clear_votes`` times in a row) before each step is sent.
+An obstacle may first be looked at again and stepped around
+(``flightrisk.drone.lane_avoid``). A blocked view cuts the lane (the drone
 stops, never lands for it, skips the rest of the lane and of any following
 lane in the same direction, and keeps later lanes on the planned grid). A
 sensor that cannot look is retried, then cuts the lane, and a sensor down
@@ -90,6 +92,8 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
+from flightrisk.drone.flight_guards import FlightGuards
+from flightrisk.drone.lane_avoid import ObstacleAvoidMixin
 from flightrisk.drone.lane_ceiling import CeilingCommandMixin
 from flightrisk.drone.lane_commands import (
     COMMAND_TYPES,
@@ -122,8 +126,11 @@ from flightrisk.drone.lane_steps import (
     uncovered_segments,
 )
 from flightrisk.drone.obstacle_sensor import (
+    OBSTACLE_AVOID_BUDGET_S,
     OBSTACLE_SENSE_TIMEOUT_S,
     OBSTACLE_SENSOR_DOWN_S,
+    OBSTACLE_SETTLE_RANGE_S,
+    OBSTACLE_SETTLE_S,
     OBSTACLE_STEP_CM,
     PERSON_CUE_AGE_KEY,
     PERSON_CUE_DOWN_KEY,
@@ -133,6 +140,7 @@ from flightrisk.drone.obstacle_sensor import (
     SENSING_STEPPED,
     SENSOR_UNAVAILABLE_DETAIL,
     START_REFUSED_REASON,
+    TELEMETRY_AVOID,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_CUTS,
     TELEMETRY_CUTS_TOTAL,
@@ -146,6 +154,16 @@ from flightrisk.drone.obstacle_sensor import (
     ObstacleSensor,
 )
 from flightrisk.drone.safety import ROOM_LIMITS, SafetyEnvelope, is_finite_number
+from flightrisk.drone.temp_preflight import (
+    EVENT_TEMP_PREFLIGHT,
+    LEVEL_OK,
+    TELEMETRY_TEMP,
+    TempCheck,
+    TempLimits,
+    TempSample,
+    judge_reading,
+    temp_telemetry,
+)
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
     MAX_TEXT_LEN,
@@ -222,7 +240,13 @@ _START_NACK_REASONS = {
 
 
 class LaneExecutor(
-    FleetCommandMixin, CeilingCommandMixin, ManualControlMixin, LanePlanMixin, FlightSequenceMixin, MonitorMixin
+    FleetCommandMixin,
+    CeilingCommandMixin,
+    ManualControlMixin,
+    LanePlanMixin,
+    ObstacleAvoidMixin,
+    FlightSequenceMixin,
+    MonitorMixin,
 ):
     """Executes ground control messages against one drone inside a safety envelope."""
 
@@ -257,6 +281,14 @@ class LaneExecutor(
         obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
         obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
         obstacle_takeoff_probe: bool = True,
+        obstacle_clear_votes: int = 1,
+        obstacle_relook: int = 0,
+        obstacle_sidestep_cm: int = 0,
+        obstacle_sidesteps: int = 0,
+        obstacle_avoid_budget_s: float = OBSTACLE_AVOID_BUDGET_S,
+        obstacle_settle_s: float = OBSTACLE_SETTLE_S,
+        temp_limits: TempLimits | None = None,
+        flight_guards: FlightGuards | None = None,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -287,6 +319,31 @@ class LaneExecutor(
           valid (``lane_flight._takeoff_sense_refusal``). The edge always
           keeps it on; False is only for tests whose scripted sensor must
           answer the lane gates from its very first call.
+        * *obstacle_clear_votes*: consecutive clear views a gate needs
+          before a step is flown (1 to 5; 1 is one view, as before). The
+          edge passes ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``.
+        * *obstacle_relook*, *obstacle_sidestep_cm*, *obstacle_sidesteps*:
+          the re-look and the sidestep at a gate that saw an obstacle
+          (``flightrisk.drone.lane_avoid``); all 0, the defaults, cut the
+          lane at once as before. The edge passes
+          ``FLIGHTRISK_OBSTACLE_RELOOK``, ``_SIDESTEP_CM`` and ``_SIDESTEPS``.
+        * *obstacle_avoid_budget_s*: the wall-clock seconds the re-look and
+          the sidestep may spend on one blocked gate (10 to 300); the edge
+          passes ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S``.
+        * *obstacle_settle_s*: the settle time the sensor waits after a move
+          before a frame counts (``FLIGHTRISK_OBSTACLE_SETTLE_S``, which the
+          edge passes). A gate's ``after`` is the gate's start less this, so
+          the sensor never judges a frame older than the gate.
+
+        *temp_limits* are the warn and refusal levels of the temperature
+        check before every takeoff (``temp_preflight``; the defaults when
+        None). Only a drone with ``state_temperature()`` (the Tello) is
+        checked: see ``_takeoff_temp_refusal``.
+
+        *flight_guards* (``flightrisk.drone.flight_guards``): how a Tello's
+        height must settle before a move to its altitude slot, how late its
+        takeoff reply may be, how often a transient refusal is retried, and
+        the hover-only test. The defaults apply when it is None.
         """
         self.drone = drone
         self.envelope = envelope
@@ -414,6 +471,11 @@ class LaneExecutor(
         # Operator text of the last takeoff refused because the drone was
         # unreachable; written and read on the flight sequence thread.
         self._unreachable_detail: str | None = None
+        # The temperature check before a takeoff (``_takeoff_temp_refusal``):
+        # its levels, and the outcome of the last check (None before the
+        # first), which telemetry reports until the next one.
+        self._temp_limits = temp_limits if temp_limits is not None else TempLimits()
+        self._temp_check: TempCheck | None = None
 
         # Obstacle sensing (``lane_flight``, ``lane_steps``). The sensor and
         # its settings are fixed for the executor's life.
@@ -433,6 +495,12 @@ class LaneExecutor(
         self._obstacle_turn = bool(obstacle_turn)
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
+        settle_lo, settle_hi = OBSTACLE_SETTLE_RANGE_S
+        if not is_finite_number(obstacle_settle_s) or not settle_lo <= obstacle_settle_s <= settle_hi:
+            raise ValueError(f"obstacle_settle_s must be from {settle_lo:g} to {settle_hi:g} s")
+        self.obstacle_settle_s = float(obstacle_settle_s)
+        self._init_avoid(obstacle_clear_votes, obstacle_relook, obstacle_sidestep_cm, obstacle_sidesteps,
+                         obstacle_avoid_budget_s)
         # Cuts of the current plan in the order they happened (all of them;
         # telemetry lists the last MAX_CUTS_LISTED). Kept across a re-task
         # that continues the plan, cleared when another plan is accepted.
@@ -476,6 +544,16 @@ class LaneExecutor(
         # Set by ``_command_move`` when the autopilot stopped a lane move
         # short (``STOPPED_SHORT``): the centimetres flown and the detail.
         self._short_stop: tuple[int, str] | None = None
+        self._guards = flight_guards if flight_guards is not None else FlightGuards()
+        # Moves the drone refused with a transient refusal (``flight_guards``)
+        # since the edge started, for telemetry (``move_refusals``): None
+        # until the first, then ``{total, last_reason, last_cmd, last_at}``.
+        # Never reset, so a drone that keeps refusing stays visible.
+        self._move_refusals: dict[str, Any] | None = None
+        # Transient refusals of this flight (``_retry_refusal``), reset at
+        # every takeoff. The lane distance they may have flown shrinks the
+        # geofence in the envelope (``SafetyEnvelope.fence_margin_cm``).
+        self._flight_refusals = 0
 
     # ------------------------------------------------------------------
     # Introspection
@@ -626,6 +704,13 @@ class LaneExecutor(
           null}``: whether the cue has been ``unknown`` for several gates in a
           row, and how old the view of the newest detection result is. Left
           out for a sensor that reports no person cue.
+        * ``obstacle_avoid``: with stepped sensing and the re-look or the
+          sidestep switched on (``lane_avoid``), what they did in the plan:
+          ``{"relooks", "relook_clears", "sidesteps", "sidestep_passes":
+          counts, "phase": "relook", "sidestep", "return", "held" or null,
+          "offsets": [lane, from_cm, length_cm, ...]}`` (``offsets`` only
+          once a step was flown beside a lane). Left out until the plan has
+          something to report.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps
@@ -663,6 +748,10 @@ class LaneExecutor(
         person = self._person_cue_status()
         if person is not None:
             status[TELEMETRY_PERSON_CUE] = person
+        if mode in (SENSING_STEPPED, SENSING_FORWARD_ONLY):
+            avoid = self._avoid_status()
+            if avoid is not None:
+                status[TELEMETRY_AVOID] = avoid
         return status
 
     def _person_cue_status(self) -> dict[str, Any] | None:
@@ -680,6 +769,30 @@ class LaneExecutor(
         if not is_finite_number(age) or age < 0:
             age = None
         return {PERSON_CUE_DOWN_KEY: bool(status[PERSON_CUE_DOWN_KEY]), PERSON_CUE_AGE_KEY: age}
+
+    def refusal_status(self) -> dict[str, Any]:
+        """The optional flight guard telemetry field (``flight_guards``), or nothing.
+
+        One object field, ``move_refusals``, so it costs one of the
+        protocol's ``MAX_FIELDS``: ``total`` counts every transient refusal
+        since the edge started (retried or not), ``last_reason`` is the last
+        reply (such as ``error No valid imu``), ``last_cmd`` the command it
+        answered (such as ``down 60``) and ``last_at`` when, on the edge
+        clock of ``takeoff_at_local_s``. ``hover_test`` is true while the
+        edge runs the hover-only test (``total`` is then 0 until a refusal).
+        ``fence_margin_cm``, while above 0, is how much the geofence is shrunk
+        on this flight after refused lane steps.
+        Empty for a drone that never refused and is not in the hover-only
+        test, so its telemetry is unchanged.
+        """
+        with self._lock:
+            refusals = None if self._move_refusals is None else dict(self._move_refusals)
+        if self._guards.hover_test:
+            refusals = {"total": 0, **(refusals or {}), "hover_test": True}
+        margin = self.envelope.fence_margin_cm
+        if refusals is not None and margin > 0:
+            refusals["fence_margin_cm"] = round(margin, 1)
+        return {} if refusals is None else {"move_refusals": refusals}
 
     def _obstacle_unavailable_detail(self) -> str:
         """Operator text of the ``drone_unreachable`` nack when the required sensor is missing."""
@@ -701,6 +814,7 @@ class LaneExecutor(
         self._obstacle_state = None
         self._obstacle_latency_ms = None
         self._plan_down_since = None
+        self._reset_avoid_plan_locked()
         self._request_sensor_probe_locked("new_plan")
 
     def _worker_alive(self) -> bool:
@@ -759,6 +873,82 @@ class LaneExecutor(
         if callable(reader):
             return reader()
         return getattr(self.drone.state, "height", None)
+
+    # ------------------------------------------------------------------
+    # Temperature check before a takeoff (``temp_preflight``)
+    # ------------------------------------------------------------------
+
+    def temp_status(self) -> dict[str, Any]:
+        """The ``temp_preflight`` telemetry field, or nothing for a drone that is never checked.
+
+        ``lane_monitor.telemetry()`` merges it into every telemetry message.
+        It carries the check before the last takeoff (``level`` None before
+        the first) and the live reading of the newest fresh state packet
+        (``temp_preflight.temp_telemetry``), so the drone card shows both and
+        the ground can refuse a start for a drone that is too hot now. A
+        drone with ``state_temperature()`` (the Tello) always reports it; any
+        other drone only once a check was recorded. Reads the state packet
+        only; never sends anything to the drone.
+        """
+        with self._lock:
+            check = self._temp_check
+        reader = getattr(self.drone, "state_temperature", None)
+        if check is None and not callable(reader):
+            return {}
+        live = self._state_temperature(reader).reading if callable(reader) else None
+        return {TELEMETRY_TEMP: temp_telemetry(check, self._temp_limits, live)}
+
+    @staticmethod
+    def _state_temperature(reader: Any) -> TempSample:
+        """``reader()`` (``TelloController.state_temperature``), or no reading when it fails. Never raises."""
+        try:
+            sample = reader()
+        except Exception as exc:  # noqa: BLE001 - an unreadable temperature warns, never refuses
+            return TempSample(None, f"state_temperature failed: {type(exc).__name__}: {exc}")
+        if not isinstance(sample, TempSample):
+            return TempSample(None, f"state_temperature returned {type(sample).__name__}")
+        return sample
+
+    def _takeoff_temp_refusal(self) -> str | None:
+        """Check the drone's temperature before a takeoff: the refusal's operator text, or None to go on.
+
+        Only a drone with ``state_temperature()`` (``TelloController``) is
+        checked; for any other drone this returns None, checks nothing and
+        reports nothing. The reading is the ``templ``/``temph`` of the
+        newest state packet, and only a fresh one: nothing is sent on the
+        command channel, so no reply can be taken for the takeoff's (Tello
+        replies carry no command id). It is judged against the levels
+        (``temp_preflight.judge_reading``): at or above the refusal level
+        the takeoff is refused with nothing sent; at or above the warn
+        level, and when there is no fresh reading, the check is logged as a
+        warning and the takeoff goes on. A reading that could not be taken
+        never refuses. Every check is logged as ``edge_temp_preflight`` and
+        kept for telemetry (``temp_status``). Runs first in every takeoff
+        (``_do_takeoff``), the operator's ``manual_takeoff`` included, so
+        the drone link, sensor and battery checks stay last. Never raises.
+        """
+        reader = getattr(self.drone, "state_temperature", None)
+        if not callable(reader):
+            return None
+        sample = self._state_temperature(reader)
+        check = judge_reading(sample.reading, self._temp_limits, detail=sample.detail)
+        with self._lock:
+            self._temp_check = check
+            kind = self._active_kind
+        text = check.operator_text()
+        fields = {"drone_id": self.drone_id, "kind": kind, **check.log_fields()}
+        if check.level == LEVEL_OK:
+            self._log.info(EVENT_TEMP_PREFLIGHT, **fields)
+            return None
+        self._log.warning(EVENT_TEMP_PREFLIGHT, operator_text=text, **fields)
+        if not check.refused:
+            return None
+        self._log.warning(
+            "edge_takeoff_refused", drone_id=self.drone_id, reason="temperature", kind=kind,
+            high_c=check.reading.high_c if check.reading else None, refuse_c=self._temp_limits.refuse_c,
+            detail=text,
+        )
+        return text[:MAX_TEXT_LEN]
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -80,7 +80,12 @@ class ServerEventsTest {
             "land_all_failed" to FleetEvent.LandAll::class,
             "profile_switch_pending" to FleetEvent.ProfileSwitchPending::class,
         )
-        assertEquals(expected.keys, Fixtures.cases("fleet_event.json").keys)
+        // The app does not know this kind: it is shown by name, with its detail, and offers no confirm control.
+        val unknownKind = "retask_needs_confirmation"
+        assertEquals(expected.keys + unknownKind, Fixtures.cases("fleet_event.json").keys)
+        val unknown = Fixtures.eventAs<FleetEvent>("fleet_event.json", unknownKind)
+        assertEquals(FleetEvent.Unknown::class, unknown::class)
+        assertEquals(unknownKind, unknown.kind)
         for ((case, cls) in expected) {
             val e = Fixtures.eventAs<FleetEvent>("fleet_event.json", case)
             assertEquals(case, cls, e::class)
@@ -278,7 +283,7 @@ class ServerEventsTest {
         assertTrue(s.available)
         assertEquals(180.0, s.ceilingCm)
         assertEquals(50.0, s.marginCm)
-        assertEquals(CeilingLimits(150.0, 1000.0, 30.0, 20.0, 500.0), s.limits)
+        assertEquals(CeilingLimits(150.0, 1000.0, 30.0, 50.0, 500.0), s.limits)
         assertEquals(listOf("drone-1", "drone-2"), s.drones.map { it.droneId })
         val edge = s.drones[1].edge!!
         assertEquals(false, edge.inSync)

@@ -5,7 +5,8 @@ djitellopy client talks to ``FakeTelloWire`` (``tests/conftest.py``), so the
 assertions are about the exact Tello SDK commands that reach the UDP socket.
 A command the wire is told to ``hold`` stays unanswered until the test
 releases it, which is how a move is kept "in flight". The battery and height
-readers are stubbed (no state stream), so a land is confirmed by its reply.
+readers, and the settled height, are stubbed (no state stream), so a land is
+confirmed by its reply.
 
 The point of these tests: a ``hold`` never puts ``stop`` (or anything else)
 on the wire, the move already on the wire completes, nothing follows it until
@@ -17,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.controller import DroneLinkStatus
+from flightrisk.drone.controller import DroneLinkStatus, SettledHeight
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from tests.conftest import TELLO_FLIGHT_WORDS
@@ -48,6 +49,9 @@ def wired(tello_on_wire):
         ctrl, wire = tello_on_wire(hold=set(hold_commands or ()))
         ctrl.read_battery = lambda: 90
         ctrl.read_height_cm = lambda: 100 if ctrl.state.is_flying else 0
+        # With no state stream the real settled_height() would never settle;
+        # the settle itself has its own tests (tests/test_tello_flight_guards.py).
+        ctrl.settled_height = lambda **_: SettledHeight(100, 110, 5, 0.0)
         # Never connected and no state stream (see the module docstring), so
         # the real link_status() would refuse every takeoff as unreachable;
         # these tests are about hold, resume and nudge, so report it healthy.

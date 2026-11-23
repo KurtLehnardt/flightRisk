@@ -93,6 +93,9 @@
             if (state.load_error) {
                 msg.className = 'ceiling-msg error';
                 msg.textContent = 'Saved settings could not be read (' + state.load_error + '). Plan and Start are refused until you save valid settings.';
+            } else if (state.load_warning) {
+                msg.className = 'ceiling-msg error';
+                msg.textContent = 'Saved settings changed on load: ' + state.load_warning + '.';
             } else if (locked) {
                 msg.className = 'ceiling-msg';
                 msg.textContent = 'Locked: ' + state.locked_reason;
@@ -140,7 +143,7 @@
             if (problems.length) {
                 msg.className = 'ceiling-msg error';
                 msg.textContent = problems.join('\n');
-            } else if (msg.classList.contains('error') && !ceilingState.load_error) {
+            } else if (msg.classList.contains('error') && !ceilingState.load_error && !ceilingState.load_warning) {
                 msg.className = 'ceiling-msg';
                 msg.textContent = '';
             }

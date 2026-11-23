@@ -12,7 +12,9 @@ moves with ``plan_paths.path_to_lanes``, and runs the checks of
    lane cap, a valid ``assign_lanes`` within the size cap, the altitude slot
    range), with its region gap rule replaced by
 3. the path separation check: any two drones' paths must stay ``gap_cm``
-   apart everywhere;
+   apart everywhere, plus the ground's sidestep margin when either drone
+   reports that it may sidestep an obstacle (``sidestep_margin_of``,
+   ``coordinator.SIDESTEP_MARGIN_CM``);
 4. coverage of the search area with a square footprint of ``strip_cm``,
    reported (never a refusal) as ``kind: "area"`` entries of ``uncovered``.
 
@@ -382,6 +384,7 @@ def build_plan(
     mode: str = "fleet",
     takeoffs: Mapping[str, Sequence[int]] | None = None,
     footprint_cm: int | None = None,
+    sidestep_margin_of: Callable[[str], int] | None = None,
 ) -> BuiltPlan:
     """Build and check a plan for ``drone_ids`` (see the module docstring).
 
@@ -397,8 +400,11 @@ def build_plan(
     ``strip_cm`` is used when the spec names none. ``alt_slot_of(drone_id,
     index)`` gives each drone's altitude slot (100 cm when omitted).
     ``geofence_cm`` None skips the fence check; the dashboard always passes
-    the edges' value. Never raises for a bad plan: every problem is in
-    ``BuiltPlan.problems``.
+    the edges' value. ``sidestep_margin_of(drone_id)`` is the margin to keep
+    beyond ``gap_cm`` from that drone's path because it may sidestep an
+    obstacle inside its own zone (``coordinator.FleetCoordinator.sidestep_margin_of``);
+    a pair keeps the larger of its two margins, and none without it. Never
+    raises for a bad plan: every problem is in ``BuiltPlan.problems``.
     """
     strip = spec.strip_cm if spec.strip_cm is not None else int(strip_cm)
     ids = [str(d) for d in drone_ids]
@@ -460,12 +466,16 @@ def build_plan(
     converted = [d for d in built.drones if d.converted is not None]
     for a, b in itertools.combinations(converted, 2):
         distance, pa, pb = pp.closest_approach(a.converted.trace, b.converted.trace)
-        if distance < gap_cm:
+        margin = 0
+        if sidestep_margin_of is not None:
+            margin = max(int(sidestep_margin_of(a.drone_id) or 0), int(sidestep_margin_of(b.drone_id) or 0))
+        if distance < gap_cm + margin:
             where = ((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2)
+            extra = f" and the {margin} cm sidestep margin" if margin else ""
             problems.append(Problem(
                 "separation",
                 f"{a.drone_id} and {b.drone_id}: the paths come within {distance:.0f} cm of each other near "
-                f"({where[0]:.0f}, {where[1]:.0f}) cm, below the {gap_cm} cm gap",
+                f"({where[0]:.0f}, {where[1]:.0f}) cm, below the {gap_cm} cm gap{extra}",
                 drone_id=a.drone_id, other_drone_id=b.drone_id, point=where,
             ))
     for text in _check_plan_problems(built.drones, spec.area, strip, geofence_cm):

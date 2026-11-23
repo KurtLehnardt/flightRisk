@@ -3,9 +3,10 @@ import XCTest
 
 /// R-8: every received payload decodes from its fixture; missing optional fields decode as nil.
 final class DecodeFixturesTests: XCTestCase {
-    func testThereAreTwentyFourFixtureFiles() throws {
+    func testThereAreTwentySevenFixtureFiles() throws {
+        // 24, plus reasoning_result.json, alert_upgrade.json and demo_scenario.json.
         let names = try Fixtures.fileNames()
-        XCTAssertEqual(names.count, 24, "fixture files: \(names)")
+        XCTAssertEqual(names.count, 27, "fixture files: \(names)")
     }
 
     /// Every case of every file with a server event this build handles decodes into the matching
@@ -121,9 +122,15 @@ final class DecodeFixturesTests: XCTestCase {
             "retask": .retask, "retask_failed": .retaskFailed, "land_all": .landAll,
             "land_all_failed": .landAll, "profile_switch_pending": .profileSwitchPending,
         ]
+        // The app does not know this kind: it is shown by name, with its detail, and offers no confirm control.
+        let unknownKind = "retask_needs_confirmation"
         let cases = try Fixtures.cases("fleet_event")
-        XCTAssertEqual(Set(cases.map(\.name)), Set(expected.keys))
-        for c in cases {
+        XCTAssertEqual(Set(cases.map(\.name)), Set(expected.keys).union([unknownKind]))
+        let unknownCase = try XCTUnwrap(cases.first { $0.name == unknownKind })
+        let unknownEvent = try JSONDecoder().decode(FleetEvent.self, from: XCTUnwrap(unknownCase.payloadData))
+        XCTAssertEqual(unknownEvent.resolvedKind, .unknown(unknownKind))
+        XCTAssertEqual(unknownEvent.resolvedKind?.isKnown, false)
+        for c in cases where c.name != unknownKind {
             let ev = try JSONDecoder().decode(FleetEvent.self, from: XCTUnwrap(c.payloadData))
             XCTAssertEqual(ev.resolvedKind, expected[c.name], c.name)
             XCTAssertEqual(ev.resolvedKind?.isKnown, true, c.name)
@@ -347,7 +354,7 @@ final class DecodeFixturesTests: XCTestCase {
         XCTAssertEqual(ok.ceilingCm, 200)
         XCTAssertEqual(ok.marginCm, 60)
         XCTAssertEqual(ok.maxSlotCm, 140)
-        XCTAssertEqual(ok.limits?.minSlotCm, 20)
+        XCTAssertEqual(ok.limits?.minSlotCm, 50)
         XCTAssertEqual(ok.limits?.maxCeilingCm, 1000)
         XCTAssertEqual(ok.editable, true)
         XCTAssertNil(ok.lockedReason)

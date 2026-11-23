@@ -538,19 +538,29 @@ def model_load(model: str, outcome: str, *, error: BaseException | None = None, 
 # reasoning (metadata only)
 # ---------------------------------------------------------------------------
 
+#: Reasoning outcomes where no model answered, so there is no latency to record.
+_NO_LATENCY_OUTCOMES = frozenset({"skipped", "unavailable", "off"})
+
+
 @_safe
 def reasoning_call(*, provider: str, model: str | None, kind: str, duration_ms: float, outcome: str,
                    tokens_in: int | None = None, tokens_out: int | None = None, error_type: str | None = None,
                    component: str = "reasoning") -> None:
-    """One reasoning call: provider, model, latency, token counts and outcome. Never the text."""
+    """One reasoning call: provider, model, latency, token counts and outcome. Never the text.
+
+    Calls that never reached a model (``skipped``, ``unavailable``, ``off``)
+    are counted but add no latency sample, so the duration histogram is not
+    pulled toward zero while a backend is paused.
+    """
     labels = {"provider": safe_token(provider), "kind": safe_token(kind), "outcome": safe_token(outcome)}
     M.reasoning_calls.add(1, labels)
-    M.reasoning_duration.record(duration_ms, labels)
+    if outcome not in _NO_LATENCY_OUTCOMES:
+        M.reasoning_duration.record(duration_ms, labels)
     if isinstance(tokens_in, int):
         M.reasoning_tokens.add(tokens_in, {"provider": labels["provider"], "direction": "input"})
     if isinstance(tokens_out, int):
         M.reasoning_tokens.add(tokens_out, {"provider": labels["provider"], "direction": "output"})
-    level = logging.INFO if outcome in ("match", "no_match", "ok") else logging.WARNING
+    level = logging.WARNING if outcome in ("error", "unavailable") else logging.INFO
     log_event(_log, level, "reasoning", f"{provider} {kind} {outcome}", category="reasoning", component=component,
               provider=provider, model=model, kind=kind, duration_ms=round(duration_ms, 1), outcome=outcome,
               tokens_in=tokens_in, tokens_out=tokens_out, error_type=error_type)
@@ -561,7 +571,7 @@ def reasoning_outcome(result: Mapping[str, Any] | None) -> str:
     if not isinstance(result, Mapping):
         return "error"
     confidence = result.get("confidence")
-    if confidence in ("error", "unavailable", "off"):
+    if confidence in ("error", "unavailable", "off", "skipped"):
         return str(confidence)
     return "match" if result.get("match") else "no_match"
 
@@ -602,6 +612,12 @@ SAFETY_EVENTS: dict[str, tuple[str, str | None]] = {
     "edge_start_refused": ("start_refused", None),
     "edge_fail_safe_idle": ("fail_safe", None),
     "edge_altitude_unknown": ("altitude_unknown", "height_unknown"),
+    # Flight guards (flightrisk/drone/flight_guards.py), logged by the edge.
+    "edge_height_unsettled": ("height_unsettled", "height_unsettled"),
+    "edge_descent_refused": ("descent_refused", "tof_clearance"),
+    "edge_takeoff_late": ("takeoff_late", "takeoff_late"),
+    "edge_move_refused": ("move_refused", None),
+    "edge_hover_test": ("hover_test", None),
     "edge_local_land_key": ("manual_land", "land_key"),
     "edge_sigint_land": ("manual_land", "sigint"),
     "edge_local_land_error": ("land_failed", "land_key"),

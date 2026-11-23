@@ -210,26 +210,30 @@ class ProfileSwitcher:
     # -- Status -------------------------------------------------------------
 
     def status_fields(self) -> dict[str, Any]:
-        """Fields added to telemetry: the active profile, any fallback, and whether a switch is allowed now.
+        """Fields added to telemetry: one ``detection_profile`` object.
 
-        ``detection_profile_switchable`` is the same flight check a switch
-        uses, so the ground can send a refused choice again the moment the
-        edge would accept it.
+        The object holds ``name`` (the active profile), ``fallback``,
+        ``switchable`` and, when they apply, ``fallback_reason`` and
+        ``requested``. It replaces five flat top-level fields so the
+        telemetry message keeps its field headroom (``MAX_FIELDS``).
+        ``switchable`` is the same flight check a switch uses, so the
+        ground can send a refused choice again the moment the edge would
+        accept it.
         """
         switchable = not self._flying()
         with self._lock:
             if self.active is None:
                 return {}
-            out: dict[str, Any] = {
-                "detection_profile": self.active,
-                "detection_profile_fallback": self.fallback_reason is not None,
-                "detection_profile_switchable": switchable,
+            profile: dict[str, Any] = {
+                "name": self.active,
+                "fallback": self.fallback_reason is not None,
+                "switchable": switchable,
             }
             if self.fallback_reason is not None:
-                out["detection_profile_fallback_reason"] = self.fallback_reason
+                profile["fallback_reason"] = self.fallback_reason
             if self.requested is not None and self.requested != self.active:
-                out["detection_profile_requested"] = self.requested
-            return out
+                profile["requested"] = self.requested
+            return {"detection_profile": profile}
 
     # -- Commands -----------------------------------------------------------
 

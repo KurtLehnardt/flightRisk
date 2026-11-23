@@ -29,6 +29,7 @@ from flightrisk.drone.controller import (
     DroneCapabilities,
     DroneState,
 )
+from flightrisk.drone.mavsdk_link import check_mavsdk_version
 from flightrisk.drone.snapshot import (
     DEGREE,
     IS_FLYING_COMMANDED,
@@ -496,6 +497,11 @@ class MavlinkController:
 
     def connect(self) -> bool:
         """Connect to the MAVLink drone and start telemetry."""
+        try:
+            check_mavsdk_version()  # mavsdk 4+ has no gRPC server this controller can use
+        except RuntimeError as exc:
+            logger.error("[%s] Connect failed: %s", self.name, exc)
+            return False
         with self._cmd_lock:
             self._running = True
             self._start_loop()

@@ -85,6 +85,7 @@ __all__ = [
     "MAX_CEILING_CM",
     "MAX_MOVE_CM",
     "MIN_ALT_SLOT_CM",
+    "MIN_ALT_SLOT_DETAIL",
     "MIN_CEILING_CM",
     "MIN_CEILING_MARGIN_CM",
     "MIN_MOVE_CM",
@@ -94,6 +95,7 @@ __all__ = [
     "ROOM_LIMITS",
     "SafetyEnvelope",
     "slot_above_ceiling",
+    "slot_below_minimum",
     "validate_ceiling",
 ]
 
@@ -126,9 +128,21 @@ DEFAULT_FIELD_LINK_LOSS_HOLD_S = 10.0
 MIN_MOVE_CM = 20
 MAX_MOVE_CM = 500
 
-# Altitude slots must be reachable with a single relative move from the
-# ground and must leave room for the minimum move size.
-MIN_ALT_SLOT_CM = MIN_MOVE_CM
+# The lowest altitude slot of the room profile (the Tello). The Tello's
+# downward Vision Positioning System works from 0.3 m (Tello user manual:
+# effective at 0.3 to 10 m, best at 0.3 to 6 m), and the Tello's own height
+# reading has a few cm of error and overshoots at the end of a move
+# (docs/ceiling-and-altitude.md), so the slot keeps 20 cm above that limit,
+# as the ceiling keeps its margin below the ceiling. A slot far below the
+# takeoff's own hover of about 80 cm also needs a long descent right after
+# takeoff: on 2026-11-21 a 20 cm slot sent a Tello 'down 80' from a stale
+# height, which it answered 'error No valid imu' while it drifted off a desk.
+MIN_ALT_SLOT_CM = 50
+MIN_ALT_SLOT_DETAIL = (
+    f"a Tello's altitude slot must be at least {MIN_ALT_SLOT_CM} cm: below 30 cm its downward vision "
+    "positioning cannot hold it, and the other 20 cm covers its height error and overshoot"
+)
+# A slot must leave room for the longest single relative move.
 MAX_ALT_SLOT_CM = MAX_MOVE_CM
 
 # Ceiling (docs/ceiling-and-altitude.md). Heights are the Tello's own reading
@@ -250,6 +264,18 @@ class CeilingError(ValueError):
 def format_cm(value: float) -> str:
     """A height for messages: ``140`` rather than ``140.0``, one decimal otherwise."""
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def slot_below_minimum(slot_cm: float, limits: EnvelopeLimits | None = None) -> str | None:
+    """Operator text for a room-profile (Tello) slot below ``MIN_ALT_SLOT_CM``, or None.
+
+    None for a slot at or above the minimum, and for any other profile,
+    whose own range message says enough.
+    """
+    lim = ROOM_LIMITS if limits is None else limits
+    if lim is not ROOM_LIMITS or not is_finite_number(slot_cm) or slot_cm >= lim.min_alt_slot_cm:
+        return None
+    return f"altitude slot {format_cm(slot_cm)} cm is too low: {MIN_ALT_SLOT_DETAIL}"
 
 
 def validate_ceiling(
@@ -419,6 +445,11 @@ class SafetyEnvelope:
         self.ceiling_cm, self.ceiling_margin_cm = validate_ceiling(ceiling_cm, ceiling_margin_cm, self.limits)
         self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
+        # How far the dead-reckoned pose may be wrong on this flight, in cm:
+        # the lane steps the drone refused but may have partly flown
+        # (``flightrisk.drone.flight_guards``). Every geofence check shrinks
+        # the fence by it on every side; ``reset_pose`` clears it.
+        self._fence_margin_cm = 0.0
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
         if link_loss_hold_s is not None and (not is_finite_number(link_loss_hold_s) or link_loss_hold_s < 0):
             raise ValueError(f"link_loss_hold_s must be 0 or more, got {link_loss_hold_s!r}")
@@ -502,8 +533,10 @@ class SafetyEnvelope:
         lim = ROOM_LIMITS if limits is None else limits
         lo, hi = lim.min_alt_slot_cm, lim.max_alt_slot_cm
         if not is_finite_number(alt_slot_cm) or not lo <= alt_slot_cm <= hi:
+            low = slot_below_minimum(alt_slot_cm, lim) if is_finite_number(alt_slot_cm) else None
             raise ValueError(
                 f"altitude slot must be within {format_cm(lo)}-{format_cm(hi)} cm, got {alt_slot_cm!r}"
+                + (f": {low}" if low else "")
             )
         return float(alt_slot_cm)
 
@@ -594,12 +627,33 @@ class SafetyEnvelope:
 
     # --- Geofence ---
 
-    def check_move(self, direction: str, distance_cm: float) -> bool:
+    @property
+    def fence_margin_cm(self) -> float:
+        """How much the fence is shrunk on every side on this flight (``add_fence_margin``), in cm."""
+        with self._lock:
+            return self._fence_margin_cm
+
+    def add_fence_margin(self, distance_cm: float) -> float:
+        """Shrink the fence by *distance_cm* more for the rest of this flight; return the whole margin.
+
+        For a move the drone refused but may have partly flown: the
+        dead-reckoned pose may be wrong by that much, so every later
+        geofence check (``check_move``, ``inside_fence``) keeps that much
+        further inside. ``reset_pose`` clears it at the next takeoff.
+        """
+        if not is_finite_number(distance_cm) or distance_cm < 0:
+            raise ValueError(f"a fence margin must be a number of 0 cm or more, got {distance_cm!r}")
+        with self._lock:
+            self._fence_margin_cm += float(distance_cm)
+            return self._fence_margin_cm
+
+    def check_move(self, direction: str, distance_cm: float, *, with_margin: bool = True) -> bool:
         """Return True if a lane move may be flown from the current pose.
 
         Refuses vertical moves (lanes never change altitude), distances the
         Tello cannot fly exactly, and any move whose dead-reckoned endpoint
-        leaves the geofence.
+        leaves the geofence, shrunk by ``fence_margin_cm`` unless
+        *with_margin* is False (``inside_fence``).
         """
         if direction not in HORIZONTAL_DIRECTIONS:
             return False
@@ -607,17 +661,32 @@ class SafetyEnvelope:
             return False
         with self._lock:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)
-        return self.inside_fence(x_cm, y_cm)
+        return self.inside_fence(x_cm, y_cm, with_margin=with_margin)
+
+    def margin_note(self, direction: str, distance_cm: float) -> str | None:
+        """Operator text when a move is refused only because the fence is shrunk (``fence_margin_cm``), else None."""
+        margin = self.fence_margin_cm
+        if margin <= 0 or self.check_move(direction, distance_cm) or not self.check_move(
+            direction, distance_cm, with_margin=False
+        ):
+            return None
+        return f"fence {format_cm(margin)} cm smaller after a refused step"
 
     def move_endpoint(self, direction: str, distance_cm: float) -> tuple[float, float]:
         """The dead-reckoned ``(x_cm, y_cm)`` a horizontal move from the current pose would reach."""
         with self._lock:
             return self.pose.endpoint(direction, distance_cm)
 
-    def inside_fence(self, x_cm: float, y_cm: float) -> bool:
-        """True if a point lies inside the geofence square around takeoff."""
+    def inside_fence(self, x_cm: float, y_cm: float, *, with_margin: bool = True) -> bool:
+        """True if a point lies inside the geofence square around takeoff.
+
+        The square is shrunk on every side by ``fence_margin_cm``, how far the
+        dead-reckoned pose may be wrong on this flight, unless *with_margin*
+        is False.
+        """
+        margin = self.fence_margin_cm if with_margin else 0.0
         # A small tolerance absorbs floating-point error from rotated moves.
-        limit = self.geofence_cm + 1e-6
+        limit = self.geofence_cm - margin + 1e-6
         return abs(x_cm) <= limit and abs(y_cm) <= limit
 
     def record_move(self, direction: str, distance_cm: float) -> None:
@@ -640,6 +709,9 @@ class SafetyEnvelope:
         """
         with self._lock:
             previous, self.pose = self.pose, RelativePose()
+            # A new flight from a new takeoff point: the error of the last
+            # flight's pose no longer applies.
+            self._fence_margin_cm = 0.0
         return previous
 
     def pose_snapshot(self) -> RelativePose:

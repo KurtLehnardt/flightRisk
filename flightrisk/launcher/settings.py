@@ -12,6 +12,15 @@ A ``LauncherSettings`` describes what this computer runs:
 ``validate`` returns every problem as an ``Issue``; an issue of level
 ``error`` blocks the start. Presets are stored in ``~/.flightrisk/launcher.json``
 (``FLIGHTRISK_LAUNCHER_FILE`` overrides the path) and never contain the edge token.
+
+The obstacle sensing mode (``obstacle_sensing``) reaches the edges this
+launcher starts as ``FLIGHTRISK_OBSTACLE_SENSING``. The same variable in the
+launcher's own environment wins over the window's setting (``effective_obstacle``
+says which applies and why), so a shell or script that sets it keeps working. An
+edge reads it once, at its start: a change applies on the next Start. The depth
+threshold (``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``) is not a launcher setting: the
+launcher never shows or sets it, and an edge uses its own default unless the
+environment it inherits sets it.
 """
 
 from __future__ import annotations
@@ -27,12 +36,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import (
+    ENV_OBSTACLE_SENSING,
+    SENSING_ENV_OFF,
+    SENSING_ENV_REQUIRED,
+)
 from flightrisk.drone.safety import (
     MAX_ALT_SLOT_CM,
     MIN_ALT_SLOT_CM,
     slot_above_ceiling,
+    slot_below_minimum,
     validate_ceiling,
 )
+from flightrisk.drone.temp_preflight import TempLimits
 from flightrisk.fleet_protocol import is_identifier
 from flightrisk.launcher.netinfo import Adapter, adapters_for_host
 
@@ -52,6 +68,8 @@ DEFAULT_MARGIN_CM = 60
 DEFAULT_OTEL_ENDPOINT = "http://localhost:4317"
 #: The coordinator's altitude slots for zones in turn, so an edge starts at the slot it is planned at.
 DEFAULT_SLOTS_CM = (100, 130)
+#: The edge's ``FLIGHTRISK_OBSTACLE_SENSING`` values, ``required`` (the default) first.
+OBSTACLE_SENSING_MODES = (SENSING_ENV_REQUIRED, SENSING_ENV_OFF)
 MIN_PORT = 1024
 MAX_PORT = 65535
 LAUNCHER_FILE_ENV = "FLIGHTRISK_LAUNCHER_FILE"
@@ -118,6 +136,8 @@ class LauncherSettings:
     llm: bool = False
     otel_enabled: bool = False
     otel_endpoint: str = DEFAULT_OTEL_ENDPOINT
+    #: ``FLIGHTRISK_OBSTACLE_SENSING`` of the edges started here: ``required`` or ``off``.
+    obstacle_sensing: str = SENSING_ENV_REQUIRED
 
     # ---- derived views -------------------------------------------------
 
@@ -193,6 +213,7 @@ class LauncherSettings:
             llm=_bool(data, "llm", defaults.llm),
             otel_enabled=_bool(data, "otel_enabled", defaults.otel_enabled),
             otel_endpoint=_text(data, "otel_endpoint", defaults.otel_endpoint),
+            obstacle_sensing=_text(data, "obstacle_sensing", defaults.obstacle_sensing).lower(),
         )
 
 
@@ -367,6 +388,14 @@ def validate(
         if not endpoint.startswith(("http://", "https://")):
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
+    env_all = os.environ if environ is None else environ
+    if (env_all.get("FLIGHTRISK_HOVER_TEST") or "").strip().lower() in ("1", "true", "yes", "on"):
+        warn("environ", "FLIGHTRISK_HOVER_TEST=1 is inherited: every edge started here runs the hover-only test. "
+             "Each drone takes off and hovers, and flies no slot move, lane, nudge or manual step until the edges "
+             "are restarted without it")
+    _validate_obstacle(settings, os.environ if environ is None else environ, err, warn)
+    _validate_temp_limits(settings, os.environ if environ is None else environ, err)
+
     if settings.role == "ground" and settings.llm:
         env = os.environ if environ is None else environ
         provider = (env.get("FLIGHTRISK_REASONING_PROVIDER") or "").strip().lower()
@@ -376,6 +405,122 @@ def validate(
         else:
             warn("llm", "the language model is on: the ground station connects to the local Ollama server at start")
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Obstacle sensing settings
+# ---------------------------------------------------------------------------
+
+SOURCE_WINDOW = "window"
+SOURCE_ENVIRONMENT = "environment"
+
+
+@dataclass(frozen=True)
+class EffectiveObstacle:
+    """The obstacle sensing mode the edges started here will use, and where it comes from.
+
+    ``mode_source`` is ``window`` (the launcher's setting) or ``environment`` (the variable in the
+    launcher's environment, which wins). ``mode_raw`` is the inherited text when it comes from the
+    environment, so a value the edge would refuse can be named.
+    """
+
+    mode: str
+    mode_source: str
+    mode_raw: str | None = None
+
+    @property
+    def downgraded(self) -> bool:
+        """True when the edges would fly with weaker obstacle protection than ``required``."""
+        return self.mode != SENSING_ENV_REQUIRED
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "mode_source": self.mode_source,
+            "mode_variable": ENV_OBSTACLE_SENSING,
+            "downgraded": self.downgraded,
+            "applies": "on the next Start",
+        }
+
+
+def _inherited(environ: Mapping[str, str], name: str) -> str | None:
+    """The inherited value of *name*, or None when it is unset or empty (the edge reads empty as unset)."""
+    raw = environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    return str(raw).strip()
+
+
+def effective_obstacle(settings: LauncherSettings, environ: Mapping[str, str]) -> EffectiveObstacle:
+    """What the edges started here will use: an inherited ``FLIGHTRISK_OBSTACLE_SENSING`` wins over the window's setting."""
+    mode_raw = _inherited(environ, ENV_OBSTACLE_SENSING)
+    if mode_raw is not None:
+        return EffectiveObstacle(mode_raw.lower(), SOURCE_ENVIRONMENT, mode_raw)
+    return EffectiveObstacle(settings.obstacle_sensing, SOURCE_WINDOW)
+
+
+def obstacle_env(settings: LauncherSettings, environ: Mapping[str, str]) -> dict[str, str]:
+    """The obstacle variable the launcher sets for an edge: the window's mode, unless the environment sets it already."""
+    if _inherited(environ, ENV_OBSTACLE_SENSING) is None:
+        return {ENV_OBSTACLE_SENSING: settings.obstacle_sensing}
+    return {}
+
+
+def sensing_warning(effective: EffectiveObstacle, drone_ids: tuple[str, ...] = ()) -> str:
+    """The full-sentence warning an operator must confirm before edges start with weaker obstacle sensing."""
+    who = f"the edges this launcher starts ({', '.join(drone_ids)})" if drone_ids else "the edges this launcher starts"
+    if effective.mode == SENSING_ENV_OFF:
+        text = (
+            f"Obstacle sensing will be OFF for {who}. Their drones will fly every lane with no obstacle "
+            "protection: nothing stops them for a wall, a plant or a person in the lane. Use this only for "
+            "bring-up with a safety observer who can land every drone at once."
+        )
+    else:
+        text = (
+            f"Obstacle sensing will be {effective.mode!r} for {who}, not required. Their drones will fly with "
+            "weaker obstacle protection, or none."
+        )
+    if effective.mode_source == SOURCE_ENVIRONMENT:
+        text += (
+            f" This comes from {ENV_OBSTACLE_SENSING} in the launcher's environment, which wins over the window; "
+            "unset it and restart the launcher to change it."
+        )
+    return text + " It applies from this Start until the edges are stopped."
+
+
+def _validate_obstacle(settings: LauncherSettings, environ: Mapping[str, str], err: Callable, warn: Callable) -> None:
+    if settings.obstacle_sensing not in OBSTACLE_SENSING_MODES:
+        err("obstacle_sensing", f"obstacle sensing must be {' or '.join(OBSTACLE_SENSING_MODES)}, "
+            f"got {settings.obstacle_sensing!r}")
+    if not settings.local_drones():
+        return  # no edge starts here, so neither the window nor the environment reaches one
+    eff = effective_obstacle(settings, environ)
+    if eff.mode_source == SOURCE_ENVIRONMENT:
+        if eff.mode not in OBSTACLE_SENSING_MODES:
+            err("obstacle_sensing", f"{ENV_OBSTACLE_SENSING}={eff.mode_raw!r} in the launcher's environment is not "
+                f"{' or '.join(OBSTACLE_SENSING_MODES)}: the edges would refuse to start. Unset or fix it and restart "
+                "the launcher")
+        elif eff.mode != settings.obstacle_sensing:
+            warn("obstacle_sensing", f"{ENV_OBSTACLE_SENSING}={eff.mode} in the launcher's environment wins over the "
+                 f"window's {settings.obstacle_sensing}: the edges start with {eff.mode}")
+    if eff.mode == SENSING_ENV_OFF:
+        warn("obstacle_sensing", "obstacle sensing is off: the edges started here fly their lanes with no obstacle "
+             "protection; Start asks you to confirm")
+
+
+def _validate_temp_limits(settings: LauncherSettings, environ: Mapping[str, str], err: Callable) -> None:
+    """An inherited ``FLIGHTRISK_TELLO_TEMP_WARN_C`` or ``..._REFUSE_C`` the edges would refuse is an error.
+
+    Every flying edge reads both at its start (``edge_device._temp_limits``) and refuses to start on a
+    bad value, so the launcher checks them the same way (``TempLimits.from_env``) before it starts one.
+    """
+    if not settings.local_drones():
+        return  # no edge starts here
+    try:
+        TempLimits.from_env(environ)
+    except ValueError as exc:
+        err("tello_temp", f"{exc} (in the launcher's environment): the edges would refuse to start. Unset or fix it "
+            "and restart the launcher (docs/fleet-setup.md, \"Takeoff temperature check\")")
 
 
 def local_tellos_without_adapter(settings: LauncherSettings, adapters: list[Adapter]) -> list[tuple[int, DroneSettings, list[Adapter]]]:
@@ -435,7 +580,9 @@ def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable
         if drone.source not in SOURCES:
             err(f"{name}.source", f"{label}: source must be tello or fake, got {drone.source!r}")
         if not MIN_ALT_SLOT_CM <= drone.alt_slot_cm <= MAX_ALT_SLOT_CM:
-            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm")
+            low = slot_below_minimum(drone.alt_slot_cm)
+            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+                + (f" ({low})" if low else ""))
         elif ceiling_ok:
             reason = slot_above_ceiling(drone.alt_slot_cm, settings.ceiling_cm, settings.margin_cm)
             if reason is not None:
@@ -547,7 +694,10 @@ def builtin_presets() -> dict[str, LauncherSettings]:
         "Layout A (edges on this computer)": LauncherSettings(
             role="edges", ground_host=DEFAULT_CABLE_ADDRESS, ground_port=DEFAULT_EDGE_PORT,
             # The same slots as scripts/demo_edge_pair.ps1. The adapter of each drone is chosen in the window.
-            drones=_two("tello", run_here=True, slots=(50, 80)),
+            # drone-1 at 60 cm, not the 50 cm minimum: at the minimum a descent
+            # from the takeoff hover needs a downward distance at least the
+            # height, on every settled packet (flight_guards), or it lands.
+            drones=_two("tello", run_here=True, slots=(60, 80)),
         ),
         "Layout B (everything here)": LauncherSettings(
             # Two real Tellos from one computer need one Wi-Fi adapter each, chosen in the window.
