@@ -1,6 +1,7 @@
 """Tests of the resource checks in tests/support/leaks.py: a check that cannot fail proves nothing."""
 
 import socket
+import sys
 import threading
 import warnings
 
@@ -46,12 +47,18 @@ def test_a_thread_that_ends_before_the_check_is_not_reported():
 
 
 def test_a_leaked_socket_is_found():
+    from tests.support import leaks
+
     before = snapshot()
-    sock = socket.socket()
+    # Windows counts handles with a noise tolerance (WINDOWS_HANDLE_NOISE), so one socket is below it by
+    # design; plant more than the tolerance there. macOS and Linux count descriptors exactly: one is enough.
+    count = leaks.WINDOWS_HANDLE_NOISE + 2 if sys.platform == "win32" else 1
+    socks = [socket.socket() for _ in range(count)]
     try:
         assert "fds" in snapshot().leaked_since(before, settle_s=0.2)
     finally:
-        sock.close()
+        for sock in socks:
+            sock.close()
     assert snapshot().leaked_since(before, settle_s=1.0) == {}
 
 
