@@ -746,16 +746,18 @@ class TestLicenceGuardNames:
     def test_every_model_the_apps_load_is_classified(self):
         """A model name in the app code is either forbidden or one this pipeline (or MiDaS) provides."""
         allowed_in_apps = {o.installed_name for o in mm.OUTPUTS} | {"midas_small.onnx"}
-        # detector.onnx is the on-device name of the user's own imported model (ByoDetectorStore); no
-        # model of that name ships in the app or the repo.
-        allowed_in_apps |= {"detector.onnx"}
         allowed_in_apps |= {Path(n).stem for n in allowed_in_apps}
+        # detector.onnx is the on-device name of the user's own imported model (ByoDetectorStore); no
+        # model of that name ships in the app or the repo. It is added after the stems, so a bare
+        # "detector" resource name is still checked.
+        allowed_in_apps |= {"detector.onnx"}
         found: set[str] = set()
         srcs = list((ROOT / "mobile").rglob("*.kt")) + list((ROOT / "ios").rglob("*.swift"))
         # Only code that ships: unit-test fixtures (src/test, src/androidTest, iOS test targets) use
         # throwaway names such as bad.onnx and are not models the apps load.
-        test_dirs = {"test", "androidTest", "Tests", "FlightRiskTests", "FlightRiskUITests"}
-        srcs = [s for s in srcs if not test_dirs & set(s.relative_to(ROOT).parts)]
+        test_roots = ("mobile/app/src/test/", "mobile/app/src/androidTest/", "mobile/contract/src/test/",
+                      "ios/FlightRiskTests/", "ios/FlightRiskUITests/", "ios/FlightRiskGround/Tests/")
+        srcs = [s for s in srcs if not s.relative_to(ROOT).as_posix().startswith(test_roots)]
         for src in srcs:
             text = src.read_text(errors="replace")
             found |= set(re.findall(r'"([A-Za-z0-9_.\-]+\.(?:onnx|tflite|ort))"', text))
