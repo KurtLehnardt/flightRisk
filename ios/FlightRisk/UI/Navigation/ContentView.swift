@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage("flightrisk_onboarding_complete") private var onboardingComplete = false
     @State private var selectedTab = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     let viewModel: SearchViewModel
     let cameraSession: AVCaptureSession
@@ -11,6 +12,11 @@ struct ContentView: View {
     let gemmaModelManager: (any GemmaModelManaging)?
     let pipeline: SearchPipeline?
     let llmSelector: LlmSelector?
+
+    /// The app's one ground view model (`GroundViewModel.live`), which the Ground tab, the scene
+    /// hook and the Settings section all use. A computed property, not a stored one: a stored
+    /// property would create the singleton, and start its link, while onboarding is showing.
+    private var groundViewModel: GroundViewModel { .live }
 
     var body: some View {
         if onboardingComplete {
@@ -55,11 +61,19 @@ struct ContentView: View {
                         Label("Settings", systemImage: "gearshape")
                     }
                     .tag(2)
-                GroundView(viewModel: .live)
+                GroundView(viewModel: groundViewModel)
                     .tabItem {
                         Label("Ground", systemImage: "antenna.radiowaves.left.and.right")
                     }
                     .tag(3)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Reconnect the ground link at once instead of after the rest of a
+                // backoff wait. Only here, where the Ground tab exists, so the
+                // onboarding screens never create the ground view model.
+                if phase == .active {
+                    groundViewModel.sceneDidBecomeActive()
+                }
             }
         } else {
             OnboardingView { [pipeline] image, report in

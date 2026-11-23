@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -106,7 +107,8 @@ private fun GroundConsoleColumn(state: GroundUiState, actions: GroundActions, ma
         GroundTopBar(state, actions, maxText)
         HorizontalDivider()
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("ground.list"),
+            // imePadding keeps the address and key fields in the connection card above the keyboard.
+            modifier = Modifier.weight(1f).fillMaxWidth().imePadding().testTag("ground.list"),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

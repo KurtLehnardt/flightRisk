@@ -1,9 +1,13 @@
 package com.flightrisk.app.ui.onboarding
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -14,12 +18,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +60,11 @@ const val PREF_ONBOARDING_COMPLETE = "flightrisk_onboarding_complete"
 /** SharedPreferences file name. Excluded from backup and device transfer. */
 const val PREFS_NAME = "flightrisk_prefs"
 
+/** The label of the action that leaves onboarding without choosing a photo. */
+const val SET_UP_SEARCH_LATER = "Set up a search later"
+
+private const val TAG = "OnboardingScreen"
+
 /**
  * First-launch onboarding flow.
  *
@@ -67,10 +78,17 @@ const val PREFS_NAME = "flightrisk_prefs"
  * 5. Quality check with retry
  * 6. Transition to search
  *
+ * Steps 3 and 4 offer "Set up a search later", which ends onboarding without a
+ * photo. That lets someone who only runs the ground console reach the tabs;
+ * the Search tab then says that there is no search target yet, and a photo can
+ * be chosen on the Target tab at any time.
+ *
  * Stores completion in SharedPreferences so the flow is only shown once.
  *
  * @param onComplete Callback when onboarding is complete. Receives the
  *   selected target bitmap.
+ * @param onSkip Callback when the person chose to set up a search later.
+ *   Onboarding is stored as complete, with no target photo.
  * @param onTryDemo Starts demo mode from the first screen, without a photo
  *   or a ground station. Onboarding is not marked complete, so it shows
  *   again when demo mode ends. Null hides the choice.
@@ -78,6 +96,7 @@ const val PREFS_NAME = "flightrisk_prefs"
 @Composable
 fun OnboardingScreen(
     onComplete: (Bitmap) -> Unit,
+    onSkip: () -> Unit,
     modifier: Modifier = Modifier,
     onTryDemo: (() -> Unit)? = null,
 ) {
@@ -85,9 +104,31 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(1) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qualityReport by remember { mutableStateOf<QualityReport?>(null) }
+    var noDialerDialog by remember { mutableStateOf(false) }
+    val skip = {
+        saveOnboardingComplete(context)
+        onSkip()
+    }
+
+    if (noDialerDialog) {
+        AlertDialog(
+            onDismissRequest = { noDialerDialog = false },
+            title = { Text("Cannot place a call") },
+            text = { Text("This device can't place calls. Call 911 from a phone now.") },
+            confirmButton = { TextButton(onClick = { noDialerDialog = false }) { Text("OK") } },
+        )
+    }
+
+    // Back goes to the previous step. On the first step no callback is registered,
+    // so the system's predictive back-to-home gesture works as usual.
+    BackHandler(enabled = currentStep > 1) { currentStep -= 1 }
 
     Box(
-        modifier = modifier.fillMaxSize(),
+        // This flow is shown before the navigation shell, so it keeps clear of the
+        // system bars itself (the window is edge-to-edge).
+        modifier = modifier
+            .fillMaxSize()
+            .safeDrawingPadding(),
     ) {
         AnimatedContent(
             targetState = currentStep,
@@ -97,13 +138,24 @@ fun OnboardingScreen(
                 1 -> EmergencyCalloutStep(
                     onContinue = { currentStep = 2 },
                     onCall911 = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:911"))
-                        context.startActivity(intent)
+                        // A tablet without telephony cannot place a call even if an app
+                        // answers the dial intent, so say so instead of doing nothing.
+                        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) {
+                            noDialerDialog = true
+                        } else {
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:911")))
+                            } catch (e: ActivityNotFoundException) {
+                                Log.w(TAG, "No app can dial 911 on this device")
+                                noDialerDialog = true
+                            }
+                        }
                     },
                     onTryDemo = onTryDemo,
                 )
                 2 -> MissingChildStep(
                     onContinue = { currentStep = 3 },
+                    onSkip = skip,
                 )
                 3 -> PhotoSelectionStep(
                     onPhotoSelected = { bitmap, report ->
@@ -111,6 +163,7 @@ fun OnboardingScreen(
                         qualityReport = report
                         currentStep = 4
                     },
+                    onSkip = skip,
                 )
                 4 -> QualityCheckStep(
                     bitmap = selectedBitmap,
@@ -224,6 +277,7 @@ private fun EmergencyCalloutStep(
 @Composable
 private fun MissingChildStep(
     onContinue: () -> Unit,
+    onSkip: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -270,6 +324,10 @@ private fun MissingChildStep(
             )
         }
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SetUpLaterButton(onClick = onSkip)
+
         Spacer(modifier = Modifier.weight(0.5f))
     }
 }
@@ -281,13 +339,40 @@ private fun MissingChildStep(
 @Composable
 private fun PhotoSelectionStep(
     onPhotoSelected: (Bitmap, QualityReport) -> Unit,
+    onSkip: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    TargetPickerScreen(
-        onPhotoSelected = onPhotoSelected,
-        inline = true,
-        modifier = modifier,
-    )
+    Column(
+        modifier = modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        TargetPickerScreen(
+            onPhotoSelected = onPhotoSelected,
+            inline = true,
+            modifier = Modifier.weight(1f),
+        )
+        SetUpLaterButton(
+            onClick = onSkip,
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
+    }
+}
+
+/** Leaves onboarding without a photo; the Target tab can add one later. */
+@Composable
+private fun SetUpLaterButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier.sizeIn(minHeight = 48.dp),
+    ) {
+        Text(
+            text = SET_UP_SEARCH_LATER,
+            style = MaterialTheme.typography.titleMedium,
+        )
+    }
 }
 
 // -----------------------------------------------------------------------

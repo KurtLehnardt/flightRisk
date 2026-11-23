@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -60,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -119,6 +120,11 @@ private const val TAG = "SearchScreen"
  * @property cloudReasoningActive True while cloud reasoning is the active backend, so the
  *   "Cloud active" indicator is shown where images are sent.
  * @property reasoningNotice The reasoning fallback notice, or null.
+ * @property hasTarget Whether a target photo has been chosen. It is false after
+ *   onboarding was finished with "Set up a search later".
+ * @property hasCamera Whether the device has a camera. The app installs on
+ *   devices without one (the camera feature is not required); they can search
+ *   with a drone.
  */
 data class SearchScreenState(
     val isSearching: Boolean = false,
@@ -140,9 +146,18 @@ data class SearchScreenState(
     val selectedPattern: PatternType = PatternType.EXPANDING_SQUARE,
     val cloudReasoningActive: Boolean = false,
     val reasoningNotice: String? = null,
+    val hasTarget: Boolean = true,
+    val hasCamera: Boolean = true,
     /** Demo mode: the preview shows a drawn scene and the camera is never opened. */
     val demoMode: Boolean = false,
-)
+) {
+    /**
+     * Whether a search can start from this state. The demo search draws its own scene and
+     * uses the drawn placeholder target, so it needs neither a camera nor a photo.
+     */
+    val readiness: SearchReadiness
+        get() = if (demoMode) SearchReadiness.READY else searchReadiness(hasTarget, hasCamera, frameSourceMode)
+}
 
 // -----------------------------------------------------------------------
 // Search screen composable
@@ -175,6 +190,7 @@ data class SearchScreenState(
  * @param onLand Callback to command drone landing.
  * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
  * @param onDroneRotate Callback for drone rotation (degrees).
+ * @param onSetUpTarget Opens the Target tab, from the "No search target yet" card.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -194,8 +210,11 @@ fun SearchScreen(
     onDroneRotate: (Int) -> Unit = {},
     onEmergencyStop: () -> Unit = {},
     onSearchPatternChanged: (PatternType) -> Unit = {},
+    onSetUpTarget: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val readiness = state.readiness
+
     // Finding 8: delay banner to avoid flash on every start
     var showBanner by remember { mutableStateOf(false) }
     LaunchedEffect(state.isSearching) {
@@ -229,7 +248,7 @@ fun SearchScreen(
                 )
             }
             FrameSourceMode.CAMERA -> {
-                if (state.isSearching && !state.demoMode) {
+                if (state.isSearching && state.hasCamera && !state.demoMode) {
                     LiveCameraPreview(modifier = Modifier.fillMaxSize())
                 } else {
                     CameraPreviewPlaceholder(
@@ -245,11 +264,8 @@ fun SearchScreen(
             ModelsNotLoadedBanner(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(
-                        top = WindowInsets.statusBars
-                            .asPaddingValues()
-                            .calculateTopPadding() + 56.dp,
-                    ),
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 56.dp),
             )
         }
 
@@ -267,7 +283,9 @@ fun SearchScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .padding(WindowInsets.statusBars.asPaddingValues())
+                // Edge-to-edge: the navigation shell already pads (and consumes) the
+                // status bar, so this only adds an inset that is still unconsumed.
+                .windowInsetsPadding(WindowInsets.statusBars)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             // Reasoning banner: "Cloud active" while images go to Anthropic, and the fallback notice.
@@ -290,6 +308,21 @@ fun SearchScreen(
                     modifier = Modifier
                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // The full "no target" card is hidden while a search runs, so keep a compact reminder.
+            if (state.isSearching && readiness == SearchReadiness.NO_TARGET) {
+                Text(
+                    text = "No target photo: detecting people only",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("search.noTargetBanner"),
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -345,11 +378,8 @@ fun SearchScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .padding(
-                    top = WindowInsets.statusBars
-                        .asPaddingValues()
-                        .calculateTopPadding() + 100.dp,
-                ),
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = 100.dp),
         ) {
             state.droneAlert?.let { message ->
                 DroneAlertBanner(
@@ -405,6 +435,8 @@ fun SearchScreen(
 
                 BottomActionBar(
                     isSearching = state.isSearching,
+                    // A running search can always be stopped; a new one needs a camera or a drone.
+                    startEnabled = readiness.canStart,
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
                 )
@@ -413,6 +445,17 @@ fun SearchScreen(
 
                 DisclaimerFooter()
             }
+        }
+
+        // ----- What is missing before a search (no target photo, or no camera) -----
+        if (!state.isSearching && readiness != SearchReadiness.READY) {
+            SearchNotReadyCard(
+                readiness = readiness,
+                onSetUpTarget = onSetUpTarget,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp),
+            )
         }
 
         // ----- Match alert banner + card (rendered LAST = highest z-index) -----
@@ -522,6 +565,7 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
 
     // Finding 10: PreviewView created in AndroidView factory, not in remember
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var cameraUnavailable by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         // Finding 1: cache provider reference from callback
@@ -534,19 +578,37 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             if (disposed) return@addListener
-            val provider = cameraProviderFuture.get()
+            val provider = try {
+                cameraProviderFuture.get()
+            } catch (e: Exception) {
+                // CameraX fails to initialise on a device with no usable camera.
+                Log.e(TAG, "Camera provider unavailable", e)
+                cameraUnavailable = true
+                return@addListener
+            }
             cameraProvider = provider
+            // The back camera is preferred; a device with only a front camera uses that.
+            val cameraSelector = listOf(CameraSelector.DEFAULT_BACK_CAMERA, CameraSelector.DEFAULT_FRONT_CAMERA)
+                .firstOrNull { selector -> runCatching { provider.hasCamera(selector) }.getOrDefault(false) }
+            if (cameraSelector == null) {
+                Log.w(TAG, "No camera to bind the preview to")
+                cameraUnavailable = true
+                return@addListener
+            }
             val p = Preview.Builder().build().also { prev ->
                 previewView?.let { pv -> prev.setSurfaceProvider(pv.surfaceProvider) }
             }
             preview = p
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             try {
                 // Finding 2: bind without unbindAll — only our use case
                 provider.bindToLifecycle(lifecycleOwner, cameraSelector, p)
             } catch (e: IllegalStateException) {
                 // Finding 6: catch specific exceptions
                 Log.e(TAG, "Camera bind failed: illegal state", e)
+            } catch (e: IllegalArgumentException) {
+                // No camera matches the selector (it can disappear, for example an external one).
+                Log.e(TAG, "Camera bind failed: no matching camera", e)
+                cameraUnavailable = true
             } catch (e: SecurityException) {
                 Log.e(TAG, "Camera bind failed: security exception", e)
             }
@@ -563,12 +625,84 @@ private fun LiveCameraPreview(modifier: Modifier = Modifier) {
         }
     }
 
+    if (cameraUnavailable) {
+        Box(
+            modifier = modifier.background(Color(0xFF121212)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = stringResource(R.string.camera_unavailable),
+                color = Color.Gray,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+        return
+    }
+
     AndroidView(
         factory = { ctx ->
             PreviewView(ctx).also { pv -> previewView = pv }
         },
         modifier = modifier,
     )
+}
+
+// -----------------------------------------------------------------------
+// Search not ready (no target photo, or no camera)
+// -----------------------------------------------------------------------
+
+/**
+ * Says what is missing before a search. With no target photo it offers to open
+ * the Target tab (a search can still start, but cannot match anyone); with no
+ * camera it points to the drone connection below.
+ */
+@Composable
+private fun SearchNotReadyCard(
+    readiness: SearchReadiness,
+    onSetUpTarget: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val (title, body) = when (readiness) {
+        SearchReadiness.NO_CAMERA ->
+            stringResource(R.string.search_no_camera_title) to stringResource(R.string.search_no_camera_body)
+        else ->
+            stringResource(R.string.search_no_target_title) to stringResource(R.string.search_no_target_body)
+    }
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            if (readiness == SearchReadiness.NO_TARGET) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onSetUpTarget,
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                ) {
+                    Text(stringResource(R.string.search_no_target_action))
+                }
+            }
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -949,6 +1083,7 @@ private fun MatchAlertCard(
 @Composable
 private fun BottomActionBar(
     isSearching: Boolean,
+    startEnabled: Boolean,
     onStartSearch: () -> Unit,
     onStopSearch: () -> Unit,
     modifier: Modifier = Modifier,
@@ -963,6 +1098,7 @@ private fun BottomActionBar(
         // Start/Stop search button
         Button(
             onClick = if (isSearching) onStopSearch else onStartSearch,
+            enabled = isSearching || startEnabled,
             colors = if (isSearching) {
                 ButtonDefaults.buttonColors(
                     containerColor = AlertRed,

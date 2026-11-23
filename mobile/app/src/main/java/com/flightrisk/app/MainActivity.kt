@@ -77,6 +77,7 @@ import com.flightrisk.app.ui.onboarding.OnboardingScreen
 import com.flightrisk.app.ui.onboarding.isOnboardingComplete
 import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.search.SearchScreenState
+import com.flightrisk.app.ui.search.searchReadiness
 import com.flightrisk.app.ui.settings.SettingsScreenState
 import com.flightrisk.app.ui.theme.FlightRiskTheme
 import androidx.lifecycle.lifecycleScope
@@ -128,6 +129,18 @@ class MainActivity : ComponentActivity() {
     private sealed interface DemoDialog {
         data class ConfirmDisconnect(val host: String) : DemoDialog
         data class Blocked(val text: String) : DemoDialog
+    }
+
+    /**
+     * Whether the device has a camera the search preview can use. The preview binds the
+     * back or the front camera only, so a device whose only camera is an external one
+     * (FEATURE_CAMERA_EXTERNAL, which FEATURE_CAMERA_ANY also reports) counts as having
+     * none. The manifest does not require a camera, so the app also installs on devices
+     * without one, which can search with a drone.
+     */
+    private val deviceHasCamera: Boolean by lazy {
+        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA) ||
+            packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT)
     }
 
     // Ground console (U3). One block: the ViewModel is owned by the activity, so it outlives tab
@@ -211,6 +224,7 @@ class MainActivity : ComponentActivity() {
         privacyPrefs = SharedPrefsPrivacyPrefs(applicationContext)
         noticeAcknowledged = !PrivacyNoticeGate.shouldShowNotice(privacyPrefs)
         onboardingComplete = isOnboardingComplete(this)
+        searchState = searchState.copy(hasCamera = deviceHasCamera)
 
         // Load initial settings from config. No secret is read here.
         val config = FlightRiskConfig.getInstance(this)
@@ -328,6 +342,9 @@ class MainActivity : ComponentActivity() {
                                     targetBitmap = bitmap
                                     onboardingComplete = true
                                 },
+                                // "Set up a search later": the tabs open with no target photo, and
+                                // Search shows "No search target yet" until one is chosen.
+                                onSkip = { onboardingComplete = true },
                                 onTryDemo = ::requestDemo,
                             )
                         } else {
@@ -453,7 +470,9 @@ class MainActivity : ComponentActivity() {
     private fun requestPermissionsIfNeeded() {
         val permissionsToRequest = mutableListOf<String>()
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+        // A device without a camera is not asked for the camera permission.
+        if (deviceHasCamera &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
             permissionsToRequest.add(Manifest.permission.CAMERA)
@@ -483,6 +502,20 @@ class MainActivity : ComponentActivity() {
     private fun handleStartSearch() {
         if (searchState.isSearching) return
         if (demoActive) return startDemoSearch()
+        // Without a camera (and no drone) there is nothing to search with. The Search
+        // screen disables Start and says why; this also covers the drone flight
+        // controls, which have their own Start button. A search without a target
+        // photo may start: it detects people (and sends them to the ground station
+        // when that link is on) but cannot match anyone, which the screen says.
+        val readiness = searchReadiness(
+            hasTarget = targetBitmap != null,
+            hasCamera = deviceHasCamera,
+            frameSourceMode = frameSourceMode,
+        )
+        if (!readiness.canStart) {
+            Log.i(TAG, "Search not started: $readiness")
+            return
+        }
 
         // Update UI immediately so button toggles without waiting for model load
         if (frameSourceMode == FrameSourceMode.DRONE) {
@@ -514,6 +547,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "PersonDetector loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "PersonDetector: native library did not load", e)
                 }
             }
 
@@ -523,6 +561,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "PersonReID loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "PersonReID: native library did not load", e)
                 }
             }
 
@@ -532,6 +575,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "FaceRecognizer loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "FaceRecognizer: native library did not load", e)
                 }
             }
 
