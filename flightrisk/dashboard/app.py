@@ -1522,6 +1522,17 @@ def _reasoning_state() -> dict:
         reason = provider_unavailable_reason(name)
         if reason:
             unavailable[name] = reason
+    # Backends that guard their calls (Claude) report breaker state, open with
+    # seconds left or closed, and calls in the last minute; others report None.
+    health = None
+    health_fn = getattr(agent, "health", None) if agent else None
+    if callable(health_fn):
+        try:
+            health = health_fn()
+        except Exception:
+            health = None
+        if not isinstance(health, dict):
+            health = None
     return {
         "provider": agent.provider if agent else "off",
         "label": agent.label if agent else None,
@@ -1529,6 +1540,7 @@ def _reasoning_state() -> dict:
         "available": [name for name in PROVIDERS if name not in unavailable],
         "unavailable": unavailable,
         "cloud_allowed": cloud_llm_allowed(),
+        "health": health,
     }
 
 
