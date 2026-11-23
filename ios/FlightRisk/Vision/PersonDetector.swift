@@ -36,6 +36,14 @@ final class PersonDetector {
     /// in that case.
     private let vnModel: VNCoreMLModel?
 
+    /// Why person detection is off, in words for the person using the app,
+    /// or `nil` when the model loaded. The Search tab shows it as a banner,
+    /// so a missing or broken model is never silent.
+    let unavailableReason: String?
+
+    /// True when the detection model loaded and `detect(frame:)` can find people.
+    var isAvailable: Bool { vnModel != nil }
+
     private var debugFrameCount = 0
 
     // MARK: - Init
@@ -56,14 +64,31 @@ final class PersonDetector {
             do {
                 let mlModel = try MLModel(contentsOf: modelURL)
                 self.vnModel = try VNCoreMLModel(for: mlModel)
+                self.unavailableReason = nil
             } catch {
                 logger.warning("Failed to load CoreML model '\(modelName)': \(error.localizedDescription)")
                 self.vnModel = nil
+                self.unavailableReason = Self.loadFailedReason()
             }
         } else {
             logger.warning("CoreML model '\(modelName).mlmodelc' not found in bundle — detector disabled")
             self.vnModel = nil
+            self.unavailableReason = Self.missingModelReason()
         }
+    }
+
+    /// The banner text when the model is not in the app bundle.
+    static func missingModelReason() -> String {
+        "Person detection model not installed. This build of FlightRisk does not include the person detection model. "
+            + "The camera can run, but no one will be found or matched. "
+            + "Install a build that includes the model."
+    }
+
+    /// The banner text when the model is in the bundle but could not be loaded.
+    static func loadFailedReason() -> String {
+        "Person detection model not loaded. The person detection model could not be loaded on this device. "
+            + "The camera can run, but no one will be found or matched. "
+            + "Restart the app; if this stays, reinstall it."
     }
 
     // MARK: - Detection
