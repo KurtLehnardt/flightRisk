@@ -438,10 +438,19 @@ typealias GroundClientFactory = @MainActor (GroundEndpoint, GroundAPIKey) -> Gro
 final class GroundViewModel {
     /// The one instance the app uses (Ground tab and Settings section). Created on first use.
     static let live: GroundViewModel = {
+        #if DEBUG
+        liveWasCreated = true
+        #endif
         let model = GroundViewModel()
         model.startAppLifecycle()
         return model
     }()
+
+    #if DEBUG
+    /// Set when `live` is first created. A test uses it to check that onboarding does not create
+    /// the live model, which starts the lifecycle observers, the ticker and the connection.
+    nonisolated(unsafe) static private(set) var liveWasCreated = false
+    #endif
 
     /// How long a command may wait for the ground's answer before "no reply yet" shows.
     static let replyTimeout: TimeInterval = 5

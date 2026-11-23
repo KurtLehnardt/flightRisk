@@ -47,13 +47,11 @@ Do not pick the team in Xcode's Signing & Capabilities pane: Xcode would write i
 
 ### Privacy policy address
 
-The onboarding notice links to the address in the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting (default: the policy on GitHub). It reaches the app through the `FlightRiskPrivacyPolicyURL` key in `Info.plist`; an address that is not `https://` falls back to the default. Change it in `project.yml`, or override it in `Signing.local.xcconfig` (write `https:/$()/...`, because `//` starts a comment in an xcconfig file).
-
-A `//` in an xcconfig value starts a comment, so `FLIGHTRISK_PRIVACY_POLICY_URL = https://example.com/privacy` is cut off at `https:` and the app falls back to the default address without any error. Write it as `https:/$()/example.com/privacy`: the empty `$()` stops the two slashes from being read as a comment. `PrivacyComplianceTests` compares the address in the built app with the build setting, and a debug build stops with an assertion if the address was rejected.
+The onboarding notice links to the address in the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting (default: the policy on GitHub). It reaches the app through the `FlightRiskPrivacyPolicyURL` key in `Info.plist`; an address that is not `https://` falls back to the default. Change it in `project.yml`, or override it in `Signing.local.xcconfig`. A `//` in an xcconfig value starts a comment, so `FLIGHTRISK_PRIVACY_POLICY_URL = https://example.com/privacy` is cut off at `https:` and the app falls back to the default address without any error. Write it as `https:/$()/example.com/privacy`: the empty `$()` stops the two slashes from being read as a comment. Both the onboarding notice and Settings link to the policy. `PrivacyComplianceTests` compares the address in the built app with the build setting, and a debug build stops with an assertion if the address was rejected.
 
 ### Build number
 
-`CFBundleVersion` is `$(CURRENT_PROJECT_VERSION)`, set in `project.yml` (currently 1). App Store Connect rejects an upload whose build number is not higher than the previous one for the same version, so raise it for each upload: change `CURRENT_PROJECT_VERSION` in `project.yml` and run `xcodegen`, or, from `ios/`, run `xcrun agvtool new-version -all <n>` (which writes the number into the project file; keep `project.yml` in step so a later `xcodegen` does not undo it). The marketing version (`CFBundleShortVersionString`) is separate.
+`CFBundleVersion` is `$(CURRENT_PROJECT_VERSION)`, set in `project.yml` (currently 1). App Store Connect rejects an upload whose build number is not higher than the previous one for the same version, so raise it for each upload: change `CURRENT_PROJECT_VERSION` in `project.yml` and run `xcodegen`. That is the only supported method. Do not use `agvtool new-version -all`: it overwrites `$(CURRENT_PROJECT_VERSION)` in `Info.plist` with a literal number, and the build number then no longer follows `project.yml`. The marketing version (`CFBundleShortVersionString`) is separate.
 
 ### App icon
 

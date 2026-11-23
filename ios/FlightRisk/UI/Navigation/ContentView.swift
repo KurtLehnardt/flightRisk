@@ -13,10 +13,10 @@ struct ContentView: View {
     let pipeline: SearchPipeline?
     let llmSelector: LlmSelector?
 
-    /// The one ground view model of this screen. The Ground tab and the scene hook both use it,
-    /// so replacing it (a demo mode, a test) is a change in one place.
-    private let groundViewModel: GroundViewModel = .live
-
+    /// The app's one ground view model (`GroundViewModel.live`), which the Ground tab, the scene
+    /// hook and the Settings section all use. A computed property, not a stored one: a stored
+    /// property would create the singleton, and start its link, while onboarding is showing.
+    private var groundViewModel: GroundViewModel { .live }
 
     var body: some View {
         if onboardingComplete {
