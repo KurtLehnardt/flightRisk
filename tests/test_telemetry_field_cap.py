@@ -3,11 +3,15 @@
 A MAVLink edge with a GPS fix, the drone link, the obstacle fields and the
 person cue sends more than 32 fields, which the old cap dropped at the
 sender's validation. These tests build the telemetry the way the edge does
-(the executor's message, then ``_with_profile_status``) and validate it. The
-worst case includes the camera sensor's depth threshold
-(``obstacle_min_safe_depth``) and, for a Tello, the temperature check before
-its last takeoff (``temp_preflight``); a MAVLink drone answers no ``temp?``,
-so its telemetry never has that field.
+(the executor's message, then ``_with_profile_status``) and validate it.
+
+``_wire`` sets every optional field group by default, whatever the drone, so
+the headroom test guards the true worst case: the camera sensor's depth
+threshold (``obstacle_min_safe_depth``) and the temperature
+(``temp_preflight``, the check before the last takeoff and the live reading).
+A real MAVLink drone has no ``state_temperature`` and never sends
+``temp_preflight``, but counting it here keeps the guard honest when a field
+is added to any producer.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import pytest
 from flightrisk import edge_device
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.obstacle_sensor import TELEMETRY_MIN_SAFE_DEPTH, TELEMETRY_PERSON_CUE
-from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, TempLimits, judge_temperature
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, TempLimits, TempReading, judge_reading
 from tests.test_obstacle_h6_fixes import LinkedFakeTello, _CueSensor, _executor
 
 _CUE = {"person_cue_down": True, "person_detection_age_s": 3.2, "min_safe_depth": 0.77}
@@ -45,16 +49,17 @@ def _runner(profile_fields=True):
     return types.SimpleNamespace(detector_ok=True, camera_ok=True, profile_switcher=switcher if profile_fields else None)
 
 
-def _wire(drone_cls, *, cue=True, v2=True, profile_fields=True, temp=None):
-    """The telemetry message as the edge sends it.
+def _wire(drone_cls, *, cue=True, v2=True, profile_fields=True, temp=True):
+    """The telemetry message as the edge sends it, with every optional field group this edge can add.
 
-    *temp* (default: only for the Tello, ``LinkedFakeTello``) adds the takeoff temperature check.
+    *cue* adds the person cue and the depth threshold (``_CUE``); *temp* adds the takeoff
+    temperature check (``temp_preflight``) for any drone class.
     """
     ex = _executor(_CueSensor(_CUE if cue else {"sensor": "fake"}), drone=drone_cls(name="drone-1"))
     ex._v2_telemetry = v2
     ex._obstacle_state, ex._obstacle_latency_ms = "clear", 210.0
-    if temp if temp is not None else drone_cls is LinkedFakeTello:
-        ex._temp_check = judge_temperature("91~93C", TempLimits())
+    if temp:
+        ex._temp_check = judge_reading(TempReading(91, 93), TempLimits())
     sent = []
     edge_device._with_profile_status(sent.append, _runner(profile_fields))(ex.telemetry())
     return sent[0]
@@ -94,6 +99,12 @@ def test_every_telemetry_producer_stays_within_the_field_cap(drone_cls, cue, v2,
     msg = _wire(drone_cls, cue=cue, v2=v2, profile_fields=profile_fields, temp=temp)
     assert len(msg) <= fp.MAX_FIELDS
     assert fp.validate_message(msg, proto=2 if v2 else 1) == "telemetry"
+
+
+def test_the_wire_helper_sets_every_optional_group():
+    msg = _wire(_GpsTello)
+    assert {"lat", "lon", "drone_link_ok", TELEMETRY_PERSON_CUE, TELEMETRY_MIN_SAFE_DEPTH, TELEMETRY_TEMP,
+            "detection_profile_requested", "control_mode", "ceiling_cm", "epoch"} <= set(msg)
 
 
 def test_the_worst_case_telemetry_leaves_headroom_under_the_cap():

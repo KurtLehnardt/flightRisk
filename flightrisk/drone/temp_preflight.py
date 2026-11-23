@@ -1,27 +1,29 @@
-"""The Tello temperature check before a takeoff: parse the ``temp?`` reply and judge it.
+"""The Tello temperature check before a takeoff: read the state packet's temperature and judge it.
 
-Before every takeoff the lane executor asks a drone that has ``query_temperature()`` (the Tello) for
-its temperature with the read-only SDK query ``temp?``. A Tello answers with the lowest and highest
-temperature of its main board in degrees Celsius, for example ``53~56C`` (the ``templ`` and ``temph``
-fields of its state packet); a single number such as ``56C`` is read as both. The highest value is
-judged, because it is the one closest to the overheat point:
+A Tello sends a state packet about ten times a second. Its ``templ`` and ``temph`` fields are the lowest
+and highest temperature in degrees Celsius; the Tello SDK 1.3, 2.0 and 3.0 all document them. Before
+every takeoff the lane executor takes them from the newest state packet of a drone that has
+``state_temperature()`` (``TelloController``). Nothing is sent on the command channel for the check:
+Tello replies carry no command id, so a query sent before a takeoff could have its reply read as the
+takeoff's answer, or the takeoff's ``ok`` read as the temperature. Only a fresh packet counts (at most
+``tello._STATE_FRESH_S`` old). The highest value is judged, because it is the one closest to the
+overheat point:
 
 * at or above the refusal level (``FLIGHTRISK_TELLO_TEMP_REFUSE_C``, default 95) the takeoff is refused
   with an operator message, unless the refusal is switched off (``off``);
-* at or above the warn level (``FLIGHTRISK_TELLO_TEMP_WARN_C``, default 90) the reading is logged as a
+* at or above the warn level (``FLIGHTRISK_TELLO_TEMP_WARN_C``, default 92) the reading is logged as a
   warning and shown on the drone card;
-* a reading that is missing (no reply, a timeout, a send that failed) or malformed is ``unknown``. It
-  is logged as a warning and never refuses a takeoff.
+* a reading that is missing (no state packet, a stale one, one without both fields) or out of range is
+  ``unknown``. It is logged as a warning and never refuses a takeoff.
 
-Why these defaults (sources in ``docs/fleet-setup.md``, "Takeoff temperature check"): the Tello SDK
-1.3 documents the ``temp?`` reply as 0 to 90 degrees Celsius, so 90 is the top of the documented
-range; no Ryze or DJI document publishes a shutdown temperature. One logged report saw a Tello that
-sat powered on reach 95 degrees and switch itself off, and another reports that a Tello EDU stops
-taking off above about 100 degrees and shuts down above about 105. The refusal level is the lowest of
-those reported shutdown points. A Tello at rest can read 91 to 93 degrees and still fly, so a
-refusal at 70 would ground a healthy drone that is merely powered on.
+Why these defaults (sources in ``docs/fleet-setup.md``, "Takeoff temperature check"): no Ryze or DJI
+document publishes a shutdown or no-takeoff temperature. One logged report saw a Tello that sat powered
+on reach 95 degrees and switch itself off, and another reports that a Tello EDU stops taking off above
+about 100 degrees and shuts down above about 105. The refusal level is the lowest of those reported
+shutdown points. Our drone-1 idles at 91 to 93 degrees and still flies, so a warn level of 90 would fire
+on every start and be ignored; 92 warns only near the top of that band, 3 degrees below the refusal.
 
-Nothing here talks to a drone; the query itself is ``TelloController.query_temperature``.
+Nothing here talks to a drone; the reading itself is ``TelloController.state_temperature``.
 """
 
 from __future__ import annotations
@@ -30,16 +32,16 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
-#: Environment variables read at the edge's start (``edge_device``).
+#: Environment variables read at the edge's start (``edge_device``) and checked by the launcher.
 ENV_TELLO_TEMP_WARN_C = "FLIGHTRISK_TELLO_TEMP_WARN_C"
 ENV_TELLO_TEMP_REFUSE_C = "FLIGHTRISK_TELLO_TEMP_REFUSE_C"
 #: The value of ``FLIGHTRISK_TELLO_TEMP_REFUSE_C`` that switches the refusal off (warn only).
 REFUSE_OFF = "off"
 
-#: The warn level: the top of the ``temp?`` range the Tello SDK 1.3 documents (0 to 90).
-DEFAULT_TEMP_WARN_C = 90
+#: The warn level: near the top of the 91 to 93 degrees our drone-1 reads at rest, 3 below the refusal.
+DEFAULT_TEMP_WARN_C = 92
 #: The refusal level: the lowest overheat shutdown temperature reported for a Tello (95).
 DEFAULT_TEMP_REFUSE_C = 95
 #: Allowed warn and refusal levels, in degrees Celsius. Below 40 every Tello that has been on for
@@ -48,9 +50,6 @@ TEMP_LIMIT_RANGE_C = (40, 120)
 #: A reading outside this range is not a temperature this board reports, so it is ``unknown``.
 TEMP_READING_RANGE_C = (-40, 150)
 
-#: How long the edge waits for the reply to ``temp?``.
-TEMP_QUERY_TIMEOUT_S = 2.5
-
 #: Levels of a check.
 LEVEL_OK = "ok"
 LEVEL_WARN = "warn"
@@ -58,38 +57,61 @@ LEVEL_REFUSE = "refuse"
 LEVEL_UNKNOWN = "unknown"
 LEVELS = (LEVEL_OK, LEVEL_WARN, LEVEL_REFUSE, LEVEL_UNKNOWN)
 
-#: The telemetry field (edge to ground) that carries the last check, and its keys.
+#: The telemetry field (edge to ground) that carries the temperature, and its keys. ``level``,
+#: ``low_c``, ``high_c`` and ``detail`` are the check before the last takeoff (``level`` is None
+#: before the first); ``live_low_c`` and ``live_high_c`` are the newest fresh state packet's
+#: reading, None while there is none.
 TELEMETRY_TEMP = "temp_preflight"
-TEMP_KEYS = ("level", "low_c", "high_c", "warn_c", "refuse_c", "detail")
+TEMP_KEYS = ("level", "low_c", "high_c", "warn_c", "refuse_c", "detail", "live_low_c", "live_high_c")
 #: Longest ``detail`` text in telemetry and in a log event.
 MAX_DETAIL_CHARS = 120
 
 #: The structured log event of every check.
 EVENT_TEMP_PREFLIGHT = "edge_temp_preflight"
 
-# ``53~56C``, ``53~56``, ``56C``, ``56``, with optional spaces and a degree sign. Plain ASCII
-# digits only, so a reply such as ``٥٦`` is not read as a number.
-_REPLY_RE = re.compile(r"(-?[0-9]{1,3})(?:\s*~\s*(-?[0-9]{1,3}))?\s*(?:°\s*)?[cC]?")
+# ``53~56C``, ``53~56``, ``56C``, ``56``, with optional spaces and a degree sign (``°C`` or ``℃``).
+# Plain ASCII digits only, so a reply such as ``٥٦`` is not read as a number.
+_REPLY_RE = re.compile(r"(-?[0-9]{1,3})(?:\s*~\s*(-?[0-9]{1,3}))?\s*(?:℃|°\s*[cC]?|[cC])?")
 
 
 @dataclass(frozen=True)
 class TempReading:
-    """One ``temp?`` reply: the board's lowest and highest temperature in degrees Celsius."""
+    """The board's lowest and highest temperature in degrees Celsius."""
 
     low_c: int
     high_c: int
 
 
+class TempSample(NamedTuple):
+    """A temperature taken from the drone: the reading, or None and why there is none."""
+
+    reading: TempReading | None
+    detail: str | None = None
+
+
+def reading_from(low: Any, high: Any) -> TempReading | None:
+    """The reading of two values (``templ`` and ``temph``) put in order, or None when either is not a temperature.
+
+    Each must be a whole number (not a bool) inside ``TEMP_READING_RANGE_C``.
+    """
+    lo, hi = TEMP_READING_RANGE_C
+    for value in (low, high):
+        if not _whole(value) or not lo <= value <= hi:
+            return None
+    return TempReading(min(low, high), max(low, high))
+
+
 def parse_temp_reply(reply: Any) -> TempReading | None:
     """The temperature in a ``temp?`` reply, or None when the reply is not one.
 
-    ``53~56C`` is 53 to 56; ``56C`` and ``56`` are 56 to 56. The two values are put in order. A
-    reply that is not text, that has anything else in it (``ok``, ``error``, ``unknown command``),
-    or whose values are outside ``TEMP_READING_RANGE_C`` is None.
+    The launcher's drone probe asks ``temp?`` before any edge starts; the edge never does (see the
+    module docstring). ``53~56C`` is 53 to 56; ``56C``, ``56℃`` and ``56`` are 56 to 56. The two
+    values are put in order. A reply that is not text, that has anything else in it (``ok``,
+    ``error``, ``unknown command``), or whose values are outside ``TEMP_READING_RANGE_C`` is None.
     """
     if isinstance(reply, (bytes, bytearray)):
         try:
-            reply = bytes(reply).decode("ascii")
+            reply = bytes(reply).decode("utf-8")
         except UnicodeDecodeError:
             return None
     if not isinstance(reply, str):
@@ -99,10 +121,7 @@ def parse_temp_reply(reply: Any) -> TempReading | None:
         return None
     first = int(match.group(1))
     second = int(match.group(2)) if match.group(2) is not None else first
-    lo, hi = TEMP_READING_RANGE_C
-    if not (lo <= first <= hi and lo <= second <= hi):
-        return None
-    return TempReading(min(first, second), max(first, second))
+    return reading_from(first, second)
 
 
 @dataclass(frozen=True)
@@ -142,6 +161,14 @@ class TempLimits:
         except ValueError as exc:
             raise ValueError(f"{ENV_TELLO_TEMP_WARN_C}/{ENV_TELLO_TEMP_REFUSE_C}: {exc}") from None
 
+    def level_of(self, high_c: int) -> str:
+        """The level of a reading whose highest value is *high_c*: refuse, warn or ok."""
+        if self.refuse_c is not None and high_c >= self.refuse_c:
+            return LEVEL_REFUSE
+        if high_c >= self.warn_c:
+            return LEVEL_WARN
+        return LEVEL_OK
+
 
 def _whole(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -160,6 +187,12 @@ def _env_degrees(environ: Mapping[str, str], name: str, default: int, *, allow_o
     return int(raw)
 
 
+def _range_text(reading: TempReading) -> str:
+    if reading.low_c == reading.high_c:
+        return f"{reading.high_c} C"
+    return f"{reading.low_c} to {reading.high_c} C"
+
+
 @dataclass(frozen=True)
 class TempCheck:
     """The outcome of one temperature check before a takeoff."""
@@ -173,10 +206,10 @@ class TempCheck:
     def refused(self) -> bool:
         return self.level == LEVEL_REFUSE
 
-    def to_telemetry(self) -> dict[str, Any]:
-        """The ``temp_preflight`` telemetry object: every key of ``TEMP_KEYS``, None where not known."""
+    def log_fields(self) -> dict[str, Any]:
+        """The fields of the ``edge_temp_preflight`` log event."""
         return {
-            "level": self.level,
+            "temp_level": self.level,
             "low_c": self.reading.low_c if self.reading else None,
             "high_c": self.reading.high_c if self.reading else None,
             "warn_c": self.limits.warn_c,
@@ -184,55 +217,73 @@ class TempCheck:
             "detail": self.detail,
         }
 
-    def log_fields(self) -> dict[str, Any]:
-        """The fields of the ``edge_temp_preflight`` log event."""
-        fields = self.to_telemetry()
-        fields["temp_level"] = fields.pop("level")
-        return fields
+    def operator_text(self) -> str:
+        """One plain sentence (or two) for the operator about this check.
 
-    def operator_text(self, drone_id: str | None = None) -> str:
-        """One plain sentence (or two) for the operator about this check."""
-        name = drone_id or "the drone"
+        It never names the drone: the ground puts the drone id in front of a refusal
+        (``Start refused: drone-1: ...``) and every log event carries ``drone_id``.
+        """
         limits = self.limits
-        if self.reading is not None:
-            reading = self.reading
-            temp = f"{reading.high_c} C" if reading.low_c == reading.high_c else f"{reading.low_c} to {reading.high_c} C"
-        else:
-            temp = "unknown"
+        temp = _range_text(self.reading) if self.reading is not None else "unknown"
         if self.level == LEVEL_REFUSE:
             return (
-                f"Takeoff refused: {name} reports {temp}, at or above the refusal level of {limits.refuse_c} C "
+                f"Takeoff refused: {temp} is at or above the refusal level of {limits.refuse_c} C "
                 f"({ENV_TELLO_TEMP_REFUSE_C}). Let it cool with the battery out or on a fan, then start again."
             )
         if self.level == LEVEL_WARN:
             return (
-                f"{name} is hot: {temp}, at or above the warn level of {limits.warn_c} C. A Tello that sits "
-                "powered on keeps heating and can switch itself off; take off soon or let it cool."
+                f"Hot: {temp} is at or above the warn level of {limits.warn_c} C. A Tello that sits powered on "
+                "keeps heating and can switch itself off; take off soon or let it cool."
             )
         if self.level == LEVEL_UNKNOWN:
-            return f"{name}: the temperature could not be read before takeoff ({self.detail or 'no reading'}); taking off anyway."
-        return f"{name} temperature {temp} before takeoff."
+            return f"The temperature could not be read before takeoff ({self.detail or 'no reading'}); taking off anyway."
+        return f"Temperature {temp} before takeoff."
+
+
+def judge_reading(reading: TempReading | None, limits: TempLimits, *, detail: str | None = None) -> TempCheck:
+    """Judge one reading against *limits*.
+
+    No reading is ``unknown`` with *detail* (why there is none), and never refuses.
+    """
+    if reading is None:
+        return TempCheck(LEVEL_UNKNOWN, limits, detail=_clip(detail or "no reading"))
+    return TempCheck(limits.level_of(reading.high_c), limits, reading)
 
 
 def judge_temperature(reply: Any, limits: TempLimits, *, failure: str | None = None) -> TempCheck:
-    """Judge one ``temp?`` reply against *limits*.
+    """Judge one ``temp?`` reply (the launcher's drone probe) against *limits*.
 
-    *failure* is why there is no reply (a timeout, a send that raised); a reply that does not parse
-    is ``unknown`` with the reply in the detail. Neither ever refuses.
+    *failure* is why there is no reply; a reply that does not parse is ``unknown`` with the reply
+    in the detail. Neither ever refuses.
     """
     if failure is not None:
-        return TempCheck(LEVEL_UNKNOWN, limits, detail=_clip(failure))
+        return judge_reading(None, limits, detail=failure)
     if reply is None:
-        return TempCheck(LEVEL_UNKNOWN, limits, detail="no reply to temp?")
+        return judge_reading(None, limits, detail="no reply to temp?")
     reading = parse_temp_reply(reply)
     if reading is None:
         shown = repr(reply) if isinstance(reply, (str, bytes, bytearray)) else type(reply).__name__
-        return TempCheck(LEVEL_UNKNOWN, limits, detail=_clip(f"not a temperature: {shown}"))
-    if limits.refuse_c is not None and reading.high_c >= limits.refuse_c:
-        return TempCheck(LEVEL_REFUSE, limits, reading)
-    if reading.high_c >= limits.warn_c:
-        return TempCheck(LEVEL_WARN, limits, reading)
-    return TempCheck(LEVEL_OK, limits, reading)
+        return judge_reading(None, limits, detail=f"not a temperature: {shown}")
+    return judge_reading(reading, limits)
+
+
+def temp_telemetry(check: TempCheck | None, limits: TempLimits, live: TempReading | None) -> dict[str, Any]:
+    """The ``temp_preflight`` telemetry object: every key of ``TEMP_KEYS``, None where not known.
+
+    *check* is the check before the last takeoff (None before the first); *live* is the newest
+    fresh state packet's reading (None while there is none).
+    """
+    reading = check.reading if check is not None else None
+    return {
+        "level": check.level if check is not None else None,
+        "low_c": reading.low_c if reading else None,
+        "high_c": reading.high_c if reading else None,
+        "warn_c": limits.warn_c,
+        "refuse_c": limits.refuse_c,
+        "detail": check.detail if check is not None else None,
+        "live_low_c": live.low_c if live else None,
+        "live_high_c": live.high_c if live else None,
+    }
 
 
 def _clip(text: str) -> str:
@@ -243,16 +294,40 @@ def _clip(text: str) -> str:
 def temp_status(value: Any) -> dict[str, Any] | None:
     """An edge's ``temp_preflight`` telemetry as the ground shows it, or None when it is not that shape.
 
-    Keeps only ``TEMP_KEYS``: ``level`` one of ``LEVELS``, the temperatures and levels finite numbers
-    or None, ``detail`` text of at most ``MAX_DETAIL_CHARS`` characters or None.
+    Keeps only ``TEMP_KEYS``: ``level`` one of ``LEVELS`` or None (no check yet), the temperatures
+    and levels finite numbers or None, ``detail`` text of at most ``MAX_DETAIL_CHARS`` characters or
+    None.
     """
-    if not isinstance(value, Mapping) or value.get("level") not in LEVELS:
+    if not isinstance(value, Mapping) or "level" not in value:
         return None
-    out: dict[str, Any] = {"level": value["level"]}
-    for key in ("low_c", "high_c", "warn_c", "refuse_c"):
+    level = value["level"]
+    if level is not None and level not in LEVELS:
+        return None
+    out: dict[str, Any] = {"level": level}
+    for key in ("low_c", "high_c", "warn_c", "refuse_c", "live_low_c", "live_high_c"):
         number = value.get(key)
         ok = isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number)
         out[key] = number if ok else None
     detail = value.get("detail")
     out["detail"] = _clip(detail) if isinstance(detail, str) and detail.strip() else None
-    return out
+    return {key: out[key] for key in TEMP_KEYS}
+
+
+def live_refusal(status: Mapping[str, Any] | None) -> str | None:
+    """The ground's start refusal for a drone whose live temperature is at or above its refusal level, or None.
+
+    *status* is ``temp_status()`` of the drone's fresh telemetry. Only a live reading counts: the
+    check before the last takeoff may be long out of date, and no live reading never refuses (the
+    edge checks again right before its takeoff).
+    """
+    if not status:
+        return None
+    high, refuse = status.get("live_high_c"), status.get("refuse_c")
+    if high is None or refuse is None or high < refuse:
+        return None
+    low = status.get("live_low_c")
+    temp = f"{low:g} to {high:g} C" if low is not None and low != high else f"{high:g} C"
+    return (
+        f"too hot: {temp}, at or above the refusal level of {refuse:g} C ({ENV_TELLO_TEMP_REFUSE_C}); "
+        "let it cool with the battery out or on a fan, then start again"
+    )

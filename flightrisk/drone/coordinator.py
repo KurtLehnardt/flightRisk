@@ -102,7 +102,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
-from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, temp_status
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -906,7 +906,7 @@ class FleetCoordinator:
                     depth = _number(telemetry.get(TELEMETRY_MIN_SAFE_DEPTH))
                     if depth is not None and depth > 0:
                         entry[TELEMETRY_MIN_SAFE_DEPTH] = depth
-                # The temperature check before the drone's last takeoff, only from an edge that made one.
+                # The temperature check before the drone's last takeoff and the live reading, only from an edge that reports them.
                 temp = temp_status(telemetry.get(TELEMETRY_TEMP))
                 if temp is not None:
                     entry[TELEMETRY_TEMP] = temp
@@ -1250,6 +1250,13 @@ class FleetCoordinator:
                     # The edge cannot reach its drone, so its battery is a
                     # cached value and a start_at would be refused anyway.
                     refusals[drone_id] = _drone_link_refusal(telemetry)
+                    continue
+                too_hot = live_refusal(temp_status(telemetry.get(TELEMETRY_TEMP)))
+                if too_hot is not None:
+                    # The drone's live temperature (its newest fresh state
+                    # packet) is at or above its edge's refusal level, so the
+                    # edge would refuse the takeoff anyway: say why here.
+                    refusals[drone_id] = too_hot
                     continue
                 sensing = telemetry.get(TELEMETRY_SENSING)
                 if telemetry.get(TELEMETRY_SENSOR_OK) is False and sensing not in (SENSING_OFF, SENSING_AUTOPILOT):

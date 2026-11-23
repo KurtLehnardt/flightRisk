@@ -2268,8 +2268,8 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
 def _temp_limits(log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None) -> TempLimits:
     """The takeoff temperature check's levels (``FLIGHTRISK_TELLO_TEMP_WARN_C``, ``..._REFUSE_C``).
 
-    Read and validated at every flying edge's start, whatever the drone kind (only a Tello is
-    asked its temperature), like the obstacle settings: a malformed value, or a refusal level
+    Read and validated at every flying edge's start, whatever the drone kind (only a Tello's
+    temperature is checked), like the obstacle settings: a malformed value, or a refusal level
     below the warn level, refuses to start with the reason. A level that differs from its
     default is logged once as ``edge_temp_setting_non_default``.
     """

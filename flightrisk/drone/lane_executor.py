@@ -151,10 +151,11 @@ from flightrisk.drone.temp_preflight import (
     EVENT_TEMP_PREFLIGHT,
     LEVEL_OK,
     TELEMETRY_TEMP,
-    TEMP_QUERY_TIMEOUT_S,
     TempCheck,
     TempLimits,
-    judge_temperature,
+    TempSample,
+    judge_reading,
+    temp_telemetry,
 )
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
@@ -301,7 +302,7 @@ class LaneExecutor(
 
         *temp_limits* are the warn and refusal levels of the temperature
         check before every takeoff (``temp_preflight``; the defaults when
-        None). Only a drone with ``query_temperature()`` (the Tello) is
+        None). Only a drone with ``state_temperature()`` (the Tello) is
         checked: see ``_takeoff_temp_refusal``.
         """
         self.drone = drone
@@ -800,46 +801,63 @@ class LaneExecutor(
     # ------------------------------------------------------------------
 
     def temp_status(self) -> dict[str, Any]:
-        """The ``temp_preflight`` telemetry field of the last check, or nothing before the first.
+        """The ``temp_preflight`` telemetry field, or nothing for a drone that is never checked.
 
-        ``lane_monitor.telemetry()`` merges it into every telemetry message,
-        so the drone card shows the reading taken before the last takeoff.
+        ``lane_monitor.telemetry()`` merges it into every telemetry message.
+        It carries the check before the last takeoff (``level`` None before
+        the first) and the live reading of the newest fresh state packet
+        (``temp_preflight.temp_telemetry``), so the drone card shows both and
+        the ground can refuse a start for a drone that is too hot now. A
+        drone with ``state_temperature()`` (the Tello) always reports it; any
+        other drone only once a check was recorded. Reads the state packet
+        only; never sends anything to the drone.
         """
         with self._lock:
             check = self._temp_check
-        return {} if check is None else {TELEMETRY_TEMP: check.to_telemetry()}
+        reader = getattr(self.drone, "state_temperature", None)
+        if check is None and not callable(reader):
+            return {}
+        live = self._state_temperature(reader).reading if callable(reader) else None
+        return {TELEMETRY_TEMP: temp_telemetry(check, self._temp_limits, live)}
+
+    @staticmethod
+    def _state_temperature(reader: Any) -> TempSample:
+        """``reader()`` (``TelloController.state_temperature``), or no reading when it fails. Never raises."""
+        try:
+            sample = reader()
+        except Exception as exc:  # noqa: BLE001 - an unreadable temperature warns, never refuses
+            return TempSample(None, f"state_temperature failed: {type(exc).__name__}: {exc}")
+        if not isinstance(sample, TempSample):
+            return TempSample(None, f"state_temperature returned {type(sample).__name__}")
+        return sample
 
     def _takeoff_temp_refusal(self) -> str | None:
-        """Check the drone's temperature right before a takeoff: the refusal's operator text, or None to go on.
+        """Check the drone's temperature before a takeoff: the refusal's operator text, or None to go on.
 
-        Only a drone with ``query_temperature()`` (``TelloController``) is
-        asked; for any other drone this returns None, checks nothing and
-        reports nothing. The read-only ``temp?`` reply is judged against the
-        levels (``temp_preflight.judge_temperature``): at or above the
-        refusal level the takeoff is refused with nothing sent; at or above
-        the warn level, and for a reading that is missing, malformed or
-        raised, the check is logged as a warning and the takeoff goes on. A
-        reading that could not be taken never refuses. Every check is logged
-        as ``edge_temp_preflight`` and kept for telemetry (``temp_status``).
-        Runs for every takeoff, the operator's ``manual_takeoff`` included.
-        Never raises.
+        Only a drone with ``state_temperature()`` (``TelloController``) is
+        checked; for any other drone this returns None, checks nothing and
+        reports nothing. The reading is the ``templ``/``temph`` of the
+        newest state packet, and only a fresh one: nothing is sent on the
+        command channel, so no reply can be taken for the takeoff's (Tello
+        replies carry no command id). It is judged against the levels
+        (``temp_preflight.judge_reading``): at or above the refusal level
+        the takeoff is refused with nothing sent; at or above the warn
+        level, and when there is no fresh reading, the check is logged as a
+        warning and the takeoff goes on. A reading that could not be taken
+        never refuses. Every check is logged as ``edge_temp_preflight`` and
+        kept for telemetry (``temp_status``). Runs first in every takeoff
+        (``_do_takeoff``), the operator's ``manual_takeoff`` included, so
+        the drone link, sensor and battery checks stay last. Never raises.
         """
-        query = getattr(self.drone, "query_temperature", None)
-        if not callable(query):
+        reader = getattr(self.drone, "state_temperature", None)
+        if not callable(reader):
             return None
-        failure = None
-        reply = None
-        try:
-            reply = query(timeout_s=TEMP_QUERY_TIMEOUT_S)
-            if reply is None:
-                failure = f"no reply to temp? within {TEMP_QUERY_TIMEOUT_S:g} s"
-        except Exception as exc:  # noqa: BLE001 - an unreadable temperature warns, never refuses
-            failure = f"temp? failed: {type(exc).__name__}: {exc}"
-        check = judge_temperature(reply, self._temp_limits, failure=failure)
+        sample = self._state_temperature(reader)
+        check = judge_reading(sample.reading, self._temp_limits, detail=sample.detail)
         with self._lock:
             self._temp_check = check
             kind = self._active_kind
-        text = check.operator_text(self.drone_id)
+        text = check.operator_text()
         fields = {"drone_id": self.drone_id, "kind": kind, **check.log_fields()}
         if check.level == LEVEL_OK:
             self._log.info(EVENT_TEMP_PREFLIGHT, **fields)

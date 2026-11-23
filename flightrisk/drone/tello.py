@@ -46,6 +46,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
 )
 from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
+from flightrisk.drone.temp_preflight import TempSample, reading_from
 from flightrisk.drone.snapshot import reading as _reading
 from flightrisk.obs_log import Throttle, log_event, notice
 
@@ -292,12 +293,17 @@ _EXTENDED_FIELDS: tuple[tuple[str, str, float, str, str], ...] = (
 
 
 class _StateReading(NamedTuple):
-    """One Tello state packet as landing reads it. A field the packet lacks, or that is not a number, is None."""
+    """One Tello state packet as landing and the takeoff temperature check read it.
+
+    A field the packet lacks, or that is not a number, is None.
+    """
 
     at: float  # time.monotonic() on arrival
     height: int | None  # ``h``: cm above (or, negative, below) the takeoff point
     tof: int | None  # ``tof``: downward time-of-flight distance in cm
     motor_s: int | None  # ``time``: whole seconds the motors have run
+    templ: int | None = None  # ``templ``: lowest temperature, degrees Celsius
+    temph: int | None = None  # ``temph``: highest temperature, degrees Celsius
 
 
 class _LandAttempt(NamedTuple):
@@ -716,10 +722,11 @@ class TelloController:
             )
 
     def _note_state_packet(self, state: object) -> None:
-        """Record when a state packet arrived and the fields landing reads from it."""
+        """Record when a state packet arrived and the fields landing and the temperature check read from it."""
         if isinstance(state, dict):
             reading = _StateReading(
-                time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time")
+                time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time"),
+                _state_int(state, "templ"), _state_int(state, "temph"),
             )
         else:
             reading = _StateReading(time.monotonic(), None, None, None)
@@ -2064,58 +2071,36 @@ class TelloController:
         self._set_measured("height", height)
         return height
 
-    def query_temperature(self, timeout_s: float = 2.5, late_reply_s: float = 0.5) -> str | None:
-        """Ask the Tello ``temp?`` once and return its reply text, or None when there is none.
+    def state_temperature(self) -> TempSample:
+        """The ``templ`` and ``temph`` of the newest state packet, if it is fresh. Sends nothing.
 
-        The read-only query of the takeoff preflight; ``flightrisk.drone.temp_preflight`` parses
-        the reply (for example ``53~56C``). It is sent and read the way the launcher's drone probe
-        sends ``battery?`` and ``temp?`` (``flightrisk.launcher.preflight._ask``): queued replies are
-        dropped first, and a bare ``ok``, the late acknowledgement of an earlier command and not the
-        value asked for, is skipped. Like the keepalive it holds ``_cmd_lock`` for the whole exchange,
-        so its reply is never read as another command's; it waits up to ``_KEEPALIVE_WAIT_S`` for the
-        channel. When no value comes within ``timeout_s`` it keeps the channel up to ``late_reply_s``
-        longer and drops a reply that arrives then, so the takeoff that follows cannot read a late
-        temperature as its own answer. Nothing is sent, and None is returned, when the channel stays
-        busy or a land is in progress or unconfirmed. Never retried; the drone link status is not
-        changed. Raises only when the send itself fails.
+        The takeoff temperature check (``flightrisk.drone.temp_preflight``) and the edge's telemetry
+        read the drone's temperature here. The Tello SDK 1.3, 2.0 and 3.0 document ``templ`` and
+        ``temph``, the lowest and highest temperature in degrees Celsius, in the state packet the
+        drone sends about ten times a second. Only the newest packet counts, and only while it is at
+        most ``_STATE_FRESH_S`` old: older state is no reading, so a temperature from before a
+        Wi-Fi gap is never judged as current. No packet, a stale one, one without both fields, and
+        values outside ``temp_preflight.TEMP_READING_RANGE_C`` give no reading and say why.
+
+        Nothing is ever sent on the command channel for this. Tello replies carry no command id, so
+        the reply to a ``temp?`` sent before a takeoff could be read as the takeoff's answer: a late
+        ``88~90C`` fails a takeoff that has already lifted the drone. Never raises.
         """
-        deadline = time.monotonic() + _KEEPALIVE_WAIT_S
-        while True:
-            with self._owner_lock:
-                if self._cmd_lock.acquire(blocking=False):
-                    break
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(_REPLY_POLL_S)
-        try:
-            tello = self.tello
-            responses = tello.get_own_udp_object()["responses"]
-            if not self._wait_command_gap_unless_landing():
-                return None
-            with self._wire_lock:
-                if self._lands_in_progress or self._land_unconfirmed:
-                    return None
-                del responses[:]
-                tello.send_command_without_return("temp?")
-            # A land that starts meanwhile ends the wait at once, so it gets the channel.
-            landing = lambda: bool(self._lands_in_progress)  # noqa: E731
-            end = time.monotonic() + timeout_s
-            while True:
-                left = end - time.monotonic()
-                if left <= 0 or landing():
-                    break
-                reply = self._await_reply(responses, left, stop_waiting=landing)
-                if reply is None:
-                    break
-                if reply.lower() != "ok":
-                    return reply
-            # No value in time: a reply that is only a little late is read and dropped here.
-            if not landing():
-                self._await_reply(responses, late_reply_s, stop_waiting=landing)
-            return None
-        finally:
-            with self._owner_lock:
-                self._cmd_lock.release()
+        if not self._state_arrivals:
+            return TempSample(None, "state packet arrivals are not recorded")
+        with self._state_lock:
+            newest = self._state_readings[-1] if self._state_readings else None
+        if newest is None:
+            return TempSample(None, "no state packet yet")
+        age = time.monotonic() - newest.at
+        if age > _STATE_FRESH_S:
+            return TempSample(None, f"no fresh state packet (newest {age:.1f} s old)")
+        if newest.templ is None or newest.temph is None:
+            return TempSample(None, "the state packet has no templ/temph")
+        reading = reading_from(newest.templ, newest.temph)
+        if reading is None:
+            return TempSample(None, f"templ/temph out of range ({newest.templ}, {newest.temph})")
+        return TempSample(reading)
 
     def _set_measured(self, field: str, value) -> None:
         """Store a value read from the drone in ``state.<field>`` and stamp when it was read.

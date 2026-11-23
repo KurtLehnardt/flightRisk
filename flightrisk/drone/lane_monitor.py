@@ -371,11 +371,11 @@ class MonitorMixin:
         return msg
 
     def _temp_telemetry(self) -> dict[str, Any]:
-        """The optional ``temp_preflight`` field of the last takeoff temperature check, or nothing.
+        """The optional ``temp_preflight`` field: the last takeoff temperature check and the live reading, or nothing.
 
-        ``LaneExecutor.temp_status()`` provides it; nothing before the first
-        check, for a drone that is never checked (no ``query_temperature``),
-        or when the accessor is missing or fails.
+        ``LaneExecutor.temp_status()`` provides it; nothing for a drone that
+        is never checked (no ``state_temperature``) and has no recorded
+        check, or when the accessor is missing or fails.
         """
         accessor = getattr(self, "temp_status", None)
         if not callable(accessor):

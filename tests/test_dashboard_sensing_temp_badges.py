@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from flightrisk.drone.temp_preflight import TempLimits, judge_temperature
+from flightrisk.drone.temp_preflight import TempLimits, TempReading, judge_reading, temp_telemetry
 from tests.test_fleet_dashboard import _started_supervisor
 from tests.test_fleet_dashboard_obstacle import _sensing, _telemetry
 
@@ -24,7 +24,7 @@ NODE = shutil.which("node")
 HARNESS = r"""
 const src = require('fs').readFileSync(process.argv[2], 'utf8');
 const cases = JSON.parse(process.argv[3]);
-const f = new Function('fmt', src + '; return {depthLimitBadge, personCueBadge, tempMeta, tempBadge};')(
+const f = new Function('fmt', src + '; return {depthLimitBadge, personCueBadge, tempMeta, tempTakeoffMeta, tempBadge};')(
     (v) => (v === undefined || v === null) ? '--' : (typeof v === 'number' ? Math.round(v * 10) / 10 : v));
 console.log(JSON.stringify(cases.map((c) => f[c.fn].apply(null, c.args))));
 """
@@ -46,8 +46,11 @@ def _run(tmp_path, calls):
     return json.loads(out.stdout)
 
 
-def _temp(reply, limits=None, failure=None):
-    return judge_temperature(reply, limits or TempLimits(), failure=failure).to_telemetry()
+def _temp(reading=None, limits=None, detail=None, live=None, checked=True):
+    """A ``temp_preflight`` object: the check of *reading* (low, high) or unknown, and the *live* reading."""
+    limits = limits or TempLimits()
+    check = judge_reading(TempReading(*reading) if reading else None, limits, detail=detail) if checked else None
+    return temp_telemetry(check, limits, TempReading(*live) if live else None)
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
@@ -60,43 +63,61 @@ class TestBrowserHelpers:
             ("depthLimitBadge", [_sensing(obstacle_min_safe_depth="0.77")]),
             ("depthLimitBadge", [_sensing(obstacle_min_safe_depth=0)]),
         ])
-        assert field["text"] == "DEPTH 0.77"
+        assert field["text"] == "DEPTH 0.77" and field["cls"] == ""
         assert "above 0.77 (the default is 0.35)" in field["title"]
         assert "applies on the next Start" in field["title"]
-        assert default["text"] == "DEPTH 0.35" and "(the default)" in default["title"]
+        # The shipped default was never calibrated: the warning style, and the title says what that means.
+        assert default["text"] == "DEPTH 0.35" and default["cls"] == "held"
+        assert "(the default, not calibrated for this site: lanes may be cut on every gate)" in default["title"]
         assert absent is None and junk is None and zero is None
 
-    def test_temperature_item_and_badge_follow_the_level(self, tmp_path):
-        ok_meta, warn_meta, refuse_meta, unknown_meta, legacy_meta, none_meta = _run(tmp_path, [
-            ("tempMeta", [{"temp_preflight": _temp("53~56C")}]),
-            ("tempMeta", [{"temp_preflight": _temp("91~93C")}]),
-            ("tempMeta", [{"temp_preflight": _temp("96C")}]),
-            ("tempMeta", [{"temp_preflight": _temp(None, failure="timeout")}]),
+    def test_the_temp_item_is_the_live_reading_coloured_by_the_levels(self, tmp_path):
+        cool, warm, hot, stale, legacy, none = _run(tmp_path, [
+            ("tempMeta", [{"temp_preflight": _temp((91, 93), live=(53, 56))}]),
+            ("tempMeta", [{"temp_preflight": _temp(live=(91, 93), checked=False)}]),
+            ("tempMeta", [{"temp_preflight": _temp(live=(96, 96), checked=False)}]),
+            ("tempMeta", [{"temp_preflight": _temp((53, 56))}]),
             ("tempMeta", [{"temperature": 40.0}]),
             ("tempMeta", [{"battery": 80}]),
         ])
-        assert ok_meta == {"text": "53-56 C", "cls": ""}
-        assert warn_meta == {"text": "91-93 C", "cls": "warn"}
-        assert refuse_meta == {"text": "96 C", "cls": "bad"}
-        assert unknown_meta == {"text": "--", "cls": ""}
-        assert legacy_meta == {"text": "40 C", "cls": ""}  # a local drone without the check, as before
-        assert none_meta is None
+        assert cool == {"text": "53-56 C", "cls": ""}
+        assert warm == {"text": "91-93 C", "cls": "warn"}
+        assert hot == {"text": "96 C", "cls": "bad"}
+        assert stale == {"text": "--", "cls": ""}  # no fresh state packet
+        assert legacy == {"text": "40 C", "cls": ""}  # a local drone without the field, as before
+        assert none is None
 
-        ok, warn, refuse, unknown, off, absent, junk = _run(tmp_path, [
-            ("tempBadge", [{"temp_preflight": _temp("53~56C")}]),
-            ("tempBadge", [{"temp_preflight": _temp("91~93C")}]),
-            ("tempBadge", [{"temp_preflight": _temp("96~98C")}]),
-            ("tempBadge", [{"temp_preflight": _temp(None, failure="no reply to temp? within 2.5 s")}]),
-            ("tempBadge", [{"temp_preflight": _temp("100C", TempLimits(refuse_c=None))}]),
+    def test_the_stored_check_is_labelled_at_takeoff(self, tmp_path):
+        ok, warn, refuse, unknown, before = _run(tmp_path, [
+            ("tempTakeoffMeta", [{"temp_preflight": _temp((53, 56), live=(80, 82))}]),
+            ("tempTakeoffMeta", [{"temp_preflight": _temp((91, 93))}]),
+            ("tempTakeoffMeta", [{"temp_preflight": _temp((96, 96))}]),
+            ("tempTakeoffMeta", [{"temp_preflight": _temp(detail="stale")}]),
+            ("tempTakeoffMeta", [{"temp_preflight": _temp(live=(53, 56), checked=False)}]),
+        ])
+        assert ok == {"text": "53-56 C", "cls": ""}
+        assert warn == {"text": "91-93 C", "cls": "warn"}
+        assert refuse == {"text": "96 C", "cls": "bad"}
+        assert unknown == {"text": "--", "cls": ""}
+        assert before is None  # no check before the first takeoff
+
+    def test_the_badge_follows_the_level_of_the_last_check(self, tmp_path):
+        ok, warn, refuse, unknown, off, before, absent, junk = _run(tmp_path, [
+            ("tempBadge", [{"temp_preflight": _temp((53, 56))}]),
+            ("tempBadge", [{"temp_preflight": _temp((91, 93))}]),
+            ("tempBadge", [{"temp_preflight": _temp((96, 98))}]),
+            ("tempBadge", [{"temp_preflight": _temp(detail="no fresh state packet (newest 1.2 s old)")}]),
+            ("tempBadge", [{"temp_preflight": _temp((100, 100), TempLimits(refuse_c=None))}]),
+            ("tempBadge", [{"temp_preflight": _temp(live=(99, 99), checked=False)}]),
             ("tempBadge", [{"temperature": 99}]),
             ("tempBadge", [{"temp_preflight": "hot"}]),
         ])
-        assert ok is None and absent is None and junk is None
+        assert ok is None and before is None and absent is None and junk is None
         assert warn == {"text": "HOT 91-93 C", "cls": "held", "title": warn["title"]}
-        assert "warn level of 90 C; a takeoff is refused at 95 C" in warn["title"]
+        assert "warn level of 92 C at the last takeoff; a takeoff is refused at 95 C" in warn["title"]
         assert refuse["text"] == "TOO HOT 96-98 C: takeoff refused" and refuse["cls"] == "held"
         assert "refusal level of 95 C" in refuse["title"]
-        assert unknown["text"] == "TEMP unknown" and "(no reply to temp? within 2.5 s)" in unknown["title"]
+        assert unknown["text"] == "TEMP unknown" and "(no fresh state packet (newest 1.2 s old))" in unknown["title"]
         assert "never holds a takeoff back" in unknown["title"]
         assert off["text"] == "HOT 100 C" and "the refusal is off" in off["title"]
 
@@ -110,6 +131,7 @@ def test_the_card_shows_the_depth_badge_next_to_the_person_cue_and_the_temperatu
     assert "[senseBadge(d), personCueBadge(d), depthLimitBadge(d), obstacleStopBadge(d), tempBadge(d)]" in JS
     assert "const temp = tempMeta(d);" in JS
     assert "meta.appendChild(metaItem('Temp', temp.text, temp.cls));" in JS
+    assert "meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));" in JS
 
 
 def test_fleet_status_carries_the_depth_threshold_only_from_an_edge_that_reports_it():

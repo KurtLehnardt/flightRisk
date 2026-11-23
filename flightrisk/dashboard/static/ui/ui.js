@@ -195,9 +195,11 @@ const socket = io();
         if (typeof v !== 'number' || !(v > 0)) return null;
         const shown = Math.round(v * 1000) / 1000;
         const isDefault = Math.abs(v - DEFAULT_MIN_SAFE_DEPTH) < 1e-9;
-        return { text: 'DEPTH ' + shown, cls: '',
+        // The shipped default was never calibrated (H1), so it gets the warning style.
+        return { text: 'DEPTH ' + shown, cls: isDefault ? 'held' : '',
             title: 'Min safe depth in force on this drone: its depth cue stops for anything scoring above ' + shown
-                + (isDefault ? ' (the default).' : ' (the default is ' + DEFAULT_MIN_SAFE_DEPTH + ').')
+                + (isDefault ? ' (the default, not calibrated for this site: lanes may be cut on every gate).'
+                    : ' (the default is ' + DEFAULT_MIN_SAFE_DEPTH + ').')
                 + ' Set in the launcher; a change applies on the next Start.' };
     }
     function obstacleStopBadge(d) {
@@ -261,35 +263,49 @@ const socket = io();
     // END obstacle-display
 
     // BEGIN temp-display
-    // The temperature check an edge made before its drone's last takeoff (temp_preflight: the Tello's temp? reply
-    // judged against the warn and refusal levels), else the plain temperature a local drone reports. These helpers
-    // only choose text and classes, and cope with any field being absent.
-    function tempRange(t) {
-        if (typeof t.high_c !== 'number') return null;
-        return (typeof t.low_c === 'number' && t.low_c !== t.high_c ? t.low_c + '-' : '') + t.high_c + ' C';
+    // A drone's temperature (temp_preflight): the live reading of its newest fresh state packet (templ and temph), and
+    // the check its edge made before the drone's last takeoff, both judged against the warn and refusal levels. Else the
+    // plain temperature a local drone reports. These helpers only choose text and classes, and cope with any field
+    // being absent.
+    function tempRange(low, high) {
+        if (typeof high !== 'number') return null;
+        return (typeof low === 'number' && low !== high ? low + '-' : '') + high + ' C';
     }
-    // The Temp item of a drone card's meta row, or null.
+    function tempLevelClass(t, high) {
+        if (typeof high !== 'number') return '';
+        if (typeof t.refuse_c === 'number' && high >= t.refuse_c) return 'bad';
+        if (typeof t.warn_c === 'number' && high >= t.warn_c) return 'warn';
+        return '';
+    }
+    // The Temp item of a drone card's meta row: the live reading, or null.
     function tempMeta(d) {
         const t = d && d.temp_preflight;
         if (t && typeof t === 'object') {
-            const cls = t.level === 'refuse' ? 'bad' : t.level === 'warn' ? 'warn' : '';
-            return { text: tempRange(t) || '--', cls: cls };
+            return { text: tempRange(t.live_low_c, t.live_high_c) || '--', cls: tempLevelClass(t, t.live_high_c) };
         }
         if (d && d.temperature) return { text: d.temperature + ' C', cls: '' };
         return null;
     }
-    // The badge for a hot drone, a refused takeoff or a temperature that could not be read; null when all is well.
+    // The "Temp at takeoff" item: the reading of the check before the last takeoff, or null before the first check.
+    function tempTakeoffMeta(d) {
+        const t = d && d.temp_preflight;
+        if (!t || typeof t !== 'object' || !t.level) return null;
+        const cls = t.level === 'refuse' ? 'bad' : t.level === 'warn' ? 'warn' : '';
+        return { text: tempRange(t.low_c, t.high_c) || '--', cls: cls };
+    }
+    // The badge for a hot drone, a refused takeoff or a temperature that could not be read at the last takeoff; null
+    // when all was well or before the first check.
     function tempBadge(d) {
         const t = d && d.temp_preflight;
         if (!t || typeof t !== 'object') return null;
-        const range = tempRange(t) || '--';
+        const range = tempRange(t.low_c, t.high_c) || '--';
         if (t.level === 'refuse') {
             return { text: 'TOO HOT ' + range + ': takeoff refused', cls: 'held',
-                title: 'At or above the refusal level of ' + t.refuse_c + ' C. Let it cool with the battery out or on a fan, then start again.' };
+                title: 'At or above the refusal level of ' + t.refuse_c + ' C at the last takeoff. Let it cool with the battery out or on a fan, then start again.' };
         }
         if (t.level === 'warn') {
             return { text: 'HOT ' + range, cls: 'held',
-                title: 'At or above the warn level of ' + t.warn_c + ' C'
+                title: 'At or above the warn level of ' + t.warn_c + ' C at the last takeoff'
                     + (typeof t.refuse_c === 'number' ? '; a takeoff is refused at ' + t.refuse_c + ' C' : '; the refusal is off')
                     + '. A Tello that sits powered on keeps heating and can switch itself off: take off soon or let it cool.' };
         }
@@ -328,6 +344,8 @@ const socket = io();
             if (typeof d.lane_index === 'number' && typeof d.lanes_total === 'number') meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
             const temp = tempMeta(d);
             if (temp) meta.appendChild(metaItem('Temp', temp.text, temp.cls));
+            const atTakeoff = tempTakeoffMeta(d);
+            if (atTakeoff) meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
