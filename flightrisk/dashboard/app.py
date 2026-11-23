@@ -46,7 +46,15 @@ from flightrisk.drone.controller import (
     capabilities_of,
     command_result,
 )
-from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM, FleetCoordinator, StartResult
+from flightrisk.drone.coordinator import (
+    DEFAULT_ALT_SLOTS_CM,
+    DEFAULT_ZONE_GAP_CM,
+    SIDESTEP_MARGIN_CM,
+    SIDESTEP_MARGIN_ENV,
+    SIDESTEP_MARGIN_MAX_CM,
+    FleetCoordinator,
+    StartResult,
+)
 from flightrisk.drone import plan_edit
 from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, CHANNEL_ORDER_RGB, to_sensor_frame
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
@@ -584,6 +592,24 @@ def fleet_geofence_cm() -> float:
     return value
 
 
+def fleet_sidestep_margin_cm() -> int:
+    """The ground's sidestep margin in cm, ``FLIGHTRISK_SIDESTEP_MARGIN_CM`` (``coordinator.SIDESTEP_MARGIN_CM``).
+
+    The re-task separation check and the map plan's path check keep this
+    much more than the gap from the path of a drone that reports it may
+    sidestep an obstacle. Set it to the edges' ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``
+    when they use another sidestep. Raises ``ValueError`` for a value that
+    is not a whole number from 0 to ``SIDESTEP_MARGIN_MAX_CM``.
+    """
+    raw = os.environ.get(SIDESTEP_MARGIN_ENV, "").strip()
+    if not raw:
+        return SIDESTEP_MARGIN_CM
+    if not raw.isascii() or not raw.isdigit() or not 0 <= int(raw) <= SIDESTEP_MARGIN_MAX_CM:
+        raise ValueError(f"{SIDESTEP_MARGIN_ENV} must be a whole number from 0 to {SIDESTEP_MARGIN_MAX_CM}, "
+                         f"got {raw!r}")
+    return int(raw)
+
+
 def _fleet_span(name: str, **attrs):
     """A span around one fleet operation (no-op while OpenTelemetry is off)."""
     from contextlib import nullcontext
@@ -738,6 +764,7 @@ class FleetSupervisor:
         geofence_cm: float | None = None,
         retask_wait_s: float = FLEET_RETASK_WAIT_S,
         ceiling: CeilingBoard | None = None,
+        sidestep_margin_cm: int | None = None,
     ):
         self.net = net
         self._ceiling = ceiling
@@ -775,6 +802,7 @@ class FleetSupervisor:
             # A drone held for manual control is never offered a lost
             # drone's lanes; they would wait for the operator.
             retask_excluded=self._held_for_manual,
+            sidestep_margin_cm=fleet_sidestep_margin_cm() if sidestep_margin_cm is None else int(sidestep_margin_cm),
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -1066,6 +1094,8 @@ class FleetSupervisor:
             alt_slot_of=slot_of,
             takeoffs=self.layout_takeoffs(),
             footprint_cm=plan_edit.camera_footprint_cm(),
+            # Paths stay this much farther than the gap from a drone that may sidestep.
+            sidestep_margin_of=self.coordinator.sidestep_margin_of,
         )
 
     def mark_plan_edited(self) -> bool:
@@ -1230,17 +1260,22 @@ class FleetSupervisor:
         self.emit_status()
         return result
 
-    def confirm_reflight(self, drone_id: str, cut_seq: object) -> tuple[bool, str]:
+    def confirm_reflight(self, drone_id: str, cut_seq: object, offset: object = None) -> tuple[bool, str]:
         """The operator confirms the re-flight of a person cut (``FleetCoordinator.confirm_reflight``).
 
-        Logged as a ``reflight_confirmed`` flight-safety event; the fleet
-        status that follows shows the segment's new state.
+        *offset* ``[lane_index, from_cm]`` names an offset segment whose
+        sidestep saw a person, when it has no cut of its own (*cut_seq*
+        None). Logged as a ``reflight_confirmed`` flight-safety event; the
+        fleet status that follows shows the segment's new state.
         """
         with self._lock:
             landed_all = self._landed_all
         if landed_all:
             return False, "LAND ALL was pressed; nothing is re-flown"
-        ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+        if offset is None:
+            ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq)
+        else:
+            ok, detail = self.coordinator.confirm_reflight(drone_id, cut_seq, offset)
         obs_events.flight_safety("reflight_confirmed" if ok else "reflight_confirm_refused", reason="operator",
                                  drone_id=drone_id, cut_seq=cut_seq, detail=detail,
                                  level=logging.WARNING if ok else logging.INFO)
@@ -2678,7 +2713,9 @@ def on_confirm_reflight(data=None):
     A person cut is never offered to another drone on its own: that drone
     would fly toward the same person from the far side. ``{"drone_id",
     "cut_seq"}`` name the cut (from the segment's ``fleet_status.uncovered``
-    entry). Runs on a worker thread, because the offer it may send must never
+    entry); an offset segment whose sidestep saw a person and that has no
+    cut is named by ``{"drone_id", "cut_seq": null, "offset": [index,
+    offset_from_cm]}``. Runs on a worker thread, because the offer it may send must never
     hold up other socket events such as ``land_all``; the answer is a
     ``reflight_confirm_result`` event to this browser.
     """
@@ -2687,12 +2724,15 @@ def on_confirm_reflight(data=None):
         emit("error", {"message": "Re-flights need fleet mode (--source edge --fleet ...)"})
         return
     data = data if isinstance(data, dict) else {}
-    drone_id, cut_seq = str(data.get("drone_id")), data.get("cut_seq")
+    drone_id, cut_seq, offset = str(data.get("drone_id")), data.get("cut_seq"), data.get("offset")
     sid = _sid()
 
     def _work():
         try:
-            ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+            if offset is None:
+                ok, detail = supervisor.confirm_reflight(drone_id, cut_seq)
+            else:
+                ok, detail = supervisor.confirm_reflight(drone_id, cut_seq, offset)
         except Exception as exc:  # noqa: BLE001 - reported to the operator
             log.error("Re-flight confirmation failed", exc_info=True)
             ok, detail = False, f"re-flight confirmation failed: {exc}"

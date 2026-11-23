@@ -1217,6 +1217,8 @@ class FlightSequenceMixin:
             pose = self.envelope.pose_snapshot()
             with self._lock:
                 self._note_sense_locked(result, latency_ms, started)
+                # The view this gate judged last (``lane_avoid``'s person check reads it).
+                self._last_look_result = result
                 verdict, reason = _RETRY, None
                 if not current():
                     # A re-task replaced the step while the sensor looked.

@@ -276,9 +276,11 @@ PERSON_CUE_AGE_KEY = "detection_age_s"
 #: the counts ``AVOID_COUNT_KEYS``, ``AVOID_PHASE_KEY`` (the step under way:
 #: ``relook``, ``sidestep``, ``return``, ``held`` while the drone hovers under
 #: manual control because it could not get back to its lane, or null) and
-#: ``AVOID_OFFSETS_KEY``. One field holds all of it, to keep the telemetry's
-#: field count down (``fleet_protocol.MAX_FIELDS``), and it is left out until
-#: the plan has something to report (a count above 0, a phase or an offset).
+#: ``AVOID_OFFSETS_KEY`` (with ``AVOID_OFFSETS_SEEN_KEY``), ``AVOID_HELD_REASON_KEY``
+#: and ``AVOID_SIDESTEP_CM_KEY``. One field holds all of it, to keep the
+#: telemetry's field count down (``fleet_protocol.MAX_FIELDS``). It is sent by an
+#: edge that may sidestep, and by one that only looks again once the plan has
+#: something to report (a count above 0, a phase or an offset).
 TELEMETRY_AVOID = "obstacle_avoid"
 #: Counts in ``TELEMETRY_AVOID``: re-look rounds started, re-look rounds that
 #: let the step fly, sidestep attempts, and sidesteps that got past.
@@ -299,6 +301,22 @@ AVOID_PHASE_HELD = "held"
 #: along the lane the segment starts, measured from where the drone started
 #: the lane; left out while there is none.
 AVOID_OFFSETS_KEY = "offsets"
+#: In ``TELEMETRY_AVOID``, next to ``AVOID_OFFSETS_KEY`` and only while one of
+#: the listed offsets has one: a list with one string per listed offset, the
+#: reason a gate of that sidestep stopped for (``person`` or ``sensor_down``),
+#: or ``""``. The ground never offers an offset whose sidestep saw a person
+#: unless the operator confirms it, because its re-flight would start at the
+#: far end of the offset, where the person was seen.
+AVOID_OFFSETS_SEEN_KEY = "offsets_seen"
+#: In ``TELEMETRY_AVOID`` while ``AVOID_PHASE_KEY`` is ``held``: why the way
+#: back to the lane stopped (``obstacle``, ``person``, ``sensor_stale``,
+#: ``sensor_down`` or ``geofence``).
+AVOID_HELD_REASON_KEY = "held_reason"
+#: In ``TELEMETRY_AVOID``: how far this edge may sidestep (``obstacle_sidestep_cm``),
+#: or 0 when it never sidesteps. The ground keeps its sidestep margin
+#: (``coordinator.SIDESTEP_MARGIN_CM``) only from the paths of drones that report
+#: more than 0.
+AVOID_SIDESTEP_CM_KEY = "sidestep_cm"
 TELEMETRY_FIELDS = (
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,

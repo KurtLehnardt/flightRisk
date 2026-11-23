@@ -600,19 +600,21 @@ def test_a_blocked_reading_never_lands_the_drone(rigs, settings):
 # ---------------------------------------------------------------------------
 
 
-def test_the_avoid_field_is_reported_only_once_the_relook_or_the_sidestep_did_something(rigs):
+def test_the_avoid_field_reports_the_sidestep_and_what_the_relook_did(rigs):
     assert TELEMETRY_AVOID not in rigs().executor.obstacle_status()
     assert TELEMETRY_AVOID not in rigs(obstacle_clear_votes=3).executor.obstacle_status()
+    # An edge that may sidestep says so from the start, so the ground keeps its sidestep margin.
     rig = rigs(**AVOID)
-    # Switched on but nothing happened yet: the field is left out, so the telemetry keeps its field count.
-    assert TELEMETRY_AVOID not in rig.executor.obstacle_status()
-    assert TELEMETRY_AVOID not in rig.executor.telemetry()
-    rig.sensor.queue(SenseResult.make_blocked())
-    fly(rig, LANES)
-    assert rig.executor.obstacle_status()[TELEMETRY_AVOID] == {
-        "relooks": 1, "relook_clears": 1, "sidesteps": 0, "sidestep_passes": 0, "phase": None,
-    }
+    assert rig.executor.obstacle_status()[TELEMETRY_AVOID] == dict(NOTHING_YET, sidestep_cm=50)
     assert TELEMETRY_AVOID in rig.executor.telemetry()
+    # One that only looks again leaves the field out until the plan has something to report.
+    relook_only = rigs(obstacle_relook=2)
+    assert TELEMETRY_AVOID not in relook_only.executor.obstacle_status()
+    relook_only.sensor.queue(SenseResult.make_blocked())
+    fly(relook_only, LANES)
+    assert relook_only.executor.obstacle_status()[TELEMETRY_AVOID] == {
+        "relooks": 1, "relook_clears": 1, "sidesteps": 0, "sidestep_passes": 0, "phase": None, "sidestep_cm": 0,
+    }
 
 
 def test_the_counts_restart_with_a_plan_that_does_not_continue_the_current_one(rigs):
@@ -640,13 +642,14 @@ def test_the_worst_case_telemetry_with_the_avoid_field_stays_under_the_cap():
     # The worst case: every count, a phase and the most offsets listed, next to eight cuts.
     ex._avoid_counts = {"relooks": 9, "relook_clears": 3, "sidesteps": 4, "sidestep_passes": 2}
     ex._avoid_phase = "sidestep"
-    ex._avoid_offsets = [[lane, 150, 150] for lane in range(6)]
+    ex._avoid_offsets = [[lane, 150, 150, "person" if lane == 5 else ""] for lane in range(6)]
     ex._cuts = [Cut(lane, 250, CUT_OBSTACLE) for lane in range(9)]
     sent = []
     edge_device._with_profile_status(sent.append, _runner(True))(ex.telemetry())
     msg = sent[0]
     assert {TELEMETRY_AVOID, TELEMETRY_PERSON_CUE, "lat"} <= set(msg)
     assert len(msg[TELEMETRY_AVOID]["offsets"]) == 3 * MAX_OFFSETS_LISTED
+    assert msg[TELEMETRY_AVOID]["offsets_seen"] == ["", "", "", "person"]
     assert len(msg) <= fp.MAX_FIELDS - 5, len(msg)
     # Fields other open branches add once merged: PR #198's ``temp_preflight`` and the incident
     # branch's ``move_refusals_total`` and ``move_refusal_last``. Together they still leave headroom.

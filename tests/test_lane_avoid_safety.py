@@ -236,12 +236,14 @@ def test_a_sensor_down_beside_the_lane_cuts_the_lanes_for_sensor_down_after_flyi
 # ---------------------------------------------------------------------------
 
 
-def test_an_unknown_person_cue_on_the_blocked_view_refuses_the_sidestep(rigs):
+def test_an_unknown_person_cue_on_the_blocked_view_and_its_person_check_refuses_the_sidestep(rigs):
     rig = rigs(**SIDESTEP_ONLY)
-    rig.sensor.queue(SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN))
+    # The lane gate's blocked view, then the one look that waits for a person: neither knows.
+    rig.sensor.queue(SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN),
+                     SenseResult.make_clear(person_cue=PERSON_CUE_UNKNOWN))
     fly(rig, LANES)
     assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_OBSTACLE)]
-    assert sidestep_trail(rig) == [("refused", None, None, "person_cue_unknown")]
+    assert sidestep_trail(rig) == [("person_check", None, None, "clear"), ("refused", None, None, "person_cue_unknown")]
     assert counts(rig) == (0, 0, 0, 0)
     assert "moved" not in phases(rig, EVENT_OBSTACLE_SIDESTEP)
     assert_invariants(rig)
@@ -251,10 +253,13 @@ def test_an_unknown_person_cue_on_the_blocked_view_refuses_the_sidestep(rigs):
 def test_an_unknown_person_cue_on_the_relook_refuses_the_sidestep(rigs):
     rig = rigs(**AVOID)
     rig.sensor.queue(SenseResult.make_blocked(person_cue=PERSON_CUE_CLEAR),
+                     SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN),
                      SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN))
     fly(rig, LANES)
     assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_OBSTACLE)]
-    assert sidestep_trail(rig) == [("refused", None, None, "person_cue_unknown")]
+    assert sidestep_trail(rig) == [
+        ("person_check", None, None, CUT_OBSTACLE), ("refused", None, None, "person_cue_unknown"),
+    ]
     assert counts(rig) == (1, 0, 0, 0)
     assert_never_landed(rig)
 
@@ -500,14 +505,19 @@ def test_the_time_budget_ends_the_relook_and_cuts_as_before(rigs):
 def test_the_time_budget_ends_a_pass_beside_the_lane_and_the_drone_flies_back(rigs):
     rig = rigs(sensor=scripted([POLE], advance_s=4.0), obstacle_avoid_budget_s=10, **SIDESTEP_ONLY)
     fly(rig, DEMO)
-    trail = sidestep_trail(rig)
-    assert ("budget", None, None, None) in trail
-    passed = [e for e in events(rig, EVENT_OBSTACLE_SIDESTEP) if e["phase"] == "passed"]
-    # The budget stopped the pass short of its 150 cm; every log carries the time since the blocked gate.
-    assert passed and passed[0]["passed_cm"] < 150
+    trail = [(e["phase"], e.get("passed_cm"), e.get("reason"), e.get("detail"))
+             for e in events(rig, EVENT_OBSTACLE_SIDESTEP)]
+    # The budget stopped the pass after 100 of its 150 cm. The lane is cut at the plan's progress before the
+    # way back, so a way back that does not clear could not leave the lane to be flown into the same obstacle.
+    assert trail[-3:] == [("budget", None, None, None), ("cut", None, CUT_OBSTACLE, "budget"),
+                          ("returned", 100, None, None)]
+    assert rig.executor.obstacle_cuts == [Cut(0, 250, CUT_OBSTACLE)]
+    stop = events(rig, "edge_obstacle_stop")[0]
+    assert (stop["x_cm"], stop["y_cm"]) == (50.0, 250.0)  # made beside the lane, before flying back
+    assert flown_points(rig)[6] == (0, 250)
     assert all("elapsed_s" in e for e in events(rig, EVENT_OBSTACLE_SIDESTEP))
-    pose = assert_invariants(rig)
-    assert at(pose)[:2] == (200.0, 400.0)
+    assert avoid(rig)["offsets"] == [0, 150, 100]
+    assert_invariants(rig)
     assert_back_on_the_plan(rig)
     assert_never_landed(rig)
 
@@ -692,3 +702,63 @@ def test_a_person_cut_is_offered_only_after_the_operators_confirmation(rigs):
     status = rig.executor.obstacle_status()
     assert status["obstacle_cut_reasons"].split(",")[0] in CONFIRM_REFLIGHT_CUT_REASONS
     assert status["obstacle_cuts"][:2] == [0, 250]
+
+
+# ---------------------------------------------------------------------------
+# The final review: a person seen during a sidestep reaches the ground (B1), and the person check (N6)
+# ---------------------------------------------------------------------------
+
+
+def test_a_person_seen_beside_the_lane_marks_the_offset_as_well_as_cutting_the_lane(rigs):
+    rig = rigs([SHORT_POLE, PERSON_BESIDE], **SIDESTEP_ONLY)
+    fly(rig, DEMO)
+    assert rig.executor.obstacle_cuts == [Cut(0, 250, CUT_PERSON)]
+    status = avoid(rig)
+    assert status["offsets"] == [0, 150, 100] and status["offsets_seen"] == [CUT_PERSON]
+
+
+def test_a_person_seen_on_the_way_back_from_the_end_of_the_lane_is_carried_to_the_ground(rigs):
+    # The review's scenario B: the pole is near the end of lane 0, so the pass flies the rest of the lane
+    # beside it; the way back then sees a person, and there is no lane left to cut for it.
+    pole = BlockedZone(heading_deg=0.0, x_min=-10, x_max=10, y_min=300, y_max=400)
+    person = BlockedZone(heading_deg=270.0, x_min=40, x_max=60, y_min=390, y_max=410, cue="person")
+    rig = rigs([pole, person], **SIDESTEP_ONLY)
+    start(rig, DEMO)
+    assert wait_for(lambda: not rig.executor.is_busy and rig.executor.control_mode != "autonomous")
+    assert rig.executor.obstacle_cuts == []
+    assert [e["reason"] for e in events(rig, EVENT_OBSTACLE_SIDESTEP) if e["phase"] == "not_cut"] == [CUT_PERSON]
+    status = avoid(rig)
+    # The ground gets the sighting on the offset (never offered without the operator) and in the held reason.
+    assert status["phase"] == "held" and status["held_reason"] == CUT_PERSON
+    assert status["offsets"] == [0, 300, 100] and status["offsets_seen"] == [CUT_PERSON]
+    assert fp.validate_message(rig.executor.telemetry(), proto=2) == "telemetry"
+    assert_invariants(rig)
+    assert_never_landed(rig)
+
+
+def test_a_person_check_lets_a_sidestep_follow_a_view_whose_person_cue_was_unknown(rigs):
+    def rule(pose, n):
+        # The lane gate's own blocked view at (0, 150) did not wait for a person: unknown.
+        return SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN) if n == 4 else None
+
+    rig = rigs(sensor=scripted([POLE], rule=rule), **SIDESTEP_ONLY)
+    fly(rig, DEMO)
+    sensor = rig.executor._obstacle_sensor
+    # One extra look, which asked the sensor to wait for a person, found none: the sidestep went ahead.
+    assert sidestep_trail(rig)[0] == ("person_check", None, None, CUT_OBSTACLE)
+    assert sensor.person_waits[4] is True
+    assert rig.executor.obstacle_cuts == []
+    assert counts(rig)[2:] == (1, 1)
+    assert at(assert_invariants(rig)) == (200.0, 400.0, 0.0)
+    assert_never_landed(rig)
+
+
+def test_a_person_check_that_sees_a_person_cuts_the_lane_for_a_person(rigs):
+    rig = rigs(**SIDESTEP_ONLY)
+    rig.sensor.queue(SenseResult.make_blocked(person_cue=PERSON_CUE_UNKNOWN),
+                     SenseResult.make_blocked("person", person_cue="blocked"))
+    fly(rig, LANES)
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_PERSON)]
+    assert sidestep_trail(rig) == [("person_check", None, None, CUT_PERSON)]
+    assert "moved" not in phases(rig, EVENT_OBSTACLE_SIDESTEP)
+    assert_never_landed(rig)
