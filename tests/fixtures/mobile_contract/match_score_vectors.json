@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Inputs and the results of the Python MatchScorer.score, which the Swift and Kotlin scorers must reproduce exactly, including the rounding of combined_score to three places (Python rounds the exact binary value, ties to even; truncation is wrong). NaN and infinity are spelled 'nan', 'inf' and '-inf' because JSON has no such numbers. signals holds reid, face and registered extra signals; reasoning is not covered.",
     "file": "match_score_vectors.json",
-    "generated_at_commit": "7d2518eee73329d3c5e754c0f0d18e8bc7dcfd4c",
+    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.vision.scorer.MatchScorer.score"

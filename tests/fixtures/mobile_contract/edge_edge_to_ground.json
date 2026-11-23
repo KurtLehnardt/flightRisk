@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Edge link, edge to ground: the 'detections' samples a phone edge sends, and the fleet-edge replies for reference (a phone never sends those).",
     "file": "edge_edge_to_ground.json",
-    "generated_at_commit": "7d2518eee73329d3c5e754c0f0d18e8bc7dcfd4c",
+    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
     "link": "raw WebSocket ws://HOST:9000 (not Socket.IO)",
     "max_message_bytes": 1048576,
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",

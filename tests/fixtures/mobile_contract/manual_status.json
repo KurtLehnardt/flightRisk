@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'manual_status' event: the answer to get_manual_status, and a broadcast on every manual change.",
     "file": "manual_status.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "ManualControl.drone_status",

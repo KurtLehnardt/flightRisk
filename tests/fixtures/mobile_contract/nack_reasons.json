@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Reason and mode vocabularies from the fleet protocol constants. Ground-side manual results add 'not_delivered', 'no_reply', 'no_telemetry' and 'invalid' (flightrisk/dashboard/manual_control.py).",
     "file": "nack_reasons.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.fleet_protocol.ceiling",
