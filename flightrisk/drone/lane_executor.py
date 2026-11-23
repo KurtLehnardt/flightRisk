@@ -147,7 +147,6 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
-    TELEMETRY_MIN_SAFE_DEPTH,
     TELEMETRY_SEQ,
     TELEMETRY_STATE,
     NullSensor,
@@ -695,10 +694,6 @@ class LaneExecutor(
           "offsets": [lane, from_cm, length_cm, ...]}`` (``offsets`` only
           once a step was flown beside a lane). Left out until the plan has
           something to report.
-        * ``obstacle_min_safe_depth``: for a sensor with a depth threshold
-          (the camera sensor), the threshold in force
-          (``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``), so the dashboard shows
-          the value this edge was started with. Left out otherwise.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps
@@ -733,21 +728,17 @@ class LaneExecutor(
         status[TELEMETRY_CUTS] = flat
         status[TELEMETRY_CUTS_TOTAL] = len(cuts)
         status[TELEMETRY_CUT_REASONS] = reasons
-        sensor_status = self._sensor_status()
-        person = self._person_cue_status(sensor_status)
+        person = self._person_cue_status()
         if person is not None:
             status[TELEMETRY_PERSON_CUE] = person
-        depth = (sensor_status or {}).get("min_safe_depth")
-        if is_finite_number(depth) and depth > 0:
-            status[TELEMETRY_MIN_SAFE_DEPTH] = float(depth)
         if mode in (SENSING_STEPPED, SENSING_FORWARD_ONLY):
             avoid = self._avoid_status()
             if avoid is not None:
                 status[TELEMETRY_AVOID] = avoid
         return status
 
-    def _sensor_status(self) -> dict[str, Any] | None:
-        """The sensor's ``status()``, or None without a sensor or when it fails. Never raises."""
+    def _person_cue_status(self) -> dict[str, Any] | None:
+        """The sensor's person cue health for telemetry, or None when it reports none. Never raises."""
         sensor = self._obstacle_sensor
         if sensor is None:
             return None
@@ -755,12 +746,6 @@ class LaneExecutor(
             status = sensor.status()
         except Exception:  # noqa: BLE001 - telemetry must not fail for a sensor's status
             return None
-        return status if isinstance(status, dict) else None
-
-    def _person_cue_status(self, status: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        """The sensor's person cue health for telemetry, or None when it reports none. Never raises."""
-        if status is None:
-            status = self._sensor_status()
         if not isinstance(status, dict) or PERSON_CUE_DOWN_KEY not in status:
             return None
         age = status.get("person_detection_age_s")

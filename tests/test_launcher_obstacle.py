@@ -1,16 +1,19 @@
-"""Obstacle sensing mode and depth threshold in the launcher (settings, edge environment, API, window).
+"""Obstacle sensing mode in the launcher (settings, edge environment, API, window).
 
-* the two settings: defaults, JSON coercion, validation against the edge's own range, persistence in presets
-  and the last-used settings, and a preset file from before they existed;
-* precedence: ``FLIGHTRISK_OBSTACLE_SENSING`` and ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`` in the launcher's
-  environment win over the window, reach the edge unchanged, and are shown as the effective value;
-* the edges' environment: the window's values when the environment does not set them, never the ground's;
+* the mode setting: default, JSON coercion, validation, persistence in presets and the last-used settings, and a
+  preset file from before it existed or from a build that also stored a depth threshold;
+* precedence: ``FLIGHTRISK_OBSTACLE_SENSING`` in the launcher's environment wins over the window, reaches the edge
+  unchanged, and is shown as the effective mode;
+* the edges' environment: the window's mode when the environment does not set it, never the ground's;
+* the depth threshold is not a launcher setting: the window, the API, the checks and the edges' environment never
+  show, ask for or set ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``;
 * ``/api/start`` refuses a start with weaker sensing until the operator confirms that exact mode with the one-time
-  nonce of the refusal, before any drone is probed or process started; a confirmation is never replayed;
+  nonce of the refusal, before any drone is probed or process started; a confirmation is never replayed, and
+  Restart does not relaunch a sensing-off edge after Stop;
 * inherited ``FLIGHTRISK_TELLO_TEMP_WARN_C`` and ``..._REFUSE_C`` the edges would refuse block Start, and the drone
   probe marks a hot drone;
 * the window's script (``chooseSensing``, ``startRequest``, ``renderObstacle``) runs under Node with stand-ins for
-  the page and the API; the page carries the controls and the "applies on next Start" note.
+  the page and the API; the page carries the mode control and the "applies on next Start" note.
 
 The children are stand-in sleepers and no drone is contacted.
 """
@@ -27,31 +30,20 @@ from dataclasses import replace
 
 import pytest
 
-from flightrisk.drone.obstacle_sensor import (
-    ENV_OBSTACLE_MIN_SAFE_DEPTH,
-    ENV_OBSTACLE_SENSING,
-    OBSTACLE_MIN_SAFE_DEPTH,
-    OBSTACLE_MIN_SAFE_DEPTH_RANGE,
-)
-from flightrisk.edge_device import ObstacleSettings
-from flightrisk.drone.safety import SafetyEnvelope
+from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_MIN_SAFE_DEPTH, ENV_OBSTACLE_SENSING
 from flightrisk.drone.temp_preflight import ENV_TELLO_TEMP_REFUSE_C, ENV_TELLO_TEMP_WARN_C
 from flightrisk.launcher.commands import EdgeToken, Redactor, build_plan
-from flightrisk.launcher.preflight import INFO, PASS, WARN, TelloProbe, obstacle_threshold_check, run_preflight
+from flightrisk.launcher.preflight import PASS, WARN, TelloProbe, run_preflight
 from flightrisk.launcher.processes import ProcessManager
 from flightrisk.launcher.server import SENSING_NONCE_TTL_S, STATIC_DIR, LauncherApp, make_server
 from flightrisk.launcher.settings import (
     ERROR,
     DroneSettings,
-    WARNING,
     LauncherSettings,
     PresetStore,
-    UNCALIBRATED_DEPTH_NOTE,
     SettingsError,
     builtin_presets,
     effective_obstacle,
-    format_depth,
-    obstacle_env,
     sensing_warning,
     validate,
 )
@@ -67,46 +59,36 @@ def _issues(settings, environ=None, level=None):
     return [i for i in found if (level is None or i.level == level) and i.field.startswith("obstacle")]
 
 
+def _mentions_depth(value) -> bool:
+    """Whether *value* (any JSON-like data) names the depth threshold anywhere."""
+    text = json.dumps(value).lower()
+    return "min_safe_depth" in text or "min safe depth" in text or "threshold" in text or "uncalibrated" in text
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
 
-def test_defaults_are_the_edges_defaults_and_every_preset_starts_required():
-    assert (LauncherSettings().obstacle_sensing, LauncherSettings().obstacle_min_safe_depth) == ("required", 0.35)
-    assert OBSTACLE_MIN_SAFE_DEPTH == 0.35 and OBSTACLE_MIN_SAFE_DEPTH_RANGE == (0.05, 0.9)
+def test_the_default_mode_is_the_edges_default_and_every_preset_starts_required():
+    assert LauncherSettings().obstacle_sensing == "required"
     for name, preset in builtin_presets().items():
         assert preset.obstacle_sensing == "required", name
-        assert preset.obstacle_min_safe_depth == OBSTACLE_MIN_SAFE_DEPTH, name
 
 
-def test_a_settings_file_from_before_the_obstacle_settings_loads_with_the_defaults():
+def test_the_depth_threshold_is_not_a_launcher_setting():
+    assert not hasattr(LauncherSettings(), "obstacle_min_safe_depth")
+    assert not _mentions_depth(REHEARSAL.to_json())
+
+
+def test_old_settings_files_load_with_the_default_mode_and_drop_a_stored_depth():
     old = REHEARSAL.to_json()
-    del old["obstacle_sensing"], old["obstacle_min_safe_depth"]
-    loaded = LauncherSettings.from_json(old)
-    assert (loaded.obstacle_sensing, loaded.obstacle_min_safe_depth) == ("required", 0.35)
-
-
-@pytest.mark.parametrize("raw, value", [
-    (0.77, 0.77), ("0.77", 0.77), (" 0.5 ", 0.5), (1, 1.0), (0.123456, 0.123), ("7.7e-1", 0.77),
-])
-def test_the_depth_is_read_as_a_number(raw, value):
-    assert LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_min_safe_depth": raw}).obstacle_min_safe_depth == value
-
-
-@pytest.mark.parametrize("raw", [0.9004, "0.9004", 0.0496, 0.04999])
-def test_rounding_never_pulls_a_depth_into_the_range(raw):
-    """A value outside 0.05 to 0.9 is kept as it is, so validation refuses it instead of the rounded value."""
-    settings = LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_min_safe_depth": raw})
-    assert settings.obstacle_min_safe_depth == float(raw)
-    (issue,) = _issues(settings, level=ERROR)
-    assert "min safe depth must be from 0.05 to 0.9" in issue.message
-
-
-@pytest.mark.parametrize("raw", ["abc", "0,77", "5_0", "nan", "inf", True, None, "", [0.5], float("nan"), float("inf")])
-def test_a_depth_that_is_not_a_number_is_refused(raw):
-    with pytest.raises(SettingsError, match="obstacle_min_safe_depth"):
-        LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_min_safe_depth": raw})
+    del old["obstacle_sensing"]
+    assert LauncherSettings.from_json(old).obstacle_sensing == "required"
+    # A file written by a build that also stored the threshold: the key is ignored and not written back.
+    stored = {**REHEARSAL.to_json(), "obstacle_sensing": "off", "obstacle_min_safe_depth": 0.77}
+    loaded = LauncherSettings.from_json(stored)
+    assert loaded.obstacle_sensing == "off" and not _mentions_depth(loaded.to_json())
 
 
 def test_the_mode_is_read_case_insensitively_and_a_non_text_mode_is_refused():
@@ -115,52 +97,29 @@ def test_the_mode_is_read_case_insensitively_and_a_non_text_mode_is_refused():
         LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_sensing": 0})
 
 
-@pytest.mark.parametrize("field, value, message", [
-    ("obstacle_sensing", "stepped", "obstacle sensing must be required or off"),
-    ("obstacle_sensing", "forward_only", "obstacle sensing must be required or off"),
-    ("obstacle_min_safe_depth", 0.04, "min safe depth must be from 0.05 to 0.9"),
-    ("obstacle_min_safe_depth", 0.95, "min safe depth must be from 0.05 to 0.9"),
-    ("obstacle_min_safe_depth", 0.0, "min safe depth must be from 0.05 to 0.9"),
-])
-def test_values_outside_the_edges_range_are_errors(field, value, message):
-    (issue,) = _issues(replace(REHEARSAL, **{field: value}), level=ERROR)
-    assert issue.field == field and message in issue.message
+@pytest.mark.parametrize("value", ["stepped", "forward_only", "maybe"])
+def test_a_mode_the_edge_does_not_take_is_an_error(value):
+    (issue,) = _issues(replace(REHEARSAL, obstacle_sensing=value), level=ERROR)
+    assert issue.field == "obstacle_sensing" and "obstacle sensing must be required or off" in issue.message
 
 
-@pytest.mark.parametrize("depth", [0.05, 0.35, 0.77, 0.9])
-def test_every_valid_window_value_is_one_the_edge_accepts(depth):
-    """The launcher's range is the edge's: what the window lets through, the edge starts with."""
-    settings = replace(REHEARSAL, obstacle_min_safe_depth=depth)
-    assert not _issues(settings, level=ERROR)
-    env = obstacle_env(settings, {})
-    parsed = ObstacleSettings("tello", SafetyEnvelope(alt_slot_cm=100), env)
-    assert (parsed.mode, parsed.min_safe_depth) == ("required", depth)
-
-
-def test_off_and_a_raised_depth_are_warnings_not_errors():
+def test_off_is_a_warning_not_an_error_and_required_raises_nothing():
     off = _issues(replace(REHEARSAL, obstacle_sensing="off"))
-    assert [i.level for i in off] == [WARNING] and "no obstacle protection" in off[0].message
-    raised = _issues(replace(REHEARSAL, obstacle_min_safe_depth=0.77))
-    assert [i.level for i in raised] == [WARNING] and "above the default 0.35" in raised[0].message
+    assert [i.level for i in off] == ["warning"] and "no obstacle protection" in off[0].message
     assert _issues(REHEARSAL) == []
 
 
-def test_the_settings_persist_in_presets_and_the_last_used_settings(tmp_path):
+def test_the_mode_persists_in_presets_and_the_last_used_settings(tmp_path):
     path = tmp_path / "launcher.json"
     store = PresetStore(path)
-    field = replace(REHEARSAL, obstacle_sensing="off", obstacle_min_safe_depth=0.77)
+    field = replace(REHEARSAL, obstacle_sensing="off")
     store.save_preset("Field", field)
     store.save_last(field)
     raw = json.loads(path.read_text())
     assert raw["presets"]["Field"]["obstacle_sensing"] == "off"
-    assert raw["presets"]["Field"]["obstacle_min_safe_depth"] == 0.77
+    assert not _mentions_depth(raw)
     again = PresetStore(path)
     assert again.presets()["Field"] == field and again.last() == field
-
-
-@pytest.mark.parametrize("value, text", [(0.77, "0.77"), (0.5, "0.5"), (0.05, "0.05"), (0.9, "0.9"), (0.123, "0.123")])
-def test_the_depth_reaches_the_edge_as_a_plain_decimal(value, text):
-    assert format_depth(value) == text
 
 
 # ---------------------------------------------------------------------------
@@ -168,37 +127,41 @@ def test_the_depth_reaches_the_edge_as_a_plain_decimal(value, text):
 # ---------------------------------------------------------------------------
 
 
-def test_without_the_variables_the_edges_get_the_windows_values_and_the_ground_does_not():
-    settings = replace(REHEARSAL, obstacle_sensing="off", obstacle_min_safe_depth=0.77)
+def test_without_the_variable_the_edges_get_the_windows_mode_and_the_ground_does_not():
+    settings = replace(REHEARSAL, obstacle_sensing="off")
     ground, *edges = build_plan(settings, EdgeToken(TOKEN, "environment"), PY, {})
-    assert ENV_OBSTACLE_SENSING not in ground.env and ENV_OBSTACLE_MIN_SAFE_DEPTH not in ground.env
+    assert ENV_OBSTACLE_SENSING not in ground.env
     for edge in edges:
-        assert edge.env[ENV_OBSTACLE_SENSING] == "off" and edge.env[ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.77"
-        assert edge.display_env[ENV_OBSTACLE_SENSING] == "off"
-        assert edge.display_env[ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.77"
+        assert edge.env[ENV_OBSTACLE_SENSING] == "off" and edge.display_env[ENV_OBSTACLE_SENSING] == "off"
     eff = effective_obstacle(settings, {})
-    assert (eff.mode, eff.mode_source, eff.depth, eff.depth_source) == ("off", "window", 0.77, "window")
+    assert (eff.mode, eff.mode_source) == ("off", "window")
 
 
-def test_an_inherited_variable_wins_and_reaches_the_edge_unchanged():
-    settings = replace(REHEARSAL, obstacle_sensing="required", obstacle_min_safe_depth=0.35)
+def test_the_launcher_never_sets_the_depth_threshold_and_passes_an_inherited_one_unchanged():
+    ground, *edges = build_plan(REHEARSAL, EdgeToken(TOKEN, "environment"), PY, {})
+    for spec in (ground, *edges):
+        assert ENV_OBSTACLE_MIN_SAFE_DEPTH not in spec.env and ENV_OBSTACLE_MIN_SAFE_DEPTH not in spec.display_env
+    # An inherited value reaches the edges like any other inherited variable; the launcher neither shows nor judges it.
     env = {ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.77", "PATH": "/bin"}
-    _, edge, _ = build_plan(settings, EdgeToken(TOKEN, "environment"), PY, env)
-    assert edge.env[ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.77"
-    assert ENV_OBSTACLE_MIN_SAFE_DEPTH not in edge.display_env  # the launcher did not set it
-    assert edge.env[ENV_OBSTACLE_SENSING] == "required"  # the window's, as the environment has none
-    eff = effective_obstacle(settings, env)
-    assert (eff.depth, eff.depth_source, eff.mode_source) == (0.77, "environment", "window")
-    (issue,) = [i for i in _issues(settings, env) if i.field == "obstacle_min_safe_depth" and "wins" in i.message]
-    assert issue.level == WARNING and "wins over the window's 0.35" in issue.message
+    _, edge, _ = build_plan(REHEARSAL, EdgeToken(TOKEN, "environment"), PY, env)
+    assert edge.env[ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.77" and ENV_OBSTACLE_MIN_SAFE_DEPTH not in edge.display_env
+    for raw in ("0.77", "0.95", "abc"):
+        found = validate(REHEARSAL, profile_names=PROFILES, environ={ENV_OBSTACLE_MIN_SAFE_DEPTH: raw}, is_windows=False)
+        assert not [i for i in found if _mentions_depth(i.to_json())]
+
+
+def test_an_inherited_mode_wins_and_reaches_the_edge_unchanged():
+    env = {ENV_OBSTACLE_SENSING: "off", "PATH": "/bin"}
+    _, edge, _ = build_plan(replace(REHEARSAL, obstacle_sensing="required"), EdgeToken(TOKEN, "environment"), PY, env)
+    assert edge.env[ENV_OBSTACLE_SENSING] == "off"
+    assert ENV_OBSTACLE_SENSING not in edge.display_env  # the launcher did not set it
 
 
 def test_an_empty_inherited_variable_counts_as_unset():
-    settings = replace(REHEARSAL, obstacle_min_safe_depth=0.6)
-    env = {ENV_OBSTACLE_MIN_SAFE_DEPTH: "  ", ENV_OBSTACLE_SENSING: ""}
-    _, edge, _ = build_plan(settings, EdgeToken(TOKEN, "environment"), PY, env)
-    assert edge.env[ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.6" and edge.env[ENV_OBSTACLE_SENSING] == "required"
-    assert effective_obstacle(settings, env).depth_source == "window"
+    env = {ENV_OBSTACLE_SENSING: ""}
+    _, edge, _ = build_plan(REHEARSAL, EdgeToken(TOKEN, "environment"), PY, env)
+    assert edge.env[ENV_OBSTACLE_SENSING] == "required"
+    assert effective_obstacle(REHEARSAL, env).mode_source == "window"
 
 
 def test_an_inherited_off_is_the_effective_mode_and_is_never_silent():
@@ -214,15 +177,9 @@ def test_an_inherited_off_is_the_effective_mode_and_is_never_silent():
     assert ENV_OBSTACLE_SENSING in warning and "wins over the window" in warning
 
 
-@pytest.mark.parametrize("env, field", [
-    ({ENV_OBSTACLE_SENSING: "maybe"}, "obstacle_sensing"),
-    ({ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.95"}, "obstacle_min_safe_depth"),
-    ({ENV_OBSTACLE_MIN_SAFE_DEPTH: "abc"}, "obstacle_min_safe_depth"),
-    ({ENV_OBSTACLE_MIN_SAFE_DEPTH: "nan"}, "obstacle_min_safe_depth"),
-])
-def test_an_inherited_value_the_edge_would_refuse_blocks_the_start(env, field):
-    errors = _issues(REHEARSAL, env, level=ERROR)
-    assert [i.field for i in errors] == [field]
+def test_an_inherited_mode_the_edge_would_refuse_blocks_the_start():
+    errors = _issues(REHEARSAL, {ENV_OBSTACLE_SENSING: "maybe"}, level=ERROR)
+    assert [i.field for i in errors] == ["obstacle_sensing"]
     assert "the edges would refuse to start" in errors[0].message
 
 
@@ -383,7 +340,7 @@ def test_restart_of_an_edge_with_an_inherited_off_is_held_back_after_stop_too(la
 
 def test_restart_after_stop_is_not_held_back_with_sensing_required(launcher_with):
     client, _, _ = launcher_with()
-    status, data = client.post("/api/start", {"settings": _settings(obstacle_min_safe_depth=0.77)})
+    status, data = client.post("/api/start", {"settings": _settings()})
     assert status == 200 and _all_running(client)
     edge = _edge_name(client)
     _stopped(client)
@@ -430,13 +387,14 @@ def test_the_refusal_comes_before_any_drone_is_probed(launcher_with):
 
 def test_required_needs_no_confirmation(launcher_with):
     client, _, _ = launcher_with()
-    status, data = client.post("/api/start", {"settings": _settings(obstacle_min_safe_depth=0.77)})
+    status, data = client.post("/api/start", {"settings": _settings()})
     assert status == 200 and data["started"] is True
     assert _wait(lambda: len(client.get("/api/state")[1]["processes"]) == 3)
     state = client.get("/api/state")[1]
     edges = [p for p in state["processes"] if p["name"].startswith("edge-")]
-    assert all(p["env"][ENV_OBSTACLE_MIN_SAFE_DEPTH] == "0.77" for p in edges)
-    assert state["running_obstacle"]["min_safe_depth"] == 0.77
+    assert all(p["env"][ENV_OBSTACLE_SENSING] == "required" for p in edges)
+    assert state["running_obstacle"]["mode"] == "required"
+    assert not _mentions_depth(state["running_obstacle"]) and not _mentions_depth([p["env"] for p in edges])
 
 
 def test_an_inherited_off_needs_the_same_confirmation(launcher_with):
@@ -455,20 +413,18 @@ def test_a_start_with_no_local_edge_needs_no_confirmation(launcher_with):
     app._require_sensing_confirmation(replace(remote, obstacle_sensing="off"), {})  # does not raise
 
 
-def test_validate_and_bootstrap_show_the_effective_values(launcher_with):
-    client, _, _ = launcher_with({ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.77"})
+def test_validate_and_bootstrap_show_the_effective_mode_and_never_the_threshold(launcher_with):
+    client, _, _ = launcher_with()
     status, data = client.post("/api/validate", {"settings": _settings(obstacle_sensing="off")})
     assert status == 200
     ob = data["obstacle"]
-    assert (ob["mode"], ob["mode_source"], ob["min_safe_depth"], ob["min_safe_depth_source"]) == (
-        "off", "window", 0.77, "environment")
+    assert (ob["mode"], ob["mode_source"], ob["mode_variable"]) == ("off", "window", ENV_OBSTACLE_SENSING)
     assert ob["edges"] == ["drone-1", "drone-2"] and ob["downgraded"] is True
     assert ob["applies"] == "on the next Start" and ob["warning"].startswith("Obstacle sensing will be OFF")
-    assert ENV_OBSTACLE_MIN_SAFE_DEPTH in data["inherited_env"]
+    assert not _mentions_depth(ob)
     boot = client.get("/api/bootstrap")[1]
-    assert boot["obstacle_limits"] == {"modes": ["required", "off"], "min_safe_depth_range": [0.05, 0.9],
-                                       "min_safe_depth_default": 0.35}
-    assert boot["settings"]["obstacle_sensing"] == "required"
+    assert boot["obstacle_limits"] == {"modes": ["required", "off"]}
+    assert boot["settings"]["obstacle_sensing"] == "required" and not _mentions_depth(boot["settings"])
     assert client.get("/api/state")[1]["running_obstacle"] is None
 
 
@@ -480,64 +436,22 @@ PAGE = (STATIC_DIR / "launcher.html").read_text(encoding="utf-8")
 SCRIPT = (STATIC_DIR / "launcher.js").read_text(encoding="utf-8")
 
 
-def test_the_page_has_both_controls_and_says_when_a_change_applies():
-    assert 'data-field="obstacle_sensing"' in PAGE and 'data-field="obstacle_min_safe_depth"' in PAGE
+def test_the_page_has_the_mode_control_only_and_says_when_a_change_applies():
+    assert 'data-field="obstacle_sensing"' in PAGE
     assert '<option value="required">' in PAGE and '<option value="off">' in PAGE
-    assert 'min="0.05" max="0.9"' in PAGE
     assert "Applies on next Start." in PAGE
     assert "wins over this window" in PAGE
+    for page in (PAGE, SCRIPT):
+        assert not _mentions_depth(page)
 
 
-# ---------------------------------------------------------------------------
-# Preflight: a threshold that was never calibrated
-# ---------------------------------------------------------------------------
-
-
-def test_the_shipped_threshold_with_sensing_required_is_a_preflight_warning():
-    check = obstacle_threshold_check(REHEARSAL, {})
-    assert (check.name, check.status) == ("Obstacle threshold", WARN)
-    assert check.detail == UNCALIBRATED_DEPTH_NOTE
-    assert check.detail.startswith("The obstacle threshold has not been calibrated (H1), so lanes may be cut on "
-                                   "every gate until it is set from recordings.")
-    assert "0.35" in check.detail and check.detail.endswith(".")
-
-
-@pytest.mark.parametrize("settings, environ, status, detail", [
-    (replace(REHEARSAL, obstacle_min_safe_depth=0.77), {}, PASS, "min safe depth 0.77 (from the window)"),
-    (REHEARSAL, {ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.77"}, PASS,
-     "min safe depth 0.77 (from FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH in the launcher's environment)"),
-    (replace(REHEARSAL, obstacle_min_safe_depth=0.77), {ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.35"}, WARN,
-     UNCALIBRATED_DEPTH_NOTE),
-    (replace(REHEARSAL, obstacle_sensing="off"), {}, INFO, "is not used: obstacle sensing is off"),
-])
-def test_the_threshold_check_follows_the_effective_values(settings, environ, status, detail):
-    check = obstacle_threshold_check(settings, environ)
-    assert check.status == status and detail in check.detail
-
-
-def test_the_warning_is_in_the_preflight_and_never_blocks_the_start(launcher_with):
+def test_no_check_and_no_start_answer_mentions_the_threshold(launcher_with):
     checks = run_preflight(REHEARSAL, EdgeToken(TOKEN, "environment"), _preflight_env(), probe_drones=False)
-    (row,) = [c for c in checks if c.name == "Obstacle threshold"]
-    assert row.status == WARN
-    remote_only = run_preflight(builtin_presets()["Layout A (ground here)"], EdgeToken(TOKEN, "environment"),
-                                _preflight_env(), probe_drones=False)
-    assert not [c for c in remote_only if c.name == "Obstacle threshold"]  # no edge starts there
+    assert not [c for c in checks if _mentions_depth(c.to_json())]
     client, _, _ = launcher_with()
     status, data = client.post("/api/start", {"settings": REHEARSAL.to_json()})
     assert status == 200 and data["started"] is True
-    (row,) = [c for c in data["checks"] if c["name"] == "Obstacle threshold"]
-    assert row["status"] == "WARN" and row["detail"] == UNCALIBRATED_DEPTH_NOTE
-
-
-def test_the_window_shows_the_same_note_next_to_the_threshold(launcher_with):
-    client, _, _ = launcher_with()
-    ob = client.post("/api/validate", {"settings": REHEARSAL.to_json()})[1]["obstacle"]
-    assert ob["uncalibrated"] is True and ob["uncalibrated_note"] == UNCALIBRATED_DEPTH_NOTE
-    ob = client.post("/api/validate", {"settings": _settings(obstacle_min_safe_depth=0.77)})[1]["obstacle"]
-    assert ob["uncalibrated"] is False and ob["uncalibrated_note"] is None
-    ob = client.post("/api/validate", {"settings": _settings(obstacle_sensing="off")})[1]["obstacle"]
-    assert ob["uncalibrated_note"] is None
-    assert 'id="obstacle-uncalibrated"' in PAGE
+    assert not _mentions_depth(data)
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +541,7 @@ async function api(path, body) {
 }
 async function ask(title, text, buttons) { asks.push({ title, text }); return answers.shift() ? { value: 'confirm' } : null; }
 function changed(rerender) { changes.push(!!rerender); }
-const settings = { obstacle_sensing: 'required', obstacle_min_safe_depth: 0.35 };
+const settings = { obstacle_sensing: 'required' };
 const f = new Function('$', 'el', 'api', 'ask', 'changed', 'settings', block +
   '\nreturn { chooseSensing, startRequest, renderObstacle, renderRunningObstacle, forgetSensingConfirmation, ' +
   'state: () => ({ sensingConfirmed, lastObstacle }) };')($, el, api, ask, changed, settings);
@@ -695,8 +609,7 @@ class TestWindowScript:
             return { res, calls, asks };
         """)
         assert out["res"] == {"started": True} and out["asks"] == []
-        assert out["calls"] == [{"path": "/api/start", "body": {"settings": {"obstacle_sensing": "required",
-                                                                              "obstacle_min_safe_depth": 0.35}}}]
+        assert out["calls"] == [{"path": "/api/start", "body": {"settings": {"obstacle_sensing": "required"}}}]
 
     def test_the_refusal_is_asked_and_the_nonce_echoed_once(self, tmp_path):
         out = _node(tmp_path, f"""
@@ -784,57 +697,38 @@ class TestWindowScript:
         """)
         assert out.startswith("Not started: the confirmation of obstacle sensing off expired")
 
-    def test_an_environment_override_shows_the_effective_value_in_the_disabled_control(self, tmp_path):
+    def test_an_environment_override_shows_the_effective_mode_in_the_disabled_control(self, tmp_path):
         ob = {"mode": "off", "mode_source": "environment", "mode_variable": ENV_OBSTACLE_SENSING,
-              "min_safe_depth": 0.77, "min_safe_depth_source": "environment",
-              "min_safe_depth_variable": ENV_OBSTACLE_MIN_SAFE_DEPTH, "min_safe_depth_default": 0.35,
-              "edges": ["drone-1"], "downgraded": True, "uncalibrated_note": None}
+              "edges": ["drone-1"], "downgraded": True}
         out = _node(tmp_path, f"""
             const controls = () => ({{
                 mode: [$('#obstacle_sensing').value, $('#obstacle_sensing').disabled],
-                depth: [$('#obstacle_min_safe_depth').value, $('#obstacle_min_safe_depth').disabled],
-                note: [$('#obstacle-uncalibrated').hidden, $('#obstacle-uncalibrated').textContent],
                 text: $('#obstacle-effective').children.map((c) => c.textContent).join(' ') }});
             f.renderObstacle({json.dumps(ob)});
             const overridden = controls();
             f.renderObstacle(null);
             const cleared = controls();
-            f.renderObstacle({json.dumps({**ob, "mode": "required", "mode_source": "window",
-                                          "min_safe_depth": 0.35, "min_safe_depth_source": "window",
-                                          "downgraded": False, "uncalibrated_note": "Not calibrated."})});
+            f.renderObstacle({json.dumps({**ob, "mode": "required", "mode_source": "window", "downgraded": False})});
             return {{ overridden, cleared, window: controls() }};
         """)
         overridden, cleared, window = out["overridden"], out["cleared"], out["window"]
-        # The window still holds required and 0.35; the disabled controls show what the edges will use.
-        assert overridden["mode"] == ["off", True] and overridden["depth"] == ["0.77", True]
-        assert "mode off (from FLIGHTRISK_OBSTACLE_SENSING in the launcher's environment" in overridden["text"]
-        assert overridden["note"] == [True, ""]
-        # No answer from /api/validate: nothing stays disabled, and the window's values are back.
-        assert cleared["mode"] == ["required", False] and cleared["depth"] == ["0.35", False]
-        assert cleared["text"] == ""
-        assert window["mode"] == ["required", False] and window["depth"] == ["0.35", False]
-        assert window["note"] == [False, "Not calibrated."]
-
-    def test_an_answer_from_validate_keeps_what_the_operator_is_typing(self, tmp_path):
-        ob = {"mode": "required", "mode_source": "window", "mode_variable": ENV_OBSTACLE_SENSING,
-              "min_safe_depth": 0, "min_safe_depth_source": "window",
-              "min_safe_depth_variable": ENV_OBSTACLE_MIN_SAFE_DEPTH, "min_safe_depth_default": 0.35,
-              "edges": ["drone-1"], "downgraded": False, "uncalibrated_note": None}
-        out = _node(tmp_path, f"""
-            const depth = $('#obstacle_min_safe_depth');
-            depth.value = '0.';            // half typed; the input handler stored Number('0.') = 0
-            settings.obstacle_min_safe_depth = 0;
-            f.renderObstacle({json.dumps(ob)});
-            return depth.value;
-        """)
-        assert out == "0."
+        # The window still holds required; the disabled control shows what the edges will use.
+        assert overridden["mode"] == ["off", True]
+        assert overridden["text"] == ("Edges started here (drone-1) will use obstacle sensing off (from "
+                                      "FLIGHTRISK_OBSTACLE_SENSING in the launcher's environment, which wins over this "
+                                      "window). Applies on next Start.")
+        # No answer from /api/validate: the control is enabled again and shows the window's mode.
+        assert cleared["mode"] == ["required", False] and cleared["text"] == ""
+        assert window["mode"] == ["required", False]
+        assert "obstacle sensing required (from this window)" in window["text"]
 
     def test_the_running_edges_values_are_shown_while_processes_run(self, tmp_path):
         out = _node(tmp_path, """
-            f.renderRunningObstacle({ mode: 'off', min_safe_depth: 0.77, downgraded: true });
+            f.renderRunningObstacle({ mode: 'off', downgraded: true });
             const shown = [$('#obstacle-running').hidden, $('#obstacle-running').textContent, $('#obstacle-running').className];
             f.renderRunningObstacle(null);
             return { shown, hidden: $('#obstacle-running').hidden };
         """)
-        assert out["shown"][0] is False and "mode off and min safe depth 0.77" in out["shown"][1]
+        assert out["shown"][0] is False
+        assert out["shown"][1] == "Running edges were started with obstacle sensing off. A change here applies on the next Start."
         assert out["shown"][2] == "small warning" and out["hidden"] is True

@@ -81,7 +81,7 @@ class TestConstants:
             assert name.startswith("FLIGHTRISK_")
 
     def test_telemetry_fields_are_unique_and_prefixed(self):
-        assert len(set(os_.TELEMETRY_FIELDS)) == len(os_.TELEMETRY_FIELDS) == 11
+        assert len(set(os_.TELEMETRY_FIELDS)) == len(os_.TELEMETRY_FIELDS) == 10
         assert os_.TELEMETRY_PERSON_CUE in os_.TELEMETRY_FIELDS
         assert os_.TELEMETRY_AVOID in os_.TELEMETRY_FIELDS
         assert all(f.startswith("obstacle_") for f in os_.TELEMETRY_FIELDS)

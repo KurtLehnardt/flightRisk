@@ -37,14 +37,10 @@ from flightrisk.launcher.netinfo import (
     list_adapters,
 )
 from flightrisk.launcher.settings import (
-    SOURCE_ENVIRONMENT,
-    UNCALIBRATED_DEPTH_NOTE,
     UNREADABLE_ADAPTERS,
     DroneSettings,
     LauncherSettings,
     choose_adapter_message,
-    effective_obstacle,
-    format_depth,
     local_tellos_with_unknown_adapter,
     local_tellos_without_adapter,
 )
@@ -294,31 +290,6 @@ class PreflightEnv:
 # ---------------------------------------------------------------------------
 
 
-OBSTACLE_THRESHOLD_CHECK = "Obstacle threshold"
-
-
-def obstacle_threshold_check(settings: LauncherSettings, environ: Mapping[str, str]) -> Check:
-    """The min safe depth the edges started here will use (``settings.effective_obstacle``).
-
-    WARN while sensing is required and the threshold is still the shipped default, which was never
-    calibrated (hardware item H1) and in the field blocked every frame; it never blocks the start.
-    INFO when sensing is off (the threshold is then unused), PASS for any other value.
-    """
-    eff = effective_obstacle(settings, environ)
-    if eff.depth is None:
-        return Check(OBSTACLE_THRESHOLD_CHECK, INFO, "the inherited min safe depth is not a number; see Setup")
-    source = ("from FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH in the launcher's environment"
-              if eff.depth_source == SOURCE_ENVIRONMENT else "from the window")
-    value = format_depth(eff.depth)
-    if eff.downgraded:
-        return Check(OBSTACLE_THRESHOLD_CHECK, INFO, f"min safe depth {value} ({source}) is not used: obstacle sensing is "
-                     f"{eff.mode}", {"min_safe_depth": eff.depth, "mode": eff.mode})
-    if eff.uncalibrated:
-        return Check(OBSTACLE_THRESHOLD_CHECK, WARN, UNCALIBRATED_DEPTH_NOTE, {"min_safe_depth": eff.depth, "mode": eff.mode})
-    return Check(OBSTACLE_THRESHOLD_CHECK, PASS, f"min safe depth {value} ({source})",
-                 {"min_safe_depth": eff.depth, "mode": eff.mode})
-
-
 def run_preflight(
     settings: LauncherSettings,
     token: EdgeToken,
@@ -353,10 +324,9 @@ def run_preflight(
         f"missing: {', '.join(missing)} (pip install -r requirements.txt)" if missing else f"{len(wanted)} packages found",
     ))
 
-    # Detector weights for the chosen profile, and the obstacle threshold, when an edge runs here.
+    # Detector weights for the chosen profile, when an edge runs here.
     if local:
         checks.append(_weights_check(settings, env))
-        checks.append(obstacle_threshold_check(settings, env.environ))
 
     # Ports and the cable address.
     adapters = env.adapters()

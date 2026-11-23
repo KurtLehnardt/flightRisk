@@ -187,21 +187,6 @@ const socket = io();
         }
         return null;
     }
-    // The depth threshold a drone's camera sensor was started with (FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH, set in the
-    // launcher or the edge's environment), or null when the drone reports none (no camera sensor, or sensing off).
-    const DEFAULT_MIN_SAFE_DEPTH = 0.35;
-    function depthLimitBadge(d) {
-        const v = d && d.obstacle_min_safe_depth;
-        if (typeof v !== 'number' || !(v > 0)) return null;
-        const shown = Math.round(v * 1000) / 1000;
-        const isDefault = Math.abs(v - DEFAULT_MIN_SAFE_DEPTH) < 1e-9;
-        // The shipped default was never calibrated (H1), so it gets the warning style.
-        return { text: 'DEPTH ' + shown, cls: isDefault ? 'held' : '',
-            title: 'Min safe depth in force on this drone: its depth cue stops for anything scoring above ' + shown
-                + (isDefault ? ' (the default, not calibrated for this site: lanes may be cut on every gate).'
-                    : ' (the default is ' + DEFAULT_MIN_SAFE_DEPTH + ').')
-                + ' Set in the launcher; a change applies on the next Start.' };
-    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -351,7 +336,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), depthLimitBadge(d), obstacleStopBadge(d), tempBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;

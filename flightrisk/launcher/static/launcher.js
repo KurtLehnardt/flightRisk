@@ -311,57 +311,41 @@ function sourceText(source, variable) {
   return source === "environment" ? variable + " in the launcher's environment, which wins over this window" : "this window";
 }
 
-// The two controls show the window's values, except a control whose variable the launcher's environment sets: that
-// one is disabled and shows the effective value from the environment, because the window's value would not reach the
-// edges. Without an answer from /api/validate both controls are enabled and show the window's values. An enabled
-// control keeps what the operator is typing; its value is written only by render() (all) or when it stops showing
-// the environment's value.
+// The mode control shows the window's mode, unless the launcher's environment sets FLIGHTRISK_OBSTACLE_SENSING: it is
+// then disabled and shows the environment's mode, because the window's would not reach the edges. Without an answer
+// from /api/validate it is enabled and shows the window's mode. Its value is written by render() (all) or when it
+// stops showing the environment's mode.
 function renderObstacleControls(all) {
   const ob = lastObstacle;
-  const shown = (v) => (v === null || v === undefined ? "" : String(v));
-  const controls = [
-    [$("#obstacle_sensing"), !!ob && ob.mode_source === "environment", ob && ob.mode, settings.obstacle_sensing,
-      ob && ob.mode_variable],
-    [$("#obstacle_min_safe_depth"), !!ob && ob.min_safe_depth_source === "environment", ob && ob.min_safe_depth,
-      settings.obstacle_min_safe_depth, ob && ob.min_safe_depth_variable],
-  ];
-  for (const [control, fromEnv, envValue, windowValue, variable] of controls) {
-    if (fromEnv) control.value = shown(envValue);
-    else if (all || control.disabled) control.value = shown(windowValue);
-    control.disabled = fromEnv;
-    control.title = fromEnv ? "Set by " + variable + " in the launcher's environment" : "";
-  }
+  const control = $("#obstacle_sensing");
+  const fromEnv = !!ob && ob.mode_source === "environment";
+  if (fromEnv) control.value = ob.mode;
+  else if (all || control.disabled) control.value = settings.obstacle_sensing;
+  control.disabled = fromEnv;
+  control.title = fromEnv ? "Set by " + ob.mode_variable + " in the launcher's environment" : "";
 }
 
 // What the edges started here will use, from /api/validate.
 function renderObstacle(ob) {
   lastObstacle = ob || null;
   renderObstacleControls(false);
-  // The threshold still at the shipped default with sensing required: the same note as the preflight WARN.
-  const note = $("#obstacle-uncalibrated");
-  note.hidden = !(ob && ob.uncalibrated_note);
-  note.textContent = (ob && ob.uncalibrated_note) || "";
   const box = $("#obstacle-effective");
   box.replaceChildren();
   if (!ob) return;
   if (!ob.edges.length) {
-    box.appendChild(el("span", { class: "muted" }, "No edge starts on this computer, so these settings are not used here."));
+    box.appendChild(el("span", { class: "muted" }, "No edge starts on this computer, so this setting is not used here."));
     return;
   }
-  const depth = ob.min_safe_depth === null ? "not a number" : String(ob.min_safe_depth);
   box.appendChild(el("span", { class: ob.downgraded ? "warning" : "" },
-    "Edges started here (" + ob.edges.join(", ") + ") will use: mode " + ob.mode + " (from " +
-    sourceText(ob.mode_source, ob.mode_variable) + "), min safe depth " + depth + " (from " +
-    sourceText(ob.min_safe_depth_source, ob.min_safe_depth_variable) + "; default " + ob.min_safe_depth_default +
-    "). Applies on next Start."));
+    "Edges started here (" + ob.edges.join(", ") + ") will use obstacle sensing " + ob.mode + " (from " +
+    sourceText(ob.mode_source, ob.mode_variable) + "). Applies on next Start."));
 }
 
 function renderRunningObstacle(ob) {
   const box = $("#obstacle-running");
   box.hidden = !ob;
   if (!ob) return;
-  box.textContent = "Running edges were started with mode " + ob.mode + " and min safe depth " + ob.min_safe_depth +
-    ". A change here applies on the next Start.";
+  box.textContent = "Running edges were started with obstacle sensing " + ob.mode + ". A change here applies on the next Start.";
   box.className = "small " + (ob.downgraded ? "warning" : "muted");
 }
 

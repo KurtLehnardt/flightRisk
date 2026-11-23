@@ -266,8 +266,8 @@ def edge_spec(settings: LauncherSettings, index: int, token: EdgeToken, python: 
         "FLIGHTRISK_CEILING_CM": str(settings.ceiling_cm),
         "FLIGHTRISK_CEILING_MARGIN_CM": str(settings.margin_cm),
         "FLIGHTRISK_APPEARANCE_ONLY": "1",
-        # The window's obstacle sensing mode and depth threshold, unless the launcher's own environment
-        # sets the variable: an inherited value wins and reaches the edge unchanged (settings.py).
+        # The window's obstacle sensing mode, unless the launcher's own environment sets the variable:
+        # an inherited value wins and reaches the edge unchanged (settings.py).
         **obstacle_env(settings, base_env),
         **_otel_env(settings, f"edge-{drone.drone_id}"),
     }

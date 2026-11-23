@@ -157,22 +157,20 @@ ceiling, the margin and each drone's altitude slot from the window, then starts 
 | Ports | the ground's `--port` and `--edge-port`; the dashboard always binds 127.0.0.1 |
 | Observability export | `FLIGHTRISK_OTEL_ENABLED`, `OTEL_ENDPOINT` and `OTEL_RESOURCE_ATTRIBUTES` per process; an endpoint on port 4318 uses OTLP over HTTP, anything else OTLP over gRPC |
 | Obstacle sensing mode | the edges' `FLIGHTRISK_OBSTACLE_SENSING`: `required` (the default) or `off`. Choosing `off` asks first, and every Start with `off` must be confirmed again (see "Obstacle sensing") |
-| Min safe depth | the edges' `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`, 0.05 to 0.9 (default 0.35; the outdoor field calibration needed 0.77). A value above the default is a warning: the depth cue then stops only for closer obstacles |
 
 ### Obstacle sensing
 
-The two obstacle settings reach only the edges this launcher starts (a ground with every edge on another computer
-does not use them; each edge computer's own launcher does). An edge reads them once, when it starts, so a change
-**applies on the next Start**; the window says so, and while processes run it also shows the values the running edges
-were started with. The dashboard shows what each edge actually uses: the `SENSE` badge for the mode and a `DEPTH`
-badge (next to `PERSON CUE`) for the threshold.
+The obstacle sensing mode reaches only the edges this launcher starts (a ground with every edge on another computer
+does not use it; each edge computer's own launcher does). An edge reads it once, when it starts, so a change
+**applies on the next Start**; the window says so, and while processes run it also shows the mode the running edges
+were started with. The dashboard's `SENSE` badge shows the mode each edge actually uses. The window has no other
+obstacle setting: the depth threshold is not an operator setting, and the launcher neither shows nor sets it.
 
-Precedence: `FLIGHTRISK_OBSTACLE_SENSING` or `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` in the launcher's own environment
-wins over the window, so a shell or script that sets them keeps working. The window shows the effective value and
-where it comes from, disables the control the environment overrides and shows the environment's value in it, and
-lists the variable among the inherited ones. An inherited value the edge would refuse (a mode other than `required`
-or `off`, a depth outside 0.05 to 0.9) is an error that blocks Start. An empty variable counts as unset. A depth
-typed outside 0.05 to 0.9 is refused as typed; it is never rounded into the range.
+Precedence: `FLIGHTRISK_OBSTACLE_SENSING` in the launcher's own environment wins over the window, so a shell or
+script that sets it keeps working. The window shows the effective mode and where it comes from, disables the mode
+control and shows the environment's mode in it, and lists the variable among the inherited ones. An inherited mode
+the edge would refuse (anything other than `required` or `off`) is an error that blocks Start. An empty variable
+counts as unset.
 
 Weaker sensing is never started silently, and a confirmation is never replayed. When the effective mode is not
 `required` (from the window or from the environment) and an edge starts here, `POST /api/start` answers 409 with
@@ -209,7 +207,6 @@ All checks are read-only; any FAIL blocks Start.
 | Virtual environment | the launcher runs in a virtual environment (otherwise a warning) |
 | Dependencies | the packages the chosen processes import are installed |
 | Detector weights | the chosen profile's weights are on disk (a stock model that Ultralytics would download is a warning) |
-| Obstacle threshold | an edge starts here and its min safe depth is not the shipped 0.35. With sensing `required` and 0.35 it is a warning, never a block: the threshold has not been calibrated (H1), so lanes may be cut on every gate until it is set from recordings. The window shows the same note under the threshold. With sensing `off` it is INFO |
 | Dashboard port, edge link port | free on 127.0.0.1 (a port in use is reported, never freed: the launcher only stops what it started) |
 | Cable address | in layout A, the address is on one of this computer's adapters and the edge port is free on it |
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |

@@ -299,13 +299,13 @@ MAX_TEXT_LEN = 200
 MAX_LANES = 1024
 MAX_LANE_DISTANCE_CM = 100_000
 # Top-level fields of one message. An edge's telemetry is the executor's own
-# fields (up to 36 with GPS, the drone link and the obstacle fields, the
-# camera sensor's depth threshold and the re-look and sidestep group
-# ``obstacle_avoid`` included; a Tello has no GPS but adds its temperature as
-# one grouped field, ``temp_preflight``) plus the ones the edge adds on the way
-# out (``detector_ok``, ``camera_ok`` and the grouped ``detection_profile``),
-# so up to 39 on a real edge and 40 with every optional field present. The
-# limit leaves headroom above that; a new optional field belongs
+# fields (up to 35 with GPS, the drone link and the obstacle fields, the
+# re-look and sidestep group ``obstacle_avoid`` included; a Tello has no GPS
+# but adds its temperature as one grouped field, ``temp_preflight``) plus the
+# ones the edge adds on the way out (``detector_ok``, ``camera_ok`` and the
+# grouped ``detection_profile``), so up to 38 on a real edge and 39 with every
+# optional field present. The limit leaves headroom above that; a new optional
+# field belongs
 # in a group. ``tests/test_telemetry_field_cap.py`` guards it. Raising it only
 # loosens what a ground accepts, so an older edge's messages are unchanged.
 MAX_FIELDS = 48

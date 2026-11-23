@@ -28,12 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from flightrisk.drone.obstacle_sensor import (
-    ENV_OBSTACLE_SENSING,
-    OBSTACLE_MIN_SAFE_DEPTH,
-    OBSTACLE_MIN_SAFE_DEPTH_RANGE,
-    SENSING_ENV_REQUIRED,
-)
+from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_REQUIRED
 from flightrisk.launcher import preflight as pf
 from flightrisk.launcher.adaptermap import confirmed_mapping, propose_adapters
 from flightrisk.launcher.ceilingfile import (
@@ -62,7 +57,6 @@ from flightrisk.launcher.settings import (
     ERROR,
     MAX_DRONES,
     OBSTACLE_SENSING_MODES,
-    UNCALIBRATED_DEPTH_NOTE,
     Issue,
     LauncherSettings,
     PresetError,
@@ -196,14 +190,13 @@ class LauncherApp:
         )
 
     def obstacle(self, settings: LauncherSettings) -> dict[str, Any]:
-        """The obstacle settings the edges started here will use, where each comes from, and the warning to confirm."""
+        """The obstacle sensing mode the edges started here will use, where it comes from, and the warning to confirm."""
         eff = effective_obstacle(settings, self.environ)
         local = tuple(d.drone_id for d in settings.local_drones())
         return {
             **eff.to_json(),
             "edges": list(local),
             "warning": sensing_warning(eff, local) if eff.downgraded and local else None,
-            "uncalibrated_note": UNCALIBRATED_DEPTH_NOTE if eff.uncalibrated and local else None,
         }
 
     def _require_sensing_confirmation(self, settings: LauncherSettings, body: dict[str, Any]) -> bool:
@@ -344,11 +337,7 @@ class LauncherApp:
             "platform": {"is_windows": self.preflight_env.is_windows, "name": sys.platform, "host": socket.gethostname()},
             "max_drones": MAX_DRONES,
             "launcher_port": self.port,
-            "obstacle_limits": {
-                "modes": list(OBSTACLE_SENSING_MODES),
-                "min_safe_depth_range": list(OBSTACLE_MIN_SAFE_DEPTH_RANGE),
-                "min_safe_depth_default": OBSTACLE_MIN_SAFE_DEPTH,
-            },
+            "obstacle_limits": {"modes": list(OBSTACLE_SENSING_MODES)},
         }
 
     def validate(self, body: dict[str, Any]) -> dict[str, Any]:

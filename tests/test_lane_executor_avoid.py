@@ -651,10 +651,9 @@ def test_the_worst_case_telemetry_with_the_avoid_field_stays_under_the_cap():
     assert len(msg[TELEMETRY_AVOID]["offsets"]) == 3 * MAX_OFFSETS_LISTED
     assert msg[TELEMETRY_AVOID]["offsets_seen"] == ["", "", "", "person"]
     assert len(msg) <= fp.MAX_FIELDS - 5, len(msg)
-    # PR #198's ``obstacle_min_safe_depth`` is already in ``msg``, and its ``temp_preflight`` never is: a
-    # MAVLink drone sends no temperature (a Tello does, but has no GPS, two fields fewer). Fields another
-    # open branch adds once merged: the incident branch's ``move_refusals_total`` and ``move_refusal_last``.
-    # Together they still leave headroom.
+    # PR #198's ``temp_preflight`` is never in ``msg``: a MAVLink drone sends no temperature (a Tello does,
+    # but has no GPS, two fields fewer). Fields another open branch adds once merged: the incident branch's
+    # ``move_refusals_total`` and ``move_refusal_last``. Together they still leave headroom.
     pending = 2
     assert len(msg) + pending <= fp.MAX_FIELDS - 3, len(msg) + pending
     assert fp.validate_message(fp.shape_for_peer(msg, 2), proto=2) == "telemetry"

@@ -1,9 +1,9 @@
-"""The drone card's depth threshold badge and temperature check, rendered by ``static/ui/ui.js``.
+"""The drone card's temperature items and badge, rendered by ``static/ui/ui.js``, and no depth threshold anywhere.
 
 The helpers between the ``obstacle-display`` and ``temp-display`` markers run under Node with stub inputs, the way
 ``tests/test_fleet_dashboard_obstacle.py`` runs them; the card's wiring is checked as text. The Python side (the
-ground passing ``obstacle_min_safe_depth`` and ``temp_preflight`` through ``fleet_status``) is checked too. No
-drone, no network.
+ground passing ``temp_preflight`` through ``fleet_status``, and never a depth threshold) is checked too. The depth
+threshold is not an operator setting, so neither the edge's telemetry nor the card shows it. No drone, no network.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ NODE = shutil.which("node")
 HARNESS = r"""
 const src = require('fs').readFileSync(process.argv[2], 'utf8');
 const cases = JSON.parse(process.argv[3]);
-const f = new Function('fmt', src + '; return {depthLimitBadge, personCueBadge, tempMeta, tempTakeoffMeta, tempBadge};')(
+const f = new Function('fmt', src + '; return {personCueBadge, tempMeta, tempTakeoffMeta, tempBadge};')(
     (v) => (v === undefined || v === null) ? '--' : (typeof v === 'number' ? Math.round(v * 10) / 10 : v));
 console.log(JSON.stringify(cases.map((c) => f[c.fn].apply(null, c.args))));
 """
@@ -55,22 +55,6 @@ def _temp(reading=None, limits=None, detail=None, live=None, checked=True):
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 class TestBrowserHelpers:
-    def test_depth_badge_shows_the_threshold_in_force(self, tmp_path):
-        field, default, absent, junk, zero = _run(tmp_path, [
-            ("depthLimitBadge", [_sensing(obstacle_min_safe_depth=0.77)]),
-            ("depthLimitBadge", [_sensing(obstacle_min_safe_depth=0.35)]),
-            ("depthLimitBadge", [_sensing()]),
-            ("depthLimitBadge", [_sensing(obstacle_min_safe_depth="0.77")]),
-            ("depthLimitBadge", [_sensing(obstacle_min_safe_depth=0)]),
-        ])
-        assert field["text"] == "DEPTH 0.77" and field["cls"] == ""
-        assert "above 0.77 (the default is 0.35)" in field["title"]
-        assert "applies on the next Start" in field["title"]
-        # The shipped default was never calibrated: the warning style, and the title says what that means.
-        assert default["text"] == "DEPTH 0.35" and default["cls"] == "held"
-        assert "(the default, not calibrated for this site: lanes may be cut on every gate)" in default["title"]
-        assert absent is None and junk is None and zero is None
-
     def test_the_temp_item_is_the_live_reading_coloured_by_the_levels(self, tmp_path):
         cool, warm, hot, stale, legacy, none = _run(tmp_path, [
             ("tempMeta", [{"temp_preflight": _temp((91, 93), live=(53, 56))}]),
@@ -123,38 +107,35 @@ class TestBrowserHelpers:
 
     def test_the_new_badges_do_not_change_the_person_cue_badge(self, tmp_path):
         (cue,) = _run(tmp_path, [("personCueBadge", [_sensing(
-            obstacle_min_safe_depth=0.77, obstacle_person_cue={"person_cue_down": True, "detection_age_s": 0.4})])])
+            temp_preflight=_temp((91, 93)), obstacle_person_cue={"person_cue_down": True, "detection_age_s": 0.4})])])
         assert cue["text"] == "PERSON CUE down"
 
 
-def test_the_card_shows_the_depth_badge_next_to_the_person_cue_and_the_temperature():
-    assert "[senseBadge(d), personCueBadge(d), depthLimitBadge(d), obstacleStopBadge(d), tempBadge(d)]" in JS
+def test_the_card_shows_the_temperature_and_no_depth_threshold():
+    assert "[senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d)]" in JS
     assert "const temp = tempMeta(d);" in JS
     assert "meta.appendChild(metaItem('Temp', temp.text, temp.cls));" in JS
     assert "meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));" in JS
+    assert "min_safe_depth" not in JS and "DEPTH " not in JS
 
 
-def test_fleet_status_carries_the_depth_threshold_only_from_an_edge_that_reports_it():
+def test_fleet_status_never_carries_a_depth_threshold():
     supervisor, _, _, _ = _started_supervisor()
     supervisor.coordinator.handle_message("drone-1", _telemetry("drone-1", **_sensing(obstacle_min_safe_depth=0.77)))
-    supervisor.coordinator.handle_message("drone-2", _telemetry("drone-2", **_sensing(obstacle_min_safe_depth="x")))
     drones = supervisor.status_payload()["drones"]
-    assert drones["drone-1"]["obstacle_min_safe_depth"] == 0.77
-    assert "obstacle_min_safe_depth" not in drones["drone-2"]
+    assert "obstacle_min_safe_depth" not in drones["drone-1"]
     json.dumps(drones)
 
 
-@pytest.mark.parametrize("status, expected", [
-    ({"sensor": "forward_camera", "min_safe_depth": 0.77, "person_cue_down": False}, 0.77),
-    ({"sensor": "fake"}, None),
-    ({"sensor": "forward_camera", "min_safe_depth": float("nan")}, None),
-    ({"sensor": "forward_camera", "min_safe_depth": 0}, None),
-    (RuntimeError("status failed"), None),
+@pytest.mark.parametrize("status", [
+    {"sensor": "forward_camera", "min_safe_depth": 0.77, "person_cue_down": False},
+    {"sensor": "forward_camera", "min_safe_depth": 0.35},
+    {"sensor": "fake"},
 ])
-def test_the_edge_reports_the_camera_sensors_threshold_in_telemetry(status, expected):
+def test_the_edge_never_reports_the_camera_sensors_threshold(status):
     from flightrisk import fleet_protocol as fp
     from tests.test_obstacle_h6_fixes import _CueSensor, _executor
 
     msg = _executor(_CueSensor(status)).telemetry()
-    assert msg.get("obstacle_min_safe_depth") == expected
+    assert "obstacle_min_safe_depth" not in msg
     fp.validate_edge_to_ground(msg, proto=1)
