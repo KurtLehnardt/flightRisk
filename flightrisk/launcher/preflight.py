@@ -24,9 +24,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_OFF, SENSING_ENV_REQUIRED
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
-from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
+from flightrisk.launcher.netinfo import Adapter, adapters_for_host, address_owners, list_adapters
 from flightrisk.launcher.settings import (
     UNREADABLE_ADAPTERS,
     DroneSettings,
@@ -381,6 +382,12 @@ def run_preflight(
         # Fail closed: with no adapter list, a probe from all addresses could reach another drone.
         ambiguous.add(drone.drone_id)
         checks.append(Check(f"Adapter for {drone.drone_id}", FAIL, UNREADABLE_ADAPTERS))
+    # Any other real drone without a local IP, one Tello on its own included: with obstacle sensing required
+    # its edge refuses to start, so say so here rather than after Start.
+    sensing = edge_sensing_mode(settings, env.environ)
+    for drone in local_tellos:
+        if not drone.local_ip and drone.drone_id not in ambiguous:
+            checks.append(_no_local_ip_check(drone, adapters, sensing))
 
     # Claude reasoning: only when this computer runs the ground and the provider is claude.
     if settings.runs_ground and uplink.provider_is_claude(env.environ):
@@ -442,6 +449,55 @@ def _weights_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
         return Check(name, FAIL, f"{row['weights']} is missing; the edge would fall back to {row['fallback'] or 'nothing'}. "
                      f"Choose another profile or copy the weights into models/")
     return Check(name, WARN, f"{row['weights']}{override} is not on disk; the first start downloads it, which needs the internet")
+
+
+def edge_sensing_mode(settings: LauncherSettings, environ: Mapping[str, str]) -> str:
+    """The ``FLIGHTRISK_OBSTACLE_SENSING`` value the edges started here will read, lower case.
+
+    The edges inherit the launcher's environment, so a value set there is what
+    they read. Otherwise it is the launcher's own sensing setting when its
+    settings carry one (``obstacle_sensing``), else the edge's default,
+    ``required``. Any value but ``off`` makes a Tello edge without a local IP
+    refuse to start (``edge_device._check_capture_stamps``), and an invalid one
+    makes every edge refuse to start, so both count as required here.
+    """
+    raw = (environ.get(ENV_OBSTACLE_SENSING) or "").strip().lower()
+    if raw:
+        return raw
+    window = getattr(settings, "obstacle_sensing", None)
+    return str(window).strip().lower() if window else SENSING_ENV_REQUIRED
+
+
+def _no_local_ip_check(drone: DroneSettings, adapters: list[Adapter], sensing: str) -> Check:
+    """The row for a real drone flown from here with no local IP: FAIL while obstacle sensing is required, else WARN.
+
+    Without ``--tello-local-ip`` the edge uses djitellopy's video decoder, which
+    gives the frames no capture stamps, so with sensing required the edge
+    refuses to start (docs/two-tellos-one-pc.md applies to one drone as well).
+    """
+    name = f"Adapter for {drone.drone_id}"
+    candidates = sorted(adapters_for_host(adapters, drone.tello_host), key=lambda a: (a.name, a.ipv4))
+    if len(candidates) == 1:
+        where = f" ({candidates[0].name} {candidates[0].ipv4} is the one adapter in its network)"
+    elif not candidates:
+        where = " (no adapter has an address in its network yet: join the drone's Wi-Fi, then refresh adapters)"
+    else:
+        where = ""
+    fix = f"set the local IP of the Wi-Fi adapter joined to {drone.drone_id}'s network{where}"
+    if sensing != SENSING_ENV_OFF:
+        return Check(
+            name, FAIL,
+            f"no local IP. Obstacle sensing is required, and a Tello edge without a local IP refuses to start, "
+            f"because its video frames would carry no capture stamps. To fix it, {fix}, or set "
+            f"{ENV_OBSTACLE_SENSING}=off to fly with no obstacle sensing",
+            {"sensing": sensing},
+        )
+    return Check(
+        name, WARN,
+        f"no local IP. The edge starts because obstacle sensing is off, but its video frames carry no capture "
+        f"stamps, so it could not start with sensing on. To fix it, {fix}",
+        {"sensing": sensing},
+    )
 
 
 def _local_ip_check(drone: DroneSettings, adapters: list[Adapter], is_windows: bool) -> Check:

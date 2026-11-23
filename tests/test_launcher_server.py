@@ -231,10 +231,25 @@ def test_start_refused_on_errors_or_failed_checks(launcher):
 def test_preflight_shows_battery_from_the_probe(launcher):
     client, _, _ = launcher
     single = builtin_presets()["Single drone"].to_json()
-    status, data = client.post("/api/preflight", {"settings": single, "probe_drones": True})
+    # The adapter the launcher proposes for it (en0); with obstacle sensing required a Tello edge needs it.
+    picked = {**single, "drones": [{**single["drones"][0], "local_ip": "192.168.10.2"}]}
+    status, data = client.post("/api/preflight", {"settings": picked, "probe_drones": True})
     assert status == 200 and data["ok"] is True
     row = next(c for c in data["checks"] if c["name"] == "Drone drone-1")
     assert row["data"]["battery"] == 77 and "battery 77%" in row["detail"]
+
+
+def test_a_single_tello_without_a_local_ip_is_not_started_while_sensing_is_required(launcher):
+    """The edge would refuse to start (#186); the launcher says so before anything starts."""
+    client, _, _ = launcher
+    single = builtin_presets()["Single drone"].to_json()
+    status, data = client.post("/api/preflight", {"settings": single, "probe_drones": True})
+    assert status == 200 and data["ok"] is False
+    row = next(c for c in data["checks"] if c["name"] == "Adapter for drone-1")
+    assert row["status"] == "FAIL" and "en0 192.168.10.2" in row["detail"]
+    _, data = client.post("/api/start", {"settings": single})
+    assert data["started"] is False
+    assert client.get("/api/state")[1]["processes"] == []
 
 
 def test_presets_save_and_delete_and_never_store_the_token(launcher, tmp_path):

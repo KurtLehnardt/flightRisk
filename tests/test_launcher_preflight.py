@@ -267,3 +267,105 @@ def test_unreadable_adapter_list_fails_and_sends_no_probe():
     assert rows["Adapter for drone-1"].status == FAIL and "set the local IP" in rows["Adapter for drone-1"].detail
     assert rows["Drone drone-1"].status == FAIL
     assert probed == []
+
+
+# ---------------------------------------------------------------------------
+# A real drone with no local IP: with obstacle sensing required its edge refuses to start (#186)
+# ---------------------------------------------------------------------------
+
+
+def _single(**drone):
+    return LauncherSettings(drones=(DroneSettings(drone_id="drone-1", **drone),))
+
+
+def _one_adapter(**overrides):
+    return _env(adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "192.168.10.2", 14)], **overrides)
+
+
+@pytest.mark.parametrize("environ", [{}, {"FLIGHTRISK_OBSTACLE_SENSING": ""}, {"FLIGHTRISK_OBSTACLE_SENSING": "required"},
+                                     {"FLIGHTRISK_OBSTACLE_SENSING": " Required "}])
+def test_a_single_tello_without_a_local_ip_fails_while_sensing_is_required(environ):
+    rows = _by_name(run_preflight(_single(), EdgeToken(None, None), _one_adapter(environ=environ)))
+    row = rows["Adapter for drone-1"]
+    assert row.status == FAIL
+    assert "Obstacle sensing is required" in row.detail and "refuses to start" in row.detail
+    # It names the one adapter in the drone's network, and the way to fly without sensing.
+    assert "en0 192.168.10.2 is the one adapter in its network" in row.detail
+    assert "FLIGHTRISK_OBSTACLE_SENSING=off" in row.detail
+    assert row.data == {"sensing": "required"}
+
+
+def test_a_single_tello_without_a_local_ip_only_warns_with_sensing_off():
+    env = _one_adapter(environ={"FLIGHTRISK_OBSTACLE_SENSING": "off"})
+    checks = run_preflight(_single(), EdgeToken(None, None), env)
+    row = _by_name(checks)["Adapter for drone-1"]
+    assert row.status == WARN and "sensing is off" in row.detail and "capture stamps" in row.detail
+    assert not [c for c in checks if c.status == FAIL]
+
+
+def test_an_unknown_sensing_value_counts_as_required():
+    """The edge refuses to start on a value it does not know, so it is never a reason to pass."""
+    env = _one_adapter(environ={"FLIGHTRISK_OBSTACLE_SENSING": "maybe"})
+    assert _by_name(run_preflight(_single(), EdgeToken(None, None), env))["Adapter for drone-1"].status == FAIL
+
+
+def test_the_launchers_own_sensing_setting_applies_unless_the_environment_sets_one():
+    """A launcher whose settings carry the sensing mode passes it to the edges; an inherited value wins."""
+    off = _single()
+    # The launcher's sensing controls add this field to LauncherSettings; it is set directly so that this test
+    # holds with or without them.
+    object.__setattr__(off, "obstacle_sensing", "off")
+    assert _by_name(run_preflight(off, EdgeToken(None, None), _one_adapter()))["Adapter for drone-1"].status == WARN
+    env = _one_adapter(environ={"FLIGHTRISK_OBSTACLE_SENSING": "required"})
+    assert _by_name(run_preflight(off, EdgeToken(None, None), env))["Adapter for drone-1"].status == FAIL
+
+
+def test_no_adapter_in_the_drones_network_says_to_join_its_wifi():
+    env = _env(adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "10.0.0.5", 4)])
+    row = _by_name(run_preflight(_single(), EdgeToken(None, None), env))["Adapter for drone-1"]
+    assert row.status == FAIL and "join the drone's Wi-Fi" in row.detail
+
+
+def test_a_drone_without_a_local_ip_is_still_probed_when_one_adapter_reaches_it():
+    probed = []
+    env = _one_adapter(tello_probe=lambda d: probed.append(d.drone_id) or TelloProbe(True, battery=90))
+    rows = _by_name(run_preflight(_single(), EdgeToken(None, None), env))
+    assert probed == ["drone-1"] and rows["Drone drone-1"].status == PASS
+
+
+def test_a_local_ip_on_an_adapter_passes_and_one_on_no_adapter_fails_whatever_the_sensing():
+    """Unchanged: an IP not on this computer makes the edge's binding check refuse to start, sensing or not."""
+    for environ in ({}, {"FLIGHTRISK_OBSTACLE_SENSING": "off"}):
+        env = _one_adapter(environ=environ)
+        rows = _by_name(run_preflight(_single(local_ip="192.168.10.2"), EdgeToken(None, None), env))
+        assert rows["Adapter for drone-1"].status == PASS
+        rows = _by_name(run_preflight(_single(local_ip="192.168.10.9"), EdgeToken(None, None), env))
+        assert rows["Adapter for drone-1"].status == FAIL and "not on any adapter" in rows["Adapter for drone-1"].detail
+
+
+def test_the_existing_adapter_failures_are_not_repeated():
+    """A drone already failed for an ambiguous or unreadable adapter list gets no second row."""
+    two = _env(adapters=lambda: [Adapter("Wi-Fi", "192.168.10.2", 12), Adapter("Wi-Fi 2", "192.168.10.50", 23)])
+    checks = run_preflight(_single(), EdgeToken(None, None), two)
+    rows = [c for c in checks if c.name == "Adapter for drone-1"]
+    assert len(rows) == 1 and "choose the adapter" in rows[0].detail
+    checks = run_preflight(_single(), EdgeToken(None, None), _env(adapters=list))
+    rows = [c for c in checks if c.name == "Adapter for drone-1"]
+    assert len(rows) == 1 and "set the local IP" in rows[0].detail
+
+
+def test_fake_drones_and_drones_flown_elsewhere_get_no_adapter_row():
+    fake = LauncherSettings(drones=(DroneSettings(drone_id="drone-1", source="fake"),))
+    elsewhere = LauncherSettings(network="cable", drones=(DroneSettings(drone_id="drone-1", run_here=False),))
+    for settings in (fake, elsewhere):
+        rows = _by_name(run_preflight(settings, EdgeToken(TOKEN, "x"), _one_adapter()))
+        assert "Adapter for drone-1" not in rows
+
+
+def test_two_tellos_each_without_a_local_ip_fail_with_the_sensing_reason_too():
+    settings = LauncherSettings(role="edges", drones=(
+        DroneSettings(drone_id="drone-1"),
+        DroneSettings(drone_id="drone-2", alt_slot_cm=130),
+    ), ground_host="10.42.0.1")
+    rows = _by_name(run_preflight(settings, EdgeToken(TOKEN, "x"), _one_adapter()))
+    assert rows["Adapter for drone-1"].status == FAIL and rows["Adapter for drone-2"].status == FAIL

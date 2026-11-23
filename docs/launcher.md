@@ -177,7 +177,7 @@ All checks are read-only; any FAIL blocks Start.
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |
 | Edge token | set, when the cable address is bound or a non-loopback ground is dialled; only "set" or "missing" is shown |
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
-| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
+| Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed. Any other real drone with no local IP, a single Tello included, fails while obstacle sensing is required (`FLIGHTRISK_OBSTACLE_SENSING` unset or `required`), because its edge would refuse to start: without a local IP its video frames carry no capture stamps. The row names the one adapter in the drone's network when there is exactly one. With sensing `off` the same drone is only a warning |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
 | Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below 30 % is a warning |
 
