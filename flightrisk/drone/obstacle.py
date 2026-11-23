@@ -338,11 +338,16 @@ def centre_floor_ratio(depth_map) -> float | None:
 
     The centre is the middle row, centre third (the region the current score
     reads), taken from the raw map. The floor band is the bottom 20 percent of
-    the rows over the middle 60 percent of the columns. Where the floor sits at
-    a known height it works as a rough yardstick: a ratio near 1 means the
-    centre is about as close as the floor just below the drone, and a larger
-    ratio means closer still. Unlike the p95 normalisation it does not depend
-    on whatever happens to be the closest thing in the frame.
+    the rows over the middle 60 percent of the columns. The band does not see
+    the ground just below the drone: it sees the ground roughly 1.9 to 3.1
+    times the camera height ahead of it. So the ratio is only a yardstick at a
+    known camera height, and a threshold fitted at one height (the slot's 100
+    or 130 cm) does not carry over to another; record at flight altitude. A
+    ratio near 1 means the centre is about as close as that stretch of ground,
+    and a larger ratio means closer still. Unlike the p95 normalisation it does
+    not depend on whatever happens to be the closest thing in the frame. MiDaS
+    gives relative inverse depth with an unknown offset and scale per frame, so
+    a plain ratio changes when the offset does; see ``centre_floor_span``.
 
     Returns None when the ratio is not usable:
       * the map is not a finite 2-D array of at least 3x3,
@@ -368,6 +373,36 @@ def centre_floor_ratio(depth_map) -> float | None:
     centre_p90 = float(np.percentile(_centre_region(arr), 90))
     ratio = centre_p90 / floor
     return ratio if np.isfinite(ratio) else None
+
+
+def centre_floor_span(depth_map) -> float | None:
+    """The centre's rise over the top band, as a share of the floor's rise over the top band.
+
+    ``(centre_p90 - top_median) / (floor_median - top_median)`` with the same centre, floor
+    band and top band as ``centre_floor_ratio``. Adding the same offset to every pixel, or
+    scaling every pixel, leaves it unchanged, which MiDaS's per-frame offset and scale break
+    for a plain ratio. About 1 means the centre is as close as the floor band; more is closer.
+
+    Returns None when the map is not a finite 2-D array of at least 3x3, when the floor band
+    is not nearer than the top band, or when their difference is too close to zero to divide
+    by (below 0.1 percent of the map's range).
+    """
+    arr = _usable_map(depth_map)
+    if arr is None:
+        return None
+    h, w = arr.shape
+    col_lo = int(w * FLOOR_BAND_COL_MARGIN)
+    col_hi = w - col_lo
+    floor_rows = max(1, int(round(h * FLOOR_BAND_ROW_FRACTION)))
+    top_rows = max(1, int(round(h * TOP_BAND_ROW_FRACTION)))
+    floor = float(np.median(arr[h - floor_rows:, col_lo:col_hi]))
+    top = float(np.median(arr[:top_rows, col_lo:col_hi]))
+    denominator = floor - top
+    spread = float(arr.max() - arr.min())
+    if not denominator > max(_MIN_FLOOR_DEPTH, 1e-3 * spread):
+        return None
+    span = (float(np.percentile(_centre_region(arr), 90)) - top) / denominator
+    return span if np.isfinite(span) else None
 
 
 def centre_sides_ratio(depth_map) -> float | None:
