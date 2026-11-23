@@ -75,12 +75,11 @@ def process_wide_threads() -> frozenset[threading.Thread]:
 
 # Windows counts kernel handles, not descriptors. Handles that are not leaks still appear: the first
 # thread pool, DLL loads and event objects. A one-time warm-up (_warm_up, run before the first snapshot)
-# takes those first-use costs out, so what is left is small. The ZBook showed deltas of 2 and 3 before
-# any warm-up; the tolerance is 2, to absorb a stray event or timer handle, and is meant to be checked
-# on Windows again and lowered if the warm-up removes the noise. Sockets are what the tests plant and
+# takes those first-use costs out. The ZBook still measured 3 extra handles when the logging listener starts
+# after a snapshot (and 2 to 3 before any warm-up), so the tolerance is that measurement plus 1. Sockets are what the tests plant and
 # what leaks in practice, so on Windows they are counted separately and exactly (open_sockets), and any
 # new socket is a leak. Descriptor counts on macOS and Linux stay exact.
-WINDOWS_HANDLE_NOISE = 2
+WINDOWS_HANDLE_NOISE = 4
 _IS_WINDOWS = sys.platform == "win32"
 _warmed_up = False
 
@@ -93,8 +92,8 @@ def fd_delta_is_leak(delta: int) -> bool:
 def open_sockets() -> int:
     """The process's sockets that have an address, counted exactly on Windows; zero elsewhere (fds cover them).
 
-    psutil lists a socket once it is bound or connected, so a socket that was only created is counted by the
-    handle count instead. TIME_WAIT entries are left out: the system, not this process, holds them.
+    psutil reads the TCP/UDP tables, which hold listening or connected TCP sockets and bound UDP sockets, so a
+    socket that was only created or only bound (TCP) is not seen here and counts only in the handle count. TIME_WAIT entries are left out: the system, not this process, holds them.
     """
     if not _IS_WINDOWS:
         return 0

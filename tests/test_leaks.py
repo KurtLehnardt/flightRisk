@@ -50,8 +50,10 @@ def test_a_leaked_socket_is_found():
     before = snapshot()
     sock = socket.socket()
     if sys.platform == "win32":
-        # Windows counts sockets exactly, but only once they have an address (psutil lists those).
+        # psutil reads the TCP table, which holds only listening and connected sockets: a TCP socket that is
+        # merely bound (as the ZBook showed) is not listed. Listening puts it in the table.
         sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
     try:
         found = snapshot().leaked_since(before, settle_s=0.2)
         assert "sockets" in found if sys.platform == "win32" else "fds" in found
