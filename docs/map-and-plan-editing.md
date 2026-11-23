@@ -275,15 +275,27 @@ the pattern stops, the drone hovers, and the operator is told to fly by hand or
 plan again. The legacy patterns (Start pattern without the map) avoid
 obstacles as before.
 
-Either way, Start pattern is refused, with the reason, unless the drone's
-state is as fresh as the fleet start gate requires
-(`flightrisk/dashboard/single_search.py`). It is read from the controller
-just before the search starts, after the obstacle guard is ready. The drone
-must be connected, and its drone link must be up when the controller reports
-one (a Tello's link is down when no state packet has arrived for 3 s or its
-last command got no answer). Its battery must be known and at least 30 %,
-the fleet's `MIN_START_BATTERY`. A drone that gives no video frame is refused
-too, because the obstacle guard could not check the path.
+Either way, Start pattern is refused, with the reason and what to do, unless
+the drone passes the same checks as the fleet start gate
+(`flightrisk/dashboard/single_search.py`). They are read from the controller
+just before the search starts, after the obstacle guard is ready:
+
+- The drone must be connected, and its drone link must be up when the
+  controller reports one (a Tello's link is down when no state packet has
+  arrived for 3 s or its last command got no answer).
+- Its battery must be known and at least 30 %, the fleet's
+  `MIN_START_BATTERY`, and above the battery monitor's critical level (10 %
+  by default). A Tello's battery comes from its newest state packet, which
+  the link check keeps under 3 s old. A controller without that reading
+  (MAVLink) uses its telemetry's battery reading, which must be at most 5 s
+  old. A reading of 0 % is a real 0 % and is refused as too low.
+- The obstacle guard needs a current video frame. A drone that gives no frame
+  is refused. When the controller reports the age of its newest frame (the
+  Tello controller), the frame must have been decoded (not the black picture
+  the decoder shows before its first frame), must not be marked stale by the
+  bound decoder (decoder backlog, dropped video data, a corrupt frame, or no
+  key frame yet), and must be at most 1 s old. A controller that does not
+  report a frame age, such as the simulator, is checked for a frame only.
 
 ## 6. Map imagery
 
