@@ -385,3 +385,14 @@ def test_unread_bound_cells_are_listed() -> None:
         and entry["bound_text"].strip().lower() not in no_bound
     }
     assert found == UNREAD_BOUND_CELLS
+
+
+def test_every_alias_carries_the_scope_its_name_states() -> None:
+    aliases = [(r.id, a) for r in TABLE for a in r.env_aliases]
+    assert aliases
+    for row_id, alias in aliases:
+        assert alias.applies_to_scale in (None, "room", "field"), (row_id, alias.name)
+        if "_FIELD_" in alias.name:
+            assert alias.applies_to_scale == "field", (row_id, alias.name)
+        if "_ROOM_" in alias.name:
+            assert alias.applies_to_scale == "room", (row_id, alias.name)

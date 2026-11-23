@@ -200,7 +200,7 @@ ROWS_1_86: tuple[ParamSpec, ...] = (
     _p("link.loss_wait_s", Unit.S, Kind.FLOAT, "Extra hold after a long ground-link loss, before the loss action.",
        _ND, (0, 10.0), (None, _B(1.5, 30)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS,
        env="FLIGHTRISK_LINK_LOSS_WAIT_S",
-       env_aliases=(EnvAlias("FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S", 1.0),), cli=("--link-loss-hold-s",)),
+       env_aliases=(EnvAlias("FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S", 1.0, "field"),), cli=("--link-loss-hold-s",)),
     _p("link.loss_action", Unit.ENUM, Kind.ENUM, "What the drone does after a long ground-link loss; the environment spelling rtl reads as return.", _ND,
        ("land", "return"), (None, None), Safer.NONE, Confirm.NONE, _FE, _NS,
        choices=("return", "land"), env="FLIGHTRISK_FAILSAFE_ACTION", cli=("--failsafe-action",)),

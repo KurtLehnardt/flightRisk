@@ -20,6 +20,7 @@ def test_builtins_present():
     assert {"tello", "tello_edu", "generic_multirotor"} <= set(MODELS)
     assert MODELS["tello_edu"].profile == "tello"
     assert set(cat.ADAPTER_SPECS) == set(cat.ADAPTERS)
+    assert cat.ADAPTER_SPECS["dji_msdk"].slot
 
 
 @pytest.mark.parametrize("model", list(MODELS.values()), ids=lambda m: m.id)

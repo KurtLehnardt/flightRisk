@@ -16,8 +16,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from flightrisk.drone.coverage import CameraModel
 
 FACT_STATUSES = ("verified", "repository", "vendor", "unverified", "proposed")
-SUPPORT_LEVELS = ("reference", "supported")
-ADAPTERS = ("tello_sdk_udp", "mavlink")
+SUPPORT_LEVELS = ("reference", "supported", "slot")
+ADAPTERS = ("tello_sdk_udp", "mavlink", "dji_msdk")
 FRAME_PATHS = ("drone_video", "capture_source")
 SCALES = ("room", "field")
 POSITIONING = ("vps_tof", "gps", "rtk")
@@ -165,11 +165,13 @@ class DroneModel:
 class AdapterSpec:
     id: str
     description: str
+    slot: bool = False
 
 
 ADAPTER_SPECS = MappingProxyType({
     "tello_sdk_udp": AdapterSpec("tello_sdk_udp", "SDK text commands on UDP 8889, state on 8890, video on 11111"),
     "mavlink": AdapterSpec("mavlink", "MAVLink through MAVSDK (--drone mavlink)"),
+    "dji_msdk": AdapterSpec("dji_msdk", "DJI Mobile SDK; declared slot, no implementation", slot=True),
 })
 
 
@@ -324,7 +326,7 @@ def render_catalogue_markdown() -> str:
         "",
     ]
     for spec in ADAPTER_SPECS.values():
-        out.append(f"- `{spec.id}`: {spec.description}")
+        out.append(f"- `{spec.id}`{' (slot)' if spec.slot else ''}: {spec.description}")
     for model in BUILTIN_MODELS.values():
         out += ["", f"## {model.name} (`{model.id}`)", ""]
         out += [

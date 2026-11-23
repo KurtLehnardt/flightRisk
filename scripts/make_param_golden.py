@@ -175,7 +175,7 @@ TODAY_REFS = {
 T, G = PROFILES
 DOC_ONLY_TODAY = {
     (8, T): "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)",
-    (8, G): "instance attribute: the MAVLink controller builds DroneCapabilities(max_altitude_m=120) (drone/mavlink.py:119)",
+    (8, G): "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)",
     (17, T): "the Tello lands as soon as the link-loss watchdog fires; no constant holds the 0 s wait",
     (18, T): "behaviour: the Tello edge lands in place on link loss; no constant",
     (33, T): "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant",
@@ -189,7 +189,7 @@ DOC_ONLY_TODAY = {
     (70, T): "unset marker: no camera footprint is set today; the strip width is used",
     (70, G): "unset marker: no camera footprint is set today; the strip width is used",
     (71, G): "deferred marker: the field has no snap target today",
-    (110, T): "the Tello frame shape (drone/tello.py:2725), unverified (drone/coverage.py:104); no constant",
+    (110, T): "the Tello frame shape (the Tello SDK stream size; FakeTelloController in drone/tello.py:2725 mirrors it), unverified (drone/coverage.py:104); no constant",
     (129, T): "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant",
     (129, G): "behaviour: a confirmed match calls _land_all (dashboard/recovery.py:185-189); no constant",
     (143, T): "implicit: FLEET_LOSS_TIMEOUT_S minus DEFAULT_LINK_LOSS_LAND_S; tests/test_param_golden.py checks the difference",
