@@ -1,0 +1,325 @@
+"""Literal guard (issue #197, design section 22, requirements GRD-1 to GRD-6).
+
+Ported from ``docs/design/hardware-profiles/guard_rule_prototype.py.txt``. Name words come from the
+registry ids in ``flightrisk.params.table``. A finding is keyed
+``(file, enclosing scope, kind, callee or target, name, value)`` and every key must be in
+``tests/param_literal_allowlist.py`` with its exact count. Scope: ``SCOPE_GLOBS``; ``params/``,
+``hardware/`` and ``tests/`` are excluded by not being listed.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+UNIT_SUFFIX = r"(?:_|^)(cm|mm|m|km|s|ms|deg|dps|mps|pct|percent|c|hz|cm_s)$"
+UNIT_TOKENS = {"cm", "mm", "m", "km", "s", "ms", "deg", "dps", "mps", "pct", "c", "hz", "per", "list"}
+EXTRA_WORDS = {"timeout", "delay", "interval", "budget", "lag", "retries", "retry", "attempts",
+               "readings", "samples", "votes", "tolerance", "threshold", "radius", "width", "depth",
+               "speed", "distance", "gap", "offset", "height", "alt", "altitude", "fov", "pitch"}
+SAFETY_WORDS = ("failsafe", "require", "sensing", "hover", "avoid", "refuse", "obstacle", "geofence",
+                "ceiling", "land")
+EXEMPT_NAME = re.compile(r"(_px|_bytes|_chars|_len)$|^(max_depth|frame_height|frame_width|match_threshold)$",
+                         re.IGNORECASE)
+EXEMPT_STR_NAME = re.compile(r"^(env_|event_)|(_env|_env_var|_detail|_message|_text|_note|_reason|_reasons|"
+                             r"_label|_key|_keys|_field|_fields|_prefix|_suffix|_title|_help|_doc)$", re.IGNORECASE)
+SCOPE_GLOBS = [
+    "flightrisk/drone/*.py",
+    "flightrisk/edge_device.py",
+    "flightrisk/edge_profiles.py",
+    "flightrisk/launcher/*.py",
+    "flightrisk/dashboard/*.py",
+    "flightrisk/fleet_protocol/constants.py",
+]
+
+
+def words_from_registry(ids=None) -> set[str]:
+    """Name words: every dotted, underscore-separated id token of length >= 3 that is not a unit."""
+    if ids is None:
+        from flightrisk.params.table import TABLE
+
+        ids = [row.id for row in TABLE]
+    words = set()
+    for pid in ids:
+        for tok in re.split(r"[._]", pid):
+            if len(tok) >= 3 and tok not in UNIT_TOKENS:
+                words.add(tok)
+    return words | EXTRA_WORDS
+
+
+def build_unit_re(words: set[str]) -> re.Pattern:
+    return re.compile(UNIT_SUFFIX + "|" + "|".join(sorted(map(re.escape, words), key=len, reverse=True)),
+                      re.IGNORECASE)
+
+
+def _num(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _num(node.operand)
+        return None if v is None else -v
+    return None
+
+
+def _numstr(node):
+    v = _num(node)
+    if v is not None:
+        return v
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.fullmatch(r"-?\d+(\.\d+)?", node.value):
+        return node.value
+    return None
+
+
+def _nums(node):
+    v = _num(node)
+    if v is not None:
+        return [v]
+    if isinstance(node, ast.Tuple):
+        return [x for x in (_num(e) for e in node.elts) if x is not None]
+    return []
+
+
+def _name(t):
+    if isinstance(t, ast.Name):
+        return t.id
+    if isinstance(t, ast.Attribute):
+        return t.attr
+    return None
+
+
+def _callee(call):
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "?")
+
+
+class Scanner(ast.NodeVisitor):
+    def __init__(self, rel, unit_re):
+        self.rel, self.unit_re, self.scope, self.out = rel, unit_re, ["<module>"], []
+        self.kinds = ["module"]
+
+    def unit(self, name):
+        return bool(name) and bool(self.unit_re.search(name)) and not EXEMPT_NAME.search(name)
+
+    def safety(self, name):
+        low = (name or "").lower()
+        return any(w in low for w in SAFETY_WORDS) and not EXEMPT_STR_NAME.search(low)
+
+    def add(self, kind, target, name, value, line):
+        if value == 0 or value == "0":
+            return
+        self.out.append(((self.rel, ".".join(self.scope), kind, target, name, value), line))
+
+    def _scoped(self, node, kind):
+        self.scope.append(node.name)
+        self.kinds.append(kind)
+        self.generic_visit(node)
+        self.kinds.pop()
+        self.scope.pop()
+
+    def visit_ClassDef(self, node):
+        is_enum = any((_name(b) or "").endswith("Enum") for b in node.bases)
+        self._scoped(node, "enum" if is_enum else "class")
+
+    def visit_FunctionDef(self, node):
+        a = node.args
+        pos = a.posonlyargs + a.args
+        pairs = list(zip(pos[len(pos) - len(a.defaults):], a.defaults))
+        pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+        for arg, d in pairs:
+            if self.unit(arg.arg):
+                for v in _nums(d):
+                    self.add("default", node.name, arg.arg, v, d.lineno)
+            if isinstance(d, ast.Constant) and isinstance(d.value, (bool, str)) and self.safety(arg.arg):
+                self.add("safety_default", node.name, arg.arg, d.value, d.lineno)
+        self._scoped(node, "function")
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def _binding(self, target_name, value, line, where="function"):
+        if self.unit(target_name):
+            for v in _nums(value):
+                self.add("assign", target_name, target_name, v, line)
+            if isinstance(value, ast.Call) and _callee(value) == "field":
+                for kw in value.keywords:
+                    if kw.arg == "default":
+                        for v in _nums(kw.value):
+                            self.add("field", target_name, target_name, v, line)
+        definition = where == "class" or (where == "module" and target_name.upper().startswith("DEFAULT_"))
+        if (definition and isinstance(value, ast.Constant) and isinstance(value.value, (bool, str))
+                and self.safety(target_name)):
+            self.add("safety_literal", target_name, target_name, value.value, line)
+
+    def visit_Assign(self, node):
+        for t in node.targets:
+            n = _name(t)
+            if n:
+                self._binding(n, node.value, node.lineno, self.kinds[-1])
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        n = _name(node.target)
+        if n and node.value is not None:
+            self._binding(n, node.value, node.lineno, self.kinds[-1])
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        callee = _callee(node)
+        for kw in node.keywords:
+            if kw.arg and kw.arg != "default" and self.unit(kw.arg):
+                for v in _nums(kw.value):
+                    self.add("kwarg", callee, kw.arg, v, kw.value.lineno)
+        if callee == "add_argument" and node.args:
+            opt = next((a.value for a in node.args if isinstance(a, ast.Constant) and isinstance(a.value, str)), "")
+            for kw in node.keywords:
+                if kw.arg == "default" and self.unit(opt.lstrip("-").replace("-", "_")):
+                    v = _numstr(kw.value)
+                    if v is not None:
+                        self.add("argparse_default", "add_argument", opt, v, kw.value.lineno)
+        if callee in ("get", "getenv") and len(node.args) >= 2:
+            key = node.args[0]
+            keyname = key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else _name(key)
+            env_like = keyname and ("FLIGHTRISK_" in keyname or keyname.endswith(("_ENV", "_ENV_VAR")) or keyname.startswith("ENV_"))
+            stem = (keyname or "").replace("FLIGHTRISK_", "").replace("_ENV_VAR", "").replace("_ENV", "").replace("ENV_", "")
+            if env_like and self.unit(stem):
+                v = _numstr(node.args[1])
+                if v is not None:
+                    self.add("env_default", callee, keyname, v, node.lineno)
+        self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        ops = [node.left, *node.comparators]
+        if all(isinstance(o, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for o in node.ops):
+            names = [_name(o) for o in ops if isinstance(o, (ast.Name, ast.Attribute))]
+            hit = next((n for n in names if self.unit(n)), None)
+            if hit:
+                for o in ops:
+                    v = _num(o)
+                    if v is not None:
+                        self.add("compare", "<compare>", hit, v, node.lineno)
+        self.generic_visit(node)
+
+
+
+
+def scan_source(text: str, rel: str, unit_re: re.Pattern) -> list[tuple[tuple, int]]:
+    scanner = Scanner(rel, unit_re)
+    scanner.visit(ast.parse(text))
+    return scanner.out
+
+
+def scope_files(root: Path = ROOT) -> list[Path]:
+    return sorted({p for g in SCOPE_GLOBS for p in root.glob(g)})
+
+
+def scan_repo(root: Path = ROOT, ids=None) -> Counter:
+    unit_re = build_unit_re(words_from_registry(ids))
+    keys: Counter = Counter()
+    for p in scope_files(root):
+        found = scan_source(p.read_text(encoding="utf-8"), str(p.relative_to(root)), unit_re)
+        keys.update(k for k, _ in found)
+    return keys
+
+
+def _keys(text: str, ids=None, rel: str = "flightrisk/drone/x.py") -> list[tuple]:
+    unit_re = build_unit_re(words_from_registry(ids))
+    return [k for k, _ in scan_source(text, rel, unit_re)]
+
+
+# --- self-tests -----------------------------------------------------------------------------------
+
+PLANTED = {
+    "A": ("def f():\n    hover_s = 5\n", "assign"),
+    "B": ("def f(x):\n    if x.timeout_s > 9:\n        pass\n", "compare"),
+    "C": ("p.add_argument('--timeout-s', default='75')\n", "argparse_default"),
+    "D": ("import os\nx = os.getenv('FLIGHTRISK_TIMEOUT_S', '30')\n", "env_default"),
+    "E": ("from dataclasses import field\nclass C:\n    timeout_s = field(default=7)\n", "field"),
+    "F": ("def f(require_failsafes=True):\n    pass\n", "safety_default"),
+}
+
+
+@pytest.mark.parametrize("rule", sorted(PLANTED))
+def test_self_planted_literal_is_reported(rule):
+    text, kind = PLANTED[rule]
+    kinds = {k[2] for k in _keys(text)}
+    assert kind in kinds, (rule, kinds)
+
+
+def test_self_planted_in_temporary_file(tmp_path):
+    d = tmp_path / "flightrisk" / "drone"
+    d.mkdir(parents=True)
+    (d / "planted.py").write_text("def f():\n    hover_s = 5\n", encoding="utf-8")
+    keys = scan_repo(tmp_path, ids=["a.timeout_s"])
+    assert list(keys) == [("flightrisk/drone/planted.py", "<module>.f", "assign", "hover_s", "hover_s", 5)]
+
+
+def test_self_zero_bool_and_non_name_not_reported():
+    assert _keys("timeout_s = 0\nplain = 5\nflag_s = True\n") == []
+
+
+def test_self_unary_minus_folded():
+    assert [k[5] for k in _keys("offset_cm = -5\n")] == [-5]
+
+
+def test_word_new_registry_word_makes_literal_a_finding():
+    text = "def f():\n    zorblax = 5\n"
+    assert _keys(text, ids=["a.timeout_s"]) == []
+    assert [k[5] for k in _keys(text, ids=["a.timeout_s", "x.zorblax_cm"])] == [5]
+
+
+def test_word_derived_from_registry_ids():
+    words = words_from_registry(["stranded.countdown_s", "a.b_cm"])
+    assert "stranded" in words and "countdown" in words
+    assert "cm" not in words and "b" not in words
+
+
+def test_word_real_registry_has_words():
+    assert {"stranded", "countdown"} <= words_from_registry()
+
+
+def test_key_changes_when_literal_moves_function():
+    k1 = _keys("def f():\n    hover_s = 5\n")
+    k2 = _keys("def g():\n    hover_s = 5\n")
+    assert k1 != k2
+
+
+def test_key_changes_when_value_changes():
+    assert _keys("def f():\n    hover_s = 5\n") != _keys("def f():\n    hover_s = 6\n")
+
+
+def test_key_has_six_fields_and_exact_counts():
+    text = "def f():\n    hover_s = 5\n    hover_s = 5\n"
+    unit_re = build_unit_re(words_from_registry(["a.timeout_s"]))
+    counts = Counter(k for k, _ in scan_source(text, "flightrisk/drone/x.py", unit_re))
+    (key, n), = counts.items()
+    assert len(key) == 6 and n == 2
+
+
+def test_self_allowlist_sections_are_per_file_in_scope():
+    from tests.param_literal_allowlist import ALLOWLIST
+
+    in_scope = {str(p.relative_to(ROOT)) for p in scope_files()}
+    assert set(ALLOWLIST) <= in_scope
+
+
+# --- full-repo run ---------------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="S9 fills tests/param_literal_allowlist.py")
+def test_every_finding_is_allowlisted_with_exact_count():
+    from tests.param_literal_allowlist import ALLOWLIST, CATEGORIES
+
+    expected = Counter()
+    for file, entries in ALLOWLIST.items():
+        for key, entry in entries.items():
+            assert entry["category"] in CATEGORIES
+            assert entry["reason"]
+            if entry["category"] == "deferred":
+                assert re.search(r"A[3-5]", entry["reason"]), key
+            expected[key] = entry["count"]
+    assert scan_repo() == expected
