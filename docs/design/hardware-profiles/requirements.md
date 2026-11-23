@@ -1,280 +1,372 @@
 # Fleet architecture v1: requirements checklist
 
-Every item is testable. "Test" names the check that proves it: a unit test, a fake-drone or simulated
-autopilot test ("fake"), an ArduPilot or PX4 SITL scenario ("SITL", design section 18), a fixture
-test, or a hardware run. The PR that delivers each item is in brackets and matches `tasks.md`. Items
-marked (B*n*) or (N*n*) answer a round 2 critic finding of PR #202; (F*n*) a round 1 finding. Section
-references point to `design.md` unless they name another file.
+Every item is testable. "Test" names the check: a unit test, a fake-drone or simulated-autopilot test
+("fake"), an ArduPilot or PX4 SITL scenario ("SITL", design section 21), a fixture test, or a hardware
+run. The PR that delivers each item is in brackets and matches `tasks.md`. Section references point to
+`design.md` unless they name another file. Finding labels: C-n, H-n, M-n from the round 1 review of the
+v1 architecture; (B*n*), (N*n*) from round 2 of PR #202; (F*n*) from round 1 of PR #202.
 
-The spec acceptance criteria map to these items as follows: AC-1 → CMP-2, RTH-1 to RTH-20; AC-2 →
-ROLES-1 to ROLES-6; AC-4.1 to AC-4.3 → CAP-1 to CAP-4, GND-5; AC-5.1 to AC-5.3 → TASK-1 to TASK-8;
-AC-5.4 to AC-5.9 → FIND-1 to FIND-16, TASK-9 to TASK-11; AC-6.1 to AC-6.6 → RTH-1 to RTH-24; AC-7.1 to
-AC-7.3 → MAV-1 to MAV-4, RTH-14 to RTH-18; AC-8.1 and AC-8.2 → AIR-1 to AIR-6; AC-9.1 and AC-9.2 →
-UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
+Spec acceptance criteria map as follows: AC-1 → CMP-2, RTH-19, RTH-20; AC-2 → ROLES-1 to ROLES-9;
+AC-4.1 to AC-4.3 → CAP-1 to CAP-4, GND-5; AC-5.1 to AC-5.3 → TASK-1 to TASK-8; AC-5.4 to AC-5.9 →
+FIND-1 to FIND-20, TASK-9 to TASK-12; AC-6.1 to AC-6.6 → RTH-1 to RTH-34; AC-7.1 to AC-7.3 → MAV-1 to
+MAV-3, RTH-13, RTH-25, AIR-13; AC-8.1 and AC-8.2 → AIR-1 to AIR-15, RTH-23; AC-9.1 and AC-9.2 → UI-1 to
+UI-6, ROLES-1 to ROLES-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
 
 ## Capability model (CAP)
 
-- [ ] CAP-1 [A1] Every built-in model carries every spec 4.1 fact as a `CapabilityFact` with a value, a
-  source and a status (`verified`, `repository`, `vendor`, `unverified`, `proposed`), and the
-  dashboard and both apps can show them (AC-4.1). Test: unit test over all models and facts.
-- [ ] CAP-2 [A1] A missing fact takes its most conservative value, marked `unverified`; an unknown model
-  gets the intersection of the built-in bounds of its environment with the safer default of each.
-  Test: unit tests.
-- [ ] CAP-3 [A3] A runtime capability missing at takeoff refuses the takeoff with the capability named,
-  and one lost in flight raises its spec 6.2 event (design section 9). Test: fake.
-- [ ] CAP-4 [A3] Changing a fake drone's declared capabilities (return method, positioning) changes its
-  return method and its separation with no rule change (AC-4.3). Test: fake.
+- [ ] CAP-1 [A1] Every built-in model carries every spec 4.1 fact as a `CapabilityFact` with value, source
+  and status, shown on the dashboard and both apps (AC-4.1). Test: unit test over all models and facts.
+- [ ] CAP-2 [A1] A missing fact takes its most conservative value marked `unverified`; an unknown model
+  gets the intersection of its environment's built-in bounds with the safer default of each. Test: unit.
+- [ ] CAP-3 [C1] A runtime capability missing at takeoff refuses the takeoff, naming it; one lost in flight
+  raises its spec 6.2 event (moved from A3, which changes no behaviour; nitpick 7). Test: fake.
+- [ ] CAP-4 [A3] Changing a fake drone's declared capabilities changes its return method and separation with
+  no rule change (AC-4.3). Test: fake.
+- [ ] CAP-5 [A2] A custom model can never set `environment` or `indoor_profile_measured` (M-11). Test:
+  loader test.
+- [ ] CAP-6 [A3, B1] A unit is simulated only when its edge reports it and verifies it: a fake or sim
+  adapter, or a MAVLink autopilot whose parameters and version string identify a SITL build (fingerprint
+  recorded per autopilot in B1); the inventory cannot mark a unit simulated (H-3(c)). Test: fake; SITL; a
+  real-autopilot parameter dump recorded as a fixture is not simulated.
 
 ## MAVLink production adapter (MAV)
 
-- [ ] MAV-1 [B2] Start is refused, naming the drone and the check, for a field drone without a 3D fix,
-  with fewer than `gps.min_satellites`, with receiver accuracy above `home.accuracy_cm`, with its
-  autopilot home farther than `home.max_offset_cm`, with its home outside the mission fence, or too
-  close to another home without sharing a landing area (AC-7.1). Test: fake; SITL (no fix, far home).
-- [ ] MAV-2 [B2] The edge reports the receiver's horizontal accuracy as its positioning uncertainty in
-  the `rth` telemetry object (ASSUMPTION A4 verified in SITL). Test: SITL.
-- [ ] MAV-3 [B2] An autopilot home that changes in flight lands the drone in place with "no known home"
-  and alerts the operator (spec 7.1, 7.5). Test: fake; SITL (set home in flight).
-- [ ] MAV-4 [B3] The edge uploads the drone's fence and the mission fence before arming, reads them back,
-  and refuses the takeoff on a failed upload, a mismatched read-back or a fence action other than
-  return or land; fences never change in flight (ASSUMPTION A5). Test: fake; SITL ArduPilot and PX4.
-- [ ] MAV-5 [B4] The autopilot's link-loss action must be return or land, and its critical-battery
-  action is checked before takeoff; on a MAVLink unit the critical battery is the autopilot's action,
-  not the edge's 15 %. Test: fake; SITL.
+- [ ] MAV-1 [B2] Start is refused, naming the drone and the check, for a field drone without a 3D fix, with
+  fewer than `gps.min_satellites`, with receiver accuracy above `home.accuracy_cm`, with its autopilot home
+  beyond `home.max_offset_cm`, or outside the mission fence (AC-7.1). Test: fake; SITL.
+- [ ] MAV-2 [B2] The edge reports its uncertainty as `position.gps_sigma_k` × the receiver's 1-sigma accuracy
+  (or the EKF variance when larger) + ground speed × position age, and a missing value as worst case (M-1).
+  Test: unit; SITL.
+- [ ] MAV-3 [B2] An autopilot home that changes in flight lands the drone with `no_known_home`. Test: fake;
+  SITL.
+- [ ] MAV-4 [B3] The edge uploads the drone's fence and the mission fence before arming, reads them back and
+  refuses the takeoff on a failure or mismatch; fences never change in flight. Test: fake; SITL ArduPilot
+  and PX4.
+- [ ] MAV-5 [B4] Every row of the parameter table (design section 13.2) is checked before takeoff for both
+  autopilots, with the accepted values exactly as listed, and a refusal names the parameter, its value and
+  the accepted values (H-2). Test: one unit test per row and autopilot.
 - [ ] MAV-6 [B4] A lost GPS fix or an EKF failsafe is a positioning fault: the autopilot acts, FlightRisk
-  sends only operator lands, shows the reason and re-matches the drone's tasks. Test: SITL
-  (`SIM_GPS_DISABLE`).
-- [ ] MAV-7 [B4] `AutopilotReturn` implements the return method seam with the autopilot's
-  return-to-launch at the drone's slot (the existing `land_for_reason` mode logic), including the land
-  fallback when the autopilot refuses or does not enter the return. Test: fake; SITL.
+  sends only operator lands, shows `fault_positioning` and re-matches tasks. Test: SITL (`SIM_GPS_DISABLE`).
+- [ ] MAV-7 [B4] An autopilot-started return is detected, shown with its reason, and handed to the ground as
+  a fixed highest-priority route; while the edge lives it watches its progress and sends only operator
+  lands. Test: fake; SITL (battery failsafe return).
+- [ ] MAV-8 [B4] GCS failsafe: `FS_GCS_ENABLE` 1 or 5, `FS_GCS_TIMEOUT` 2 to 10 s, the GCS system id equal to
+  the edge's; PX4 `NAV_DLL_ACT` 2 or 3, `COM_DL_LOSS_T` 2 to 10 s, `COM_DLL_EXCEPT` 0. Test: SITL (kill the
+  edge: the drone returns or lands).
+- [ ] MAV-9 [B4] `FS_OPTIONS` bits 0, 1, 2 and 4 clear; `COM_RCL_EXCEPT` 0. Test: unit; SITL.
+- [ ] MAV-10 [B4] The return ends landed at home (`RTL_ALT_FINAL` 0; `RTL_LAND_DELAY` ≥ 0), goes to home (no
+  rally points; home-or-rally `RTL_TYPE`), and runs no leftover mission landing (action 6 refused, mission
+  cleared before arming). Test: SITL for each.
+- [ ] MAV-11 [B4] Fence, critical-battery, low-battery and RC-loss actions accept only the values of the
+  table; values accepted today and refused now are listed in design section 27 item 6. Test: unit; SITL.
+- [ ] MAV-12 [B4] The autopilot's low-battery level is at most `battery.return_floor_pct` − 5 points; a
+  voltage-only threshold is refused; the field critical level is the autopilot's (K-4). Test: unit; SITL
+  slow drain (FlightRisk returns first).
+- [ ] MAV-13 [B4, D1] The autopilot's landing delay is written as the drone's place in its landing order ×
+  `separation.landing_interval_s` and read back before arming (place 0 until D1 provides orders). Test:
+  SITL (two drones, shared landing area, both edges killed, sequenced landings).
+- [ ] MAV-14 [B4] `--allow-unverified-failsafes` and `link.require_failsafes = false` are accepted only for
+  a verified simulated unit. Test: unit.
 
 ## SITL harness (SITL)
 
-- [ ] SITL-1 [B1] `scripts/sitl_fleet.sh --count N --autopilot ardupilot|px4` starts N vehicles with
-  their own system ids and separated homes, and stops them; N from 2 to 10. Test: run with N = 2 and
-  N = 10 on the Mac; the log is attached to B1.
-- [ ] SITL-2 [B1] `tests/integration/sitl_fleet.py` fixtures set the required failsafe parameters,
-  start one real edge per vehicle (replay frames, no camera) and the real ground, and tear everything
-  down; the tests carry the `sitl` marker and are skipped without SITL. Test: the fixtures' own smoke
-  test in SITL.
-- [ ] SITL-3 [B1] B1 records the largest fleet that keeps telemetry at its rate on the Mac and on a
-  Linux machine, and the PX4 multi-vehicle command that worked. Test: recorded in
-  `docs/sitl-demo.md`.
-- [ ] SITL-4 [B1 to E4] Every PR marked "SITL" in `tasks.md` adds its scenario to
-  `tests/integration/test_sitl_scenarios.py` and attaches the run log. Test: review.
+- [ ] SITL-1 [B1] `scripts/sitl_fleet.sh --count N --autopilot ardupilot|px4` starts N vehicles (2 to 10)
+  with their own system ids and separated homes, and stops them. Test: runs with N = 2 and N = 10.
+- [ ] SITL-2 [B1] Fixtures set the section 13 parameters, start one real edge per vehicle with the A3
+  command line (nitpick 11) and the ground, and tear down; `sitl` marker. Test: smoke scenario.
+- [ ] SITL-3 [B1] B1 records the largest fleet that keeps telemetry at its rate, the PX4 multi-vehicle
+  command, the SITL fingerprint of each autopilot, and the local `AP_FWVersion.h` patch the native Mac
+  build needs (`docs/sitl-demo.md:122`, nitpick 10). Test: recorded in `docs/sitl-demo.md`.
+- [ ] SITL-4 [B1 to E4] Every PR marked SITL adds its scenarios and attaches the log. Test: review.
 
 ## Return to home (RTH)
 
-- [ ] RTH-1 [C1] The return state machine (`flightrisk/drone/rth/machine.py`) implements every state of
-  design section 10.2 and every transition of the event table (section 10.3), pure and clocked, with
-  one unit test per default action and per fallback reason (AC-6.1). Test: unit tests.
-- [ ] RTH-2 [C1] Phase C1 keeps today's actions as the resolved defaults (a Tello lands on a long link
-  loss, the orphan countdown lands, every Tello error lands), so C1 changes no behaviour. Test: the
-  existing suites pass unchanged.
-- [ ] RTH-3 [C1] The fault classifier maps drone replies and autopilot status to fault or transient;
-  unclassifiable errors are faults. Test: unit tests over the known replies (`error Motor stop`, `error
-  No valid imu`, `error Not joystick`, unknown text).
-- [ ] RTH-4 [C1] The energy model computes the return threshold as the larger of
-  `battery.return_floor_pct` and energy to home plus `battery.landing_reserve_pct`, and predicts the
-  battery at home; a prediction below the reserve returns early. Test: unit tests.
-- [ ] RTH-5 [C1] The indoor uncertainty model grows with distance, turns and hover time from the
-  placeholders, never shrinks in flight, and predicts the uncertainty at home. Test: unit tests.
-- [ ] RTH-6 [C1] The Tello's dead-reckoned return climbs or descends into its slot first, flies direct
-  through cleared areas and otherwise retraces its flown polyline in legs of 20 to 500 cm through the
-  sensed-step gate, descends only over home, keeps keepalives running, and with the sensor down only
-  retraces (AC-6.4). Test: fake.
-- [ ] RTH-7 [C1] A blocked leg hovers, looks again, tries another cleared route, then after
-  `return.blocked_wait_s` holds for a connected operator or lands with "way home blocked". Test: fake.
-- [ ] RTH-8 [C1] A person cue on the way home hovers and alerts, continues only after a human confirms, a
-  manual detour or a land, and lands after `return.person_cue_wait_s` without an answer. Test: fake.
-- [ ] RTH-9 [C1] After a long link loss the edge returns only if the whole route, widened by its
-  uncertainty, lies inside its `zone` and `corridor` at its slot; otherwise it lands with "return route
-  not cleared" (AC-6.2). Test: fake; SITL (inside and outside the zone).
-- [ ] RTH-10 [C1] The `rth` telemetry object carries state, reason, home, distance, uncertainty,
-  reserve, threshold, countdown and "cannot be recalled", as one top-level field. Test: telemetry field
-  cap test (38 of 48 at most).
-- [ ] RTH-11 [C1] `return` (with `wait`), `on_complete: return` and the `zone`, `corridor`, `cleared`
-  and `speed_cm_s` keys of `assign_lanes` validate, and are never sent to an edge whose reply does not
-  advertise them. Test: protocol tests.
-- [ ] RTH-12 [C2] RETURN ALL sends `return` to every flying drone, manual and held ones too, and shows
-  each drone's result: returning, waiting, landing in place with its reason, or "not reached" with what
-  it will do alone. Test: fake; SITL (four drones).
-- [ ] RTH-13 [C2] Conflicting returns go lowest battery margin first, then shortest route; a drone about
-  to drop below its landing reserve goes first; waiting drones hold side by side at their own slots,
-  never stacked; if no order works the drone lands in place; separation is never broken (AC-7.3).
-  Test: unit tests; SITL (four drones with crossing routes).
-- [ ] RTH-14 [C2] One landing at a time per landing area; homes closer than `separation.landing_cm`
-  share an area. Test: unit test; SITL.
-- [ ] RTH-15 [C2] Per-drone Return is enabled whenever the drone flies and can be commanded, else says
-  why; Land is always enabled; taking control stops a return; resuming a task after a return caused by
-  battery, a fault or uncertainty is refused. Test: dashboard handler tests.
-- [ ] RTH-16 [C2] The stranded countdown ends in a return when its resolved action is return; a blocked
-  return then lands and the countdown never restarts (AC-6.3). Test: fake.
-- [ ] RTH-17 [C2] Homes show from takeoff to landing as markers in each drone's colour; positions show
-  their uncertainty; returns show route and progress; a drone landed in place shows where and why
-  (AC-7.2). Test: payload tests; a documented browser check.
-- [ ] RTH-18 [C2] An edge restart in flight lands with "no known home" (AC-7.2). Test: fake.
-- [ ] RTH-19 [C4] The resolved defaults switch to return (task end after `retask.window_s`, long link
-  loss, stranded countdown, low battery, sensor failure; transient errors retry once and return), and
-  every other value keeps today's default (AC-1, spec 10.1(7)). Test: the start-path tests named in C4's
-  description; SITL.
-- [ ] RTH-20 [C4] LAND ALL during returns lands every drone no slower than today (AC-6.3). Test: SITL
-  (timed against `main` before C4).
-- [ ] RTH-21 [C1 to C4] No automatic action ever sends a takeoff; each shows its reason within 2 s on the
-  dashboard and is logged (AC-6.5). Test: a test that scans every automatic action path for takeoff
-  sends; event timing test.
-- [ ] RTH-22 [C4] AC-6.6 (hardware, Dev/test): a Tello whose ground link is cut past the wait returns
-  and lands within its uncertainty bound of its taped mark in ten runs on the ZBook. Test: hardware log
-  attached to C4.
-- [ ] RTH-23 [C1] Under fast uncertainty growth an indoor drone holds, then returns, then lands, in that
-  order (AC-8.2). Test: fake.
-- [ ] RTH-24 [C4] Critical battery lands in place at once, even mid-return. Test: fake; SITL.
+- [ ] RTH-1 [C1] The state machine implements every state of section 10.3 and every row of the event table
+  (10.4); each row has a unit test of its default action and of each fallback reason (AC-6.1, M-12). Test:
+  unit.
+- [ ] RTH-2 [C1] C1 resolves to today's actions, so it changes no behaviour except items 19 and 20 of
+  section 27. Test: existing suites pass with no other edit.
+- [ ] RTH-3 [C1] Fault classifier: unclassifiable errors are faults. Test: unit over the known replies.
+- [ ] RTH-4 [C1] Return threshold = critical + energy to home + worst-case wait + reserve, never below the
+  floor; the worst-case wait comes from the landing order and the last granted queue wait; a drone arrives
+  above home with at least critical + reserve (H-8). Test: unit; a fake return with default numbers ends
+  landed at home.
+- [ ] RTH-5 [C1] The indoor uncertainty model grows from the placeholders and never shrinks in flight.
+  Test: unit.
+- [ ] RTH-6 [C1] The Tello's dead-reckoned return (section 10.10; AC-6.4). Test: fake.
+- [ ] RTH-7 [C1] Blocked return: hover, look again, another route, then after `return.blocked_wait_s` hold
+  for an operator (bounded, RTH-32) or land with `way_home_blocked_obstacle`. Test: fake.
+- [ ] RTH-8 [C1] Person cue on the way home: land after `return.person_cue_wait_s` without an answer. Test:
+  fake.
+- [ ] RTH-9 [C1] After a long link loss the edge returns only inside its zone and corridor, outside every
+  known no-entry area other than its own, in its landing order, else lands with `no_cleared_route` (AC-6.2).
+  Test: fake; SITL.
+- [ ] RTH-10 [C1] The `rth` telemetry object is one top-level field (38 of 48 at most). Test: field-cap test.
+- [ ] RTH-11 [A2] `return_home`, `on_complete: return_home`, `corridor`, `landing`, `no_entry`,
+  `set_no_entry`, `set_speed` and `escort_setpoint` validate; corridor and area points are objects;
+  `hover_timeout_s` ≥ 1 s (M-7). Test: protocol tests.
+- [ ] RTH-12 [C2] RETURN ALL shows each drone's result. Test: fake; SITL (four drones).
+- [ ] RTH-13 [C2] Ordering: autopilot-started returns first, then lowest battery margin, then shortest route;
+  waiting drones hold side by side at their own slots; separation never broken (AC-7.3). Test: unit; SITL.
+- [ ] RTH-14 [C2] One landing at a time per shared landing area. Test: SITL.
+- [ ] RTH-15 [C2] Per-drone controls as spec 9.2. Test: handler tests.
+- [ ] RTH-16 [C2] The stranded countdown's return action, a blocked return then lands, no restart (AC-6.3).
+  Test: fake.
+- [ ] RTH-17 [C2] Homes, uncertainties, routes, progress, landing order and landed-in-place reasons on the
+  map (AC-7.2). Test: payload tests; browser check.
+- [ ] RTH-18 [C1] An edge restart in flight lands with `no_known_home`. Test: fake.
+- [ ] RTH-19 [C6, C7] The resolved defaults switch to return, field in C6 and indoor in C7, and every other
+  value keeps today's default (AC-1). Test: the start-path tests named in each PR; SITL (C6); ZBook (C7).
+- [ ] RTH-20 [C2] After LAND ALL every drone's edge sends LAND within 1 s and the autopilot reports LAND mode
+  within 2 s, also during returns (AC-6.3; absolute bounds, M-9). Test: SITL.
+- [ ] RTH-21 [C1, C2] Property test: random sequences of events, commands and timeouts through the state
+  machine and the ground senders never produce a takeoff (AC-6.5, M-9). Test: property test.
+- [ ] RTH-22 [C7] AC-6.6 on the ZBook: a 300 cm out-and-back lane in a 400 by 400 cm room, link cut past
+  the wait, ten taped runs, each landing within its uncertainty bound of the mark. Test: hardware log.
+- [ ] RTH-23 [C1] Under fast uncertainty growth an indoor drone holds, then returns, then lands (AC-8.2).
+  Test: fake.
+- [ ] RTH-24 [C1] Critical battery lands in place at once, even mid-return. Test: fake; SITL.
+- [ ] RTH-25 [C2] Indoor Start confirmation lists each mark and heading for the operator to confirm; Start is
+  refused until confirmed (indoor AC-7.1; M-9). Test: handler test.
+- [ ] RTH-26 [C1] Landing is terminal: every landing decision enters the state machine; while landing the
+  edge nacks `return_home`, `escort_setpoint`, `assign_lanes`, `start_at`, `resume`, `nudge`, manual moves
+  and `set_speed` with `landing` and starts no automatic return; a further land is accepted (C-1). Test:
+  unit; fake (each command after LAND ALL).
+- [ ] RTH-27 [C1] The MAVLink adapter never sends RTL after a land is decided; a `wait: false` release after
+  a land is refused (C-1). Test: fake.
+- [ ] RTH-28 [C2] LAND ALL first cancels the return queue, escort controller, local-search re-plans,
+  converge, re-task offers, stranded countdowns, `on_complete` timers, a scheduled mission-end RETURN ALL and
+  speed changes, then sends the land; per-drone Land the same for one drone (C-1). Test: unit; SITL (each
+  sender active, then LAND ALL).
+- [ ] RTH-29 [C1] The MAVLink edge-guided return moves into the slot first, flies GUIDED to above home at the
+  slot, holds until cleared, then lands. Test: SITL.
+- [ ] RTH-30 [C2] A returning drone holds above home until the ground clears its landing. Test: SITL.
+- [ ] RTH-31 [C1] The progress monitor treats a return that gains less than `return.progress_min_cm` within
+  `return.progress_timeout_s` as blocked, for edge-guided and autopilot returns (H-2). Test: fake; SITL
+  (an RTL that stops short).
+- [ ] RTH-32 [C2] Every wait and hold is bounded by the energy model; if two bounds cannot both be met the
+  earlier bound goes first, and the drone that cannot be scheduled lands with `no_return_order` (ties: higher
+  unit id) (M-10). Test: unit.
+- [ ] RTH-33 [C2] `return_home` without `wait` is accepted from any authenticated ground, so a standby keeps
+  RETURN ALL; an edge without `return_home` is shown "cannot return" and held, never landed (M-5). Test:
+  multi-ground test; older-edge fake.
+- [ ] RTH-34 [C1 to C7] Every spec 6.2 row of section 10.4 has its own test, and every SITL-marked row its
+  scenario (M-12). Test: a test that lists the rows and their tests.
 
-## Roles (ROLES)
+## Lost drones (LOST, C-2)
 
-- [ ] ROLES-1 [C3] A connection's role is the role of the key it presents (`FLIGHTRISK_API_KEY`
-  operator, `FLIGHTRISK_SUPERVISOR_KEY`, `FLIGHTRISK_OBSERVER_KEY`); with no keys only loopback
-  clients connect, as operators. Test: connection tests.
-- [ ] ROLES-2 [C3] Every Socket.IO event and HTTP route is in the role table; a missing entry fails a
-  test that enumerates the registered handlers and routes (deny by default). Test: that test.
-- [ ] ROLES-3 [C3] Observers can send only LAND ALL and per-drone Land, from a phone; supervisors cannot
-  plan, start, fly, answer alerts or change settings; non-supervisor phones cannot send Return (AC-2).
-  Test: one refusal test per role and event class.
-- [ ] ROLES-4 [C3] A client that declares itself a phone is refused confirmations, match-alert answers,
-  on-find policy changes, safety settings, home edits and less-safe acceptances, whatever its key.
-  Test: handler tests.
-- [ ] ROLES-5 [C3] On connect the ground sends `session` with the role and the allowed events. Test:
-  handler test.
-- [ ] ROLES-6 [C3] Keys never appear in logs, files the launcher writes, presets or the vault. Test:
-  the launcher's existing secret checks extended to the two new keys.
-
-## Operator UI (UI)
-
-- [ ] UI-1 [C2] RETURN ALL is first in the top bar, always visible, never disabled, one press, no
-  dialog, Shift+R; LAND ALL is always visible, never disabled, in the danger colour, Shift+L, not
-  adjacent to RETURN ALL, one press, no dialog (AC-9.1). Test: DOM tests of the template; a documented
-  browser check.
-- [ ] UI-2 [C2] A client that cannot reach the ground says that nothing was sent and points to the local
-  land keys. Test: UI test with a dropped connection.
-- [ ] UI-3 [C2] Drone cards show home and distance, uncertainty ("uncalibrated" while a placeholder),
-  return reserve, state, countdowns and each value's source (spec 9.5). Test: payload tests.
-- [ ] UI-4 [E1] The match alert panel shows the attributed target (changeable), per-target scores,
-  evidence, "k of N viewpoints match", the Claude opinion as an aid, the verification countdown, the
-  unfound targets and the on-find policy, with the buttons of spec 9.3. Test: payload and handler tests.
-- [ ] UI-5 [C4] The Start confirmation lists each home or mark, heading, sensing mode, return altitude
-  and threshold, every non-default safety value with its source, and the on-find policy (spec 9.4).
-  Test: payload test.
-- [ ] UI-6 [F1, F2, F3] Dashboard and apps show the same states, homes and reasons (AC-9.2). Test:
-  fixtures generated from the dashboard payloads.
+- [ ] LOST-1 [D2] The ground declares a drone lost only after `link.loss_detect_s` + `link.loss_wait_s` +
+  `link.ground_loss_margin_s` for that unit (K-7); `FLEET_LOSS_TIMEOUT_S` is removed. Test: unit; fake field
+  drone holding 13 s is not declared lost.
+- [ ] LOST-2 [D2] The ground never lands or re-lands a lost drone; it sends it only operator commands. Test:
+  unit (no `land` on loss, none on reconnect while flying).
+- [ ] LOST-3 [D2] A lost drone's lanes wait for a human confirm; nothing is re-tasked automatically. Test:
+  unit.
+- [ ] LOST-4 [D2] The confirm is refused while the lost drone may still be flying: until it reports landed or
+  `lost.flying_window_s` after its last flying report (#212's refusal as precondition). Test: unit, including
+  a link that drops again.
+- [ ] LOST-5 [D2] Its no-entry area covers its moving last position, zone, corridor, return line and landing
+  area (zone, corridor and landing area without a position); the owner is exempt (H-9). Test: unit.
+- [ ] LOST-6 [D2] #212's orphan-landed mark and its refusal of a later phone Resume stay. Test: #212's tests
+  pass.
 
 ## Airspace (AIR)
 
-- [ ] AIR-1 [D1] Two drones in one band stay at least `separation.base_cm` + both uncertainties apart
-  along every planned task, transit, viewpoint, escort and return route; Plan refuses a route that
-  breaks it (AC-8.1). Test: unit tests; SITL ten-vehicle stress run.
-- [ ] AIR-2 [D1] Field bands: the close band from `airspace.close_band_floor_cm`, the sweep band at
-  least `airspace.band_gap_cm` above it. Test: unit tests.
-- [ ] AIR-3 [D1] Every route widened by its drone's uncertainty stays inside every fence and outside
-  every unconfirmed no-entry area (AC-8.1). Test: unit tests.
-- [ ] AIR-4 [D1] A person cue, a lost drone (radius = uncertainty + `noentry.lost_margin_cm`) or a
-  stranded drone creates a no-entry area that a drone enters only after a human confirms, including on
-  its way home; the 20 s lost-drone timer is removed. Test: unit tests; fake.
-- [ ] AIR-5 [D1] When a drone's precision degrades, its required separation grows at once; it carries
-  on, holds and is re-routed or sent home, or lands past its bound. Test: unit tests.
-- [ ] AIR-6 [D1] An empty intersection of bounds across a fleet's models refuses Plan, naming the units
-  (round 1 F19). Test: unit test.
+- [ ] AIR-1 [D1] Route tubes of two drones in one band never intersect (space-only, widened by half the base
+  separation plus predicted uncertainty); Plan refuses a route that would (AC-8.1). Test: unit; SITL ten
+  vehicles.
+- [ ] AIR-2 [D1] The in-flight separation monitor checks every pair at the telemetry rate and holds the drone
+  that is not returning (or the higher unit id) on a violation (M-1). Test: unit.
+- [ ] AIR-3 [D1] Every route widened by uncertainty stays inside every fence and outside every unconfirmed
+  no-entry area (AC-8.1). Test: unit.
+- [ ] AIR-4 [D1] Person-cue and operator-drawn no-entry areas; confirm-to-enter (one drone, one entry) and
+  confirm-to-clear (everyone) on a laptop; Converge, Not verified and Escort count for their subject. Test:
+  unit.
+- [ ] AIR-5 [D1] Degrading precision grows the separation at once; carry on, hold and re-route or return, or
+  land past the bound. Test: unit.
+- [ ] AIR-6 [D1] An empty intersection of bounds across a fleet's models refuses Plan, naming the units. Test:
+  unit.
+- [ ] AIR-7 [D1] Zones and corridors are generated per drone; zone-and-corridor tubes in one band never
+  intersect (H-1). Test: unit.
+- [ ] AIR-8 [D1] Where the straight line from a point of a zone to home leaves zone and corridor, the drone's
+  autopilot link-loss action must be land, checked before takeoff (H-1). Test: unit; SITL (edge killed at the
+  far corner).
+- [ ] AIR-9 [D1] Homes closer than `separation.landing_cm` share a landing area with an order sent in
+  `assign_lanes.landing`; a shared area without an order is refused (H-1, H-7). Test: unit.
+- [ ] AIR-10 [D1] No-entry areas reach the edges in `assign_lanes` and `set_no_entry`; every re-task re-sends
+  zone, corridor, landing record and areas; an edge refuses a leg into a known area other than its own (H-1).
+  Test: unit; fake.
+- [ ] AIR-11 [D1] Re-tasks, converge, local search and escort carry a task zone and a corridor home, checked
+  like any zone. Test: unit.
+- [ ] AIR-12 [D1] Bands: both intervals defined; constraints K-12 and K-13 hold; Plan refuses a slot outside
+  its task's band (H-6). Test: unit.
+- [ ] AIR-13 [D1] Homes are at least `separation.base_cm` apart plus both accuracies in the field; Start
+  names both drones of a closer pair (H-7, K-15). Test: unit; SITL.
+- [ ] AIR-14 [D1] A field mission needs `airspace.obstacle_top_cm` per area and corridor; Plan refuses a slot
+  below it + `airspace.obstacle_margin_cm`, naming the area and drone (H-10, K-14). Test: unit.
+- [ ] AIR-15 [D1] Indoor slots never count as separation; field drones in different bands may overlap
+  horizontally except in a sweep-band drone's takeoff, landing or descent column. Test: unit.
+
+## Confirmations (CONF, H-3)
+
+- [ ] CONF-1 [C5] Start is refused, naming the unit, for any unit without a current `describe_unit` reply for
+  its latest `unit_rev` (older edges and v1 links included). Test: unit.
+- [ ] CONF-2 [C5] `scripts/field_fleet_ground.py` prints the Start list and needs `--confirm unit:id=value`
+  for each less-safe value, including its own `--allow-unverified-failsafes` and `--link-loss-hold-s`, unless
+  every unit is verified simulated. Test: script tests.
+- [ ] CONF-3 [A1] Until C5 a custom-model default less safe than its base is refused at resolve time with the
+  message of section 7.3. Test: unit.
+- [ ] CONF-4 [C5, E1] A mission setting changed in flight to a less-safe value takes effect only after the
+  operator confirms the exact value on the laptop. Test: handler tests (C5 mechanism, E1 settings).
+- [ ] CONF-5 [C5] A standby that becomes the authority sends no new plan, start, re-task or release until the
+  operator confirms its less-safe ground values; LAND ALL, Land and RETURN ALL work at once. Test:
+  multi-ground test.
+- [ ] CONF-6 [C5] Verified simulated units need no confirmation; the rehearsal preset and the shared launcher
+  fixture pass unchanged. Test: launcher tests.
+
+## Test-adapter facts (FACT, user direction)
+
+- [ ] FACT-1 [A1] Every Tello-coupled tuning row of `parameters.md` has `edit: fact`, `confirm: none`, and
+  the note "test-adapter fact, read-only, not operator-facing". Test: registry test.
+- [ ] FACT-2 [A1, A5, C5] No fact row is offered to change, tune or calibrate anywhere: not as a launcher or
+  dashboard control, not in a params or inventory file schema (the loaders refuse fact ids), not as an
+  "uncalibrated" or threshold warning in a preflight message, and not in a Start confirmation. A check that
+  uses a fact may still report its result (design section 7.5). Test: a test that enumerates the launcher
+  and dashboard controls, the file schemas, the preflight message catalogue and the Start-confirmation
+  payload builder.
+- [ ] FACT-3 [A3] A fact row's existing environment variable still sets it, as a developer override logged at
+  start and shown with source `env`. Test: unit.
+
+## Roles (ROLES, H-4)
+
+- [ ] ROLES-1 [C3] The role comes from the credential alone. Test: connection tests with and without a
+  `client` claim.
+- [ ] ROLES-2 [C3] Every Socket.IO event and HTTP route is in the role table; a missing entry fails a test
+  that enumerates handlers and routes. Test: that test.
+- [ ] ROLES-3 [C3] The event-by-role table of section 16.2 holds for every role and kind (AC-2). Test: one
+  allowed and one refused test per cell class.
+- [ ] ROLES-4 [C3] The operator key is accepted only on loopback; elsewhere it gives observer rights and a
+  "pair this device" message. Test: connection tests.
+- [ ] ROLES-5 [C3] On connect the ground sends `session` with the role and allowed events. Test: handler test.
+- [ ] ROLES-6 [C3] Keys and tokens never appear in logs, presets, launcher-written files or the vault;
+  `devices.json` holds only salted hashes. Test: secret scans.
+- [ ] ROLES-7 [C3] Pairing creates a per-device token with role and kind; revocation takes effect on the next
+  event. Test: handler tests.
+- [ ] ROLES-8 [C3] A supervisor token is refused over cleartext from a non-loopback address. Test: connection
+  test.
+- [ ] ROLES-9 [C3] LAND ALL and per-drone Land are allowed to every authenticated session and never fail
+  closed: with a role table that raises, both still go out. Test: that test.
+
+## Operator UI (UI)
+
+- [ ] UI-1 [C2] RETURN ALL and LAND ALL as section 17 (AC-9.1). Test: DOM tests; browser check.
+- [ ] UI-2 [C2] A client that cannot reach the ground says nothing was sent and points to the local land
+  keys. Test: UI test.
+- [ ] UI-3 [C2] Drone cards show home and distance, uncertainty (a number; never an "uncalibrated" label or a calibration prompt), reserve,
+  state, countdowns and sources (spec 9.5). Test: payload tests.
+- [ ] UI-4 [E1] The match alert panel as spec 9.3 with the ambiguity mark. Test: payload and handler tests.
+- [ ] UI-5 [C5] The Start confirmation lists marks, headings, sensing mode, return altitude and threshold,
+  every non-default safety value with its source (never a fact) and the on-find policy (spec 9.4). Test:
+  payload test.
+- [ ] UI-6 [F1, F2, F3] Dashboard and apps show the same states, homes and reasons; app reducers render a
+  reason from the fixture event synchronously; the ground emits it within 2 s (AC-6.5, AC-9.2; M-9). Test:
+  fixture, reducer and emission-timing tests; one device check.
 
 ## Tasks and matching (TASK)
 
-- [ ] TASK-1 [D2] No task goes to a unit lacking a required capability; a field fleet without thermal
-  leaves a thermal sweep unassigned with a reason per unit, shown on the map (AC-5.1). Test: unit
-  tests; SITL with a mixed simulated fleet.
-- [ ] TASK-2 [D2] The hard filters of design section 12.3 are never overridden by a setting or a
-  confirmation. Test: unit tests.
-- [ ] TASK-3 [D2] Ranking is better positioning, battery margin, shorter transit, idle before busy, not
-  already blocked there, then unit id. Test: unit tests.
-- [ ] TASK-4 [D2] One task per unit; a sensing unit takes appended work only after its own tasks. Test:
-  unit test.
-- [ ] TASK-5 [D2] The plan explains every choice and every refusal per unit. Test: unit test of the
-  explanation payload.
-- [ ] TASK-6 [D2] A thermal flag that may be a person stays "needs confirmation" until a human confirms;
-  a level-camera unit qualifies only if its uncertainty plus the flag's is within tolerance (AC-5.2).
-  Test: unit tests.
-- [ ] TASK-7 [D2] A lost unit's tasks are re-matched with their progress; its area is no-entry until a
-  human confirms; re-tasking never sends a takeoff (AC-5.3). Test: fake.
-- [ ] TASK-8 [D2] For an all-Tello indoor fleet the head-on generator produces today's zones and lanes
-  for 1, 2, 3 and 4 Tellos. Test: the snapshots of GND-3.
-- [ ] TASK-9 [D3] No search exceeds (1 − overlap) × footprint length × measured detection rate (capped
-  by the airframe and the step cycle) or a lane spacing of footprint width × (1 − overlap); a lower
-  detection rate slows the drone (AC-5.9). Test: unit tests; SITL with a throttled test detector.
-- [ ] TASK-10 [D3] Field missions are planned on the dashboard from a GPS-anchored area, with tasks per
-  capability on the map. Test: dashboard tests; SITL two-vehicle mission planned from the dashboard.
-- [ ] TASK-11 [D3] The edge reports its achieved detection rate inside the detection-profile telemetry
-  object. Test: telemetry test.
+- [ ] TASK-1 [D4] No task goes to a unit lacking a required capability; a thermal sweep without thermal units
+  stays unassigned with a reason per unit (AC-5.1). Test: unit; SITL.
+- [ ] TASK-2 [D4] Hard filters are never overridden. Test: unit.
+- [ ] TASK-3 [D4] Ranking by bands (positioning class, 10-point battery buckets, 30 s transit buckets, idle,
+  not blocked, unit id); tasks matched by priority, creation time, id; running tasks never reassigned; every
+  match records its input snapshot (M-2). Test: unit; replay test from a snapshot.
+- [ ] TASK-4 [D4] One task per unit; a sensing unit takes appended work only after its own. Test: unit.
+- [ ] TASK-5 [D4] The plan explains every choice and refusal per unit. Test: unit.
+- [ ] TASK-6 [D4] A thermal flag that may be a person stays "needs confirmation" (AC-5.2). Test: unit.
+- [ ] TASK-7 [D4] A lost unit's tasks follow section 12; re-tasking never sends a takeoff (AC-5.3). Test: fake.
+- [ ] TASK-8 [D4] An all-Tello indoor fleet gets today's zones and lanes for 1 to 4 Tellos. Test: snapshots.
+- [ ] TASK-9 [D5] Speed and spacing follow the rule of 14.4 (AC-5.9). Test: unit; SITL with a throttled test
+  detector.
+- [ ] TASK-10 [D3] Field missions are planned on the dashboard from GPS-anchored areas with obstacle tops.
+  Test: dashboard tests; SITL two-vehicle mission.
+- [ ] TASK-11 [D5] The edge reports `det_hz` in the detection-profile telemetry object; `set_speed` changes
+  speed mid-lane (the Tello at its next step); the footprint of a level camera and the initial rate follow
+  14.4 (M-6). Test: unit; fake.
+- [ ] TASK-12 [D4] The operator can accept an area as unsearched; it is logged and shown (M-12). Test:
+  handler test.
 
 ## On-find flows (FIND)
 
-- [ ] FIND-1 [E1] Each target has its own references and status; every sighting is attributed to the
-  best-matching target with a score for each and can be re-attributed (AC-5.4). Test: unit tests.
-- [ ] FIND-2 [E1] Only a human Confirm marks a target found; the Claude opinion and viewpoint count are
-  labelled aids (AC-5.5). Test: unit tests.
-- [ ] FIND-3 [E1] Continue keeps searching for unfound targets; confirming the last one or End search
-  runs exactly the on-find policy in force; policy changes are logged (AC-5.4). Test: unit tests;
-  fake.
-- [ ] FIND-4 [E1] A confirmed match no longer lands every fleet drone; the legacy single-drone path is
-  unchanged. Test: recovery tests.
-- [ ] FIND-5 [E1] On a sighting the finder keeps watch until its return threshold and the others
-  continue; Not verified starts the local search when it is on, otherwise drones resume. Test: fake.
-- [ ] FIND-6 [E2] Converge viewpoints are at least `find.approach_distance_cm` from the subject,
-  pairwise separated and never stacked; when the ring cannot hold N, fewer go with a reason (AC-5.6).
-  Test: unit tests; SITL with three drones.
-- [ ] FIND-7 [E2] Each viewpoint reports its evidence and the panel shows "k of N viewpoints match"; the
-  verification window lapsing resumes converged drones, keeps the finder watching and leaves the alert
-  open. Test: unit tests.
-- [ ] FIND-8 [E3] The local search radius is uncertainty + running speed × elapsed time, capped, cut to
-  fences and zones minus other no-entry areas; it stops on each stop condition, and a new sighting
-  resets it (AC-5.7). Test: unit tests; SITL.
-- [ ] FIND-9 [E3] The local search shows the share of the disc searched and re-plans as the radius
-  grows. Test: unit tests.
-- [ ] FIND-10 [E4] Escort is refused indoors with the reason of spec 5.8 (AC-5.8). Test: unit test.
-- [ ] FIND-11 [E4] Field escorts keep the stand-off, altitude and separation, never stack or cross a
-  limit; at a limit they stop and keep watch. Test: unit tests; SITL with a moving test subject.
-- [ ] FIND-12 [E4] A relief has the subject in view before an escort leaves; without relief the operator
-  is alerted and the escort returns at its threshold. Test: SITL.
-- [ ] FIND-13 [E4] Losing the subject for `escort.lost_from_view_s` holds the escorts, alerts and starts
-  a local search; escort resumes only after a human confirms a new sighting. Test: fake; SITL.
-- [ ] FIND-14 [E4] An escort setpoint older than 2 s makes the edge hold. Test: fake.
-- [ ] FIND-15 [E1] Mission settings (rows 129 to 142) change in flight except the approach distance and
-  the escort stand-off and altitude, and every change is logged with its author. Test: unit tests.
-- [ ] FIND-16 [E1] Vision keeps one embedding set per target and scores every detection against every
-  target. Test: unit tests.
+- [ ] FIND-1 [E1] Per-target references, thresholds and scores; attribution to the best target, ambiguous
+  when the top two are within `find.ambiguity_margin`; re-attribution until Confirm, then locked (AC-5.4,
+  M-4). Test: unit.
+- [ ] FIND-2 [E1] Only a human Confirm marks a target found (AC-5.5). Test: unit.
+- [ ] FIND-3 [E1] Continue and End search; the on-find policy runs; changes logged (AC-5.4). Test: unit; fake.
+- [ ] FIND-4 [E1] A confirmed match no longer lands every fleet drone. Test: recovery tests.
+- [ ] FIND-5 [E1] Finder keeps watch; Not verified starts the local search when on. Test: fake.
+- [ ] FIND-6 [E2] Converge viewpoints at no less than the approach distance, separated, never stacked; fewer
+  with a reason (AC-5.6). Test: unit; SITL.
+- [ ] FIND-7 [E2] Viewpoint evidence and "k of N"; the verification window lapsing resumes drones and leaves
+  the alert open. Test: unit.
+- [ ] FIND-8 [E3] Local search radius, cut and stop conditions; a new sighting resets it (AC-5.7). Test: unit;
+  SITL.
+- [ ] FIND-9 [E3] Share of the disc searched; re-planned as r grows. Test: unit.
+- [ ] FIND-10 [E4] Escort refused indoors with the reason (AC-5.8). Test: unit.
+- [ ] FIND-11 [E4] Stand-off, altitude, separation; allowed zones exclude other drones' running task tubes;
+  stop at a limit (M-3). Test: unit; SITL.
+- [ ] FIND-12 [E4] Hand-off at return threshold + margin; the escort leaves only when the relief's detections
+  are attributed to the same target and geolocate within the combined uncertainty for
+  `escort.handoff_frames` frames; otherwise it returns at its threshold with an alert (M-3). Test: SITL with a
+  moving test subject and a bystander.
+- [ ] FIND-13 [E4] Lost from view: hold, alert, local search; resume only after a confirmed new sighting.
+  Test: fake; SITL.
+- [ ] FIND-14 [E4] An escort setpoint older than 2 s holds the drone; setpoints are refused while landing.
+  Test: fake.
+- [ ] FIND-15 [E1] Mission settings change in flight except approach distance and escort stand-off and
+  altitude; changes logged (CONF-4 for less-safe ones). Test: unit.
+- [ ] FIND-16 [E1] One embedding set per target; the ground scores every detection against every target; no
+  edge wire change. Test: unit.
+- [ ] FIND-17 [E2] Converge pre-selects the N nearest eligible drones by distance (spec 5.6), changeable,
+  under the hard filters. Test: unit.
+- [ ] FIND-18 [E4] Escort ends when the operator ends it, the search ends, or no escort can continue. Test:
+  unit.
+- [ ] FIND-19 [E4] With the ground gone, an escort returns only if its task corridor reaches home, else lands
+  after the wait (documented). Test: fake.
+- [ ] FIND-20 [E1] The panel states that false alarms grow with the number of targets. Test: payload test.
 
-## Round 2 findings (R2)
+## The default switch in four steps (SW, M-8)
 
-- [ ] R2-B1 [C4] A less-safe custom-model default needs the Start confirmation; a dashboard started by
-  hand shows the Start confirmation and refuses Start until every less-safe value reported by any edge
-  or set on the ground is confirmed with its exact value; a hand-started dashboard refuses a less-safe
-  ground value from a file without `--confirm-less-safe`. Test: dashboard start tests without a
-  launcher.
-- [ ] R2-B2 [A4, A5] The dashboard reads `FLIGHTRISK_LAUNCHER_PARAMS` as its launcher layer, and A5
-  merges after A3 and A4. Test: dashboard start test with the variable; merge order in `tasks.md`.
-- [ ] R2-B3 [C4] The rehearsal preset's geofence is 450 cm; simulated units need no confirmation; the
-  shared launcher fixture (`tests/test_launcher_server.py:110`) passes unchanged. Test: launcher
-  tests.
-- [ ] R2-B4 [A1] Every `generic_multirotor` value in the golden file equals today's effective value for
-  a MAVLink unit, or carries `origin: changed` with its section 20 item. Test: the golden-file test
-  imports today's MAVLink and field constants.
-- [ ] R2-N6 [A1] A diff to `flightrisk/params/table.py`, the golden file or the literal allowlist fails a
-  test unless `docs/design/hardware-profiles/safety-value-changes.md` gains an entry naming the value,
-  old and new, the reason and the section 20 item. Test: that test.
-- [ ] R2-N7 [A4] The ground retries `describe_unit` after a timeout or a `busy` nack at 2, 4, 8 and then
-  every 30 s while `unit_rev` is unchanged, and Plan names the unit it waits for. Test: unit test with a
-  silent fake edge.
-- [ ] R2-N8 [A1] Every operator text comes from the message catalogue in one of three forms (refused,
-  unavailable, landed in place), each naming the subject, the value or reason and the limit. Test: a
-  test that renders every message.
-- [ ] R2-N9 [A1] `MIN_START_BATTERY` stays importable as an alias of `battery.min_takeoff_pct`. Test:
-  import test.
+- [ ] SW-1 [C4] Warn-only release: the launcher, the dashboard, every edge and `scripts/field_fleet_ground.py`
+  show and log every value C5 will refuse or ask to confirm, naming the value, its source and the bound or
+  reason; nothing is refused. Test: a test that runs every C5 refusal case under C4 and gets a warning.
+- [ ] SW-2 [C4] Setting `FLIGHTRISK_LINK_LOSS_LAND_S` logs that its meaning changes at C7 and names
+  `FLIGHTRISK_LINK_LOSS_WAIT_S` and `FLIGHTRISK_LINK_LOSS_ACTION`; its value still sets
+  `link.loss_detect_s` (choice R-1). Test: unit.
+- [ ] SW-3 [C6] The field takeoff minimum becomes 40 % and constraint K-3 holds for the field profile
+  (choice R-2). Test: registry test.
+- [ ] SW-4 [C5, C6, C7] Each step can be reverted on its own: C6 and C7 change only resolved defaults and
+  their golden-file rows; C5 only bounds, precedence and confirmations. Test: review of each diff against
+  section 27.
+
+## Change control and earlier round 2 findings (R2, TAG)
+
+- [ ] TAG-1 [A1] Every "from <PR>, section 27 item N" tag in `parameters.md` names an item of `design.md`
+  section 27 listed under that PR (H-11). Test: a parser test over both files.
+- [ ] R2-B1 [C5] A less-safe custom default needs the Start confirmation; a hand-started dashboard shows it and
+  refuses Start until confirmed; a less-safe ground value from a file needs `--confirm-less-safe`. Test:
+  dashboard start tests without a launcher.
+- [ ] R2-B2 [A4, A5] The dashboard reads `FLIGHTRISK_LAUNCHER_PARAMS` as its launcher layer; A5 merges after
+  A3 and A4. Test: dashboard start test with the variable.
+- [ ] R2-B3 [C5] The rehearsal preset's geofence is 450 cm; simulated units need no confirmation. Test:
+  launcher tests.
+- [ ] R2-B4 [A1] Every generic value equals today's MAVLink value or carries a tag. Test: golden-file test.
+- [ ] R2-N6 [A1] The safety-value change log's latest entry holds the SHA-256 of the table, the golden file
+  and the allowlist, and a test recomputes them (M-9). Test: that test.
+- [ ] R2-N7 [A4] `describe_unit` retries at 2, 4, 8 and then every 30 s; Plan names the unit it waits for.
+  Test: unit with a silent fake edge.
+- [ ] R2-N8 [A1] Every operator text comes from the message catalogue in one of three forms. Test: render
+  test.
+- [ ] R2-N9 [A1] `MIN_START_BATTERY` stays importable as an alias. Test: import test.
 
 
 # #197 core requirements (carried from PR #202 round 1, re-tagged by phase)
@@ -306,7 +398,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   (A2), are generated, and a test fails when a committed file differs from the generated one.
 - [ ] CAT-8 [A2] A dual RGB and thermal sensor is described as two `CameraSpec`s sharing one
   `mount`, and the two always report the same role (F8). Test: unit test with the `site_hex` example
-  of `hardware-profiles-detail.md` section 8.1.
+  of `hardware-profiles-detail.md` section 8.1 (still current for this item).
 
 ### Flight parameter registry and golden file (PAR)
 
@@ -319,18 +411,18 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   `default`, `lo`, `hi`, `safer`, `confirm`, `edit`, `off_value`, `safety_switch` and `origin`, and for
   every environment alias its `today_accepts`. `table.py` equals the golden file value by value. Every
   `origin: today` value equals the constant it replaces in the code at the A1 base; every
-  `origin: changed` value names a design section 20 item. Test: unit tests.
+  `origin: changed` value names a design section 27 item. Test: unit tests.
 - [ ] PAR-4 [A1] (F18) The `tello` bounds of `move.min_cm` and `move.max_cm`, and the value of every
   `tello_sdk.*` row (rows 87 to 110), equal the constants the Tello driver uses. Test: unit test that
   imports the driver constants.
 - [ ] PAR-5 [A1] Canonical and alias environment names are unique across rows; every flight
-  `FLIGHTRISK_*` variable and flag named in design section 20 maps to exactly one row; a room alias is
+  `FLIGHTRISK_*` variable and flag named in design section 27 maps to exactly one row; a room alias is
   never read for a field model and a field alias never for a room model. Test: unit tests.
 - [ ] PAR-6 [A1] Every constraint of `hardware-profiles-detail.md` section 10.3 holds for every profile's defaults. Test:
   unit test.
 - [ ] PAR-7 [A1] `docs/flight-parameters.md` is generated from the registry and a test fails when it
   differs.
-- [ ] PAR-8 [A3] `EnvelopeLimits`, `ROOM_LIMITS`, `FIELD_LIMITS` and `limits_for` are derived from the profile columns, and every public constant of `flightrisk/drone/safety.py` keeps its name and value in phase A (the 450 cm geofence default arrives in C4). Test: unit test; the existing safety tests pass unchanged.
+- [ ] PAR-8 [A3] `EnvelopeLimits`, `ROOM_LIMITS`, `FIELD_LIMITS` and `limits_for` are derived from the profile columns, and every public constant of `flightrisk/drone/safety.py` keeps its name and value in phase A (the 450 cm geofence default arrives in C5). Test: unit test; the existing safety tests pass unchanged.
 - [ ] PAR-9 [A1] (F6) No test or build step writes the golden file; its generator script refuses to
   overwrite an existing file. Test: a test that runs the generator against a temporary existing file
   and expects a refusal; a grep-based test that no test opens the golden file for writing.
@@ -360,7 +452,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   against a custom model's default; a custom default less safe than its base is marked less safe.
   `confirm: non_default` rows are marked for confirmation whenever they differ from the base default.
   Test: unit tests over all `confirm` rows and a custom model.
-- [ ] RES-9 [C4] `FLIGHTRISK_MANUAL_ORPHAN_LAND_S=10` is refused at dashboard start with the standard
+- [ ] RES-9 [C5] `FLIGHTRISK_MANUAL_ORPHAN_LAND_S=10` is refused at dashboard start with the standard
   message instead of being raised to 30 s. Test: unit test.
 - [ ] RES-10 [A1] (F3) `params.json` and `inventory.json` refuse a safety switch stored as off
   (`sensing.mode = off`, `sensing.turn = false`, `link.require_failsafes = false`,
@@ -411,7 +503,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
 - [ ] INV-7 [A2] (F17) Every write carries the `rev` it read; a mismatched `rev` is refused with the
   reload message; two concurrent writers with the same `rev` result in exactly one success. Test: unit
   tests including a two-thread race.
-- [ ] INV-8 [D2] (F17) Plan decides each unit's role and pattern from its reported `gates`
+- [ ] INV-8 [D4] (F17) Plan decides each unit's role and pattern from its reported `gates`
   when it has reported, and from the inventory otherwise. Test: coordinator test where the inventory
   asks for `birdseye_search` but the reported gate says it is off.
 
@@ -430,7 +522,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
 - [ ] FEA-5 [A2] Switching on a statically unavailable feature from any source is refused with the
   feature's reason; an unavailable feature never switched on is reported off with its reason. Test:
   unit test.
-- [ ] FEA-6 [C4] Switching off `forward_obstacle_sensing` needs the launcher confirmation, and
+- [ ] FEA-6 [C5] Switching off `forward_obstacle_sensing` needs the launcher confirmation, and
   the dashboard refuses it from a phone. Test: launcher server test (409, then success with
   `confirm_params`); dashboard event test.
 - [ ] FEA-7 [A3] (F2) `sensing.mode = required` is accepted when `forward_obstacle_sensing` is
@@ -443,14 +535,14 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   requires a thermal sensor is refused on an RGB-only unit with the nack reason `unavailable`;
   `top_down` on a level camera is accepted with a warning in the ack detail. Test: profile switcher
   unit tests.
-- [ ] FEA-9 [D2] A bird's-eye sweep task is matched only to units with `birdseye_search` on and available, in the sweep band; its lane spacing comes from the nadir swath and its detection profile is `top_down`; head-on tasks run beside it in the close band. Test: matcher and coordinator unit tests.
+- [ ] FEA-9 [D4] A bird's-eye sweep task is matched only to units with `birdseye_search` on and available, in the sweep band; its lane spacing comes from the nadir swath and its detection profile is `top_down`; head-on tasks run beside it in the close band. Test: matcher and coordinator unit tests.
 - [ ] FEA-10 [A2, A3] (F2) On a MAVLink unit, `forward_obstacle_sensing` is available only with
   `--source camera` or `url` and a level mount, and never depends on the drone declaring
   `STEPPED_SENSING` (which `MavlinkFleetDrone` does not, `mavlink_fleet.py:376-385`). Test: unit tests
   for each `--source`.
-- [ ] FEA-11 [A3, A4, D2] (F16) Each feature's "when unavailable" behaviour of `hardware-profiles-detail.md` section 9.2
+- [ ] FEA-11 [C1, A4, D4] (F16) Each feature's "when unavailable" behaviour of `hardware-profiles-detail.md` section 9.2
   holds: refuse the start, refuse the takeoff, refuse Plan, or degrade with the banner text. Test: one
-  test per feature in the PR that owns that behaviour (start and takeoff in A3, Plan in D2,
+  test per feature in the PR that owns that behaviour (start and takeoff in C1, Plan in D4,
   banners in A4).
 
 ### Seams (SEAM)
@@ -473,7 +565,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   architecture test.
 - [ ] SEAM-7 [A3] (F8) Each `detections` message carries optional `cam` and `pitch_deg` from the
   frame it came from; the ground's detections handler accepts a message with and without them, and an
-  older handler's validation accepts the extra keys (ASSUMPTION A8). Test: edge message test and
+  older handler's validation accepts the extra keys (ASSUMPTION A6). Test: edge message test and
   ground handler test.
 - [ ] SEAM-8 [A3] (F8) One detection pipeline runs per unit: `select_pipeline` returns exactly one
   profile for the unit's search camera. Test: unit test with a dual-sensor unit.
@@ -491,7 +583,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   `confirmed` object; invalid JSON or an unknown id refuses the start. Test: unit tests.
 - [ ] EDGE-5 [A3] A Tello edge with no setting resolves every value to the golden file's `tello`
   defaults, and the existing safety, ceiling, flight-guard, obstacle, avoidance, temperature and
-  telemetry test suites pass with only the edits of design section 20. Test: the existing suites plus
+  telemetry test suites pass with only the edits of design section 27. Test: the existing suites plus
   a table test of resolved defaults.
 - [ ] EDGE-6 [A3] An edge refuses to start when its model's scale, adapter or frame path does not
   match its backend. Test: unit test.
@@ -532,11 +624,11 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   bounds. Test: unit test with two units of different bounds.
 - [ ] GND-2 [A4] The start battery gate uses each unit's resolved `battery.min_takeoff_pct`. Test:
   unit test with 40 % set on one edge.
-- [ ] GND-3 [A4, D2] (F7) The coordinator uses each unit's move range instead of `TELLO_MIN_MOVE_CM` and
+- [ ] GND-3 [A4, D4] (F7) The coordinator uses each unit's move range instead of `TELLO_MIN_MOVE_CM` and
   `TELLO_MAX_MOVE_CM`, and default plans for 1, 2, 3 and 4 Tellos are unchanged. Test: unit test with a
   field unit; plan snapshots for 1, 2, 3 and 4 Tellos taken on the A4 base and compared after.
 - [ ] GND-4 [A4] `fleet_patterns` zone slots equal the coordinator's (fixed by #208); A4 only reads them through the registry. Test: unit test.
-- [ ] GND-5 [D1] A mission mixing environments is refused at Plan, naming each unit from the wrong environment, and indoors every unit without a measured indoor profile (spec AC-4.2). Test: unit test.
+- [ ] GND-5 [A4] A mission mixing environments is refused at Plan (moved from D1, nitpick 12), naming each unit from the wrong environment, and indoors every unit without a measured indoor profile (spec AC-4.2). Test: unit test.
 - [ ] GND-6 [D1] Indoor slots never count as separation: two indoor drones are separated horizontally whatever their slots; field drones in different bands may overlap horizontally except in a sweep-band drone's takeoff, landing or descent column (spec 8.3; replaces round 1 F7). Test: airspace unit tests; the snapshots of GND-3 still pass.
 - [ ] GND-7 [A4] (F13) Plan requires each reporting unit's stored `describe_unit` reply to carry the
   latest `unit_rev` its `hello` advertised, and plans with the intersection of the reported bounds and
@@ -562,7 +654,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   tests.
 - [ ] DSH-7 [A4] (F15) `flightrisk/dashboard/single_search.py` uses the resolved
   `battery.min_takeoff_pct`. Test: unit test with 40 % set.
-- [ ] DSH-8 [C4] (F4) The dashboard ceiling card asks for confirmation before saving a ceiling raise
+- [ ] DSH-8 [C5] (F4) The dashboard ceiling card asks for confirmation before saving a ceiling raise
   or a margin decrease relative to the saved file, or a value less safe than the profile default.
   Test: server-side handler test that a save without the confirmation is refused.
 - [ ] DSH-9 [A4] (F16) A degraded feature (`appearance_match`, `claude_second_opinion`) shows its
@@ -577,7 +669,7 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   Start and while the edges run. Test: server test of the payload.
 - [ ] LCH-3 [A5] A refused value is an `Issue(ERROR)` that blocks Start; an environment value that
   overrides the window is an `Issue(WARNING)`. Test: `validate` unit tests.
-- [ ] LCH-4 [C4] (F4, F19) Start returns HTTP 409 with `needs_confirmation: "flight_params"` while any
+- [ ] LCH-4 [C5] (F4, F19) Start returns HTTP 409 with `needs_confirmation: "flight_params"` while any
   value of `hardware-profiles-detail.md` section 10.2's list is unconfirmed, including an environment or flag value that is
   less safe than the window's value for an `edit: ui` row; the retry succeeds only when
   `confirm_params` holds an entry with the same `unit`, `id` and exact `value` for each; a preset load
@@ -591,12 +683,12 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
   unit test with 40 % set.
 - [ ] LCH-7 [A5] A `launcher.json` written by the current launcher loads unchanged. Test: fixture test
   with a saved file.
-- [ ] LCH-8 [C4] (F4) At Start the launcher writes the resolved ceiling, margin and slots into the
+- [ ] LCH-8 [C5] (F4) At Start the launcher writes the resolved ceiling, margin and slots into the
   ceiling file, and the Start plan shows their sources; with an inherited `FLIGHTRISK_CEILING_CM`, the
   file holds that value. Test: `ceilingfile` unit tests.
-- [ ] LCH-9 [C4] (F9) Changing a unit's model to one with any wider bound needs the 409 confirmation
+- [ ] LCH-9 [C5] (F9) Changing a unit's model to one with any wider bound needs the 409 confirmation
   listing every widened bound. Test: server test.
-- [ ] LCH-10 [C4] (F19) `docs/launcher.md` and `docs/fleet-setup.md` carry the migration notes of
+- [ ] LCH-10 [C5] (F19) `docs/launcher.md` and `docs/fleet-setup.md` carry the migration notes of
   `hardware-profiles-detail.md` section 16 (presets, ceiling file, shell exports that now win). Test: review.
 
 ### Mobile (MOB)
@@ -620,13 +712,13 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
 
 ### Guard test (GRD)
 
-- [ ] GRD-1 [A1] (F11) `tests/test_param_literals.py` applies rules A to F of design section 19 to
+- [ ] GRD-1 [A1] (F11) `tests/test_param_literals.py` applies rules A to F of design section 22 to
   the files in scope (including `flightrisk/dashboard/*.py` and `flightrisk/launcher/*.py`), and every
   finding is in `tests/param_literal_allowlist.py` with a category, a reason and its exact count.
   Test: the test itself.
 - [ ] GRD-2 [A1] An allowlist key whose count no longer matches fails the test. Test: the test
   itself; each migration PR deletes or lowers the entries it migrates.
-- [ ] GRD-3 [A1] The checker reports each planted literal of design section 19 in a temporary file,
+- [ ] GRD-3 [A1] The checker reports each planted literal of design section 22 in a temporary file,
   one per rule. Test: self-tests.
 - [ ] GRD-4 [A1] Every `deferred` entry names a follow-up. Test: the test itself.
 - [ ] GRD-5 [A1] (F11) Name words are derived from the registry ids; adding a row with a new word
@@ -644,12 +736,12 @@ UI-1 to UI-6, ROLES-1 to ROLES-6; AC-10 → PAR, RES and C4 items.
 
 ### Compatibility (CMP)
 
-- [ ] CMP-1 [A1 to A5] Phase A changes no runtime behaviour: the full suite passes with only the assertion edits design section 20 lists for A5, and no runtime path sends `return`, `escort_setpoint` or `on_complete: return`, enforces a target bound, or flips a default. Test: the full suite; a grep-based test for call sites.
-- [ ] CMP-2 [C4] With no new setting, every resolved value equals the golden file's, except the defaults design section 20 lists for C4. Test: the suites; the AC-6.6 hardware runs on the ZBook before C4 merges.
-- [ ] CMP-3 [A1, C4] (F10) `tests/test_param_parity.py` probes every environment alias
+- [ ] CMP-1 [A1 to A5] Phase A changes no runtime behaviour: the full suite passes with only the assertion edits design section 27 lists for A5, and no runtime path sends `return`, `escort_setpoint` or `on_complete: return`, enforces a target bound, or flips a default. Test: the full suite; a grep-based test for call sites.
+- [ ] CMP-2 [C6, C7] With no new setting, every resolved value equals the golden file's, except the defaults design section 27 lists for C5, C6 and C7. Test: the suites; SITL before C6 merges; the AC-6.6 hardware runs on the ZBook before C7 merges.
+- [ ] CMP-3 [A1, C5] (F10) `tests/test_param_parity.py` probes every environment alias
   and flag at both ends of today's range and the new bound, plus a typical and a malformed value, and
   asserts that the resolver accepts exactly what today's code accepts, except the probes listed in
-  `PARITY_EXCEPTIONS`, each naming its design section 20 item. Test: the test itself.
-- [ ] CMP-4 [every PR] (F10) Each PR edits only the existing assertions design section 20
+  `PARITY_EXCEPTIONS`, each naming its design section 27 item. Test: the test itself.
+- [ ] CMP-4 [every PR] (F10) Each PR edits only the existing assertions design section 27
   lists for it. Test: review of the diff against the list; a PR that needs another edit stops and
   splits the change out.

@@ -1,107 +1,117 @@
-# Fleet architecture v1: parameter registry and constants
+# Fleet architecture v1: parameter registry, constraints and constants
 
-This file holds the tables of the architecture in `design.md` (section 7). It is the source the
-golden file of PR A1 is generated from. Line numbers are on `origin/main` at `b0027a2`; rows from
-in-flight branches say so ("incident" is #207, "sensing" is #198).
+This file holds the tables of the architecture in `design.md` (section 7). It is the only source the
+golden file of PR A1 is generated from. Line numbers are on `origin/main` at `fc5f6aa` (the column header
+still says `b0027a2`; nothing these rows cite changed between the two). Rows from in-flight branches say
+so ("incident" is #207, "sensing" is #198).
+
+## 0. Columns
+
+- **Class:** A airframe parameter, R read-only profile fact or derived value, M mission or operator value.
+  Rows 24 and 32 are R for the Tello and A for the generic multirotor and count as A.
+- **Env:** `field` (production, GPS), `indoor (test adapter)` (Tello family, Dev/test only), or `both`.
+- **Tello default / Generic default:** the `tello` and `generic_multirotor` profile columns. Until the PR
+  that changes it, every value equals what today's code does for that kind of drone. A later value carries
+  "from <PR>, section 27 item N": the PR of `tasks.md` that changes it and the `design.md` section 27 item
+  that lists the change. A test checks that every such tag names an item listed under the same PR (finding
+  H-11).
+- **Bounds:** the target hard bounds. Until C5 the resolver enforces the range today's code accepts
+  (`today_accepts` in the golden file); C4 only warns; C5 switches to these bounds, and `design.md`
+  section 27 item 26 lists every value that becomes refused.
+- **Safer / Confirm:** the safer direction, and whether a value on the other side of the base default needs
+  an exact confirmation at Start (`less_safe`), any change does (`non_default`), or nothing (`none`).
+- **Edit:** `ui` (an operator control: only airframe-neutral mission and safety choices, such as sensing
+  mode, return and land behaviour, separation, obstacle tops and the on-find policy), `file_env` (params
+  file and environment; not a control), `read_only` (a profile fact or a derived value), or `fact`.
+- **`fact`: test-adapter fact, read-only, not operator-facing.** Tello-coupled tuning values (the obstacle
+  depth threshold, settle and steadiness tolerances, refusal caps, sensing timings, avoidance counts, the
+  temperature levels, the dead-reckoning growth and energy placeholders, the hover test switch). They
+  appear only in the read-only effective-values table with their source. They are never a launcher or
+  dashboard control, never in a params or inventory file, never a preflight warning, never something the
+  operator is asked to calibrate, and never in a Start confirmation. Their existing environment variables
+  stay only as developer overrides for test-adapter bring-up (logged at start and shown with source
+  `env`), so today's tests and scripts keep working (`design.md` section 26, choice R-5).
+- **Applies:** `next_start`, `on_ground` (changed between flights by the ground), `plan`, or `in_flight` (a
+  mission setting that may change during the flight, spec 10.1(5)).
+- Rows 53 and 85 (floor ratio) are removed: the floor ratio is tabled. Rows 111 to 142 are spec values;
+  rows 143 to 156 are new in this revision. Section 1.1 lists every cross-value constraint with current ids.
+
+Counts: 154 rows: 82 A, 35 R, 37 M; 77 for both environments, 35 field only, 42 indoor test-adapter only;
+by edit: 23 `ui`, 63 `file_env`, 36 `read_only`, 2 split read-only (Tello) and file (generic), 30 `fact`.
 
 ## 1. Registry rows
 
-Columns:
-
-- **Class:** A airframe parameter, R read-only profile fact, M mission or operator value. Rows 24 and
-  32 are R for the Tello and A for the generic multirotor and count as A.
-- **Env:** `field` (production, GPS), `indoor (test adapter)` (Tello family, Dev/test only), or
-  `both`. Tello-only rows are test-adapter rows: they keep today's values and are never tuned
-  (spec section 0 tables Tello collision tuning).
-- **Tello default / Generic default:** the `tello` and `generic_multirotor` profile columns. In phase A
-  every value equals what today's code does for that kind of drone (round 2 finding B4); a later value
-  says which PR changes it ("from C3"), and `design.md` section 20 lists every such change.
-- **Bounds:** the target hard bounds. Until PR C3 the resolver enforces the range today's code accepts
-  (`today_accepts` in the golden file), so phases A and B change no behaviour; C3 switches to these
-  bounds and `design.md` section 20 lists each value that becomes refused.
-- **Safer / Confirm:** the direction that is safer, and whether a value on the other side of the base
-  default needs an exact confirmation at Start (`less_safe`), any change does (`non_default`), or
-  nothing (`none`). Every row states both (round 2 finding N4).
-- **Applies:** `next_start` (read when the process starts), `on_ground` (changed between flights by the
-  ground), `plan` (read at Plan), or `in_flight` (a mission setting that may change during the flight;
-  spec 10.1(5)).
-- Rows 53 and 85 (the floor-ratio opt-in) are removed: the floor ratio is tabled (#206 is a draft).
-  Rows 111 to 142 are new values from the spec (sections 10.2 and 10.3).
-
-Counts: 140 rows: 74 A, 33 R and 33 M; 70 for both environments, 28 field only and 42 indoor
-test-adapter only.
-
 | # | Parameter id | Where today (`b0027a2`) | Today | Unit | Class | Env | Tello default | Generic default | Tello bound | Generic bound | Safer | Confirm | Edit | Applies | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `envelope.geofence_cm` | `drone/safety.py:107`, `launcher/settings.py:49`, `launcher/settings.py:61`, `safety.py:206-207`, `drone/fleet_plan_check.py:145`, `dashboard/app.py:584-594` | 500 edge, 450 launcher | cm | A | both | 450 (from C3; 500 today when started without a launcher) | 3000 | 40-5000 (lo new) | 500-50000 | lower | less_safe | ui | next_start | `FLIGHTRISK_GEOFENCE_CM` (room); `FLIGHTRISK_FIELD_GEOFENCE_M` x100 and `--geofence-m` (field). Findings 1 (fixed by #208). |
+| 1 | `envelope.geofence_cm` | `drone/safety.py:107`, `launcher/settings.py:49`, `launcher/settings.py:61`, `safety.py:206-207`, `drone/fleet_plan_check.py:145`, `dashboard/app.py:584-594` | 500 edge, 450 launcher | cm | A | both | 450 (from C5, section 27 item 29; 500 today when started without a launcher) | 3000 | 40-5000 (lo new) | 500-50000 | lower | less_safe | ui | next_start | `FLIGHTRISK_GEOFENCE_CM` (room); `FLIGHTRISK_FIELD_GEOFENCE_M` x100 and `--geofence-m` (field). Findings 1 (fixed by #208). |
 | 2 | `envelope.ceiling_cm` | `safety.py:130,134,136`, `safety.py:203-204,209`, `launcher/settings.py:50` | 200 | cm | A | both | 200 | 3000 | 150-1000 | 1000-12000 | lower | less_safe | ui | on_ground | `FLIGHTRISK_CEILING_CM`; `FLIGHTRISK_FIELD_CEILING_M` x100, `--ceiling-m`; `set_ceiling`.4). |
 | 3 | `envelope.ceiling_margin_cm` | `safety.py:131,139`, `safety.py:205,210`, `launcher/settings.py:51` | 60 | cm | A | both | 60 | 500 | 30-500 (hi new) | 300-3000 (hi new) | higher | less_safe | ui | on_ground | `FLIGHTRISK_CEILING_MARGIN_CM`; `FLIGHTRISK_FIELD_CEILING_MARGIN_M` x100, `--ceiling-margin-m`. |
-| 4 | `envelope.alt_slot_cm` (per drone) | `safety.py:108,122-123`; incident `safety.py:131`; `safety.py:201-202,208`; `edge_device.py:1629`; `launcher/settings.py:97` | 100 | cm | A | both | 100 | 1500 | 50-500 (50 from incident) | 1000-12000 | none | none | ui | on_ground | `--alt-slot` (`ALT_CM`); `--alt-slot-m`, `FLIGHTRISK_FIELD_ALT_SLOT_M` x100; launcher per drone; `set_ceiling`, `assign_lanes.alt_cm`. |
+| 4 | `envelope.alt_slot_cm` (per drone) | `safety.py:108,122-123`; incident `safety.py:131`; `safety.py:201-202,208`; `edge_device.py:1629`; `launcher/settings.py:97` | 100 | cm | A | both | 100 | 1500 | 50-500 (50 from incident) | 1000-12000 | higher | less_safe | ui | on_ground | `--alt-slot` (`ALT_CM`); `--alt-slot-m`, `FLIGHTRISK_FIELD_ALT_SLOT_M` x100; launcher per drone; `set_ceiling`, `assign_lanes.alt_cm`. Return altitude = own slot; lower is less safe (spec 10.2); confirmation from C5 (section 27 item 30). |
 | 5 | `plan.alt_slots_cm` | `drone/coordinator.py:134`, `drone/fleet_patterns.py:176`, `launcher/settings.py:54`, `dashboard/ceiling.py:278` | (100, 130) after the prerequisite | cm_list | A | both | (100, 130) | (1000, 1500) (`scripts/field_fleet_ground.py:98`) | each in row 4 bound | each in row 4 bound | none | none | file_env | plan | Zone defaults; per-drone slots on the dashboard card are the UI. Finding 2 (fixed by #208). |
 | 6 | `move.min_cm` | `safety.py:117`, `coordinator.py:153`, `drone/controller.py:106`, `drone/tello.py:572`, `fleet_protocol/constants.py:287`, `safety.py:197` | 20 | cm | R | both | 20 | 20 | 20-20 | 20-20 | none | none | read_only | next_start | Tello SDK fact. Finding 5. |
 | 7 | `move.max_cm` | `safety.py:118`, `coordinator.py:154`, `controller.py:107`, `tello.py:573`, `fleet_protocol/constants.py:288`, `safety.py:198`; legacy `drone/mavlink.py:117` | 500; 5000 field | cm | R | both | 500 | 5000 | 500-500 | 5000-5000 | none | none | read_only | next_start | Tello SDK fact; legacy backend differs (finding 8). |
 | 8 | `envelope.max_altitude_cm` | `controller.py:108`, `tello.py:574`, `mavlink.py:118` | 10 m Tello, 120 m default | cm | R | both | 1000 | 12000 | fixed | fixed | none | none | read_only | next_start | Declared in `DroneCapabilities`; no consumer found. Both Tello models publish 30 m (`coverage.py:61-65`, finding 10); FlightRisk keeps the stricter 10 m. |
 | 9 | `envelope.fence_breach_margin_cm` | `drone/mavlink_fleet.py:283` | 300 | cm | A | field | n/a | 300 | n/a | 100-1000 new | lower | less_safe | file_env | next_start | GPS noise allowance before a breach landing. |
 | 10 | `envelope.autopilot_fence_margin_cm` | `drone/autopilot.py:220` | 5 m | cm | A | field | n/a | 500 | n/a | 200-2000 new | none | none | file_env | next_start | Autopilot fence must contain the edge fence plus this. |
-| 11 | `battery.min_takeoff_pct` | `safety.py:105`, `coordinator.py:142`, `launcher/preflight.py:57` | 30 | pct | A | both | 30 | 30 | 20-95 new | 20-95 new | higher | less_safe | file_env | next_start | `FLIGHTRISK_MIN_TAKEOFF_BATTERY`. Single source after the prerequisite (`min_takeoff_battery_from_env`). |
-| 12 | `battery.critical_pct` | `safety.py:106`, `safety.py:424` | 15 | pct | A | both | 15 | 15 (autopilot's level from B3) | 10-50 new | 10-50 new | higher | less_safe | file_env | next_start | New `FLIGHTRISK_LAND_BATTERY`. Finding 4. Land in place at once, even mid-return (spec 6.2 critical battery). |
+| 11 | `battery.min_takeoff_pct` | `safety.py:105`, `coordinator.py:142`, `launcher/preflight.py:57` | 30 | pct | A | both | 30 | 30 (40 from C6, section 27 item 33) | 20-95 new | 20-95 new | higher | less_safe | file_env | next_start | `FLIGHTRISK_MIN_TAKEOFF_BATTERY`. Single source after the prerequisite (`min_takeoff_battery_from_env`). |
+| 12 | `battery.critical_pct` | `safety.py:106`, `safety.py:424` | 15 | pct | A | both | 15 | 15 (the autopilot's critical level from B4, section 27 item 8) | 10-50 new | 10-50 new | higher | less_safe | file_env | next_start | New `FLIGHTRISK_LAND_BATTERY`. Finding 4. Land in place at once, even mid-return (spec 6.2 critical battery). |
 | 13 | `battery.display_warn_pct` | `config.py:140`, `dashboard/safety.py:26` | 20 | pct | M | both | 20 | 20 | 5-80 new | 5-80 new | none | none | file_env | next_start | Ground display (legacy single-drone path, `observability.py:151-152`). |
 | 14 | `battery.display_critical_pct` | `config.py:141`, `dashboard/safety.py:27` | 10 | pct | M | both | 10 | 10 | 5-50 new | 5-50 new | none | none | file_env | next_start | Ground display. |
-| 15 | `battery.rth_min_pct` | `dashboard/safety.py:21` | 40 | pct | A | field | n/a | 40 | n/a | 20-90 new | higher | less_safe | file_env | next_start | Only drones with return-to-home. |
+| 15 | `battery.rth_min_pct` | `dashboard/safety.py:21` | 40 | pct | A | field | n/a | 40 | n/a | 20-90 new | higher | less_safe | file_env | next_start | Only drones with return-to-home. Scope: the legacy single-drone dashboard recovery path only; the fleet uses rows 111 and 112. |
 | 16 | `link.loss_detect_s` | `safety.py:98,104` | 3.0 | s | A | both | 3.0 | 3.0 | 1.5-10 new | 1.5-30 new | lower | less_safe | file_env | next_start | `FLIGHTRISK_LINK_LOSS_LAND_S`. The Tello lands itself after about 15 s without commands (`coordinator.py:192-200`). Short ground-link loss: after this the drone holds (spec 6.2). Bound starts at 1.5 heartbeat intervals so one missed 1 s heartbeat plus 0.5 s of jitter never triggers it. |
-| 17 | `link.loss_wait_s` | `safety.py:112`, `edge_device.py:242` | 10 (field) | s | A | both | 0 (10 from C3) | 10 | 0-0 today; 1.5-30 from C3 | 0-60 new | lower | less_safe | file_env | next_start | `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`, `--link-loss-hold-s`. Long ground-link loss: hold this much longer, then `link.loss_action` (spec 10.2). Canonical env `FLIGHTRISK_LINK_LOSS_WAIT_S`; alias `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`. |
-| 18 | `link.loss_action` | `mavlink_fleet.py:264`, `edge_device.py:253` | rtl | enum | A | both | land (return from C3) | return (alias `rtl`) | {return, land} | {return, land} | none | none | file_env | next_start | `FLIGHTRISK_FAILSAFE_ACTION`, `--failsafe-action`. Merges today's `FLIGHTRISK_FAILSAFE_ACTION` (`rtl` reads as `return`). Return only inside the own zone and corridor without a ground (spec 7.4). |
+| 17 | `link.loss_wait_s` | `safety.py:112`, `edge_device.py:242` | 10 (field) | s | A | both | 0 (10 from C7, section 27 item 34) | 10 | 0 today; 1.5-30 from C7 | 1.5-30 (from C5, section 27 item 26) | lower | less_safe | file_env | next_start | `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`, `--link-loss-hold-s`. Long ground-link loss: hold this much longer, then `link.loss_action` (spec 10.2). Canonical env `FLIGHTRISK_LINK_LOSS_WAIT_S`; alias `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`. |
+| 18 | `link.loss_action` | `mavlink_fleet.py:264`, `edge_device.py:253` | rtl | enum | A | both | land (return from C7, section 27 item 34) | return (alias `rtl`) | {return, land} | {return, land} | none | none | file_env | next_start | `FLIGHTRISK_FAILSAFE_ACTION`, `--failsafe-action`. Merges today's `FLIGHTRISK_FAILSAFE_ACTION` (`rtl` reads as `return`). Return only inside the own zone and corridor without a ground (spec 7.4). |
 | 19 | `link.require_failsafes` | `mavlink_fleet.py:266` | true | bool | A | field | n/a | true | n/a | {true, false} | true | less_safe | file_env | next_start |  |
 | 20 | `link.drone_stale_s` | `mavlink_fleet.py:269` | 3.0 | s | A | field | n/a | 3.0 | n/a | 1-10 new | lower | less_safe | file_env | next_start | Tello's equivalent is the SDK-coupled `_STATE_LOST_S` (constant). |
 | 21 | `link.rtl_accept_s` | `mavlink_fleet.py:289` | 5.0 | s | A | field | n/a | 5.0 | n/a | 2-30 new | lower | less_safe | file_env | next_start |  |
 | 22 | `gps.min_satellites` | `autopilot.py:62`, `mavlink_fleet.py:267` | 8 | count | A | field | n/a | 8 | n/a | 6-20 new | higher | less_safe | file_env | next_start |  |
-| 23 | `stranded.countdown_s` | `dashboard/manual_control.py:110-112,132-135` | 120 (min 30, clamped) | s | M | both | 120 | 120 | 30-600 (hi new) | 30-600 (hi new) | lower | less_safe | file_env | next_start | `FLIGHTRISK_MANUAL_ORPHAN_LAND_S`; ground scope. Spec 6.2 stranded countdown; ends in a return from C2 (today it lands). Clamp below 30 s becomes a refusal. |
+| 23 | `stranded.countdown_s` | `dashboard/manual_control.py:110-112,132-135` | 120 (min 30, clamped) | s | M | both | 120 | 120 | 30-600 (hi new) | 30-600 (hi new) | lower | less_safe | file_env | next_start | `FLIGHTRISK_MANUAL_ORPHAN_LAND_S`; ground scope. Spec 6.2 stranded countdown; ends in a return from C6 (field) and C7 (indoor), section 27 items 32 and 34 (today it lands). Clamp below 30 s becomes a refusal. |
 | 24 | `takeoff.reply_timeout_s` | `tello.py:92`, `dashboard/manual_control.py:141`, `mavlink_fleet.py:270` | 20 Tello, 60 MAVLink | s | R (Tello) / A (generic) | both | 20 | 60 | 20-20 | 20-180 new | none | none | read_only (Tello), file_env (generic) | next_start | Tello value matches djitellopy and is coupled to `_LAND_DEADLINE_S` (`tello.py:80-88`). The ground's manual wait derives from it. |
-| 25 | `takeoff.late_s` | incident `flight_guards.py:94-95` | 10.0 | s | A | indoor (test adapter) | 10 | n/a | 2-20 | n/a | lower | less_safe | file_env | next_start | `FLIGHTRISK_TELLO_TAKEOFF_LATE_S`. |
-| 26 | `takeoff.settle_samples` | incident `flight_guards.py:78-79` | 5 | count | A | indoor (test adapter) | 5 | n/a | 2-50 | n/a | higher | less_safe | file_env | next_start | `FLIGHTRISK_TELLO_SETTLE_SAMPLES`. |
-| 27 | `takeoff.settle_tolerance_cm` | incident `flight_guards.py:81-82` | 10 | cm | A | indoor (test adapter) | 10 | n/a | 2-50 | n/a | lower | less_safe | file_env | next_start | `FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM`. |
-| 28 | `takeoff.settle_timeout_s` | incident `flight_guards.py:86-87` | 5.0 | s | A | indoor (test adapter) | 5 | n/a | 1-10 | n/a | none | none | file_env | next_start | `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S`. |
-| 29 | `takeoff.refusal_retries` | incident `flight_guards.py:98-99` | 2 | count | A | indoor (test adapter) | 2 | n/a | 0-3 | n/a | none | none | file_env | next_start | `FLIGHTRISK_TELLO_REFUSAL_RETRIES`. |
-| 30 | `takeoff.refusal_hold_s` | incident `flight_guards.py:100-101` | 2.5 | s | A | indoor (test adapter) | 2.5 | n/a | 0.5-5 | n/a | none | none | file_env | next_start | `FLIGHTRISK_TELLO_REFUSAL_HOLD_S`. |
+| 25 | `takeoff.late_s` | incident `flight_guards.py:94-95` | 10.0 | s | A | indoor (test adapter) | 10 | n/a | 2-20 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_TAKEOFF_LATE_S`. |
+| 26 | `takeoff.settle_samples` | incident `flight_guards.py:78-79` | 5 | count | A | indoor (test adapter) | 5 | n/a | 2-50 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_SETTLE_SAMPLES`. |
+| 27 | `takeoff.settle_tolerance_cm` | incident `flight_guards.py:81-82` | 10 | cm | A | indoor (test adapter) | 10 | n/a | 2-50 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM`. |
+| 28 | `takeoff.settle_timeout_s` | incident `flight_guards.py:86-87` | 5.0 | s | A | indoor (test adapter) | 5 | n/a | 1-10 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S`. |
+| 29 | `takeoff.refusal_retries` | incident `flight_guards.py:98-99` | 2 | count | A | indoor (test adapter) | 2 | n/a | 0-3 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_REFUSAL_RETRIES`. |
+| 30 | `takeoff.refusal_hold_s` | incident `flight_guards.py:100-101` | 2.5 | s | A | indoor (test adapter) | 2.5 | n/a | 0.5-5 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_REFUSAL_HOLD_S`. |
 | 31 | `takeoff.descent_clearance_cm` | incident `flight_guards.py:107` | 50 | cm | R | indoor (test adapter) | 50 | n/a | 50-50 | n/a | none | none | read_only | next_start | Equals the lower slot bound: VPS floor 30 cm plus 20 cm. |
 | 32 | `takeoff.height_cm` | `tello.py:2404` (fake), `mavlink_fleet.py:217,256` | about 80 Tello; 5 m MAVLink | cm | R (Tello) / A (generic) | both | 80 | 500 | 80-80 | 200-2000 | none | none | read_only (Tello), file_env (generic) | next_start | Tello hover height is firmware behaviour (`docs/ceiling-and-altitude.md`); generic `--takeoff-alt-m` x100 (`edge_device.py:1583`). |
-| 33 | `mode.hover_test` | incident `flight_guards.py:74` | false | bool | M | both | false | false | {false, true} | {false, true} | none | non_default | file_env | next_start | `FLIGHTRISK_HOVER_TEST`; shown loudly. |
+| 33 | `mode.hover_test` | incident `flight_guards.py:74` | false | bool | M | both | false | false | {false, true} | {false, true} | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_HOVER_TEST`; shown loudly. Tuned for the Tello's forward camera; read-only for every profile. |
 | 34 | `tello.ground_height_cm` | `tello.py:162` | 10 | cm | R | indoor (test adapter) | 10 | n/a | 10-10 | n/a | none | none | read_only | next_start | Land confirmation from the state stream (Q4). |
 | 35 | `tello.ground_tof_cm` | `tello.py:167` | 30 | cm | R | indoor (test adapter) | 30 | n/a | 30-30 | n/a | none | none | read_only | next_start | (Q4). |
 | 36 | `tello.ground_readings` | `tello.py:172` | 3 | count | R | indoor (test adapter) | 3 | n/a | 3-3 | n/a | none | none | read_only | next_start | (Q4). |
-| 37 | `tello.temp_warn_c` | sensing `temp_preflight.py:42,47` | 90 | degC | A | indoor (test adapter) | 90 | n/a | 40-120 | n/a | lower | less_safe | file_env | next_start | `FLIGHTRISK_TELLO_TEMP_WARN_C`. |
-| 38 | `tello.temp_refuse_c` | sensing `temp_preflight.py:44,47` | 95 or off | degC | A | indoor (test adapter) | 95 | n/a | 40-120, off | n/a | lower | less_safe | file_env | next_start | `FLIGHTRISK_TELLO_TEMP_REFUSE_C`; off_value `off`. |
-| 39 | `sensing.turn` | `obstacle_sensor.py:103` | true | bool | M | both | true | true | {true, false} | {true, false} | true | less_safe | file_env | next_start | `FLIGHTRISK_OBSTACLE_TURN`. |
+| 37 | `tello.temp_warn_c` | sensing `temp_preflight.py:42,47` | 90 | degC | A | indoor (test adapter) | 90 | n/a | 40-120 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_TEMP_WARN_C`. |
+| 38 | `tello.temp_refuse_c` | sensing `temp_preflight.py:44,47` | 95 or off | degC | A | indoor (test adapter) | 95 | n/a | 40-120, off | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_TELLO_TEMP_REFUSE_C`; off_value `off`. |
+| 39 | `sensing.turn` | `obstacle_sensor.py:103` | true | bool | M | both | true | true | {true, false} | {true, false} | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_TURN`. Tuned for the Tello's forward camera; read-only for every profile. |
 | 40 | `sensing.mode` | `obstacle_sensor.py:101`; sensing `launcher/settings.py:146` | required | enum | M | both | required | required | {required, off} | {required, off} | required | less_safe | ui | next_start | `FLIGHTRISK_OBSTACLE_SENSING`. |
-| 41 | `sensing.step_cm` | `obstacle_sensor.py:45,47-48,50`, `edge_device.py:1860-1866` | 50; 500 field | cm | A | both | 50 | 500 | 20-100 | 20-5000 | none | none | file_env | next_start | `FLIGHTRISK_OBSTACLE_STEP_CM`. Tabled: no step tuning (spec section 0). |
-| 42 | `sensing.settle_s` | `obstacle_sensor.py:56,58` | 0.3 | s | A | both | 0.3 | 0.3 | 0.1-3.0 | 0.1-3.0 | higher | less_safe | file_env | next_start | `FLIGHTRISK_OBSTACLE_SETTLE_S`. |
-| 43 | `sensing.min_safe_depth` | `obstacle_sensor.py:79,84`, `drone/obstacle.py:60`; sensing `launcher/settings.py:148` | 0.35 | ratio | A | both | 0.35 | 0.35 | 0.05-0.9 | 0.05-0.9 | lower | less_safe | ui | next_start | `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`; uncalibrated. H1 calibration tabled; value unchanged. |
-| 44 | `sensing.person_fraction` | `obstacle_sensor.py:70,75` | 0.55 | ratio | A | both | 0.55 | 0.55 | 0.2-0.9 | 0.2-0.9 | lower | less_safe | file_env | next_start | `FLIGHTRISK_OBSTACLE_PERSON_FRACTION`; camera field of view. |
-| 45 | `sensing.max_decode_lag_s` | `obstacle_sensor.py:93,95` | 0.3 | s | A | indoor (test adapter) | 0.3 | n/a | 0.1-2.0 | n/a | lower | less_safe | file_env | next_start | `FLIGHTRISK_MAX_DECODE_LAG_S`; Tello decoder only. |
-| 46 | `sensing.view_wait_s` | `obstacle_sensor.py:61` | 0.7 | s | A | both | 0.7 | 0.7 | 0.2-3.0 new | 0.2-3.0 new | none | none | file_env | next_start | Camera latency. |
-| 47 | `sensing.sense_timeout_s` | `obstacle_sensor.py:64` | 2.0 | s | A | both | 2.0 | 2.0 | 0.5-10 new | 0.5-10 new | none | none | file_env | next_start | The "2 s sense budget" of the issue. |
-| 48 | `sensing.sense_retries` | `obstacle_sensor.py:66` | 3 | count | M | both | 3 | 3 | 1-5 new | 1-5 new | none | none | file_env | next_start |  |
-| 49 | `sensing.sensor_down_s` | `obstacle_sensor.py:68` | 10 | s | M | both | 10 | 10 | 2-30 new | 2-30 new | lower | less_safe | file_env | next_start |  |
-| 50 | `sensing.person_wait_s` | `obstacle_sensor.py:86` | 1.0 | s | M | both | 1.0 | 1.0 | 0.2-5 new | 0.2-5 new | none | none | file_env | next_start |  |
-| 51 | `sensing.retry_pause_s` | `drone/lane_flight.py:162` | 0.5 | s | M | both | 0.5 | 0.5 | 0.1-3 new | 0.1-3 new | none | none | file_env | next_start |  |
-| 52 | `move.heading_tolerance_deg` | `lane_flight.py:166`, `mavlink_fleet.py:214` | 10 | deg | A | both | 10 | 10 | 3-30 new | 3-30 new | lower | less_safe | file_env | next_start | Compass accuracy; one concept, two copies. |
+| 41 | `sensing.step_cm` | `obstacle_sensor.py:45,47-48,50`, `edge_device.py:1860-1866` | 50; 500 field | cm | A | both | 50 | 500 | 20-100 | 20-5000 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_STEP_CM`. Tabled: no step tuning (spec section 0). Tuned for the Tello's forward camera; read-only for every profile. |
+| 42 | `sensing.settle_s` | `obstacle_sensor.py:56,58` | 0.3 | s | A | both | 0.3 | 0.3 | 0.1-3.0 | 0.1-3.0 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_SETTLE_S`. Tuned for the Tello's forward camera; read-only for every profile. |
+| 43 | `sensing.min_safe_depth` | `obstacle_sensor.py:79,84`, `drone/obstacle.py:60`; sensing `launcher/settings.py:148` | 0.35 | ratio | A | both | 0.35 | 0.35 | 0.05-0.9 | 0.05-0.9 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`; uncalibrated. H1 calibration tabled; value unchanged. Tuned for the Tello's forward camera; read-only for every profile. |
+| 44 | `sensing.person_fraction` | `obstacle_sensor.py:70,75` | 0.55 | ratio | A | both | 0.55 | 0.55 | 0.2-0.9 | 0.2-0.9 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_PERSON_FRACTION`; camera field of view. Tuned for the Tello's forward camera; read-only for every profile. |
+| 45 | `sensing.max_decode_lag_s` | `obstacle_sensor.py:93,95` | 0.3 | s | A | indoor (test adapter) | 0.3 | n/a | 0.1-2.0 | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_MAX_DECODE_LAG_S`; Tello decoder only. |
+| 46 | `sensing.view_wait_s` | `obstacle_sensor.py:61` | 0.7 | s | A | both | 0.7 | 0.7 | 0.2-3.0 new | 0.2-3.0 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Camera latency. Tuned for the Tello's forward camera; read-only for every profile. |
+| 47 | `sensing.sense_timeout_s` | `obstacle_sensor.py:64` | 2.0 | s | A | both | 2.0 | 2.0 | 0.5-10 new | 0.5-10 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. The "2 s sense budget" of the issue. Tuned for the Tello's forward camera; read-only for every profile. |
+| 48 | `sensing.sense_retries` | `obstacle_sensor.py:66` | 3 | count | M | both | 3 | 3 | 1-5 new | 1-5 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Tuned for the Tello's forward camera; read-only for every profile. |
+| 49 | `sensing.sensor_down_s` | `obstacle_sensor.py:68` | 10 | s | M | both | 10 | 10 | 2-30 new | 2-30 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Tuned for the Tello's forward camera; read-only for every profile. |
+| 50 | `sensing.person_wait_s` | `obstacle_sensor.py:86` | 1.0 | s | M | both | 1.0 | 1.0 | 0.2-5 new | 0.2-5 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Tuned for the Tello's forward camera; read-only for every profile. |
+| 51 | `sensing.retry_pause_s` | `drone/lane_flight.py:162` | 0.5 | s | M | both | 0.5 | 0.5 | 0.1-3 new | 0.1-3 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Tuned for the Tello's forward camera; read-only for every profile. |
+| 52 | `move.heading_tolerance_deg` | `lane_flight.py:166`, `mavlink_fleet.py:214` | 10 | deg | A | both | 10 | 10 | 3-30 new | 3-30 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Compass accuracy; one concept, two copies. Tuned for the Tello's forward camera; read-only for every profile. |
 | 53 | removed |  |  |  |  |  |  |  |  |  |  |  |  |  | `sensing.metric` (floor-ratio opt-in, #206 draft): tabled, not added. |
-| 54 | `avoid.clear_votes` | `obstacle_sensor.py:106-108` | 2 | count | M | both | 2 | 2 | 1-5 | 1-5 | higher | less_safe | file_env | next_start | `FLIGHTRISK_OBSTACLE_CLEAR_VOTES`. |
-| 55 | `avoid.relook` | `obstacle_sensor.py:112-114` | 2 | count | M | both | 2 | 2 | 0-5 | 0-5 | none | none | file_env | next_start | `FLIGHTRISK_OBSTACLE_RELOOK`. |
-| 56 | `avoid.sidestep_cm` | `obstacle_sensor.py:119-121` | 50 | cm | A | both | 50 | 50 | 20-100, off 0 | 20-100, off 0 | none | none | file_env | next_start | `FLIGHTRISK_OBSTACLE_SIDESTEP_CM`. Sidestep tuning tabled; today's value for every kind. |
-| 57 | `avoid.sidesteps` | `obstacle_sensor.py:124-126` | 2 | count | M | both | 2 | 2 | 0-4 | 0-4 | none | none | file_env | next_start | `FLIGHTRISK_OBSTACLE_SIDESTEPS`. |
-| 58 | `avoid.sidestep_pass_cm` | `obstacle_sensor.py:130` | 150 | cm | A | both | 150 | 150 | 50-400 new | 50-400 new | none | none | file_env | next_start | Depth cue range (hardware item H1). Sidestep tuning tabled. |
+| 54 | `avoid.clear_votes` | `obstacle_sensor.py:106-108` | 2 | count | M | both | 2 | 2 | 1-5 | 1-5 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_CLEAR_VOTES`. Tuned for the Tello's forward camera; read-only for every profile. |
+| 55 | `avoid.relook` | `obstacle_sensor.py:112-114` | 2 | count | M | both | 2 | 2 | 0-5 | 0-5 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_RELOOK`. Tuned for the Tello's forward camera; read-only for every profile. |
+| 56 | `avoid.sidestep_cm` | `obstacle_sensor.py:119-121` | 0 (off) after the sidestep-off PR (in flight) | cm | A | both | 0 (off) | 0 (off) | 20-100, off 0 | 20-100, off 0 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_SIDESTEP_CM`. Sidestep tuning tabled; today's value for every kind. Tuned for the Tello's forward camera; read-only for every profile. |
+| 57 | `avoid.sidesteps` | `obstacle_sensor.py:124-126` | 2 | count | M | both | 2 | 2 | 0-4 | 0-4 | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. `FLIGHTRISK_OBSTACLE_SIDESTEPS`. Tuned for the Tello's forward camera; read-only for every profile. |
+| 58 | `avoid.sidestep_pass_cm` | `obstacle_sensor.py:130` | 150 | cm | A | both | 150 | 150 | 50-400 new | 50-400 new | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Depth cue range (hardware item H1). Sidestep tuning tabled. Tuned for the Tello's forward camera; read-only for every profile. |
 | 59 | `plan.strip_cm` | `drone/plan_edit.py:64-65`, `drone/fleet_scale.py:54,129`, `dashboard/__main__.py:146` | 75 | cm | A | both | 75 | derived from the nadir swath (`field_scale`) | 20-1000 | 200-10000 | none | none | ui (map) | plan | `FLIGHTRISK_FLEET_STRIP_CM`, `--fleet-strip-cm`. Tello bound matches the map editor (`plan_edit.py:154`). Finding 6. |
 | 60 | `plan.area_cm` | `dashboard/__main__.py:141`, `fleet_scale.py:128`, `fleet_plan_check.py:151`, `fleet_scale.py:48` | 400 x 400 | cm (w, h) | A | both | 400 x 400 | per mission | side 20-20000 | side 200-50000 | none | none | ui (map) | plan | `FLIGHTRISK_FLEET_AREA_CM`, `--fleet-area-cm`. Tello max side is twice its 100 m range. |
 | 61 | `plan.zone_gap_cm` | `coordinator.py:131` | 100 | cm | M | both | 100 | 0 (`fleet_scale.py:149`) | 40-1000 new | 0-5000 new | higher | less_safe | file_env | plan |  |
-| 62 | `separation.base_cm` | `fleet_plan_check.py:136` | 150 | cm | A | both | 150 | 150 (500 from D1) | 100-1000 new | 150-5000 new | higher | less_safe | file_env | plan | Airframe size plus position error. Spec 8.2 base separation; corridors widen it by both drones' uncertainty. |
+| 62 | `separation.base_cm` | `fleet_plan_check.py:136` | 150 | cm | A | both | 150 | 150 (500 from D1, section 27 item 9) | 100-1000 new | 150-5000 new | higher | less_safe | file_env | plan | Airframe size plus position error. Spec 8.2 base separation; corridors widen it by both drones' uncertainty. |
 | 63 | `plan.placement_tolerance_cm` | `fleet_plan_check.py:139,201` | 10 | cm | M | both | 10 | 10 | 0-500 | 0-500 | higher | less_safe | file_env | plan |  |
 | 64 | `plan.altitude_tolerance_cm` | `fleet_plan_check.py:177` | 10 | cm | A | both | 10 | 10 | 5-50 new | 5-500 new | higher | less_safe | file_env | plan | Height-sensor error. |
 | 65 | `plan.placement_offset_cm` | `fleet_patterns.py:170` | 50 | cm | M | both | 50 | 50 | 0-500 new | 0-5000 new | none | none | file_env | plan |  |
 | 66 | `plan.takeoff_stagger_s` | `fleet_patterns.py:173`, `fleet_plan_check.py:202` | 2.0 | s | M | both | 2.0 | 2.0 | 0-60 | 0-60 | none | none | file_env | plan |  |
 | 67 | `plan.min_slot_separation_cm` | `fleet_scale.py:50` | 5 m (field only) | cm | A | field | n/a: indoor slots are never separation (spec 8.3) | 500 | n/a | 300-2000 new | higher | less_safe | file_env | plan | Room plans do not check it today (ASSUMPTION A3); it applies to the distinct slot values only (section 10.3). |
 | 68 | `plan.dedup_radius_cm` | `coordinator.py:831` | 80 | cm | M | both | 80 | 80 | 20-500 new | 20-5000 new | none | none | file_env | plan | Merges detections on the shared grid. |
-| 69 | `plan.lost_obstacle_s` | `coordinator.py:192` | 20 | s | A | both | 20 | 20 | 15-120 new | 15-300 new | higher | less_safe | file_env | plan | Tello hover then auto-land; a MAVLink drone returns home instead. Removed in D1: replaced by a no-entry area until a human confirms (spec 5.4). |
+| 69 | `plan.lost_obstacle_s` | `coordinator.py:192` | 20 | s | A | both | 20 | 20 | 15-120 new | 15-300 new | higher | less_safe | file_env | plan | Tello hover then auto-land; a MAVLink drone returns home instead. Removed in D2 (section 27 item 18): replaced by the lost-drone no-entry area and `lost.flying_window_s` (row 145). |
 | 70 | `plan.camera_footprint_cm` | `plan_edit.py:72,75` | unset (strip) | cm | A | both | unset | unset | 20-5000 | 20-5000 | none | none | file_env | plan | `FLIGHTRISK_CAMERA_FOOTPRINT_CM`. |
 | 71 | `plan.snap_target_cm`, `plan.snap_tolerance_cm` | `drone/plan_paths.py:67,70` | 25, 40 | cm | A | both | 25, 40 | deferred | deferred | deferred | none | none | read_only | plan | Derived from the Tello's 20 cm minimum move; allowlisted as `deferred` in v1 because the snap tolerance is a proven bound. |
 | 72 | `plan.field_fence_margin_cm` | `fleet_scale.py:52` | 5 m | cm | A | field | n/a | 500 | n/a | 200-2000 new | higher | less_safe | file_env | plan |  |
@@ -145,18 +155,18 @@ test-adapter only.
 | 110 | `tello_sdk.video_size_px` | `drone/coverage.py:105-106` | 960 x 720 | px_pair | R | indoor (test adapter) | 960 x 720 | n/a | fixed | n/a | none | none | read_only | next_start | Tello SDK or driver fact, shown with its source (D-F18). UNVERIFIED stream size (ASSUMPTION A7). |
 | 111 | `battery.return_floor_pct` | new (spec v1) | none | pct | A | both | 25 [PROPOSED] | 30 [PROPOSED] | 15-90 new | 20-90 new | higher | less_safe | file_env | next_start | Lowest return threshold; the threshold is the larger of this and energy to home plus reserve (spec 10.2). |
 | 112 | `battery.landing_reserve_pct` | new (spec v1) | none | pct | A | both | 10 [PROPOSED] | 15 [PROPOSED] | 5-50 new | 5-50 new | higher | less_safe | file_env | next_start | Charge left on landing at home (spec 10.2). |
-| 113 | `battery.return_rate_pct_per_100m` | new (spec v1) | none | pct | A | both | placeholder [UNCALIBRATED] | placeholder [PROPOSED]; the autopilot's estimate when it reports one | only more pessimistic | only more pessimistic | higher | less_safe | file_env | next_start | Energy to home (spec 6.2, battery cannot reach home). |
-| 114 | `battery.hover_rate_pct_per_min` | new (spec v1) | none | pct | A | both | placeholder [UNCALIBRATED] | placeholder [PROPOSED] | only more pessimistic | only more pessimistic | higher | less_safe | file_env | next_start | Energy for holds and waits on the way home. |
+| 113 | `battery.return_rate_pct_per_100m` | new (spec v1) | none | pct | A | both | placeholder [UNCALIBRATED]; test-adapter fact, read-only | placeholder [PROPOSED]; the autopilot's estimate when it reports one | only more pessimistic | only more pessimistic | higher | less_safe | file_env | next_start | Energy to home (spec 6.2, battery cannot reach home). |
+| 114 | `battery.hover_rate_pct_per_min` | new (spec v1) | none | pct | A | both | placeholder [UNCALIBRATED]; test-adapter fact, read-only | placeholder [PROPOSED] | only more pessimistic | only more pessimistic | higher | less_safe | file_env | next_start | Energy for holds and waits on the way home. |
 | 115 | `position.uncertainty_bound_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | 50 [PROPOSED] | n/a | 20-75 | n/a | lower | less_safe | file_env | next_start | Land in place above it; return early when predicted at home nears it (spec 6.2). |
-| 116 | `position.dr_growth_per_m_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | higher | less_safe | file_env | next_start | Dead-reckoning growth per metre flown; calibration tabled. |
-| 117 | `position.dr_growth_per_turn_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | higher | less_safe | file_env | next_start | Per turn (heading drift). |
-| 118 | `position.dr_growth_per_min_hover_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | higher | less_safe | file_env | next_start | Per minute of hover drift [UNVERIFIED size]. |
+| 116 | `position.dr_growth_per_m_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Dead-reckoning growth per metre flown; calibration tabled. |
+| 117 | `position.dr_growth_per_turn_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Per turn (heading drift). |
+| 118 | `position.dr_growth_per_min_hover_cm` | new (spec v1) | none | cm | A | indoor (test adapter) | placeholder [UNCALIBRATED] | n/a | only more pessimistic | n/a | none | none | fact | next_start | Test-adapter fact, read-only, not operator-facing. Per minute of hover drift [UNVERIFIED size]. |
 | 119 | `home.accuracy_cm` | new (spec v1) | none | cm | A | field | n/a | 200 [PROPOSED] | n/a | 50-500 | lower | less_safe | file_env | next_start | Home check before takeoff (spec 7.2). |
 | 120 | `home.max_offset_cm` | new (spec v1) | none | cm | A | field | n/a | 500 [PROPOSED] | n/a | 100-1000 | lower | less_safe | file_env | next_start | The autopilot's home must lie this close to the current position (spec 7.2). |
 | 121 | `separation.landing_cm` | new (spec v1) | none | cm | A | both | 150 [PROPOSED] | 1000 [PROPOSED] | at least `separation.base_cm` | at least `separation.base_cm` | higher | less_safe | file_env | plan | Homes closer than this share a landing area; one landing at a time (spec 7.4). |
 | 122 | `airspace.close_band_floor_cm` | new (spec v1) | 1000 (lowest field slot) | cm | A | field | n/a | 1000 | n/a | 1000-12000 | higher | less_safe | file_env | plan | Close band starts here (spec 8.3). |
 | 123 | `airspace.band_gap_cm` | new (spec v1) | 500 (field slot separation) | cm | A | field | n/a | 500 [PROPOSED] | n/a | 300-2000 | higher | less_safe | file_env | plan | Between the close band and the sweep band (spec 8.3). |
-| 124 | `retask.window_s` | new (spec v1) | 20 (`DEFAULT_HOVER_TIMEOUT_S`) | s | M | both | 20 | 20 | 0-120 | 0-120 | lower | less_safe | file_env | plan | Hover after the last task, then return (spec 6.2); the protocol cap stays 120 s. |
+| 124 | `retask.window_s` | new (spec v1) | 20 (`DEFAULT_HOVER_TIMEOUT_S`) | s | M | both | 20 | 20 | 1-120 | 1-120 | lower | less_safe | file_env | plan | Hover after the last task, then return (spec 6.2); the protocol cap stays 120 s. At least 1 s: `hover_timeout_s` must be positive (`fleet_protocol/validate.py:182-185`). |
 | 125 | `return.blocked_wait_s` | new (spec v1) | none | s | M | both | 30 [PROPOSED] | 30 [PROPOSED] | 0-120 | 0-120 | lower | less_safe | file_env | next_start | Then hold for a connected operator, else land (spec 6.2). |
 | 126 | `return.person_cue_wait_s` | new (spec v1) | none | s | M | both | 30 [PROPOSED] | 30 [PROPOSED] | 0-300 | 0-300 | lower | less_safe | file_env | next_start | Then land with no answer (spec decision 3). |
 | 127 | `noentry.lost_margin_cm` | new (spec v1) | 20 s timer (`coordinator.py:192`) | cm | A | both | 100 [PROPOSED] | 500 [PROPOSED] | at least `separation.base_cm` | at least `separation.base_cm` | higher | less_safe | file_env | plan | Lost-drone no-entry radius = uncertainty + this (spec 10.2). |
@@ -169,12 +179,52 @@ test-adapter only.
 | 134 | `find.running_speed_cm_s` | new (spec v1) | none | cm_per_s | M | both | 300 | 400 | 50-800 | 50-800 | higher | none | ui | in_flight | Lower is less thorough (spec 10.3). |
 | 135 | `find.local_search_max_radius_cm` | new (spec v1) | none | cm | M | both | mission area | 100000 | within the fence | within the fence | none | none | ui | in_flight |  |
 | 136 | `find.local_search_time_s` | new (spec v1) | none | s | M | both | 600 | 600 | 1-3600 | 1-3600 | none | none | ui | in_flight |  |
-| 137 | `search.required_overlap_pct` | new (spec v1) | 0.2 field (`scripts/field_fleet_ground.py:99`) | pct | M | both | 30 | 30 (20 today, from D3) | 10-80 | 10-80 | higher | none | ui | in_flight | Lane spacing and speed rule (spec 5.9). |
+| 137 | `search.required_overlap_pct` | new (spec v1) | 0.2 field (`scripts/field_fleet_ground.py:99`) | pct | M | both | 30 | 30 (20 today, from D5, section 27 item 37) | 10-80 | 10-80 | higher | none | ui | in_flight | Lane spacing and speed rule (spec 5.9). |
 | 138 | `escort.count` | new (spec v1) | none | count | M | field | n/a | 1 | n/a | 0-free tracking units | none | none | ui | in_flight | Field only (spec 5.8). |
 | 139 | `escort.standoff_cm` | new (spec v1) | none | cm | A | field | n/a | 2000 | n/a | at least `find.approach_distance_cm` | higher | less_safe | ui | plan | Never changed in flight. |
 | 140 | `escort.altitude_cm` | new (spec v1) | none | cm | A | field | n/a | 1500 | n/a | close band | higher | less_safe | ui | plan | Never changed in flight. |
 | 141 | `escort.handoff_margin_pct` | new (spec v1) | none | pct | M | field | n/a | 10 | n/a | 5-30 | higher | less_safe | ui | in_flight | Points above the return threshold. |
 | 142 | `escort.lost_from_view_s` | new (spec v1) | none | s | M | field | n/a | 10 | n/a | 3-60 | none | none | ui | in_flight |  |
+| 143 | `link.ground_loss_margin_s` | new (this revision) | 2 (implicit in `FLEET_LOSS_TIMEOUT_S = 5.0`, `dashboard/app.py:559-563`) | s | M | both | 2 | 2 | 1-10 | 1-10 | higher | less_safe | file_env | next_start | Margin the ground adds to the edge's detect and wait times before it declares a drone lost (section 12). |
+| 144 | `link.ground_loss_timeout_s` | new (this revision) | 5 for every drone (`dashboard/app.py:563`) | s | R | both | derived: detect + wait + margin (5 today, 15 from C7) | derived: 3 + 10 + 2 = 15 (from D2, section 27 item 15) | derived | derived | none | none | read_only | next_start | Shown with its inputs; never shorter than the drone's own detect + wait (constraint K-7). |
+| 145 | `lost.flying_window_s` | new (this revision) | 20 (`LOST_OBSTACLE_S`, `coordinator.py:192`) | s | R | both | 20 (auto-land 15 s + descent + margin) | derived: detect + wait + time home + landing + margin, capped by endurance (from D2) | derived | derived | none | none | read_only | plan | The #212 precondition: a lost drone's area cannot be cleared or entered before it passes or the drone reports landed (section 12). |
+| 146 | `airspace.close_band_ceiling_cm` | new (this revision) | none | cm | A | field | n/a | 1500 [PROPOSED] | n/a | 1000-12000 | none | none | file_env | plan | Top of the close band (section 11.3). |
+| 147 | `airspace.sweep_band_floor_cm` | new (this revision) | none | cm | A | field | n/a | 2000 [PROPOSED] | n/a | 1500-12000 | higher | less_safe | file_env | plan | At least close ceiling + band gap (K-12). |
+| 148 | `airspace.sweep_band_ceiling_cm` | new (this revision) | none | cm | A | field | n/a | 2500 [PROPOSED] | n/a | 2000-12000 | none | none | file_env | plan | At most ceiling minus margin (K-12). |
+| 149 | `airspace.obstacle_top_cm` | new (this revision) | none | cm | M | field | n/a | no default: required per search area and corridor | n/a | 0-12000 | higher | less_safe | ui | plan | Highest known obstacle per area (section 11.5); a lower value than the operator's last entry needs confirmation. |
+| 150 | `airspace.obstacle_margin_cm` | new (this revision) | none | cm | A | field | n/a | 500 [PROPOSED] | n/a | 200-2000 | higher | less_safe | file_env | plan | Return and flight slots stay at least this above the obstacle top. |
+| 151 | `position.gps_sigma_k` | new (this revision) | none | ratio | A | field | n/a | 2 [PROPOSED] | n/a | 2-5 | higher | less_safe | file_env | next_start | Field uncertainty = k x 1-sigma accuracy + speed x age (section 11.2). |
+| 152 | `return.progress_min_cm` | new (this revision) | none | cm | A | both | 20 [PROPOSED] | 200 [PROPOSED] | 10-200 | 100-2000 | lower | less_safe | file_env | next_start | Progress monitor: required gain toward home (section 10.1). |
+| 153 | `return.progress_timeout_s` | new (this revision) | none | s | A | both | 20 [PROPOSED] | 20 [PROPOSED] | 5-60 | 5-60 | lower | less_safe | file_env | next_start | Progress monitor window; no progress counts as blocked. |
+| 154 | `separation.landing_interval_s` | new (this revision) | none | s | A | both | 10 [PROPOSED] | 30 [PROPOSED] | 5-120 | 10-300 | higher | less_safe | file_env | plan | Spacing of the landing order in a shared landing area (sections 10.9, 11.4). |
+| 155 | `find.ambiguity_margin` | new (this revision) | none | ratio | M | both | 0.05 [PROPOSED] | 0.05 [PROPOSED] | 0-0.3 | 0-0.3 | higher | none | ui | in_flight | Top two target scores within this mark a sighting ambiguous (section 15.1). |
+| 156 | `escort.handoff_frames` | new (this revision) | none | count | M | field | n/a | 5 [PROPOSED] | n/a | 3-30 | higher | less_safe | file_env | plan | Consecutive frames in which the relief must see the same target before the escort leaves (section 15.5). |
+
+### 1.1 Cross-value constraints (current ids)
+
+Checked by the resolver for every profile's defaults (A1 test) and for every effective value at start and
+at Plan. These replace the superseded constraints of `hardware-profiles-detail.md` section 10.3.
+
+| # | Constraint | Where checked |
+| --- | --- | --- |
+| K-1 | `battery.critical_pct` < `battery.return_floor_pct` | resolver |
+| K-2 | `battery.return_floor_pct` ≥ `battery.critical_pct` + `battery.landing_reserve_pct` | resolver |
+| K-3 | `battery.min_takeoff_pct` > `battery.return_floor_pct` | resolver |
+| K-4 | Field: the autopilot's low-battery level ≤ `battery.return_floor_pct` − 5 points, and `battery.critical_pct` = the autopilot's critical level, with the reserve above it | B4 preflight |
+| K-5 | Return threshold = `battery.critical_pct` + energy to home + worst-case wait + `battery.landing_reserve_pct`, never below `battery.return_floor_pct` (a formula, design section 10.6) | edge energy model |
+| K-6 | `link.loss_detect_s` ≥ 1.5 × `HEARTBEAT_INTERVAL_S` (`fleet_protocol/constants.py:275`) | resolver |
+| K-7 | `link.ground_loss_timeout_s` = `link.loss_detect_s` + `link.loss_wait_s` + `link.ground_loss_margin_s` for every unit | ground |
+| K-8 | `envelope.ceiling_cm` − `envelope.ceiling_margin_cm` ≥ the lowest slot of the profile; every slot ≤ ceiling − margin | resolver, Plan |
+| K-9 | `tello.temp_warn_c` ≤ `tello.temp_refuse_c` unless the refusal is off | resolver |
+| K-10 | `sensing.step_cm` within [`move.min_cm`, `move.max_cm`]; `avoid.sidestep_cm` is 0 or within the step bound | resolver |
+| K-11 | `retask.window_s` ≥ 1 | resolver |
+| K-12 | `airspace.close_band_floor_cm` < `airspace.close_band_ceiling_cm`; `airspace.sweep_band_floor_cm` ≥ close ceiling + `airspace.band_gap_cm`; sweep floor ≤ `airspace.sweep_band_ceiling_cm` ≤ ceiling − margin | resolver |
+| K-13 | Every slot lies in exactly one band; `escort.altitude_cm`, viewpoint slots and every return slot lie in the band of the drone's task | Plan |
+| K-14 | Every slot flown or returned over an area ≥ its `airspace.obstacle_top_cm` + `airspace.obstacle_margin_cm` | Plan |
+| K-15 | Every pair of homes ≥ `separation.base_cm` apart, plus both receivers' accuracies in the field; homes closer than `separation.landing_cm` share a landing area with an order | Start |
+| K-16 | `escort.standoff_cm` ≥ `find.approach_distance_cm` ≥ `separation.base_cm` | Plan |
+| K-17 | Escort hand-off level = return threshold + `escort.handoff_margin_pct`, below 100 % | edge, ground |
+| K-18 | A custom model never sets `environment` or `indoor_profile_measured`, never widens a bound, never changes scale, adapter or frame path | A2 loader |
 
 ## 2. Constants that stay in code
 

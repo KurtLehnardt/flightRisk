@@ -1,16 +1,16 @@
-files in scope: 76; findings: 519; distinct keys: 509; files with findings: 57
-by kind: {'argparse_default': 2, 'assign': 339, 'compare': 32, 'default': 64, 'env_default': 4, 'kwarg': 74, 'safety_default': 2, 'safety_literal': 2}
+files in scope: 76; findings: 522; distinct keys: 512; files with findings: 57
+by kind: {'argparse_default': 2, 'assign': 341, 'compare': 32, 'default': 65, 'env_default': 4, 'kwarg': 74, 'safety_default': 2, 'safety_literal': 2}
     44 flightrisk/drone/tello.py
     40 flightrisk/drone/obstacle_sensor.py
     26 flightrisk/drone/safety.py
     24 flightrisk/drone/mavlink_fleet.py
     22 flightrisk/drone/coverage.py
     21 flightrisk/dashboard/map_tiles.py
+    21 flightrisk/drone/search.py
     21 flightrisk/fleet_protocol/constants.py
-    20 flightrisk/drone/search.py
+    20 flightrisk/edge_device.py
     19 flightrisk/drone/coordinator.py
     19 flightrisk/drone/mavlink.py
-    19 flightrisk/edge_device.py
     19 flightrisk/launcher/settings.py
     18 flightrisk/drone/fleet_scale.py
     17 flightrisk/dashboard/app.py
@@ -26,10 +26,10 @@ by kind: {'argparse_default': 2, 'assign': 339, 'compare': 32, 'default': 64, 'e
      8 flightrisk/drone/tello_bound.py
      7 flightrisk/dashboard/state.py
      7 flightrisk/drone/obstacle.py
+     6 flightrisk/dashboard/pipeline.py
      6 flightrisk/drone/fake.py
      6 flightrisk/drone/mavsdk_link.py
      6 flightrisk/drone/template_backend.py
-     5 flightrisk/dashboard/pipeline.py
      5 flightrisk/drone/plan_edit.py
      5 flightrisk/launcher/preflight.py
      4 flightrisk/dashboard/__main__.py
@@ -121,6 +121,7 @@ flightrisk/dashboard/pipeline.py:61 [assign] scope=<module> target=CRITICAL_LAND
 flightrisk/dashboard/pipeline.py:230 [assign] scope=<module>._frame_loop target=REASONING_INTERVAL name=REASONING_INTERVAL value=5
 flightrisk/dashboard/pipeline.py:231 [assign] scope=<module>._frame_loop target=METRICS_INTERVAL name=METRICS_INTERVAL value=10
 flightrisk/dashboard/pipeline.py:232 [assign] scope=<module>._frame_loop target=TRACK_UPDATE_INTERVAL name=TRACK_UPDATE_INTERVAL value=1
+flightrisk/dashboard/pipeline.py:380 [assign] scope=<module>._frame_loop target=frames_needed name=frames_needed value=3
 flightrisk/dashboard/pipeline.py:587 [compare] scope=<module>._frame_loop target=<compare> name=count value=1
 flightrisk/dashboard/plan_store.py:44 [assign] scope=<module> target=MAX_PLANS name=MAX_PLANS value=500
 flightrisk/dashboard/plan_store.py:134 [assign] scope=<module> target=_REPLACE_PAUSE_S name=_REPLACE_PAUSE_S value=0.075
@@ -421,6 +422,7 @@ flightrisk/drone/search.py:121 [default] scope=<module> target=generate_parallel
 flightrisk/drone/search.py:122 [default] scope=<module> target=generate_parallel_track name=strip_width_cm value=150
 flightrisk/drone/search.py:154 [default] scope=<module> target=generate_track_line name=length_cm value=500
 flightrisk/drone/search.py:155 [default] scope=<module> target=generate_track_line name=sweep_width_cm value=100
+flightrisk/drone/search.py:156 [default] scope=<module> target=generate_track_line name=num_sweeps value=3
 flightrisk/drone/search.py:190 [default] scope=<module> target=generate_spiral name=radius_cm value=50
 flightrisk/drone/search.py:191 [default] scope=<module> target=generate_spiral name=growth_per_turn_cm value=100
 flightrisk/drone/search.py:192 [default] scope=<module> target=generate_spiral name=num_turns value=3
@@ -501,6 +503,7 @@ flightrisk/edge_device.py:284 [assign] scope=<module> target=_CONTROL_RECV_TIMEO
 flightrisk/edge_device.py:291 [assign] scope=<module> target=_FLEET_RECONNECT_MAX_DELAY_S name=_FLEET_RECONNECT_MAX_DELAY_S value=2.0
 flightrisk/edge_device.py:299 [assign] scope=<module> target=_FRAME_ERROR_GIVE_UP_S name=_FRAME_ERROR_GIVE_UP_S value=10.0
 flightrisk/edge_device.py:352 [compare] scope=<module>._check_frame_stride target=<compare> name=MAX_FRAME_STRIDE value=1
+flightrisk/edge_device.py:368 [assign] scope=<module> target=_RECENT_FRAMES name=_RECENT_FRAMES value=4
 flightrisk/edge_device.py:642 [default] scope=<module>.DecodedFramePoller target=stop name=timeout value=1.0
 flightrisk/edge_device.py:687 [default] scope=<module>.ResilientCaptureSource target=__init__ name=retry_s value=1.0
 flightrisk/edge_device.py:905 [kwarg] scope=<module>._make_sender._bridge_send target=run name=timeout value=5.0

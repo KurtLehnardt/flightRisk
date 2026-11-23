@@ -1,13 +1,18 @@
 # FlightRisk fleet architecture v1
 
-Status: architecture for review. It implements the approved product specification
-`spec-v1.md` (beside this file, copied unchanged) and folds in issue #197 (hardware catalogue,
-airframe profiles, inventory, capability-gated features) and every finding of the two PR #202 critic
-rounds that still applies. Nothing here has been implemented. Base: `origin/main` at `b0027a2`. Line
-numbers are on `b0027a2` unless a row says "incident" (#207) or "sensing" (#198). The parameter tables
-are in `parameters.md`; the detailed #197 component design (catalogue fields, inventory schema, wire
-shapes, camera roles, golden file, guard rules) is `hardware-profiles-detail.md`; the testable checklist
-is `requirements.md`; the phased PR plan is `tasks.md`.
+Status: architecture for review, revision 2 (answers the round 1 critic of the v1 architecture:
+C-1, C-2, H-1 to H-11, M-1 to M-12 and the nitpicks, and adds the user direction that Tello-coupled
+tuning values are read-only test-adapter facts; section 28 lists each resolution). It implements
+the approved product specification `spec-v1.md` (beside this file, unchanged) and folds in issue #197
+(hardware catalogue, airframe profiles, inventory, capability-gated features) and every earlier
+finding on PR #202 that still applies. Nothing here has been implemented. Base: `origin/main` at
+`fc5f6aa`, which contains #211 (`d9234fa`) and #205; since `b0027a2` only `flightrisk/edge_profiles.py`
+and `flightrisk/dashboard/detection_profiles.py` changed under `flightrisk/`, so every line number
+below is on `fc5f6aa`. Rows from in-flight branches say so ("incident" is #207, "sensing" is #198).
+The parameter tables and every cross-value constraint are in `parameters.md`; the detailed #197
+component design (catalogue fields, inventory schema, wire shapes, camera roles, golden file, guard
+rules) is `hardware-profiles-detail.md`; the testable checklist is `requirements.md`; the PR plan is
+`tasks.md`.
 
 Production first: **MAVLink drones with GPS, flying in the field, are the production platform. The
 Tello is the indoor reference and test adapter and never flies in the field.** Tello collision tuning
@@ -16,319 +21,308 @@ FlightRisk is loosely coupled: every rule names a capability, never a model.
 
 ## 1. Decisions in one page
 
-1. **Capability model first.** A catalogue of drone models describes every fact of spec section 4.1
-   (positioning, home and return, failsafes, limits and links, cameras and protection, reporting,
-   search and tracking), each with its source and verification status. Rules read capabilities;
-   an unknown fact takes its most conservative value; an unknown model gets the most conservative
-   profile.
-2. **The MAVLink/GPS adapter is the first concrete production adapter**, wired only through
-   capabilities: its return method is the autopilot's return-to-launch, its positioning uncertainty
-   comes from the GPS receiver, and its home is the autopilot's home at arming. The Tello adapter
-   implements the same seams for indoor Dev/test with a dead-reckoned return.
-3. **Return to home is the default safety action**, carried out by one edge-side return state machine
-   per drone that can finish without the ground station. Landing in place is a fallback with a
-   reason from a closed list (spec 6.3). RETURN ALL is the primary fleet control; LAND ALL stays the
+1. **Capability model first.** A catalogue describes every fact of spec 4.1 with its source and
+   verification status; rules read capabilities; an unknown fact or model is conservative.
+2. **The MAVLink/GPS adapter is the first production adapter.** It returns under edge control: into
+   its slot, then a GUIDED flight to above its home at the slot, a hold there until the landing is
+   cleared, then LAND. The autopilot's own return-to-launch is the fallback when the edge is gone or
+   the autopilot's failsafe acts, and B4 constrains every autopilot parameter that decides where and
+   how that fallback flies and lands (section 13).
+3. **Landing is terminal.** Every landing decision, from any source, enters the edge's state machine;
+   from then on the edge refuses every motion command and every automatic return, and on LAND ALL the
+   ground cancels every sender before it sends the land (section 10.2).
+4. **Return to home is the default safety action**, finished by the edge without the ground; landing
+   in place is a fallback with a reason from a closed list. RETURN ALL is primary; LAND ALL is the
    emergency control and is never gated, refused or delayed.
-4. **Home is the drone's own takeoff point**, recorded once per flight and checked before takeoff.
-   Without a ground station a drone returns only along a route inside its own zone and corridor at
-   its slot, otherwise it lands after the wait.
-5. **Separation grows with positioning uncertainty.** Two drones in one band keep
-   base separation + uncertainty A + uncertainty B apart along every route; field bands are 5 m apart;
-   indoor slots never count as separation. Indoor and field units never share a mission.
-6. **A mission is a set of capability-matched tasks**, not equal zones. A matcher applies hard filters
-   (required capabilities, features on, fences, range, battery to finish and return, uncertainty
-   within tolerance) and a deterministic ranking, explains every choice and refusal, and never gives a
-   task to an unfit unit.
-7. **Only a human visual confirmation marks a target found.** Multi-target missions attribute every
-   sighting to a target. After Confirm the operator chooses Continue or End search; End search runs
-   the on-find policy (keep watch, RETURN ALL or LAND ALL). Converge and verify, the moving-target
-   local search and escort (field only) are ground-planned tasks.
-8. **The ground station enforces roles** (operator, supervisor, observer) on every event and route,
-   deny by default. Every phone keeps LAND ALL and per-drone Land; only supervisor phones get Return.
-9. **The #197 core stays:** a parameter registry with defaults and hard bounds per profile
-   (`parameters.md`, 140 rows), pinned by a golden file; one resolver with sources; files never weaken
-   safety; an inventory of owned units; capability-gated features with camera roles; frame metadata;
-   the `describe_unit` query and `unit_rev` in the `hello`; and a literal guard test.
-10. **Six phases, 23 PRs** (`tasks.md`): A core with no behaviour change, B MAVLink production
-    adapter maturity, C the return-to-home default switch, D the task model and airspace, E the
-    on-find flows, F mobile. Every PR states its SITL or fake-drone test plan and its behaviour
-    changes.
+5. **The ground never lands a lost drone and never hands its work away by itself.** It declares a
+   drone lost only after the drone's own detect and wait times plus a margin; the lost drone's lanes
+   wait for a human confirm; its last position, zone, corridor, return line and landing area become
+   a no-entry area (section 12). This lands before any default switch.
+6. **Without a ground station, a drone returns only inside its own zone and corridor.** The ground
+   generates zones and corridors that never overlap within a band, a precomputed landing order for
+   shared landing areas, and pushes no-entry areas to the edges (sections 10.9, 11).
+7. **Separation grows with uncertainty** (field: 2 × the receiver's 1-sigma accuracy plus speed ×
+   telemetry age); two field bands with explicit floors and ceilings; homes at least the base
+   separation apart; return slots above the highest known obstacle plus a margin.
+8. **Confirmations cannot be bypassed.** Start is refused for any unit without a current
+   description; "simulated" comes from the edge's report checked against the autopilot; less-safe
+   values need an exact confirmation at Start, for in-flight changes and when a standby takes over.
+9. **Roles come from credentials alone.** The operator key never leaves the ground host; phones and
+   other laptops pair for per-device supervisor or observer tokens; supervisor tokens need TLS; LAND
+   ALL and Land are allowed to every authenticated session and never fail closed.
+10. **Tello-coupled tuning values are read-only test-adapter facts.** The obstacle depth threshold,
+    settle and steadiness tolerances, refusal caps, sensing timings, avoidance counts, temperature levels
+    and the dead-reckoning placeholders appear only in the read-only effective-values table with their
+    source: never a control, a preflight warning, a calibration request or a confirmation. Operator-facing
+    settings are airframe-neutral mission and safety choices (sensing mode, return and land behaviour,
+    separation, obstacle tops, the on-find policy) (section 7.5).
+11. **Order: core, then the production adapter, then the field airspace and planning, then the return
+    machinery, then the switch in four steps (warn only, bounds and confirmations, field defaults,
+    indoor defaults), then mobile, tasks and the on-find flows.** 28 PRs (`tasks.md`).
 
 ## 2. Scope, environments and assumptions
 
-**In scope:** everything spec v1 requires (sections 2 to 11) plus the #197 core. **Non-goals** are
-the spec's (section 1): storage and protocol design beyond what this document fixes, tuning a real
-rescue airframe, obstacle-sensor calibration and the tabled Tello collision tuning, regulation beyond
-the spec's ceiling, fence and altitude rules, any automatic takeoff, precision landing and charging,
-the DJI Mobile SDK adapter, in-flight gimbal moves and dual detection pipelines (PR #202 roadmap R3 to
-R5), and the Android direct single-Tello mode.
+**In scope:** everything spec v1 requires (sections 2 to 11) plus the #197 core. **Non-goals** are the
+spec's (section 1), including the Android direct single-Tello mode, the DJI Mobile SDK adapter,
+in-flight gimbal moves and dual detection pipelines.
 
-**Environments** (spec 1 and 8.1): `field` (production; GPS drones only) and `indoor` (Dev/test; the
-Tello family only until another room-scale model has a measured profile). The environment is a
-capability fact of each model, not a model test, so a future room-scale drone with a measured profile
-joins indoor missions without a rule change.
+**Environments** (spec 1, 8.1): `field` (production; GPS drones only) and `indoor` (Dev/test; Tello
+family only until another room-scale model has a measured profile). The environment and
+`indoor_profile_measured` are read-only facts of a built-in model; a custom model inherits them from
+its base and can never set them (M-11).
 
-Assumptions (each is labelled where it is used):
+Assumptions:
 
-- ASSUMPTION A1 (in-flight work): every PR of this plan starts after these merge: #207 (Tello incident
-  fixes), #198 (sensing controls and temperature), #208 (geofence, slot and battery consistency; it
-  keeps `MIN_START_BATTERY` as an alias of the single battery minimum), #211 (detection-profile
-  telemetry grouping; worst-case telemetry 37 of 48 fields), the lost-drone manual re-land fix, and
-  #205 (mobile models). #206 (floor ratio) is a draft and tabled. If any of them changes, PR A1
-  updates the affected rows and the golden file before it opens.
-- ASSUMPTION A2: bounds and defaults marked [PROPOSED] in `parameters.md` are the spec's proposals,
-  not tuned values; [UNCALIBRATED] Tello placeholders stay pessimistic and their calibration is tabled.
+- ASSUMPTION A1 (in-flight work): every PR starts after #207 (Tello incident fixes), #198 (sensing
+  controls and temperature), #208 (geofence, slot and battery consistency; keeps `MIN_START_BATTERY`
+  as an alias) and #212 (lost drone flown by hand is not re-landed; three #200 follow-ups) merge. #206
+  (floor ratio) is a draft and tabled. Also in flight: a small PR that makes the sidestep off by default
+  (row 56 then reads 0), and #198 drops its depth-threshold control and its "uncalibrated" preflight
+  warning before it merges, keeping only the sensing mode in the launcher. #213 (mavsdk pinned below 4,
+  Windows support in `flightrisk/drone/mavsdk_link.py` and `supervised.py`) is open; B2 starts after it
+  merges, since B2 to B4 own `mavsdk_link.py`. If any changes, A1 updates the affected rows and the golden
+  file.
+- ASSUMPTION A2: bounds and defaults marked [PROPOSED] are the spec's proposals; [UNCALIBRATED] Tello
+  placeholders stay pessimistic and their calibration is tabled.
 - ASSUMPTION A3: a launcher and the edges it starts run the same installed version
   (`flightrisk/launcher/commands.py:245-277`).
-- ASSUMPTION A4: MAVSDK exposes the GPS receiver's horizontal accuracy (`raw_gps` horizontal
-  uncertainty) for ArduPilot and PX4; PR B1 verifies it in SITL and falls back to the autopilot's
-  `GPS_RAW_INT` `h_acc` through a MAVLink passthrough if not.
+- ASSUMPTION A4: MAVSDK exposes the receiver's horizontal accuracy (`raw_gps` horizontal uncertainty)
+  for ArduPilot and PX4; B2 verifies it in SITL and otherwise reads `GPS_RAW_INT.h_acc` through a
+  MAVLink passthrough.
 - ASSUMPTION A5: MAVSDK's geofence plugin uploads inclusion and exclusion polygons and circles to both
-  autopilots; PR B2 verifies a read-back in ArduPilot SITL and PX4 SITL.
+  autopilots; B3 verifies the read-back in ArduPilot and PX4 SITL.
 - ASSUMPTION A6: a ground that does not know an optional key of `detections`, `hello`, `ack` or a
-  telemetry object ignores it, as today's grounds ignore extra telemetry fields
-  (`docs/open-drone-support.md`, "The fleet protocol is unchanged"); each PR that adds one tests it.
-- ASSUMPTION A7: the Tello's camera is fixed and forward-facing; its 960 by 720 stream is UNVERIFIED
+  telemetry object ignores it; each PR that adds one tests it.
+- ASSUMPTION A7: the Tello camera is fixed and forward-facing; its 960 by 720 stream is UNVERIFIED
   (`flightrisk/drone/coverage.py:101-106`).
+- ASSUMPTION A8: the PX4 parameter enumerations of section 13 that the PX4 documentation pages
+  reachable here did not confirm (`COM_POSCTL_NAVL`, the `RTL_TYPE` values) are read by B4 from the
+  parameter metadata of the PX4 build used in SITL and recorded in `docs/open-drone-support.md`
+  before the check is written; ArduPilot's current documentation names some return parameters with
+  an `_M` suffix (`RTL_ALT_M`, `RTL_ALT_FINAL_M`), so B4 reads whichever name the connected firmware
+  has (`SYSID_MYGCS` or `MAV_GCS_SYSID` likewise).
 
 ## 3. What exists today and is reused
 
-| Existing piece | Where | Reused as |
+| Existing piece | Where (`fc5f6aa`) | Reused as |
 | --- | --- | --- |
-| Role protocols `Lifecycle`, `TelemetrySource`, `FlightControl`, `Motion`, `Navigation` (with `return_to_home`), `VideoSource`; `Capability`; `DroneCapabilities` | `flightrisk/drone/controller.py:67-99`, `:103-117`, `:310-416` (`return_to_home` at `:365`) | The adapter interface (section 17). |
-| Backend registry and bootstrap | `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py` | Backends declare their control protocol and the catalogue models they drive. |
-| MAVLink fleet drone: preflight (3D fix, satellites, global position, home flag, battery, arming checks, failsafe parameters), return-to-launch for failsafe reasons with a land fallback, return altitude at or below the slot, external-control rules | `flightrisk/drone/mavlink_fleet.py:250-308` (options), `:376-385` (capabilities), `:694` (`check_slot`), `:741` (`preflight_problems`), `:1196-1270` (`land_for_reason`); `flightrisk/drone/autopilot.py:247` (`failsafe_problems`), `:398` (`avoidance_problems`), `:446` (`rtl_altitude_cm`), `:461` (`preflight_problems`) | The production adapter's preflight, home and return base (phase B). |
-| Ground-link watchdog with the field hold, and the Tello's immediate landing | `flightrisk/drone/safety.py:319-345`, `:625-639`; `flightrisk/drone/lane_monitor.py:80-130` | The short and long link-loss events of the return state machine (section 10). |
-| The lane executor's sensed steps, re-flight transit splitting and avoidance | `flightrisk/drone/lane_flight.py`, `lane_reflight.py`, `lane_avoid.py` | The Tello's dead-reckoned return flies its legs through the same sensed-step machinery. |
-| Coordinator: zones, lanes, start gate, re-task, lost drones, LAND ALL | `flightrisk/drone/coordinator.py:489` (`start`), `:2541` (`on_drone_lost`), `:3328-3339` (start gate), `:3793` (`land_all`) | Becomes the executor of matched tasks; zone planning becomes one task generator. |
-| Field plan scale from the camera's nadir swath | `flightrisk/drone/fleet_scale.py:1-23`, `:78-190`; `coverage.nadir_swath_m` (`coverage.py:326`) | Lane spacing and the bird's-eye pattern (sections 12.9, 11). |
-| `assign_lanes` with `on_complete` `hover` or `land` | `flightrisk/fleet_protocol/constants.py:153`, `:165`; `validate.py:179-184` | Gains `return` (section 15). |
-| Configuration commands, failsafe types | `fleet_protocol/constants.py:110-111`, `:125` | `describe_unit` is a separate query set; LAND ALL keeps its failsafe path. |
-| Edge authority and watchdog feeding | `flightrisk/fleet_authority.py:93-140`, `:236-270`; `flightrisk/edge_device.py:785`; `flightrisk/edge_uplink.py:198`, `:287-289` | Queries never feed the watchdog (section 15). |
-| Dashboard authentication: one API key for every client | `flightrisk/dashboard/app.py:204`, `:219` (`_require_api_key`); 45 Socket.IO handlers and 15 HTTP routes | Replaced by role keys and a per-event role table (section 13). |
-| LAND ALL path; recovery lands every drone on a confirmed match; no backend implements `return_to_home` | `dashboard/app.py:1484` (`_land_all`), `:2925`; `dashboard/recovery.py:25`, `:189` | LAND ALL kept as the emergency path; recovery replaced by the on-find policy (section 12.6). |
-| Orphan countdown that lands | `dashboard/manual_control.py:110-135` | The stranded countdown, ending in a return (section 10.6). |
-| SITL: `scripts/start_sitl.sh` (instances on TCP 5760 + 10 N), `scripts/field_fleet_ground.py`, `tests/integration/test_sitl_fleet.py` (one and two vehicles, opt-in `sitl` marker); ArduCopter 4.6.3 SITL flew one- and two-drone field plans and a link-loss return | `docs/sitl-demo.md`, `docs/open-drone-support.md` ("Verification status") | The SITL fleet harness of section 18 extends them to 2 to 10 vehicles. |
-| Everything PR #202 round 1 reused (detection profiles, `FrameStamp`, `ObstacleSettings`, `FlightGuards`, `TempLimits`, the 409 confirmation, launcher presets, the ceiling file, mobile fixtures) | `hardware-profiles-detail.md`, section 3 | Unchanged; the line numbers that moved are updated in `parameters.md`. |
+| Role protocols, `Capability`, `DroneCapabilities` | `flightrisk/drone/controller.py:67-99`, `:103-117`, `:310-416` (`return_to_home` at `:365`) | The adapter interface (section 20). |
+| Backend registry and bootstrap | `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py` | Backends declare their protocol and catalogue models. |
+| MAVLink fleet drone: preflight, return-to-launch for failsafe reasons with a land fallback, return altitude at or below the slot | `flightrisk/drone/mavlink_fleet.py:250-308`, `:376-385`, `:694`, `:741`, `:1196-1270` | The production adapter (section 13). |
+| Autopilot failsafe checks: fence, battery, RC loss and data-link loss actions, return altitude, system id | `flightrisk/drone/autopilot.py:190-245` (accepted value sets), `:247` (`failsafe_problems`), `:446`, `:461`; `docs/open-drone-support.md:107` (GCS failsafe "recommended but not checked") | Tightened and completed by B4 (section 13). |
+| Ground-link watchdog with the field hold; the monitor that latches the first landing reason | `flightrisk/drone/safety.py:319-345`, `:625-639`; `flightrisk/drone/lane_monitor.py:80-130` (latch at `:89-97`) | Inputs of the return state machine; the latch becomes the terminal landing state (section 10.2). |
+| Edge authority: landing never fenced or refused | `flightrisk/fleet_authority.py:10-14`, `:93-140`, `:236-270` | LAND ALL keeps its path; queries never feed the watchdog. |
+| The executor's existing `return` sequence and `returning` phase (manual resume's way back) | `flightrisk/drone/lane_flight.py:206`, `:355`; `flightrisk/drone/lane_manual.py:848` | Kept; the new return-to-home names use an `rth` prefix and the command is `return_home` (nitpick 3). |
+| Ground loss detection: `FLEET_LOSS_TIMEOUT_S = 5.0` | `flightrisk/dashboard/app.py:559-563` | Replaced by a derived per-unit timeout (section 12). |
+| Coordinator: lost drones (immediate re-task and one best-effort land), the re-land of a lost drone that flies again, the 20 s lost-drone obstacle | `flightrisk/drone/coordinator.py:2541-2610`, `:1472` (`_reland_lost_locked`), `:3388-3420` (`_lost_obstacle_locked`, `LOST_OBSTACLE_S` at `:192`) | Replaced by section 12; #212's refusal while the lost drone may still fly is kept as a precondition. |
+| Field plan scale, nadir swath | `flightrisk/drone/fleet_scale.py:1-23`, `:78-190`; `coverage.py:326` | Field planning on the dashboard (D3), bird's-eye sweeps. |
+| `assign_lanes` with a required `zone`, `on_complete` `hover` or `land`, `hover_timeout_s` only with `hover` | `flightrisk/fleet_protocol/validate.py:135`, `:179-185`; `constants.py:153`, `:165` | Gains `corridor`, `landing`, `no_entry` and `on_complete: return_home` (section 18). |
+| List caps: 16 numbers per list, 64 per message | `fleet_protocol/constants.py:259`, `:262` | Corridors and areas encode points as objects (M-7). |
+| Dashboard authentication: one API key for every client | `flightrisk/dashboard/app.py:204`, `:219`; 45 Socket.IO handlers, 15 HTTP routes | Replaced by roles from credentials (section 16). |
+| LAND ALL path; recovery lands every drone on a confirmed match | `dashboard/app.py:1484`, `:2925`; `dashboard/recovery.py:25`, `:189` | LAND ALL first cancels every sender (section 10.2); recovery replaced by the on-find policy. |
+| Orphan countdown that lands | `dashboard/manual_control.py:110-135` | The stranded countdown (section 10.4). |
+| SITL: `scripts/start_sitl.sh`, `scripts/field_fleet_ground.py`, `tests/integration/test_sitl_fleet.py`; native ArduCopter 4.6.3 on the Mac | `docs/sitl-demo.md:81-124`, `docs/open-drone-support.md` | Extended to fleets of 2 to 10 (section 21). |
+| The ground scores detections against the target; the edge only keeps the embeddings | `flightrisk/edge_device.py:810-813` | Multi-target scoring stays on the ground; no edge wire change (M-4). |
+| Everything the #197 detail design reused | `hardware-profiles-detail.md`, section 3 | Unchanged; moved line numbers are in `parameters.md`. |
 
 ## 4. Gaps this architecture closes
 
-The spec's appendix A lists the gaps between today and the spec; each maps to a component and a
-phase here:
-
-| Gap (spec appendix A) | Component | Phase |
+| Gap (spec appendix A, plus review findings) | Component | PR |
 | --- | --- | --- |
-| A Tello lands 3 s after the ground link goes silent | Return state machine: short loss holds, long loss returns inside its own zone | C |
-| MAVLink holds 10 s then returns; no home checks or own-zone rule | Home checks, own-zone rule, shown reasons | B, C |
-| The orphan countdown lands; a blocked way back loops into held | Stranded countdown ends in a return; a blocked return lands; no loop | C |
-| LAND ALL is the only fleet control | RETURN ALL primary, per-drone Return, roles | C, F |
-| Every Tello error lands it (`lane_flight.py:358-359`) | Fault classification: faults and unclassified errors land, others retry once and return | C |
-| After its last lane a drone hovers; no `on_complete` | Re-task window, then return (`on_complete: return`) | C |
-| Lands at 15 %; no return threshold or energy to home | Energy model, return threshold, landing reserve, critical battery | C |
-| No backend implements `return_to_home` | Return methods: autopilot RTL (MAVLink), dead-reckoned (Tello) | B, C |
-| A confirmed match lands every drone; no converge, local search or escort | Targets, sightings, on-find policy, converge, local search, escort | E |
-| One target | Multi-target references and attribution | E |
-| Fixed 75 cm lanes at the default speed | Search-speed rule from footprint, overlap and detection rate | D |
-| Dead-reckoned pose treated as exact; no home marker | Uncertainty models, home markers, Start checks | B, C, D |
-| A lost drone blocks paths for 20 s | No-entry area until a human confirms | D |
-| Sensor down ends the lanes and the drone hovers | Retrace home, else land | C |
-| A Tello with its drone link down is only reported | "Cannot be recalled" state | C |
-| Every API-key client has the same rights | Role keys and the role table | C |
-| Equal zones, one pattern | Capability-matched tasks | D |
-| Link-loss time, battery levels and orphan time are env vars or constants | Registry rows with bounds and sources | A |
+| A Tello lands 3 s after the ground link goes silent | Return state machine: short loss holds, long loss returns inside its own zone | C1, C7 |
+| MAVLink holds 10 s then returns; no home checks, own-zone rule or failsafe completeness | Home checks, autopilot parameter table, edge-flown return with hold above home | B2, B4, C1 |
+| The ground declares a drone lost after 5 s, lands and re-lands it, and re-tasks its lanes at once | Derived loss timeout, no ground landings, confirm before re-task, no-entry area | D2 |
+| Corridors and landing order do not exist | Zone and corridor generation, non-overlap check, landing order | D1 |
+| The orphan countdown lands; a blocked way back loops into held | Stranded countdown ends in a return; a blocked return lands; no loop | C2, C6, C7 |
+| LAND ALL is the only fleet control and senders could undo it | RETURN ALL primary; landing terminal; LAND ALL cancels senders | C1, C2 |
+| Every Tello error lands it (`lane_flight.py:358-359`) | Fault classification | C1, C7 |
+| Lands at 15 %; no return threshold | Energy model with critical, energy to home, worst-case wait and reserve | C1, C6, C7 |
+| A confirmed match lands every drone; one target | Targets, sightings, on-find policy, converge, local search, escort | E1 to E4 |
+| Fixed lanes at the default speed | Search-speed rule | D5 |
+| Dead-reckoned pose treated as exact; no home marker | Uncertainty models, home markers, Start checks | B2, C1, C2, D1 |
+| Every API-key client has the same rights | Roles from credentials | C3 |
+| Equal zones, one pattern | Capability-matched tasks | D4 |
+| The dashboard cannot plan a field mission (`docs/open-drone-support.md:189`) | Field planning on the dashboard | D3 |
 
-The #197 findings of PR #202 still apply where they are not fixed yet: findings 1 to 3 are fixed by
-#208; findings 4 to 16 (land battery not configurable, Tello move range in neutral code, duplicated
-strip and area, the orphan clamp, two legacy MAVLink move ranges, no upper room geofence bound, two
-Tello heights, the MAVLink camera orientation, cameras described three times, Android constants,
-privacy-screen key names, the Android 10 % landing, and `STEPPED_SENSING` on MAVLink) are carried by
-the PRs named in `tasks.md`. Finding 15 (Android lands its direct-mode Tello at 10 %) is recorded but
-not changed, because the Android direct single-Tello mode is a non-goal of the spec.
+PR #202's #197 findings 4 to 16 are carried by the PRs named in `tasks.md`; findings 1 to 3 are fixed
+by #208; finding 15 (Android direct-mode landing at 10 %) is recorded and not changed (spec non-goal).
 
 ## 5. Architecture overview
 
 ```
- hardware catalogue ── capability facts with source and status, environment, return method,
-   (flightrisk/hardware)  positioning and uncertainty model, failsafes, cameras, tracking
-        │
- profiles + resolver ──── parameters.md rows: default and hard bound per profile, sources,
-   (flightrisk/params)    golden file, file safety, exact confirmations
+ hardware catalogue ── capability facts with source and status (environment and indoor profile
+   (flightrisk/hardware)  read-only), return method, positioning and uncertainty model, failsafes,
+        │                 cameras, tracking
+ profiles + resolver ──── parameters.md rows and constraints, golden file, sources, file safety,
+   (flightrisk/params)    exact confirmations, refusal messages
         │
  inventory + features ─── owned units, availability, camera roles, static and runtime gates
         │
- ┌──────┴───────────────────────────── ground station ───────────────────────────────────┐
- │ mission model (flightrisk/mission): targets, tasks, matcher, airspace (separation,      │
- │ bands, fences, no-entry), return ordering, sightings, on-find policy, converge,         │
- │ local search, escort controller, search-speed rule; roles (flightrisk/dashboard/roles)  │
- │ coordinator executes assigned tasks; dashboard and phones display and command           │
+ ┌──────┴───────────────────────────── ground station ────────────────────────────────────┐
+ │ airspace (bands, separation, homes, zones and corridors, obstacle tops, no-entry areas,   │
+ │ landing order) │ lost drones │ mission model (targets, tasks, matcher, sightings,         │
+ │ on-find policy, converge, local search, escort, search speed) │ return coordinator       │
+ │ (RETURN ALL, ordering, LAND ALL cancellation) │ roles and device tokens │ coordinator     │
  └──────┬──────────────────────────────────────────────────────────────────────────────────┘
-        │ fleet protocol v2: assign_lanes (+ zone, corridor, cleared areas, on_complete
-        │ return), return, escort_setpoint, describe_unit query, hello unit_rev, rth telemetry
- ┌──────┴────────────────────────────────── edge ─────────────────────────────────────────┐
- │ lane executor (tasks as lanes) │ return state machine (flightrisk/drone/rth/)          │
- │ energy model │ uncertainty model │ home record │ fault classifier │ frame metadata      │
- │ adapters: MAVLink (production: autopilot RTL, fence upload, GPS home) │ Tello (test:     │
- │ dead-reckoned return) │ fake and SITL                                                  │
- └────────────────────────────────────────────────────────────────────────────────────────┘
+        │ fleet protocol v2: assign_lanes (+ corridor, landing, no_entry, on_complete
+        │ return_home), return_home, set_no_entry, set_speed, escort_setpoint,
+        │ describe_unit query, hello unit_rev, rth telemetry object
+ ┌──────┴──────────────────────────────────── edge ───────────────────────────────────────┐
+ │ return state machine (flightrisk/drone/rth/): terminal landing, energy, uncertainty,     │
+ │ home, faults, progress monitor │ lane executor │ frame metadata                          │
+ │ adapters: MAVLink (production: edge-guided return, autopilot fallback, fence upload,    │
+ │ parameter table) │ Tello (test: dead-reckoned return) │ fake and SITL                    │
+ └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-The new pure packages (`flightrisk/hardware`, `flightrisk/params`, `flightrisk/mission`, and the
-return state machine core in `flightrisk/drone/rth/`) import no Flask, vision or drone driver, so
-they are unit-testable and importable by an edge-only install.
 
 ## 6. Capability model and catalogue (spec section 4)
 
-### 6.1 Facts with source and status
+Every fact of spec 4.1 is a `CapabilityFact(value, source, status)`, status in `verified`,
+`repository`, `vendor`, `unverified`, `proposed`, shown on the dashboard and both apps (AC-4.1). The
+fact groups and the two built-in columns:
 
-Every fact of spec 4.1 is a `CapabilityFact(value, source, status)` with `status` in
-`verified` (flown or measured), `repository` (stated by code or docs), `vendor` (vendor document),
-`unverified`, or `proposed`. The dashboard and both apps show the status (AC-4.1). The catalogue
-model (`DroneModel`, PR #202 section 6 kept) gains these fact groups:
-
-| Group (spec 4.1) | Fields | Generic GPS quad (production) | Tello (Dev/test) |
+| Group | Fields | Generic GPS quad (production) | Tello (Dev/test) |
 | --- | --- | --- | --- |
-| Positioning | `positioning` (`gps`, `rtk`, `dead_reckoning`); `uncertainty_model` (`receiver` or `dead_reckoning_growth`); `heading_ref` (`compass` or `power_on_relative`); `sensor_height_cm` | `gps`, `receiver`, `compass` (`autopilot.py` 3D fix and 8 satellites) | `dead_reckoning`, growth placeholders [UNCALIBRATED], `power_on_relative`, vision positioning 30 to 1000 cm (vendor) |
-| Environment | `environment` (`field` or `indoor`); `indoor_profile_measured` | `field` | `indoor`, measured: true |
-| Home and return | `home_source` (`autopilot_arming` or `pose_origin`); `return_method` (`autopilot_rtl`, `edge_flown_slot`, `edge_dead_reckoned`); `interruptible_moves` | autopilot home, `autopilot_rtl`, interruptible by mode change | pose origin reset at takeoff, `edge_dead_reckoned`, a land interrupts a move and a return cannot |
-| Failsafes | `command_loss_action` and delay; `low_battery_action`; `fence_action`; `checkable_before_takeoff` | the configured autopilot action, checked before takeoff | lands itself about 15 s after the last command (repository), not configurable |
-| Limits and links | move range, speed, altitude, endurance, range; `commands_without_ground` | autopilot; position hold | SDK 20 to 500 cm; nothing without the edge |
-| Cameras and protection | camera mounts and roles (PR #202 section 6.2); `protection` (`edge_stepped`, `autopilot_avoidance`, `none`) | forward RGB by default; ArduCopter path planning or a companion camera, PX4 none | one fixed forward RGB [UNVERIFIED]; stepped sensing, uncalibrated |
-| Reporting | `battery_trust` (`autopilot_estimate`, `coarse_pct`); `fault_visibility` | autopilot estimate; faults through status and failsafe modes | coarse percentage [UNVERIFIED]; faults only as error replies |
-| Search and tracking | footprint per camera and altitude; `detection_rate_hz` (measured at runtime); `top_speed`; `tracking` (absolute positioning, interruptible moves, a camera that holds the subject from the stand-off) | tracking: yes if the camera holds the subject [UNVERIFIED for a fixed forward camera] | tracking: no |
+| Positioning | `positioning`, `uncertainty_model` (`receiver` or `dead_reckoning_growth`), `heading_ref`, `sensor_height_cm` | `gps`, `receiver`, `compass` | `dead_reckoning`, growth placeholders [UNCALIBRATED], `power_on_relative`, vision positioning 30 to 1000 cm (vendor) |
+| Environment (read-only) | `environment`, `indoor_profile_measured` | `field` | `indoor`, true |
+| Home and return | `home_source`, `return_method`, `interruptible_moves` | autopilot home; `edge_guided` with `autopilot_rtl` fallback; interruptible by mode change | pose origin; `edge_dead_reckoned`; a land interrupts a move, a return cannot |
+| Failsafes | command-loss action and delay, low and critical battery actions, fence action, checkable before takeoff | the autopilot's, checked before takeoff against section 13 | lands itself about 15 s after the last command (repository) |
+| Limits and links | moves, speed, altitude, endurance, range, `commands_without_ground` | autopilot; position hold | SDK 20 to 500 cm; nothing without the edge |
+| Cameras and protection | mounts and roles; `protection` | forward RGB by default; ArduCopter path planning or a companion camera; PX4 none | one fixed forward RGB [UNVERIFIED]; stepped sensing, uncalibrated |
+| Reporting | `battery_trust`, `fault_visibility` | autopilot estimate; status and failsafe modes | coarse percentage [UNVERIFIED]; error replies only |
+| Search and tracking | footprint per camera, altitude and pitch; nominal `detection_rate_hz`; `top_speed`; `tracking` | tracking yes if the camera holds the subject [UNVERIFIED for a fixed forward camera] | tracking no |
 
-The built-in models are `generic_multirotor` (production, simulation-only status), `tello` and
-`tello_edu` (test adapter). The spec's "thermal field drone" is a documented custom-model template in
-`docs/hardware-catalogue.md` (a downward or gimbal thermal camera), because no thermal pipeline exists
-yet (roadmap R1); defining it in an inventory file makes the thermal tasks matchable.
+Rules: a missing fact takes its most conservative value marked `unverified`; an unknown model gets the
+intersection of the built-in bounds of its environment with the safer default of each; Plan refuses a
+wrong-environment unit and, indoors, a unit without a measured profile, by name (AC-4.2; A4 refuses a
+mixed fleet at Plan already, nitpick 12); a runtime capability missing at takeoff refuses the takeoff
+(C1); one lost in flight raises its spec 6.2 event (C1; nitpick 7); the fake drone imitates a catalogue
+entry, so changing its declared capabilities changes its return method and separation (AC-4.3).
+Camera roles (one role per mount; a gimbal is level only with measured pitch; a gimbal needs a declared
+mission pitch) are as in `hardware-profiles-detail.md` section 6.2.
 
-### 6.2 Rules
-
-- **Unknown facts are conservative.** The resolver fills a missing fact with its most conservative
-  value (for example `tracking: false`, `return_method: none`, `protection: none`) and marks it
-  `unverified`. An unknown model gets the most conservative profile: the intersection of all
-  built-in profile bounds of its environment and the safer default of each (spec 10.1(1)).
-- **Environment checks at Plan** (AC-4.2): a unit whose `environment` differs from the mission's is
-  refused by name; indoors, a unit without `indoor_profile_measured` is refused by name.
-- **Runtime capabilities** (protection, measured gimbal pitch, frames arriving, GPS fix) are checked at
-  the takeoff preflight, fail-closed; a runtime capability lost in flight raises its event of spec 6.2
-  (section 10.3). AC-4.3: changing a fake drone's declared capabilities changes its return method and
-  its separation without a rule change; the fake drone takes its facts from the catalogue entry it is
-  told to imitate.
-- **Camera roles** (PR #202 round 1, F1, unchanged): each mount has one role at a time (`level`,
-  `nadir` or `oblique`); a gimbal is level only with measured pitch; every sense gate on a gimbal
-  returns `unavailable` when the measured pitch is not level; a gimbal needs a declared mission pitch.
+**Simulated units (H-3(c)).** A unit is simulated only when its edge reports it and the report is
+verified: a fake or sim adapter; or a MAVLink autopilot that the edge identifies as SITL from
+parameters only a simulator build has (ArduPilot: the `SIM_*` parameters; PX4: the simulator's own
+parameters) and from the MAVLink version string; B1 records the exact fingerprint each autopilot's SITL
+build reports. The inventory cannot make a unit
+simulated. Only a verified simulated unit may use `--allow-unverified-failsafes` or
+`link.require_failsafes = false`, and only it is exempt from confirmations.
 
 ## 7. Parameters, profiles and confirmations (spec section 10, #197)
 
-### 7.1 Registry, profiles and golden file
+### 7.1 Registry, golden file and change control
 
-The registry (`flightrisk/params/`) holds one row per configurable value: id with unit suffix, unit,
-kind, scope (`drone`, `ground`, `mission`), a default and a hard bound per profile column, `safer`,
-`confirm`, `safety_switch`, `edit`, `applies`, environment names and aliases with scale factors (a room
-alias is never read for a field model), command-line flags, and cross-value constraints. The 140 rows
-and the 65 constants that stay in code are in `parameters.md`. `hardware-profiles-detail.md` sections 7 and 10 are
-kept, with these changes:
+The registry (`flightrisk/params/`) holds one row per configurable value (id with unit suffix, unit,
+kind, scope `drone`, `ground` or `mission`, default and hard bound per profile, `safer`, `confirm`,
+`safety_switch`, `edit`, `applies`, environment names and aliases, flags) and every cross-value
+constraint; both are listed in `parameters.md` (rows and constraints), which is the only source the
+golden file is generated from. Changes from the previous revision:
 
 - **Profile columns:** `generic_multirotor` (production) and `tello` (test adapter; `tello_edu` shares
-  it). In phase A **every generic value equals what today's code does for a MAVLink unit**, and every
-  Tello value equals what it does for a Tello (round 2 finding B4). Values the spec changes are
-  marked with the PR that changes them and listed in section 20.
-- **Two bound sets until C4.** The golden file records `today_accepts` for every alias. Until PR C4 the
-  resolver enforces `today_accepts`, so phases A and B refuse nothing that works today; C4 switches to
-  the target bounds of `parameters.md` and section 20 lists every value that becomes refused.
-- **Golden file and owners.** PR A1 commits `tests/golden/flight_params.json`, generated once by
-  `scripts/make_param_golden.py` (which refuses to overwrite) from the code at the A1 base; tests
-  compare the table with it value by value. GitHub cannot require the repository owner to approve
-  their own PR, so `.github/CODEOWNERS` alone cannot enforce review in this single-owner repository
-  (round 2 finding N6). The enforcement is therefore a test: any diff to `flightrisk/params/table.py`,
-  the golden file or the literal allowlist must add an entry to `docs/design/hardware-profiles/
-  safety-value-changes.md` naming the value, old and new, the reason and the section 20 item, and the
-  critic review of every PR checks that log. `.github/CODEOWNERS` still lists those files, the return
-  state machine, the role table and `fleet_protocol/constants.py`, so a second maintainer gets
-  requested automatically when one exists.
-- **Mission settings** (spec 10.3, rows 129 to 142) have scope `mission`, live in the mission record,
-  may change in flight (`applies: in_flight`) except the approach distance and the escort stand-off and
-  altitude, and every change is logged with its author.
+  it). Until the PR that changes it, every generic value equals what today's code does for a MAVLink
+  unit and every Tello value what it does for a Tello. A value that changes later carries the tag
+  "from <PR>" naming exactly the PR of `tasks.md` that changes it; a test checks that every tag names
+  an item of section 27 listed under the same PR (H-11).
+- **Bounds:** until C5 the resolver enforces the range today's code accepts (`today_accepts` in the
+  golden file); C4 only warns where a target bound would refuse; C5 enforces the target bounds.
+- **Golden file:** `tests/golden/flight_params.json`, generated once by `scripts/make_param_golden.py`
+  (refuses to overwrite) at the A1 base; tests compare `table.py` with it value by value.
+- **Change control (M-9, round 2 N6):** `docs/design/hardware-profiles/safety-value-changes.md` is an
+  append-only log. Each entry names the value, old and new, the reason, the section 27 item, and the
+  SHA-256 of `flightrisk/params/table.py`, of the golden file and of the literal allowlist after the
+  change. A test recomputes the three hashes and fails unless they equal the latest entry's, so any
+  change to those files without a log entry fails, with no git diff involved. `.github/CODEOWNERS`
+  lists these files, the return state machine, `roles.py`, `devices.py` and
+  `fleet_protocol/constants.py`, and the critic of every PR checks the log; GitHub cannot make the
+  sole owner review their own PR.
 
 ### 7.2 Sources and precedence
 
 Lowest to highest: profile, params file, inventory, launcher window, environment, command-line flag;
-at runtime the ground (`set_ceiling`, mission settings) for `on_ground` and `in_flight` values. Every
-effective value carries its source (spec 10.1(4)). The environment wins over the window (#202 Q1),
-shown and confirmed when less safe.
+at runtime the ground (`set_ceiling` and mission settings). Every effective value carries its source.
+The environment wins over the window from C5, shown and confirmed when less safe.
 
-### 7.3 Confirmations: one gate at Start that nothing bypasses (round 2 finding B1)
+### 7.3 Confirmations that nothing bypasses (H-3, round 2 B1)
 
-Round 2 found two bypasses: a custom model's less-safe default, and a dashboard started by hand
-(no launcher, so no 409). The fix puts the authoritative confirmation where the spec puts it, at Start
-on the ground (spec 9.4), fed by what every edge reports:
+1. **Less safe** is measured against the built-in base column. A custom model's default is another
+   source.
+2. **Start needs a current description of every unit.** Start is refused, naming the unit, for any
+   unit whose edge has not answered `describe_unit` for its latest `unit_rev`, including older edges
+   and edges on a protocol v1 link (H-3(b)). The Android phone-as-edge flies nothing and is not a
+   unit, so it is not affected.
+3. **The Start confirmation** (spec 9.4) lists each home or mark and heading, the sensing mode, the
+   return altitude and threshold, every non-default safety value with its source (never a test-adapter
+   fact, section 7.5), and the on-find policy; every less-safe value and every safety feature switched off must be confirmed with its exact
+   value per unit (`confirm_params: [{"unit", "id", "value"}]`). It runs on the dashboard however the
+   dashboard was started, and also in `scripts/field_fleet_ground.py` as long as that script plans
+   field missions (H-3(a)): the script prints the same list and needs `--confirm unit:id=value` for
+   each, and its `--allow-unverified-failsafes` and `--link-loss-hold-s` values count as values to
+   confirm unless every unit is verified simulated.
+4. **Until the confirmation exists (A1 to C4), a less-safe custom-model default is refused** at
+   resolve time with "this custom default is less safe than its base; a confirmation for it arrives in
+   C5" (H-3(d)). A less-safe value from a file needs `--confirm-less-safe id=value` on a hand-started
+   edge or dashboard, as before.
+5. **In-flight changes (H-3(e)):** a mission setting changed in flight to a less-safe value (for
+   example a lower escort hand-off margin, row 141) needs the same exact confirmation from the operator
+   on the laptop before it takes effect.
+6. **Standby takeover (H-3(f)):** a standby ground that becomes the authority shows its ground-scope
+   values that differ from the previous authority's and are less safe; until the operator confirms them
+   it sends no new plan, start, re-task or release, while LAND ALL, Land and RETURN ALL work at once.
+7. **No file stores a safety feature as off** (spec 10.1(3)).
+8. **Verified simulated units** need no confirmation (section 6).
 
-1. Every effective value, on the ground and on every edge (from `describe_unit`), carries `less_safe`,
-   computed against the **built-in base column**, never a custom default. A custom model's default is
-   just another source.
-2. **Start** (the dashboard's `start_fleet`, however the dashboard was started) shows the Start
-   confirmation of spec 9.4: each home or mark and heading, the sensing mode, the return altitude and
-   threshold, every non-default safety value with its source, and the on-find policy. Every less-safe
-   value and every safety feature switched off must be confirmed with its exact value, per unit:
-   `confirm_params: [{"unit": "drone-1", "id": "envelope.ceiling_cm", "value": 260}]` (round 1 F19).
-   Start is refused until the confirmation matches what the edges report now (a changed `unit_rev`
-   voids it).
-3. The launcher's 409 (PR #202 round 1, F4) stays as an earlier, friendlier gate for the processes it
-   starts; it never replaces step 2.
-4. A hand-started edge still refuses a less-safe value that comes from a file unless
-   `--confirm-less-safe id=value` matches; a hand-started dashboard refuses a less-safe ground-scope
-   value from a file the same way (`--confirm-less-safe` on the dashboard).
-5. No file stores a safety feature as off (spec 10.3(3)).
-6. **Simulated units** (adapter `sim`, the fake drone, and SITL vehicles marked `simulated` in the
-   inventory) show their less-safe values but need no confirmation, because they cannot hurt anyone;
-   this keeps rehearsals and test fixtures from turning into confirmations (round 2 finding B3).
+### 7.4 Refusal wording (round 2 N8)
 
-### 7.4 Refusal wording (round 2 finding N8)
+All operator texts come from `flightrisk/params/messages.py` in three forms, each in plain words with
+numbers: refused input ("`envelope.ceiling_margin_cm` 20 cm from FLIGHTRISK_CEILING_MARGIN_CM is
+refused: the Tello allows 30 to 500 cm."), unavailable capability ("drone-1 cannot do bird's-eye
+search: the Tello has one fixed forward camera."), and fallback landing ("drone-1 landed in place:
+position uncertainty 62 cm is above the 50 cm bound."). A test renders every message.
 
-All operator texts come from one message catalogue (`flightrisk/params/messages.py`) with three
-forms, each in plain words with numbers:
+### 7.5 Tello-coupled values are test-adapter facts (user direction)
 
-- refused input: "`envelope.ceiling_margin_cm` 20 cm from FLIGHTRISK_CEILING_MARGIN_CM is refused:
-  the Tello allows 30 to 500 cm.";
-- unavailable capability: "drone-1 cannot do bird's-eye search: the Tello has one fixed forward
-  camera.";
-- fallback landing (spec 6.3): "drone-1 landed in place: position uncertainty 62 cm is above the 50 cm
-  bound."
+Every Tello-coupled tuning value has `edit: fact` in `parameters.md` (30 rows): the obstacle depth
+threshold (`sensing.min_safe_depth`), the takeoff settle and steadiness values, the refusal retries and
+hold, the late-takeoff limit, the temperature levels, every sensing timing and count, the clear votes,
+re-look and sidestep values, the turn and hover-test switches, and the dead-reckoning growth
+placeholders. They are shown only in the read-only effective-values table with their source. They are
+never a launcher or dashboard control, never stored in a params or inventory file, never a preflight
+warning, never a calibration request and never part of a Start confirmation. Their existing environment
+variables remain developer overrides for test-adapter bring-up only (logged at start, shown with source
+`env`; choice R-5). The operator-facing settings are airframe-neutral mission and safety choices:
+sensing mode, return and land behaviour, separation, obstacle tops and the on-find policy.
 
-A test renders every message once and checks that it names the subject, the value or reason, and the
-limit.
+A check that uses a fact still reports its result in plain words (for example "drone-1 is too hot to
+take off: 62 °C"), because that is a fact about the drone, not a setting; what is never shown is the
+fact as something to change, tune or calibrate, or a warning that it is uncalibrated. [PROPOSED] and
+[UNCALIBRATED] marks stay in `parameters.md` for developers only.
 
 ## 8. Inventory (#197, spec 9.4)
 
-`hardware-profiles-detail.md` section 8 is kept: `~/.flightrisk/inventory.json` with `rev` and compare-and-swap
-writes, no secrets, units of built-in or custom models, availability, per-unit feature switches, gimbal
-mission pitch, an implicit inventory when the file is missing, and Plan using the reported gates. Added
-for the spec:
-
-- each unit has an `environment` (from its model) and a `simulated` flag (section 7.3, step 6);
-- **indoor units** have a listed mark and heading (spec 7.2): `"mark": {"label": "tape A",
-  "x_cm": 0, "y_cm": 0, "heading_deg": 0}`; the Start confirmation lists them for the operator to
-  confirm;
-- phones may add units of built-in models and toggle availability and non-safety features (round 1
-  F9, spec 9.4 "PR #202's limited inventory edits"); everything else is laptop-only.
+As in `hardware-profiles-detail.md` section 8, with `rev` and compare-and-swap writes, no secrets,
+units of built-in or custom models, availability, per-unit feature switches, gimbal mission pitch and
+an implicit inventory when the file is missing. Added: each unit has an `environment` from its model;
+indoor units have a listed mark and heading (spec 7.2) that the Start confirmation lists; phones with a
+supervisor token may add units of built-in models and toggle availability and non-safety features
+(section 16); everything else is laptop-only.
 
 ## 9. Capability-gated features (#197)
 
-The seven features of `hardware-profiles-detail.md` section 9.2 are kept with their static requirement, runtime
-requirement and "when unavailable" behaviour. Round 2 finding N1 adds the column "if lost in flight",
-which maps each runtime loss to its spec 6.2 event:
+The seven features of `hardware-profiles-detail.md` section 9.2 keep their static requirement,
+runtime requirement and "when unavailable" behaviour; the "if lost in flight" column maps each loss to
+its spec 6.2 event:
 
 | Feature | If lost in flight |
 | --- | --- |
-| `forward_obstacle_sensing` | "Obstacle sensor fails mid-task": end and re-match its tasks; return by retracing flown airspace; land if no flown route reaches home (indoor); field drones with avoidance make a normal return |
-| `onboard_avoidance` | The same event; a field drone without other protection returns at a slot above known obstacles |
-| `level_search`, `birdseye_search` | Camera role lost (gimbal pitch not level or not nadir): the task is re-matched; the drone keeps flying its return normally |
-| `thermal_detection` | Thermal frames stop: the thermal task is re-matched; the drone returns at task end |
-| `appearance_match` | Banner on the cards; nothing else |
-| `claude_second_opinion` | Banner "Claude second opinion is off" in the alert panel (spec 5.6) |
+| `forward_obstacle_sensing` | "Obstacle sensor fails mid-task": end and re-match its tasks; return by retracing flown airspace (indoor) or at a slot above the obstacle top (field); land if no route reaches home |
+| `onboard_avoidance` | The same event |
+| `level_search`, `birdseye_search` | Camera role lost: the task is re-matched; the drone returns at task end |
+| `thermal_detection` | Thermal frames stop: the thermal task is re-matched |
+| `appearance_match` | Banner on the cards |
+| `claude_second_opinion` | Banner "Claude second opinion is off" in the alert panel |
 
-New capability-gated tasks of the spec (thermal sweep, bird's-eye sweep, escort) are gated the same
-way: a task type is offered only if an available unit has its feature on (spec 5.2(5)).
+A task type is offered only if an available unit has its feature on (spec 5.2(5)).
 
 ## 10. Return to home (spec sections 6 and 7)
 
@@ -336,616 +330,860 @@ way: a task type is offered only if an available unit has its feature on (spec 5
 
 | Component | Where | Role |
 | --- | --- | --- |
-| Return state machine | `flightrisk/drone/rth/machine.py` (pure, clocked) | One per edge. Consumes events, decides the action and the fallback reason, and drives a return method. Finishes without the ground (spec 6.1(7)). |
-| Return methods | `flightrisk/drone/rth/methods.py` | `AutopilotReturn` (MAVLink: the autopilot's return-to-launch at the slot, through `land_for_reason`'s existing mode logic, `mavlink_fleet.py:1196-1270`); `EdgeFlownSlotReturn` (MAVLink: the edge flies the route at the slot when the ground orders a waypoint route); `DeadReckonedReturn` (Tello, Dev/test: section 10.5). Chosen by the capability `return_method`. |
-| Home record | `flightrisk/drone/rth/home.py` | Records home at takeoff (field: the autopilot's home at arming; indoor: the pose origin), detects a changed or lost home, and answers "home known and valid". |
-| Energy model | `flightrisk/drone/rth/energy.py` | Battery needed to reach home = distance home × `battery.return_rate_pct_per_100m` + expected waits × `battery.hover_rate_pct_per_min` + `battery.landing_reserve_pct`. Return threshold = the larger of `battery.return_floor_pct` and that sum. Field: uses the autopilot's remaining-capacity estimate when it reports one. |
-| Uncertainty model | `flightrisk/drone/rth/uncertainty.py` | Field: the receiver's horizontal accuracy (ASSUMPTION A4). Indoor: grows by the `position.dr_growth_*` placeholders per metre, turn and minute of hover; never shrinks in flight. Predicts the uncertainty at home along the return route. |
-| Fault classifier | `flightrisk/drone/rth/faults.py` | Classifies drone replies and autopilot status into `fault` (IMU, motor, positioning, unclassified: land in place) or `transient` (hover, retry once, return). Replaces "every Tello error lands it" (`lane_flight.py:358-359`). |
-| Ground return coordinator | `flightrisk/mission/returns.py` | RETURN ALL and per-drone Return; orders conflicting returns; one landing at a time per landing area; sends releases (section 10.7). |
+| Return state machine | `flightrisk/drone/rth/machine.py` (pure, clocked) | One per edge. Every safety input, every operator command and every landing decision enters it; it decides the action and the fallback reason and drives a return method. Finishes without the ground. |
+| Return methods | `flightrisk/drone/rth/` | `EdgeGuidedReturn` (MAVLink primary: move vertically into the slot, GUIDED flight to above home at the slot, hold there until the landing is cleared, then LAND); `AutopilotFallback` (MAVLink: observes and constrains the autopilot's own return when the edge did not start it or the edge is gone); `DeadReckonedReturn` (Tello, Dev/test). Chosen by the capability `return_method`. |
+| Progress monitor | `rth/progress.py` | A return that does not bring the drone `return.progress_min_cm` closer to home within `return.progress_timeout_s` counts as blocked (spec 6.2, "obstacle on the way home"), whoever flies it (H-2). |
+| Home record | `rth/home.py` | Records home at takeoff, detects a changed or lost home. |
+| Energy model | `rth/energy.py` | Section 10.6. |
+| Uncertainty model | `rth/uncertainty.py` | Field: k × the receiver's 1-sigma accuracy plus speed × telemetry age; indoor: growth placeholders; a missing value counts as worst case (section 11.2). |
+| Fault classifier | `rth/faults.py` | Fault (IMU, motor, positioning, unclassified: land in place) or transient (hover, retry once, return); replaces "every Tello error lands it" (`lane_flight.py:358-359`) from C7. |
+| Ground return coordinator | `flightrisk/mission/returns.py` | RETURN ALL and per-drone Return, ordering, landing clearance, and the cancellation of every sender on LAND ALL (section 10.2). |
 
-### 10.2 States
+New names carry an `rth` prefix (`rth_returning`, `rth_waiting`, `rth_above_home`, `rth_landing`) and
+the protocol command is `return_home`, because the executor already has a `return` sequence and a
+`returning` phase for the manual way back (`lane_flight.py:206`, `:355`).
 
-`flying` (a task or manual) → `holding` (short link loss, a blocked leg, a person cue, waiting for a
-release) → `returning` (climb or descend into the slot, fly the route) → `waiting_to_return` (ordered
-to wait by the ground, side by side at its own slot) → `descending_home` (only over home) →
-`landed_at_home`; any state → `landing_in_place(reason)` → `landed_in_place(reason)`; and
-`cannot_be_recalled` (the drone link is lost and the drone lands by itself, Tello). These are the
-states spec 9.5 shows ("Searching", "Holding", "Keeping watch", "Converging", "At viewpoint",
-"Local search", "Escorting", "Returning", "Waiting to return", "Landed at home", "Landed in place with
-reason", "Cannot be recalled"); the task states come from the mission model.
+### 10.2 Landing is terminal (C-1)
 
-### 10.3 Event table (spec 6.2)
+- **Every landing decision is an input to the edge state machine**: LAND ALL (`emergency_land_all`),
+  per-drone Land, the local land key, Ctrl+C, critical battery, a fault, every fallback reason, the
+  link-loss land of today's defaults, a ceiling or geofence breach that lands, an autopilot mode the edge
+  sees switch to LAND, and an on-find policy of LAND ALL. Today only the monitor latches the first
+  landing reason (`lane_monitor.py:89-97`); the latch moves into the state machine and covers every
+  source.
+- **`rth_landing` and `landed` are terminal for flight.** While landing, the edge refuses `return_home`,
+  `escort_setpoint`, `assign_lanes`, `start_at`, `resume`, `nudge`, manual moves and `set_speed` with the
+  existing nack reason `landing` (`fleet_protocol/constants.py`, `NACK_REASONS_V2`), and starts no
+  automatic return (task end, low battery, stranded countdown, link loss). A further land is accepted
+  and only re-sends the landing. Once disarmed on the ground the drone is `landed` and accepts only an
+  operator takeoff; nothing automatic ever sends a takeoff.
+- **The MAVLink adapter never turns a decided landing into a return.** `land_for_reason` maps failsafe
+  reasons to RTL today (`mavlink_fleet.py:1234-1236`); from C1 the state machine decides between return
+  and land, and once land is decided every later call sends LAND only. A queued `wait: false` release
+  that arrives after a land is refused with `landing`.
+- **On LAND ALL the ground first cancels every sender, then sends the land:** the return queue and its
+  pending releases, the escort controller, local-search re-plans, converge flights, re-task offers,
+  stranded countdowns, `on_complete` timers, a scheduled mission-end RETURN ALL, and any speed change.
+  Per-drone Land cancels the same for that drone. The coordinator marks the drone `landing`, and every
+  sender checks that mark before it sends.
+- **Tests:** for each command and automatic action above, a fake-drone test and a SITL scenario send it
+  after LAND ALL and assert a `landing` nack, no mode change away from LAND, and a landed drone.
 
-Each row is one transition with its owner, its default action, its fallback (a spec 6.3 reason) and
-its test. "SITL" means an ArduPilot SITL scenario (section 18); "fake" means the fake drone or the
-simulated autopilot link.
+### 10.3 States
 
-| Spec 6.2 event | Detected by | Default action (field; Dev/test) | Fallback reason | Test |
-| --- | --- | --- | --- | --- |
-| Tasks done; mission complete | edge on `on_complete: return`; ground on mission end | hover `retask.window_s`, then return; mission complete sends RETURN ALL | per 6.3 | fake, SITL |
-| RETURN ALL / per-drone Return | ground `return` command | stop the task (manual and held too) and return; ground orders conflicts. Dev/test: after the current move | unreachable: "not reached" plus what it will do alone | fake, SITL (4 drones) |
-| LAND ALL / per-drone Land | today's failsafe path (`FAILSAFE_TYPES`, `fleet_protocol/constants.py:125`) | land in place at once; interrupts returns; discards queued commands | none; retried | existing tests; SITL during returns (AC-6.3) |
-| Ground link lost, short | edge watchdog after `link.loss_detect_s` | hold; resume when the link returns | 6.3 | fake |
-| Ground link lost, long; ground crash | after `link.loss_wait_s` more | return only inside its own zone and corridor at its slot; a standby ground may take over within the wait | "return route not cleared" | fake, SITL (inside and outside the zone) |
-| Drone link lost; edge dies | edge (drone link status) | field: the autopilot's link-loss action (return or land, checked before takeoff); Dev/test: "cannot be recalled" | link back in flight: add drift to uncertainty, then return or land | SITL (kill the edge), fake |
-| Tello no-command failsafe | adapter fact | keepalives run in flight, holds and returns; stop once a landing is decided | none | fake (Dev/test) |
-| Low battery (return threshold) | energy model | return | 6.3 | fake, SITL (`SIM_BATT_*`) |
-| Critical battery | `battery.critical_pct`; field: the autopilot's critical action | land in place at once, even mid-return | none | fake, SITL |
-| Battery cannot reach home | energy model prediction | return early | "battery cannot reach home" | fake |
-| Stranded countdown ends | ground (`stranded.countdown_s`) | return (today: land) | land; never back to held | fake |
-| Obstacle on the way home | sensor gate or `STOPPED_SHORT` | hover, look again, try another cleared route | after `return.blocked_wait_s`: hold for a connected operator, else "way home blocked" | fake |
-| Person cue on the way home | person cue, thermal detection | hover and alert; continue after a human confirms, a manual detour, or a land | after `return.person_cue_wait_s`: "way home blocked (person, no answer)" | fake |
-| IMU, motor or positioning fault | fault classifier; autopilot status | land in place at once; the autopilot's failsafe is never fought | none | fake, SITL (`SIM_GPS_DISABLE`) |
-| Command error that is not a fault | fault classifier | hover, retry once, return | land; unclassifiable errors are faults | fake |
-| Uncertainty above its bound (Dev/test) | uncertainty model | land; earlier, when the prediction at home nears the bound, end the task and return | "position uncertainty N cm is above the M cm bound" | fake |
-| Geofence or ceiling breach | envelope, autopilot fence | fence: return (the autopilot's fence action must be return or land); ceiling: land | land | SITL (fence), fake |
-| Obstacle sensor fails mid-task | sensor down | end and re-match its tasks; retrace flown airspace home | "no flown route reaches home" | fake |
-| Autopilot failsafe | autopilot mode | the autopilot wins; FlightRisk sends only operator lands, shows the reason, re-matches tasks | the autopilot's own | SITL |
-| Sighting, Converge, Confirm, Not verified, escort rows | mission model (section 12) | see section 12 | see section 12 | fake, SITL |
+`flying` (task or manual) → `holding` (short link loss, a blocked leg, a person cue, waiting for a
+release) → `rth_returning` (into the slot, then the route) → `rth_waiting` (ordered to wait, at its own
+slot, side by side) → `rth_above_home` (holding above home until the landing is cleared) →
+`rth_landing` → `landed`; any state → `rth_landing(reason)` → `landed_in_place(reason)`; and
+`cannot_be_recalled` (drone link lost; Tello lands by itself). These map to the spec 9.5 display states;
+task states (keeping watch, converging, at viewpoint, local search, escorting) come from the mission.
 
-### 10.4 Home (spec 7)
+### 10.4 Event table (spec 6.2, one row each)
 
-- **Recording:** once per flight at takeoff, never moved. Field: the autopilot's home at arming; a home
-  the autopilot changes in flight makes home invalid ("no known home"), alerts the operator and lands
-  in place (spec 7.5). Indoor: the pose origin; an edge restart in flight loses it ("no known home").
+"Field default" and "Indoor default" are the actions from C6 and C7; before them each row keeps today's
+action. Reason codes are those of section 10.5. Every row has a unit test of its default action and of
+each fallback reason (AC-6.1); "SITL" rows also have a scenario.
+
+| # | Spec 6.2 event | Detected by | Field default (C6) | Indoor default (C7) | Fallback reason | SITL |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Tasks done | edge `on_complete: return_home` | hover `retask.window_s`, return | same | per 10.5 | yes |
+| 2 | Mission complete | ground | RETURN ALL | same | per 10.5 | yes |
+| 3 | RETURN ALL or per-drone Return | `return_home` | stop the task (manual and held too) and return; ground orders conflicts | same, after the current move | not reached: shown with what it will do alone | yes |
+| 4 | LAND ALL or per-drone Land | failsafe path | land at once; terminal (10.2) | same | `land_all`, `operator_land` | yes |
+| 5 | Ground link lost, short | watchdog after `link.loss_detect_s` | hold; resume when the link returns | same | per 10.5 | yes |
+| 6 | Ground link lost, long; ground crash | after `link.loss_wait_s` more | return inside own zone and corridor at its slot, in its landing order | same | `no_cleared_route` | yes |
+| 7 | Drone link lost; edge dies | edge, autopilot | the autopilot's link-loss action (return or land, checked before takeoff; land when the straight line home leaves the zone and corridor, 10.9) | cannot be recalled | link back: add drift to uncertainty, then return or land | yes |
+| 8 | Tello no-command failsafe | adapter fact | n/a | keepalives in flight, holds and returns; stop once landing is decided | `cannot_be_commanded` | no |
+| 9 | Low battery | energy model threshold | return | same | per 10.5 | yes |
+| 10 | Critical battery | `battery.critical_pct`; field: the autopilot's critical action | land at once, even mid-return | same | `critical_battery` | yes |
+| 11 | Battery cannot reach home | energy prediction | return early | same | `battery_cannot_reach_home` | yes |
+| 12 | Stranded countdown ends | ground | return | same | land, never back to held | yes |
+| 13 | Obstacle on the way home | sensor gate, `STOPPED_SHORT`, progress monitor | hover, look again, try another cleared route | same | after `return.blocked_wait_s`: `way_home_blocked_obstacle` | yes |
+| 14 | Person cue on the way home | person cue, thermal detection | hover and alert; continue only after a human confirms, a detour or a land | same | after `return.person_cue_wait_s`: `way_home_blocked_person` | no |
+| 15 | IMU, motor or positioning fault | fault classifier, autopilot status | land at once; never fight the autopilot | same | `fault_imu`, `fault_motor`, `fault_positioning`, `fault_unclassified` | yes |
+| 16 | Command error that is not a fault | fault classifier | hover, retry once, return | same | unclassifiable: `fault_unclassified` | no |
+| 17 | Uncertainty above its bound | uncertainty model | n/a (positioning fault) | land; end the task and return earlier when the prediction at home nears the bound | `uncertainty_above_bound` | no |
+| 18 | Geofence breach | envelope, autopilot fence | return (autopilot fence action return or land) | moves leaving the fence are refused | land | yes |
+| 19 | Ceiling breach | envelope | land at once | same | `ceiling_breach` | no |
+| 20 | Obstacle sensor fails mid-task | sensor down | end and re-match tasks; return at a slot above the obstacle top | retrace flown airspace | `no_cleared_route` | no |
+| 21 | Autopilot failsafe | autopilot mode | the autopilot wins; FlightRisk sends only operator lands, shows the reason, re-matches tasks; its return is the highest-priority route | n/a | the autopilot's own | yes |
+| 22 | Sighting raised | mission | finder keeps watch, others continue | same | finder returns at its threshold | no |
+| 23 | Converge pressed | operator | N drones to separated viewpoints | same, approach beyond the 3 m cue | a drone with no viewpoint keeps its task | yes |
+| 24 | Target confirmed | operator | Continue or End search (on-find policy) | same | per drone | no |
+| 25 | Not verified pressed | operator | local search if on, else resume | same | per drone | no |
+| 26 | Escort battery at hand-off level | energy model | send relief; leave once the relief has the subject in view | n/a | no relief: alert, return at threshold | yes |
+| 27 | Escorted subject lost from view | mission | hold, alert, local search | n/a | per drone | yes |
+| 28 | Escorted subject crosses a limit | mission | stop at the limit, keep watch, alert | n/a | then row 27 | yes |
+| 29 | Return makes no progress (H-2) | progress monitor | row 13 | same | row 13 | yes |
+| 30 | Landing area not cleared | ground clearance, landing order | hold above home until cleared | same | wait bound reached: per 10.8 | yes |
+
+### 10.5 Fallback reasons (closed list)
+
+`critical_battery`, `battery_cannot_reach_home`, `fault_imu`, `fault_motor`, `fault_positioning`,
+`fault_unclassified`, `way_home_blocked_obstacle`, `way_home_blocked_person`, `no_known_home`,
+`uncertainty_above_bound`, `no_cleared_route`, `cannot_be_commanded`, `operator_land`, `land_all`,
+`on_find_land_all` (spec 6.3), plus `ceiling_breach` (spec 6.2, ceiling row) and `no_return_order`
+(spec 7.4, "if no order works"). An edge that cannot return (an older edge without `return_home`) is not
+landed: it is shown "cannot return (older edge)" and held (M-5).
+
+### 10.6 Energy and the return threshold (H-8)
+
+- **Return threshold** = `battery.critical_pct` + energy to home + worst-case wait + `battery.landing_reserve_pct`,
+  and never below `battery.return_floor_pct`.
+- **Energy to home** = distance home along the return route × `battery.return_rate_pct_per_100m`
+  (field: the autopilot's remaining-capacity estimate when it reports one).
+- **Worst-case wait** = (the drone's place in its landing order × `separation.landing_interval_s` +
+  the queue wait the ground last granted in `return_home.max_wait_s`, 0 before any) ×
+  `battery.hover_rate_pct_per_min` / 60. Both inputs reach the edge in `assign_lanes.landing` and
+  `return_home`, so the edge never depends on a number it cannot see.
+- **The drone arrives above home with at least critical + reserve**, so a normal return never ends in a
+  critical-battery landing short of home. Field: `battery.critical_pct` is the autopilot's critical level,
+  read before takeoff, and the reserve is above it.
+- Constraints (in `parameters.md`): critical < return floor; return floor ≥ critical + reserve; takeoff
+  minimum > return floor; the autopilot's low-battery level ≤ return floor − 5 points, so FlightRisk
+  always returns first (H-2).
+
+### 10.7 Home (spec 7)
+
+- Recorded once per flight at takeoff (field: the autopilot's home at arming; indoor: the pose origin);
+  a home that changes in flight, or an edge restart in flight, lands with `no_known_home`.
 - **Before takeoff (spec 7.2, AC-7.1):** field: a 3D fix, at least `gps.min_satellites`, receiver
-  accuracy within `home.accuracy_cm`, the autopilot's home within `home.max_offset_cm` of the current
-  position, inside the mission fence, and at least `separation.landing_cm` from other homes or sharing
-  a landing area. Indoor: the operator confirms each mark and heading; each mark is inside its fence,
-  separated from other homes and outside no-entry areas; the ceiling is measured from the takeoff
-  surface. Both: the return altitude (the drone's own slot) lies between the profile floor and the
-  ceiling minus margin, and no unit gets work it cannot finish and still return with its reserve.
-  Start names the drone and the check.
+  accuracy within `home.accuracy_cm`, the autopilot's home within `home.max_offset_cm`, inside the mission
+  fence. Indoor: each mark and heading confirmed in the Start confirmation, inside its fence, outside
+  no-entry areas, ceiling measured from the takeoff surface (indoor AC-7.1 has requirement RTH-25). Both:
+  the return slot between the profile floor and ceiling minus margin and above the obstacle top plus
+  margin (section 11.5); no work the unit cannot finish and still return with critical + reserve.
+- **Home separation (H-7):** every pair of homes is at least `separation.base_cm` apart, plus both
+  receivers' accuracies in the field; Start is refused, naming both drones, for a closer pair. Homes
+  closer than `separation.landing_cm` share a landing area, and the plan gives each drone of a shared area
+  its place in a landing order.
 
-### 10.5 The Tello's dead-reckoned return (Dev/test only)
+### 10.8 Returns with the ground: RETURN ALL, ordering, clearance and termination
 
-The edge flies home itself, keeping keepalives running. It first moves vertically back into its slot,
-then follows a route made of legs of 20 to 500 cm: direct through operator-cleared areas (sent in the
-plan as rectangles), otherwise retracing the airspace it already flew (the edge records its flown
-polyline). Each leg goes through the existing sensed-step gate (`lane_flight.py`), so a blocked leg or
-a person cue raises the events of section 10.3. With the obstacle sensor down it only retraces
-(AC-6.4). It descends only over home. A return cannot interrupt a move, so a return starts after the
-current move (spec 6.2). Nothing here is tuned; the uncertainty growth is a pessimistic placeholder.
+- **RETURN ALL** sends `return_home` to every flying drone, manual and held ones too, and shows each
+  drone's result. `return_home` without `wait` is accepted from any authenticated ground, like LAND
+  (M-5); ordering (`wait`, releases) only from the authority. A standby dashboard therefore keeps RETURN
+  ALL.
+- **Ordering:** every return route is checked against all other drones (section 11). An
+  autopilot-started return (row 21, or an autopilot low-battery return) is a fixed route with the
+  highest priority; the others yield to it. Conflicts then go lowest battery margin first, then
+  shortest route; waiting drones get `return_home {wait: true, max_wait_s}` and hold at their own slot,
+  side by side.
+- **Landing clearance:** a returning drone holds above home (`rth_above_home`) until the ground clears
+  its landing; in a shared landing area one drone at a time. Without the ground, each drone uses its
+  precomputed landing order (10.9).
+- **Termination (M-10):** every wait is bounded by the energy model: the bound is the moment the drone
+  would drop below critical + reserve + energy to home. A waiting or holding drone is released before its
+  bound; if two bounds cannot both be met, the drone with the earlier bound goes first, and the drone
+  that still cannot be scheduled before its bound lands in place with `no_return_order` (ties: the
+  higher unit id lands). "Hold for a connected operator" after a blocked return is bounded the same way.
+- **Per-drone controls (spec 9.2):** Return enabled whenever the drone flies and can be commanded, else
+  it says why; Land always enabled; taking control stops a return; resuming a task after a return caused
+  by battery, a fault or uncertainty is refused.
 
-### 10.6 Without the ground station (spec 7.4, decision 1)
+### 10.9 Returns without the ground (spec 7.4, decision 1; H-1)
 
-The plan gives each drone its zone and its corridor (`assign_lanes` gains `zone` and `corridor`,
-section 15). After a long link loss the edge returns only if the whole return route, widened by its
-uncertainty, lies inside its zone and corridor at its slot; otherwise it lands after the wait with
-"return route not cleared". Field: the autopilot's straight return path is checked the same way
-before the edge asks for it. The stranded countdown (a held or manual drone nobody controls) ends in a
-return; a blocked return then lands and never re-enters held (spec 6.2, AC-6.3).
+- `assign_lanes` carries the drone's `zone` (already required, `validate.py:135`), its `corridor`, its
+  `landing` record (landing area, place in the order, `separation.landing_interval_s`) and the current
+  no-entry areas, and every re-task re-sends all of them; `set_no_entry` pushes later changes to every
+  edge (spec 6.1(6)).
+- After a long link loss the edge returns only if the whole route home, widened by its uncertainty, lies
+  in its zone and corridor at its slot and outside every no-entry area it knows (its own area excepted);
+  otherwise it lands after the wait with `no_cleared_route`. In a shared landing area it waits above home
+  for its place × the interval before descending.
+- Drones outside their own zone by design (re-tasked, converging, local search, escorting) carry a task
+  zone and a corridor back to home in their assignment, checked like any zone (section 11.4); an escort
+  that loses the ground therefore lands near the subject when its corridor does not reach home, which is
+  documented (M-3).
+- **Edge death (MAVLink):** the autopilot flies its own straight line home. D1 checks, for every zone,
+  that the straight line from every point of the zone to home lies inside zone and corridor; where it
+  does not, the autopilot's link-loss action must be land, and B4's preflight refuses another value for
+  that drone. The autopilot's per-drone landing delay (`RTL_LOIT_TIME` on ArduPilot, `RTL_LAND_DELAY` on
+  PX4) is set to its place in the landing order × the interval, so a shared landing area stays sequenced
+  even without the edge.
 
-### 10.7 RETURN ALL, ordering and landing (spec 7.4, 9.1)
+### 10.10 The Tello's dead-reckoned return (Dev/test only)
 
-- **RETURN ALL** sends `return` to every flying drone, manual and held ones too. Each drone's result is
-  shown: returning, waiting, landing in place with its reason, or "not reached" with what it will do
-  alone.
-- **Ordering:** the ground checks every return route against all other drones (section 11). Conflicts
-  go lowest battery margin first, then shortest route; a drone about to drop below its landing reserve
-  goes first. Waiting drones get `return` with `wait: true` and hold at their own slot side by side,
-  never stacked; the ground releases them with `wait: false`. If no order works, the drone lands in
-  place. A waiting drone that loses the ground applies section 10.6.
-- **Landing:** one at a time per landing area; homes closer than `separation.landing_cm` share an
-  area.
-- **Per-drone controls (spec 9.2):** Return is enabled whenever the drone flies and can be commanded,
-  else it says why; Land is always enabled; taking control stops a return; resuming a task after a
-  return is refused when battery, a fault or uncertainty caused it.
+The edge flies home itself with keepalives running: first into its slot, then legs of 20 to 500 cm,
+direct through operator-cleared areas, otherwise retracing its flown polyline, each leg through the
+sensed-step gate; with the sensor down it only retraces (AC-6.4); it descends only over home; a return
+starts after the current move. Nothing is tuned; the growth values are pessimistic placeholders.
 
 ## 11. Airspace (spec section 8)
 
-`flightrisk/mission/airspace.py` checks every planned task, transit, viewpoint, escort position and
-return route:
+`flightrisk/mission/airspace.py` (D1) checks every planned task, transit, viewpoint, escort position
+and return route, and generates zones, corridors and landing orders. D1 runs behind today's defaults:
+it plans and refuses, but changes no return behaviour.
 
-- **One environment per airspace** (spec 8.1): Plan refuses a mixed mission (section 6.2).
-- **Horizontal separation** (spec 8.2): two drones in the same band stay at least
-  `separation.base_cm` + uncertainty A + uncertainty B apart, now and along every planned route.
-  Indoor base 150 cm (today); field 500 cm (from D1).
-- **Bands** (spec 8.3): field close band from `airspace.close_band_floor_cm` (close search, viewpoints,
-  escort) and a sweep band at least `airspace.band_gap_cm` above it (bird's-eye and thermal sweeps).
-  Drones in different bands may overlap horizontally except in the column where a sweep-band drone
-  takes off, lands or descends. Indoors, slots sit under ceiling minus margin and never count as
-  separation, so indoor drones are always separated horizontally (this replaces the slot rule of
-  round 1 F7, round 2 finding N3: `plan.min_slot_separation_cm` applies only in the field).
-- **Fences and no-entry areas** (spec 8.4): each drone has a fence around its home; the mission has a
-  shared fence; tasks may add more. Every route is widened by the drone's uncertainty and must stay
-  inside every fence and outside every no-entry area. Field: the autopilot's fence must contain
-  FlightRisk's and act by return or land (uploaded in B3). Indoor: the fence is soft; moves that would
-  leave it are refused.
-- **No-entry areas** replace today's 20 s lost-drone timer (`coordinator.py:192`): a person cue, a
-  lost drone (radius = its uncertainty + `noentry.lost_margin_cm`) or a stranded drone creates one; a
-  drone enters only after a human confirms (spec 6.1(6)), including on its way home.
-- **Precision degrades** (spec 8.5): the required separation grows at once; if the corridor still
-  clears every other drone the drone carries on, otherwise it holds and is re-routed or sent home, and
-  past its bound it lands. A field drone that loses its fix has a positioning fault: its autopilot acts
-  and its area is no-entry until it lands.
+### 11.1 One environment per airspace
 
-## 12. Mission and task model (spec section 5)
+Plan refuses a mixed mission and, indoors, a unit without a measured indoor profile (A4, AC-4.2).
 
-### 12.1 Records
+### 11.2 Positioning uncertainty and separation (spec 8.2; M-1)
 
-All in `flightrisk/mission/model.py`, pure and serialisable (the ground keeps them in its mission
-store beside today's plan store, `flightrisk/dashboard/plan_store.py`):
+- **Field uncertainty** = `position.gps_sigma_k` × the receiver's 1-sigma horizontal accuracy (k ≥ 2;
+  the EKF's horizontal position variance when it reports one and it is larger) + the drone's ground speed
+  × the age of its position. **Indoor:** the dead-reckoning growth model. A missing or stale value
+  counts as worst case: the unit gets no new route and its no-entry area grows until a value arrives.
+- **Planned separation is space-only and conservative:** two drones in one band never have intersecting
+  route tubes (task, transit, viewpoint, escort, return), each widened by half the base separation plus
+  its predicted uncertainty, whatever their timing.
+- **In flight**, the ground checks every pair at the telemetry rate against `separation.base_cm` +
+  uncertainty A + uncertainty B; a violation holds the drone that is not returning (or the higher unit
+  id) and alerts the operator. The edge never relies on this monitor for its own safety.
+- Base separation: indoor 150 cm (today); field 500 cm from D1.
 
-- `Mission`: environment, search areas, targets, units, on-find policy, mission settings
-  (rows 129 to 142), tasks, no-entry areas, airspace plan, log.
-- `Target`: id, label, references (photo and embeddings per target), status (`searching`, `sighted`,
-  `found`, `escorted`, `lost`).
-- `Task`: id, type, place (area, segment or point with uncertainty), required and preferred
-  capabilities, band, precision tolerance, progress, state (`unassigned` with reasons, `assigned`,
-  `running`, `done`, `abandoned`), assignee, `needs_confirmation` (for a person cue or a no-entry
-  area).
-- `Sighting`: id, time, finder, geolocated point and uncertainty, per-target scores, attributed target
-  (changeable), evidence per viewpoint, Claude opinion (an aid), state.
+### 11.3 Bands (spec 8.3; H-6)
 
-### 12.2 Task types and how they become flight
+| Band | Floor | Ceiling | Holds |
+| --- | --- | --- | --- |
+| Close (field) | `airspace.close_band_floor_cm` (1000) | `airspace.close_band_ceiling_cm` (1500) | close and head-on search, viewpoints, escort, keep-watch, every slot of a unit doing those tasks |
+| Sweep (field) | `airspace.sweep_band_floor_cm` (2000) | `airspace.sweep_band_ceiling_cm` (2500) | bird's-eye and thermal sweeps |
+
+Constraints (in `parameters.md`): close floor < close ceiling; sweep floor ≥ close ceiling +
+`airspace.band_gap_cm`; sweep floor ≤ sweep ceiling ≤ ceiling − margin; every slot lies in exactly one
+band; `escort.altitude_cm`, viewpoint slots and every return slot lie inside the band of the drone's
+task. The default field slots (10 and 15 m) and the 15 m escort altitude are in the close band. Drones
+in different bands may overlap horizontally except in the column where a sweep-band drone takes off,
+lands or descends. Indoors, slots never count as separation, so indoor drones are always separated
+horizontally.
+
+### 11.4 Zones, corridors and landing order (H-1)
+
+- D1 gives each drone a **zone** (its task area) and a **corridor** (a tube at its slot from the zone to
+  its home, at least base separation + its uncertainty wide) and checks that the zone-and-corridor tubes
+  of all drones in one band do not intersect.
+- **Straight line home:** for every point of a zone the straight line to home must lie inside the zone
+  and corridor; where it does not, the drone's autopilot link-loss action must be land (checked by B4
+  before takeoff), because an autopilot whose edge died flies that straight line.
+- **Landing order:** homes closer than `separation.landing_cm` share a landing area; D1 numbers the
+  drones of each shared area (lowest planned battery margin first) and sends each its place and
+  `separation.landing_interval_s` in `assign_lanes.landing`. A shared landing area without an order is
+  refused.
+- **Re-tasks** (re-flights, converge, local search, escort) carry a task zone and a corridor back to
+  home, checked the same way before they are offered; every re-task re-sends zone, corridor, landing
+  record and no-entry areas.
+
+### 11.5 Obstacle tops (spec 6.1(5); H-10)
+
+A field mission's search areas and corridors carry `airspace.obstacle_top_cm`, the height of the
+highest known obstacle, entered by the operator per area (no default; a field mission without it is
+refused at Plan). Plan refuses any slot used to fly or return over an area below its obstacle top +
+`airspace.obstacle_margin_cm`, naming the area and the drone. The ceiling and band constraints still
+apply. Indoors, the ceiling and the cleared areas play this role.
+
+### 11.6 Fences
+
+Each drone has a fence around its home; the mission has a shared fence; tasks may add more. Every route,
+widened by its drone's uncertainty, stays inside every fence. Field: the autopilot's fence is uploaded
+before arming (B3) and its action is return or land (B4). Indoor: moves that would leave the fence are
+refused.
+
+### 11.7 No-entry areas (spec 6.1(6); H-9)
+
+| Kind | Covers | Created by | Cleared by |
+| --- | --- | --- | --- |
+| Person cue | the cue's position widened by its uncertainty | a person cue or thermal flag | a human confirm-to-clear, or Converge, Not verified or Escort for its subject |
+| Lost drone (section 12) | its moving last position widened by its uncertainty growth since the last report, its zone, its corridor, its return line (last position to home, widened) and its landing area; without any position report, the zone, corridor and landing area | the ground declaring it lost | its report of being landed, or a human confirm-to-clear allowed only after the precondition of section 12 |
+| Stranded drone | as for a lost drone, while it hovers with no controller | the stranded countdown | as for a lost drone |
+| Operator-drawn | the drawn area | the operator | the operator |
+
+- **Confirm-to-enter** lets one named drone enter once (its task, transit, viewpoint, escort or return);
+  **confirm-to-clear** removes the area for everyone. Both are operator or supervisor actions on a
+  laptop; for a lost or stranded drone both wait for the section 12 precondition.
+- **The owning drone is exempt** from its own area, so a lost drone may fly home through it.
+- Areas reach the edges in `assign_lanes` and through `set_no_entry` on every change; an edge refuses any
+  move or return leg into an area it knows, except its own.
+
+### 11.8 When precision degrades (spec 8.5)
+
+The required separation grows at once; if the corridor still clears every other drone the drone carries
+on, otherwise it holds and is re-routed or sent home; past its bound it lands. A field drone that loses
+its fix has a positioning fault: its autopilot acts (section 13) and its area is no-entry until it lands.
+
+## 12. Lost drones (C-2, folding in #212)
+
+Today the ground declares a drone lost after `FLEET_LOSS_TIMEOUT_S = 5.0` s
+(`dashboard/app.py:559-563`), offers its lanes at once and sends one best-effort land
+(`coordinator.py:2541-2610`), re-lands it if it reports flying again (`_reland_lost_locked`, `:1472`;
+#212 exempts drones flown by hand), and keeps its last position as a 20 s point obstacle
+(`:3388-3420`). After the return defaults switch, a drone holds `link.loss_detect_s` and then
+`link.loss_wait_s` before it returns, so all three behaviours would act against a drone that is doing
+exactly what the spec asks. D2 replaces them, before any default switch:
+
+1. **The ground loss timeout is derived per unit**: `link.ground_loss_timeout_s` = `link.loss_detect_s`
+   + `link.loss_wait_s` + `link.ground_loss_margin_s` (constraint in `parameters.md`). With today's
+   defaults a Tello stays at 3 + 0 + 2 = 5 s (unchanged) and a MAVLink drone becomes 3 + 10 + 2 = 15 s
+   (today 5 s, which already declares a holding field drone lost); after C7 a Tello becomes 15 s.
+2. **The ground never lands or re-lands a lost drone.** It sends it only what an operator sends (Land,
+   Return). If its link returns, the dashboard shows its own state (holding, returning, landing) and the
+   operator may Land, Return or Resume task (spec 9.2 rules).
+3. **Its unflown lanes become tasks waiting for a human confirm**; nothing is re-tasked automatically.
+4. **The confirm is refused while the lost drone may still be flying** (#212's refusal, kept as a
+   precondition): until it reports landed, or until `lost.flying_window_s` after its last report of
+   flying. Tello: 20 s (today's `LOST_OBSTACLE_S`: its 15 s auto-land, the descent and a margin). Field:
+   derived per unit = detect + wait + the time home from its last position at its speed + landing time +
+   `link.ground_loss_margin_s`, capped by its remaining endurance from the energy model.
+5. **Its no-entry area** is the lost-drone area of section 11.7, replacing the 20 s point.
+6. #212's other behaviours stay: a held drone that lands with no controller gets the orphan-landed mark,
+   and a later phone Resume is refused and re-tasks nothing.
+
+## 13. The MAVLink production adapter: autopilot parameters and returns (H-2)
+
+### 13.1 Edge-guided return and the autopilot fallback
+
+An edge-started return moves the drone vertically into its slot first, then flies GUIDED to above its
+home at the slot, holds there until the landing is cleared (section 10.8), then sends LAND. The progress
+monitor watches it (row 29). The autopilot's own return-to-launch happens only when the autopilot's
+failsafe fires or the edge is gone; while the edge lives it treats such a return as the highest-priority
+route, watches its progress, and sends only operator lands. The parameters below make that fallback fly
+home, at a bounded altitude, and land there in order.
+
+### 13.2 Parameter table (B4)
+
+Checked before every takeoff; a value outside "accepted" refuses the takeoff and names the parameter,
+its value and the accepted values. "Today" is what `autopilot.py:190-245` accepts now. Every newly
+refused value is listed in section 27 (B4). ArduPilot names follow the connected firmware (A8).
+
+| Purpose | ArduPilot: accepted | ArduPilot today | PX4: accepted | PX4 today | SITL scenario (B4) |
+| --- | --- | --- | --- | --- | --- |
+| Edge (GCS) link loss | `FS_GCS_ENABLE` 1 (RTL) or 5 (Land); 5 required where the straight line home leaves zone and corridor (11.4); `FS_GCS_TIMEOUT` 2 to 10 s; `SYSID_MYGCS` or `MAV_GCS_SYSID` equal to the edge's MAVSDK system id (245, `docs/open-drone-support.md:107`) | not checked ("recommended") | `NAV_DLL_ACT` 2 (Return) or 3 (Land), 3 required as for ArduPilot; `COM_DL_LOSS_T` 2 to 10 s; `COM_DLL_EXCEPT` 0 | `NAV_DLL_ACT` 2 or 3; the rest not checked | kill the edge process; the drone returns or lands as configured, in its landing order |
+| Failsafe exceptions | `FS_OPTIONS` bits 0, 1, 2 and 4 clear (continue in Auto on RC or GCS failsafe, continue in Guided on RC failsafe, continue in pilot control on GCS failsafe); bit 3 (continue landing) allowed | not checked | `COM_RCL_EXCEPT` 0 | not checked | set each bit; preflight refuses |
+| Position (EKF) fault | `FS_EKF_ACTION` 1 or 3 (land); 0 and 2 (AltHold drifts) refused | not checked | position-loss response land or descend (`COM_POSCTL_NAVL` 1 on firmware that has it; A8) | not checked | `SIM_GPS_DISABLE` 1 in flight: the drone lands; FlightRisk shows `fault_positioning` |
+| Return ends landed at home | `RTL_ALT_FINAL` (`RTL_ALT_FINAL_M`) 0 | not checked | `RTL_LAND_DELAY` ≥ 0 (−1 loiters forever) | not checked | autopilot RTL ends disarmed at home |
+| Return goes to home | no rally points (`RALLY_TOTAL` 0) | not checked | `RTL_TYPE` the home-or-rally value, with no rally points and no mission landing (A8) | not checked | upload a rally point: preflight refuses |
+| No leftover mission landing | value 6 (DO_LAND_START) refused in every failsafe action; the edge clears the autopilot's mission before arming | 6 accepted in the battery and RC-loss actions | mission-landing `RTL_TYPE` values refused; mission cleared | not checked | load a mission with DO_LAND_START: cleared before arming; value 6 refused |
+| Return altitude | `RTL_ALT` (`RTL_ALT_M`) 0 or at most the slot; the autopilot returns at the higher of it and its current altitude, so every edge-started return first moves into the slot | `RTL_ALT` ≤ slot | `RTL_RETURN_ALT` and `RTL_DESCEND_ALT` at most the slot (it returns at the higher of `RTL_RETURN_ALT` and its altitude) | `RTL_RETURN_ALT` ≤ slot | edge killed at 15 m with a 10 m slot: returns within the close band; edge-started return descends into the slot first |
+| Landing order without the edge | `RTL_LOIT_TIME` = place × `separation.landing_interval_s` (ms), written and read back before arming | not set | `RTL_LAND_DELAY` = place × interval (s) | not set | two drones sharing a landing area, both edges killed: they land one after the other |
+| Fence action | `FENCE_ACTION` 1 (RTL or land) or 2 (land) | 1 to 5 | `GF_ACTION` 3 (Return) or 5 (Land) | 2, 3, 5 | breach the uploaded fence: return or land |
+| Critical battery | `BATT_FS_CRT_ACT` 1 (land); FlightRisk's field critical level = the autopilot's critical capacity | 1, 2, 3, 4, 6, 7 | `COM_LOW_BAT_ACT` 2 (land at critical); `BAT_CRIT_THR` read as the field critical level | 2, 3 | drain to critical mid-return: lands in place |
+| Low battery | `BATT_FS_LOW_ACT` 1 or 2; the autopilot's low level (`BATT_LOW_MAH` as a share of `BATT_CAPACITY`) at most `battery.return_floor_pct` − 5 points; a voltage-only threshold is refused because it cannot be compared | 1, 2, 3, 4, 6, 7; level not compared | `BAT_LOW_THR` at most the return floor − 5 points | not compared | drain slowly: FlightRisk returns before the autopilot's low failsafe |
+| RC loss | `FS_THR_ENABLE` 1 (RTL) or 3 (land) | 1, 3, 4, 5, 6, 7 | `NAV_RCL_ACT` 2 or 3 | 2, 3 | RC off in SITL: return or land |
+| Kept from today | `FENCE_ENABLE` 1, `FENCE_TYPE` circle and max altitude, fence radius containing the edge's fence, `FENCE_ALT_MAX` above the ceiling and at most 120 m, `BATT_ARM_VOLT`, system id | same | `GF_MAX_HOR_DIST`, `GF_MAX_VER_DIST`, system id | same | existing tests |
+
+Sources: ArduPilot GCS failsafe (https://ardupilot.org/copter/docs/gcs-failsafe.html), RTL mode
+(https://ardupilot.org/copter/docs/rtl-mode.html), EKF failsafe
+(https://ardupilot.org/copter/docs/common-ekf-inav-failsafe.html), parameter renames
+(https://ardupilot.org/copter/docs/common-param-name-changes.html); PX4 safety
+(https://docs.px4.io/main/en/config/safety.html) and return mode
+(https://docs.px4.io/main/en/flight_modes_mc/return.html).
+
+## 14. Missions and tasks (spec section 5)
+
+### 14.1 Records
+
+`flightrisk/mission/model.py` (types in A2, used from D3 and D4): `Mission` (environment, areas with
+obstacle tops, targets, units, on-find policy, mission settings rows 129 to 142, tasks, no-entry areas,
+airspace plan, log), `Target` (references, status `searching`, `sighted`, `found`, `escorted`, `lost`),
+`Task` (type, place, required and preferred capabilities, band, precision tolerance, priority, created
+time, progress, state `unassigned` with reasons, `waiting_for_confirm`, `assigned`, `running`, `done`,
+`unsearched`, `abandoned`, assignee), `Sighting` (finder, point and uncertainty, per-target scores,
+attribution and its state, evidence, Claude opinion as an aid).
+
+### 14.2 Task types and how they fly
 
 | Spec task type | Generator | Flown as |
 | --- | --- | --- |
-| Wide bird's-eye sweep | `field_scale` lanes at the sweep band from the nadir swath (`fleet_scale.py`) | `assign_lanes` at the sweep-band slot |
-| Thermal sweep | the same with the thermal camera's footprint | `assign_lanes`, thermal pipeline (roadmap R1) |
-| Head-on area search | today's zone and lane planner (`coordinator.py`, `plan_paths.py`) | `assign_lanes` in the close band |
-| Close search of a flag, re-fly of a segment | flag uncertainty plus margin as a small area; today's re-flight segments (`lane_reflight.py`) | `assign_lanes` |
-| Keep watch | a hover point that sees the sighting | `assign_lanes` with one point and `on_complete: hover` until released |
-| Converge and verify | viewpoint ring (12.7) | one point per drone |
-| Moving-target local search | outward search of the r(t) disc (12.8) | `assign_lanes`, re-planned as r grows |
-| Escort (field only) | escort controller (12.9) | `escort_setpoint` commands |
+| Wide bird's-eye sweep | `field_scale` lanes in the sweep band from the nadir swath | `assign_lanes` at a sweep-band slot |
+| Thermal sweep | the same with the thermal footprint | `assign_lanes`; thermal pipeline is roadmap R1 |
+| Head-on area search | today's zone and lane planner | `assign_lanes` in the close band |
+| Close search of a flag; re-fly of a segment | flag uncertainty plus margin; today's re-flight segments | `assign_lanes` |
+| Keep watch | a hover point that sees the sighting | `assign_lanes` with one point, `on_complete: hover` until released |
+| Converge and verify | viewpoint ring (15.3) | one point per drone |
+| Moving-target local search | outward search of the r(t) disc (15.4) | `assign_lanes`, re-planned as r grows |
+| Escort (field only) | escort controller (15.5) | `escort_setpoint` |
 
-The coordinator stays the executor: it sends lanes, watches acks, nacks and telemetry, re-tasks and
-reports. Today's equal-zone plan becomes the head-on area search generator.
+### 14.3 Matching (spec 5.2; M-2)
 
-### 12.3 Matching (spec 5.2)
+1. **Hard filters**, never overridden: required capabilities; the feature on; task, routes to it and home
+   inside the unit's fences and range and clear of other tubes (section 11); battery for transit, task and
+   return to critical + reserve (10.6); predicted uncertainty within the task's tolerance; the unit not
+   held, manual, landing or in a fallback; every needed confirmation given.
+2. **Ranking by bands, not raw values:** positioning class (RTK, GPS within tolerance, dead reckoning),
+   then battery margin in 10-point buckets, then transit time in 30 s buckets, then idle before busy, then
+   not already blocked there, then unit id. A centimetre of accuracy never beats a battery bucket.
+3. **Task order:** tasks are matched by priority, then creation time, then id.
+4. **Running tasks are never reassigned** by a rerun; only a loss, a fallback or an operator action frees
+   them.
+5. **Every match records its input snapshot** (unit states, uncertainties, batteries, the bucketed
+   values) with its explanation, so a decision can be replayed exactly.
+6. **No match:** the task is listed unassigned with a reason per unit, shown on the map; the operator may
+   free or add a unit, change the task, or **accept the area as unsearched** (task state `unsearched`,
+   logged, shown on the map) (spec 5.2; M-12).
 
-`flightrisk/mission/matching.py`:
+### 14.4 Hand-off, re-task and search speed
 
-1. **Hard filters**, never overridden: required capabilities; the feature on; the task and the routes
-   to it and home inside the unit's fence and range (widened by uncertainty, section 11); battery for
-   transit, task and return plus reserve (energy model); predicted uncertainty within the task's
-   tolerance; the unit not held, manual, landing or in a fallback; every needed confirmation given.
-2. **Ranking:** better positioning, then battery margin, shorter transit, idle before busy, not already
-   blocked there; ties break on unit id.
-3. One task per unit at a time; a sensing unit takes appended work only after its own tasks.
-4. **Explanations:** for every task, why the unit was chosen and why each other unit was refused,
-   shown in the plan and on the map.
-5. **No match:** the task is listed unassigned with a reason per unit and shown on the map; never given
-   to an unfit unit, never dropped. Matching reruns when a unit frees up (AC-5.1).
-6. A task type is offered only if an available unit has its feature on.
+- A thermal flag becomes a person cue: a close-search task waits for a human confirm (AC-5.2); a
+  level-camera unit qualifies only if its uncertainty plus the flag's is within tolerance.
+- A lost unit's tasks wait for a confirm (section 12); a landed unit is never launched.
+- **Search speed (spec 5.9; M-6):** lane spacing ≤ footprint width × (1 − overlap); speed ≤ (1 − overlap)
+  × footprint length along the track × detection rate, capped by the airframe and the step cycle. For a
+  level forward camera the footprint is the ground band in which a person appears at least the detection
+  profile's minimum height in pixels, between the camera's near edge and that range; its length along the
+  track is that band's depth. Before the first measurement the rate is the catalogue's nominal rate for
+  the profile (marked unverified) and the speed starts at the lower of that and half the airframe speed.
+  A new `set_speed` command (v2, authority only) changes the speed mid-lane; the Tello applies it at its
+  next step. The edge reports its achieved rate (`det_hz`) in the detection-profile telemetry object.
 
-### 12.4 Hand-off and re-task (spec 5.3, 5.4)
+## 15. On-find flows (spec 5.5 to 5.8)
 
-- A thermal flag becomes a person cue: a close-search task of the flag's uncertainty plus a margin is
-  proposed with `needs_confirmation` and waits for a human (AC-5.2). A GPS unit with a level camera
-  qualifies only if its uncertainty plus the flag's is within tolerance. The sweep continues and
-  findings attach to the flag.
-- A lost unit's unfinished tasks are matched again with their progress; its last known area becomes a
-  no-entry area until a human confirms; held or manual units never get re-tasked work; a landed unit is
-  never launched (AC-5.3, spec 6.1(4)).
+### 15.1 Targets, sightings and verification (M-4)
 
-### 12.5 Targets, sightings and verification (spec 5.5)
+- The ground scores every detection against every target (it scores today; the edge only keeps
+  embeddings, `edge_device.py:810-813`), so multi-target needs no edge wire change.
+- Each target has its own match threshold. A sighting is attributed to the best target; when the top two
+  scores are within `find.ambiguity_margin` it is marked **ambiguous** and shows both. The operator can
+  re-attribute until Confirm, after which the attribution is locked. The false-alarm rate grows with the
+  number of targets, which the panel states next to the target list.
+- On a sighting the finder keeps watch until its return threshold; others continue; the operator answers
+  on the laptop (Converge, Confirm found, Not verified, Dismiss). Only a human Confirm marks a target
+  found; scores, viewpoint counts and the Claude opinion are labelled aids.
 
-- Each target has its own references; the ground scores every detection against every target and
-  attributes the sighting to the best match; the operator can re-attribute (AC-5.4). Vision builds one
-  embedding set per target (today one, spec appendix A).
-- On a sighting the finder keeps watch until its return threshold; the others continue. The operator
-  answers on the laptop: Converge, Confirm found, Not verified, or Dismiss.
-- **Only a human Confirm marks a target found** (spec 5.5(3), AC-5.5). Scores, the viewpoint count and
-  the Claude second opinion are labelled aids.
-- After Confirm: Continue (pre-selected while targets remain) or End search (pre-selected for the last
-  target). Confirming the last unfound target ends the search.
+### 15.2 On-find policy
 
-### 12.6 On-find policy (spec 5.5(5))
+Set at Plan, changeable at any time, logged. On End search: keep watch (default; watchers and escorts stay
+until their thresholds or release, others return), RETURN ALL, or LAND ALL. This replaces
+`recovery.py:189` for fleets.
 
-`find.on_find_policy` is set at Plan and changeable at any time by the operator; every change is
-logged. On End search: (a) keep watch (default): watchers and escorts stay until their return
-thresholds or release, all others return; (b) RETURN ALL; (c) LAND ALL. This replaces
-`recovery.py:189`, which lands every fleet drone on a confirmed match today; the legacy single-drone
-path keeps its own behaviour.
+### 15.3 Converge and verify
 
-### 12.7 Converge and verify (spec 5.6)
+N viewpoints on a ring at no less than `find.approach_distance_cm`, spread in bearing, pairwise separated,
+each at its own slot in the close band. **Pre-selection is the N nearest eligible drones by distance**,
+as spec 5.6 says, not the 5.2 ranking; the operator can change it; the hard filters of 14.3 still apply.
+If the ring, fences or batteries cannot hold N, fewer go with the reason. The verification window lapsing
+resumes converged drones, keeps the finder watching and leaves the alert open.
 
-`flightrisk/mission/viewpoints.py`: N viewpoints on a ring around the last known location at no less
-than `find.approach_distance_cm`, spread in bearing, each pair at least the required separation apart
-(section 11), each drone at its own slot, never stacked. If the ring, fences or batteries cannot hold N,
-fewer go and the operator sees why (AC-5.6). The Converge press is the confirmation to approach. Each
-viewpoint reports person seen or not, per-target scores, the crop and "k of N viewpoints match"; the
-Claude opinion is shown when on and consented, labelled as an aid, with a banner when it is off. The
-verification window lapsing resumes converged drones, keeps the finder watching and leaves the alert
-open.
+### 15.4 Moving-target local search
 
-### 12.8 Moving-target local search (spec 5.7)
+r(t) = sighting uncertainty + `find.running_speed_cm_s` × time since last seen, capped; cut to fences and
+allowed areas minus other no-entry areas; outward at the 14.4 speed; re-planned as r grows; stops on the
+operator, the time limit, the disc covered once, or every drone at its threshold; a new sighting resets it.
 
-`flightrisk/mission/local_search.py`: radius r(t) = sighting uncertainty + `find.running_speed_cm_s` ×
-time since last seen, capped at `find.local_search_max_radius_cm`. The disc is cut to the mission
-fence, the drones' fences and allowed zones, minus no-entry areas other than the subject's own. It uses
-the converged drones, the finder or the escorts (changeable), works outward at the 12.10 speed,
-re-plans as r grows, and shows the share searched. It stops on the operator, the time limit
-(`find.local_search_time_s`), the maximum disc covered once, or every drone at its return threshold. A
-new sighting resets centre and clock (AC-5.7).
+### 15.5 Escort, field only (M-3)
 
-### 12.9 Escort, field only (spec 5.8)
+- **Setpoints:** the ground computes each escort's setpoint at 1 Hz from the subject's latest geolocated
+  position (detections carry `cam` and `pitch_deg`), at `escort.standoff_cm` on its own bearing and
+  `escort.altitude_cm` in the close band, pairwise separated; **allowed zones** are the mission fence minus
+  every no-entry area other than the subject's own and minus the route tubes of every other drone's
+  running task; a setpoint that cannot satisfy them is not sent and the escort holds. The edge holds when
+  a setpoint is older than 2 s, and refuses setpoints while landing (10.2).
+- **Hand-off before the return threshold:** the hand-off level is the return threshold +
+  `escort.handoff_margin_pct`, so the relief is matched before the escort must return; if the relief is not
+  in view by the return threshold, the escort returns anyway and the operator is alerted.
+- **"The relief has the subject in view"** means the relief's own detections are attributed to the same
+  target and its geolocated positions lie within the combined uncertainty of the escort's subject position
+  for `escort.handoff_frames` consecutive processed frames; only then does the escort leave.
+- **Lost from view** for `escort.lost_from_view_s`: hold, alert, local search; resume only after a human
+  confirms a new sighting. **At a limit:** stop there, keep watch, alert.
+- **Ends** when the operator ends it, the search ends, or no escort can continue (spec 5.8).
+- **Ground crash:** an escort is outside its own zone, so after the long link-loss wait it returns only if
+  its task corridor reaches home, otherwise it lands near the subject (documented, section 10.9).
 
-`flightrisk/mission/escort.py` runs on the ground at 1 Hz: from the subject's latest geolocated
-position (detections carry `cam` and `pitch_deg`, section 17; `geolocate.pixel_to_ground`) it computes
-each escort's setpoint at `escort.standoff_cm` horizontally on its own bearing, at
-`escort.altitude_cm` in the close band, pairwise separated and never stacked, inside the fence and
-allowed zones and outside other no-entry areas. It sends `escort_setpoint` (section 15); the edge flies
-it with the MAVLink position target and holds if a setpoint is older than 2 s. Escort is refused
-indoors with the reason of spec 5.8. If the subject crosses a limit, escorts stop at it and keep watch;
-lost from view for `escort.lost_from_view_s`: hold, alert, start a local search. Hand-off: at the return
-threshold plus `escort.handoff_margin_pct` a relief is matched; the escort leaves once the relief
-reports the subject in view; with no relief the operator is alerted and the escort returns at its
-threshold (AC-5.8).
+## 16. Roles, credentials and devices (spec sections 2 and 9.4; H-4)
 
-### 12.10 Search speed and thoroughness (spec 5.9)
+### 16.1 Credentials decide the role
 
-`flightrisk/mission/speed.py`: lane spacing ≤ footprint width × (1 − `search.required_overlap_pct`);
-speed ≤ (1 − overlap) × footprint length along track × measured detection rate, capped by the
-airframe's speed and, for stepped sensing, the step cycle (`search.step_cycle_speed_cm_s`, the Tello's
-30 cm/s estimate). The edge reports its achieved detection rate in telemetry (`det_hz`, in the
-`detection_profile` group of #211); the ground lowers a unit's commanded speed when the rate drops
-(AC-5.9). The footprint comes from the camera, altitude and pitch (catalogue, section 6).
+- **The role comes from the credential alone**, never from anything the client says about itself.
+- **Operator:** `FLIGHTRISK_API_KEY`, accepted only on a loopback connection, so the operator key never
+  leaves the ground host. A non-loopback connection that presents it is downgraded to observer rights
+  (LAND ALL and Land, below) and told to pair; it is never refused outright, so a phone set up the old way
+  can still land.
+- **Supervisor and observer:** per-device tokens. The operator pairs a device from the dashboard (a one-time
+  code or QR code holding the token and the ground's TLS certificate fingerprint) and chooses its role and
+  its kind (`laptop` or `phone`). The ground stores only a salted hash of each token with its label, role,
+  kind, creation and last-seen time (`~/.flightrisk/devices.json`, beside the other files and outside the
+  repository) and can revoke one device at any time. The token never appears in logs, presets or the vault.
+- **Transport:** supervisor tokens are accepted only over TLS (`wss`, with the paired fingerprint pinned)
+  or loopback; a supervisor token over cleartext is refused with "pair over TLS". Observer tokens are
+  accepted over cleartext on the local network, because they can only land.
+- **Laptop-only actions** (approving or refusing confirmations, answering match alerts, changing the
+  on-find policy, safety settings, homes and less-safe values) need the operator key or a supervisor token
+  of kind `laptop` where the table allows it; the kind is part of the token record, not a client claim.
 
-## 13. Roles and authentication (spec sections 2 and 9.4)
+### 16.2 Events by role
 
-- **Credentials.** Three keys, each from the environment or `~/.flightrisk-fleet.env` like the edge
-  token, never in a committed or synced file: `FLIGHTRISK_API_KEY` (operator, as today,
-  `dashboard/app.py:204`), `FLIGHTRISK_SUPERVISOR_KEY` and `FLIGHTRISK_OBSERVER_KEY`. A connection's
-  role is the role of the key it presents; with no keys configured, only loopback clients connect and
-  they are operators (today's local-development behaviour; a non-loopback bind already needs the API
-  key).
-- **One role table** (`flightrisk/dashboard/roles.py`) maps every Socket.IO event and HTTP route (45
-  and 15 today) to the roles allowed to use it. It is deny by default: a test enumerates every
-  registered handler and route and fails if one is missing from the table. The handler checks the role
-  before doing anything and answers a refusal with the role and the event.
-- **What each role may do** is the spec's table (section 2): the operator everything; the supervisor
-  RETURN ALL, LAND ALL, per-drone Return and Land, acknowledging alerts, and approving or refusing
-  confirmations; the observer, from a phone, LAND ALL and per-drone Land only. Phones never answer
-  confirmations or match alerts, change the on-find policy or safety settings, edit homes, or accept
-  less-safe values, because those events are not on any phone's allow-list and the ground refuses them
-  from a client that declared itself a phone in its handshake (`client: "ios"` or `"android"`).
-- **Handshake:** on connect the ground sends `session` with the role and the list of events the client
-  may emit, so the apps and the dashboard enable only what the role allows (AC-2, AC-9.2).
+"Op" is the operator on the ground host; "Sup laptop", "Sup phone", "Obs phone" and "Obs view" are paired
+devices (an observer on a dashboard view uses a laptop observer token). Every Socket.IO event and HTTP
+route is in `flightrisk/dashboard/roles.py`; a test enumerates the registered handlers and routes and fails
+on any missing entry (deny by default).
 
-## 14. Operator controls and displays (spec section 9)
+| Event class | Op | Sup laptop | Sup phone | Obs phone | Obs view |
+| --- | --- | --- | --- | --- | --- |
+| LAND ALL, per-drone Land | yes | yes | yes | yes | yes (hard-allowed) |
+| RETURN ALL, per-drone Return | yes | yes | yes | no | no |
+| Acknowledge an alert (mark seen; not an answer) | yes | yes | yes | no | no |
+| Approve or refuse a confirmation (no-entry, Start, less-safe, standby values) | yes | yes | no | no | no |
+| Answer a match alert (Confirm, Not verified, Dismiss, Continue, End search, Converge, Escort) | yes | no | no | no | no |
+| Change the on-find policy, mission settings, safety settings, homes | yes | no | no | no | no |
+| Plan, Start, manual flight, re-task, re-fly | yes | no | no | no | no |
+| Resume a held drone nobody controls | yes | yes | yes | no | no |
+| Choose a detection profile | yes | yes | yes | no | no |
+| Limited inventory edits (add a unit of a built-in model, availability, non-safety features) | yes | yes | yes | no | no |
+| Other inventory edits, custom models, device pairing and revocation | yes | no | no | no | no |
+| Read everything (state, plan, mission, targets, parameters, inventory) | yes | yes | yes | yes | yes |
 
-- **RETURN ALL** is first in the top bar, always visible, never disabled, one press, no dialog, its own
-  shortcut (Shift+R). **LAND ALL** is always visible, never disabled, in the danger colour, Shift+L,
-  placed apart from RETURN ALL, one press, no dialog, and overrides every return (AC-9.1). A client
-  that cannot reach the ground says that nothing was sent and points to the local land keys or the
-  drones' own controls.
-- **Per drone:** Return and Land as in section 10.7; Take control and Resume search as today.
-- **Map:** each home as a marker in the drone's colour with its id; positions with their uncertainty
-  ("± N cm", "uncalibrated" while a placeholder); returns with route and progress; drones landed in
-  place where they landed, with the reason; no-entry areas; tasks, assigned and unassigned, with
-  reasons.
-- **Drone cards** show home and distance, uncertainty, return reserve, the state of section 10.2, the
-  countdowns ("Returning in 7 s unless the link returns", "HELD: returning home in 87 s") and each
-  value's source (spec 9.5).
-- **Match alert panel** (laptop only): attributed target (changeable), score per target, crop and
-  viewpoint evidence, "k of N viewpoints match", the Claude opinion labelled as an aid, the verification
-  countdown, unfound targets and the on-find policy; buttons Converge N, Confirm found, Not verified,
-  Dismiss; after Confirm, Continue, End search and Escort N (field only); local-search and escort
-  panels as in spec 9.3.
-- Every automatic action is shown with its reason within 2 s on the dashboard and both apps, and is
-  logged (AC-6.5).
+Contradictions resolved: spec section 2 lets an observer send nothing but LAND ALL and Land, while 9.4
+lets "phones" resume a held drone, choose a detection profile and make inventory edits; the specific
+observer row wins, so those are supervisor-phone actions. Limited inventory edits are not "settings" in
+the sense of section 2 (spec 9.4 grants them explicitly). A supervisor may acknowledge an alert (spec 2),
+which only marks it seen; answering it stays with the operator (spec 9.4). Spec 6.1(3) says LAND ALL and
+Land are never gated, so they are allowed to every authenticated session, dashboard observers included,
+although the section 2 table mentions them only for observer phones (M-12; decision D-B3).
 
-## 15. Fleet protocol and telemetry
+### 16.3 Land never fails closed
 
-All additions are additive. New ground-to-edge types are protocol v2 only and are sent only to an edge
-whose `describe_unit` reply advertises them; older edges are never sent them.
+The LAND ALL and per-drone Land handlers check only that the session is authenticated; a missing role
+entry, an error in the role lookup or a revoked supervisor token on an authenticated connection never
+blocks them. A test injects a role table that raises and checks that LAND ALL and Land still go out.
+
+## 17. Operator controls and displays (spec section 9)
+
+RETURN ALL first in the top bar, always visible and enabled, one press, Shift+R; LAND ALL always visible
+and enabled, danger colour, Shift+L, apart from RETURN ALL, one press, overriding every return. A client
+that cannot reach the ground says nothing was sent and points to the local land keys. Per-drone Return and
+Land per section 10.8. The map shows homes, uncertainties, return routes and progress, landing order,
+landed-in-place drones with reasons, zones, corridors, bands, obstacle tops and no-entry areas with their
+kind. Drone cards show home and distance, uncertainty (a number; no calibration label), reserve,
+state, countdowns and each value's source. The match alert panel is as spec 9.3, with the ambiguity mark
+of 15.1. Every automatic action shows its reason within 2 s and is logged (AC-6.5).
+
+## 18. Fleet protocol and telemetry
+
+Additions are additive; new types are v2 only and are sent only to an edge whose `describe_unit` reply
+advertises them. Shapes are defined once in A2.
 
 | Addition | Direction | Content | Older peers |
 | --- | --- | --- | --- |
-| `return` (fenced v2 command) | ground → edge | `wait` (true: hold at the slot as "waiting to return"; false: go now) | never sent to an edge without `return` in its reply; v1 fallback is today's `land` |
-| `on_complete: "return"` | ground → edge in `assign_lanes` | plus `hover_timeout_s` as the re-task window | today's choices are `hover` and `land` (`fleet_protocol/constants.py:165`) |
-| `zone`, `corridor`, `cleared`, `speed_cm_s` | ground → edge in `assign_lanes` | the own zone rectangle, the corridor polygon (at most 32 points, within `MAX_LISTED_NUMBERS`), operator-cleared rectangles (indoor), the commanded search speed | optional keys |
-| `escort_setpoint` (fenced v2 command) | ground → edge | target position (plan frame and latitude and longitude), altitude, bearing, `valid_s` | field units only |
-| `describe_unit` (read-only query) | ground → edge | `hardware-profiles-detail.md` section 12.2: answered from any ground, never feeding the watchdog, its own per-connection cache, at most one per connection per 2 s; the reply's `unit` now also carries the spec 4.1 facts, each with `status` | not in `CONFIG_COMMAND_TYPES` |
-| `describe_unit` retry (round 2 finding N7) | ground | after a timeout (5 s) or a `busy` nack the ground retries at 2, 4, 8 and then every 30 s while the `unit_rev` is unchanged; Plan says which unit it is waiting for | |
-| `unit_rev` in the v2 `hello` | edge → ground | hash of the start-time resolution, re-sent on every reconnect | ignored by older grounds |
-| `rth` telemetry object | edge → ground | `state`, `reason`, `home` (plan-frame x and y, two numbers), `dist_cm`, `unc_cm`, `reserve_pct`, `threshold_pct`, `countdown_s`, `cannot_recall` | one top-level field: worst case 37 + 1 = 38 of `MAX_FIELDS = 48` after #211 |
-| `det_hz` | edge → ground | achieved detection rate, inside the detection-profile telemetry object of #211 | no new top-level field |
-| `detections` keys `cam`, `pitch_deg` | edge → ground | the camera and its pitch for each frame | ASSUMPTION A6 |
+| `return_home` | ground → edge | `wait`, `max_wait_s`; without `wait` accepted from any authenticated ground, with `wait` only from the authority (M-5) | never sent to an edge that does not advertise it; such an edge is shown "cannot return (older edge)" and held, never landed |
+| `on_complete: "return_home"` | in `assign_lanes` | with `hover_timeout_s` as the re-task window (≥ 1 s, since the validator requires a positive value, `validate.py:182-185`) | older choices `hover`, `land` |
+| `corridor`, `landing`, `no_entry`, `speed_cm_s` | in `assign_lanes` (`zone` already exists and is required, `validate.py:135`) | the corridor as a list of point objects `{"x_cm", "y_cm"}` (objects, so the 16-per-list and 64-per-message number caps of `constants.py:259`, `:262` never bind); `landing` = area id, place, interval; `no_entry` = areas as point-object polygons with kind and id | optional keys |
+| `set_no_entry` | ground → edge (v2, authority; also accepted from a standby when it adds an area) | the full current list | |
+| `set_speed` | ground → edge (v2, authority) | speed in cm/s | |
+| `escort_setpoint` | ground → edge (v2, authority) | target position, altitude, bearing, `valid_s` | field units only |
+| `describe_unit` | read-only query | as `hardware-profiles-detail.md` section 12.2; never feeds the watchdog; own cache; one per connection per 2 s; retried by the ground at 2, 4, 8 s and then every 30 s | not a configuration command |
+| `unit_rev` | in the v2 edge `hello` | hash of the start-time resolution | ignored by older grounds |
+| `rth` | telemetry object | state, reason, home, distance, uncertainty, reserve, threshold, countdown, cannot-recall, landing place | one top-level field: 37 + 1 = 38 of 48 |
+| `cam`, `pitch_deg` | in `detections` | camera and pitch per frame | A6 |
 
-The edge's privacy screen rules (no key containing `feature`, `reid`, `frame`, `image` and the other
-forbidden parts, `fleet_protocol/constants.py:198-255`) apply to every new key; the names above pass.
+Every motion command and `return_home` is refused with `landing` while the drone lands (10.2). Every new
+key passes the privacy screen.
 
-## 16. Mobile contract and apps (spec 9.4)
+## 19. Mobile contract and apps (spec 9.4)
 
-- **Every phone** keeps LAND ALL and per-drone Land, pinned; **supervisor phones** also get RETURN ALL
-  (`return_all`) and per-drone Return (`drone_command {"command": "return"}`). Phones may also resume a
-  held drone nobody controls, choose a detection profile and make the limited inventory edits. They may
-  not plan, start, fly manually, answer confirmations or alerts (Confirm, Continue, End search,
-  Converge, Escort), change the on-find policy or safety settings, edit homes or accept less-safe
-  values. They never queue commands (spec 9.4).
-- **New events a phone handles:** `session` (role and allowed events), `inventory`, `flight_params`,
-  `inventory_ack`, `return_all_ack` (each drone's result), `targets` and `sightings` (read-only),
-  `mission` (on-find policy, unfound targets, tasks with reasons, no-entry areas), and the new keys of
-  `fleet_status` (home, distance, uncertainty, reserve, state, countdowns, reasons, cannot be
-  recalled). Apps ignore unknown keys at every depth (`docs/mobile-contract.md`, "Compatibility
-  rules").
-- **New emits:** `return_all` and `drone_command` `return` (supervisor only), `get_inventory`,
-  `get_flight_params`, `inventory_add_unit`, `inventory_set_available`, `inventory_set_feature`.
-  Fixtures for every event and every role's allowed and forbidden emits are generated by Python.
-- **iOS** stays an operator console. **Android** keeps phone-as-edge unchanged; its direct
-  single-Tello mode is a non-goal of the spec and is not changed (finding 15 recorded, not fixed).
-- Apps show the same states, homes and reasons as the dashboard within 2 s (AC-6.5, AC-9.2).
+Phones pair for a supervisor or observer token (16.1) and receive the `session` event with their role
+and allowed events. Every phone keeps LAND ALL and per-drone Land pinned; supervisor phones also get
+RETURN ALL, per-drone Return, alert acknowledgement, resume-held, detection profile and the limited
+inventory edits. New events handled: `session`, `inventory`, `flight_params`, `inventory_ack`,
+`return_all_ack`, `targets`, `sightings`, `mission`, and the new `fleet_status` keys (home, distance,
+uncertainty, reserve, state, countdowns, reasons, cannot-recall). iOS stays an operator console; Android
+keeps phone-as-edge unchanged and its direct single-Tello mode is a spec non-goal. AC-6.5's 2 s on the
+apps is tested by the ground's emission timing test plus app reducer tests that render the reason from
+the fixture event synchronously, and checked once on a device (M-9).
 
-## 17. Adapters and frame seams (production first)
+## 20. Adapters and frame seams
 
-`hardware-profiles-detail.md` section 11 is kept, re-ordered so the production adapter comes first:
+1. **MAVLink/GPS (production):** `MavlinkFleetDrone` over MAVSDK, frames from the companion computer's
+   capture source (`--source camera` or `url`; it does not declare `STEPPED_SENSING`), edge-guided return
+   with the autopilot fallback (section 13), receiver uncertainty, autopilot home, uploaded fence.
+2. **Tello (test adapter):** `TelloController`, frames from its video, dead-reckoned return, growth
+   placeholders, pose-origin home; no new Tello-only constant.
+3. **Fake and SITL:** the fake imitates a catalogue entry; SITL vehicles are MAVLink units verified
+   simulated by their edge (section 6).
 
-1. **MAVLink/GPS (production)**: `MavlinkFleetDrone` over MAVSDK (`mavlink_fleet.py`), frames from the
-   companion computer's capture source (`--source camera` or `url`; it does not declare
-   `STEPPED_SENSING`, `mavlink_fleet.py:376-385`), return method `autopilot_rtl`, positioning
-   uncertainty from the receiver, home from the autopilot, fence uploaded before arming (B3).
-2. **Tello (test adapter)**: `TelloController` (`tello.py`), frames from the drone's video, return
-   method `edge_dead_reckoned`, positioning uncertainty from growth placeholders, home at the pose
-   origin. No new Tello-only constant is added beyond the read-only SDK facts already registered.
-3. **Fake and SITL**: the fake drone imitates a catalogue entry's capabilities (AC-4.3); SITL vehicles
-   are MAVLink units marked `simulated` in the inventory.
+Frame sources (`CV2FrameSource` `edge_device.py:307`, `DroneFrameSource` `:444`, `ResilientCaptureSource`
+`:672`) are wrapped so every frame carries `FrameMeta`; detections carry `cam` and `pitch_deg`. One
+detection pipeline per unit.
 
-Frame sources (`CV2FrameSource` `edge_device.py:307`, `DroneFrameSource` `:444`,
-`ResilientCaptureSource` `:672`) are wrapped so every frame carries `FrameMeta` (camera, mount, sensor,
-pitch, `FrameStamp`), and detections carry `cam` and `pitch_deg` to the ground, which escort and
-geolocation need. One detection pipeline runs per unit.
+## 21. Test strategy
 
-## 18. Test strategy: SITL first for production behaviour
+### 21.1 Tiers
 
-### 18.1 Tiers
-
-| Tier | What | Where it runs | Gate |
+| Tier | What | Where | Gate |
 | --- | --- | --- | --- |
-| 1. Unit and fake | Every state-machine transition, matcher rule, airspace check, role rule, registry and resolver rule; the simulated MAVSDK link (`tests/test_mavlink_fleet_edge.py` style) and the fake drone | every PR, CI (Linux), the Mac, the ZBook (the suite is portable since #189) | required |
-| 2. SITL fleet | ArduCopter SITL (and PX4 SITL for the PX4-specific paths) fleets of 2 to 10 vehicles with real edge processes and the real ground | opt-in `sitl` marker (`pytest.ini` excludes it by default); the Mac natively (ArduCopter 4.6.3 built natively, as verified in `docs/open-drone-support.md`) or a Linux machine | required for every PR marked "SITL" in `tasks.md`; its log is attached to the PR |
-| 3. Hardware | Indoor Tello runs (Dev/test) and, later, field runs with a safety pilot | the ZBook for Tellos; field later | listed per PR; AC-6.6 |
+| Unit and fake | every transition, matcher rule, airspace check, role rule, registry and resolver rule; property tests | every PR, CI (Linux), the Mac, the ZBook | required |
+| SITL | ArduCopter (and PX4 for PX4 paths) fleets of 2 to 10 with real edges and the real ground; `scripts/field_fleet_ground.py` until D3, then the dashboard | opt-in `sitl` marker; the Mac natively or Linux | required for PRs marked SITL; log attached |
+| Hardware | indoor Tello runs (ZBook); later field runs with a safety pilot | ZBook; field | listed per PR |
 
-### 18.2 The SITL fleet harness (PR B1)
+### 21.2 The SITL fleet harness (B1)
 
-- `scripts/sitl_fleet.sh --count N --autopilot ardupilot|px4 [--origin LAT,LON,ALT]` starts N vehicles,
-  extending `scripts/start_sitl.sh` (instance N on TCP 5760 + 10 N; `--native` uses a local
-  `sim_vehicle.py`). Each instance gets its own system id and a home offset on a grid so homes are
-  separated (spec 7.2). PX4 instances use PX4's multi-vehicle SITL with MAVSDK ports 14540 + N
-  (ASSUMPTION: verified in B1, since no PX4 SITL has run yet).
-- `tests/integration/sitl_fleet.py` (pytest fixtures): starts the vehicles, sets the failsafe
-  parameters the edge requires (as `tests/integration/test_sitl_fleet.py` does today), starts one real
-  edge process per vehicle (`python -m flightrisk.edge_device --drone mavlink --source file` with replay
-  frames, so no camera is needed) and the real ground (`scripts/field_fleet_ground.py` until D3, then
-  the dashboard), and tears everything down.
-- **Scenario catalogue** (`tests/integration/test_sitl_scenarios.py`), each a spec acceptance test:
-  RETURN ALL with four drones whose return routes conflict (ordering, no stacking, landing one at a
-  time); LAND ALL during returns (AC-6.3); long link loss inside and outside the own zone (AC-6.2);
-  kill an edge (autopilot link-loss action); battery drain to the return threshold and to critical
-  (SITL battery simulation parameters); GPS loss (`SIM_GPS_DISABLE`, a positioning fault); autopilot
-  fence breach with the uploaded fence; Start refused for a missing fix or a far autopilot home
-  (AC-7.1); capability matching with a mixed simulated fleet (a custom thermal model left unassigned
-  without a thermal unit, AC-5.1); converge with three drones (AC-5.6); escort of a simulated subject
-  that moves at running speed (a test detector emits geolocated detections along a path) with a relief
-  hand-off (AC-5.8); local search growth (AC-5.7); and a ten-vehicle separation stress run (AC-8.1,
-  AC-7.3).
-- **Scale and timing:** SITL runs at real time (speed-up 1), because edge and ground timers are wall
-  clock. Detectors are off or replaced by the test detector so ten edges fit on one machine
-  (ASSUMPTION: ten ArduCopter instances plus ten edges fit on the Mac; B1 measures CPU and records the
-  largest fleet that keeps telemetry at its rate).
+`scripts/sitl_fleet.sh --count N --autopilot ardupilot|px4` starts N vehicles with their own system ids
+and separated homes; fixtures set the failsafe parameters of section 13, start one real edge per vehicle
+(replay frames, no camera) and the ground. B1 merges after A3, so it uses the edge's new command line
+(`--model`, `SEAM-3`) from the start (nitpick 11). B1 records the local `AP_FWVersion.h` patch that the
+native Mac build needs (`docs/sitl-demo.md:122`, a local patch, not upstream) in the harness's setup
+notes (nitpick 10), the SITL fingerprint each autopilot reports (section 6), the PX4 multi-vehicle
+command, and the largest fleet that keeps telemetry at its rate. SITL runs at real time.
 
-### 18.3 The Windows ZBook's role
+### 21.3 Scenario catalogue and testability (M-9)
 
-The ZBook (4 cores, no GPU, `docs/fleet-setup.md`) is the indoor Dev/test rig: two Tellos on two Wi-Fi
-adapters (layout B), the hardware runs of AC-6.6 (a Tello whose ground link is cut returns and lands
-within its uncertainty bound of the taped mark, ten runs) and of each Dev/test row of the event table,
-and the Windows portability check of the full test suite and the launcher. It may also run the ground
-station against a SITL fleet hosted on the Mac over the LAN, which exercises the field ground on
-Windows; it is not the SITL host for large fleets.
+Each SITL scenario is named in the PR that needs it (`tasks.md`). Rules:
 
-## 19. The literal guard test (#197)
+- **Absolute timing bounds** replace comparisons with an old build: after LAND ALL every drone's edge
+  sends LAND within 1 s and the autopilot reports LAND mode within 2 s (RTH-20).
+- **No automatic takeoff** is a property test: random sequences of every event, command and timeout,
+  driven through the state machine and the ground's senders, never produce a takeoff (RTH-21).
+- **AC-6.6** uses a geometry that can pass with the placeholders: a 300 cm out-and-back lane in a 400 by
+  400 cm room, with the uncertainty bound at its default of 50 cm, where the predicted uncertainty at home
+  stays below the bound; ten taped runs on the ZBook.
+- **Indoor AC-7.1** (marks confirmed) has its own requirement (RTH-25).
 
-`hardware-profiles-detail.md` section 14 is kept (rules A to F, name words derived from the registry ids, allowlist
-keyed by file, enclosing scope, kind, callee or target, name and value with exact counts, the Kotlin
-check moved out with the Android direct mode). The scope adds `flightrisk/mission/` and
-`flightrisk/drone/rth/` once they exist. Re-measured on `b0027a2` with the ids of `parameters.md`: 519
-findings with 509 distinct keys in 57 of the 76 files in scope (`guard_main.txt` lists them;
-`guard_rule_prototype.py.txt` is the prototype).
+### 21.4 The Windows ZBook
 
-## 20. Behaviour changes, by phase (complete list)
+The indoor Dev/test rig: two Tellos on two adapters, the C7 hardware gate (AC-6.6), the Windows
+portability run of the suite and the launcher, and optionally a ground against a SITL fleet on the Mac over
+the LAN. It is not the SITL host for large fleets.
 
-Rule for every phase: **constructor defaults keep today's behaviour; only resolved defaults change.**
-`SafetyEnvelope`, `LaneExecutor`, `ManualControl` and the coordinator keep today's constructor
-defaults, and the new defaults arrive through the resolver at edge start, dashboard start and Plan. Tests
-that build these objects directly therefore keep testing today's mechanisms (a land on link loss is
-still reachable with `link.loss_action = land`), and only tests that go through a start path or a plan
-default change. Each PR may edit only the existing assertions listed for it below; if any other
-existing assertion fails, the PR stops and the change is split out for its own review. A parity test
-(`tests/test_param_parity.py`, PR A1) probes every environment alias and flag at both ends of today's
-range and the target bound and fails on any difference that is not listed here.
+## 22. The literal guard test (#197)
 
-**Phase A: no behaviour change.** A5 changes how the launcher hands values to its processes
-(`FLIGHTRISK_LAUNCHER_PARAMS` for edges and the ground, round 2 finding B2) but not the values; it
-keeps today's rule that the window wins for the three variables the launcher strips
-(`commands.py:44-46`) until C4. Assertions A5 may edit: `tests/test_launcher_commands.py:67`
-(`--alt-slot` no longer passed) and `:119-121` (the three variables travel in the launcher layer).
+As in `hardware-profiles-detail.md` section 14 (rules A to F, name words derived from the registry ids,
+allowlist keyed by file, enclosing scope, kind, callee or target, name and value with exact counts). The
+scope adds `flightrisk/mission/`, `flightrisk/drone/rth/` and `flightrisk/drone/autopilot_fence.py` once
+they exist. Measured on `fc5f6aa` with the 154 ids of `parameters.md`: 522 findings with 512 distinct keys
+in 57 of the 76 files in scope (`guard_main.txt`, regenerated with this revision).
 
-**Phase B (field only; every change below concerns simulated MAVLink units today):**
+## 23. Migration notes for operators
 
-1. B2: Start is refused for a field drone whose receiver accuracy exceeds `home.accuracy_cm`, whose
-   autopilot home is farther than `home.max_offset_cm`, whose home is outside the mission fence, or
-   whose home is too close to another without sharing a landing area (spec 7.2).
-2. B2: an autopilot home that changes in flight lands the drone in place with "no known home".
-3. B3: the edge uploads the drone's fence and the mission fence to the autopilot before arming; a failed
-   upload or read-back, or a fence action other than return or land, refuses the takeoff.
-4. B4: on a MAVLink unit the critical battery is the autopilot's critical action, checked before
-   takeoff, instead of the edge landing at 15 %; the autopilot's link-loss action must be return or
-   land; a lost GPS fix is a positioning fault that lands in place.
+These go into `docs/launcher.md`, `docs/fleet-setup.md` and `docs/open-drone-support.md` with the PR that
+causes them:
 
-**Phase C:**
+- **Presets** (`launcher.json`) load unchanged; drones become implicit `tello` units; new keys are written
+  on the next save (A5).
+- **Ceiling file:** the format is unchanged; from C5 the launcher writes resolved values.
+- **Shell exports that win from C5 (Q1):** `FLIGHTRISK_GEOFENCE_CM`, `FLIGHTRISK_CEILING_CM`,
+  `FLIGHTRISK_CEILING_MARGIN_CM` exported in a shell profile were ignored by the launcher and win from C5;
+  C4 already warns about each, with its value.
+- **`FLIGHTRISK_LINK_LOSS_LAND_S`** keeps its name and sets `link.loss_detect_s`; while
+  `link.loss_action` is `land` (today's Tello default) its old meaning holds exactly; from C4 the launcher
+  and the edge warn that its meaning changes at C7 and name `FLIGHTRISK_LINK_LOSS_WAIT_S` and
+  `FLIGHTRISK_LINK_LOSS_ACTION` (M-8).
+- **Companion computers:** C4 lists every setting that C5 will refuse, so a field edge can be fixed before
+  C5 lands instead of failing to start in the field (M-8).
+- **Phones (C3):** a phone that uses `FLIGHTRISK_API_KEY` over the network keeps LAND ALL and Land and
+  must be paired for anything else.
+- **Tello tuning values (user direction):** the depth threshold, settle tolerances, refusal caps and the
+  other Tello-coupled values are no longer controls or warnings anywhere; developers may still set their
+  environment variables for bring-up. #198 drops its depth-threshold control and uncalibrated warning
+  before it merges, and a small in-flight PR makes the sidestep off by default.
+- **Autopilots (B4):** the parameter table of section 13 with the values to set on each autopilot.
 
-5. C2 adds RETURN ALL and per-drone Return (new controls; nothing existing changes) and moves LAND ALL
-   apart from RETURN ALL in the top bar.
-6. C3 enforces roles: with only `FLIGHTRISK_API_KEY` configured every keyed client is an operator, as
-   today; a client that declares itself a phone is refused every event outside the phone allow-list
-   (the apps never send those today).
-7. C4, **the return-to-home default switch** (spec 10.1(7)): task end hovers `retask.window_s` then
-   returns (today: hovers until landed); a long ground-link loss returns inside the own zone, else lands
-   after the wait (today: a Tello lands 3 s after the link goes silent; `link.loss_wait_s` goes from 0 to
-   10 s for the Tello); the stranded countdown ends in a return (today: lands); low battery returns at
-   the return threshold and only critical battery lands in place (today: a Tello lands at 15 %); a
-   command error that is not a fault retries once and returns (today: every Tello error lands it); the
-   obstacle sensor failing mid-task retraces home (today: hovers).
-8. C4: the Tello geofence default becomes 450 cm for an edge started without a launcher (#202 Q2); the
-   launcher's "Rehearsal with fake drones" preset changes from 500 to 450 cm
-   (`launcher/settings.py:562`, round 2 finding B3).
-9. C4: the target bounds of `parameters.md` replace today's accepted ranges. Values accepted today that
-   become refused: `FLIGHTRISK_GEOFENCE_CM` below 40 or above 5000; `FLIGHTRISK_FIELD_GEOFENCE_M` and
-   `--geofence-m` below 5 m; `FLIGHTRISK_CEILING_MARGIN_CM` above 500; `FLIGHTRISK_FIELD_CEILING_MARGIN_M`
-   and `--ceiling-margin-m` above 30 m; `FLIGHTRISK_MIN_TAKEOFF_BATTERY` below 20 or above 95;
-   `FLIGHTRISK_LINK_LOSS_LAND_S` below 1.5 s or above 10 s (Tello) or 30 s (field);
-   `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S` and `--link-loss-hold-s` below 1.5 s or above 30 s;
-   `FLIGHTRISK_MANUAL_ORPHAN_LAND_S` below 30 s (refused instead of raised to 30 s) or above 600 s;
-   `FLIGHTRISK_FLEET_STRIP_CM` and `--fleet-strip-cm` below 20 or above 1000 cm;
-   `FLIGHTRISK_FLEET_AREA_CM` and `--fleet-area-cm` with a side below 20 or above 20 000 cm;
-   `--speed-mps` below 0.5 m/s.
-10. C4: inherited `FLIGHTRISK_GEOFENCE_CM`, `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILING_MARGIN_CM`
-    win over the launcher window, shown as warnings and confirmed when less safe (#202 Q1); the launcher
-    writes the resolved ceiling values into the ceiling file.
-11. C4: Start on the dashboard shows the Start confirmation of spec 9.4 and is refused until every
-    less-safe value and every safety feature switched off is confirmed with its exact value (section
-    7.3); simulated units need none.
+## 24. Risks
 
-Assertions C4 may edit: `tests/test_safety.py:206` (`(500, 30, 15)` becomes `(450, 30, 15)`);
-`tests/test_manual_ground.py:415` (the cases `("5", 30.0)` and `("0", 30.0)` become refusals); and the
-start-path assertions of the edge and dashboard start tests that pin a land on link loss, a land at the
-orphan countdown or a land on every error when the defaults are resolved, which C4 lists in its PR
-description before it starts. The tests that construct `SafetyEnvelope` with `link_loss_land_s=1.5`
-(`tests/test_safety.py:193`, `tests/test_edge_uplink.py:206`) stay valid because the bound starts at
-1.5 s (round 2 finding N2: 1.5 heartbeat intervals is the smallest wait that one missed 1 s heartbeat
-plus 0.5 s of jitter cannot trigger). The shared launcher test fixture's `FLIGHTRISK_LINK_LOSS_LAND_S=5`
-(`tests/test_launcher_server.py:110`) stays valid: 5 s lies inside the new 1.5 to 10 s bound, and the
-fixture's fake drones are simulated units that need no confirmation (round 2 finding B3).
+- **The default switches change how every drone ends a flight.** They come last, in four steps (C4 warn
+  only, C5 bounds and confirmations, C6 field defaults gated by SITL, C7 indoor defaults gated by the ZBook
+  runs), each revertible on its own (M-8).
+- **SITL is idealised**; nothing here claims field readiness; the hardware path of
+  `docs/open-drone-support.md` still applies.
+- **PX4 has never run in SITL here**; B1 brings it up and B4 reads its parameter enumerations (A8).
+- **Ground load** (escort setpoints, pairwise separation at telemetry rate for ten drones) is measured in
+  the ten-vehicle SITL run.
+- **Pairing friction:** phones must pair once (C3); old phones keep landing rights meanwhile.
+- **Telemetry headroom:** `rth` is the only new top-level field (38 of 48).
 
-**Phase D:**
+## 25. Decisions
 
-12. D1: the field base separation becomes 500 cm (generic `separation.base_cm`; today 150, applied only
-    to map plans); a lost or stranded drone's area is no-entry until a human confirms (today: a 20 s
-    timer, `coordinator.py:192`); indoor slots no longer count as separation.
-13. D2: plans are capability-matched tasks; for an all-Tello indoor fleet the head-on generator produces
-    exactly today's zones and lanes (snapshots for 1, 2, 3 and 4 Tellos, round 1 F7).
-14. D3: field missions are planned on the dashboard; lane spacing and speed follow the search-speed rule;
-    the field overlap default becomes 30 % (today 0.2 in `scripts/field_fleet_ground.py:99`).
+### 25.1 From the approved spec (spec section 12)
 
-**Phase E:**
+1. Without a ground station a drone returns only inside its own zone and corridor at its slot, else lands
+   after the wait. 2. Indoor route home: direct through cleared areas, retrace elsewhere. 3. A person cue on
+   the way home with no answer: land after the wait. 4. Non-GPS drones indoors only, GPS drones in the
+   field, never mixed. 5. Only supervisor phones get Return; every phone keeps Land. 6. Configurable
+   on-find policy, optional converge and moving-target search. 7. Verification is the human's visual
+   confirmation; Continue or End search; multi-target; escort optional and field only. 8. The search radius
+   grows at running speed; search as fast as stays thorough. 9. Indoors: Tello family only until another
+   room-scale model has a measured profile. 10. MAVLink/GPS is production; the Tello is the test adapter;
+   Tello collision tuning is tabled. 11. RTH is the default for safety actions only (spec 10.1(7)).
 
-15. E1: a confirmed match no longer lands every fleet drone (`recovery.py:189`); End search runs the
-    on-find policy, keep watch by default. E1 edits the fleet-recovery assertions that expect every
-    drone to land on Confirm, listed in its PR description.
-16. E2 to E4 add converge, local search and escort, each started only by an operator press.
+### 25.2 Carried from PR #202 (revised where noted)
 
-**Phase F:**
+Q1 the environment wins over the launcher window (C5); Q2 the Tello geofence default is 450 cm (C5); Q3
+`tello_edu` is its own entry sharing the Tello column; Q4 Tello driver thresholds and SDK facts are
+read-only; Q5 `unit_rev` in the v2 `hello` plus the `describe_unit` query; Q6 the launcher edits existing
+fields plus inventory, model, feature switches and gimbal pitch; Q7 custom models narrowing only, with
+environment and indoor profile read-only; Q8 the allowlist keyed by file, scope, kind, callee or target,
+name and value with counts; Q9 `describe_unit` is a read-only query from any ground with its own cache, a
+rate limit and retries; Q10 one inventory on the ground host with `rev` and compare-and-swap; Q11 phones'
+inventory rights are supervisor-only (16.2); Q12 `top_down` on a level camera is advisory; Q13 bird's-eye
+is a task type matched per unit in the sweep band; Q14 the generic default camera is fixed forward RGB;
+D-F18 every Tello height, distance and timing is a registry row, the SDK facts read-only.
 
-17. Supervisor phones gain RETURN ALL and per-drone Return; phones gain the limited inventory edits and
-    the read-only mission, target and parameter views.
+### 25.3 Made in this architecture
 
-## 21. Risks
+- D-B1. MAVLink returns are edge-guided (into the slot, to above home, hold, land); the autopilot's
+  return-to-launch is the constrained fallback (replaces D-A1).
+- D-B2. Confirmations are enforced at Start on the ground for every unit with a current description, in
+  `field_fleet_ground.py` while it plans field missions, for in-flight less-safe changes and for a
+  standby's values (extends D-A2).
+- D-B3. LAND ALL and Land are allowed to every authenticated session, dashboard observers included,
+  because spec 6.1(3) says they are never gated.
+- D-B4. Observer phones only land; resume-held, detection profile and inventory edits are supervisor
+  actions (spec section 2 is the more specific rule).
+- D-B5. Simulated means verified by the edge against the autopilot; the inventory cannot say it (replaces
+  D-A3).
+- D-B6. The ground never lands or re-lands a lost drone; it waits for a human confirm, with #212's
+  refusal as the precondition.
+- D-B7. Constructor defaults keep today's behaviour; resolved defaults carry the spec's (D-A4 kept).
+- D-B8. The safety-value change log, verified by hashes, enforces review of table, golden file and
+  allowlist (D-A5 made concrete).
+- D-B9. The default switch is four PRs (C4 to C7) with separate field and indoor defaults.
+- D-B10. The Android direct single-Tello mode is unchanged (spec non-goal; D-A6 kept).
+- D-B11. Escort setpoints are computed on the ground at 1 Hz and held by the edge when older than 2 s
+  (D-A7 kept).
+- D-B12. Tello-coupled tuning values are read-only test-adapter facts, never operator-facing (user
+  direction, section 7.5).
 
-- **The default switch (C4) changes how every drone ends a flight.** It lands alone, after the return
-  machinery has shipped behind today's defaults (C1, C2) and run in SITL, with its own critic review and
-  the AC-6.6 hardware runs on the ZBook before merge.
-- **SITL is idealised** (`docs/open-drone-support.md`, "Not verified"): no real GPS noise, wind or
-  radios. Nothing here claims field readiness; the hardware path of `docs/open-drone-support.md`
-  (tethered, then one drone with a safety pilot, then two) still applies.
-- **PX4 has never run in SITL here.** B1 brings it up; until then PX4-specific paths are tested against
-  the simulated MAVSDK only.
-- **Ground load.** Escort setpoints at 1 Hz and ten-drone separation checks run on the ground; D1 and E4
-  measure them in the ten-vehicle SITL run.
-- **Roles misconfiguration** could lock a supervisor out or let a phone do too much. Deny by default,
-  the `session` handshake and a role test per event bound the risk.
-- **Telemetry headroom:** `rth` is the only new top-level field (38 of 48 after #211).
+## 26. Remaining choices
 
-## 22. Decisions
+These are interpretations, not open product questions; each is adopted as recommended unless the
+consensus decides otherwise.
 
-### 22.1 From the approved spec (spec section 12, 2026-11-22)
+- **R-1. `FLIGHTRISK_LINK_LOSS_LAND_S` after C7.** (A) Keep the name, meaning `link.loss_detect_s`, with
+  a warning naming the new variables. (B) Retire it: refuse it from C5 and require the new names.
+  Recommendation: A; existing scripts keep working and C4 warns early.
+- **R-2. Field takeoff minimum.** The constraint "takeoff minimum > return floor" fails with today's 30 %
+  and the spec's 30 % field floor. (A) Raise the field takeoff minimum to 40 % in C6. (B) 35 %. (C) Lower
+  the field floor to 25 %. Recommendation: A; the spec fixes the floor and 40 % leaves a usable flight.
+- **R-3. Dashboard observers and LAND ALL** (spec 2 against 6.1(3)). (A) Allow (D-B3). (B) Phone observers
+  only. Recommendation: A, because "never gated" is the safety rule.
+- **R-4. Observer tokens over cleartext.** (A) Allow, since they can only land. (B) Require TLS for every
+  token. Recommendation: A for the local network, with a banner; B is a one-line change if the consensus
+  prefers it.
 
-1. No ground station: a drone returns only inside its own zone and corridor at its slot, else lands
-   after the wait.
-2. Indoor route home: direct through operator-cleared areas, retrace elsewhere.
-3. A person cue on the way home with no answer: land after the person-cue wait.
-4. Environments: non-GPS drones indoors only, GPS drones in the field, never mixed.
-5. Phones: only supervisor phones get Return; every phone keeps Land.
-6. On a find: a configurable on-find policy (keep watch, RETURN ALL, LAND ALL), optional converge and
-   verify, optional moving-target search.
-7. Verification is the human's visual confirmation; hints are aids; after Confirm, Continue or End
-   search; multi-target missions; escort optional and field only.
-8. Search bound: the radius grows at a running speed; drones search as fast as stays thorough.
-9. Indoors: Tello family only until another room-scale drone has a measured profile.
-10. Production versus test: MAVLink/GPS is production; the Tello is the indoor reference and test
-    adapter; Tello collision tuning is tabled.
-11. RTH is the default for safety actions, overriding #197's "Tello flights unchanged by default" for
-    those actions only (spec 10.1(7)).
+- **R-5. Environment variables of test-adapter facts.** (A) Keep them as developer overrides for
+  test-adapter bring-up, logged and shown with source `env`, never a control, file entry, warning or
+  confirmation. (B) Remove them, so the facts are fixed in code. Recommendation: A; dozens of existing
+  tests and bring-up scripts set them, and B would break the parity rule for no operator benefit.
 
-### 22.2 Carried from PR #202 (decided 2026-11-22, revised where noted)
+## 27. Behaviour changes, by PR (complete list)
 
-Q1 the environment wins over the launcher window (applied in C4); Q2 the Tello geofence default is
-450 cm (C4); Q3 `tello_edu` is its own catalogue entry sharing the Tello column; Q4 Tello driver
-thresholds and SDK facts are read-only; Q5 `unit_rev` in the v2 `hello` plus the `describe_unit` query;
-Q6 the launcher edits existing fields plus inventory, model, feature switches and gimbal pitch; Q7
-custom models in v1, narrowing only; Q8 the allowlist keyed by file, scope, kind, callee or target,
-name and value with counts; Q9 `describe_unit` is a read-only query from any ground, never feeding the
-watchdog, with its own cache, a rate limit and the retry of section 15; Q10 one inventory on the ground
-host with `rev` and compare-and-swap; Q11 phones add units of built-in models and toggle availability
-and non-safety features only; Q12 `top_down` on a level camera is advisory; Q13 bird's-eye search only
-when every planned unit supports it (now a task type: a bird's-eye sweep is matched only to units that
-have it, and a mixed fleet runs different task types side by side in different bands, which supersedes
-the "fleet-wide pattern" limit); Q14 the generic default camera is fixed forward RGB. D-F18: every
-Tello height, distance and timing is a registry row, the SDK facts read-only and shown (rows 87 to 110,
-marked test adapter).
+Rule: constructor defaults keep today's behaviour; only resolved defaults change. Each PR may edit only
+the existing assertions listed for it; a PR whose list says "named in its description" names the exact
+lines there before work starts, and any other failing assertion stops the PR. The parity test
+(`tests/test_param_parity.py`) fails on any acceptance difference not listed here, and a test checks that
+every "from <PR>" tag in `parameters.md` matches an item below naming that PR and that row.
 
-### 22.3 Made in this architecture
+- **A1, A2, A3, B1:** none.
+- **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
+- **A5:** none. Assertions: `tests/test_launcher_commands.py:67`, `:119-121`.
+- **B2:** 2. Field Start is refused without a 3D fix, with too few satellites, with receiver accuracy above
+  `home.accuracy_cm`, with the autopilot's home beyond `home.max_offset_cm`, or outside the mission fence.
+  3. A home that changes in flight lands with `no_known_home`. 4. Positioning uncertainty is reported as
+  2 × the receiver's accuracy plus speed × age.
+- **B3:** 5. The fences are uploaded before arming; a failed upload, a read-back mismatch or another fence
+  action refuses the takeoff.
+- **B4:** 6. Newly refused autopilot values (section 13.2): ArduPilot `FS_GCS_ENABLE` other than 1 or 5,
+  `FS_GCS_TIMEOUT` outside 2 to 10 s, a GCS system id other than the edge's, `FS_OPTIONS` with bit 0, 1, 2
+  or 4 set, `FS_EKF_ACTION` 0 or 2, `RTL_ALT_FINAL` above 0, any rally point, action 6 in any failsafe,
+  `FENCE_ACTION` 3, 4 or 5, `BATT_FS_CRT_ACT` other than 1, `BATT_FS_LOW_ACT` 3, 4, 6 or 7, `FS_THR_ENABLE`
+  4 to 7, a low-battery level above the return floor − 5 points, a voltage-only low threshold; PX4
+  `COM_DL_LOSS_T` outside 2 to 10 s, `COM_DLL_EXCEPT` or `COM_RCL_EXCEPT` other than 0, a position-loss
+  response other than land or descend, `RTL_LAND_DELAY` −1, mission-landing `RTL_TYPE` values, any rally
+  point, `GF_ACTION` 2, `COM_LOW_BAT_ACT` 3, `BAT_LOW_THR` above the floor − 5 points, `RTL_DESCEND_ALT`
+  above the slot. 7. The edge clears the autopilot's mission and writes the landing delay before arming.
+  8. On a MAVLink unit the critical battery is the autopilot's critical action, not the edge's 15 %.
+- **D1:** 9. Field base separation becomes 500 cm. 10. Bands are enforced at Plan. 11. A field mission
+  needs an obstacle top per area, and slots below it plus the margin are refused. 12. Homes closer than the
+  base separation (plus both accuracies in the field) are refused; a shared landing area gets an order.
+  13. Zones and corridors are generated and overlapping tubes in a band are refused; where the straight
+  line home leaves zone and corridor the autopilot's link-loss action must be land. 14. Indoor slots no
+  longer count as separation.
+- **D2:** 15. The ground loss timeout is derived: a field drone is declared lost after 15 s instead of 5 s
+  (a Tello stays at 5 s until C7). 16. The ground no longer lands or re-lands a lost drone. 17. A lost
+  drone's lanes wait for a human confirm instead of being offered at once. 18. Lost-drone no-entry areas
+  replace the 20 s point. Assertions: those of the lost-drone and orphan tests (`tests/test_lost_drone_manual_reland.py`
+  from #212, `tests/test_orphan_retask.py`, and the lost-drone tests of the coordinator suites), named in
+  its description.
+- **D3:** none for existing flows (field missions become plannable on the dashboard).
+- **C1:** 19. While a drone lands, the edge refuses `return_home`, `escort_setpoint`, `assign_lanes`,
+  `start_at`, `resume`, `nudge`, manual moves and `set_speed` with `landing` (today `assign_lanes` and the
+  fenced commands already are; the rest are new). 20. The MAVLink adapter never turns a decided landing
+  into a return.
+- **C2:** 21. RETURN ALL and per-drone Return exist; LAND ALL moves apart from RETURN ALL. 22. LAND ALL
+  cancels every ground sender before it sends the land. 23. A returning drone holds above home until the
+  ground clears its landing.
+- **C3:** 24. The operator key works only on loopback; elsewhere it gives observer rights; supervisor and
+  observer devices pair for tokens; supervisor tokens need TLS.
+- **C4:** 25. Warnings only: every value C5 will refuse or ask to confirm, and every deprecated meaning, is
+  shown and logged; nothing is refused.
+- **C5:** 26. Target bounds enforced. Values accepted today that become refused: `FLIGHTRISK_GEOFENCE_CM`
+  below 40 or above 5000; `FLIGHTRISK_FIELD_GEOFENCE_M` and `--geofence-m` below 5 m;
+  `FLIGHTRISK_CEILING_MARGIN_CM` above 500; `FLIGHTRISK_FIELD_CEILING_MARGIN_M` and `--ceiling-margin-m`
+  above 30 m; `FLIGHTRISK_MIN_TAKEOFF_BATTERY` below 20 or above 95; `FLIGHTRISK_LINK_LOSS_LAND_S` below
+  1.5 s or above 10 s (Tello) or 30 s (field); `FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S` and `--link-loss-hold-s`
+  below 1.5 s or above 30 s (H-11); `FLIGHTRISK_MANUAL_ORPHAN_LAND_S` below 30 s (refused, not raised) or
+  above 600 s; `FLIGHTRISK_FLEET_STRIP_CM` and `--fleet-strip-cm` below 20 or above 1000 cm;
+  `FLIGHTRISK_FLEET_AREA_CM` and `--fleet-area-cm` with a side below 20 or above 20 000 cm; `--speed-mps`
+  below 0.5 m/s. 27. The environment wins over the launcher window for the three stripped variables.
+  28. Start confirmations on the dashboard, in the launcher (409) and in `field_fleet_ground.py`; less-safe
+  custom defaults become usable with a confirmation; in-flight less-safe changes and a standby's values
+  are confirmed. 29. The Tello geofence default becomes 450 cm for an edge started without a launcher, and
+  the rehearsal preset becomes 450 cm. 30. Slots below the profile default need a confirmation (the
+  "Layout A (edges on this computer)" preset's 50 and 80 cm). 31. The launcher writes the resolved
+  ceiling values. Assertions: `tests/test_safety.py:206` (`(500, 30, 15)` to `(450, 30, 15)`);
+  `tests/test_manual_ground.py:415` (the cases `("5", 30.0)` and `("0", 30.0)` become refusals); and the
+  launcher tests that start the Layout A or rehearsal presets, named in its description.
+- **C6 (field defaults, SITL-gated):** 32. Task end, long link loss, the stranded countdown and low
+  battery return. 33. The field takeoff minimum becomes 40 % (R-2). Assertions: the MAVLink start-path
+  tests that pin a land on these events, named in its description.
+- **C7 (indoor defaults, ZBook-gated):** 34. The Tello holds 10 s after the short loss and returns
+  (`link.loss_wait_s` 0 to 10, `link.loss_action` land to return); its ground loss timeout becomes 15 s;
+  the stranded countdown returns; low battery returns at the threshold (floor 25 %) and only critical
+  (15 %) lands; transient errors retry once and return; a failed sensor retraces home. Assertions: the
+  Tello start-path tests that pin these lands, named in its description. The tests that construct
+  `SafetyEnvelope` with `link_loss_land_s=1.5` (`tests/test_safety.py:193`, `tests/test_edge_uplink.py:206`)
+  and the launcher fixture's `FLIGHTRISK_LINK_LOSS_LAND_S=5` (`tests/test_launcher_server.py:110`) stay
+  valid: 1.5 and 5 lie inside the 1.5 to 10 s bound (1.5 heartbeat intervals is the smallest value one
+  missed 1 s heartbeat plus 0.5 s of jitter cannot trigger).
+- **F1 to F3:** 35. Paired supervisor phones get RETURN ALL, Return and the supervisor actions of 16.2.
+- **D4:** 36. Plans are capability-matched tasks; an all-Tello fleet gets today's zones and lanes
+  (snapshots for 1 to 4 Tellos).
+- **D5:** 37. Lane spacing and speed follow the search-speed rule; the field overlap becomes 30 %
+  (today 0.2 in `scripts/field_fleet_ground.py:99`).
+- **E1:** 38. A confirmed match no longer lands every fleet drone; the on-find policy runs, keep watch by
+  default. Assertions: the fleet-recovery tests that expect every drone to land on Confirm, named in its
+  description.
+- **E2 to E4:** 39. Converge, local search and escort, each started only by an operator press.
 
-- D-A1. The production adapter's return method is the autopilot's return-to-launch; the edge-flown
-  slot route is used only when the ground orders a waypoint route around a conflict.
-- D-A2. Confirmations are enforced at Start on the ground for every unit, from what the edges report;
-  the launcher's 409 is an earlier gate only (round 2 B1).
-- D-A3. Simulated units need no confirmation (round 2 B3).
-- D-A4. Constructor defaults keep today's behaviour; resolved defaults carry the spec's (section 20).
-- D-A5. Code-owner review is enforced by a safety-value change log checked by a test and by the
-  critic, because the repository has one owner (round 2 N6).
-- D-A6. The Android direct single-Tello mode is left unchanged (spec non-goal); its 10 % landing is
-  recorded, not fixed (round 1 F14).
-- D-A7. Escort setpoints are computed on the ground at 1 Hz and flown by the edge as MAVLink position
-  targets with a 2 s validity.
+## 28. How the review findings are resolved
 
-### 22.4 Remaining questions
-
-None. The spec answers every product question, and every design choice above has a stated
-recommendation that this document adopts. If the consensus prefers another option for D-A1 to D-A7,
-the PR that implements it is named in `tasks.md`.
-
-## 23. How the PR #202 critic findings are resolved
-
-| Finding | Status | Where |
+| Finding | Resolution | Where |
 | --- | --- | --- |
-| Round 1 F1 to F19 | Kept as resolved in round 1, except F14 (Android direct mode is a spec non-goal, D-A6), F7's slot rule (superseded by spec 8.3, section 11) and the floor-ratio rows (tabled) | sections 6 to 9, 15, 19; `parameters.md` |
-| **B1** custom-model defaults or a hand-started dashboard bypass the less-safe confirm | Fixed: less safe is measured against the base column; the authoritative confirmation is the Start confirmation on the ground, fed by every edge's report, whatever started the dashboard; a hand-started dashboard and edge refuse file-sourced less-safe values without `--confirm-less-safe` | section 7.3 |
-| **B2** the launcher PR must merge after the edge and dashboard PRs, and the ground must read its launcher layer | Fixed: A5 (launcher) merges after A3 (edge) and A4 (dashboard); A4 makes the dashboard read `FLIGHTRISK_LAUNCHER_PARAMS` as its launcher layer | `tasks.md` A4, A5 |
-| **B3** the rehearsal preset's 500 cm against the 450 cm base, and the shared fixture's `LINK_LOSS 5` turning tests into 409s | Fixed: the rehearsal preset becomes 450 cm in C4; simulated units need no confirmation; 5 s is inside the new bound | sections 7.3, 20 items 8 and C4 assertions |
-| **B4** generic defaults must equal today's effective MAVLink values or be listed | Fixed: every generic value in phase A equals today's (sidestep 50, pass 150, zone gap 0, separation 150, placement tolerance 10, altitude tolerance 10, offset 50, dedup 80, lost obstacle 20, manual step 30, field slots 10 and 15 m, critical 15 %); later values are listed in section 20 | `parameters.md`, section 20 |
-| N1 mid-flight gating column | Added | section 9 |
-| N2 the 1.5 s reasoning | Stated | sections 20 (C4 assertions), `parameters.md` row 16 |
-| N3 the slot rule | Replaced by spec 8.3 (indoor slots never separate; bands in the field) | section 11 |
-| N4 safer and confirm for every row | Added as columns for all 140 rows | `parameters.md` |
-| N5 owners | Every file has one owning PR, including `fleet_authority*.py`, `edge_uplink.py`, `obs_comm.py`, `single_search.py`, `recovery.py`, `roles.py` and the new packages | `tasks.md` |
-| N6 CODEOWNERS | CODEOWNERS kept, enforcement by the safety-value change log test and the critic | section 7.1, D-A5 |
-| N7 `describe_unit` retry | Added | section 15 |
-| N8 refusal wording | One message catalogue, three forms, tested | section 7.4 |
-| N9 the `MIN_START_BATTERY` alias #208 keeps | The registry maps it to `battery.min_takeoff_pct` and keeps it importable (re-export), so `single_search.py` and #208's alias keep working | `parameters.md` row 11, A4 |
-| N10 nits | Fixed in the text | throughout |
+| **C-1** landing not terminal | Every landing decision enters the edge state machine; landing is terminal; the edge nacks every motion command and starts no automatic return while landing; the MAVLink adapter never turns a landing into RTL; LAND ALL first cancels every ground sender; fake and SITL tests send each after LAND ALL | 10.2; C1, C2; RTH-26 to RTH-28 |
+| **C-2** the ground declares a holding drone lost and re-tasks at once | Derived per-unit loss timeout with a constraint; no land or re-land; lanes wait for a human confirm with #212's refusal as precondition; zone, corridor, return line and landing area become no-entry; in D2, before every switch | 12; D2; LOST-1 to LOST-6 |
+| **H-1** no-ground returns only on the edge | D1 generates zones and corridors, checks tube overlap within a band and the straight line home (else autopilot link-loss action land); landing order for shared areas; no-entry areas pushed to edges; zone and corridor re-sent with every re-task; task zones for drones outside their own zone | 10.9, 11.4, 11.7; D1; AIR-7 to AIR-11 |
+| **H-2** MAVLink return and failsafe rules incomplete | Parameter table for both autopilots with exact accepted values, today's values and SITL scenarios; edge-guided return into the slot first; autopilot low level below FlightRisk's; autopilot-started return the highest-priority route; hold above home until cleared; progress monitor | 13, 10.1, 10.8; B4; MAV-5 to MAV-14 |
+| **H-3** confirmation bypasses | Start refused without a current description; simulated verified by the edge against the autopilot; Start confirmation in `field_fleet_ground.py`; less-safe custom defaults refused until C5; in-flight and standby confirmations | 6, 7.3; C5; R2-B1, CONF-1 to CONF-6 |
+| **H-4** self-declared phone roles | Role from the credential alone; operator key loopback only; per-device tokens; TLS for supervisor tokens; the event-by-role table with contradictions resolved; LAND hard-allowed with a test | 16; C3; ROLES-1 to ROLES-9 |
+| **H-5** phase order | A, B, D1 to D3, C1 to C7, then F, D4, D5, E; D5 and E1 sequential | `tasks.md` |
+| **H-6** bands not computable | Both band intervals as rows; constraints | 11.3; `parameters.md` |
+| **H-7** home check always true | Homes at least base separation (+ accuracies) apart; closer than landing separation share a sequenced area | 10.7, 11.4; D1 |
+| **H-8** returns end short of home | Threshold = critical + energy + worst-case wait + reserve; constraints with current ids in `parameters.md` | 10.6; `parameters.md` |
+| **H-9** no-entry coverage | Moving last position, zone, corridor, return line, landing area; #212 precondition; confirm-to-clear versus confirm-to-enter; owner exempt | 11.7, 12 |
+| **H-10** obstacle tops | Per-area `airspace.obstacle_top_cm`; Plan refuses slots below it plus a margin | 11.5 |
+| **H-11** `parameters.md` contradictions | Phase tags corrected to `tasks.md`; row 17 bounds 1.5 to 30 s; row 4 safer higher, confirm less safe; a test ties tags to section 27 | `parameters.md`; 7.1 |
+| M-1 uncertainty | k × accuracy + speed × age; missing = worst case; space-only tubes; in-flight monitor | 11.2 |
+| M-2 matching | Banded ranking, input snapshot, task order, no reassignment of running tasks | 14.3 |
+| M-3 escort | Hand-off before the return threshold; "in view" defined; allowed zones; deconfliction; ground-crash behaviour documented | 15.5 |
+| M-4 multi-target | Per-target thresholds, ambiguous state, locked attribution, false-alarm note; no edge change | 15.1 |
+| M-5 RETURN ALL availability | `return_home` without wait from any ground; older edges held, never landed | 10.8, 18 |
+| M-6 search speed | Footprint for a level camera, initial rate, `set_speed` | 14.4 |
+| M-7 protocol shapes | `zone` exists; point objects; re-task window ≥ 1 s | 18 |
+| M-8 C4 blast radius | Split into C4 to C7; warn-only first; meaning of the old variable kept with warnings; field and indoor defaults separate | 23, 27; `tasks.md` |
+| M-9 testability | Absolute timing bounds; property test; app timing test; indoor AC-7.1 requirement; hash-based change log; passable AC-6.6 geometry | 7.1, 19, 21.3 |
+| M-10 termination | Energy-bounded waits; deterministic choice of the drone that lands | 10.8 |
+| M-11 environment override | Environment and indoor profile read-only for custom models | 2, 6 |
+| M-12 spec gaps | Ceiling breach and no-order reasons; every 6.2 row separate; escort end; accept as unsearched; converge pre-selection; observer tension | 10.4, 10.5, 14.3, 15.3, 15.5, 16.2 |
+| User direction: Tello-coupled values | 30 rows marked `fact` (read-only, not operator-facing); no requirement surfaces them to the operator; the depth threshold leaves the launcher (#198) | 7.5; `parameters.md` |
+| Nitpicks 1 to 12 | Base `fc5f6aa`; `zone` exists; `rth` names; requirement pointers fixed; SEAM-7 cites A6; spec 10.1(3); CAP-3 moved to C1; row 15 scope note; constraints with current ids; B1 records the Mac patch and uses the new command line; mixed-environment refusal in A4 | throughout |
 
-## 24. External sources
+## 29. External sources
 
-- Tello SDK 2.0 User Guide, move commands 20 to 500 cm:
-  https://xcopter.com/download/Tello%20SDK%202.0%20User%20Guide.pdf
-- Tello User Manual v1.2: p.4 flight time and range; p.5 app-signal failsafe; p.7 vision positioning
-  0.3 to 10 m: https://www.adorama.com/col/productManuals/RYTELO.pdf
+- Tello SDK 2.0 User Guide: https://xcopter.com/download/Tello%20SDK%202.0%20User%20Guide.pdf
+- Tello User Manual v1.2: https://www.adorama.com/col/productManuals/RYTELO.pdf
 - Tello EDU specifications: https://core-electronics.com.au/dji-tello-edu.html.md
-- 14 CFR 107.51, 400 ft limit: https://www.ecfr.gov/current/title-14/chapter-I/subchapter-F/part-107/subpart-B/section-107.51
-- ArduPilot MAVLink gimbal and mount (cited by `docs/sitl-demo.md`):
-  https://ardupilot.org/dev/docs/mavlink-gimbal-mount.html
+- 14 CFR 107.51: https://www.ecfr.gov/current/title-14/chapter-I/subchapter-F/part-107/subpart-B/section-107.51
+- ArduPilot GCS failsafe: https://ardupilot.org/copter/docs/gcs-failsafe.html
+- ArduPilot RTL mode: https://ardupilot.org/copter/docs/rtl-mode.html
+- ArduPilot EKF failsafe: https://ardupilot.org/copter/docs/common-ekf-inav-failsafe.html
+- ArduPilot parameter name changes: https://ardupilot.org/copter/docs/common-param-name-changes.html
+- PX4 safety configuration: https://docs.px4.io/main/en/config/safety.html
+- PX4 return mode: https://docs.px4.io/main/en/flight_modes_mc/return.html

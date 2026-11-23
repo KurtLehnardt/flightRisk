@@ -1,4 +1,4 @@
-"""Prototype of the issue #197 guard rule (design.md section 19). Read-only; prints findings.
+"""Prototype of the issue #197 guard rule (design.md section 22). Read-only; prints findings.
 
 Run: python3 guard_rule_prototype.py.txt <repo root> [-v]
 
