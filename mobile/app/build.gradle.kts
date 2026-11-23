@@ -8,6 +8,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
+    id("com.mikepenz.aboutlibraries.plugin")
 }
 
 // ---------------------------------------------------------------------------
@@ -334,9 +335,45 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// ---------------------------------------------------------------------------
+// Library licences
+// ---------------------------------------------------------------------------
+// AboutLibraries reads every dependency's POM at build time and writes
+// aboutlibraries.json (a raw resource) for the Licences screen, with the full
+// licence texts. Only the release variant's runtime dependencies are listed.
+// The build fails when a library has no licence or one outside the allowed list.
+aboutLibraries {
+    collect {
+        includePlatform = false
+    }
+    library {
+        duplicationMode = com.mikepenz.aboutlibraries.plugin.DuplicateMode.MERGE
+        duplicationRule = com.mikepenz.aboutlibraries.plugin.DuplicateRule.SIMPLE
+    }
+    export {
+        variant = "release"
+    }
+    license {
+        strictMode = com.mikepenz.aboutlibraries.plugin.StrictMode.FAIL
+        allowedLicenses.addAll("Apache-2.0", "MIT", "BSD-3-Clause", "BSD-2-Clause")
+        // Reviewed exceptions, each tied to the one library that carries it.
+        allowedLicensesMap.put("Android Software Development Kit License", listOf(
+            "com.google.android.gms:play-services-base",
+            "com.google.android.gms:play-services-basement",
+            "com.google.android.gms:play-services-location",
+            "com.google.android.gms:play-services-tasks",
+        ))
+        allowedLicensesMap.put("BSD License", listOf("androidx.camera:camera-core"))
+        allowedLicensesMap.put("GNU General Public License, version 2 (GPL2), with the classpath exception", listOf("org.checkerframework:checker-compat-qual"))
+    }
+}
+
 dependencies {
     // Shared ground-station contract (models, decoders, Socket.IO frame codec)
     implementation(project(":contract"))
+
+    // Reads the generated library list for the Licences screen (core only, no UI artifact).
+    implementation("com.mikepenz:aboutlibraries-core:12.2.4")
     // The contract's JSON element types appear in its public API
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
 
