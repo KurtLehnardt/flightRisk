@@ -7,6 +7,7 @@ stand-in model that returns a synthetic depth map.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 
@@ -18,6 +19,7 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.drone import obstacle as obstacle_mod
 from flightrisk.drone import obstacle_camera
 from flightrisk.drone.coordinator import _person_cue
+from flightrisk.drone.lane_steps import Cut
 from flightrisk.drone.obstacle import ObstacleGuard, centre_floor_ratio
 from flightrisk.drone.obstacle_camera import ForwardCameraSensor
 from flightrisk.drone.obstacle_sensor import (
@@ -39,6 +41,8 @@ from flightrisk.drone.obstacle_sensor import (
     EVENT_OBSTACLE_GATE,
     EVENT_OBSTACLE_METRIC,
     EVENT_OBSTACLE_METRIC_UNVALIDATED,
+    EVENT_OBSTACLE_RELOOK,
+    EVENT_OBSTACLE_SIDESTEP,
     EVENT_SETTING_NON_DEFAULT,
     FLOOR_RATIO_FIELD_HIGHEST_CLEAR,
     FLOOR_RATIO_FIELD_LOWEST_WALL,
@@ -58,6 +62,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSOR_OK,
     LatestFrame,
+    SenseResult,
     depth_metric_fields,
     obstacle_metric_settings,
 )
@@ -80,7 +85,9 @@ from tests.test_fleet_dashboard_obstacle import _sensing
 from tests.test_launcher_preflight import _env as preflight_env
 from tests.test_obstacle_h6_fixes import _CueSensor, _executor
 from tests import test_lane_executor_obstacle as lane_tests
+from tests.test_lane_executor_avoid import AVOID, POLE, assert_never_landed, counts, gate_sources, phases
 from tests.test_lane_executor_obstacle import (
+    DEMO,
     TimelineSensor,
     assert_invariants,
     events,
@@ -353,7 +360,7 @@ class TestGuardFloorRatio:
         monkeypatch.setattr("flightrisk.drone.midas_model.load_midas_small", no_model)
         with pytest.raises(ValueError):
             ObstacleGuard(metric="ratio")
-        for bad in (0.0, -1.0, float("nan"), float("inf"), True, "0.8", None):
+        for bad in (0.0, -1.0, float("nan"), float("inf"), True, "0.8", None, 0.49, 1.01, 1.5):
             with pytest.raises(ValueError):
                 ObstacleGuard(metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=bad)
 
@@ -385,6 +392,7 @@ class TestSensorFloorRatio:
         assert event.fr_fields["value"] == result.depth_score
         assert event.fr_fields["limit"] == OBSTACLE_FLOOR_RATIO_MAX
         assert event.fr_fields["state"] == "clear" and event.fr_fields["depth_state"] == DEPTH_STATE_CLEAR
+        assert event.fr_fields["comparison"] == "<=" and " <= 0.7986: clear" in event.getMessage()
         assert event.fr_fields["device"] == sensor._guard.device_name
         assert event.fr_fields["device"] in ("mps", "cpu", "cuda")
         assert ratios == [(pytest.approx(0.7, abs=1e-6), {"depth_state": "clear"})]
@@ -416,7 +424,7 @@ class TestSensorFloorRatio:
         assert sensor.status()["obstacle_sensor_ok"] is True
         events = [r for r in caplog.records if getattr(r, "fr_event", None) == EVENT_OBSTACLE_METRIC]
         assert events[-1].fr_fields["depth_state"] == DEPTH_STATE_NO_FLOOR_REFERENCE
-        assert events[-1].fr_fields["state"] == "blocked"
+        assert events[-1].fr_fields["state"] == "blocked" and events[-1].fr_fields["comparison"] is None
         assert ratios == []  # counted as the action no_floor_reference instead
 
     def test_a_close_person_still_blocks_and_names_the_person(self, model, frames):
@@ -509,7 +517,7 @@ class TestSensorFloorRatio:
         with pytest.raises(ValueError):
             _sensor(frames, guard=object(), metric="ratio")
 
-    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -0.8, "0.8", True, None])
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -0.8, "0.8", True, None, 0.49, 1.01, 1.5])
     def test_a_bad_limit_is_refused(self, frames, bad):
         with pytest.raises(ValueError):
             _sensor(frames, guard=object(), metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=bad)
@@ -548,15 +556,20 @@ class TestReplayParity:
         live = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO).sense(_after())
         assert live.depth_score == offline and live.clear == replay.is_clear(offline, OBSTACLE_FLOOR_RATIO_MAX)
 
-    def test_a_ratio_exactly_at_the_limit_is_clear_in_both(self, model, frames):
+    def test_a_ratio_exactly_at_the_limit_is_clear_in_both(self, model, frames, caplog):
         depth = make_map(centre=0.7891, floor=0.9883, top=0.1, rest=0.25)
         offline = self._offline(model, depth)["centre_floor_ratio"]
         at_limit = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=offline).sense(_after())
         assert at_limit.clear and replay.is_clear(offline, offline)
         just_below = float(np.nextafter(offline, 0.0))
-        under = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=just_below).sense(_after())
+        with caplog.at_level(logging.INFO, logger="flightrisk.drone.obstacle_camera"):
+            under = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=just_below).sense(_after())
         assert under.blocked and not replay.is_clear(offline, just_below)
         assert under.depth_score == at_limit.depth_score == offline
+        # At four decimals the value and the limit read the same; the comparison says which side it is on.
+        event = [r for r in caplog.records if getattr(r, "fr_event", None) == EVENT_OBSTACLE_METRIC][-1]
+        assert event.fr_fields["limit"] == just_below
+        assert event.fr_fields["comparison"] == ">" and f"{offline:.4f} > " in event.getMessage()
 
     def test_a_degenerate_map_is_unavailable_live_but_still_has_a_ratio_offline(self, model, frames):
         """The intended difference: the replay reports a ratio for every map; the gate never judges a degenerate one."""
@@ -737,6 +750,18 @@ class TestEnvironment:
             _wiring, log = _wire("tello", environ)
             assert not [e for _lv, e, _f in log.records if e == EVENT_OBSTACLE_METRIC_UNVALIDATED]
 
+    @pytest.mark.parametrize(("kind", "source", "used"), [
+        ("tello", None, True), ("mavlink", "camera", True), ("fake", None, False), ("mavlink", "file", False),
+    ])
+    def test_the_warnings_say_when_this_edge_does_not_use_the_metric(self, monkeypatch, kind, source, used):
+        monkeypatch.setattr(obstacle_camera, "ForwardCameraSensor", _StubCameraSensor)
+        _wiring, log = _wire(kind, {ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.9"}, source)
+        (warning,) = [f for _lv, e, f in log.records if e == EVENT_OBSTACLE_METRIC_UNVALIDATED]
+        rows = [f["detail"] for _lv, e, f in log.records if e == EVENT_SETTING_NON_DEFAULT]
+        no_camera = "no effect on this edge, which has no camera sensor"
+        assert (no_camera in warning["detail"]) is not used
+        assert len(rows) == 2 and all((no_camera in d) is not used for d in rows)
+
     def test_a_limit_set_under_the_score_is_named_as_having_no_effect(self, monkeypatch):
         monkeypatch.setattr(obstacle_camera, "ForwardCameraSensor", _StubCameraSensor)
         _wiring, log = _wire("tello", {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.9"})
@@ -860,6 +885,18 @@ class TestLauncherWarning:
         (row,) = [c for c in checks if c.name == OBSTACLE_METRIC_CHECK]
         assert row.status == INFO and "not used" in row.detail
 
+    def test_fake_drones_only_make_it_info(self):
+        env = preflight_env(environ={ENV_OBSTACLE_METRIC: "floor_ratio"})
+        fakes = LauncherSettings(drones=(DroneSettings(source="fake"),))
+        (row,) = [c for c in run_preflight(fakes, EdgeToken(None, None), env, probe_drones=False)
+                  if c.name == OBSTACLE_METRIC_CHECK]
+        assert row.status == INFO and "fake drone" in row.detail
+        mixed = LauncherSettings(drones=(DroneSettings(drone_id="drone-1", source="fake"),
+                                         DroneSettings(drone_id="drone-2", local_ip="192.168.10.2", alt_slot_cm=130)))
+        (row,) = [c for c in run_preflight(mixed, EdgeToken(None, None), env, probe_drones=False)
+                  if c.name == OBSTACLE_METRIC_CHECK]
+        assert row.status == WARN
+
     def test_a_value_the_edge_would_refuse_fails(self):
         row = obstacle_metric_check({ENV_OBSTACLE_METRIC: "ratio"})
         assert row.status == FAIL and ENV_OBSTACLE_METRIC in row.detail
@@ -875,21 +912,96 @@ class TestDashboardNote:
     def test_the_sense_badge_names_the_opt_in_metric(self, tmp_path):
         cue = {"person_cue_down": False, "detection_age_s": 0.4}
         metric = {**cue, "depth_metric": "floor_ratio", "depth_metric_max": OBSTACLE_FLOOR_RATIO_MAX}
-        value, near, no_floor, stale, default = run_js(tmp_path, [
+        value, near, at_limit, over, no_floor, stale, default = run_js(tmp_path, [
             ("senseBadge", [_sensing(obstacle_person_cue={**metric, "depth_metric_value": 0.712,
                                                           "depth_state": "clear"})]),
             ("senseBadge", [_sensing(obstacle_person_cue={**metric, "depth_metric_value": 0.79834,
                                                           "depth_state": "clear"})]),
+            ("senseBadge", [_sensing(obstacle_person_cue={**metric, "depth_metric_value": OBSTACLE_FLOOR_RATIO_MAX,
+                                                          "depth_state": "clear"})]),
+            ("senseBadge", [_sensing(obstacle_state="blocked", obstacle_person_cue={
+                **metric, "depth_metric_value": 0.79862, "depth_state": "blocked"})]),
             ("senseBadge", [_sensing(obstacle_state="blocked", obstacle_person_cue={
                 **metric, "depth_metric_value": None, "depth_state": "no_floor_reference"})]),
             ("senseBadge", [_sensing(obstacle_sensor_ok=False, obstacle_person_cue={
                 **metric, "depth_metric_value": None, "depth_state": None})]),
             ("senseBadge", [_sensing(obstacle_person_cue=cue)]),
         ])
-        assert value["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.712 / 0.7986"
+        assert value["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.712 <= 0.7986"
         assert "3 outdoor recordings at one height" in value["title"]
         # Four decimals: three would show 0.798 for values on both sides of the limit.
-        assert near["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.7983 / 0.7986"
-        assert no_floor["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) no floor / 0.7986"
-        assert stale["text"] == "SENSE STALE, floor ratio (unvalidated) -- / 0.7986"
+        assert near["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.7983 <= 0.7986"
+        # A value shown equal to the limit: the comparison of the unrounded numbers says which side it is on.
+        assert at_limit["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.7986 <= 0.7986"
+        assert over["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.7986 > 0.7986"
+        assert no_floor["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) no floor, limit 0.7986"
+        assert stale["text"] == "SENSE STALE, floor ratio (unvalidated) --, limit 0.7986"
         assert default == {"text": "SENSE ok 220 ms", "cls": "", "title": "The obstacle sensor works."}
+
+
+# ---------------------------------------------------------------------------
+# With the re-look and the sidestep (#193): a view the depth cue could not judge is never stepped around
+# ---------------------------------------------------------------------------
+
+
+class _FloorRatioViews(TimelineSensor):
+    """The scripted sensor, with each blocked depth view reshaped as the camera sensor gives it under floor_ratio.
+
+    ``no_floor`` makes every such view one without a floor reference; otherwise it is a judged view
+    above the limit. ``person_cue`` is the person cue of those views.
+    """
+
+    def __init__(self, timeline, pose_provider, no_floor, person_cue):
+        super().__init__(timeline, pose_provider, [POLE])
+        self.no_floor, self.person_cue = no_floor, person_cue
+
+    def sense(self, after, timeout_s=2.0):
+        result = super().sense(after, timeout_s)
+        if not result.blocked or result.cue != CUE_DEPTH:
+            return result
+        ratio = None if self.no_floor else 0.9
+        detail = {
+            **result.detail, "metric": OBSTACLE_METRIC_FLOOR_RATIO, "floor_ratio": ratio,
+            "floor_ratio_max": OBSTACLE_FLOOR_RATIO_MAX, "score": 0.3,
+            "depth_action": ACTION_NO_FLOOR_REFERENCE if self.no_floor else "reverse",
+            "depth_state": DEPTH_STATE_NO_FLOOR_REFERENCE if self.no_floor else DEPTH_STATE_BLOCKED,
+        }
+        return dataclasses.replace(result, person_cue=self.person_cue, depth_score=ratio, detail=detail)
+
+
+@pytest.mark.parametrize("person_cue", ["clear", "unknown"])
+def test_a_view_without_a_floor_reference_is_looked_at_again_but_never_stepped_around(rigs, person_cue):
+    """Round-2 finding 4 of #206: lane_avoid picked a side for a view the depth cue could not judge."""
+    rig = rigs(sensor=lambda timeline, envelope, clock: _FloorRatioViews(
+        timeline, envelope.pose_snapshot, True, person_cue), **AVOID)
+    lane_tests.fly(rig, DEMO)
+    # The re-look ran (and was blocked again); the sidestep was refused for the missing floor reference.
+    assert counts(rig) == (1, 0, 0, 0)
+    assert "start" in phases(rig, EVENT_OBSTACLE_RELOOK) and "blocked" in phases(rig, EVENT_OBSTACLE_RELOOK)
+    sidestep = events(rig, EVENT_OBSTACLE_SIDESTEP)
+    assert [(e["phase"], e.get("reason")) for e in sidestep] == [("refused", ACTION_NO_FLOOR_REFERENCE)]
+    # No sideways move, no sidestep gate and no extra person look for it: the lane is cut where it stopped.
+    assert "person_check" not in gate_sources(rig) and "sidestep" not in gate_sources(rig)
+    assert rig.executor.obstacle_cuts == [Cut(0, 150, CUT_OBSTACLE)]
+    assert_invariants(rig)
+    assert_never_landed(rig)
+
+
+def test_a_judged_floor_ratio_view_above_the_limit_may_still_be_stepped_around(rigs):
+    rig = rigs(sensor=lambda timeline, envelope, clock: _FloorRatioViews(
+        timeline, envelope.pose_snapshot, False, "clear"), **AVOID)
+    lane_tests.fly(rig, DEMO)
+    assert "start" in phases(rig, EVENT_OBSTACLE_SIDESTEP)
+    assert ACTION_NO_FLOOR_REFERENCE not in [e.get("reason") for e in events(rig, EVENT_OBSTACLE_SIDESTEP)]
+    assert_invariants(rig)
+    assert_never_landed(rig)
+
+
+def test_the_sidestep_refusal_names_a_view_without_a_floor_reference(rigs):
+    rig = rigs()
+    no_floor = SenseResult.make_blocked(person_cue="clear", detail={"depth_action": ACTION_NO_FLOOR_REFERENCE})
+    assert rig.executor._sidestep_refusal(no_floor) == ACTION_NO_FLOOR_REFERENCE
+    by_state = SenseResult.make_blocked(person_cue="clear", detail={"depth_state": DEPTH_STATE_NO_FLOOR_REFERENCE})
+    assert rig.executor._sidestep_refusal(by_state) == ACTION_NO_FLOOR_REFERENCE
+    judged = SenseResult.make_blocked(person_cue="clear", detail={"depth_action": "go_left"})
+    assert rig.executor._sidestep_refusal(judged) is None

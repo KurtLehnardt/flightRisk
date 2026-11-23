@@ -274,7 +274,7 @@ class ForwardCameraSensor:
         if metric not in OBSTACLE_METRICS:
             raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
         if not valid_floor_ratio_max(floor_ratio_max):
-            raise ValueError(f"floor_ratio_max must be a positive finite number, got {floor_ratio_max!r}")
+            raise ValueError(f"floor_ratio_max must be a number from 0.5 to 1.0, got {floor_ratio_max!r}")
         self._frames = frames
         self._runner = runner
         self.min_safe_depth = float(min_safe_depth)
@@ -466,12 +466,14 @@ class ForwardCameraSensor:
         map on another device, which matters for a limit this close to the data.
         """
         ratio = metric_detail["floor_ratio"]
+        # The comparison is spelled out, so a value shown equal to the limit at four decimals is unambiguous.
+        comparison = None if ratio is None else ("<=" if ratio <= self.floor_ratio_max else ">")
+        shown = "no floor reference" if ratio is None else f"{ratio:.4f} {comparison} {self.floor_ratio_max:g}"
         log_event(
             logger, logging.INFO, EVENT_OBSTACLE_METRIC,
-            f"{self.metric} {'none' if ratio is None else f'{ratio:.4f}'} against {self.floor_ratio_max:g}: "
-            f"{metric_detail['depth_state']}",
+            f"{self.metric} {shown}: {metric_detail['depth_state']}",
             component="edge", drone_id=self.drone_id,
-            metric=self.metric, value=ratio, limit=self.floor_ratio_max,
+            metric=self.metric, value=ratio, comparison=comparison, limit=self.floor_ratio_max,
             depth_state=metric_detail["depth_state"], state=result.state, score=metric_detail["score"],
             device=getattr(self._guard, "device_name", None),
         )

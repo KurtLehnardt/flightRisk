@@ -279,12 +279,17 @@ def obstacle_metric_settings(environ: Any) -> tuple[str, float]:
 
 
 def valid_floor_ratio_max(value: Any) -> bool:
-    """Whether ``value`` can be a floor ratio limit: a real, finite, positive number (not a bool or a string)."""
+    """Whether ``value`` can be a floor ratio limit: a real number (not a bool or a string) in ``OBSTACLE_FLOOR_RATIO_MAX_RANGE``.
+
+    The guard and the camera sensor refuse anything else, so a limit outside
+    the range the edge accepts cannot reach the gate another way either.
+    """
+    lo, hi = OBSTACLE_FLOOR_RATIO_MAX_RANGE
     return (
         not isinstance(value, bool)
         and isinstance(value, (int, float))
         and math.isfinite(value)
-        and value > 0
+        and lo <= value <= hi
     )
 
 

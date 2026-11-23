@@ -411,7 +411,7 @@ def run_preflight(
 
     # The opt-in obstacle metric the edges started here inherit, when one is selected.
     if local:
-        metric_check = obstacle_metric_check(env.environ)
+        metric_check = obstacle_metric_check(env.environ, tuple(d.source for d in local))
         if metric_check is not None:
             checks.append(metric_check)
 
@@ -501,15 +501,16 @@ OBSTACLE_METRIC_CHECK = "Obstacle metric"
 OBSTACLE_METRIC_WARNING = "Opt-in metric; threshold not validated indoors (H1)"
 
 
-def obstacle_metric_check(environ: Mapping[str, str]) -> Check | None:
+def obstacle_metric_check(environ: Mapping[str, str], sources: tuple[str, ...] | None = None) -> Check | None:
     """The depth metric the edges started here inherit, or None for the default score.
 
     WARN while ``FLIGHTRISK_OBSTACLE_METRIC`` selects an opt-in metric: its
     threshold rests on 3 outdoor recordings at one height and is not validated
-    indoors. It never blocks the start. INFO instead while the inherited
-    ``FLIGHTRISK_OBSTACLE_SENSING`` is ``off``, because no edge then uses it.
-    A value the edge would refuse is a FAIL (``settings.validate`` reports it
-    as an error too).
+    indoors. It never blocks the start. INFO instead when no edge started here
+    uses it: the inherited ``FLIGHTRISK_OBSTACLE_SENSING`` is ``off``, or
+    *sources* (the sources of the local drones) has no real Tello, because a
+    fake drone's scripted sensor looks at no picture. A value the edge would
+    refuse is a FAIL (``settings.validate`` reports it as an error too).
     """
     try:
         metric, ratio_max = obstacle_metric_settings(environ)
@@ -523,6 +524,13 @@ def obstacle_metric_check(environ: Mapping[str, str]) -> Check | None:
             OBSTACLE_METRIC_CHECK, INFO,
             f"{ENV_OBSTACLE_METRIC}={metric} is set but not used: {ENV_OBSTACLE_SENSING}=off, so the edges started "
             f"here fly with no obstacle sensing at all",
+            data,
+        )
+    if sources is not None and "tello" not in sources:
+        return Check(
+            OBSTACLE_METRIC_CHECK, INFO,
+            f"{ENV_OBSTACLE_METRIC}={metric} is set but not used: every drone started here is a fake drone, whose "
+            f"scripted obstacle sensor looks at no picture",
             data,
         )
     return Check(

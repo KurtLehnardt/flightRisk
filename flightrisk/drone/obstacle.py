@@ -92,7 +92,7 @@ class ObstacleGuard:
         if metric not in OBSTACLE_METRICS:
             raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
         if not valid_floor_ratio_max(floor_ratio_max):
-            raise ValueError(f"floor_ratio_max must be a positive finite number, got {floor_ratio_max!r}")
+            raise ValueError(f"floor_ratio_max must be a number from 0.5 to 1.0, got {floor_ratio_max!r}")
         self.min_safe_depth = min_safe_depth
         self.check_interval = check_interval
         self.center_stat = center_stat

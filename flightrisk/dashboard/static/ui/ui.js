@@ -162,12 +162,16 @@ const socket = io();
         const cue = d && d.obstacle_person_cue;
         if (!cue || typeof cue !== 'object' || cue.depth_metric !== 'floor_ratio') return null;
         const round4 = (v) => Math.round(v * 10000) / 10000;
-        const max = typeof cue.depth_metric_max === 'number' ? round4(cue.depth_metric_max) : null;
-        let value;
-        if (cue.depth_state === 'no_floor_reference') value = 'no floor';
-        else if (typeof cue.depth_metric_value === 'number') value = String(round4(cue.depth_metric_value));
-        else value = '--';
-        return { text: ', floor ratio (unvalidated) ' + value + (max !== null ? ' / ' + max : ''),
+        const limit = typeof cue.depth_metric_max === 'number' ? cue.depth_metric_max : null;
+        const max = limit !== null ? round4(limit) : null;
+        const v = cue.depth_metric_value;
+        // The comparison uses the unrounded numbers, so a value shown equal to the limit still reads right.
+        let shown;
+        if (cue.depth_state === 'no_floor_reference') shown = 'no floor' + (max !== null ? ', limit ' + max : '');
+        else if (typeof v === 'number' && max !== null) shown = round4(v) + (v <= limit ? ' <= ' : ' > ') + max;
+        else if (typeof v === 'number') shown = String(round4(v));
+        else shown = '--' + (max !== null ? ', limit ' + max : '');
+        return { text: ', floor ratio (unvalidated) ' + shown,
             title: ' Depth metric: floor ratio (opt-in), blocked above ' + (max !== null ? max : 'its limit')
                 + ' and when the view has no floor reference. Unvalidated: its threshold rests on 3 outdoor'
                 + ' recordings at one height, none indoors (H1).' };

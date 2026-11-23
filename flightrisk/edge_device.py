@@ -1932,23 +1932,42 @@ class ObstacleSettings:
             "obstacle_avoid_budget_s": self.avoid_budget_s,
         }
 
-    def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
+    def metric_unused(self, camera_sensor: bool = True) -> str | None:
+        """Why the depth metric has no effect on this edge, or None when its camera sensor uses it.
+
+        It has none while obstacle sensing is ``off``, and none on an edge
+        without a camera sensor (*camera_sensor* false: a fake drone, whose
+        scripted sensor never looks at a picture, or a MAVLink edge without a
+        camera source, which relies on the autopilot).
+        """
+        if self.mode == SENSING_ENV_OFF:
+            return "it has no effect while obstacle sensing is off"
+        if not camera_sensor:
+            return ("it has no effect on this edge, which has no camera sensor (a fake drone, or a MAVLink edge "
+                    "without a camera source)")
+        return None
+
+    def warn_non_default(self, log: StructuredLogger, drone_id: str | None, camera_sensor: bool = True) -> None:
         """Log every setting that is not its default once, at warning level, by name and value.
 
         While the opt-in ``floor_ratio`` metric is selected it also logs
         ``edge_obstacle_metric_unvalidated`` once, at warning level. A floor
-        ratio limit set while the score decides is named as having no effect.
+        ratio limit set while the score decides is named as having no effect,
+        and so is the metric on an edge that does not use it (``metric_unused``).
         """
+        unused = self.metric_unused(camera_sensor)
         for name, value, default in self.non_default:
             detail = f"{name}={value!r} is not the default ({default!r})"
             if name == ENV_OBSTACLE_FLOOR_RATIO_MAX and self.metric != OBSTACLE_METRIC_FLOOR_RATIO:
                 detail += f"; it has no effect while {ENV_OBSTACLE_METRIC} is {self.metric!r}"
+            elif name in (ENV_OBSTACLE_METRIC, ENV_OBSTACLE_FLOOR_RATIO_MAX) and unused is not None:
+                detail += f"; {unused}"
             log.warning(
                 EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
                 detail=detail,
             )
         if self.metric == OBSTACLE_METRIC_FLOOR_RATIO:
-            unused = "; it has no effect while obstacle sensing is off" if self.mode == SENSING_ENV_OFF else ""
+            unused = "" if unused is None else f"; {unused}"
             log.warning(
                 EVENT_OBSTACLE_METRIC_UNVALIDATED, drone_id=drone_id, metric=self.metric,
                 floor_ratio_max=self.floor_ratio_max,
@@ -2081,7 +2100,9 @@ def _build_obstacle_wiring(
     kind = _drone_kind(args)
     drone_id = getattr(args, "drone_id", None)
     settings = ObstacleSettings(kind, envelope, env)
-    settings.warn_non_default(log, drone_id)
+    # The edges below that build a camera sensor: all but a fake drone and a MAVLink edge without a camera.
+    camera_sensor = kind != "fake" and not (kind == "mavlink" and getattr(args, "source", None) not in ("camera", "url"))
+    settings.warn_non_default(log, drone_id, camera_sensor=camera_sensor)
     mode, turn, step_cm, settle_s = settings.mode, settings.turn, settings.step_cm, settings.settle_s
     if mode == SENSING_ENV_OFF:
         log.warning(
