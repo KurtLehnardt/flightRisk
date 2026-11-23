@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var confirmingDemo = false
     @State private var demoRefusal: String?
+    @Environment(\.scenePhase) private var scenePhase
 
     let viewModel: SearchViewModel
     let cameraSession: AVCaptureSession
@@ -77,6 +78,14 @@ struct ContentView: View {
                 // The demo replaces the camera search; a running search stops.
                 if viewModel.isSearching { viewModel.stopSearch(reason: "demo_started") }
                 selectedTab = 3
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Reconnect the ground link at once instead of after the rest of a
+                // backoff wait. Only here, where the Ground tab exists, so the
+                // onboarding screens never create the ground view model.
+                if phase == .active {
+                    groundViewModel.sceneDidBecomeActive()
+                }
             }
         } else {
             OnboardingView(

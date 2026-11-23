@@ -18,12 +18,21 @@ class OnnxModelLoader(
     assetFileName: String,
 ) : Closeable {
 
-    val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
+    val environment: OrtEnvironment
     val session: OrtSession
 
     init {
         val modelBytes = context.assets.open(assetFileName).use { it.readBytes() }
-        session = environment.createSession(modelBytes)
+        try {
+            environment = OrtEnvironment.getEnvironment()
+            session = environment.createSession(modelBytes)
+        } catch (e: LinkageError) {
+            // UnsatisfiedLinkError (the native library did not load) or
+            // ExceptionInInitializerError (its static initialiser failed) are Errors, so
+            // callers that catch Exception would crash. Report them as an ordinary
+            // failure so the caller degrades to "models not loaded".
+            throw IllegalStateException("The ONNX Runtime native library did not load (${e.javaClass.simpleName})", e)
+        }
     }
 
     /**

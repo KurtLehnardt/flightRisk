@@ -19,7 +19,13 @@ settings:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
     INFOPLIST_FILE: FlightRisk/Info.plist
-    DEVELOPMENT_TEAM: ""
+    # The privacy policy the onboarding notice links to. It is written into Info.plist as
+    # FlightRiskPrivacyPolicyURL. Set it here, or in Config/Signing.local.xcconfig, once the
+    # policy is hosted. DEVELOPMENT_TEAM is not set here: it comes from Config/Signing.xcconfig.
+    FLIGHTRISK_PRIVACY_POLICY_URL: https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md
+    # The build number (CFBundleVersion). Raise it for every App Store Connect upload; see
+    # ios/README.md, "Build number".
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   FlightRisk:
     type: application
@@ -38,17 +44,26 @@ targets:
         product: GroundProtocol
       - package: FlightRiskGround
         product: SocketIOMini
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
         INFOPLIST_FILE: FlightRisk/Info.plist
         CODE_SIGN_STYLE: Automatic
+        # iPhone only. XcodeGen's iOS target preset sets "1,2", which would override the
+        # project-level value, so the target sets it again.
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: FlightRisk/Info.plist
       properties:
         CFBundleDisplayName: FlightRisk
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        ITSAppUsesNonExemptEncryption: false
+        FlightRiskPrivacyPolicyURL: "$(FLIGHTRISK_PRIVACY_POLICY_URL)"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -65,9 +80,13 @@ targets:
       - FlightRiskTests
     dependencies:
       - target: FlightRisk
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
         INFOPLIST_FILE: FlightRiskTests/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
   FlightRiskUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -75,7 +94,11 @@ targets:
       - FlightRiskUITests
     dependencies:
       - target: FlightRisk
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: FlightRisk
+        TARGETED_DEVICE_FAMILY: "1"

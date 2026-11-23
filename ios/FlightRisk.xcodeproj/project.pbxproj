@@ -44,6 +44,7 @@
 		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
 		79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */; };
 		83311E405D293114CACA202A /* DemoUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBC39CAEC49912772833E0B /* DemoUITests.swift */; };
+		8431EFC27258C7C830F9B8C4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BE6C96B3E631C1431FAB6618 /* Assets.xcassets */; };
 		8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */; };
 		863E2CA269FEA140DEDD2D2D /* GroundText+Shorten.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */; };
 		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
@@ -64,6 +65,7 @@
 		B35B5D2E9BBDEA6C449DF905 /* GroundHardeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E9100C0DC1B5F8CFD1FCB8 /* GroundHardeningTests.swift */; };
 		B5A0C591FE8390D32BBF8F78 /* DroneStatusCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE27DFFA90B637CA614C7BF /* DroneStatusCardView.swift */; };
 		BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B4251664E956AD316034AF /* MatchScorerTests.swift */; };
+		BF0EFE15254CDD97CBCFB47B /* OnboardingGroundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 579AAE590A2CF0FCC2543109 /* OnboardingGroundTests.swift */; };
 		CB26A272F738D7CF9B82DBFD /* GroundSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */; };
 		CD8AB112C62FE48B21A526C6 /* PlanCurrentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */; };
 		CE312B422E6D04F5F6610AD6 /* SearchPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1579D100580E363B8D28F94E /* SearchPipeline.swift */; };
@@ -71,6 +73,7 @@
 		D26276CDE6ACCAE2FE5BD83A /* GroundViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2F430D7789339A8B286F19 /* GroundViewModel.swift */; };
 		D288D9B4336216C304CC56FA /* ReasoningSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BE5191B00606EAE1AA1F94 /* ReasoningSettingsTests.swift */; };
 		D6CA86F10FD513C9BF201B8C /* GroundLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71B77E3623BE1947AB032CE8 /* GroundLayout.swift */; };
+		D881CF00BDA876A0730EB094 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 37DE532080DC987B62AE9D01 /* PrivacyInfo.xcprivacy */; };
 		D8C1FB13C942A48596579DB4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31371F0ADD85F5CF5C112DD4 /* SettingsView.swift */; };
 		DAB66B86DEB63AB9BE8015DF /* ClothingColorMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE6FB61B6DB63745F6AB545 /* ClothingColorMatcher.swift */; };
 		DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */; };
@@ -133,6 +136,7 @@
 		338E5007C4F0B499E1161828 /* OSNetReIDMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSNetReIDMatcher.swift; sourceTree = "<group>"; };
 		35792841BED0D09966745935 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		37A07D66689A481E4C07F063 /* FlightRiskGround */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FlightRiskGround; path = FlightRiskGround; sourceTree = SOURCE_ROOT; };
+		37DE532080DC987B62AE9D01 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		3C18B10FC35D8511EDDFC931 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		3E42D1E2974BEB9D652A07D9 /* GroundMatchAlertView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundMatchAlertView.swift; sourceTree = "<group>"; };
 		3F2F430D7789339A8B286F19 /* GroundViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundViewModel.swift; sourceTree = "<group>"; };
@@ -148,6 +152,8 @@
 		527451F7363858076AFD12CF /* CeilingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CeilingView.swift; sourceTree = "<group>"; };
 		528EE687C8CE5B766B01FBF9 /* GemmaModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GemmaModelManager.swift; sourceTree = "<group>"; };
 		52F7753BE4176DC8ABBCADA2 /* MatchingSignal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchingSignal.swift; sourceTree = "<group>"; };
+		5750DED5BD56AF82A536DC61 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		579AAE590A2CF0FCC2543109 /* OnboardingGroundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingGroundTests.swift; sourceTree = "<group>"; };
 		581C04115FE79D1192573A6D /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
 		595B3628D879395662E1E001 /* VideoTilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoTilesView.swift; sourceTree = "<group>"; };
 		59BFA7DF8E90AA1B5611D58A /* ImageQualityScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageQualityScorer.swift; sourceTree = "<group>"; };
@@ -183,6 +189,7 @@
 		B69634E5AA5C105D3BEC3074 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanGridViewStateTests.swift; sourceTree = "<group>"; };
 		BC27CB526DDAD7CAEA259FFB /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		BE6C96B3E631C1431FAB6618 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C1371036140E40440DEB3B4F /* PlanGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanGridView.swift; sourceTree = "<group>"; };
 		C7CAABBA552EF1B74A2F7647 /* ReasoningSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningSettings.swift; sourceTree = "<group>"; };
 		CB622BBAF1226C79D19769EE /* DetectionProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionProfilesView.swift; sourceTree = "<group>"; };
@@ -265,6 +272,7 @@
 				4F23C5A72BB537E18797473D /* GroundViewModelTests.swift */,
 				8943A4554AA1A516C8F35352 /* Info.plist */,
 				14B4251664E956AD316034AF /* MatchScorerTests.swift */,
+				579AAE590A2CF0FCC2543109 /* OnboardingGroundTests.swift */,
 				ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */,
 				BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */,
 				D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */,
@@ -415,8 +423,10 @@
 		BDDD43E843468FCD7F14A5CE /* FlightRisk */ = {
 			isa = PBXGroup;
 			children = (
+				BE6C96B3E631C1431FAB6618 /* Assets.xcassets */,
 				0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */,
 				4ABE92EEEE51DF56E95D0159 /* Info.plist */,
+				37DE532080DC987B62AE9D01 /* PrivacyInfo.xcprivacy */,
 				F13333465B30BF9D1F2B584E /* Alert */,
 				9E0FE97CD88AC376B1C1920C /* Camera */,
 				6024718204B7B14B69454174 /* Config */,
@@ -466,12 +476,21 @@
 		E1254E755EE27D1A6D45B2C4 = {
 			isa = PBXGroup;
 			children = (
+				ECD376B29FF70E50D25EAA81 /* Config */,
 				BDDD43E843468FCD7F14A5CE /* FlightRisk */,
 				3658B56FE3DD369AB70330AE /* FlightRiskTests */,
 				F8115A8E787D4F4D255BC8A2 /* FlightRiskUITests */,
 				08C8A1FA3C2F7BB3DFAB1FAB /* Packages */,
 				D63EB7FAD1009AC95314462C /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		ECD376B29FF70E50D25EAA81 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				5750DED5BD56AF82A536DC61 /* Signing.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		F13333465B30BF9D1F2B584E /* Alert */ = {
@@ -526,6 +545,7 @@
 			buildConfigurationList = 37854391229A03FCE9C84BEF /* Build configuration list for PBXNativeTarget "FlightRisk" */;
 			buildPhases = (
 				657C6045B0A0DD0997C6553E /* Sources */,
+				59704F94E0566E88A5987A27 /* Resources */,
 				50918952C35F379446F3F3E8 /* Frameworks */,
 			);
 			buildRules = (
@@ -609,6 +629,18 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		59704F94E0566E88A5987A27 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8431EFC27258C7C830F9B8C4 /* Assets.xcassets in Resources */,
+				D881CF00BDA876A0730EB094 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5500DA21B3C3A3B925D9A3F9 /* Sources */ = {
@@ -697,6 +729,7 @@
 				120179245B1A767ABF9E72FB /* GroundTestSupport.swift in Sources */,
 				E81B8F714B847F9E364B7649 /* GroundViewModelTests.swift in Sources */,
 				BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */,
+				BF0EFE15254CDD97CBCFB47B /* OnboardingGroundTests.swift in Sources */,
 				CD8AB112C62FE48B21A526C6 /* PlanCurrentTests.swift in Sources */,
 				54BEF6E800A3C73BD1EAAEE5 /* PlanGridViewStateTests.swift in Sources */,
 				79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */,
@@ -724,6 +757,7 @@
 /* Begin XCBuildConfiguration section */
 		0513994AA79010C09866BA78 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				INFOPLIST_FILE = FlightRiskTests/Info.plist;
@@ -734,7 +768,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskTests;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FlightRisk.app/FlightRisk";
 			};
 			name = Release;
@@ -773,10 +807,11 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				FLIGHTRISK_PRIVACY_POLICY_URL = "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md";
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -832,10 +867,11 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				FLIGHTRISK_PRIVACY_POLICY_URL = "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md";
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -866,6 +902,7 @@
 		};
 		4F04B975DE7ECDB2660271A0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -876,13 +913,14 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskUITests;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_TARGET_NAME = FlightRisk;
 			};
 			name = Release;
 		};
 		5FCAD2ADC4B563143E6DA183 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				INFOPLIST_FILE = FlightRiskTests/Info.plist;
@@ -893,13 +931,14 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskTests;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FlightRisk.app/FlightRisk";
 			};
 			name = Debug;
 		};
 		8C6E02CAADA2A84C75139FAA /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -911,12 +950,13 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.app;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
 		9419C6DEE84B4B58A292F913 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -927,13 +967,14 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskUITests;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				TEST_TARGET_NAME = FlightRisk;
 			};
 			name = Debug;
 		};
 		EDFBEA79B279543BFC4CFCB1 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5750DED5BD56AF82A536DC61 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -945,7 +986,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.app;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};

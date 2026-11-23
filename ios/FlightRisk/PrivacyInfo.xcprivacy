@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	The FlightRisk app's privacy manifest. docs/app-store-compliance.md explains each entry.
+
+	Tracking: none. The app has no advertising, analytics or tracking code and no tracking domains.
+
+	Collected data: only the optional cloud reasoning path sends user data to a third party. When the
+	user has turned on "Allow cloud reasoning", saved a Claude API key and selected Cloud Claude, the
+	reference photo, the cropped image of each detected person and the typed description are sent to
+	Anthropic. The request carries the user's own API key, so the data is declared as linked to the
+	user. Face embeddings, appearance features, camera frames and location never leave the device and
+	are not declared.
+
+	Required reason APIs:
+	- UserDefaults (CA92.1): the app's own settings, in the standard domain and in the app-only suite
+	  "flightrisk_config". No App Group is used.
+	- Disk space (E174.1): GemmaModelManager checks the free space before it downloads the on-device
+	  model and refuses the download, with a message, when there is not enough.
+	- File timestamp (C617.1): swift-transformers (Hub/Downloader.swift) reads the attributes of a
+	  partly downloaded model file inside the app container to resume the download.
+	- System boot time (35F9.1): precautionary. Nothing in the app or its packages calls a boot time
+	  API, but mlx-swift's bundled metal-cpp contains a "systemUptime" selector string that Apple's
+	  scanner may flag (ITMS-91053). Remove this entry only if a later build no longer contains it.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
