@@ -58,7 +58,7 @@ final class VocabularyTests: XCTestCase {
     func testOtherVocabulariesKeepTheirWireValues() {
         XCTAssertEqual(ManualAction.knownWireValues.sorted(), ["land", "resume_search"])
         XCTAssertEqual(ReasoningProviderName.knownWireValues.sorted(), ["claude", "gemma", "off"])
-        XCTAssertEqual(FleetEventKind.knownWireValues.count, 9)
+        XCTAssertEqual(FleetEventKind.knownWireValues.count, 10)
         XCTAssertEqual(LaneDirection(wire: "up"), .unknown("up"))
     }
 

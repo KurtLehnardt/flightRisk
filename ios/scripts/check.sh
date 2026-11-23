@@ -5,6 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The property lists and the privacy manifest must be well formed.
+echo "Linting property lists..."
+plutil -lint "$IOS_DIR/FlightRisk/Info.plist" "$IOS_DIR/FlightRisk/PrivacyInfo.xcprivacy" "$IOS_DIR/FlightRiskTests/Info.plist"
+
 # Check the Swift package first (Metal-free)
 echo "Building Swift package..."
 cd "$IOS_DIR/FlightRiskGround"

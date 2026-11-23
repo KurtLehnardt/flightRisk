@@ -1,5 +1,7 @@
 package com.flightrisk.app.privacy
 
+import com.flightrisk.app.BuildConfig
+
 /**
  * The words of the first-launch privacy notice and of the recording setting.
  * They are kept here, apart from the screens, so a unit test can check that
@@ -9,7 +11,14 @@ package com.flightrisk.app.privacy
 object PrivacyNoticeText {
     const val TITLE = "Privacy Notice"
 
-    const val POLICY_URL = "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md"
+    /**
+     * The privacy policy address, the one place the app reads it from. It is set
+     * at build time from the Gradle property `flightrisk.privacyPolicyUrl`
+     * (mobile/app/build.gradle.kts). The default is the policy file on GitHub,
+     * which must be replaced by a hosted page before the app is submitted to
+     * Google Play (docs/app-store-compliance.md).
+     */
+    const val POLICY_URL: String = BuildConfig.PRIVACY_POLICY_URL
     const val POLICY_LINK_LABEL = "Read the full privacy policy"
 
     data class Item(val title: String, val description: String)

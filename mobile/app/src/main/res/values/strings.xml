@@ -30,5 +30,11 @@
     <string name="drone_rotate_cw">Rotate CW</string>
     <string name="drone_rotate_ccw">Rotate CCW</string>
     <string name="drone_stop_search">Stop Search</string>
+    <string name="search_no_target_title">No search target yet</string>
+    <string name="search_no_target_body">Choose a clear, recent photo of the person you are looking for. Without one, a search only detects people and cannot find a match.</string>
+    <string name="search_no_target_action">Choose a target photo</string>
+    <string name="search_no_camera_title">No camera on this device</string>
+    <string name="search_no_camera_body">Connect a Tello drone to search with its camera.</string>
+    <string name="camera_unavailable">Camera unavailable</string>
     <string name="drone_search_disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</string>
 </resources>

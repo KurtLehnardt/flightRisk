@@ -3,7 +3,13 @@ package com.flightrisk.app.ui.navigation
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
@@ -163,9 +169,21 @@ fun FlightRiskNavHost(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val context = LocalContext.current
+    val navigateTo: (String) -> Unit = { route ->
+        navController.navigate(route) {
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     Scaffold(
         modifier = modifier,
+        // Edge-to-edge is always on from Android 15 (target SDK 35+): pad the content for
+        // the system bars and for a display cutout (a landscape notch), not only the bars.
+        contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
         bottomBar = {
             NavigationBar(
                 modifier = Modifier.semantics {
@@ -175,15 +193,7 @@ fun FlightRiskNavHost(
                 for (dest in destinations) {
                     NavigationBarItem(
                         selected = currentRoute == dest.route,
-                        onClick = {
-                            navController.navigate(dest.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
+                        onClick = { navigateTo(dest.route) },
                         icon = {
                             Icon(
                                 imageVector = dest.icon,
@@ -199,7 +209,11 @@ fun FlightRiskNavHost(
         NavHost(
             navController = navController,
             startDestination = NavDestination.Search.route,
-            modifier = Modifier.padding(innerPadding),
+            // Consume what this shell padded, so a screen's own Scaffold or
+            // statusBarsPadding() does not add the status bar a second time.
+            modifier = Modifier
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding),
         ) {
             composable(NavDestination.Search.route) {
                 SearchScreen(
@@ -208,6 +222,7 @@ fun FlightRiskNavHost(
                         frameSourceMode = frameSourceMode,
                         latestDroneFrame = latestDroneFrame,
                         selectedPattern = selectedSearchPattern,
+                        hasTarget = targetBitmap != null,
                     ),
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
@@ -215,16 +230,14 @@ fun FlightRiskNavHost(
                     onNotMyChild = onNotMyChild,
                     onNavigateToMatch = { lat, lon ->
                         val uri = Uri.parse("geo:$lat,$lon?q=$lat,$lon")
-                        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                            setPackage("com.google.android.apps.maps")
-                        }
-                        if (intent.resolveActivity(context.packageManager) != null) {
-                            context.startActivity(intent)
-                        } else {
-                            // Fallback to any map app
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, uri)
-                            )
+                        // Google Maps first, then any map app. resolveActivity() cannot see
+                        // other packages without a <queries> entry (package visibility), so
+                        // the launch itself is tried and a missing app is caught.
+                        val mapsIntent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.apps.maps")
+                        val opened = runCatching { context.startActivity(mapsIntent) }.isSuccess ||
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }.isSuccess
+                        if (!opened) {
+                            Toast.makeText(context, "No map app is installed", Toast.LENGTH_LONG).show()
                         }
                     },
                     onDismissDroneAlert = onDismissDroneAlert,
@@ -236,6 +249,7 @@ fun FlightRiskNavHost(
                     onDroneRotate = onDroneRotate,
                     onEmergencyStop = onEmergencyStop,
                     onSearchPatternChanged = onSearchPatternChanged,
+                    onSetUpTarget = { navigateTo(NavDestination.Target.route) },
                 )
             }
 

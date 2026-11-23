@@ -63,6 +63,10 @@ struct FlightRiskApp: App {
     }
 
     private func setupPipeline() async {
+        // PersonDetector loaded its model in init. If the model is missing or
+        // broken, say so on the Search tab instead of searching silently.
+        viewModel.detectionUnavailableReason = personDetector.unavailableReason
+
         // Load vision models (PersonDetector loads in init; ReID and Face need explicit load)
         _ = personReID.loadModel()
         _ = faceRecognizer.loadModels()

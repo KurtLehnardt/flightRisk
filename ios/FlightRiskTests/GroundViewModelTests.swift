@@ -487,6 +487,58 @@ final class GroundViewModelTests: XCTestCase {
         await harness.push(t2, "fleet_status", GroundSamples.fleetTwo) { !self.vm.isStateStale }
     }
 
+    func testSceneBecomingActiveEndsTheBackoffWaitAtOnce() async {
+        let t1 = await harness.connect()
+        await harness.push(t1, "fleet_status", GroundSamples.fleetTwo) { !self.vm.isStateStale }
+        t1.serverDrop()
+        await harness.waitUntil("reconnecting") { !self.vm.linkStatus.isConnected }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        let t2 = await harness.handshake(after: before)
+        XCTAssertEqual(t2.sentEventNames, GroundCommand.stateRequests.map(\.eventName))
+        // A connected link is left alone.
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before + 1)
+        XCTAssertTrue(vm.linkStatus.isConnected)
+    }
+
+    func testSceneBecomingActiveDoesNotRetryAKeyTheGroundRefused() async {
+        harness.configure()
+        vm.setEnabled(true)
+        await harness.waitUntil("a transport") { self.harness.recorder.transports.count == 1 }
+        let t = harness.recorder.transports[0]
+        t.push(GroundTestFrames.open)
+        await harness.waitUntil("the namespace connect") { t.sent.contains { $0.hasPrefix("40") } }
+        t.push(GroundTestFrames.connectError)
+        await harness.waitUntil("wrong key") { self.vm.linkStatus == .wrongKey }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before, "the same refused key is not sent again")
+        XCTAssertEqual(vm.linkStatus, .wrongKey)
+        // The banner's Retry still works.
+        vm.retryConnection()
+        await harness.waitUntil("retry") { self.harness.recorder.transports.count == before + 1 }
+    }
+
+    func testSceneBecomingActiveNeverConnectsALinkThatIsOffOrInTheBackground() async {
+        harness.configure()
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, 0, "a link that is switched off stays off")
+        XCTAssertEqual(vm.linkStatus, .off)
+
+        let t = await harness.connect()
+        vm.appDidEnterBackground()
+        await harness.waitUntil("the client stopped") { t.closed }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before, "no connection from the background")
+        XCTAssertEqual(vm.linkStatus, .paused)
+    }
+
     func testReleasingTheViewModelShutsTheClientDown() async {
         var model: GroundViewModel? = harness.makeViewModel()
         XCTAssertNil(model?.saveAddress(GroundHarness.address))
