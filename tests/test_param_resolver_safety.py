@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -26,11 +28,14 @@ from flightrisk.params.resolver import (
     resolve,
     resolve_unit,
     spec_for,
+    today_accepts_from_golden,
 )
 from flightrisk.params.spec import Confirm, EffectiveValue, Kind, Safer, Source
 from flightrisk.params.table import TABLE
 
 G = "generic_multirotor"
+TODAY = today_accepts_from_golden(json.loads(
+    (Path(__file__).resolve().parent / "golden" / "flight_params.json").read_text(encoding="utf-8")))
 CEILING = "envelope.ceiling_cm"
 GEOFENCE = "envelope.geofence_cm"
 #: Words an operator message must never contain, because they name a test-adapter fact or its variable.
@@ -433,3 +438,34 @@ def test_an_inventory_value_outside_the_base_bound_is_refused_on_a_custom_model(
     with pytest.raises(ParamRefused):
         resolve_unit(model, "t-1", {Source.INVENTORY: {param_id: value}},
                      confirmations={param_id: str(value)})
+
+
+# Critic round 1, F4: a custom model's narrowed bound holds for every layer, environment and flags included.
+def _low_ceiling():
+    return custom.custom_model("low-ceiling", {"extends": "tello", "param_bounds": {CEILING: {"lo": 150, "hi": 200}}})
+
+
+@pytest.mark.parametrize("layers", [
+    {Source.ENV: {"FLIGHTRISK_CEILING_CM": "1000"}},
+    {Source.ENV: {"FLIGHTRISK_CEILING_CM": "201"}},
+    {Source.FILE: {CEILING: 1000}},
+    {Source.INVENTORY: {CEILING: 1000}},
+    {Source.LAUNCHER: {CEILING: 1000}},
+])
+def test_a_narrowed_bound_is_enforced_for_every_layer(layers):
+    with pytest.raises(ParamRefused) as err:
+        resolve(_low_ceiling(), "t-1", layers, today_accepts=TODAY)
+    assert "200" in err.value.message
+
+
+def test_a_narrowed_bound_is_enforced_for_a_flag():
+    hex_model = _hex(param_bounds={CEILING: {"lo": 1000, "hi": 6000}})
+    with pytest.raises(ParamRefused):
+        resolve(hex_model, "hex-1", {Source.CLI: {"--ceiling-m": "100"}}, today_accepts=TODAY)
+    assert resolve(hex_model, "hex-1", {Source.CLI: {"--ceiling-m": "50"}},
+                   today_accepts=TODAY)[CEILING].value == 5000
+
+
+def test_a_value_inside_both_today_and_the_narrowed_bound_is_accepted():
+    out = resolve(_low_ceiling(), "t-1", {Source.ENV: {"FLIGHTRISK_CEILING_CM": "180"}}, today_accepts=TODAY)
+    assert (out[CEILING].value, out[CEILING].lo, out[CEILING].hi) == (180, 150, 200)

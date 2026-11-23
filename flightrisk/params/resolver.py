@@ -29,7 +29,11 @@ Decisions:
    with ``today_accepts=None`` (no golden data), or for a name today's code
    does not read at all (``table.read_today`` is false, for example
    ``FLIGHTRISK_LAND_BATTERY`` and ``FLIGHTRISK_LINK_LOSS_WAIT_S``), is an
-   environment or flag value checked against the target bound.
+   environment or flag value checked against the target bound. On a custom
+   or unknown model, which has no today behaviour to keep, an environment or
+   flag value must also stay inside the model's own bound, so the effective
+   range is today's range intersected with the model's bound. Built-in
+   models are unaffected.
 2. Where today's code clamps (``policy: clamp``, row 23
    ``FLIGHTRISK_MANUAL_ORPHAN_LAND_S``, "min 30, clamped"), the resolver
    clamps to the same end and logs it (risk R5). C5 turns this into a
@@ -524,24 +528,32 @@ def _today_range(today_accepts: Optional[TodayAccepts], name: str, profile: str)
 
 
 def _check_bound(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, detail: str, source: Source,
-                 name: Optional[str], today_accepts: Optional[TodayAccepts]) -> Any:
-    """Return the value to use after the bound check, clamped where today's code clamps; raise if refused."""
+                 name: Optional[str], today_accepts: Optional[TodayAccepts], model_bound: bool = False) -> Any:
+    """Return the value to use after the bound check, clamped where today's code clamps; raise if refused.
+
+    ``model_bound`` is true for a custom or unknown model: an environment or flag value must then also
+    stay inside the model's own bound, so the effective range is today's range intersected with it.
+    """
     profile = model.profile
+    target: Optional[Bound] = spec.bounds.get(profile)
     if today_accepts is not None and name and source in _NAME_LAYERS and read_today(name):
         # Decision 1: an environment or flag value of a name today's code reads is checked against today's
         # range only. Such a name with no recorded range is open, as today's reader accepts any value its
         # parse accepts. A name today's code does not read falls through to the target bound.
         today = _today_range(today_accepts, name, profile) or _OPEN
         end = _outside_range(value, today)
-        if end is None:
-            return value
-        if today.policy == "clamp" and not isinstance(value, tuple):
+        if end is not None:
+            if today.policy != "clamp" or isinstance(value, tuple):
+                raise _refusal(spec, model, unit_id, value, detail, (today.lo, today.hi), source)
             clamped = today.lo if end == "lo" else today.hi
             clamped = _whole(clamped) if spec.kind is Kind.INT else float(clamped)
             log.warning("%s=%r is outside %s to %s; clamped to %r as today", name, value, today.lo, today.hi, clamped)
-            return clamped
-        raise _refusal(spec, model, unit_id, value, detail, (today.lo, today.hi), source)
-    target: Optional[Bound] = spec.bounds.get(profile)
+            value = clamped
+        if model_bound and target is not None and _outside(value, target.lo, target.hi) is not None:
+            lo = target.lo if today.lo is None else max(today.lo, target.lo)
+            hi = target.hi if today.hi is None else min(today.hi, target.hi)
+            raise _refusal(spec, model, unit_id, value, detail, (lo, hi), source)
+        return value
     if target is not None and _outside(value, target.lo, target.hi) is not None:
         raise _refusal(spec, model, unit_id, value, detail, (target.lo, target.hi), source)
     return value
@@ -775,7 +787,7 @@ def resolve(
                 raise ParamRefused(stored_switch_off(param_id, value, detail), param_id=param_id, source=source)
             if not is_off:
                 value = _check_bound(spec, drone, unit_id, value, detail, source,
-                                     name.name if name else None, today_accepts)
+                                     name.name if name else None, today_accepts, narrowing is not None)
             result[param_id] = _effective(spec, drone, value, bases[param_id], source, detail, is_off)
 
     return result
