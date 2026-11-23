@@ -141,7 +141,9 @@ capped call is skipped at once and the alert reads "AI check paused (Claude unav
 N s)" or "AI check skipped (rate cap)", so the reasoning worker never stalls. If Anthropic rejects the
 key (HTTP 401 or 403), Claude checks turn off with a notice until the dashboard restarts or Claude is
 selected again. Settings from `ANTHROPIC_*` variables (base URL, custom headers, API key, trace
-content) are ignored.
+content) are ignored. A failed check shows fixed text built from the status code or error type, for
+example "AI check failed (Claude error 529: overloaded).", never the raw error message, because the
+result goes to every connected client; the full error is logged on the ground, redacted.
 
 ## Observability (Grafana)
 
