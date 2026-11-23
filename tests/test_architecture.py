@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "flightrisk"
 CONCRETE_BACKENDS = ("flightrisk.drone.tello", "flightrisk.drone.mavlink")
+#: Packages that must stay free of the web, vision and drone driver libraries.
+LIGHT_PACKAGES = ("params", "hardware")
+HEAVY_LIBRARIES = ("flask", "ultralytics", "torch", "cv2", "mavsdk", "djitellopy")
 #: Modules allowed to import concrete backends directly.
 BOOTSTRAP_MODULES = {ROOT / "drone" / "backends.py"}
 
@@ -102,3 +105,17 @@ def test_checker_detects_a_relative_import(tmp_path):
 
 def test_package_of_dashboard_module():
     assert _package_of(ROOT / "dashboard" / "app.py") == "flightrisk.dashboard"
+
+
+def test_params_and_hardware_import_no_heavy_libraries_or_runtime_modules():
+    offenders = {}
+    for name in LIGHT_PACKAGES:
+        for path in sorted((ROOT / name).rglob("*.py")):
+            bad = sorted(
+                mod for mod in _imported_modules(path)
+                if mod.split(".")[0] in HEAVY_LIBRARIES
+                or any(mod == b or mod.startswith(b + ".") for b in CONCRETE_BACKENDS)
+            )
+            if bad:
+                offenders[str(path.relative_to(ROOT))] = bad
+    assert offenders == {}
