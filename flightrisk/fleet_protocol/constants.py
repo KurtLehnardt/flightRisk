@@ -303,9 +303,9 @@ MAX_LANE_DISTANCE_CM = 100_000
 # camera sensor's depth threshold and the re-look and sidestep group
 # ``obstacle_avoid`` included; a Tello has no GPS but adds its temperature as
 # one grouped field, ``temp_preflight``) plus the ones the edge adds on the way
-# out (``detector_ok``, ``camera_ok`` and up to five detection profile
-# fields), so up to 43 on a real edge and 44 with every optional field
-# present. The limit leaves headroom above that; a new optional field belongs
+# out (``detector_ok``, ``camera_ok`` and the grouped ``detection_profile``),
+# so up to 39 on a real edge and 40 with every optional field present. The
+# limit leaves headroom above that; a new optional field belongs
 # in a group. ``tests/test_telemetry_field_cap.py`` guards it. Raising it only
 # loosens what a ground accepts, so an older edge's messages are unchanged.
 MAX_FIELDS = 48

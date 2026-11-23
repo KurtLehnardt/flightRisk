@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Export CLIP image encoders to ONNX for mobile ReID inference.
 
+WARNING: this script must not be used for store builds. Its default model,
+MobileCLIP-S2, has research-only weights, and neither model it exports is the
+ground's appearance model (open_clip ViT-B-16, laion2b_s34b_b88k), so their
+embeddings cannot be compared with the ground's. Build the store models with
+scripts/mobile_models/make_models.py instead (see docs/mobile-models.md).
+
 Exports two models:
   - Primary:  MobileCLIP-S2     (~20 MB, optimized for mobile)
   - Fallback: OpenAI CLIP ViT-B/32 (~150 MB, proven ONNX export)

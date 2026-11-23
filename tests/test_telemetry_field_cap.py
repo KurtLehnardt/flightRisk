@@ -7,11 +7,11 @@ sender's validation. These tests build the telemetry the way the edge does
 
 ``_wire`` sets every optional field group by default, whatever the drone: the
 camera sensor's depth threshold (``obstacle_min_safe_depth``), the re-look and
-sidestep counts (``obstacle_avoid``) and the temperature (``temp_preflight``,
-the check before the last takeoff and the live reading). The headroom test
-checks both the real producers (a MAVLink drone has GPS and never sends
-``temp_preflight``; a Tello sends it and has no GPS) and the message with every
-optional field at once, which no real edge sends.
+sidestep group (``obstacle_avoid``), the detection profile group and the
+temperature (``temp_preflight``, the check before the last takeoff and the live
+reading). A real MAVLink drone never sends ``temp_preflight`` (a Tello sends it
+and has no GPS), so the message with every group at once is a bound no real
+edge reaches.
 """
 from __future__ import annotations
 
@@ -23,9 +23,7 @@ from flightrisk import edge_device
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.obstacle_sensor import TELEMETRY_AVOID, TELEMETRY_MIN_SAFE_DEPTH, TELEMETRY_PERSON_CUE
 from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, TempLimits, TempReading, judge_reading
-from flightrisk.drone.lane_executor import LaneExecutor
-from flightrisk.observability import StructuredLogger
-from tests.test_obstacle_h6_fixes import LinkedFakeTello, _CueSensor, _envelope, _executor
+from tests.test_obstacle_h6_fixes import LinkedFakeTello, _CueSensor, _executor
 
 _CUE = {"person_cue_down": True, "person_detection_age_s": 3.2, "min_safe_depth": 0.77}
 
@@ -44,33 +42,24 @@ class _NoGpsTello(LinkedFakeTello):
 
 def _runner(profile_fields=True):
     """A runner with every field ``_with_profile_status`` can add."""
-    switcher = types.SimpleNamespace(status_fields=lambda: {
-        "detection_profile": "fast", "detection_profile_fallback": True, "detection_profile_switchable": True,
-        "detection_profile_fallback_reason": "model missing", "detection_profile_requested": "accurate",
-    })
+    switcher = types.SimpleNamespace(status_fields=lambda: {"detection_profile": {
+        "name": "fast", "fallback": True, "switchable": True,
+        "fallback_reason": "model missing", "requested": "accurate",
+    }})
     return types.SimpleNamespace(detector_ok=True, camera_ok=True, profile_switcher=switcher if profile_fields else None)
 
 
-#: The re-look and the sidestep switched on, so the executor reports ``obstacle_avoid``.
-_AVOID = {"obstacle_relook": 2, "obstacle_sidestep_cm": 50, "obstacle_sidesteps": 2}
-
-
-def _wire(drone_cls, *, cue=True, v2=True, profile_fields=True, temp=True, avoid=True):
+def _wire(drone_cls, *, cue=True, v2=True, profile_fields=True, temp=True):
     """The telemetry message as the edge sends it, with every optional field group this edge can add.
 
     *cue* adds the person cue and the depth threshold (``_CUE``); *temp* adds the takeoff
-    temperature check (``temp_preflight``) for any drone class; *avoid* switches the re-look and
-    the sidestep on with something to report (``obstacle_avoid``).
+    temperature check (``temp_preflight``) for any drone class.
     """
-    drone = drone_cls(name="drone-1")
-    drone.connect()
-    ex = LaneExecutor(drone, _envelope(), "drone-1", send=lambda m: None, logger=StructuredLogger(component="test"),
-                      obstacle_sensor=_CueSensor(_CUE if cue else {"sensor": "fake"}), **(_AVOID if avoid else {}))
-    if avoid:
-        ex._avoid_counts = {"relooks": 9, "relook_clears": 3, "sidesteps": 4, "sidestep_passes": 2}
-        ex._avoid_phase = "sidestep"
+    ex = _executor(_CueSensor(_CUE if cue else {"sensor": "fake"}), drone=drone_cls(name="drone-1"))
     ex._v2_telemetry = v2
     ex._obstacle_state, ex._obstacle_latency_ms = "clear", 210.0
+    # Every optional group the edge can add, so the count is a real worst case.
+    ex._avoid_status = lambda: {"phase": "sidestep", "sidestep_cm": 60, "offsets": [0, 1, 2], "held_reason": "x"}
     if temp:
         ex._temp_check = judge_reading(TempReading(91, 93), TempLimits())
     sent = []
@@ -92,7 +81,8 @@ def test_mavlink_telemetry_with_gps_and_the_person_cue_is_a_valid_fleet_message(
 def test_the_full_wire_message_of_a_mavlink_edge_is_valid():
     msg = _wire(_GpsTello)
     assert {"lat", "lon", TELEMETRY_PERSON_CUE, TELEMETRY_MIN_SAFE_DEPTH, "detector_ok", "camera_ok",
-            "detection_profile_requested"} <= set(msg)
+            "detection_profile", TELEMETRY_AVOID} <= set(msg)
+    assert msg["detection_profile"]["requested"] == "accurate"
     assert fp.validate_message(fp.shape_for_peer(msg, 2), proto=2) == "telemetry"
 
 
@@ -117,17 +107,18 @@ def test_every_telemetry_producer_stays_within_the_field_cap(drone_cls, cue, v2,
 def test_the_wire_helper_sets_every_optional_group():
     msg = _wire(_GpsTello)
     assert {"lat", "lon", "drone_link_ok", TELEMETRY_PERSON_CUE, TELEMETRY_MIN_SAFE_DEPTH, TELEMETRY_TEMP,
-            TELEMETRY_AVOID, "detection_profile_requested", "control_mode", "ceiling_cm", "epoch"} <= set(msg)
+            TELEMETRY_AVOID, "detection_profile", "control_mode", "ceiling_cm", "epoch"} <= set(msg)
 
 
 def test_the_worst_case_telemetry_leaves_headroom_under_the_cap():
-    # Real producers: a MAVLink drone with GPS never sends temp_preflight; a Tello sends it and has no GPS.
-    real = max(len(_wire(_GpsTello, temp=False)), len(_wire(_NoGpsTello, temp=False)), len(_wire(LinkedFakeTello)))
-    assert real <= fp.MAX_FIELDS - 5, f"worst-case telemetry has {real} of {fp.MAX_FIELDS} fields; add no field without grouping"
-    # Every optional field on one message (GPS and the temperature together), which no real edge sends. It has one
-    # field less headroom until the telemetry grouping change lands.
-    every = len(_wire(_GpsTello))
-    assert every <= fp.MAX_FIELDS - 4, f"telemetry with every optional field has {every} of {fp.MAX_FIELDS} fields"
+    worst = max(len(_wire(cls)) for cls in (_GpsTello, _NoGpsTello, LinkedFakeTello))
+    assert worst <= fp.MAX_FIELDS - 5, f"worst-case telemetry has {worst} of {fp.MAX_FIELDS} fields; add no field without grouping"
+
+
+def test_the_profile_status_is_one_field_not_five():
+    with_profile, without = _wire(_GpsTello), _wire(_GpsTello, profile_fields=False)
+    assert len(with_profile) - len(without) == 1
+    assert not [key for key in with_profile if key.startswith("detection_profile_")]
 
 
 def test_the_cap_still_rejects_a_message_over_it():
