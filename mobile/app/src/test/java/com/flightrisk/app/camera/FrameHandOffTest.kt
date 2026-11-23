@@ -108,6 +108,33 @@ class FrameHandOffTest {
     }
 
     @Test
+    fun `a frame converted across a stop and a start is dropped`() {
+        val h = newHandOff().apply { start() }
+        val old = Frame(1)
+        val r = h.offer(old, { it.closed++ }) { src -> h.stop(); h.start(); "bmp${src.id}" }
+        assertNull(r)
+        assertEquals(1, old.closed)
+        assertNull(h.take())
+        assertNull(h.latest)
+        // The new search still wants a frame: the next one is converted for it.
+        assertEquals("bmp2", h.offerFrame(Frame(2)))
+        assertEquals("bmp2", h.take())
+    }
+
+    @Test
+    fun `a frame whose conversion runs out of memory is closed and dropped`() {
+        val h = newHandOff().apply { start() }
+        val big = Frame(1)
+        assertNull(h.offer(big, { it.closed++ }) { throw OutOfMemoryError("frame") })
+        assertEquals(1, big.closed)
+        assertNull(h.take())
+        assertNull(h.latest)
+        val next = Frame(2)
+        assertEquals("bmp2", h.offerFrame(next))
+        assertEquals(1, next.closed)
+    }
+
+    @Test
     fun `latest is the last converted frame even after it was taken`() {
         val h = newHandOff().apply { start() }
         h.offerFrame(Frame(1))

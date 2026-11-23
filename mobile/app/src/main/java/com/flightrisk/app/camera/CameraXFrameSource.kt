@@ -85,9 +85,12 @@ class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
     /**
      * Binds the preview and the frame analysis to [owner] (the Activity) for a
      * search. [displayRotation] is the display's `Surface.ROTATION_*`. Call on
-     * the main thread.
+     * the main thread. Use cases bound by an earlier bind are unbound first,
+     * so a second bind never leaves two sets bound.
      */
     fun bind(context: Context, owner: LifecycleOwner, displayRotation: Int) {
+        releaseBoundCases()
+        preview = null
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             status = Status.NO_PERMISSION
             return
@@ -119,6 +122,8 @@ class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
                 .build()
             val analysisCase = buildImageAnalysis(displayRotation)
             try {
+                // Nothing this source bound before stays bound next to the new use cases.
+                releaseBoundCases()
                 p.bindToLifecycle(owner, selector, previewCase, analysisCase)
                 boundCases = listOf(previewCase, analysisCase)
                 preview = previewCase
@@ -140,12 +145,18 @@ class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
     /** Unbinds the search's use cases. Call on the main thread. */
     fun unbind() {
         bindGeneration++
-        val cases = boundCases
-        boundCases = emptyList()
+        releaseBoundCases()
         preview = null
         status = Status.IDLE
+    }
+
+    /** Unbinds the use cases this source bound, if any, and stops their frame analysis. Main thread. */
+    private fun releaseBoundCases() {
+        val cases = boundCases
+        boundCases = emptyList()
+        if (cases.isEmpty()) return
         try {
-            if (cases.isNotEmpty()) provider?.unbind(*cases.toTypedArray())
+            provider?.unbind(*cases.toTypedArray())
         } catch (e: Exception) {
             Log.w(TAG, "Camera cleanup failed", e)
         }

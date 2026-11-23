@@ -86,6 +86,58 @@ class StoreModelAuditTest {
         assertTrue(activity.contains("cameraFrameSource = cameraFrameSource"))
     }
 
+    /** The text of [source] from [from] up to (not including) [to]; both must be present. */
+    private fun between(source: String, from: String, to: String): String {
+        val a = source.indexOf(from)
+        assertTrue("missing: $from", a >= 0)
+        val b = source.indexOf(to, a + from.length)
+        assertTrue("missing after $from: $to", b > a)
+        return source.substring(a, b)
+    }
+
+    @Test
+    fun `a second camera bind unbinds what this source bound before`() {
+        val source = File(app, "src/main/java/com/flightrisk/app/camera/CameraXFrameSource.kt").readText()
+        val bind = between(source, "fun bind(", "fun unbind(")
+        val first = bind.indexOf("releaseBoundCases()")
+        assertTrue("bind must release earlier use cases", first >= 0)
+        assertTrue(first < bind.indexOf("ProcessCameraProvider.getInstance("))
+        // And again right before the new use cases are bound.
+        val inListener = bind.lastIndexOf("releaseBoundCases()")
+        assertTrue(inListener > first && inListener < bind.indexOf("p.bindToLifecycle("))
+        val release = between(source, "private fun releaseBoundCases()", "private fun buildImageAnalysis(")
+        assertTrue(release.contains("provider?.unbind(*cases.toTypedArray())"))
+        assertTrue(release.contains("clearAnalyzer()"))
+        assertTrue(between(source, "fun unbind(", "private fun releaseBoundCases()").contains("releaseBoundCases()"))
+    }
+
+    @Test
+    fun `switching the demo on and Stop both run the real stop path`() {
+        val activity = File(app, "src/main/java/com/flightrisk/app/MainActivity.kt").readText()
+        val stopPath = between(activity, "private fun stopRealSearch()", "private fun handleDismissAlert()")
+        for (step in listOf(
+            "pipelineSetupJob?.cancel()", "searchPipeline?.stop(", "cameraFrameSource.stop()", "cameraFrameSource.unbind()",
+        )) assertTrue("stop path lacks $step", stopPath.contains(step))
+        assertTrue(stopPath.indexOf("searchPipeline?.stop(") < stopPath.indexOf("cameraFrameSource.unbind()"))
+
+        // applyDemo(true) stops a running search before the demo takes over.
+        val applyDemo = between(activity, "private fun applyDemo(", "private fun startDemoSearch(")
+        val stop = applyDemo.indexOf("if (on && realSearchRunning()) stopRealSearch()")
+        assertTrue("applyDemo must run the stop path", stop >= 0)
+        assertTrue(stop < applyDemo.indexOf("demoActive = on"))
+
+        // Stop runs the stop path before the demo branch, so the demo cannot skip it.
+        val handleStop = between(activity, "private fun handleStopSearch()", "private fun realSearchRunning()")
+        val run = handleStop.indexOf("if (!demoActive || realSearchRunning()) stopRealSearch()")
+        assertTrue("handleStopSearch must run the stop path", run >= 0)
+        assertTrue(run < handleStop.indexOf("if (demoActive) {"))
+
+        val running = between(activity, "private fun realSearchRunning()", "private fun stopRealSearch()")
+        for (part in listOf("pipelineSetupJob != null", "searchPipeline != null", "cameraFrameSource.status != CameraXFrameSource.Status.IDLE")) {
+            assertTrue("realSearchRunning lacks $part", running.contains(part))
+        }
+    }
+
     @Test
     fun `rotations are whole quarter turns`() {
         assertEquals(0, FrameRotation.normalize(0))

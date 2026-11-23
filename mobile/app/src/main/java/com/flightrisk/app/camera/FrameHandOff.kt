@@ -11,13 +11,17 @@ package com.flightrisk.app.camera
  * Otherwise it is closed unconverted, which costs nothing. The pipeline calls
  * [take]: it gets the waiting frame once, or null, and in that case the next
  * frame the camera delivers is converted for it. A frame converted while (or
- * after) the source is stopped is dropped.
+ * after) the source is stopped is dropped, also when it was started again
+ * meanwhile. A conversion that throws, or runs out of memory, drops the frame.
  */
 class FrameHandOff<F, T : Any> {
     private val lock = Any()
     private var running = false
     private var wanted = false
     private var ready: T? = null
+
+    /** Counts start() and stop() calls, so a frame converted for an earlier search is dropped. */
+    private var generation = 0L
 
     /** The last frame converted, whether or not it was taken; null after [stop]. */
     @Volatile
@@ -26,6 +30,7 @@ class FrameHandOff<F, T : Any> {
 
     /** Starts keeping frames; the first frame delivered is converted. */
     fun start() = synchronized(lock) {
+        generation++
         running = true
         wanted = true
         ready = null
@@ -33,6 +38,7 @@ class FrameHandOff<F, T : Any> {
 
     /** Stops keeping frames and drops the waiting one. */
     fun stop() = synchronized(lock) {
+        generation++
         running = false
         wanted = false
         ready = null
@@ -47,16 +53,23 @@ class FrameHandOff<F, T : Any> {
      */
     fun offer(frame: F, close: (F) -> Unit, convert: (F) -> T): T? {
         try {
-            val need = synchronized(lock) { running && wanted && ready == null }
-            if (!need) return null
+            val wantedFor = synchronized(lock) {
+                if (!(running && wanted && ready == null)) return null
+                generation
+            }
             val value = try {
                 convert(frame)
             } catch (e: Exception) {
                 // The pipeline still wants a frame; the next one is tried.
                 return null
+            } catch (e: OutOfMemoryError) {
+                // A frame too large to convert now is dropped (and closed below); the next one is tried.
+                return null
             }
             synchronized(lock) {
-                if (!running) return null
+                // A stop(), or a stop() and a start(), while converting: the frame belongs to a
+                // search that has ended, so it is dropped.
+                if (!running || generation != wantedFor) return null
                 ready = value
                 wanted = false
                 latest = value

@@ -30,6 +30,9 @@ object OnnxModelScanner {
     const val MAX_NODES = 50_000
     const val MAX_TENSORS = 50_000
 
+    /** The largest field number protobuf allows (2^29 - 1). */
+    const val MAX_FIELD = 536_870_911L
+
     /** Why a model was refused; [message] is shown to the user. */
     class UnsafeModel(message: String) : Exception(message)
 
@@ -96,16 +99,48 @@ object OnnxModelScanner {
 
         private fun malformed(): Nothing = throw UnsafeModel("The file is not a well-formed ONNX model.")
 
-        private fun varint(at: IntArray, end: Int): Long {
+        /**
+         * A varint of at most [maxBytes] bytes. Protobuf reads a value in at most 10 bytes and
+         * a tag or a length in at most 5, so a longer one is refused, as is a 10th byte with
+         * bits past bit 63.
+         */
+        private fun varint(at: IntArray, end: Int, maxBytes: Int = 10): Long {
             var result = 0L
             var shift = 0
+            var count = 0
             while (true) {
-                if (at[0] >= end || shift >= 64) malformed()
+                if (at[0] >= end || count >= maxBytes) malformed()
                 val b = buf.get(at[0]++).toInt() and 0xFF
+                count++
+                if (shift == 63 && b > 1) malformed()
                 result = result or ((b and 0x7F).toLong() shl shift)
                 if (b and 0x80 == 0) return result
                 shift += 7
             }
+        }
+
+        /**
+         * A field tag. Protobuf (and so ONNX Runtime) keeps only the low 32 bits of a tag, so a
+         * 5-byte tag padded with bits above bit 31 names one field for ONNX Runtime and another
+         * for a 64-bit reader; a model could hide its graph from this scan that way. A tag above
+         * 0xFFFFFFFF, longer than 5 bytes, or with a field number outside 1 to 2^29-1 is refused.
+         */
+        private fun tag(at: IntArray, end: Int): Long {
+            val tag = varint(at, end, maxBytes = 5)
+            if (tag > 0xFFFF_FFFFL) malformed()
+            val field = tag ushr 3
+            if (field < 1 || field > MAX_FIELD) malformed()
+            return tag
+        }
+
+        /**
+         * A length-delimited field's length. Protobuf reads it in at most 5 bytes and below
+         * 2^31; it must also fit in the bytes left before [end].
+         */
+        private fun length(at: IntArray, end: Int): Int {
+            val len = varint(at, end, maxBytes = 5)
+            if (len < 0 || len > Int.MAX_VALUE || len > end - at[0]) malformed()
+            return len.toInt()
         }
 
         fun message(kind: Kind, start: Int, end: Int, depth: Int) {
@@ -118,10 +153,9 @@ object OnnxModelScanner {
             }
             val at = intArrayOf(start)
             while (at[0] < end) {
-                val tag = varint(at, end)
+                val tag = tag(at, end)
                 val field = (tag ushr 3).toInt()
                 val wire = (tag and 7).toInt()
-                if (field <= 0) malformed()
                 when (wire) {
                     0 -> {
                         val v = varint(at, end)
@@ -133,10 +167,9 @@ object OnnxModelScanner {
                         skip(at, if (wire == 1) 8 else 4, end)
                     }
                     2 -> {
-                        val len = varint(at, end)
-                        if (len < 0 || len > end - at[0]) malformed()
+                        val len = length(at, end)
                         val from = at[0]
-                        val to = from + len.toInt()
+                        val to = from + len
                         // TensorProto.external_data: any entry names a file outside the model. A
                         // data_location written with the wrong wire type is refused too.
                         if (kind == Kind.TENSOR && (field == 13 || field == 14)) externalData()
@@ -144,7 +177,7 @@ object OnnxModelScanner {
                         if (sub != null) message(sub, from, to, depth + 1)
                         at[0] = to
                     }
-                    else -> malformed() // groups (3, 4) are not used by ONNX
+                    else -> malformed() // groups (3, 4) are not used by ONNX; 6 and 7 are not wire types
                 }
             }
             if (at[0] != end) malformed()

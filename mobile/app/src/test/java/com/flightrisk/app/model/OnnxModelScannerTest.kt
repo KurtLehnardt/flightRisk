@@ -130,6 +130,79 @@ class OnnxModelScannerTest {
         refused(model(len(7, g)))
     }
 
+    // ---- tag, length and wire-type edge cases ----
+
+    private fun bytes(vararg b: Int) = ByteArray(b.size) { b[it].toByte() }
+
+    /** Field 7 (graph), wire type 2, as 5 bytes with bit 32 set: protobuf reads it as tag 0x3A. */
+    private val paddedGraphTag = bytes(0xBA, 0x80, 0x80, 0x80, 0x10)
+
+    @Test
+    fun `a padded field 7 tag carrying an external data graph is refused`() {
+        val hostile = graph(len(5, tensor(external = traversal)))
+        val hidden = cat(paddedGraphTag, varint(hostile.size.toLong()), hostile)
+        // A clean graph too, so the scan would pass if it skipped the padded one.
+        refused(model(len(7, graph(node())), hidden))
+        refused(model(hidden))
+    }
+
+    @Test
+    fun `a 5-byte field 7 tag inside 32 bits is still read as the graph`() {
+        val hostile = graph(len(5, tensor(external = traversal)))
+        val tag = bytes(0xBA, 0x80, 0x80, 0x80, 0x00)
+        refused(model(len(7, graph(node())), cat(tag, varint(hostile.size.toLong()), hostile)))
+        val clean = graph(node())
+        assertEquals(1, scan(model(cat(tag, varint(clean.size.toLong()), clean))).graphs)
+    }
+
+    @Test
+    fun `a tag longer than 5 bytes is refused`() {
+        val clean = graph(node())
+        val tag = bytes(0xBA, 0x80, 0x80, 0x80, 0x80, 0x00)
+        refused(model(len(7, graph(node())), cat(tag, varint(clean.size.toLong()), clean)))
+    }
+
+    @Test
+    fun `the largest field number passes and field 0 is refused`() {
+        val ok = model(len(7, graph(node())), int(OnnxModelScanner.MAX_FIELD.toInt(), 1))
+        assertEquals(1, scan(ok).graphs)
+        refused(model(len(7, graph(node())), int(0, 1)))
+    }
+
+    @Test
+    fun `a length past the end of the file is refused`() {
+        refused(model(len(7, graph(node())), tag(30, 2), varint(1000), ByteArray(4)))
+    }
+
+    @Test
+    fun `a length of 2^31 or more, or negative as a 64-bit value, is refused`() {
+        val head = model(len(7, graph(node())))
+        refused(cat(head, tag(30, 2), varint(0x8000_0000L)))
+        refused(cat(head, tag(30, 2), varint(0xFFFF_FFFFL)))
+        refused(cat(head, tag(30, 2), varint(-1L)))
+        refused(cat(head, tag(30, 2), varint(Long.MIN_VALUE)))
+    }
+
+    @Test
+    fun `a length longer than 5 bytes is refused`() {
+        refused(model(len(7, graph(node())), tag(30, 2), bytes(0x81, 0x80, 0x80, 0x80, 0x80, 0x00), ByteArray(1)))
+    }
+
+    @Test
+    fun `wire types 3, 4, 6 and 7 are refused`() {
+        for (wire in listOf(3, 4, 6, 7)) {
+            refused(model(len(7, graph(node())), tag(30, wire), ByteArray(8)))
+        }
+    }
+
+    @Test
+    fun `a varint past 64 bits is refused`() {
+        val head = model(len(7, graph(node())))
+        refused(cat(head, tag(30, 0), bytes(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02)))
+        refused(cat(head, tag(30, 0), ByteArray(10) { 0x80.toByte() }, bytes(0x00)))
+        assertEquals(1, scan(cat(head, tag(30, 0), varint(-1L))).graphs)
+    }
+
     @Test
     fun `scanning a file on disk gives the same verdict`() {
         val bad = File(tmp.root, "bad.onnx").apply { writeBytes(model(len(7, graph(len(5, tensor(external = traversal)))))) }

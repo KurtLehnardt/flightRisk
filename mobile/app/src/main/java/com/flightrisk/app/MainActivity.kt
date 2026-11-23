@@ -417,6 +417,10 @@ class MainActivity : ComponentActivity() {
     /** Follows the demo switch: the drawn placeholder target in, the real one out, and back again. */
     private fun applyDemo(on: Boolean) {
         if (on == demoActive) return
+        // The ground console can switch the demo on while a real search runs. That search is
+        // stopped the normal way first (setup and pipeline stopped, camera unbound), so the
+        // camera does not stay on behind the demo with no Stop button to turn it off.
+        if (on && realSearchRunning()) stopRealSearch()
         demoActive = on
         if (on) {
             realTargetBitmap = targetBitmap
@@ -748,10 +752,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleStopSearch() {
+        // A real search is stopped whatever the demo state, so Stop always turns the camera off.
+        if (!demoActive || realSearchRunning()) stopRealSearch()
         if (demoActive) {
-            searchState = searchState.copy(isSearching = false, boxes = emptyList(), cameraFrame = null, fps = 0f, personsDetected = 0, highestMatchScore = 0f)
+            searchState = searchState.copy(isSearching = false, boxes = emptyList(), cameraFrame = null, fps = 0f, personsDetected = 0, highestMatchScore = 0f, activeAlert = null)
             return
         }
+        searchState = searchState.copy(isSearching = false, activeAlert = null)
+        Log.i(TAG, "Search stopped")
+    }
+
+    /** A camera or drone search is set up, running, or holds the camera. */
+    private fun realSearchRunning(): Boolean =
+        pipelineSetupJob != null || searchPipeline != null ||
+            cameraFrameSource.status != CameraXFrameSource.Status.IDLE
+
+    /**
+     * The stop path of a real search: the model setup and the pipeline stop, the camera
+     * stops keeping frames and is unbound, a drone stops its pattern (and lands in drone
+     * mode), and alerts are dismissed. It changes no search state; callers do.
+     */
+    private fun stopRealSearch() {
         pipelineSetupJob?.cancel()
         pipelineSetupJob = null
         pipelineEventJob?.cancel()
@@ -765,8 +786,7 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch { droneManager?.land() }
         }
         alertManager?.dismissAll()
-        searchState = searchState.copy(isSearching = false, activeAlert = null)
-        Log.i(TAG, "Search stopped")
+        Log.i(TAG, "Real search stopped")
     }
 
     private fun handleDismissAlert() {
