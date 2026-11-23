@@ -502,6 +502,28 @@ def test_a_packet_without_a_usable_temperature_is_no_reading(tello_on_wire, setu
     assert ctrl.state_temperature().reading is None
 
 
+def test_the_newest_fresh_packet_with_both_fields_is_used(tello_on_wire):
+    import time
+
+    from flightrisk.drone.tello import _StateReading
+
+    ctrl, _ = tello_on_wire()
+    now = time.monotonic()
+    with ctrl._state_lock:
+        ctrl._state_readings.extend([
+            _StateReading(now - 0.3, 0, 10, 5, 60, 62),
+            _StateReading(now - 0.1, 0, 10, 5, None, None),  # the newest packet lacks the fields
+        ])
+    assert ctrl.state_temperature() == TempSample(TempReading(60, 62))
+    with ctrl._state_lock:
+        ctrl._state_readings.clear()
+        ctrl._state_readings.extend([
+            _StateReading(now - 2.0, 0, 10, 5, 60, 62),     # has them, but stale
+            _StateReading(now - 0.1, 0, 10, 5, None, None),
+        ])
+    assert ctrl.state_temperature() == TempSample(None, "the state packet has no templ/temph")
+
+
 def test_no_state_packet_yet_is_no_reading(tello_on_wire):
     ctrl, _ = tello_on_wire()
     assert ctrl.state_temperature() == TempSample(None, "no state packet yet")

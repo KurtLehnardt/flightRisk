@@ -294,10 +294,11 @@ async function runValidate() {
 // BEGIN obstacle-sensing
 // tests/test_launcher_obstacle.py runs this block under Node with stand-ins for $, el, api, ask, changed and settings.
 
-// The weaker obstacle sensing mode the operator chose and confirmed in the mode control ("off"), or null. It only
-// spares the second question at the very next Start: startRequest takes and clears it before it sends anything, and
-// Stop and loading a preset clear it too, so a confirmation never carries over to a later Start. The launcher itself
-// also refuses every such Start until it is confirmed with the one-time nonce of its own refusal.
+// The weaker obstacle sensing the operator chose and confirmed in the mode control, as { mode, edges } (the edges this
+// launcher would start then, from /api/validate), or null. It only spares the second question at the very next Start,
+// and only for the same mode and the same edges: startRequest takes and clears it before it sends anything, and Stop
+// and loading a preset clear it too, so a confirmation never carries over to a later Start or to other edges. The
+// launcher itself also refuses every such Start until it is confirmed with the one-time nonce of its own refusal.
 let sensingConfirmed = null;
 // The obstacle settings the edges started here will use, from the last /api/validate, or null.
 let lastObstacle = null;
@@ -375,25 +376,27 @@ async function chooseSensing(select) {
   }
   let text = "The edges started here will fly their lanes with no obstacle protection: nothing stops them for a " +
     "wall, a plant or a person in the lane. Use this only for bring-up with a safety observer.";
+  let edges = null;  // unknown without an answer: Start then asks again
   try {
     const res = await api("/api/validate", { settings: Object.assign({}, settings, { obstacle_sensing: mode }) });
     if (res.obstacle && res.obstacle.warning) text = res.obstacle.warning;
+    if (res.obstacle && Array.isArray(res.obstacle.edges)) edges = res.obstacle.edges.join(",");
   } catch (e) { /* keep the built-in text */ }
   const answer = await ask("Fly with obstacle sensing " + mode + "?", text,
     [{ label: "Turn sensing " + mode, value: "confirm", cls: "danger" }, { label: "Keep required", value: "cancel" }]);
   if (answer) {
     settings.obstacle_sensing = mode;
-    sensingConfirmed = mode;
+    sensingConfirmed = { mode: mode, edges: edges };
   } else {
     select.value = settings.obstacle_sensing;
   }
   changed(false);
 }
 
-// /api/start refuses weaker obstacle sensing until it is confirmed: 409 with needs_confirmation, the mode, the warning
-// and a one-time confirm_nonce. The warning is asked unless the operator confirmed that same mode in the mode control
-// since the last Start, Stop or preset load; then the start is sent once more with the mode and the nonce. Returns
-// the start's answer, or null when the operator cancelled and nothing was started.
+// /api/start refuses weaker obstacle sensing until it is confirmed: 409 with needs_confirmation, the mode, the edges,
+// the warning and a one-time confirm_nonce. The warning is asked unless the operator confirmed that same mode for those
+// same edges in the mode control since the last Start, Stop or preset load; then the start is sent once more with the
+// mode and the nonce. Returns the start's answer, or null when the operator cancelled and nothing was started.
 async function startRequest() {
   const confirmed = sensingConfirmed;
   sensingConfirmed = null;  // a confirmation counts for this Start only, whatever the answer
@@ -401,7 +404,9 @@ async function startRequest() {
     return await api("/api/start", { settings });
   } catch (e) {
     if (!(e.status === 409 && e.data && e.data.needs_confirmation === "obstacle_sensing")) throw e;
-    if (confirmed !== e.data.mode) {
+    const sameEdges = !!confirmed && confirmed.edges !== null && Array.isArray(e.data.edges) &&
+      confirmed.edges === e.data.edges.join(",");
+    if (!(confirmed && confirmed.mode === e.data.mode && sameEdges)) {
       const answer = await ask("Start with obstacle sensing " + e.data.mode + "?", e.data.error,
         [{ label: "Start with sensing " + e.data.mode, value: "confirm", cls: "danger" }, { label: "Cancel", value: "cancel" }]);
       if (!answer) return null;

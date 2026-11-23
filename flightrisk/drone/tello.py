@@ -2077,10 +2077,11 @@ class TelloController:
         The takeoff temperature check (``flightrisk.drone.temp_preflight``) and the edge's telemetry
         read the drone's temperature here. The Tello SDK 1.3, 2.0 and 3.0 document ``templ`` and
         ``temph``, the lowest and highest temperature in degrees Celsius, in the state packet the
-        drone sends about ten times a second. Only the newest packet counts, and only while it is at
-        most ``_STATE_FRESH_S`` old: older state is no reading, so a temperature from before a
-        Wi-Fi gap is never judged as current. No packet, a stale one, one without both fields, and
-        values outside ``temp_preflight.TEMP_READING_RANGE_C`` give no reading and say why.
+        drone sends about ten times a second. The newest packet that carries both fields counts, and
+        only while it is at most ``_STATE_FRESH_S`` old: older state is no reading, so a temperature
+        from before a Wi-Fi gap is never judged as current. No packet, no fresh one, no fresh one
+        with both fields, and values outside ``temp_preflight.TEMP_READING_RANGE_C`` give no reading
+        and say why.
 
         Nothing is ever sent on the command channel for this. Tello replies carry no command id, so
         the reply to a ``temp?`` sent before a takeoff could be read as the takeoff's answer: a late
@@ -2089,17 +2090,23 @@ class TelloController:
         if not self._state_arrivals:
             return TempSample(None, "state packet arrivals are not recorded")
         with self._state_lock:
-            newest = self._state_readings[-1] if self._state_readings else None
-        if newest is None:
+            readings = list(self._state_readings)
+        if not readings:
             return TempSample(None, "no state packet yet")
-        age = time.monotonic() - newest.at
+        now = time.monotonic()
+        age = now - readings[-1].at
         if age > _STATE_FRESH_S:
             return TempSample(None, f"no fresh state packet (newest {age:.1f} s old)")
-        if newest.templ is None or newest.temph is None:
+        packet = next(
+            (r for r in reversed(readings)
+             if now - r.at <= _STATE_FRESH_S and r.templ is not None and r.temph is not None),
+            None,
+        )
+        if packet is None:
             return TempSample(None, "the state packet has no templ/temph")
-        reading = reading_from(newest.templ, newest.temph)
+        reading = reading_from(packet.templ, packet.temph)
         if reading is None:
-            return TempSample(None, f"templ/temph out of range ({newest.templ}, {newest.temph})")
+            return TempSample(None, f"templ/temph out of range ({packet.templ}, {packet.temph})")
         return TempSample(reading)
 
     def _set_measured(self, field: str, value) -> None:

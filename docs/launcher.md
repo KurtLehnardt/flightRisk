@@ -181,9 +181,14 @@ any drone is probed or any process starts. The window shows that warning and, on
 again with `confirm_sensing` set to exactly that mode and `confirm_nonce` echoed. Any other mode, a missing or unknown
 nonce, or a nonce issued for other edges is no confirmation. A nonce is good for one attempt and expires after 5
 minutes, and Stop forgets every outstanding nonce, so a confirm, Start, Stop, Start sequence is asked again. When the
-operator chose `off` in the mode control (which asks first), the next Start skips the second question; that yes then
-counts for that Start only, and Stop or loading a preset forgets it. The confirmed start is recorded in the window's
-event log.
+operator chose `off` in the mode control (which asks first), the next Start skips the second question, but only for
+the same mode and the same edges the 409 names (`edges`); that yes then counts for that Start only, and Stop or loading
+a preset forgets it. The confirmed start is recorded in the window's event log.
+
+Restart follows the same rule. An edge whose environment has `FLIGHTRISK_OBSTACLE_SENSING` other than `required` may be
+restarted only during its confirmed run, from the confirmed Start until Stop (an edge that crashed during the run can be
+restarted). After Stop, Restart of that edge answers 409 "Press Start to confirm sensing off again.", and Start asks
+for the confirmation again.
 
 The edges' takeoff temperature levels are checked too: an inherited `FLIGHTRISK_TELLO_TEMP_WARN_C` or
 `FLIGHTRISK_TELLO_TEMP_REFUSE_C` the edges would refuse (see `docs/fleet-setup.md`, "Takeoff temperature check") is an
@@ -245,7 +250,8 @@ then own the drones' command ports.
 - **Restart** stops one process and starts it again with the same settings. It is refused while a stop or
   another restart runs. An edge that had to be terminated without landing is not started again by that
   Restart, because its drone may still be in the air (a Tello lands by itself about 15 s after its
-  commands stop); once the drone is down, Restart again, or Stop and Start. **On Windows, Restart of an
+  commands stop); once the drone is down, Restart again, or Stop and Start. An edge started with obstacle sensing
+  `off` is not restarted after Stop: press Start to confirm it again (see "Obstacle sensing"). **On Windows, Restart of an
   edge is refused** until the Windows stop has been verified on hardware: land it with LAND ALL, then Stop
   and Start.
 - **Quit launcher** asks whether to stop the processes or leave them running. Left running, they keep

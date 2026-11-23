@@ -334,6 +334,62 @@ def test_a_confirmed_start_cannot_be_replayed_after_stop(launcher_with):
     assert data["confirm_nonce"] != confirmed["confirm_nonce"]
 
 
+def _restart(client, name):
+    return client.post("/api/restart", {"name": name})
+
+
+def _edge_name(client):
+    return next(p["name"] for p in client.get("/api/state")[1]["processes"] if p["name"].startswith("edge-"))
+
+
+def _all_running(client):
+    return _wait(lambda: all(p["status"] == "running" for p in client.get("/api/state")[1]["processes"]))
+
+
+def test_restart_relaunches_a_sensing_off_edge_during_its_confirmed_run_only(launcher_with):
+    """Regression (round 2 critic probe): after Stop, Restart must not relaunch an edge with sensing off unasked."""
+    client, app, _ = launcher_with()
+    body = {"settings": _settings(obstacle_sensing="off")}
+    status, data = client.post("/api/start", {**body, "confirm_sensing": "off", "confirm_nonce": _refused(client, body)})
+    assert status == 200 and data["started"] is True
+    assert _all_running(client)
+    edge = _edge_name(client)
+    # During the confirmed run (an edge that crashed, say) Restart is allowed.
+    status, data = _restart(client, edge)
+    assert status == 200 and data == {"restarting": edge}
+    assert _all_running(client)
+    _stopped(client)
+    status, data = _restart(client, edge)
+    assert status == 409, data
+    assert data["error"].endswith("Press Start to confirm sensing off again.")
+    assert data["needs_confirmation"] == "obstacle_sensing" and data["mode"] == "off"
+    assert not client.get("/api/state")[1]["busy"]  # nothing was relaunched
+    # A new confirmed Start opens a new run, in which Restart works again.
+    status, data = client.post("/api/start", {**body, "confirm_sensing": "off", "confirm_nonce": _refused(client, body)})
+    assert status == 200 and data["started"] is True
+    assert _all_running(client)
+    assert _restart(client, edge)[0] == 200
+
+
+def test_restart_of_an_edge_with_an_inherited_off_is_held_back_after_stop_too(launcher_with):
+    client, _, _ = launcher_with({ENV_OBSTACLE_SENSING: "off"})
+    body = {"settings": _settings()}
+    status, _ = client.post("/api/start", {**body, "confirm_sensing": "off", "confirm_nonce": _refused(client, body)})
+    assert status == 200 and _all_running(client)
+    edge = _edge_name(client)
+    _stopped(client)
+    assert _restart(client, edge)[0] == 409
+
+
+def test_restart_after_stop_is_not_held_back_with_sensing_required(launcher_with):
+    client, _, _ = launcher_with()
+    status, data = client.post("/api/start", {"settings": _settings(obstacle_min_safe_depth=0.77)})
+    assert status == 200 and _all_running(client)
+    edge = _edge_name(client)
+    _stopped(client)
+    assert _restart(client, edge)[0] == 200
+
+
 def test_stop_forgets_an_outstanding_nonce(launcher_with):
     client, app, _ = launcher_with()
     body = {"settings": _settings(obstacle_sensing="off")}
@@ -601,7 +657,10 @@ def _node(tmp_path, scenario: str):
 
 
 REFUSAL = {"status": 409, "data": {"error": "Obstacle sensing will be OFF ...", "needs_confirmation": "obstacle_sensing",
-                                   "mode": "off", "mode_source": "window", "confirm_nonce": "n1"}}
+                                   "mode": "off", "mode_source": "window", "edges": ["drone-1", "drone-2"],
+                                   "confirm_nonce": "n1"}}
+#: /api/validate's answer while the mode control asks: the same two edges as REFUSAL.
+VALIDATED = {"status": 200, "data": {"obstacle": {"warning": "The launcher warning.", "edges": ["drone-1", "drone-2"]}}}
 STARTED = {"status": 200, "data": {"started": True}}
 
 
@@ -624,7 +683,7 @@ class TestWindowScript:
                      asks, calls: calls.map((c) => c.path) };
         """)
         assert out["cancelled"] == {"mode": "required", "shown": "required", "confirmed": None}
-        assert out["accepted"] == {"mode": "off", "confirmed": "off"}
+        assert out["accepted"] == {"mode": "off", "confirmed": {"mode": "off", "edges": None}}  # no edges answered
         assert out["back"] == {"mode": "required", "confirmed": None}  # choosing required again asks nothing
         assert [a["text"] for a in out["asks"]] == ["The launcher warning."] * 2
         assert out["calls"] == ["/api/validate", "/api/validate"]
@@ -664,7 +723,7 @@ class TestWindowScript:
         out = _node(tmp_path, f"""
             const select = $('#obstacle_sensing');
             select.value = 'off';
-            script([{{ status: 200, data: {{}} }}], [true]);
+            script([{json.dumps(VALIDATED)}], [true]);
             await f.chooseSensing(select);
             const asked = asks.length;
             script([{json.dumps(REFUSAL)}, {json.dumps(STARTED)}], []);
@@ -681,11 +740,32 @@ class TestWindowScript:
         assert out["asks"] == 2 and out["res"] is None
         assert out["nonces"] == [None, "n1", None]
 
+    @pytest.mark.parametrize("validated, refused_edges", [
+        (VALIDATED, ["drone-1"]),                                         # the drone list changed since the yes
+        (VALIDATED, ["drone-1", "drone-2", "drone-3"]),
+        ({"status": 200, "data": {"obstacle": {"warning": "W"}}}, ["drone-1", "drone-2"]),  # edges unknown then
+        ({"status": 500, "data": {"error": "down"}}, ["drone-1", "drone-2"]),
+    ])
+    def test_a_confirmation_for_other_edges_is_asked_again(self, tmp_path, validated, refused_edges):
+        refusal = {"status": 409, "data": {**REFUSAL["data"], "edges": refused_edges}}
+        out = _node(tmp_path, f"""
+            const select = $('#obstacle_sensing');
+            select.value = 'off';
+            script([{json.dumps(validated)}], [true]);
+            await f.chooseSensing(select);
+            script([{json.dumps(refusal)}, {json.dumps(STARTED)}], [true]);
+            const res = await f.startRequest();
+            return {{ res, asks: asks.length, last: calls[calls.length - 1].body }};
+        """)
+        assert out["asks"] == 2  # the mode control's yes, and again at Start
+        assert out["res"] == {"started": True}
+        assert (out["last"]["confirm_sensing"], out["last"]["confirm_nonce"]) == ("off", "n1")
+
     def test_stop_and_a_preset_load_forget_the_confirmation(self, tmp_path):
         out = _node(tmp_path, f"""
             const select = $('#obstacle_sensing');
             select.value = 'off';
-            script([{{ status: 200, data: {{}} }}], [true]);
+            script([{json.dumps(VALIDATED)}], [true]);
             await f.chooseSensing(select);
             f.forgetSensingConfirmation();
             script([{json.dumps(REFUSAL)}], [false]);

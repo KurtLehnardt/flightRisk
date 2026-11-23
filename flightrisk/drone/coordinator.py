@@ -1254,8 +1254,11 @@ class FleetCoordinator:
                 too_hot = live_refusal(temp_status(telemetry.get(TELEMETRY_TEMP)))
                 if too_hot is not None:
                     # The drone's live temperature (its newest fresh state
-                    # packet) is at or above its edge's refusal level, so the
-                    # edge would refuse the takeoff anyway: say why here.
+                    # packet) is at or above its edge's refusal level. A drone
+                    # on the ground would be refused its takeoff by the edge
+                    # anyway; one already in the air (after a manual takeoff)
+                    # is refused here too, so a start never sends a drone that
+                    # hot on its lanes.
                     refusals[drone_id] = too_hot
                     continue
                 sensing = telemetry.get(TELEMETRY_SENSING)
