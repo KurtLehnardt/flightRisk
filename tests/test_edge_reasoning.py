@@ -513,6 +513,21 @@ def test_analyze_exception_resolves_entry_to_error(edge_env):
     assert sio.named("alert_upgrade") == []
 
 
+def test_claude_call_skipped_resolves_entry_to_error(edge_env):
+    """A skipped Claude call (breaker open or rate cap) must clear the pending alert, not crash the worker."""
+    from flightrisk.reasoning.claude_agent import BREAKER_OPEN_MESSAGE, ClaudeCallSkipped
+
+    edge_env.analyze_match.side_effect = ClaudeCallSkipped(BREAKER_OPEN_MESSAGE)
+    sio = FakeSocketIO()
+    _fire(sio)
+    _run_worker(sio)
+    entry = app_state.match_history[-1]
+    assert entry["gemma_confidence"] == "error"
+    assert entry["gemma_match"] is False
+    assert sio.named("reasoning_result")[0]["result"]["confidence"] == "error"
+    assert sio.named("alert_upgrade") == []
+
+
 def test_alertless_skipped_job_resolves_nothing(edge_env):
     gemma_queue.put_nowait(("analyze", "t", np.zeros((4, 4, 3), np.uint8), np.zeros((4, 4, 3), np.uint8), None))
     app_state.match_history = [{"track_id": "t", "alert_id": None, "gemma_confidence": "pending"}]
