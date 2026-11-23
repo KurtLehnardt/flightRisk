@@ -5,8 +5,9 @@ apps test their decoders against (``docs/mobile-contract.md``). These tests:
 
 * regenerate every fixture with ``scripts/export_mobile_contract_fixtures.py``
   in a temporary directory and fail when the result differs from the committed
-  files (only ``_meta.generated_at_commit`` may differ), so a change to any
-  payload the phones read shows up here first;
+  files (only ``_meta.generated_at_commit`` and ``_meta.library_versions`` may
+  differ; the versions are checked against the lock files instead), so a change
+  to any payload the phones read shows up here first;
 * check the structure both apps rely on: every file parses, has a ``_meta``
   block and named cases, keeps the case names the apps reference, and stays
   small;
@@ -123,8 +124,14 @@ def _committed() -> dict[str, dict]:
 
 
 def _without_commit(doc: dict) -> dict:
+    """The document without what legitimately differs between machines: the commit and the installed library versions.
+
+    Library versions drift whenever a venv is newer than the lock files (installer/locks). What the phones depend on
+    is the frames themselves, which are still compared in full, so the versions are only checked for being recorded.
+    """
     out = json.loads(json.dumps(doc))
     out["_meta"].pop("generated_at_commit", None)
+    out["_meta"].pop("library_versions", None)
     return out
 
 
@@ -168,6 +175,38 @@ def test_regenerated_fixtures_match_the_committed_files(regenerated):
         "regenerate them (venv/bin/python scripts/export_mobile_contract_fixtures.py), update "
         "docs/mobile-contract.md and tell both app teams."
     )
+
+
+LIBRARY_PACKAGES = ("python-engineio", "python-socketio", "flask-socketio")
+LOCKS = ("macos-arm64.txt", "windows-x64-ground.txt")
+
+
+def _locked_version(lock: str, package: str) -> str:
+    text = (ROOT / "installer" / "locks" / lock).read_text(encoding="utf-8")
+    match = re.search(rf"^{re.escape(package)}==([^\s\\;]+)", text, re.MULTILINE)
+    assert match, f"{package} is not pinned in installer/locks/{lock}"
+    return match.group(1)
+
+
+@pytest.mark.parametrize("lock", LOCKS)
+def test_the_committed_library_versions_are_the_ones_the_lock_files_pin(lock):
+    """Independent of the installed venv: the fixture was generated with the versions the installers ship."""
+    recorded = _committed()["socketio_frames.json"]["_meta"]["library_versions"]
+    assert set(recorded) == set(LIBRARY_PACKAGES)
+    assert recorded == {package: _locked_version(lock, package) for package in LIBRARY_PACKAGES}, (
+        "regenerate the fixtures from a venv built from the lock files, or update the lock files"
+    )
+
+
+def test_installed_library_major_versions_match_the_committed_fixture(regenerated):
+    """Minor drift in the venv is fine; a new major version of the wire libraries would change the protocol."""
+    committed = _committed()["socketio_frames.json"]
+    now = regenerated["socketio_frames.json"]["_meta"]["library_versions"]
+    recorded = committed["_meta"]["library_versions"]
+    assert {k: v.split(".")[0] for k, v in now.items()} == {k: v.split(".")[0] for k, v in recorded.items()}
+    assert recorded["python-engineio"].startswith("4.") and recorded["python-socketio"].startswith("5.")
+    assert "EIO=4" in committed["_meta"]["description"]
+    assert regenerated["socketio_frames.json"]["cases"]["engineio_open"] == committed["cases"]["engineio_open"]
 
 
 def test_committed_files_are_rendered_deterministically():

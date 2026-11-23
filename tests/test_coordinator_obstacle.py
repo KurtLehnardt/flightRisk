@@ -622,6 +622,8 @@ def full_obstacle_fields(pairs=MAX_CUTS_LISTED):
         "obstacle_cuts_total": 11, "obstacle_cut_reasons": ",".join([CUT_SENSOR_STALE] * pairs),
         "obstacle_person_cue": {"person_cue_down": True, "detection_age_s": 4.25},
         "obstacle_min_safe_depth": 0.77,
+        "obstacle_avoid": {"relooks": 3, "relook_clears": 1, "sidesteps": 2, "sidestep_passes": 1, "phase": "sidestep",
+                           "offsets": [0, 150, 150] * 4},
     }
 
 

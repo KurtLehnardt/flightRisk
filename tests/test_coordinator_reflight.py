@@ -18,6 +18,7 @@ import pytest
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone import coordinator as coordinator_module
 from flightrisk.drone.coordinator import (
+    MAX_OFFSET_REFLIGHTS_PER_DRONE,
     MAX_REFLIGHTS_PER_DRONE,
     FleetCoordinator,
     ZoneAssignment,
@@ -1060,3 +1061,203 @@ def test_a_real_edge_blocked_again_on_the_reversed_segment(real_receiver):
     ]
     # The edge's own cut is not offered again.
     assert len(coord._reflights) == 1
+
+
+# ---------------------------------------------------------------------------
+# Sidesteps (``lane_avoid``): offset segments, a held drone and the separation margin
+# ---------------------------------------------------------------------------
+
+
+def avoid_fields(phase=None, offsets=None, **counts):
+    status = {"relooks": 0, "relook_clears": 0, "sidesteps": 1, "sidestep_passes": 1, "phase": phase, **counts}
+    if offsets is not None:
+        status["offsets"] = offsets
+    return {"obstacle_avoid": status}
+
+
+def fleet_events(fleet, kind):
+    return [p for name, p in fleet.events if name == "fleet_event" and p.get("event") == kind]
+
+
+def test_an_offset_segment_is_announced_listed_and_offered_like_a_cut():
+    fleet = Fleet()
+    # drone-1 flew 150 cm of lane 0, from 150 cm on, 50 cm beside the lane.
+    fleet.tel("drone-1", lane_index=0, rel_x_cm=0, rel_y_cm=300, **avoid_fields(offsets=[0, 150, 150]))
+    (event,) = fleet_events(fleet, "lane_offset")
+    assert (event["drone_id"], event["lane_index"], event["x_cm"], event["y_cm"], event["unflown_cm"]) == (
+        "drone-1", 0, 0, 150, 150)
+    assert "beside the lane" in event["detail"]
+    # Listed with the uncovered segments, waiting for drone-1 to finish, like a cut segment.
+    assert [(s["index"], s["reason"], ends(s), s["status"], s["cut_seq"]) for s in fleet.segments()] == [
+        (0, "offset", (0, 150, 0, 300), "waiting", None),
+    ]
+    # The same offset again is not announced again.
+    fleet.tel("drone-1", lane_index=1, **avoid_fields(offsets=[0, 150, 150]))
+    assert len(fleet_events(fleet, "lane_offset")) == 1
+    fleet.done("drone-2")
+    fleet.done("drone-1")
+    offer = fleet.assigns("drone-2")[-1]
+    # Re-flown reversed, from its far end back toward where the sidestep began.
+    assert offer["lanes"][-1] == {"direction": "back", "distance_cm": 150}
+    offered = fleet.reflight_events("reflight_offered")[0]
+    assert offered["reason"] == "offset" and offered["cut_seq"] is None
+    assert "offset segment" in offered["detail"]
+    assert {(s["reason"], s["status"], s["receiver"]) for s in fleet.segments()} == {("offset", "acked", "drone-2")}
+
+
+def test_offsets_have_their_own_reflight_limit_so_passed_poles_never_crowd_out_a_cut():
+    fleet = Fleet()
+    offsets = [0, 0, 50, 0, 100, 50, 0, 200, 50, 2, 0, 50]
+    fleet.tel("drone-1", lane_index=2, **avoid_fields(offsets=offsets))
+    # A fifth offset is over the offsets' own limit: only reported.
+    fleet.tel("drone-1", lane_index=2, **avoid_fields(offsets=[0, 300, 50]))
+    fleet.cut("drone-1", [(2, 100)], CUT_OBSTACLE, lane_index=3, **avoid_fields(offsets=offsets))
+    chunks = [c for c in fleet.coord._reflights if c.lost_id == "drone-1"]
+    assert sum(1 for c in chunks if c.offset is not None) == MAX_OFFSET_REFLIGHTS_PER_DRONE
+    # The cut is still taken up for a re-flight: the offsets do not count toward MAX_REFLIGHTS_PER_DRONE.
+    assert [c.cut_seq for c in chunks if c.offset is None] == [1]
+    assert [p["lane_index"] for p in fleet_events(fleet, "lane_blocked")] == [2]
+    assert len(fleet_events(fleet, "lane_offset")) == 5
+
+
+def test_offsets_from_before_the_plan_was_acked_are_ignored():
+    fleet = Fleet(edge_kwargs={"drone-1": {"auto_ack": False}})
+    state = fleet.coord._drones["drone-1"]
+    with fleet.coord._lock:
+        state.acked = False
+    fleet.tel("drone-1", **avoid_fields(offsets=[0, 150, 150]))
+    assert fleet_events(fleet, "lane_offset") == [] and fleet.segments() == []
+
+
+def test_a_drone_held_after_a_sidestep_is_announced_once():
+    fleet = Fleet()
+    fleet.tel("drone-1", rel_x_cm=50, rel_y_cm=300, control_mode="manual", **avoid_fields(phase="held"))
+    fleet.tel("drone-1", rel_x_cm=50, rel_y_cm=300, control_mode="held", **avoid_fields(phase="held"))
+    (event,) = fleet_events(fleet, "sidestep_held")
+    assert event["drone_id"] == "drone-1"
+    assert "(50, 300) cm" in event["detail"] and "Resume search" in event["detail"]
+    # Back under its plan, then held again: announced again.
+    fleet.tel("drone-1", **avoid_fields(phase=None))
+    fleet.tel("drone-1", **avoid_fields(phase="held"))
+    assert len(fleet_events(fleet, "sidestep_held")) == 2
+
+
+def test_the_separation_check_keeps_a_sidestep_margin_from_a_drone_that_may_sidestep():
+    # drone-1's path along y = 0 ends 120 cm from drone-2's takeoff point at x = 350.
+    near = [{"direction": "right", "distance_cm": 230}]
+    fleet = Fleet()
+    lanes = fleet.coord.lanes("drone-2")
+    # drone-1 has not said it may sidestep: the gap alone.
+    with fleet.coord._lock:
+        assert fleet.coord._too_close("drone-2", lanes, {"drone-1": near}) is None
+    assert fleet.coord.sidestep_margin_of("drone-1") == 0
+    fleet.tel("drone-1", **avoid_fields(sidestep_cm=50))
+    assert fleet.coord.sidestep_margin_of("drone-1") == 50
+    with fleet.coord._lock:
+        assert fleet.coord._too_close("drone-2", lanes, {"drone-1": near}) == (
+            "come within 120 cm of drone-1, below the 100 cm gap and the 50 cm sidestep margin")
+    # An edge that reports it never sidesteps keeps only the gap.
+    fleet.tel("drone-1", **avoid_fields(sidestep_cm=0))
+    with fleet.coord._lock:
+        assert fleet.coord._too_close("drone-2", lanes, {"drone-1": near}) is None
+    exact = Fleet(sidestep_margin_cm=0)
+    exact.tel("drone-1", **avoid_fields(sidestep_cm=50))
+    with exact.coord._lock:
+        assert exact.coord._too_close("drone-2", lanes, {"drone-1": near}) is None
+    with pytest.raises(ValueError, match="sidestep_margin_cm"):
+        Fleet(sidestep_margin_cm=-1)
+
+
+# ---------------------------------------------------------------------------
+# An offset near a person is never offered without the operator (final review B1)
+# ---------------------------------------------------------------------------
+
+
+def offered_events(fleet):
+    return fleet.reflight_events("reflight_offered")
+
+
+def test_an_offset_beside_a_person_cut_waits_for_the_cuts_confirmation():
+    # The review's probe: the edge's result of a person seen beside the lane, Cut(0, 250, person) and the
+    # offset (0, 150, 100) flown up to it. Re-flown reversed, the offset would start where the person was.
+    fleet = Fleet()
+    fleet.cut("drone-1", [(0, 250)], CUT_PERSON, lane_index=1, **avoid_fields(offsets=[0, 150, 100]))
+    fleet.done("drone-2")
+    fleet.done("drone-1", **avoid_fields(offsets=[0, 150, 100]))
+    assert offered_events(fleet) == [] and len(fleet.assigns("drone-2")) == 1
+    offset = next(s for s in fleet.segments() if s["reason"] == "offset")
+    assert (offset["status"], offset["cut_seq"], offset["offset_from_cm"]) == ("needs_confirmation", 1, 150)
+    # Confirming the person cut releases the offset with it.
+    ok, detail = fleet.coord.confirm_reflight("drone-1", 1)
+    assert ok, detail
+    chunks = [(c.cut_seq, c.offset, c.confirm) for c in fleet.coord._reflights]
+    assert (1, None, False) in chunks and (None, (0, 150), False) in chunks
+    assert offered_events(fleet)
+
+
+def test_a_person_cut_that_arrives_after_its_offset_still_holds_the_offset():
+    fleet = Fleet()
+    # The offset is reported before the cut the same sidestep made a moment later.
+    fleet.tel("drone-1", lane_index=0, **avoid_fields(offsets=[0, 150, 100]))
+    (chunk,) = fleet.coord._reflights
+    assert not chunk.confirm
+    fleet.cut("drone-1", [(0, 250)], CUT_PERSON, lane_index=1, **avoid_fields(offsets=[0, 150, 100]))
+    assert (chunk.confirm, chunk.confirm_cut) == (True, 1)
+    fleet.done("drone-2")
+    fleet.done("drone-1", **avoid_fields(offsets=[0, 150, 100]))
+    assert offered_events(fleet) == []
+
+
+def test_an_offset_whose_sidestep_saw_a_person_on_the_way_back_needs_confirmation_on_its_own():
+    # Scenario B: the pass reached the end of lane 0, so the person seen on the way back could cut nothing;
+    # the edge carries the sighting on the offset and in the held reason.
+    fleet = Fleet()
+    fleet.tel("drone-1", lane_index=1, rel_x_cm=50, rel_y_cm=400, control_mode="manual",
+              **avoid_fields(phase="held", offsets=[0, 300, 100], offsets_seen=["person"], held_reason="person"))
+    (held,) = fleet_events(fleet, "sidestep_held")
+    assert "A person was seen on its way back" in held["detail"] and held["reason"] == "person"
+    (announced,) = fleet_events(fleet, "lane_offset")
+    assert announced["seen"] == "person" and "person was seen" in announced["detail"]
+    (chunk,) = fleet.coord._reflights
+    assert (chunk.offset, chunk.confirm, chunk.seen, chunk.confirm_cut) == ((0, 300), True, "person", None)
+    (offset,) = fleet.segments()
+    assert (offset["status"], offset["cut_seq"], offset["offset_from_cm"], offset["seen"]) == (
+        "needs_confirmation", None, 300, "person")
+    fleet.done("drone-2")
+    fleet.done("drone-1", **avoid_fields(offsets=[0, 300, 100], offsets_seen=["person"]))
+    assert offered_events(fleet) == []
+    # It has no cut: the operator confirms the offset itself.
+    assert fleet.coord.confirm_reflight("drone-1", None, [0, 999])[0] is False
+    ok, detail = fleet.coord.confirm_reflight("drone-1", None, [0, 300])
+    assert ok and "offset segment" in detail
+    assert offered_events(fleet) and offered_events(fleet)[0]["reason"] == "offset"
+    assert fleet.coord.confirm_reflight("drone-1", None, [0, 300])[0] is False  # needs no confirmation now
+
+
+def test_a_sighting_reported_after_its_offset_still_holds_the_offset():
+    fleet = Fleet()
+    fleet.tel("drone-1", lane_index=0, **avoid_fields(offsets=[0, 300, 100]))
+    (chunk,) = fleet.coord._reflights
+    assert not chunk.confirm
+    fleet.tel("drone-1", lane_index=1, **avoid_fields(phase="held", offsets=[0, 300, 100], offsets_seen=["person"],
+                                                      held_reason="person"))
+    assert (chunk.confirm, chunk.seen) == (True, "person")
+    assert len(fleet_events(fleet, "lane_offset")) == 1
+
+
+def test_a_held_drone_whose_way_back_saw_an_obstacle_is_announced_without_a_person():
+    fleet = Fleet()
+    fleet.tel("drone-1", **avoid_fields(phase="held", held_reason="obstacle"))
+    (held,) = fleet_events(fleet, "sidestep_held")
+    assert "person" not in held["detail"] and held["reason"] == "obstacle"
+
+
+def test_the_supervisor_and_the_socket_event_pass_an_offset_to_confirm():
+    from unittest.mock import MagicMock
+
+    from tests.test_fleet_dashboard import _supervisor
+
+    supervisor, *_ = _supervisor()
+    supervisor.coordinator.confirm_reflight = MagicMock(return_value=(True, "confirmed"))
+    assert supervisor.confirm_reflight("drone-1", None, [0, 300]) == (True, "confirmed")
+    supervisor.coordinator.confirm_reflight.assert_called_once_with("drone-1", None, [0, 300])

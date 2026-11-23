@@ -22,7 +22,12 @@ import pytest
 from flightrisk.launcher.commands import EdgeToken, Redactor
 from flightrisk.launcher.netinfo import Adapter
 from flightrisk.launcher.preflight import PreflightEnv, TelloProbe
-from flightrisk.launcher.processes import ProcessManager
+from flightrisk.launcher.processes import (
+    WINDOWS_EDGE_RESTART_REFUSED,
+    Managed,
+    ProcessManager,
+    ProcessSpec,
+)
 from flightrisk.launcher.server import STATIC_DIR, LauncherApp, make_server
 from flightrisk.launcher.settings import PresetStore, builtin_presets
 
@@ -201,6 +206,7 @@ def test_start_logs_and_stop_through_the_api(launcher):
     assert TOKEN not in json.dumps(client.get("/api/state")[1])
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Exercises the POSIX spawn and stop path; Windows refuses an edge restart by design")
 def test_restart_through_the_api(launcher):
     client, app, _ = launcher
     app.manager.windows = False  # this exercises the POSIX restart; Windows refuses to restart an edge
@@ -215,6 +221,19 @@ def test_restart_through_the_api(launcher):
 
     assert _wait(new_pid)
     assert client.post("/api/restart", {"name": "someone-else"})[0] == 404
+
+
+def test_restart_of_an_edge_is_refused_on_windows(launcher):
+    """Runs on every platform: nothing is spawned, the manager only believes it is on Windows."""
+    client, app, _ = launcher
+    spec = ProcessSpec(name="edge-drone-1", kind="edge", argv=(sys.executable, "-c", "pass"), env={})
+    app.manager.windows = True
+    app.manager._procs["edge-drone-1"] = Managed(spec=spec, log_path=app.manager.log_dir / "edge-drone-1.log")
+    app.manager._order.append("edge-drone-1")
+    assert app.manager.can_restart(app.manager._procs["edge-drone-1"]) is False
+    status, data = client.post("/api/restart", {"name": "edge-drone-1"})
+    assert status == 409
+    assert data["error"] == WINDOWS_EDGE_RESTART_REFUSED
 
 
 def test_start_refused_on_errors_or_failed_checks(launcher):
