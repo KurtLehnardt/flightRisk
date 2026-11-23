@@ -275,6 +275,16 @@ the pattern stops, the drone hovers, and the operator is told to fly by hand or
 plan again. The legacy patterns (Start pattern without the map) avoid
 obstacles as before.
 
+Either way, Start pattern is refused, with the reason, unless the drone's
+state is as fresh as the fleet start gate requires
+(`flightrisk/dashboard/single_search.py`). It is read from the controller
+just before the search starts, after the obstacle guard is ready. The drone
+must be connected, and its drone link must be up when the controller reports
+one (a Tello's link is down when no state packet has arrived for 3 s or its
+last command got no answer). Its battery must be known and at least 30 %,
+the fleet's `MIN_START_BATTERY`. A drone that gives no video frame is refused
+too, because the obstacle guard could not check the path.
+
 ## 6. Map imagery
 
 ### 6.1 Layers

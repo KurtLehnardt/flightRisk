@@ -59,6 +59,7 @@ from flightrisk.dashboard.obs_hooks import install_http_observability, install_s
 from flightrisk.dashboard.ceiling import EVENT as CEILING_EVENT
 from flightrisk.dashboard.ceiling import CeilingBoard, CeilingRefusal, CeilingStore
 from flightrisk.dashboard.manual_control import ManualControl
+from flightrisk.dashboard.single_search import single_search_refusal
 from flightrisk.dashboard import map_tiles, plan_store
 
 try:
@@ -3155,6 +3156,17 @@ def on_start_search(data):
     _guard, guard_error = _obstacle_guard_for_search()
     if guard_error is not None:
         emit("error", {"message": f"Search not started: the obstacle guard is unavailable ({guard_error})"})
+        return
+
+    # The drone's state is read last, after the guard (whose first build can
+    # take seconds), with the rules of the fleet start gate: the drone link,
+    # the battery and a current video frame for the obstacle guard
+    # (flightrisk/dashboard/single_search.py).
+    refusal = single_search_refusal(drone)
+    if refusal is not None:
+        obs_events.flight_safety("single_search_refused", reason="start_gate",
+                                 drone_id=getattr(drone, "name", None), detail=refusal)
+        emit("error", {"message": f"Search not started: {refusal}"})
         return
 
     app_state.search_active = True

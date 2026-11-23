@@ -54,6 +54,7 @@ from flightrisk.drone.obstacle_sensor import (
 from flightrisk.drone.tello import FakeTelloController, TelloController
 from tests import test_lane_executor_obstacle as obstacle_tests
 from tests.lane_executor_support import FENCE, LANES, reply_for, send, takeoff, wait_for
+from tests.single_drone_doubles import ready_single_drone
 from tests.test_coordinator import make_fleet
 from tests.test_coordinator_reflight import LANES as REFLIGHT_PLAN_LANES
 from tests.test_coordinator_reflight import REFLIGHT, TRANSIT, Fleet
@@ -601,6 +602,7 @@ def test_f6_the_single_drone_search_checks_a_tellos_frame_in_bgr(clean_app_state
     drone.state.is_flying = True
     drone.get_frame.return_value = _rgb()
     drone.move.return_value = True
+    ready_single_drone(drone)
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     seen: list = []
