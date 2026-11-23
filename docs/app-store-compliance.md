@@ -6,6 +6,51 @@ The Apple sections describe the iOS app and the Google Play sections describe th
 
 ## Apple App Store
 
+### iOS store readiness: what the code now does
+
+The App Store readiness audit of 22 November 2026 (at `3d79bc2`) found these blockers in the iOS app. Each is fixed in code; the items that need the owner are in "iOS store checklist" below.
+
+| Audit finding | What the app does now |
+|---|---|
+| No privacy manifest | `ios/FlightRisk/PrivacyInfo.xcprivacy` is in the app target's Copy Bundle Resources (in `project.yml` through the `FlightRisk` source folder, and in `project.pbxproj`). Its entries are explained under "Privacy manifest" below. |
+| `TARGETED_DEVICE_FAMILY` was `"1,2"` on the targets (XcodeGen's iOS preset overrode the project's `"1"`), although the app is portrait-only | Both targets set `TARGETED_DEVICE_FAMILY: "1"` in `project.yml`, so the generated project is iPhone-only. The app is not offered on iPad, so the iPad multitasking orientation rules do not apply. |
+| No export compliance key | `ITSAppUsesNonExemptEncryption` is `false` in `Info.plist` and `project.yml`. See "Export compliance". |
+| `DEVELOPMENT_TEAM = ""` in the project | The team comes from `ios/Config/Signing.xcconfig`, which includes the gitignored `ios/Config/Signing.local.xcconfig`. No team ID is committed. See `ios/README.md`, "Signing". |
+| No app icon | `ios/FlightRisk/Assets.xcassets/AppIcon.appiconset` holds one 1024 x 1024 PNG (the single-size format of Xcode 14 and later), with no alpha channel and no rounded corners. It is a full-bleed crop of `branding/flightRiskIcon.png`, made by `branding/make_app_icon.py`. `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` resolves to it. |
+| The ground link waited out its reconnect backoff (1 to 10 s) after the app came back | When the scene becomes active, the ground view model calls the client's `retryNow()`, which is what the banner's Retry does, so a dropped link reconnects at once. A connected link is untouched, and nothing connects in the background or while the link is off. |
+| A missing detection model switched person detection off silently | `PersonDetector` records why it is off (model not in the build, or failed to load), and the Search tab shows a "Person detection unavailable" banner with that reason whenever it applies, searching or not. |
+| The privacy policy link was a hard-coded GitHub URL | One constant, `PrivacyNotice.policyURL`, read from the `FlightRiskPrivacyPolicyURL` key in `Info.plist`, which is filled from the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting. The GitHub copy stays the default until the policy is hosted. |
+| The policy said the iOS app uses "ONNX Runtime" | `docs/privacy-policy.md` now says Core ML on iPhone and ONNX Runtime on Android. |
+
+### Privacy manifest (`PrivacyInfo.xcprivacy`)
+
+Key names are Apple's (`NSPrivacyTracking`, `NSPrivacyTrackingDomains`, `NSPrivacyCollectedDataTypes`, `NSPrivacyAccessedAPITypes`), checked against Apple's Bundle Resources documentation on 22 November 2026.
+
+**Tracking.** `NSPrivacyTracking` is false and `NSPrivacyTrackingDomains` is empty. The app has no advertising, analytics or tracking code.
+
+**Required reason APIs.** The app's code, the local `FlightRiskGround` package and every package the app links (mlx-swift 0.29.1, mlx-swift-examples 2.29.1, swift-transformers 1.0.0, swift-jinja 2.5.1, swift-collections 1.6.0, swift-numerics 1.1.1, GzipSwift 6.0.1, at the revisions in `Package.resolved`) were searched for the file timestamp, system boot time, disk space, active keyboard and user defaults APIs. None of those packages ships its own privacy manifest, and all of them are linked statically into the app binary, so the app's manifest declares their use. A simulator build of the app was also checked: the binary imports `NSUserDefaults`, `NSURLVolumeAvailableCapacityForImportantUsageKey` and the `attributesOfItemAtPath:error:` selector, and none of `stat`, `fstat`, `lstat`, `fstatat`, the `getattrlist` family, the `statfs` and `statvfs` families or `mach_absolute_time`.
+
+| Category | Reason | Where |
+|---|---|---|
+| `NSPrivacyAccessedAPICategoryUserDefaults` | `CA92.1`: the app's own settings | `@AppStorage` and `UserDefaults.standard` (onboarding, sensitivity preset, ground station address and switch in `GroundViewModel.swift`), and the app-only suite `flightrisk_config` (`FlightRiskConfig`, `ReasoningSettings`). No App Group is used. |
+| `NSPrivacyAccessedAPICategoryDiskSpace` | `E174.1`: check for enough space before writing files | `GemmaModelManager.checkDiskSpace()` reads `volumeAvailableCapacityForImportantUsage` and refuses the model download, with an error the user sees, when there is not enough space. |
+| `NSPrivacyAccessedAPICategoryFileTimestamp` | `C617.1`: metadata of files in the app container | swift-transformers `Hub/Downloader.swift` calls `FileManager.attributesOfItem` on a partly downloaded model file in the app's container to resume the download. |
+
+No system boot time API (`systemUptime`, `mach_absolute_time`) and no active keyboard API is called by the app or the linked package code. One caveat: the binary contains the string `systemUptime`, because mlx-swift's vendored metal-cpp (`Cmlx/mlx/mlx/backend/metal/device.cpp` includes its private implementation) registers a selector for every Foundation method it wraps. Nothing calls `NS::ProcessInfo::systemUptime()`, so the manifest does not declare the system boot time category. If App Store Connect nevertheless reports ITMS-91053 for the system boot time category when a build is uploaded, that string is the cause; the owner then decides between asking mlx-swift upstream to declare it and adding `NSPrivacyAccessedAPICategorySystemBootTime` to the app's manifest.
+
+**Collected data.** Apple counts data as collected when it leaves the device and the developer or a third party can keep it longer than needed to answer the request. Only the optional cloud reasoning path does that: after the user turns on "Allow cloud reasoning", saves a Claude API key and selects Cloud Claude, the reference photo and the cropped image of each detected person, and the typed description, are sent to Anthropic. The manifest therefore declares:
+
+| Data type | Linked | Tracking | Purpose |
+|---|---|---|---|
+| `NSPrivacyCollectedDataTypePhotosorVideos` (reference photo and person crops) | Yes | No | App Functionality |
+| `NSPrivacyCollectedDataTypeOtherUserContent` (the typed description) | Yes | No | App Functionality |
+
+"Linked" is declared because each request carries the user's own Anthropic API key, so Anthropic can associate the images with the user's Anthropic account. The owner can revisit this. Not declared, because they do not leave the device: face embeddings and appearance features (computed and kept in memory on the phone), camera frames, location (attached to on-screen match alerts only), and the ground station key (sent only to the user's own ground station, which is not a third party). The ground station link carries commands and status, not user data. The model download from Hugging Face sends no user data.
+
+### Export compliance
+
+`ITSAppUsesNonExemptEncryption` is `false`. The app uses only the encryption built into iOS: TLS through `URLSession` (Anthropic, Hugging Face, the ground station health check) and through Network.framework (`NWProtocolTLS` for `wss://` ground links), and the Keychain for stored keys. The app code and `FlightRiskGround` contain no cryptographic code. Of the linked packages, only swift-transformers imports CryptoKit, to compute SHA-256 hashes of downloaded model files for an integrity check; hashing is not encryption. If a later change adds its own encryption (for example an end-to-end encrypted ground link), this answer must be reviewed.
+
 ### Permission Usage Descriptions (Info.plist)
 
 These are the strings in `ios/FlightRisk/Info.plist` and the `info.properties` block of `ios/project.yml`. A unit test checks that the two agree.
@@ -39,11 +84,13 @@ Found by searching `ios/FlightRisk` and `ios/FlightRiskGround/Sources` for `URLS
 
 **Provisional.** The table below is a draft and the owner decides the final answers. Apple counts data sent to a server that the developer does not run (a third party) as collected unless the narrow exceptions apply, so the cloud path and the ground link probably change some rows. What is known: with cloud reasoning on, the reference photo and person crops (which can show a face) and the typed description go to Anthropic; the camera and location data are otherwise processed and stored on the device; the Hugging Face download exposes the IP address to Hugging Face. Rows marked "Provisional" depend on that decision.
 
+The draft below matches the privacy manifest. Apple's definition of "collected" covers data that leaves the device, so camera frames and location, which the app uses on the device only, are not listed as collected. (An earlier draft listed Camera and Precise Location as collected; that conflicted with the definition and with the code.)
+
 | Data Type | Collected | Linked to User | Used for Tracking | Purpose |
 |-----------|-----------|----------------|-------------------|---------|
-| Camera | Yes | No | No | App Functionality |
-| Precise Location | Yes | No | No | App Functionality |
-| Photos or Videos | Provisional: yes when cloud reasoning is on (reference photo and crops go to Anthropic); otherwise no | -- | -- | App Functionality |
+| Photos or Videos | Yes, only with cloud reasoning on (reference photo and crops go to Anthropic) | Yes (sent with the user's own API key) | No | App Functionality |
+| Other User Content | Yes, only with cloud reasoning on (the typed description goes to Anthropic) | Yes (sent with the user's own API key) | No | App Functionality |
+| Precise Location | No (shown on the device only) | -- | -- | -- |
 | Identifiers | No | -- | -- | -- |
 | Usage Data | No | -- | -- | -- |
 | Diagnostics | No | -- | -- | -- |
@@ -83,6 +130,7 @@ Found by searching `ios/FlightRisk` and `ios/FlightRiskGround/Sources` for `URLS
 
 - **Required:** Yes. Must be provided in App Store Connect under "App Information > Privacy Policy URL."
 - **URL:** To be set at deployment (host `docs/privacy-policy.md` as a web page).
+- **In the app:** the onboarding notice links to `PrivacyNotice.policyURL`, which comes from the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting (through `FlightRiskPrivacyPolicyURL` in `Info.plist`). Its default is the GitHub copy of `docs/privacy-policy.md`. When the policy is hosted, set the build setting to the hosted address, the same one given to App Store Connect (see `ios/README.md`, "Privacy policy address").
 
 ### App Review Notes (Recommended)
 
@@ -99,6 +147,18 @@ Include the following in the "Notes" field during submission:
 > Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
 >
 > The first-launch privacy notice is shown before the camera starts.
+
+### iOS store checklist (needs the owner)
+
+The code changes above do not finish the submission. These steps need the owner, an Apple developer account or hardware:
+
+- [ ] **A release Xcode with the Metal Toolchain.** The MLX packages need the Metal Toolchain component (`xcodebuild -downloadComponent MetalToolchain`). Archive with a release (non-beta) Xcode: an app built with a beta Xcode cannot be submitted for App Store review.
+- [ ] **Team ID and bundle ID.** Put the team ID in `ios/Config/Signing.local.xcconfig` (never committed), and register the bundle ID `com.flightrisk.app` in the developer account, or change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` first.
+- [ ] **The on-device models.** No detection, re-identification or face model is bundled yet, so the Search tab shows "Person detection unavailable". Which models ship, and their licences, is an open decision (research is running). Review will reject an app whose main feature does not work, so do not submit before this is decided.
+- [ ] **A hosted privacy policy.** Host `docs/privacy-policy.md` at a public HTTPS address, set `FLIGHTRISK_PRIVACY_POLICY_URL` to it and enter the same address in App Store Connect.
+- [ ] **The App Store Connect record and App Privacy answers.** Create the app record and answer the App Privacy questionnaire. The draft under "Privacy Nutrition Labels" matches the privacy manifest; the owner confirms it, including the "Linked" answer.
+- [ ] **Screenshots.** iPhone screenshots for the required display sizes (6.9-inch or 6.5-inch, per App Store Connect's current list). No iPad screenshots are needed, because the app is iPhone-only.
+- [ ] **A device test.** No physical iPhone has run the app. Test the camera, onboarding, the Ground tab against a real ground station (including the reconnect when the app comes back to the foreground), the banner when a model is missing, and the icon on the home screen, then send a TestFlight build.
 
 ---
 
