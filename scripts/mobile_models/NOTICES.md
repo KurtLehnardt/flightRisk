@@ -305,20 +305,7 @@ below, with this exception from the LICENSE file:
 
 ## 5. Android app: libraries
 
-The libraries below are compiled into the Android app (see
-`mobile/app/build.gradle.kts`; versions are those pinned there). The app does
-not use a licence-listing plugin, so the libraries are listed here by family.
-Licence text for Apache-2.0 libraries: Apache License 2.0, below.
-
-| Library | Licence | Source |
-|---|---|---|
-| AndroidX (core-ktx, exifinterface, lifecycle, activity-compose, fragment-ktx, navigation-compose, room, security-crypto, camera-core, camera-camera2, camera-lifecycle, camera-view) and their transitive AndroidX libraries | Apache-2.0, copyright The Android Open Source Project | https://developer.android.com/jetpack/androidx |
-| Jetpack Compose (ui, ui-graphics, ui-tooling-preview, material3, compose-bom) | Apache-2.0, copyright The Android Open Source Project | https://developer.android.com/jetpack/compose |
-| Kotlin standard library, kotlinx-coroutines-android, kotlinx-serialization-json | Apache-2.0, copyright JetBrains s.r.o. and Kotlin contributors | https://github.com/Kotlin |
-| OkHttp 4.12.0 (with Okio) | Apache-2.0, copyright Square, Inc. | https://github.com/square/okhttp |
-| MediaPipe tasks-genai 0.10.22 | Apache-2.0, copyright The MediaPipe Authors (Google LLC) | https://github.com/google-ai-edge/mediapipe |
-| ONNX Runtime for Android 1.32.0 | MIT, copyright Microsoft Corporation | https://github.com/microsoft/onnxruntime |
-| Google Play services Location 21.3.0 | Android Software Development Kit License and the Google Play services terms (not open source) | https://developers.google.com/android/guides/setup |
+The Android app's licence screen lists its third-party libraries, with their licences, from the build.
 
 ### ONNX Runtime (MIT)
 
