@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'ceiling_settings' event: the answer to get_ceiling_settings, and a broadcast on every change. 'file' is a path on the ground machine, for display only.",
     "file": "ceiling_settings.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "CeilingBoard.payload",

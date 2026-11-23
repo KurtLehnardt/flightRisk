@@ -36,6 +36,29 @@ object GroundText {
     /** A drone id for display. */
     fun shortId(id: String): String = shorten(id, MAX_ID_TEXT)
 
+    // Bidirectional overrides and isolates could make a model's reason read differently from what it says.
+    // The line and paragraph separators (U+2028, U+2029) and NEL (U+0085) are line breaks the white space
+    // pattern below does not match, so they are folded here too.
+    private val BIDI_CONTROLS = Regex("[\\u0085\\u061C\\u200E\\u200F\\u2028\\u2029\\u202A-\\u202E\\u2066-\\u2069]")
+
+    // An Anthropic API key, should a ground ever put one in an error text.
+    private val CLAUDE_KEY = Regex("sk-ant-[A-Za-z0-9_-]+")
+    private val SPACES = Regex("\\s+")
+
+    /**
+     * The reason an AI check gave, made safe to show as plain text: cut to [max] characters, control,
+     * line separator and bidirectional override characters replaced, credentials and API keys removed,
+     * runs of white space folded. Null when nothing is left.
+     */
+    fun rationale(text: String?, max: Int = MAX_SERVER_TEXT): String? {
+        if (text.isNullOrBlank()) return null
+        var out = text.take(max * 4)
+        out = CLAUDE_KEY.replace(out, Redact.PLACEHOLDER)
+        out = BIDI_CONTROLS.replace(out, " ")
+        out = SPACES.replace(Redact.text(out, maxLength = max * 2), " ").trim()
+        return Redact.truncate(out, max).ifEmpty { null }
+    }
+
     const val LAND_ALL_NO_ANSWER =
         "LAND ALL: the ground never answered. Land each drone by hand (per-drone Land, or the drone's own controls)."
     const val EARLIER_LAND_ALL_NO_ANSWER = "An earlier LAND ALL got no answer from the ground. Do not assume it landed the drones."
@@ -52,6 +75,8 @@ object GroundText {
     const val LAND_ALL_CONNECTION_LOST =
         "LAND ALL: the connection was lost before the ground answered. $LAND_BY_OTHER_MEANS"
     const val LAND_ALL_NO_REPLY_YET = "LAND ALL: no reply from the ground yet. Check the connection."
+    const val LAND_ALL_NOT_SENT_DEMO_STARTED =
+        "LAND ALL was NOT sent: demo mode started after the tap, so this phone is no longer connected to the ground. $LAND_BY_OTHER_MEANS"
 
     const val STALE_AFTER_DISCONNECT = "Last values: not connected to the ground."
     const val STALE_REFRESHING = "Last values: waiting for a fresh fleet status from the ground."

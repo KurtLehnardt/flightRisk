@@ -22,7 +22,7 @@ final class CommandTests: XCTestCase {
 
     func testNoForbiddenEventCanBeProduced() throws {
         let names = try forbidden.compactMap(\.event)
-        XCTAssertEqual(names.count, 14)
+        XCTAssertEqual(names.count, 16)
         for forbiddenName in names + ["match_alert_response", "set_reasoning_provider", "set_stream_video"] {
             XCTAssertFalse(GroundCommand.allowedEventNames.contains(forbiddenName), forbiddenName)
         }

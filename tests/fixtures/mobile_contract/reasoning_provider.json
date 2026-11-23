@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'reasoning_provider' event: which reasoning backend the GROUND uses. Display only on a phone.",
     "file": "reasoning_provider.json",
-    "generated_at_commit": "74c4529192d5ea3868564a93c5222dc1e9a284b0",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.dashboard.app._reasoning_state",
