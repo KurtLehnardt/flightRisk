@@ -613,3 +613,47 @@ def test_detector_health_reaches_the_dashboard():
     assert board.payload()["drones"]["drone-1"]["detector_ok"] is False
     board.observe_control(telemetry("drone-1", "default", True, detector_ok=True))
     assert board.payload()["drones"]["drone-1"]["detector_ok"] is True
+
+
+# -- Both telemetry shapes: the grouped object and the flat fields of an older edge ------------------------------
+# TODO(removal): delete the flat-shape cases with the flat branch of _read_telemetry_profile, one release on.
+
+def grouped_telemetry(drone_id, flying, **profile):
+    return {"type": "telemetry", "drone_id": drone_id, "is_flying": flying, "detection_profile": profile}
+
+
+def test_ground_reads_the_grouped_profile_object():
+    board, _, _ = make_board()
+    board.observe_control(grouped_telemetry("drone-1", False, name="level", fallback=True,
+                                            fallback_reason="weights_missing", requested="top_down", switchable=True))
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["supported"] and drone["active"] == "level"
+    assert drone["fallback"] is True and drone["fallback_reason"] == "weights_missing"
+    assert drone["requested"] == "top_down" and drone["switchable"] is True
+
+
+def test_ground_reads_the_flat_profile_fields_of_an_older_edge():
+    board, _, _ = make_board()
+    board.observe_control(telemetry("drone-1", "level", False, detection_profile_fallback=True,
+                                    detection_profile_fallback_reason="weights_missing",
+                                    detection_profile_requested="top_down", detection_profile_switchable=True))
+    drone = board.payload()["drones"]["drone-1"]
+    assert drone["supported"] and drone["active"] == "level"
+    assert drone["fallback"] is True and drone["fallback_reason"] == "weights_missing"
+    assert drone["requested"] == "top_down" and drone["switchable"] is True
+
+
+def test_both_shapes_give_the_same_board_state():
+    flat, _, _ = make_board()
+    flat.observe_control(telemetry("drone-1", "level", True, detection_profile_fallback=True,
+                                   detection_profile_requested="top_down", detection_profile_switchable=False))
+    grouped, _, _ = make_board()
+    grouped.observe_control({**grouped_telemetry("drone-1", True, name="level", fallback=True,
+                                                 requested="top_down", switchable=False)})
+    assert flat.payload()["drones"]["drone-1"] == grouped.payload()["drones"]["drone-1"]
+
+
+def test_a_grouped_profile_with_a_bad_name_is_not_trusted():
+    board, _, _ = make_board()
+    board.observe_control(grouped_telemetry("drone-1", False, name="<script>", fallback=True))
+    assert not board.payload()["drones"]["drone-1"]["supported"]

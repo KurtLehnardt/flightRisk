@@ -1,3 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Properties
 
 plugins {
@@ -164,6 +167,94 @@ if (!hasReleaseSigning) {
                     "(docs/android-release-signing.md).",
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Licence guard for store builds
+// ---------------------------------------------------------------------------
+// Every release APK and bundle is checked right after it is built by
+// scripts/mobile_models/licence_guard.py (Python 3.9 or newer, standard library
+// only). Only the models scripts/mobile_models/make_models.py installed, listed
+// with their SHA-256 in assets/mobile-models.json, may be in it, and no known
+// forbidden model (YOLO, Ultralytics, InsightFace, MobileCLIP, OSNet or the
+// models the app used to load) under any name. On any finding, or when the
+// guard cannot run or finds no APK or bundle to check, the build fails, and a
+// rejected APK or bundle is renamed to *.licence-guard-rejected so it cannot be
+// uploaded by mistake. Debug builds are not checked. Use another Python
+// with -Pflightrisk.python=/path/to/python3 (default: python3 on PATH).
+// See docs/mobile-models.md and docs/android-release-signing.md.
+val licenceGuardScript: File = rootProject.file("../scripts/mobile_models/licence_guard.py")
+// Appended to the name of an APK or bundle the guard rejected.
+val licenceGuardRejectedSuffix = ".licence-guard-rejected"
+val licenceGuardPython: String = providers.gradleProperty("flightrisk.python")
+    .orNull?.trim()?.takeIf { it.isNotEmpty() } ?: "python3"
+
+fun registerLicenceGuard(
+    taskName: String,
+    what: String,
+    target: Provider<out FileSystemLocation>,
+): TaskProvider<Exec> = tasks.register<Exec>(taskName) {
+    group = "verification"
+    description = "Fails the build if the release $what carries a model make_models.py did not install."
+    inputs.files(target)
+    inputs.file(licenceGuardScript)
+    executable = licenceGuardPython
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(licenceGuardScript.absolutePath, target.get().asFile.absolutePath)
+    })
+    isIgnoreExitValue = true
+    doFirst {
+        val checked = target.get().asFile
+        if (checked.isDirectory) {
+            // A file an earlier run rejected is not part of this build, and the guard would check it.
+            checked.walkTopDown().filter { it.isFile && it.name.endsWith(licenceGuardRejectedSuffix) }.forEach { it.delete() }
+        }
+        val found = if (checked.isDirectory) checked.walkTopDown().any { it.isFile && it.extension == "apk" } else checked.isFile
+        if (!found) {
+            throw GradleException(
+                "Licence guard: no release $what to check at $checked (a rejected one is renamed " +
+                    "*$licenceGuardRejectedSuffix). Change what was rejected and build again, or run a clean " +
+                    "release build (./gradlew clean :app:${if (what == "bundle") "bundle" else "assemble"}Release).",
+            )
+        }
+    }
+    doLast {
+        val exit = executionResult.get().exitValue
+        if (exit != 0) {
+            // Rename what was checked, so a rejected APK or bundle cannot be uploaded by mistake.
+            val checked = target.get().asFile
+            val files = if (checked.isDirectory) {
+                checked.walkTopDown().filter { it.isFile && it.extension == "apk" }.toList()
+            } else {
+                listOf(checked)
+            }
+            val renamed = files.map { file ->
+                val rejected = File(file.path + licenceGuardRejectedSuffix)
+                Files.move(file.toPath(), rejected.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                rejected.name
+            }
+            throw GradleException(
+                "Licence guard: the release $what at $checked failed the check (exit $exit; the findings are " +
+                    "above). Renamed it to ${renamed.joinToString()} so it cannot be uploaded by mistake. Remove " +
+                    "every model make_models.py did not install from mobile/app/src/main/assets and build again " +
+                    "(docs/mobile-models.md).",
+            )
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+        val guardBundle = registerLicenceGuard(
+            "licenceGuard${name}Bundle", "bundle", variant.artifacts.get(SingleArtifact.BUNDLE),
+        )
+        val guardApk = registerLicenceGuard(
+            "licenceGuard${name}Apk", "APK", variant.artifacts.get(SingleArtifact.APK),
+        )
+        tasks.matching { it.name == "bundle$name" }.configureEach { finalizedBy(guardBundle) }
+        tasks.matching { it.name == "assemble$name" }.configureEach { finalizedBy(guardApk) }
     }
 }
 
