@@ -206,6 +206,18 @@ The default depth threshold, 0.35, is the old single-drone guard's value. It has
 5. **Measure the model's latency under load.** `venv/bin/python scripts/bench_obstacle.py --with-yolo [--video <mp4>] [--frames n]` prints MiDaS latency (p50 and p95) while a YOLO11n thread runs, to see what the sensor costs on the laptop that flies two drones (H4). If MiDaS stays above about 400 ms under load, the fallback in the design is a longer step (75 cm) with a correspondingly larger blocked distance, not skipping the sensing.
 6. **Record the outcome.** The sensor's `status()` reports `calibrated`, which is `false` and which nothing in the edge sets to true; it is not sent in telemetry. Writing the measured numbers and the chosen threshold into this document is the record.
 
+## Comparing obstacle metrics offline (metrics report)
+
+Field recordings show that no single threshold on the current score separates a wall at 150 cm from a clear yard. `scripts/obstacle_replay.py --metrics-report` compares the current score with two candidate metrics on existing recordings, without flying and without any image leaving the computer. The candidates are `centre_floor_ratio` (the centre's 90th percentile over the median of the bottom 20 percent of rows, middle 60 percent of columns; None when the floor is unusable) and `centre_sides_ratio` (the centre's 90th percentile over the mean of the two side thirds). Both are pure functions in `flightrisk/drone/obstacle.py` and are not used by any flight decision.
+
+On the ZBook, from the repository folder, with the recordings made by `obstacle_record.py`:
+
+```
+venv\Scripts\python.exe scripts\obstacle_replay.py --metrics-report rec\yard_clear rec\yard_wall100 rec\yard_wall150 rec\yard_wall150b --clear yard_clear --obstacle yard_wall100,yard_wall150,yard_wall150b --stride 1 --json metrics_report.json
+```
+
+Each folder is labelled by its name (or write `label=folder`). The output is text only: per label the count, min, p10, median, p90, max and share of None for each metric; a clear-rate sweep over a small threshold grid; with `--clear` and `--obstacle`, the best separating threshold per metric with its false clear rate (an obstacle called clear) and false block rate, and the lowest false block rate that has no false clear; and the probability of 1, 2 and 3 consecutive clear frames per label, counted from the observed frame order rather than assuming independence. A frame whose metric is None counts as blocked. `--json` also writes the numbers; nothing else is written, and no image or crop is saved. Share the text or the JSON, never the frames.
+
 ## Hardware checklist
 
 | Id | Item | How |

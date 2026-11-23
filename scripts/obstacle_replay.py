@@ -8,6 +8,8 @@ latency to stdout; optionally writes a CSV for further analysis.
 Usage:
     python scripts/obstacle_replay.py --frames <dir> [--stride n] [--out csv] [--min-safe-depth x]
     python scripts/obstacle_replay.py --video <mp4> [--stride n] [--out csv] [--min-safe-depth x]
+    python scripts/obstacle_replay.py --metrics-report rec/yard_clear rec/yard_wall100 \\
+        --clear yard_clear --obstacle yard_wall100 [--json report.json]
 
 Arguments:
     --frames <dir>: A recording made by scripts/obstacle_record.py: the PNG frames
@@ -19,6 +21,16 @@ Arguments:
     --out csv: Write per-frame data to CSV file (optional).
     --min-safe-depth x: Depth threshold for obstacle detection (default 0.35).
 
+    --metrics-report DIR [DIR ...]: Compare candidate obstacle metrics over one or more
+        recordings and print text tables only (never images). Each DIR is a recording folder,
+        labelled with its folder name, or ``label=DIR`` to choose the label. Per label it
+        reports the current score, ``centre_floor_ratio`` and ``centre_sides_ratio`` (n, min,
+        p10, median, p90, max, share of None), a clear-rate threshold sweep, and the N-of-M
+        voting rates (probability of N consecutive clears, N=1..3, from the observed frame
+        order). ``--clear`` and ``--obstacle`` take comma separated labels and add the best
+        separating threshold per metric with its error rates. ``--json FILE`` also writes the
+        numbers. None counts as not clear (blocked), the fail-safe reading.
+
 Every frame goes through ``flightrisk.drone.obstacle_sensor.to_sensor_frame``,
 the same conversion the edge's frame feeds use, so a frame replayed here and
 the same frame in flight reach the depth model as the same tensor. OpenCV
@@ -27,11 +39,13 @@ reads PNG and video files as BGR, the sensor's channel order.
 
 import argparse
 import csv
+import json
 import sys
 import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 # Run from a checkout without installing the package.
 _REPO = Path(__file__).resolve().parent.parent
@@ -59,7 +73,7 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser(
         description="Replay a recording and run the obstacle sensor on every nth frame"
     )
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--frames", help="A recording directory written by scripts/obstacle_record.py"
     )
@@ -78,10 +92,77 @@ def parse_args(args=None):
         "--min-safe-depth", type=float, default=0.35,
         help="Depth threshold for obstacle detection (default 0.35)"
     )
+    parser.add_argument(
+        "--metrics-report", nargs="+", metavar="DIR",
+        help="Compare candidate obstacle metrics over these recording folders (label=DIR or DIR)"
+    )
+    parser.add_argument(
+        "--clear", default="",
+        help="With --metrics-report: comma separated labels of recordings with nothing in the way"
+    )
+    parser.add_argument(
+        "--obstacle", default="",
+        help="With --metrics-report: comma separated labels of recordings with an obstacle in the way"
+    )
+    parser.add_argument(
+        "--ratio-threshold", type=float, default=1.0,
+        help="With --metrics-report: the voting threshold of the ratio metrics when no --clear and "
+             "--obstacle labels give a best one (default 1.0)"
+    )
+    parser.add_argument(
+        "--json", dest="json_out",
+        help="With --metrics-report: also write the report numbers to this JSON file"
+    )
     parsed = parser.parse_args(args)
     if parsed.stride < 1:
         parser.error("--stride must be 1 or more")
+    if parsed.metrics_report:
+        if parsed.frames or parsed.video:
+            parser.error("--metrics-report takes its recordings itself; drop --frames and --video")
+        try:
+            parsed.recordings = parse_recordings(parsed.metrics_report)
+        except ValueError as exc:
+            parser.error(str(exc))
+        parsed.clear_labels = _split_labels(parsed.clear)
+        parsed.obstacle_labels = _split_labels(parsed.obstacle)
+        known = {label for label, _ in parsed.recordings}
+        for name in parsed.clear_labels + parsed.obstacle_labels:
+            if name not in known:
+                parser.error(f"label {name!r} is not one of the recordings: {sorted(known)}")
+        if set(parsed.clear_labels) & set(parsed.obstacle_labels):
+            parser.error("a label cannot be both --clear and --obstacle")
+    elif parsed.json_out or parsed.clear or parsed.obstacle:
+        parser.error("--json, --clear and --obstacle need --metrics-report")
+    elif not (parsed.frames or parsed.video):
+        parser.error("one of --frames, --video or --metrics-report is required")
     return parsed
+
+
+def _split_labels(text):
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def parse_recordings(items):
+    """Turn ``DIR`` or ``label=DIR`` items into ``[(label, dir)]``; a bare DIR is labelled by its folder name.
+
+    ``=`` only splits when the text before it has no path separator, so a path that happens to hold
+    an ``=`` is still a path. Raises ValueError on a duplicate or empty label.
+    """
+    pairs = []
+    for item in items:
+        label, sep, rest = item.partition("=")
+        if sep and label and "/" not in label and "\\" not in label:
+            directory = rest
+        else:
+            directory = item
+            label = item.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+        if not label or not directory:
+            raise ValueError(f"cannot read a label and folder from {item!r}")
+        pairs.append((label, directory))
+    labels = [label for label, _ in pairs]
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"duplicate recording labels: {labels}")
+    return pairs
 
 
 def build_guard(min_safe_depth):
@@ -249,8 +330,238 @@ def run_replay(video_path, stride, min_safe_depth, csv_out=None, frames_dir=None
     return results
 
 
-def main():
-    args = parse_args()
+# ---------------------------------------------------------------------------
+# --metrics-report: compare candidate obstacle metrics on recordings
+# ---------------------------------------------------------------------------
+
+#: Metric names in report order. Higher is closer for every one of them.
+METRIC_NAMES = ("score", "centre_floor_ratio", "centre_sides_ratio")
+#: Fixed threshold grids for the sweep.
+SWEEP_GRIDS = {
+    "score": [round(0.30 + 0.05 * i, 2) for i in range(15)],
+    "centre_floor_ratio": [round(0.30 + 0.10 * i, 2) for i in range(13)],
+    "centre_sides_ratio": [round(0.50 + 0.10 * i, 2) for i in range(11)],
+}
+VOTE_LENGTHS = (1, 2, 3)
+
+
+def depth_map_of(guard):
+    """The raw depth map of the guard's last check, or None."""
+    return getattr(guard, "_last_depth_map", None)
+
+
+def frame_metrics(result, depth_map):
+    """The metrics of one frame: ``{name: float or None}``.
+
+    The score is the guard's own centre score (``center_depth``); a degenerate map has none, so
+    None, which the report reads as blocked. The candidates come from the raw depth map.
+    """
+    from flightrisk.drone.obstacle import centre_floor_ratio, centre_sides_ratio
+
+    score = None if result.get("degenerate") else result.get("center_depth")
+    if score is not None and not np.isfinite(score):
+        score = None
+    return {
+        "score": None if score is None else float(score),
+        "centre_floor_ratio": None if depth_map is None else centre_floor_ratio(depth_map),
+        "centre_sides_ratio": None if depth_map is None else centre_sides_ratio(depth_map),
+    }
+
+
+def collect_metrics(directory, stride, guard):
+    """Run the guard over a recording and return one metrics dict per processed frame, in order."""
+    from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, to_sensor_frame
+
+    rows = []
+    for number, (raw, _captured, _lag) in enumerate(recorded_frames(directory)):
+        if number % stride != 0:
+            continue
+        result = guard.check_path(to_sensor_frame(raw, CHANNEL_ORDER_BGR))
+        rows.append(frame_metrics(result, depth_map_of(guard)))
+    return rows
+
+
+def summarize(values):
+    """n, min, p10, median, p90, max over the non-None values, and the share of None."""
+    present = [v for v in values if v is not None]
+    out = {"n": len(values), "none_share": (len(values) - len(present)) / len(values) if values else 0.0}
+    if present:
+        arr = np.asarray(present, dtype=float)
+        out.update(
+            min=float(arr.min()), p10=float(np.percentile(arr, 10)), median=float(np.median(arr)),
+            p90=float(np.percentile(arr, 90)), max=float(arr.max()),
+        )
+    else:
+        out.update(min=None, p10=None, median=None, p90=None, max=None)
+    return out
+
+
+def is_clear(value, threshold):
+    """A frame is clear when its metric is at or below the threshold. None is never clear."""
+    return value is not None and value <= threshold
+
+
+def clear_rate(values, threshold):
+    """The share of frames that are clear at the threshold (None counts as blocked)."""
+    if not values:
+        return None
+    return sum(1 for v in values if is_clear(v, threshold)) / len(values)
+
+
+def consecutive_clear_rate(values, threshold, n):
+    """The share of windows of ``n`` consecutive frames that are all clear, from the observed order.
+
+    No independence is assumed: the windows are the real runs of the recording. None when the
+    recording has fewer than ``n`` frames.
+    """
+    windows = len(values) - n + 1
+    if windows < 1:
+        return None
+    flags = [is_clear(v, threshold) for v in values]
+    return sum(1 for i in range(windows) if all(flags[i:i + n])) / windows
+
+
+def best_threshold(clear_values, obstacle_values):
+    """The threshold that best separates clear frames from obstacle frames, and its error rates.
+
+    A candidate threshold is every observed value; a frame is called clear when its value is at or
+    below it, so None is called blocked. ``false_clear`` is the share of obstacle frames called
+    clear (the dangerous error), ``false_block`` the share of clear frames called blocked. The best
+    minimises the mean of the two, then the false clear rate, then the threshold. Also reported:
+    the lowest false block rate with no false clear at all (``safe``), or None if there is none.
+    Returns None without values on either side.
+    """
+    candidates = sorted({v for v in list(clear_values) + list(obstacle_values) if v is not None})
+    if not clear_values or not obstacle_values or not candidates:
+        return None
+    scored = []
+    for t in candidates:
+        fc = clear_rate(obstacle_values, t)
+        fb = 1.0 - clear_rate(clear_values, t)
+        scored.append({"threshold": t, "false_clear": fc, "false_block": fb, "balanced_error": round((fc + fb) / 2, 12)})
+    best = min(scored, key=lambda r: (r["balanced_error"], r["false_clear"], r["threshold"]))
+    safe_rows = [r for r in scored if r["false_clear"] == 0]
+    safe = min(safe_rows, key=lambda r: (r["false_block"], r["threshold"])) if safe_rows else None
+    return {"best": best, "safe": safe}
+
+
+def build_report(per_label, clear_labels, obstacle_labels, score_threshold, ratio_threshold):
+    """The report numbers: ``per_label`` is ``{label: [metrics dict per frame]}``."""
+    report = {"labels": list(per_label), "score_threshold": score_threshold, "metrics": {}}
+    for name in METRIC_NAMES:
+        series = {label: [row[name] for row in rows] for label, rows in per_label.items()}
+        entry = {"summary": {label: summarize(vals) for label, vals in series.items()}}
+        entry["sweep"] = {
+            "thresholds": SWEEP_GRIDS[name],
+            "clear_rate": {
+                label: [clear_rate(vals, t) for t in SWEEP_GRIDS[name]] for label, vals in series.items()
+            },
+        }
+        separation = None
+        if clear_labels and obstacle_labels:
+            separation = best_threshold(
+                [v for lb in clear_labels for v in series[lb]],
+                [v for lb in obstacle_labels for v in series[lb]],
+            )
+        entry["separation"] = separation
+        if name == "score":
+            operating = score_threshold
+        elif separation is not None:
+            operating = separation["best"]["threshold"]
+        else:
+            operating = ratio_threshold
+        entry["voting"] = {
+            "threshold": operating,
+            "p_consecutive_clear": {
+                label: {str(n): consecutive_clear_rate(vals, operating, n) for n in VOTE_LENGTHS}
+                for label, vals in series.items()
+            },
+        }
+        report["metrics"][name] = entry
+    return report
+
+
+def _fmt(value, spec=".3f"):
+    return "-" if value is None else format(value, spec)
+
+
+def format_report(report):
+    """The report as text tables."""
+    lines = []
+    labels = report["labels"]
+    width = max([len(lb) for lb in labels] + [5])
+    for name, entry in report["metrics"].items():
+        lines.append("")
+        lines.append(f"== {name} (higher is closer; clear means at or below the threshold; None counts as blocked) ==")
+        lines.append(f"{'label':<{width}}  {'n':>5} {'min':>7} {'p10':>7} {'median':>7} {'p90':>7} {'max':>7} {'None%':>6}")
+        for label in labels:
+            s = entry["summary"][label]
+            lines.append(
+                f"{label:<{width}}  {s['n']:>5} {_fmt(s['min']):>7} {_fmt(s['p10']):>7} {_fmt(s['median']):>7} "
+                f"{_fmt(s['p90']):>7} {_fmt(s['max']):>7} {s['none_share'] * 100:>5.1f}%"
+            )
+        lines.append("")
+        lines.append("Clear rate by threshold:")
+        thresholds = entry["sweep"]["thresholds"]
+        lines.append(f"{'label':<{width}}  " + " ".join(f"{t:>5.2f}" for t in thresholds))
+        for label in labels:
+            rates = entry["sweep"]["clear_rate"][label]
+            lines.append(f"{label:<{width}}  " + " ".join(f"{_fmt(r, '.2f'):>5}" for r in rates))
+        sep = entry["separation"]
+        if sep is not None:
+            b, s = sep["best"], sep["safe"]
+            lines.append("")
+            lines.append(
+                f"Best separating threshold: {b['threshold']:.3f}  false clear (obstacle called clear) "
+                f"{b['false_clear'] * 100:.1f}%  false block (clear called blocked) {b['false_block'] * 100:.1f}%"
+            )
+            if s is None:
+                lines.append("No threshold gives zero false clears.")
+            else:
+                lines.append(
+                    f"Lowest false block with zero false clears: threshold {s['threshold']:.3f}  "
+                    f"false block {s['false_block'] * 100:.1f}%"
+                )
+        vote = entry["voting"]
+        lines.append("")
+        lines.append(f"Probability of N consecutive clear frames at threshold {vote['threshold']:.3f}:")
+        lines.append(f"{'label':<{width}}  " + " ".join(f"{'N=' + str(n):>6}" for n in VOTE_LENGTHS))
+        for label in labels:
+            rates = vote["p_consecutive_clear"][label]
+            lines.append(f"{label:<{width}}  " + " ".join(f"{_fmt(rates[str(n)], '.3f'):>6}" for n in VOTE_LENGTHS))
+    return "\n".join(lines) + "\n"
+
+
+def run_metrics_report(recordings, stride, min_safe_depth, clear_labels=(), obstacle_labels=(),
+                       ratio_threshold=1.0, json_out=None, guard=None, out=None):
+    """Replay each ``(label, dir)`` recording, print the metrics report as text, and return the report dict.
+
+    Text only: no image or crop is written anywhere. ``guard`` is for tests.
+    """
+    out = out or sys.stdout
+    if guard is None:
+        guard = build_guard(min_safe_depth)
+    per_label = {}
+    for label, directory in recordings:
+        print(f"Replaying {label}: {directory}", file=sys.stderr, flush=True)
+        per_label[label] = collect_metrics(directory, stride, guard)
+    report = build_report(per_label, list(clear_labels), list(obstacle_labels), min_safe_depth, ratio_threshold)
+    out.write(format_report(report))
+    if json_out:
+        with open(json_out, "w") as f:
+            json.dump(report, f, indent=2)
+        print(f"Wrote report numbers to: {json_out}", file=sys.stderr)
+    return report
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.metrics_report:
+        run_metrics_report(
+            args.recordings, args.stride, args.min_safe_depth, args.clear_labels,
+            args.obstacle_labels, args.ratio_threshold, args.json_out,
+        )
+        return
     run_replay(
         args.video,
         args.stride,
