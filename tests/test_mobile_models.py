@@ -569,6 +569,23 @@ class TestInstall:
                         "--ios", str(tmp_path / "i2")]) == 1
         assert "--allow-unpinned-build" in capsys.readouterr().err
 
+    def test_an_ungated_android_embedder_needs_an_explicit_flag(self, tmp_path, capsys):
+        _fake_outputs(tmp_path / "work")
+        dynamic = {("android", "embedder"): "int8-dynamic"}
+        with pytest.raises(mm.VerificationFailed, match="--allow-ungated-embedder"):
+            mm.run_install(tmp_path / "work", tmp_path / "a", None, "android", dynamic, lambda m: None)
+        assert not (tmp_path / "a").exists()
+        assert mm.main(["install", "--work-dir", str(tmp_path / "work"), "--targets", "android",
+                        "--android", str(tmp_path / "a"), "--android-embedder", "int8-dynamic"]) == 1
+        assert "not gated on the person parity" in capsys.readouterr().err
+        assert mm.main(["install", "--work-dir", str(tmp_path / "work"), "--targets", "android",
+                        "--android", str(tmp_path / "a"), "--android-embedder", "int8-dynamic",
+                        "--allow-ungated-embedder"]) == 0
+        assert (tmp_path / "a" / "clip_vit_b16_laion2b.onnx").read_bytes() == b"clip_vit_b16_laion2b_int8.onnx" * 5
+        # the person-gated fp32 embedder needs no flag
+        mm.run_install(tmp_path / "work", tmp_path / "b", None, "android", {("android", "embedder"): "fp32"}, lambda m: None)
+        assert (tmp_path / "b" / "clip_vit_b16_laion2b.onnx").read_bytes() == b"clip_vit_b16_laion2b.onnx" * 5
+
     def test_an_output_changed_after_verification_is_refused(self, tmp_path):
         _fake_outputs(tmp_path / "work")
         (tmp_path / "work" / "out" / "android" / "yolox_s.onnx").write_bytes(b"swapped after verify")
@@ -971,6 +988,39 @@ class TestLicenceGuardScan:
         bad = subprocess.run(["/usr/bin/python3", str(PIPELINE / "licence_guard.py"), str(assets)], capture_output=True, text=True, check=False)
         assert bad.returncode == 1 and "weights.dat" in bad.stderr
 
+    @pytest.mark.skipif(not Path("/usr/bin/python3").exists(), reason="no system Python")
+    def test_the_system_python_opens_archives_found_in_a_folder(self, tmp_path):
+        """Before 3.11 a SpooledTemporaryFile cannot be opened as a zip; the guard must not depend on it."""
+        version = subprocess.run(["/usr/bin/python3", "-c", "import sys; print(sys.version_info[:2] >= (3, 9))"],
+                                 capture_output=True, text=True, check=False)
+        if version.stdout.strip() != "True":
+            pytest.skip("the system Python is older than 3.9")
+        guard = [str(PIPELINE / "licence_guard.py")]
+        model = ONNX_LIKE + b"detector"
+        manifest = json.dumps({"generated_by": lg.MANIFEST_GENERATOR,
+                               "models": [{"file": "yolox_s.onnx", "sha256": _sha(model)}]}).encode()
+        apk_entries = {"assets/yolox_s.onnx": model, "assets/mobile-models.json": manifest,
+                       "okhttp3/internal/publicsuffix/publicsuffixes.gz": gzip.compress(b"com\nnet\n"),
+                       "classes.dex": b"dex\n035\x00"}
+        # an output folder as Gradle hands it over: the APK (a zip inside the folder) and its metadata
+        release = tmp_path / "apk" / "release"
+        release.mkdir(parents=True)
+        _zip(release / "app-release.apk", apk_entries)
+        (release / "output-metadata.json").write_text("{}")
+        (release / "baselineProfiles" / "0").mkdir(parents=True)
+        _zip(release / "baselineProfiles" / "0" / "app-release.dm", {"primary.prof": b"pro\x00010"})
+        ok = subprocess.run(["/usr/bin/python3", *guard, str(release)], capture_output=True, text=True, check=False)
+        assert ok.returncode == 0, ok.stderr
+        # a zip nested in the APK, holding a model, is opened and caught
+        _zip(release / "app-release.apk", {**apk_entries, "assets/textures.bin": _zip_bytes({"det_10g.onnx": b"x"})})
+        bad = subprocess.run(["/usr/bin/python3", *guard, str(release)], capture_output=True, text=True, check=False)
+        assert bad.returncode == 1, bad.stderr
+        assert "textures.bin!det_10g.onnx" in bad.stderr and "Traceback" not in bad.stderr
+        # and a broken gzip is an error, not a traceback
+        _zip(release / "app-release.apk", {**apk_entries, "okhttp3/broken.gz": gzip.compress(b"text" * 100)[:-12] + b"\x00" * 12})
+        broken = subprocess.run(["/usr/bin/python3", *guard, str(release)], capture_output=True, text=True, check=False)
+        assert broken.returncode == 2 and "Traceback" not in broken.stderr, broken.stderr
+
 
 class TestLicenceGuardAllowlist:
     """Only what make_models.py installed may ship: renamed and archived models are caught."""
@@ -1044,6 +1094,18 @@ class TestLicenceGuardAllowlist:
             info.external_attr = (0o120777 << 16)
             zf.writestr(info, "/etc/passwd")
         assert [f.rule for f in lg.scan([apk])] == ["symlink"]
+
+    @pytest.mark.parametrize("blob", [
+        gzip.compress(b"plain text " * 200)[:40],  # cut short
+        b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 64,  # a gzip header and no valid deflate data
+        bz2.compress(b"plain text " * 200)[:30],
+        lzma.compress(b"plain text " * 200)[:40],
+    ])
+    def test_a_broken_compressed_file_is_an_error_not_a_crash(self, tmp_path, blob):
+        apk = _zip(tmp_path / "app.apk", {"okhttp3/data.gz": blob})
+        with pytest.raises(lg.GuardError, match="cannot be read"):
+            lg.scan([apk])
+        assert lg.main([str(apk)]) == 2
 
     def test_core_ml_models_need_the_pinned_weights_in_their_metadata(self, tmp_path):
         models = tmp_path / "Models"
@@ -1225,6 +1287,12 @@ class TestDetectorMetrics:
         assert np.isnan(mm._finite_max(0.0, float("nan")))
         assert np.isnan(mm._finite_min(1.0, float("nan")))
 
+    def test_the_sample_sanity_check_fails_on_nan(self):
+        assert mm._sample_sanity_problem({"dog": 0.91, "bicycle": 0.95}) is None
+        assert mm._sample_sanity_problem({"dog": 0.91, "bicycle": 0.5})
+        assert mm._sample_sanity_problem({"dog": float("nan"), "bicycle": 0.95})
+        assert mm._sample_sanity_problem({"dog": 0.95, "bicycle": float("nan")})
+
     def test_a_wrong_shape_fails(self):
         m = mm._detector_metrics(_FakeRunner(det=self.refs_list, change=lambda a: a[:100]),
                                  self.canvases, self.refs, TOL_DET)
@@ -1258,6 +1326,46 @@ class TestEmbedderMetrics:
         m = mm._embedder_metrics(_FakeRunner(emb=self.emb, change=lambda a: a * np.nan),
                                  self.tensors, self.ref, self.sims, TOL_EMB)
         assert m["within_tolerance"] is False
+
+    def test_a_change_near_the_match_threshold_is_gated_on_its_own(self):
+        # two embeddings whose PyTorch similarity is 0.56, near the ground's 0.55, and one far from it
+        a = np.zeros(512)
+        a[0] = 1.0
+        b = np.zeros(512)
+        b[0], b[1] = 0.56, np.sqrt(1 - 0.56 ** 2)
+        c = np.zeros(512)
+        c[2] = 1.0
+        emb = [a, b, c]
+        tensors = [np.full((1, 3, 224, 224), float(i), dtype=np.float32) for i in range(3)]
+        ref = np.stack(emb)
+        sims = ref @ ref.T
+
+        def nudge(v, idx, amount):
+            v = v.copy()
+            v[idx] += amount
+            return mp.l2_normalize(v)
+
+        tol = {"cosine_min": 0.99, "similarity_max_abs": 0.02, "similarity_near_threshold_max_abs": 0.01}
+        # b moves towards a by about 0.015: within 0.02 overall, but a near-threshold pair moves 0.015
+        moved = [a, nudge(b, 0, 0.018), c]
+        m = mm._embedder_metrics(_FakeRunner(emb=moved), tensors, ref, sims, tol)
+        assert m["pairs_near_threshold"] == 2  # (a, b) and (b, a)
+        assert 0.01 < m["similarity_near_threshold_max_abs"] < 0.02 and m["similarity_max_abs"] < 0.02
+        assert m["within_tolerance"] is False
+        assert mm._embedder_metrics(_FakeRunner(emb=moved), tensors, ref, sims,
+                                    {"cosine_min": 0.99, "similarity_max_abs": 0.02})["within_tolerance"] is True
+        # the same size of change on a pair far from the threshold passes
+        far = [a, b, nudge(c, 3, 0.12)]
+        m = mm._embedder_metrics(_FakeRunner(emb=far), tensors, ref, sims, tol)
+        assert m["similarity_near_threshold_max_abs"] < 1e-9 and m["within_tolerance"] is True
+
+    def test_the_android_default_is_gated_near_the_threshold_on_the_person_inputs(self):
+        person = mm.PERSON_TOLERANCES["android/clip_vit_b16_laion2b_w8.onnx"]
+        assert person["similarity_near_threshold_max_abs"] == 0.01 and person["similarity_max_abs"] == 0.02
+        assert mm.GROUND_MATCH_THRESHOLD == 0.55 and mm.NEAR_THRESHOLD_BAND == 0.05
+        from flightrisk.config import VisionConfig
+
+        assert VisionConfig().reid_threshold == mm.GROUND_MATCH_THRESHOLD
 
     def test_a_drift_is_measured(self):
         rng = np.random.default_rng(2)
@@ -1489,7 +1597,10 @@ class TestContract:
         assert mm.COREML_GATE_UNITS["ios/YOLOXs.mlpackage"] == mm.COREML_ALL_UNITS
         assert mm.COREML_GATE_UNITS["ios/YOLOXsFP16.mlpackage"] == ("CPU_AND_GPU",)
         assert mm.COREML_COMPUTE_UNITS["ios/YOLOXsFP16.mlpackage"] == "cpuAndGPU"
-        assert mm.PERSON_GATED == {"android/yolox_s.onnx", "android/clip_vit_b16_laion2b_w8.onnx"}
+        assert mm.PERSON_GATED == {"android/yolox_s.onnx", "android/clip_vit_b16_laion2b_w8.onnx",
+                                   "android/clip_vit_b16_laion2b.onnx"}
+        android_embedders = {o.key for o in mm.OUTPUTS if o.platform == "android" and o.role == "embedder"}
+        assert android_embedders - mm.PERSON_GATED == {"android/clip_vit_b16_laion2b_int8.onnx"}
         assert set(mm.TOLERANCES) == {o.key for o in mm.OUTPUTS}
         assert set(mm.COREML_GATE_UNITS) == {o.key for o in mm.OUTPUTS if o.platform == "ios"}
         runs = mm._runs(next(o for o in mm.OUTPUTS if o.key == "ios/YOLOXsFP16.mlpackage"))
@@ -1834,6 +1945,13 @@ class TestDocsAndNotices:
         for token in ("16 px", "48 px", "silhouette", "person"):
             assert token in doc, token
 
+    def test_the_doc_states_the_guards_limits_and_how_to_repin_the_photo(self):
+        doc = " ".join(self.DOC.read_text().split())
+        for token in ("out of scope", "raw deflate", "XOR", "zip or gzip anywhere in the iOS app",
+                      "Re-pinning the person photo", "similarity_near_threshold_max_abs", "--allow-ungated-embedder",
+                      ".licence-guard-rejected"):
+            assert token in doc, token
+
     def test_the_doc_explains_the_tools_lock_and_the_test_command(self):
         doc = self.DOC.read_text()
         for token in ("requirements.lock", "--require-hashes", "--allow-unpinned-build",
@@ -1888,6 +2006,7 @@ class TestDocsAndNotices:
         assert "licence_guard.py" in gradle and "SingleArtifact.BUNDLE" in gradle and "SingleArtifact.APK" in gradle
         assert 'withBuildType("release")' in gradle
         assert '"bundle$name"' in gradle and '"assemble$name"' in gradle
+        assert '".licence-guard-rejected"' in gradle and "Files.move" in gradle
         project = (ROOT / "ios" / "project.yml").read_text()
         assert "postBuildScripts" in project and "licence_guard.py" in project
         assert 'CONFIGURATION" != "Release"' in project

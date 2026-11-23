@@ -73,6 +73,7 @@ import stat
 import sys
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -462,9 +463,9 @@ class _File:
 
 #: Compressed formats the standard library can open: the first bytes of what they hold are checked.
 _INSPECTABLE: dict[str, Callable[[IO[bytes]], IO[bytes]]] = {
-    "gzip archive": lambda f: gzip.GzipFile(fileobj=f, mode="rb"),
-    "bzip2 archive": lambda f: bz2.BZ2File(f, mode="rb"),
-    "xz archive": lambda f: lzma.LZMAFile(f, mode="rb"),
+    "gzip archive": lambda f: gzip.GzipFile(fileobj=f, mode="rb"),  # noqa: SIM115 - used in a with block
+    "bzip2 archive": lambda f: bz2.BZ2File(f, mode="rb"),  # noqa: SIM115 - used in a with block
+    "xz archive": lambda f: lzma.LZMAFile(f, mode="rb"),  # noqa: SIM115 - used in a with block
 }
 
 
@@ -482,6 +483,7 @@ def _spooled(head: bytes) -> bool:
 
 def _read(f: _File, want_all: Callable[[bytes], bool]) -> _Read:
     """Read the first bytes of ``f``; read the rest (hashing and searching it) when ``want_all(head)``."""
+    spool = None
     try:
         with f.opener() as fh:
             head = fh.read(_HEAD)
@@ -489,7 +491,9 @@ def _read(f: _File, want_all: Callable[[bytes], bool]) -> _Read:
                 return _Read(head)
             digest = hashlib.sha256()
             search = _Search(_PATTERNS)
-            spool = tempfile.SpooledTemporaryFile(max_size=64 << 20) if _spooled(head) else None  # noqa: SIM115 - closed by the caller
+            # A real temporary file: before Python 3.11 SpooledTemporaryFile has no seekable(),
+            # which zipfile needs, so the guard crashed on /usr/bin/python3 (3.9).
+            spool = tempfile.TemporaryFile() if _spooled(head) else None  # noqa: SIM115 - closed by the caller
             chunk = head
             while chunk:
                 digest.update(chunk)
@@ -497,7 +501,9 @@ def _read(f: _File, want_all: Callable[[bytes], bool]) -> _Read:
                 if spool is not None:
                     spool.write(chunk)
                 chunk = fh.read(_CHUNK)
-    except (OSError, zipfile.BadZipFile, RuntimeError, EOFError) as exc:
+    except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as exc:
+        if spool is not None:
+            spool.close()
         raise GuardError(f"{f.location}: cannot be read ({exc})") from exc
     return _Read(head, digest.hexdigest(), search.found, spool)
 
@@ -557,7 +563,7 @@ def _compressed_content(r: _Read, what: str, location: str) -> str | None:
         with _INSPECTABLE[what](r.spool) as inner:
             head = inner.read(_HEAD)
             more = inner.read(1)
-    except (OSError, EOFError, lzma.LZMAError) as exc:
+    except (OSError, EOFError, lzma.LZMAError, zlib.error) as exc:
         raise GuardError(f"{location}: {what} cannot be read ({exc})") from exc
     if head[257:262] == b"ustar":
         return "tar archive"
@@ -602,7 +608,7 @@ def _check_files(files: list[_File], allowlist: bool, findings: list[Finding], d
             try:
                 with f.opener() as fh:
                     data = fh.read(4 << 20)
-            except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            except (OSError, zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as exc:
                 raise GuardError(f"{f.location}: cannot be read ({exc})") from exc
             listed = _parse_manifest(data)
             if listed is None:

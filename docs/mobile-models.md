@@ -31,7 +31,11 @@ It needs only the Python standard library (3.9 or newer, so the
   followed by `licenceGuardReleaseBundle` and `licenceGuardReleaseApk`
   (`mobile/app/build.gradle.kts`), which check the built bundle or APK and fail
   the build on any finding, when the guard cannot run, or when there is no file
-  to check (set the Python with `-Pflightrisk.python=...`; default `python3`);
+  to check (set the Python with `-Pflightrisk.python=...`; default `python3`).
+  A rejected APK or bundle is renamed to `*.licence-guard-rejected` (for
+  example `app-release.aab.licence-guard-rejected`), so it cannot be uploaded
+  by mistake; if the next build has nothing new to package, it fails asking
+  for a clean release build;
 - in every iOS Release build, archives included: the FlightRisk target's last
   build phase, "Licence guard (Release)" (`ios/project.yml`), checks
   `$TARGET_BUILD_DIR/$WRAPPER_NAME`, the built `.app`; Debug builds skip it;
@@ -70,6 +74,11 @@ It exits 0 when clean, 1 when it finds something (each finding is listed) and
    archive, a zip is opened and its entries checked, and zstd and 7z files,
    which the guard cannot open, are refused. A model format outside an asset
    folder (`res/raw/detector.tflite`) is refused like any unlisted model.
+
+   On iOS the whole `.app` is an asset folder, so a zip or gzip anywhere in the
+   iOS app (in any framework or resource bundle too) fails the Release build,
+   whatever it holds. Today's app has none; a dependency that adds one must be
+   reviewed, and the guard changed on purpose, before it can ship.
 2. **Denylist.** No file may have the SHA-256 of a known forbidden model file,
    whatever its name or place: every file of InsightFace's buffalo_l, buffalo_m,
    buffalo_s, buffalo_sc and antelopev2 packs (release v0.7) and the pack
@@ -98,6 +107,14 @@ It exits 0 when clean, 1 when it finds something (each finding is listed) and
 The guard does not know MiDaS: `midas_small.onnx`, which the Android
 `ObstacleGuard` loads, is not made by this pipeline, so a release build that
 carries it fails until MiDaS is added to `make_models.py` (follow-up below).
+
+What the guard is for, and what it is not: it stops a forbidden or unvetted
+model from reaching a store build by accident, under any name, in any of the
+usual model and archive formats. Deliberate hiding is out of scope: a model
+stored as raw deflate or another stream without a header, XOR-ed or otherwise
+encoded, split into pieces, or inside a container format the guard does not
+recognise is not detected. Code review of what goes into the app folders and
+the app's dependencies remains the control for that.
 
 The app integration PRs remove the code that loads the forbidden models; this
 pipeline provides the replacements and the guard.
@@ -187,7 +204,10 @@ Core ML predictions need macOS, so on Linux use `--targets android`. Variants
 are chosen with `--android-detector fp32|fp16`,
 `--android-embedder int8-weights|int8-dynamic|fp32`,
 `--ios-detector fp32|fp16` and `--ios-embedder palettized8|fp16`. The installed
-file names do not depend on the variant, so the app code does not either.
+file names do not depend on the variant, so the app code does not either. The
+ground compares Android embeddings with its own (phone-as-edge), so `install`
+refuses an Android embedder whose person parity does not gate `verify`: today
+that is `int8-dynamic`, which needs `--allow-ungated-embedder` too.
 
 ## Outputs
 
@@ -400,7 +420,10 @@ change is a maximum over every pair, so it grows with the number of inputs:
 over the 35 person crops the weight-only int8 embedder moves a similarity by up
 to 0.013 (as the Core ML fp16 embedder does), against 0.005 over the 9 general
 inputs, while its smallest cosine stays at 0.9987. Its person tolerance is
-therefore 0.995 cosine and 0.02 similarity (`PERSON_TOLERANCES`).
+therefore 0.995 cosine and 0.02 similarity over all pairs, and 0.01 over the
+pairs whose PyTorch similarity is within 0.05 of 0.55, where a change can flip
+a match decision (`similarity_near_threshold_max_abs`, measured @@NEAR@@ over
+@@PAIRS@@ such pairs; `PERSON_TOLERANCES`).
 
 Measured on macOS 27, Apple M1 Max, with the locked tools. Detector (score
 diff, box diff, smallest matched IoU; 21 general and 29 person detections
@@ -457,6 +480,21 @@ Findings:
 - The ONNX outputs were byte-identical across repeated conversions; the Core
   ML packages were not (their manifests carry fresh identifiers), which is why
   `install` checks digests against `verify.json` rather than fixed values.
+
+### Re-pinning the person photo
+
+The person photo is a parity input only. To replace it (if Wikimedia moves or
+changes the file, or a better photo is found): choose a photograph in the
+public domain or under CC0, of several people at a distance, with no
+identifiable faces; check its licence on its Commons page; download the
+original file with a descriptive User-Agent (Wikimedia refuses Python's
+default); record its URL (`upload.wikimedia.org`, https), size and SHA-256 in
+`PERSON_PHOTO` in `make_models.py`, its Commons page in the comment above it,
+and its row in the licence table here; update `test_the_recorded_checksums`;
+then run `make_models.py fetch` and `verify` and replace the person numbers
+in this page and in the PR. `verify` needs PyTorch to find at least three
+people in the whole photo and four at native resolution. Never commit the
+photo or install it into an app.
 
 ## Tests
 

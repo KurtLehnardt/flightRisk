@@ -299,16 +299,28 @@ BOX_ROWS_MIN_SCORE = 0.05
 
 #: Outputs whose parity on the person inputs (the pinned photograph's people and their
 #: crops at native size and at 16 to 48 pixels tall) also gates verify: the Android
-#: defaults, whose embeddings the ground compares with its own (phone-as-edge). The
-#: person metrics of every other output are recorded only.
-PERSON_GATED: frozenset[str] = frozenset({"android/yolox_s.onnx", "android/clip_vit_b16_laion2b_w8.onnx"})
+#: default detector and the Android embedders whose embeddings the ground may compare
+#: with its own (phone-as-edge). The person metrics of every other output are recorded
+#: only, and ``install`` refuses an Android embedder that is not listed here unless
+#: ``--allow-ungated-embedder`` is given.
+PERSON_GATED: frozenset[str] = frozenset({
+    "android/yolox_s.onnx", "android/clip_vit_b16_laion2b_w8.onnx", "android/clip_vit_b16_laion2b.onnx",
+})
+#: The ground's default re-identification threshold (``config.vision.reid_threshold``),
+#: and the band around it where a change in similarity can flip a match decision.
+GROUND_MATCH_THRESHOLD = 0.55
+NEAR_THRESHOLD_BAND = 0.05
 #: Tolerances on the person inputs, where they differ from TOLERANCES. The largest
 #: similarity change is a maximum over every pair of inputs, so it grows with their
 #: number: over the 35 person crops the weight-only int8 embedder moves a similarity by
 #: up to 0.0134 (and the Core ML fp16 embedder by 0.013), against 0.005 over the 9
-#: general inputs, while its smallest cosine stays at 0.9987. The ground matches at 0.55.
+#: general inputs, while its smallest cosine stays at 0.9987. Its person tolerance is
+#: therefore 0.02 over all pairs, but 0.01 over the pairs whose PyTorch similarity is
+#: within NEAR_THRESHOLD_BAND of GROUND_MATCH_THRESHOLD, where a change can flip a match.
 PERSON_TOLERANCES: dict[str, dict[str, float]] = {
-    "android/clip_vit_b16_laion2b_w8.onnx": {"cosine_min": 0.995, "similarity_max_abs": 0.02},
+    "android/clip_vit_b16_laion2b_w8.onnx": {
+        "cosine_min": 0.995, "similarity_max_abs": 0.02, "similarity_near_threshold_max_abs": 0.01,
+    },
 }
 #: Heights (pixels) the person crops are scaled down to, as a person seen from altitude.
 SMALL_CROP_HEIGHTS = (16, 24, 32, 48)
@@ -1443,6 +1455,16 @@ def _detector_metrics(runner: _Runner, canvases, refs, tol: dict[str, float]) ->
     }
 
 
+def _sample_sanity_problem(sanity: dict[str, float]) -> str | None:
+    """Why PyTorch's scores for the demo picture's dog and bicycle fail the 0.8 check (NaN fails), or None.
+
+    Each score is compared on its own: ``min`` would skip a NaN that is not first.
+    """
+    if not all(score >= 0.8 for score in sanity.values()):
+        return f"PyTorch YOLOX-S does not find the sample's dog and bicycle ({sanity}); preprocessing or weights are wrong"
+    return None
+
+
 def detector_reference(downloads_dir: Path) -> Callable[[Any], Any]:
     """PyTorch YOLOX-S with upstream's own decoding: a letterboxed BGR canvas -> ``[8400, 85]``."""
     import torch
@@ -1473,8 +1495,8 @@ def _worst(runs: dict[str, dict[str, Any]], labels: list[str], keys_max: tuple[s
 
 _DET_MAX = ("score_max_abs", "box_max_abs_px", "missing_detections", "extra_detections")
 _DET_MIN = ("match_iou_min", "matched_detections")
-_EMB_MAX = ("similarity_max_abs",)
-_EMB_MIN = ("cosine_min", "cosine_mean")
+_EMB_MAX = ("similarity_max_abs", "similarity_near_threshold_max_abs")
+_EMB_MIN = ("cosine_min", "cosine_mean", "pairs_near_threshold")
 
 
 def verify_detector(outputs: list[Output], out_dir: Path, downloads_dir: Path, log: Callable[[str], None],
@@ -1508,7 +1530,7 @@ def verify_detector(outputs: list[Output], out_dir: Path, downloads_dir: Path, l
     }
     # The embedder's person crops come from the native-resolution window (people at
     # their full size), cut where PyTorch finds them, as the app would cut them.
-    native = dict((n, img) for n, img in groups["person"]).get("person:native")
+    native = dict(groups["person"]).get("person:native")
     crop_persons = [] if native is None else [
         d for d in mp.yolox_postprocess(refs["person:native"], 1.0, classes=(mp.COCO_PERSON,))
         if d["score"] >= PERSON_CROP_MIN_SCORE
@@ -1524,8 +1546,9 @@ def verify_detector(outputs: list[Output], out_dir: Path, downloads_dir: Path, l
         "outputs": {},
     }
     problems: list[str] = []
-    if min(sanity.values()) < 0.8:
-        problems.append(f"PyTorch YOLOX-S does not find the sample's dog and bicycle ({sanity}); preprocessing or weights are wrong")
+    sample_problem = _sample_sanity_problem(sanity)
+    if sample_problem:
+        problems.append(sample_problem)
     if len(persons) < 3 or len(crop_persons) < 4:
         problems.append(f"PyTorch YOLOX-S finds {len(persons)} people in the whole person photo and {len(crop_persons)} "
                         f"at native size (score {PERSON_CROP_MIN_SCORE} or more), expected at least 3 and 4; "
@@ -1615,13 +1638,22 @@ def _embedder_metrics(runner: _Runner, tensors, ref, ref_sims, tol: dict[str, fl
     norms = np.array([np.linalg.norm(r) for r in raw])
     got = np.stack([mp.l2_normalize(r) for r in raw])
     cosines = (ref * got).sum(axis=1)
-    sim_err = float(np.max(np.abs(ref @ got.T - ref_sims)))
+    sim_change = np.abs(ref @ got.T - ref_sims)
+    sim_err = float(np.max(sim_change))
+    # Pairs whose PyTorch similarity is near the ground's match threshold: there a change flips a decision.
+    near = np.abs(ref_sims - GROUND_MATCH_THRESHOLD) <= NEAR_THRESHOLD_BAND
+    near_err = float(np.max(sim_change[near])) if near.any() else 0.0
     cos_min = float(np.min(cosines))
+    within = cos_min >= tol["cosine_min"] and sim_err <= tol["similarity_max_abs"]
+    if "similarity_near_threshold_max_abs" in tol:
+        within = within and near_err <= tol["similarity_near_threshold_max_abs"]
     return {
-        "within_tolerance": bool(cos_min >= tol["cosine_min"] and sim_err <= tol["similarity_max_abs"]),
+        "within_tolerance": bool(within),
         "problems": problems,
         "cosine_min": cos_min, "cosine_mean": float(np.mean(cosines)),
-        "similarity_max_abs": sim_err, "norm_max_abs_error": float(np.max(np.abs(norms - 1.0))),
+        "similarity_max_abs": sim_err,
+        "similarity_near_threshold_max_abs": near_err, "pairs_near_threshold": int(near.sum()),
+        "norm_max_abs_error": float(np.max(np.abs(norms - 1.0))),
         "per_input_cosine": [float(c) for c in cosines],
     }
 
@@ -1711,7 +1743,9 @@ def verify_embedder(outputs: list[Output], out_dir: Path, groups: dict[str, list
                     log(f"verify: {output.key} [{label}, {g}, {note}]: "
                         f"{'within' if m['within_tolerance'] else 'OUTSIDE'} tolerance, "
                         f"cosine_min={m['cosine_min']:.6f} cosine_mean={m['cosine_mean']:.6f} "
-                        f"similarity_max_abs={m['similarity_max_abs']:.2e}")
+                        f"similarity_max_abs={m['similarity_max_abs']:.2e} "
+                        f"near_threshold={m['similarity_near_threshold_max_abs']:.2e} "
+                        f"({m['pairs_near_threshold']} pairs)")
             if gates:
                 gated.append(label)
         gate_groups = ("general", "person") if person_gated else ("general",)
@@ -1818,7 +1852,7 @@ def write_golden(golden_dir: Path, detector: Callable[[Any], Any], embedder: Emb
     log(f"verify: golden fixtures in {golden_dir} (channel swap moves detector scores by {det_swap:.3f}, "
         f"embedding cosine {emb_swap:.4f})")
     problems = []
-    if det_swap <= 0.1 or emb_swap >= 0.98:
+    if not (det_swap > 0.1 and emb_swap < 0.98):  # NaN fails too
         problems.append(f"the golden frame does not show a channel swap clearly (detector {det_swap}, embedder {emb_swap})")
     return {"dir": str(golden_dir), "files": {k: v["sha256"] for k, v in files.items()},
             "channel_order_check": doc["channel_order_check"], "problems": problems}
@@ -2001,7 +2035,7 @@ def _clear_leftovers(dest_dir: Path, names: Iterable[str]) -> None:
 
 def run_install(work_dir: Path, android_dir: Path | None, ios_dir: Path | None, targets: str,
                 overrides: dict[tuple[str, str], str | None], log: Callable[[str], None],
-                allow_unpinned_build: bool = False) -> dict[str, Any]:
+                allow_unpinned_build: bool = False, allow_ungated_embedder: bool = False) -> dict[str, Any]:
     out_dir = work_dir / "out"
     verify_path = work_dir / VERIFY_NAME
     if not verify_path.is_file():
@@ -2018,6 +2052,15 @@ def run_install(work_dir: Path, android_dir: Path | None, ios_dir: Path | None, 
             "or pass --allow-unpinned-build to install it anyway (recorded in mobile-models.json)."
         )
     chosen = select_outputs(targets, overrides)
+    for o in chosen:
+        # The ground compares Android embeddings with its own (phone-as-edge), so only an
+        # embedder whose person parity gates verify is installed without being asked twice.
+        if o.platform == "android" and o.role == "embedder" and o.key not in PERSON_GATED and not allow_ungated_embedder:
+            raise VerificationFailed(
+                f"the {o.variant} Android embedder ({o.filename}) is not gated on the person parity, and the "
+                "ground compares Android embeddings with its own; nothing installed. Use the default "
+                "(int8-weights) or fp32, or pass --allow-ungated-embedder to install it anyway."
+            )
     for o in chosen:
         recorded = report.get("outputs", {}).get(o.key)
         src = out_dir / o.platform / o.filename
@@ -2086,7 +2129,8 @@ def _parity_summary(report: dict[str, Any], o: Output) -> dict[str, Any]:
     out["gated_on"] = section.get("gated_on")
     person = section.get("person")
     if isinstance(person, dict):
-        out["person"] = {k: person.get(k) for k in keys + ("cosine_min_by_size",) if k in person}
+        extra = ("cosine_min_by_size", "similarity_near_threshold_max_abs", "pairs_near_threshold")
+        out["person"] = {k: person.get(k) for k in keys + extra if k in person}
         out["person_gated"] = section.get("person_gated")
     return out
 
@@ -2161,7 +2205,7 @@ def _overrides(args) -> dict[tuple[str, str], str | None]:
 
 def cmd_install(args) -> int:
     run_install(Path(args.work_dir), args.android, args.ios, args.targets, _overrides(args), _log,
-                args.allow_unpinned_build)
+                args.allow_unpinned_build, args.allow_ungated_embedder)
     return 0
 
 
@@ -2190,7 +2234,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--ios", type=Path, default=DEFAULT_IOS_DIR, help="iOS models folder (default: %(default)s)")
         p.add_argument("--android-detector", choices=("fp32", "fp16"), help="detector variant for Android (default: fp32)")
         p.add_argument("--android-embedder", choices=("fp32", "int8-weights", "int8-dynamic"),
-                       help="embedder variant for Android (default: int8-weights)")
+                       help="embedder variant for Android (default: int8-weights; int8-dynamic needs "
+                            "--allow-ungated-embedder)")
+        p.add_argument("--allow-ungated-embedder", action="store_true",
+                       help="install an Android embedder whose person parity does not gate verify (int8-dynamic)")
         p.add_argument("--ios-detector", choices=("fp32", "fp16"),
                        help="detector variant for iOS (default: fp32; fp16 must be loaded with computeUnits = .cpuAndGPU)")
         p.add_argument("--ios-embedder", choices=("fp16", "palettized8"), help="embedder variant for iOS (default: palettized8)")
