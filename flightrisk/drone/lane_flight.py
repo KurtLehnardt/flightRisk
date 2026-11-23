@@ -106,8 +106,16 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from flightrisk.drone.controller import CommandOutcome, CommandRefusedError, command_result
-from flightrisk.drone.flight_guards import DESCENT_CLEARANCE_CM, reply_text, transient_refusal
+from flightrisk.drone.controller import (
+    CommandOutcome,
+    CommandRefusedError,
+    command_result,
+)
+from flightrisk.drone.flight_guards import (
+    DESCENT_CLEARANCE_CM,
+    reply_text,
+    transient_refusal,
+)
 from flightrisk.drone.lane_steps import (
     Cut,
     plan_heading,
@@ -665,10 +673,10 @@ class FlightSequenceMixin:
                 # A point the plan was to continue from (a sidestep's point on
                 # the lane, a hold point) belongs to the frame just replaced.
                 self._resume_target = None
-                # The flight's refusal budget and the fence margin of its
-                # refused lane steps start again (``_retry_refusal``).
+                # The flight's refusal budget starts again (``_retry_refusal``);
+                # reset_pose() above cleared the fence margin of its refused
+                # lane steps.
                 self._flight_refusals = 0
-                self._refused_cm = 0.0
             self._flying_lanes = False
             self._phase = "taking_off"
             self._moving = True
@@ -863,9 +871,15 @@ class FlightSequenceMixin:
         if settled is None:
             if self._abort.is_set():
                 return None
+            why = getattr(self.drone, "settle_reject_reason", None)
+            try:
+                reject = why() if callable(why) else None
+            except Exception:  # noqa: BLE001 - a log field only
+                reject = None
             self._log.error(
                 EVENT_HEIGHT_UNSETTLED,
                 drone_id=self.drone_id,
+                reject=reject,
                 samples=guards.settle_samples,
                 tolerance_cm=guards.settle_tolerance_cm,
                 timeout_s=guards.settle_timeout_s,
@@ -1138,14 +1152,17 @@ class FlightSequenceMixin:
                 if self._turns_to_face():
                     # The drone faces the step's plan direction.
                     body = "forward"
-            margin = self._refused_cm
-            if not self.envelope.check_move(body, distance, margin):
+            if not self.envelope.check_move(body, distance):
                 pose = self.envelope.pose_snapshot()
                 extra = {} if body == direction else {"heading_deg": round(pose.heading_deg, 1)}
+                margin = self.envelope.fence_margin_cm
                 if margin:
                     # Refused lane steps may have been partly flown: the
                     # fence is shrunk by their length (``_retry_refusal``).
                     extra["refused_margin_cm"] = round(margin, 1)
+                    note = self.envelope.margin_note(body, distance)
+                    if note:
+                        extra["detail"] = f"geofence: {note}"
                 self._log.error(
                     "edge_geofence_refused",
                     drone_id=self.drone_id,
@@ -1168,10 +1185,10 @@ class FlightSequenceMixin:
                 # most of a lane and may have been partly flown.
                 key = (gen, step)
                 sensed = self._lane_step_cm() is not None and (self._turns_to_face() or direction == "forward")
-                with self._lock:
-                    # The refused step may have been partly flown: from now
-                    # on the geofence is checked as if all of it had been.
-                    self._refused_cm += distance
+                # The refused step may have been partly flown: from now on
+                # every geofence check of this flight keeps its length further
+                # inside (``SafetyEnvelope.add_fence_margin``).
+                self.envelope.add_fence_margin(distance)
                 if not self._retry_refusal(exc, refusals.get(key, 0), f"{body} {distance}", allowed=sensed,
                                            lane_index=lane_index):
                     raise

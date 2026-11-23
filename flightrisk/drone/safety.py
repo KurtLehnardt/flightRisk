@@ -408,6 +408,11 @@ class SafetyEnvelope:
         self.ceiling_cm, self.ceiling_margin_cm = validate_ceiling(ceiling_cm, ceiling_margin_cm, self.limits)
         self.alt_slot_cm = self.check_alt_slot(alt_slot_cm)
         self.pose = RelativePose()
+        # How far the dead-reckoned pose may be wrong on this flight, in cm:
+        # the lane steps the drone refused but may have partly flown
+        # (``flightrisk.drone.flight_guards``). Every geofence check shrinks
+        # the fence by it on every side; ``reset_pose`` clears it.
+        self._fence_margin_cm = 0.0
         self.link_watchdog = LinkWatchdog(link_loss_land_s, clock=clock)
         if link_loss_hold_s is not None and (not is_finite_number(link_loss_hold_s) or link_loss_hold_s < 0):
             raise ValueError(f"link_loss_hold_s must be 0 or more, got {link_loss_hold_s!r}")
@@ -585,12 +590,33 @@ class SafetyEnvelope:
 
     # --- Geofence ---
 
-    def check_move(self, direction: str, distance_cm: float, margin_cm: float = 0.0) -> bool:
+    @property
+    def fence_margin_cm(self) -> float:
+        """How much the fence is shrunk on every side on this flight (``add_fence_margin``), in cm."""
+        with self._lock:
+            return self._fence_margin_cm
+
+    def add_fence_margin(self, distance_cm: float) -> float:
+        """Shrink the fence by *distance_cm* more for the rest of this flight; return the whole margin.
+
+        For a move the drone refused but may have partly flown: the
+        dead-reckoned pose may be wrong by that much, so every later
+        geofence check (``check_move``, ``inside_fence``) keeps that much
+        further inside. ``reset_pose`` clears it at the next takeoff.
+        """
+        if not is_finite_number(distance_cm) or distance_cm < 0:
+            raise ValueError(f"a fence margin must be a number of 0 cm or more, got {distance_cm!r}")
+        with self._lock:
+            self._fence_margin_cm += float(distance_cm)
+            return self._fence_margin_cm
+
+    def check_move(self, direction: str, distance_cm: float, *, with_margin: bool = True) -> bool:
         """Return True if a lane move may be flown from the current pose.
 
         Refuses vertical moves (lanes never change altitude), distances the
         Tello cannot fly exactly, and any move whose dead-reckoned endpoint
-        leaves the geofence shrunk by *margin_cm* (``inside_fence``).
+        leaves the geofence, shrunk by ``fence_margin_cm`` unless
+        *with_margin* is False (``inside_fence``).
         """
         if direction not in HORIZONTAL_DIRECTIONS:
             return False
@@ -598,22 +624,32 @@ class SafetyEnvelope:
             return False
         with self._lock:
             x_cm, y_cm = self.pose.endpoint(direction, distance_cm)
-        return self.inside_fence(x_cm, y_cm, margin_cm)
+        return self.inside_fence(x_cm, y_cm, with_margin=with_margin)
+
+    def margin_note(self, direction: str, distance_cm: float) -> str | None:
+        """Operator text when a move is refused only because the fence is shrunk (``fence_margin_cm``), else None."""
+        margin = self.fence_margin_cm
+        if margin <= 0 or self.check_move(direction, distance_cm) or not self.check_move(
+            direction, distance_cm, with_margin=False
+        ):
+            return None
+        return f"fence {format_cm(margin)} cm smaller after a refused step"
 
     def move_endpoint(self, direction: str, distance_cm: float) -> tuple[float, float]:
         """The dead-reckoned ``(x_cm, y_cm)`` a horizontal move from the current pose would reach."""
         with self._lock:
             return self.pose.endpoint(direction, distance_cm)
 
-    def inside_fence(self, x_cm: float, y_cm: float, margin_cm: float = 0.0) -> bool:
-        """True if a point lies inside the geofence square around takeoff, shrunk by *margin_cm* on every side.
+    def inside_fence(self, x_cm: float, y_cm: float, *, with_margin: bool = True) -> bool:
+        """True if a point lies inside the geofence square around takeoff.
 
-        The margin is how far the dead-reckoned pose may be wrong, for
-        example by lane steps the drone refused but may have partly flown
-        (``flightrisk.drone.flight_guards``).
+        The square is shrunk on every side by ``fence_margin_cm``, how far the
+        dead-reckoned pose may be wrong on this flight, unless *with_margin*
+        is False.
         """
+        margin = self.fence_margin_cm if with_margin else 0.0
         # A small tolerance absorbs floating-point error from rotated moves.
-        limit = self.geofence_cm - max(0.0, float(margin_cm)) + 1e-6
+        limit = self.geofence_cm - margin + 1e-6
         return abs(x_cm) <= limit and abs(y_cm) <= limit
 
     def record_move(self, direction: str, distance_cm: float) -> None:
@@ -636,6 +672,9 @@ class SafetyEnvelope:
         """
         with self._lock:
             previous, self.pose = self.pose, RelativePose()
+            # A new flight from a new takeoff point: the error of the last
+            # flight's pose no longer applies.
+            self._fence_margin_cm = 0.0
         return previous
 
     def pose_snapshot(self) -> RelativePose:

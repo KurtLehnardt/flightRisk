@@ -1962,6 +1962,8 @@ def _obstacle_sidestep_cm(environ: Any) -> int:
             f"from {lo:g} to {hi:g}. Refusing to start."
         )
     return value
+
+
 def _flight_guards(environ: Any) -> FlightGuards:
     """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
 

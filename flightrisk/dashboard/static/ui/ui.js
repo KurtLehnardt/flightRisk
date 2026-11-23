@@ -195,8 +195,10 @@ const socket = io();
         if (typeof n !== 'number' || n < 1) return null;
         const last = r.last_cmd && r.last_reason ? 'Last: ' + r.last_cmd + ' answered "' + r.last_reason + '". '
             : (r.last_reason ? 'Last: ' + r.last_reason + '. ' : '');
+        const fence = typeof r.fence_margin_cm === 'number' && r.fence_margin_cm > 0
+            ? 'The geofence is ' + r.fence_margin_cm + ' cm smaller for the rest of this flight after a refused step. ' : '';
         return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
-            title: last + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
+            title: last + fence + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
     }
     // The drone card badge of an edge in the hover-only test (FLIGHTRISK_HOVER_TEST=1), or null.
     function hoverTestBadge(d) {

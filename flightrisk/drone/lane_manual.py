@@ -396,13 +396,14 @@ class ManualControlMixin:
                 return None
             x_cm, y_cm = envelope.move_endpoint(direction, amount)
             fence = envelope.geofence_cm
+            note = envelope.margin_note(direction, amount)
             return "geofence", {
                 "geofence_cm": fence,
                 "x_cm": _round(x_cm),
                 "y_cm": _round(y_cm),
                 "detail": (
                     f"{direction} {amount} cm would reach ({x_cm:.0f}, {y_cm:.0f}) cm from the takeoff point, "
-                    f"outside the {format_cm(fence)} cm geofence"
+                    f"outside the {format_cm(fence)} cm geofence" + (f" ({note})" if note else "")
                 ),
             }
         slot = envelope.alt_slot_cm
@@ -668,7 +669,8 @@ class ManualControlMixin:
                 released, detail = True, "on_ground"
             else:
                 point = self._resume_point_locked() or self.envelope.pose_snapshot()
-                fence = self.envelope.geofence_cm
+                # Within the fence as shrunk by refused lane steps this flight.
+                fence = max(0.0, self.envelope.geofence_cm - self.envelope.fence_margin_cm)
                 target = RelativePose(
                     max(-fence, min(fence, point.x_cm)), max(-fence, min(fence, point.y_cm)), point.heading_deg
                 )

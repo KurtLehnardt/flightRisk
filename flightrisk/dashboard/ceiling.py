@@ -211,8 +211,10 @@ class CeilingStore:
 
     def __init__(self, path: str | os.PathLike | None = None):
         self.path = Path(path).expanduser() if path is not None else default_settings_path()
-        # Set by load() when it dropped drone slots below the lowest slot.
+        # Set by load() when it dropped drone slots below the lowest slot:
+        # the warning, and the ``(drone_id, slot)`` pairs dropped.
         self.load_warning: str | None = None
+        self.dropped_slots: list[tuple[str, float]] = []
 
     def load(self) -> tuple[CeilingSettings, str | None]:
         """The saved settings, or the defaults when there is no file.
@@ -226,6 +228,7 @@ class CeilingStore:
         drones fly their zone's default slot) and ``load_warning`` says so.
         """
         self.load_warning = None
+        self.dropped_slots = []
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -242,11 +245,12 @@ class CeilingStore:
             kept = _without_low_slots(data)
             if kept is not None:
                 settings, dropped = kept
+                self.dropped_slots = dropped
                 self.load_warning = (
                     "saved altitude slots below the lowest slot of "
                     f"{MIN_ALT_SLOT_CM} cm were dropped: "
                     + ", ".join(f"{drone_id} {format_cm(slot)} cm" for drone_id, slot in dropped)
-                    + "; those drones now fly their zone's default slot. Save the settings to keep this"
+                    + "; those drones now fly their zone's default slot"
                 )
                 return settings, None
             return CeilingSettings(), f"{self.path} is not valid ceiling settings: {exc}"
@@ -344,6 +348,10 @@ class CeilingBoard:
         self.settings, self.load_error = store.load()
         # Low slots dropped on load (``CeilingStore.load``); cleared by a save.
         self.load_warning: str | None = getattr(store, "load_warning", None)
+        if self.load_warning:
+            self.load_warning += (
+                self._dropped_slot_note(getattr(store, "dropped_slots", [])) + ". Save the settings to keep this"
+            )
         if self.load_error:
             self._log.error("ceiling_settings_unreadable", error=self.load_error)
         if self.load_warning:
@@ -357,6 +365,25 @@ class CeilingBoard:
         self._activity = activity
 
     # -- Slots ----------------------------------------------------------------
+
+    def _dropped_slot_note(self, dropped: list[tuple[str, float]]) -> str:
+        """For each dropped slot of a configured drone, the slot it flies now, and any drone that shares it.
+
+        A dropped slot falls back to the default slot of the drone's zone,
+        which may be the slot another drone flies.
+        """
+        ids = list(self._fleet_drones)
+        notes = []
+        for drone_id, _ in dropped:
+            if drone_id not in ids:
+                continue
+            slot = self.slot_for(drone_id, ids.index(drone_id))
+            same = [other for k, other in enumerate(ids) if other != drone_id and self.slot_for(other, k) == slot]
+            notes.append(
+                f"{drone_id} now flies {format_cm(slot)} cm"
+                + (f", the same slot as {', '.join(same)}: give one of them its own slot" if same else "")
+            )
+        return "; " + "; ".join(notes) if notes else ""
 
     def slot_for(self, drone_id: str, index: int, settings: CeilingSettings | None = None) -> int:
         """The altitude slot for *drone_id*, flying zone *index*: its own, else the default for the zone."""

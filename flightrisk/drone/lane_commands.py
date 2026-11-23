@@ -443,6 +443,8 @@ class FleetCommandMixin:
                 refusal = "busy"
             elif not self.envelope.check_move(direction, distance):
                 refusal = "geofence"
+                # Refused only because refused lane steps shrank the fence.
+                detail = self.envelope.margin_note(direction, distance)
             elif not self._launch("nudge", cmd=msg, nudge=(direction, distance, self._held)):
                 refusal = "busy" if self._closed else "landing"
         if refusal is not None:

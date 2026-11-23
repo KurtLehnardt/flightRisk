@@ -731,6 +731,8 @@ class TelloController:
         # Seconds from putting the last takeoff on the wire to reading the
         # reply that decided it, or None (``last_takeoff_reply_s``).
         self._takeoff_reply_s: float | None = None
+        # Why the last settled_height() found no steady height (``settle_reject_reason``).
+        self._settle_reject: str | None = None
         self._lift_guard_until = 0.0
         self._reply_guard_until = 0.0
         self._zero_height_count = 0
@@ -2307,11 +2309,13 @@ class TelloController:
         """
         started = time.monotonic()
         deadline = started + timeout_s
+        self._settle_reject = None
         while True:
-            reading = self._settled_window(started, samples, tolerance_cm)
+            reading, reject = self._settled_window(started, samples, tolerance_cm)
             if reading is not None:
                 height, tof, vgx, vgy = reading
                 return SettledHeight(height, tof, samples, round(time.monotonic() - started, 3), vgx, vgy)
+            self._settle_reject = reject
             if self._landing or time.monotonic() >= deadline:
                 return None
             if abort is not None:
@@ -2322,35 +2326,46 @@ class TelloController:
 
     def _settled_window(
         self, since: float, samples: int, tolerance_cm: float
-    ) -> tuple[int, int | None, int | None, int | None] | None:
-        """``(h, lowest tof, largest |vgx|, largest |vgy|)`` of the last *samples* height packets after *since*.
+    ) -> tuple[tuple[int, int | None, int | None, int | None] | None, str | None]:
+        """``((h, lowest tof, largest |vgx|, largest |vgy|), None)`` of the last *samples* height packets after *since*.
 
-        None unless they show a steady height (see ``settled_height``).
+        When they do not show a steady height (see ``settled_height``),
+        ``(None, why)``: ``too_few`` packets yet, the newest ``stale``, a
+        ``gap`` longer than ``_STATE_FRESH_S``, a ``burst`` of packets closer
+        than ``_SETTLE_BURST_GAP_S``, a run that does not ``span`` enough
+        time, a packet ``not_lifted``, or ``h_drift`` or ``tof_drift`` beyond
+        the tolerance.
         """
         readings = [r for r in self._height_readings() if r.at > since]
         if samples < 1 or len(readings) < samples:
-            return None
+            return None, "too_few"
         window = readings[-samples:]
         if time.monotonic() - window[-1].at > _STATE_FRESH_S:
-            return None
+            return None, "stale"
         gaps = [later.at - earlier.at for earlier, later in pairwise(window)]
-        if any(gap > _STATE_FRESH_S or gap < _SETTLE_BURST_GAP_S for gap in gaps):
-            return None
+        if any(gap > _STATE_FRESH_S for gap in gaps):
+            return None, "gap"
+        if any(gap < _SETTLE_BURST_GAP_S for gap in gaps):
+            return None, "burst"
         if window[-1].at - window[0].at < (samples - 1) * _SETTLE_MIN_GAP_S:
-            return None
+            return None, "span"
         if not all(_lifted(r) for r in window):
-            return None
+            return None, "not_lifted"
         heights = [r.height for r in window]
         if max(heights) - min(heights) > tolerance_cm:
-            return None
+            return None, "h_drift"
         vgx = max((abs(r.vgx) for r in window if r.vgx is not None), default=None)
         vgy = max((abs(r.vgy) for r in window if r.vgy is not None), default=None)
         tofs = [r.tof for r in window]
         if all(_tof_valid(t) and t < _TOF_OUT_OF_RANGE_CM for t in tofs):
             if max(tofs) - min(tofs) > tolerance_cm:
-                return None
-            return window[-1].height, min(tofs), vgx, vgy
-        return window[-1].height, None, vgx, vgy
+                return None, "tof_drift"
+            return (window[-1].height, min(tofs), vgx, vgy), None
+        return (window[-1].height, None, vgx, vgy), None
+
+    def settle_reject_reason(self) -> str | None:
+        """Why the last ``settled_height`` found no steady height at its end (see ``_settled_window``), or None."""
+        return self._settle_reject
 
     def last_takeoff_reply_s(self) -> float | None:
         """Seconds from putting the last takeoff on the wire to reading the reply that decided it, or None.

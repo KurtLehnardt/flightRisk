@@ -529,11 +529,10 @@ class LaneExecutor(
         # until the first, then ``{total, last_reason, last_cmd, last_at}``.
         # Never reset, so a drone that keeps refusing stays visible.
         self._move_refusals: dict[str, Any] | None = None
-        # Transient refusals of this flight, and the lane distance they may
-        # have flown, which shrinks the geofence (``_retry_refusal``). Reset
-        # at every takeoff.
+        # Transient refusals of this flight (``_retry_refusal``), reset at
+        # every takeoff. The lane distance they may have flown shrinks the
+        # geofence in the envelope (``SafetyEnvelope.fence_margin_cm``).
         self._flight_refusals = 0
-        self._refused_cm = 0.0
 
     # ------------------------------------------------------------------
     # Introspection
@@ -760,6 +759,8 @@ class LaneExecutor(
         answered (such as ``down 60``) and ``last_at`` when, on the edge
         clock of ``takeoff_at_local_s``. ``hover_test`` is true while the
         edge runs the hover-only test (``total`` is then 0 until a refusal).
+        ``fence_margin_cm``, while above 0, is how much the geofence is shrunk
+        on this flight after refused lane steps.
         Empty for a drone that never refused and is not in the hover-only
         test, so its telemetry is unchanged.
         """
@@ -767,6 +768,9 @@ class LaneExecutor(
             refusals = None if self._move_refusals is None else dict(self._move_refusals)
         if self._guards.hover_test:
             refusals = {"total": 0, **(refusals or {}), "hover_test": True}
+        margin = self.envelope.fence_margin_cm
+        if refusals is not None and margin > 0:
+            refusals["fence_margin_cm"] = round(margin, 1)
         return {} if refusals is None else {"move_refusals": refusals}
 
     def _obstacle_unavailable_detail(self) -> str:

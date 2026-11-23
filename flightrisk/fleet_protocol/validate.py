@@ -229,7 +229,7 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
 
 
 def _validate_move_refusals(value: Any) -> None:
-    """``move_refusals``: ``{total, last_reason, last_cmd, last_at, hover_test}``; ``total`` required, the rest optional."""
+    """``move_refusals``: ``{total, last_reason, last_cmd, last_at, hover_test, fence_margin_cm}``; only ``total`` required."""
     what = "'telemetry' field 'move_refusals'"
     if not isinstance(value, Mapping):
         raise ProtocolError(f"{what} must be an object, got {_short(value)}")
@@ -249,6 +249,9 @@ def _validate_move_refusals(value: Any) -> None:
     at = value.get("last_at")
     if at is not None and not _is_number(at):
         raise ProtocolError(f"{what} field 'last_at' must be a number or null, got {_short(at)}")
+    margin = value.get("fence_margin_cm")
+    if margin is not None and not (_is_number(margin) and margin >= 0):
+        raise ProtocolError(f"{what} field 'fence_margin_cm' must be a number of 0 or more, got {_short(margin)}")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:

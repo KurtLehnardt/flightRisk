@@ -119,7 +119,9 @@ move to the slot (`flightrisk/drone/flight_guards.py`):
   two arrive within 0.01 s of each other, so a backlog that is processed in one burst is not taken
   for steady state. A stream that is delayed steadily, without a burst, cannot be told apart this
   way. If no such run arrives within `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S` (default 5 s), nothing is
-  sent and the drone lands (landing reason `height_unsettled`, event `edge_height_unsettled`).
+  sent and the drone lands (landing reason `height_unsettled`, event `edge_height_unsettled`,
+  whose `reject` says why the last run did not count: `too_few`, `stale`, `gap`, `burst`, `span`,
+  `not_lifted`, `h_drift` or `tof_drift`).
   The settle checks vertical steadiness only. The horizontal speeds (`vgx`, `vgy`) are logged
   with the settled height (`edge_height_settled`) for calibration, but not judged. A `tof` that
   jumps resets the run: a drone that drifts off a desk edge settles about 0.5 s after the edge,
@@ -143,13 +145,17 @@ move to the slot (`flightrisk/drone/flight_guards.py`):
   of `FLIGHTRISK_TELLO_REFUSAL_HOLD_S` (default 2.5 s). A move to the slot is computed again from
   a new settled height, never resent with its old distance, which the drone may have partly
   flown. A sensed lane step goes back through its sense gate with a new view first. An unsensed
-  lane move, a turn, a manual step, a nudge and a step of the `resume_search` way back are never
-  retried. A flight retries at most `FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT` refusals in all
+  lane move, a turn, a manual step, a nudge, a step of the `resume_search` way back and a move of
+  an obstacle sidestep are never retried. A flight retries at most `FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT` refusals in all
   (default 2, counted from each takeoff): the next one lands, whatever the step, so a drone that
   refuses every step lands instead of retrying each one. A refused lane step may have been partly
-  flown, so from then on the geofence is checked as if all of it had been: the fence shrinks by
-  the length of every refused lane step of the flight (`edge_geofence_refused` then carries
-  `refused_margin_cm`). When no retry is left the drone lands as before (`executor_error`). A hold,
+  flown, so from then on the geofence is checked as if all of it had been: the edge's safety
+  envelope shrinks the fence by the length of every refused lane step of the flight, until the
+  next takeoff. Every geofence check of the flight uses the shrunk fence: lane steps, a re-task,
+  nudges, manual steps, the `resume_search` way back and the obstacle sidestep's choice of side.
+  A move refused only because of the shrinking says so (`fence 50 cm smaller after a refused
+  step`) in its nack, in `edge_geofence_refused` (with `refused_margin_cm`) and in the drone card's
+  `DRONE REFUSED` tooltip; telemetry carries the margin as `fence_margin_cm` in `move_refusals`. When no retry is left the drone lands as before (`executor_error`). A hold,
   a landing or a lost ground link during the hover stops the retry. Every such refusal, retried or
   not, is logged (`edge_move_refused`) and counted in telemetry (the object field
   `move_refusals`, whose `last_reason` is the reply as plain printable text), and the drone card
@@ -174,7 +180,8 @@ each one that is not its default is logged once at startup
 Saved dashboard settings from before the lowest slot was raised may hold a slot below 50 cm. The
 dashboard keeps the saved ceiling, margin and other slots, drops only those slots (the drones then
 fly their zone's default slot), logs `ceiling_slots_dropped` and shows the change in the
-"Ceiling and altitude" section until the settings are saved again.
+"Ceiling and altitude" section until the settings are saved again. The warning names the slot each
+such drone of the configured fleet now flies, and any drone it now shares that slot with.
 
 ## The `set_ceiling` command
 

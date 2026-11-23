@@ -25,11 +25,12 @@ on 2026-10-28. The lane executor now:
   the slot is computed again from a new settled height (never resent with
   its old distance, which the drone may have partly flown), and a sensed
   lane step goes back through its sense gate. Every other move lands as
-  before. A flight that has been refused more than ``refusals_per_flight``
-  times lands at the next refusal, whatever the step, and a refused lane step
-  counts as possibly flown for the geofence (the fence shrinks by its
-  length), so the dead-reckoning error cannot grow past the fence. Each
-  refusal is logged and counted in telemetry;
+  before. The refusal that takes a flight past ``refusals_per_flight``
+  (with the default of 2, the third refusal of the flight) lands, whatever
+  the step, and a refused lane step counts as possibly flown for the geofence
+  (the envelope's fence shrinks by its length for the rest of the flight), so
+  the dead-reckoning error cannot grow past the fence. Each refusal is
+  logged and counted in telemetry;
 * with ``hover_test``, takes off and hovers: no move to the slot, no lane,
   and no manual step, nudge or ``resume_search`` way back.
 

@@ -56,6 +56,7 @@ from flightrisk.drone.flight_guards import (
     FlightGuards,
     transient_refusal,
 )
+from flightrisk.drone.lane_avoid import PlanArea
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.lane_flight import (
     EVENT_DESCENT_REFUSED,
@@ -65,7 +66,7 @@ from flightrisk.drone.lane_flight import (
     EVENT_MOVE_REFUSED,
     EVENT_TAKEOFF_LATE,
 )
-from flightrisk.drone.obstacle_sensor import FakeObstacleSensor
+from flightrisk.drone.obstacle_sensor import FakeObstacleSensor, SenseResult
 from flightrisk.drone.safety import MIN_ALT_SLOT_CM, SafetyEnvelope, slot_below_minimum
 from flightrisk.edge_device import _flight_guards
 from tests.lane_executor_support import (
@@ -131,6 +132,9 @@ class GuardedTello(SteppedTello):
 
     def read_height_cm(self) -> int | None:
         return self.stale_height_cm if self.state.is_flying else 0
+
+    def settle_reject_reason(self) -> str:
+        return "tof_drift"
 
     def settled_height(self, *, samples, tolerance_cm, timeout_s, abort=None):
         self.settle_args.append({"samples": samples, "tolerance_cm": tolerance_cm, "timeout_s": timeout_s})
@@ -238,6 +242,7 @@ def test_a_drone_that_never_settles_lands_without_any_move(guarded):
     assert drone.timeline[-1] == ("land",)
     (unsettled,) = events(log, EVENT_HEIGHT_UNSETTLED)
     assert unsettled["last_height_cm"] == 100 and unsettled["timeout_s"] == 5.0
+    assert unsettled["reject"] == "tof_drift"  # why the last window did not settle
     assert land_reasons(log) == ["height_unsettled"]
 
 
@@ -514,6 +519,8 @@ def test_a_refused_lane_step_shrinks_the_geofence_by_its_length():
         assert moves(drone) == ["forward 50"] * 4
         (fence,) = events(log, "edge_geofence_refused")
         assert fence["refused_margin_cm"] == 50 and fence["y_cm"] == 150
+        assert fence["detail"] == "geofence: fence 50 cm smaller after a refused step"
+        assert executor.telemetry()["move_refusals"]["fence_margin_cm"] == 50
     finally:
         executor.shutdown(timeout=WAIT_S)
     validate_sent(sent)
@@ -535,10 +542,11 @@ def test_the_flights_refusal_budget_and_fence_margin_reset_at_takeoff(guarded):
     executor, drone, _sent, _clock, log = guarded(
         settled=[settled(100, 200)] * 2, refusals={"down": ["error No valid imu"]},
     )
-    executor._flight_refusals, executor._refused_cm = 5, 150.0  # left over from an earlier flight
+    executor._flight_refusals = 5  # left over from an earlier flight
+    executor.envelope.add_fence_margin(150.0)
     take_off(executor)
     assert moves(drone) == ["down 50", "down 50"]  # the refusal was retried: the budget started again
-    assert executor._refused_cm == 0.0
+    assert executor.envelope.fence_margin_cm == 0.0  # reset_pose() at the takeoff cleared it
     assert events(log, EVENT_MOVE_REFUSED)[0]["flight_refusals"] == 1
 
 
@@ -592,6 +600,58 @@ def test_a_link_loss_during_the_retry_hover_lands_without_the_retry(guarded):
     assert wait_for(lambda: not executor.is_busy)
     assert moves(drone) == ["down 50"]
     assert "link_loss" in land_reasons(log)
+
+
+def test_the_side_chooser_never_allows_a_side_the_shrunk_fence_refuses():
+    """The critic's probe: fence 100 cm, the drone at x 40, one refused 50 cm step. Right would reach x 90."""
+    timeline: list = []
+    executor, _drone, _clock, _log, _sent = _sensed_executor(
+        timeline, {}, geofence_cm=100, guards=FAST,
+    )
+    try:
+        envelope = executor.envelope
+        envelope.record_move("right", 40)
+        executor.obstacle_sidestep_cm = 50
+        area = PlanArea(-100.0, 100.0, -100.0, 100.0)
+        step = (0, 0, "forward", 50)
+        allowed, _ = executor._sidestep_sides(step, SenseResult.make_blocked(), area)
+        assert "right" in allowed  # without a margin, x 90 is inside the 100 cm fence
+        envelope.add_fence_margin(50)
+        allowed, refused = executor._sidestep_sides(step, SenseResult.make_blocked(), area)
+        assert ("right", "geofence") in refused and "right" not in allowed
+        for side in allowed:
+            assert envelope.check_move(side, 50)
+        assert not envelope.check_move("right", 50)
+        assert envelope.margin_note("right", 50) == "fence 50 cm smaller after a refused step"
+    finally:
+        executor.shutdown(timeout=WAIT_S)
+
+
+def test_the_shrunk_fence_applies_to_nudges_and_manual_steps(guarded):
+    executor, _drone, sent, _clock, _log = guarded(settled=[settled(50, 60)])
+    take_off(executor)
+    envelope = executor.envelope
+    envelope.record_move("right", 450)
+    envelope.add_fence_margin(50)  # a refused lane step of this flight
+    send(executor, nudge("right", 30, cmd_id="n1"))
+    nack = reply_for(sent, "n1")
+    assert (nack["reason"], nack["detail"]) == ("geofence", "fence 50 cm smaller after a refused step")
+    send(executor, fp.make_manual_hold(cmd_id="m1", fence=FENCE))
+    assert wait_for(lambda: reply_for(sent, "m1") is not None)
+    send(executor, fp.make_manual_move("right", distance_cm=30, cmd_id="m2", fence=FENCE))
+    assert wait_for(lambda: reply_for(sent, "m2") is not None)
+    refused = reply_for(sent, "m2")
+    assert refused["reason"] == "geofence" and "(fence 50 cm smaller after a refused step)" in refused["detail"]
+
+
+def test_reset_pose_clears_the_fence_margin():
+    envelope = SafetyEnvelope(geofence_cm=100)
+    assert envelope.add_fence_margin(30) == 30 and envelope.add_fence_margin(20) == 50
+    assert not envelope.inside_fence(60, 0) and envelope.inside_fence(60, 0, with_margin=False)
+    envelope.reset_pose()
+    assert envelope.fence_margin_cm == 0 and envelope.inside_fence(60, 0)
+    with pytest.raises(ValueError):
+        envelope.add_fence_margin(-1)
 
 
 class _MeasuredTello(GuardedTello):
@@ -829,6 +889,7 @@ def test_a_backlog_burst_is_not_a_settled_height(tello_on_wire):
     _feed(ctrl, [(100, 110)] * 5, gap_s=0.001)
     thread.join(WAIT_S)
     assert out == [None]
+    assert ctrl.settle_reject_reason() in ("burst", "stale")  # a burst, then too old to be fresh
 
 
 def test_packets_spread_like_a_tello_stream_settle(tello_on_wire):
@@ -848,6 +909,7 @@ def test_a_drone_still_on_its_takeoff_point_does_not_settle(tello_on_wire):
     _feed(ctrl, [(5, 10)] * 6, gap_s=TELLO_STATE_S)
     thread.join(WAIT_S)
     assert out == [None]
+    assert ctrl.settle_reject_reason() in ("not_lifted", "stale")
 
 
 def test_a_single_tof_jump_at_a_desk_edge_resets_the_settle(tello_on_wire):
@@ -1110,12 +1172,14 @@ def test_drone_card_shows_refused_moves(tmp_path):
         "console.log(JSON.stringify([f.refusalBadge({}), f.refusalBadge({move_refusals: {total: 1}}),\n"
         "  f.refusalBadge({move_refusals: {total: 3, last_cmd: 'down 30', last_reason: 'error No valid imu'}}),\n"
         "  f.refusalBadge({move_refusals: {total: 0, hover_test: true}}),\n"
-        "  f.hoverTestBadge({move_refusals: {total: 0, hover_test: true}}), f.hoverTestBadge({})]));\n"
+        "  f.hoverTestBadge({move_refusals: {total: 0, hover_test: true}}), f.hoverTestBadge({}),\n"
+        "  f.refusalBadge({move_refusals: {total: 1, fence_margin_cm: 50}})]));\n"
     )
     src = tmp_path / "block.js"
     src.write_text(block)
     out = subprocess.run([NODE, str(harness), str(src)], capture_output=True, text=True, check=True)
-    none, one, three, hover_refusal, hover, no_hover = json.loads(out.stdout)
+    none, one, three, hover_refusal, hover, no_hover, fenced = json.loads(out.stdout)
+    assert "The geofence is 50 cm smaller for the rest of this flight after a refused step." in fenced["title"]
     assert hover_refusal is None and no_hover is None
     assert hover["text"] == "HOVER TEST" and hover["cls"] == "held"
     assert none is None
@@ -1157,3 +1221,17 @@ def test_a_saved_file_that_is_invalid_for_another_reason_still_falls_back(tmp_pa
     settings, error = store.load()
     assert error is not None and store.load_warning is None
     assert settings.ceiling_cm == 200  # the defaults, refused for flight until saved, as before
+
+
+def test_a_dropped_slot_names_the_slot_it_now_shares(tmp_path):
+    from flightrisk.dashboard.ceiling import CeilingBoard, CeilingStore
+
+    path = tmp_path / "ceiling.json"
+    # drone-1's own 20 cm slot is dropped; its zone default (100 cm) is the slot drone-3 already flies.
+    path.write_text(json.dumps({"version": 1, "ceiling_cm": 200, "margin_cm": 60,
+                                "slots_cm": {"drone-1": 20, "drone-3": 100}}))
+    board = CeilingBoard(CeilingStore(path), fleet_drones=["drone-1", "drone-2", "drone-3"],
+                         default_slots_cm=(100, 130), logger=QuietLogger())
+    warning = board.payload()["load_warning"]
+    assert "drone-1 now flies 100 cm, the same slot as drone-3" in warning
+    assert warning.endswith("Save the settings to keep this")

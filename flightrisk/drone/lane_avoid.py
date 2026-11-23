@@ -103,9 +103,13 @@ meets the obstacle at a new gate, with a new budget. What bounds the total is
 the per-lane counts, ``obstacle_sidesteps`` attempts and
 ``OBSTACLE_RELOOKS_PER_LANE`` re-look rounds, which a resumed plan keeps.
 
-**Never land.** Nothing here calls a landing. Every sideways and offset move is
-checked against the geofence before it is sent, so the geofence landing of a
-lane step can never be reached from a sidestep. A way back to the lane that a
+**Never land for an obstacle.** Nothing here calls a landing. Every sideways
+and offset move is checked against the geofence (shrunk by the lane steps the
+drone refused this flight) before it is sent, so the geofence landing of a
+lane step can never be reached from a sidestep. A move or turn the drone
+itself refuses still lands it through the executor's error path
+(``executor_error``): it is never retried here, and a transient refusal is
+counted in ``move_refusals`` (``flightrisk.drone.flight_guards``). A way back to the lane that a
 gate does not clear cuts nothing (unless it saw a person or a sensor down,
 above): the drone hovers under manual control with the point on the lane as
 its hold point (``lane_manual._end_blocked_return``), its telemetry reports
@@ -1045,9 +1049,9 @@ class ObstacleAvoidMixin:
                 continue
             if verdict != _GO:
                 return ended("done")
-            # The fence is shrunk by the lane steps the drone refused this
-            # flight, which it may have partly flown (``_retry_refusal``).
-            if not self.envelope.check_move("forward", beside[3], self._refused_cm):
+            # The envelope's fence is shrunk by the lane steps the drone
+            # refused this flight, which it may have partly flown.
+            if not self.envelope.check_move("forward", beside[3]):
                 return ended("done")
             # Not retried: a refusal beside an obstacle lands, counted in
             # ``move_refusals`` (``lane_flight._run_sequence``).
