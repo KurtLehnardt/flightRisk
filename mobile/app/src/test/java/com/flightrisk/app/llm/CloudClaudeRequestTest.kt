@@ -134,7 +134,6 @@ class CloudClaudeRequestTest {
         val body = Json.parseToJsonElement(
             CloudClaudeLlmBackend.requestBody("some-model", listOf(JsonObject(mapOf("type" to JsonPrimitive("text"))))),
         ).jsonObject
-        // A model without the refusal fallback gets no "fallbacks" field.
         assertEquals(setOf("model", "max_tokens", "output_config", "messages"), body.keys)
         assertEquals("some-model", body.getValue("model").jsonPrimitive.content)
     }
@@ -148,12 +147,11 @@ class CloudClaudeRequestTest {
     }
 
     @Test
-    fun `the default model asks for the server-side refusal fallback like the desktop agent`() = runBlocking {
+    fun `no beta header and no fallbacks field are sent`() = runBlocking {
         val h = enabledHarness()
         h.backend.analyzeMatch(bitmap, bitmap, null)
-        val request = h.server.requests.single()
-        assertEquals("server-side-fallback-2026-07-01", request.beta)
-        assertEquals("default", sentBody(h).getValue("fallbacks").jsonPrimitive.content)
+        assertNull(h.server.requests.single().beta)
+        assertNull(sentBody(h)["fallbacks"])
     }
 
     @Test

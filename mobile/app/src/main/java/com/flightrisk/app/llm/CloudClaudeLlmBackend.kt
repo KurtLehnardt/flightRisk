@@ -278,7 +278,6 @@ class CloudClaudeLlmBackend(
             .header("content-type", "application/json")
             .header("x-api-key", key)
             .header("anthropic-version", API_VERSION)
-            .apply { if (model in FALLBACK_MODELS) header("anthropic-beta", FALLBACK_BETA) }
             .post(body.toRequestBody(JSON))
             .tag(AttemptCounter::class.java, AttemptCounter())
             .build()
@@ -474,16 +473,15 @@ class CloudClaudeLlmBackend(
         private const val REFUSAL_TEXT = "Claude declined to compare these images"
 
         /**
-         * Models that accept the server-side refusal fallback (Claude API only), with the
-         * beta header the desktop agent sends for them. Mobile sends it too: a safety
-         * classifier decline on a search-and-rescue image would otherwise end the check
-         * as a failed match, while the fallback re-runs the same request on another
-         * model on Anthropic's side. Nothing extra leaves the device (the same request
-         * goes to the same service), and the app always calls the Claude API directly,
-         * the only platform that accepts the header. The key is sent as before.
+         * No server-side refusal fallback (the `server-side-fallback-2026-07-01` beta and
+         * `"fallbacks": "default"` that the desktop agent sends for this model). The
+         * desktop is updated with the server, but a shipped app is not: if Anthropic
+         * retired the beta, every request from an old install would fail until the user
+         * updated. For Claude Sonnet 5.5 the default fallback also retries only `cyber`
+         * and `frontier_llm` declines, which comparing two photos of people by clothing
+         * should not trigger. A decline is reported as an error and counted in the
+         * notice instead. Revisit if real traffic shows declines.
          */
-        private val FALLBACK_MODELS = setOf("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1")
-        private const val FALLBACK_BETA = "server-side-fallback-2026-07-01"
         private const val JPEG_QUALITY = 85
         private const val TAG = "CloudClaudeLlm"
         private val JSON = "application/json".toMediaType()
@@ -513,8 +511,6 @@ class CloudClaudeLlmBackend(
         internal fun requestBody(model: String, contentBlocks: List<JsonObject>): String = buildJsonObject {
             put("model", model)
             put("max_tokens", MAX_TOKENS)
-            // Same as the desktop agent: a classifier decline is re-run on a fallback model.
-            if (model in FALLBACK_MODELS) put("fallbacks", "default")
             putJsonObject("output_config") {
                 put("effort", EFFORT)
             }
