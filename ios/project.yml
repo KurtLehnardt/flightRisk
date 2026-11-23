@@ -47,11 +47,32 @@ targets:
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
+    # The licence guard (scripts/mobile_models/licence_guard.py, Python 3.9+ standard
+    # library only) checks the built app in every Release build, including archives:
+    # only the Core ML models scripts/mobile_models/make_models.py converted (pinned
+    # weights digest in their metadata) may be in it, and no known forbidden model under
+    # any name. Any finding, or a guard that cannot run, fails the build. Debug builds
+    # are not checked. The phase reads the whole app folder, so it runs outside the
+    # user script sandbox (ENABLE_USER_SCRIPT_SANDBOXING below) and on every build.
+    postBuildScripts:
+      - name: Licence guard (Release)
+        shell: /bin/sh
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/../scripts/mobile_models/licence_guard.py
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)
+        script: |
+          if [ "$CONFIGURATION" != "Release" ]; then
+            echo "licence guard: skipped for the $CONFIGURATION configuration"
+            exit 0
+          fi
+          exec /usr/bin/env python3 "$SRCROOT/../scripts/mobile_models/licence_guard.py" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
         INFOPLIST_FILE: FlightRisk/Info.plist
         CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         # iPhone only. XcodeGen's iOS target preset sets "1,2", which would override the
         # project-level value, so the target sets it again.
         TARGETED_DEVICE_FAMILY: "1"
