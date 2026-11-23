@@ -16,6 +16,7 @@
 		1884829E3DF19EF87111C55C /* GemmaModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 528EE687C8CE5B766B01FBF9 /* GemmaModelManager.swift */; };
 		1EC4C07C3821A5F880AF1953 /* GroundProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 1B44DC7618235D364413EAA1 /* GroundProtocol */; };
 		202CD5FA057871A3029A6AED /* ModelIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB8ED6F068D4F72C60256B02 /* ModelIO.swift */; };
+		20B49E9D0A7046A665C1CB0B /* CustomDetectorStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B18A425585A9733F8E0BD51 /* CustomDetectorStoreTests.swift */; };
 		22820493631F77B26E2C8BCA /* PersonVision in Frameworks */ = {isa = PBXBuildFile; productRef = 047996D60103AB0B9D43AC2C /* PersonVision */; };
 		2509893C9F1010B3129996FB /* SensitivityPreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52439BABA6B78915E990592B /* SensitivityPreset.swift */; };
 		28F69D71B8044264122D9BB4 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 2BC2DD3B880CCB5E5A65D306 /* MLXLLM */; };
@@ -55,6 +56,7 @@
 		8CE614C9684A2600BB842295 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 2D1DDBA636ED676A70D7FCD0 /* MLXLMCommon */; };
 		90FC6509A85B004D8CE3666B /* CeilingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527451F7363858076AFD12CF /* CeilingView.swift */; };
 		92A4880AEFFA562E4467D3D0 /* DetectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F54412BC9D6805A3C3EDF4D /* DetectionTracker.swift */; };
+		9392C84C5144DFDD37656AB4 /* PhotoColourSpaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62342CC904AC19DBB702BE42 /* PhotoColourSpaceTests.swift */; };
 		96FFAFD23506CF7982521BFA /* PersonDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFDA478D1331861625B42ED /* PersonDetector.swift */; };
 		994D5EAD3502233DE64351BA /* FlightRiskApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */; };
 		9E0DF391D376B1022810591A /* MatchingSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52F7753BE4176DC8ABBCADA2 /* MatchingSignal.swift */; };
@@ -162,6 +164,7 @@
 		59BFA7DF8E90AA1B5611D58A /* ImageQualityScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageQualityScorer.swift; sourceTree = "<group>"; };
 		5C62204D4A923643A5EB39B4 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		61CB1427AC3BB7B28610E584 /* GroundSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundSettingsTests.swift; sourceTree = "<group>"; };
+		62342CC904AC19DBB702BE42 /* PhotoColourSpaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoColourSpaceTests.swift; sourceTree = "<group>"; };
 		66F0F05724180E94E78FA3F5 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		6B4428E3DF406C0107B2594B /* ImageDescriptionExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDescriptionExtractor.swift; sourceTree = "<group>"; };
 		6E26E01C26C0702AFE5EF323 /* HUDOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDOverlayView.swift; sourceTree = "<group>"; };
@@ -172,6 +175,7 @@
 		71B77E3623BE1947AB032CE8 /* GroundLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundLayout.swift; sourceTree = "<group>"; };
 		74AD7FC8D8DF5C80E4A44593 /* ConfidenceProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfidenceProgressView.swift; sourceTree = "<group>"; };
 		74F1A35C7E18DE766B9D604B /* MatchAlertBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchAlertBannerView.swift; sourceTree = "<group>"; };
+		7B18A425585A9733F8E0BD51 /* CustomDetectorStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomDetectorStoreTests.swift; sourceTree = "<group>"; };
 		7C5B59EAD83FF4D2DAFABCB7 /* LlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmBackend.swift; sourceTree = "<group>"; };
 		7D823CEF3D40016659F1C1B0 /* LlmSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LlmSelector.swift; sourceTree = "<group>"; };
 		7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GroundText+Shorten.swift"; sourceTree = "<group>"; };
@@ -271,6 +275,7 @@
 		3658B56FE3DD369AB70330AE /* FlightRiskTests */ = {
 			isa = PBXGroup;
 			children = (
+				7B18A425585A9733F8E0BD51 /* CustomDetectorStoreTests.swift */,
 				DE8083FEACE0E0BA2791EC83 /* CustomDetectorTests.swift */,
 				FFC95A3FF4D067DA32A57C51 /* DetectionTrackerTests.swift */,
 				7033FFDC6D7A0FA5C713A4C2 /* FlightRiskConfigTests.swift */,
@@ -284,6 +289,7 @@
 				14B4251664E956AD316034AF /* MatchScorerTests.swift */,
 				579AAE590A2CF0FCC2543109 /* OnboardingGroundTests.swift */,
 				3330CE1F3A47152039098210 /* OnDeviceModelTests.swift */,
+				62342CC904AC19DBB702BE42 /* PhotoColourSpaceTests.swift */,
 				ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */,
 				BAB074E917CA55E5CF52AD3E /* PlanGridViewStateTests.swift */,
 				D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */,
@@ -675,7 +681,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nMODELS=\"$SRCROOT/FlightRisk/Models\"\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nmkdir -p \"$DEST\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then level=warning; else level=note; fi\nfor name in YOLOXs CLIPViTB16LAION; do\n  rm -rf \"$DEST/$name.mlmodelc\"\n  if [ -d \"$MODELS/$name.mlpackage\" ]; then\n    xcrun coremlc compile \"$MODELS/$name.mlpackage\" \"$DEST\" \\\n      --deployment-target \"$IPHONEOS_DEPLOYMENT_TARGET\" --sdkroot \"$SDKROOT\" \\\n      --platform ios --container bundle-resources\n  else\n    echo \"$level: $name.mlpackage is not in ios/FlightRisk/Models, so this build has no $name model (see docs/mobile-models.md)\"\n  fi\ndone\nfor file in mobile-models.json model-notices.md; do\n  rm -f \"$DEST/$file\"\n  if [ -f \"$MODELS/$file\" ]; then cp \"$MODELS/$file\" \"$DEST/$file\"; fi\ndone\n";
+			shellScript = "set -eu\nMODELS=\"$SRCROOT/FlightRisk/Models\"\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nmkdir -p \"$DEST\"\nmissing=\"\"\nfor name in YOLOXs CLIPViTB16LAION; do\n  rm -rf \"$DEST/$name.mlmodelc\"\n  if [ -d \"$MODELS/$name.mlpackage\" ]; then\n    xcrun coremlc compile \"$MODELS/$name.mlpackage\" \"$DEST\" \\\n      --deployment-target \"$IPHONEOS_DEPLOYMENT_TARGET\" --sdkroot \"$SDKROOT\" \\\n      --platform ios --container bundle-resources\n  else\n    missing=\"$missing $name.mlpackage\"\n  fi\ndone\nfor file in mobile-models.json model-notices.md; do\n  rm -f \"$DEST/$file\"\n  if [ -f \"$MODELS/$file\" ]; then cp \"$MODELS/$file\" \"$DEST/$file\"; else missing=\"$missing $file\"; fi\ndone\nif [ -n \"$missing\" ]; then\n  if [ \"$CONFIGURATION\" = \"Release\" ] && [ \"${FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS:-}\" != \"YES\" ]; then\n    echo \"error: this Release build is missing these files in ios/FlightRisk/Models:$missing. A store build needs both model packages, mobile-models.json and model-notices.md. Install them with scripts/mobile_models/make_models.py install (see docs/mobile-models.md). CI builds without models may set FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS=YES as a build setting; store builds must not.\"\n    exit 1\n  fi\n  echo \"warning: these files are not in ios/FlightRisk/Models, so this build is incomplete or has no models:$missing (see docs/mobile-models.md)\"\nfi\n";
 		};
 		911F990A317E1D31D7820553 /* Licence guard (Release) */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -696,7 +702,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n  echo \"licence guard: skipped for the $CONFIGURATION configuration\"\n  exit 0\nfi\nexec /usr/bin/env python3 \"$SRCROOT/../scripts/mobile_models/licence_guard.py\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\n";
+			shellScript = "if [ \"$CONFIGURATION\" != \"Release\" ]; then\n  echo \"licence guard: skipped for the $CONFIGURATION configuration\"\n  exit 0\nfi\nexec /usr/bin/python3 \"$SRCROOT/../scripts/mobile_models/licence_guard.py\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -778,6 +784,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				20B49E9D0A7046A665C1CB0B /* CustomDetectorStoreTests.swift in Sources */,
 				4C8166259E2D4485F6E5A90E /* CustomDetectorTests.swift in Sources */,
 				DBCABDFE7662B9C71D82050F /* DetectionTrackerTests.swift in Sources */,
 				59178801B86A305F0802B17D /* FlightRiskConfigTests.swift in Sources */,
@@ -790,6 +797,7 @@
 				BB4D348D0623892736579ADE /* MatchScorerTests.swift in Sources */,
 				00C7745957EBCF45F3E656C0 /* OnDeviceModelTests.swift in Sources */,
 				BF0EFE15254CDD97CBCFB47B /* OnboardingGroundTests.swift in Sources */,
+				9392C84C5144DFDD37656AB4 /* PhotoColourSpaceTests.swift in Sources */,
 				CD8AB112C62FE48B21A526C6 /* PlanCurrentTests.swift in Sources */,
 				54BEF6E800A3C73BD1EAAEE5 /* PlanGridViewStateTests.swift in Sources */,
 				79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */,

@@ -15,6 +15,7 @@ struct FlightRiskApp: App {
     @State private var personReID: PersonReID
     @State private var frameSource = AVCaptureFrameSource()
     @State private var pipeline: SearchPipeline
+    @State private var targetNotice: String?
 
     init() {
         let config = FlightRiskConfig.shared
@@ -64,7 +65,8 @@ struct FlightRiskApp: App {
     private func setupPipeline() async {
         // PersonDetector loaded its model in init. If the model is missing or
         // broken, say so on the Search tab instead of searching silently.
-        viewModel.detectionUnavailableReason = personDetector.unavailableReason
+        refreshBanner()
+        personDetector.preload()
 
         // The appearance embedder needs an explicit load.
         personReID.loadModel()
@@ -106,9 +108,33 @@ struct FlightRiskApp: App {
         viewModel.updateBackendStatus(from: llmSelector)
 
         // Importing, switching or removing the user's own detector can turn detection on or off.
-        for await _ in NotificationCenter.default.notifications(named: CustomDetectorStore.didChange) {
-            viewModel.detectionUnavailableReason = personDetector.unavailableReason
+        // Dropping the user's detector after repeated failures, or a photo that cannot be used,
+        // also show on that banner.
+        Task { @MainActor in
+            for await _ in NotificationCenter.default.notifications(named: PersonDetector.customDetectorFailed) {
+                refreshBanner()
+            }
         }
+        Task { @MainActor in
+            for await note in NotificationCenter.default.notifications(named: SearchPipeline.targetPhotoRejected) {
+                targetNotice = note.userInfo?["message"] as? String
+                refreshBanner()
+            }
+        }
+        for await _ in NotificationCenter.default.notifications(named: CustomDetectorStore.didChange) {
+            personDetector.preload()
+            refreshBanner()
+        }
+    }
+
+    /// Puts the most important message on the Search tab banner: detection off, then a dropped
+    /// custom detector, then a photo that could not be used.
+    @MainActor
+    private func refreshBanner() {
+        viewModel.detectionUnavailableReason = personDetector.unavailableReason
+            ?? personDetector.customFailureNotice
+            ?? targetNotice
+        viewModel.isUsingCustomDetector = personDetector.isUsingCustomModel
     }
 }
 
@@ -130,8 +156,23 @@ extension SearchPipeline {
     }
 
     /// Set the target reference photo and compute its appearance embedding.
-    func setTargetPhoto(_ image: CGImage) {
+    ///
+    /// When the photo cannot be used, no target is kept and the Search tab banner says so.
+    @discardableResult
+    func setTargetPhoto(_ image: CGImage) -> Bool {
+        guard reidCallback?.setTarget(photo: image) == true else {
+            self.targetPhoto = nil
+            let message = SearchPipeline.targetPhotoRejectedMessage
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: SearchPipeline.targetPhotoRejected, object: nil,
+                                                userInfo: ["message": message])
+            }
+            return false
+        }
         self.targetPhoto = image
-        _ = reidCallback?.setTarget(photo: image)
+        return true
     }
+
+    static let targetPhotoRejected = Notification.Name("FlightRiskTargetPhotoRejected")
+    static let targetPhotoRejectedMessage = "This photo could not be used for matching. Try another photo."
 }

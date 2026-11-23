@@ -35,6 +35,10 @@ final class SearchViewModel {
     /// banner whenever it is set.
     var detectionUnavailableReason: String?
 
+    /// True while the user's own imported detector is the one in use. Set from
+    /// ``PersonDetector/isUsingCustomModel``; the Search tab shows a badge.
+    var isUsingCustomDetector = false
+
     // MARK: - Search State
 
     /// Whether the search is actively running.

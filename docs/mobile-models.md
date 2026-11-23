@@ -388,8 +388,13 @@ when `ios/FlightRisk/Models/<name>.mlpackage` exists, compiles it into the app
 with `xcrun coremlc compile ... --platform ios --container bundle-resources`
 (the command Xcode itself runs for a model in the sources; under a second per
 model). It copies `mobile-models.json` and `model-notices.md` beside them. A
-missing package is a note in Debug and a warning in Release; the build still
-succeeds and the Search tab shows "Person detection unavailable". The compiled
+missing package, `mobile-models.json` or `model-notices.md` (a partial install
+included) is a warning in Debug that names every missing item; the build
+succeeds and the Search tab shows "Person detection unavailable". In Release,
+including archives, it is an error that fails the build, as Android's
+`checkReleaseModels` does. CI's model-less Release builds pass
+`FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS=YES` as a build setting to skip that
+check. Store builds must never set it. The compiled
 `.mlmodelc` folders keep the `flightrisk.weights_sha256` metadata, so the
 Release licence guard checks them as it checks the packages. The detector is
 loaded with the compute units `mobile-models.json` names for it (`all` for the
@@ -402,9 +407,14 @@ no Core ML, so `swift test` checks them on a Mac:
 - `Letterbox` and `LetterboxGeometry`: the YOLOX canvas (ratio, sides
   truncated, top-left, padding 114). The resize is bilinear with OpenCV's
   sampling positions but rounds in floating point, where OpenCV rounds in
-  fixed point (and its arm64 build takes yet another path), so about a tenth
-  of the canvas values of the golden frame differ from `detector_input.f32`,
-  each by exactly one level; none by more.
+  fixed point (and its arm64 build takes yet another path). It is exact at
+  integer frame-to-canvas ratios, which include the app's 1920 x 1080 frames
+  (`LetterboxOpenCVExactnessTests` checks 1920 x 1080, 1280 x 720, 3840 x 2160
+  and 1080 x 1920 against OpenCV 5.1 `INTER_LINEAR` by SHA-256). At non-integer
+  ratios, such as 4:3, 800 x 480 and the Tello, it differs by at most one
+  level: about a tenth of the canvas values of the golden frame differ from
+  `detector_input.f32`, each by exactly one level; none by more. Porting
+  Android's `ImageResize.bilinearCv` for those sources is a follow-up.
 - `YOLOXDecoder` and `NonMaxSuppression`: upstream's postprocess (best class
   per row, objectness times class score, NMS per class at 0.45, boxes divided
   by the ratio in float32). On the golden output it reproduces `golden.json`'s
@@ -412,7 +422,12 @@ no Core ML, so `swift test` checks them on a Mac:
 - `CropRule`: the crop rule above.
 - `CLIPPreprocess` and `PillowBicubic`: a port of Pillow's bicubic resampler
   (`Resample.c`, fixed point), so the embedder input is the ground's bit for
-  bit: its SHA-256 equals `embedder_input.f32`'s.
+  bit: its SHA-256 equals `embedder_input.f32`'s. It matches Pillow 13.0.0,
+  including its pass order: vertical first when `(h - th) > 0 && (h - th) > 2 *
+  (w - tw)`. `requirements.lock` pins Pillow 13.0.0, but a ground venv installed
+  from `requirements-ground.txt` (`Pillow>=10.4`) may have an older Pillow, for
+  example 12.3.0, which always resizes horizontally first. Pinning the ground
+  is a follow-up.
 - `PersonBoxFilter`: which person boxes are kept (below).
 
 The app's `PersonDetector` letterboxes each camera frame, hands the canvas to
@@ -428,17 +443,24 @@ offset from PyTorch does not affect a match.
 **Box filter.** The app used to drop every box under 12% of the frame height
 or 0.8% of its area, which dropped people who are small in the frame: the
 normal case from altitude. The default is now `PersonBoxFilter.aerial`: at
-least 1% of the frame height (11 pixels of a 1080-pixel frame) and 0.01% of
-its area, and between 0.15 and 3 times as wide as tall (3 rather than 1.5, so
-that a person lying down, seen from the side or from above, is kept). Each
+least 1% of the frame height (11 pixels of a 1080-pixel frame) and 0.005% of
+its area, and between 0.1 and 4 times as wide as tall (so that a person lying
+down, seen from the side or from above, is kept). These are the values
+Android's `AERIAL` uses. Detection keeps every box that passes this filter;
+matching is limited separately: only crops at least 40 pixels tall get a ReID
+or CLIP score, and at most 5 crops are scored per frame, the highest detector
+scores first. Smaller detections are still detected and published, but not
+scored. The limits are `FlightRiskConfig.vision.matchMinCropHeightPx` (40) and
+`matchMaxPerFrame` (5), as on Android. Each
 limit can be changed with `FLIGHTRISK_MIN_BOX_HEIGHT_RATIO`,
 `FLIGHTRISK_MIN_BOX_AREA_RATIO`, `FLIGHTRISK_MIN_BOX_ASPECT_RATIO` and
-`FLIGHTRISK_MAX_BOX_ASPECT_RATIO` in the app's `flightrisk_config` defaults
+`FLIGHTRISK_MAX_BOX_ASPECT_RATIO` (and `FLIGHTRISK_MATCH_MIN_CROP_HEIGHT_PX`,
+`FLIGHTRISK_MATCH_MAX_PER_FRAME` for the matching limits) in the app's `flightrisk_config` defaults
 suite.
 
 **Tests.** `PersonVisionTests` (package) run without any model: the golden
 numbers in `Tests/PersonVisionTests/Fixtures/golden-subset.json` (the 54
-detector output rows whose best class scores 0.2 or more, the detections,
+detector output rows whose objectness times best class score is 0.2 or more, the detections,
 the crop's pixels and the embedder input's digest, all from the drawn frame)
 and synthetic tensors for the letterbox, decoding, NMS, filter, crop rule,
 the user-model checks and the zip reader. With the full fixtures they also
@@ -698,9 +720,12 @@ ground's dependencies:
 - **Embed the person in the reference photo.** The app and the ground embed
   the whole reference photo; cutting the person out first (with the detector
   and the crop rule) would compare like with like. It changes the ground too.
-- **A bit-exact letterbox.** The Swift letterbox differs from OpenCV's by one
-  level in about a tenth of the values. Matching OpenCV's fixed-point
-  rounding (on each platform's build) would make the canvas exact.
+- **Letterbox at non-integer ratios.** The Swift letterbox is exact at integer
+  ratios (including 1920 x 1080) and differs by at most one level at others,
+  such as 4:3, 800 x 480 and the Tello. Porting Android's
+  `ImageResize.bilinearCv` is a follow-up for those sources.
+- **Pin the ground's Pillow.** The ground venv may have an older Pillow than
+  the 13.0.0 the Swift port matches; pin it in `requirements-ground.txt`.
 
 ## Legal questions
 

@@ -97,9 +97,24 @@ final class PersonDetector {
     private let customStore: CustomDetectorStore?
     private let bundledReason: String?
 
+    /// Guards the fields below. Never held while a model loads or runs.
     private let lock = NSLock()
+    /// Serialises loads of the user's model, so two threads never load it at once.
+    private let loadLock = NSLock()
     private var customGeneration = -1
     private var custom: CustomYOLOBackend?
+    private var consecutiveCustomFailures = 0
+    private var customDisabled = false
+    private var _customFailureNotice: String?
+
+    /// How many frames in a row the user's model may fail before the bundled one takes over.
+    static let customFailureLimit = 3
+
+    /// Posted on the main queue when the user's model is dropped for the session.
+    static let customDetectorFailed = Notification.Name("FlightRiskCustomDetectorFailed")
+
+    /// The banner text after the user's model failed and was dropped for the session.
+    static let customFailedNotice = "Your imported detector failed; using the built-in detector."
 
     // MARK: - Init
 
@@ -139,16 +154,29 @@ final class PersonDetector {
     /// Why person detection is off, in words for the person using the app, or `nil` when a
     /// detector is ready (the bundled one, or the user's own while it is on). The Search tab
     /// shows it as a banner, so a missing or broken model is never silent.
+    ///
+    /// This reads settings and files only. It never loads a model, so it is safe on the main thread.
     var unavailableReason: String? {
-        activeBackend() == nil ? (bundledReason ?? Self.missingModelReason()) : nil
+        if bundled != nil { return nil }
+        lock.lock()
+        let disabled = customDisabled
+        lock.unlock()
+        if !disabled, let store = customStore, store.isUsable { return nil }
+        return bundledReason ?? Self.missingModelReason()
     }
 
-    /// True when `detect(frame:)` can find people.
+    /// Set after the user's model failed repeatedly and was dropped for this session.
+    var customFailureNotice: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _customFailureNotice
+    }
+
+    /// True when `detect(frame:)` can find people with what is loaded now.
     var isAvailable: Bool { activeBackend() != nil }
 
-    /// True while the user's own detector is the one in use.
+    /// True while the user's own detector is the one in use. Never loads a model.
     var isUsingCustomModel: Bool {
-        refreshCustom()
         lock.lock()
         defer { lock.unlock() }
         return custom != nil
@@ -170,9 +198,19 @@ final class PersonDetector {
 
     // MARK: - Backend choice
 
-    /// Reloads the user's own model when its settings changed since the last frame.
-    private func refreshCustom() {
+    /// Loads the user's own model in the background when its settings changed, so the first
+    /// frame after an import does not wait for it.
+    func preload() {
+        Task.detached(priority: .utility) { [self] in ensureLoaded() }
+    }
+
+    /// Loads the user's own model when its settings changed since the last load. This is slow, so
+    /// it runs only on the pipeline's queue or a detached task, never on the main thread. The load
+    /// lock keeps two callers from loading at once; the second sees the finished result.
+    private func ensureLoaded() {
         guard let store = customStore else { return }
+        loadLock.lock()
+        defer { loadLock.unlock() }
         let generation = store.generation
         lock.lock()
         let stale = generation != customGeneration
@@ -182,27 +220,61 @@ final class PersonDetector {
         lock.lock()
         custom = backend
         customGeneration = generation
+        consecutiveCustomFailures = 0
+        customDisabled = false
+        _customFailureNotice = nil
         lock.unlock()
     }
 
+    /// The loaded backend: the user's model, or the bundled one. Never loads.
     private func activeBackend() -> PersonDetectorBackend? {
-        refreshCustom()
         lock.lock()
         defer { lock.unlock() }
         return custom ?? bundled
+    }
+
+    /// Counts a failed frame of the user's model; after three in a row, drops it for the session.
+    private func customFailed(_ backend: PersonDetectorBackend, error: Error) {
+        lock.lock()
+        guard let current = custom, current === backend else { lock.unlock(); return }
+        consecutiveCustomFailures += 1
+        let drop = consecutiveCustomFailures >= Self.customFailureLimit
+        if drop {
+            custom = nil
+            customDisabled = true
+            _customFailureNotice = Self.customFailedNotice
+        }
+        lock.unlock()
+        logger.error("Custom detector failed: \(String(describing: type(of: error)))")
+        if drop {
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Self.customDetectorFailed, object: self) }
+        }
+    }
+
+    private func customSucceeded(_ backend: PersonDetectorBackend) {
+        lock.lock()
+        if let current = custom, current === backend { consecutiveCustomFailures = 0 }
+        lock.unlock()
     }
 
     // MARK: - Detection
 
     /// People in `image`, in frame pixels, after the score threshold, NMS and the box filter.
     func persons(in image: RGBImage) -> [DetectedBox] {
+        ensureLoaded()
         guard let backend = activeBackend() else { return [] }
         do {
-            return try backend.persons(in: image, scoreThreshold: confidence).filter {
-                boxFilter.accepts(width: $0.width, height: $0.height, frameWidth: image.width, frameHeight: image.height)
+            let found = try backend.persons(in: image, scoreThreshold: confidence).filter {
+                boxFilter.cropBox($0, frameWidth: image.width, frameHeight: image.height) != nil
             }
+            customSucceeded(backend)
+            return found
         } catch {
-            logger.error("Person detection failed on a frame")
+            if backend is CustomYOLOBackend {
+                customFailed(backend, error: error)
+            } else {
+                logger.error("Person detection failed on a frame: \(String(describing: type(of: error)))")
+            }
             return []
         }
     }
@@ -212,6 +284,7 @@ final class PersonDetector {
     /// - Parameter frame: The camera frame.
     /// - Returns: One `Detection` per person, highest score first.
     func detect(frame: CGImage) -> [Detection] {
+        ensureLoaded()
         guard isAvailable, let image = ModelIO.rgb(frame) else { return [] }
         var detections: [Detection] = []
         for box in persons(in: image) {

@@ -31,6 +31,11 @@ final class FlightRiskConfig {
         /// Which person boxes are kept, by size and shape. Loose by default, for people who are
         /// small in the frame (aerial search); see `PersonBoxFilter.aerial`.
         var personBoxFilter: PersonBoxFilter = .aerial
+        /// Only crops at least this tall (pixels) get a ReID or CLIP score. Smaller detections are
+        /// still detected and published, but not scored. The same as Android.
+        var matchMinCropHeightPx: Int = 40
+        /// At most this many crops are scored per frame, the highest detector scores first.
+        var matchMaxPerFrame: Int = 5
         var scorerMatchThreshold: Float = 0.45
         var scorerReidWeight: Float = 0.35
         /// The shared scorer's face weight (`MatchScorer`, the same on every platform). The app
@@ -185,27 +190,33 @@ final class FlightRiskConfig {
     func loadOverrides() {
         guard let defaults = UserDefaults(suiteName: Self.suiteName) else { return }
 
-        if let confidence = defaults.object(forKey: "FLIGHTRISK_DETECTOR_CONFIDENCE") as? Float {
+        if let confidence = (defaults.object(forKey: "FLIGHTRISK_DETECTOR_CONFIDENCE") as? NSNumber)?.floatValue {
             vision.detectorConfidence = confidence
         }
-        if let reidThreshold = defaults.object(forKey: "FLIGHTRISK_REID_THRESHOLD") as? Float {
+        if let reidThreshold = (defaults.object(forKey: "FLIGHTRISK_REID_THRESHOLD") as? NSNumber)?.floatValue {
             vision.reidThreshold = reidThreshold
         }
-        if let scorerThreshold = defaults.object(forKey: "FLIGHTRISK_SCORER_THRESHOLD") as? Float {
+        if let scorerThreshold = (defaults.object(forKey: "FLIGHTRISK_SCORER_THRESHOLD") as? NSNumber)?.floatValue {
             vision.scorerMatchThreshold = scorerThreshold
         }
         // The person box filter (fractions of the frame; width / height for the aspect limits).
-        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_HEIGHT_RATIO") as? Float {
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MIN_BOX_HEIGHT_RATIO") as? NSNumber)?.floatValue {
             vision.personBoxFilter.minHeightRatio = v
         }
-        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_AREA_RATIO") as? Float {
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MIN_BOX_AREA_RATIO") as? NSNumber)?.floatValue {
             vision.personBoxFilter.minAreaRatio = v
         }
-        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_ASPECT_RATIO") as? Float {
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MIN_BOX_ASPECT_RATIO") as? NSNumber)?.floatValue {
             vision.personBoxFilter.minAspectRatio = v
         }
-        if let v = defaults.object(forKey: "FLIGHTRISK_MAX_BOX_ASPECT_RATIO") as? Float {
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MAX_BOX_ASPECT_RATIO") as? NSNumber)?.floatValue {
             vision.personBoxFilter.maxAspectRatio = v
+        }
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MATCH_MIN_CROP_HEIGHT_PX") as? NSNumber)?.intValue {
+            vision.matchMinCropHeightPx = max(0, v)
+        }
+        if let v = (defaults.object(forKey: "FLIGHTRISK_MATCH_MAX_PER_FRAME") as? NSNumber)?.intValue {
+            vision.matchMaxPerFrame = max(1, v)
         }
         if let model = defaults.string(forKey: "FLIGHTRISK_GEMMA_MODEL") {
             reasoning.model = model
@@ -222,7 +233,7 @@ final class FlightRiskConfig {
             if let enabled = defaults.object(forKey: "FLIGHTRISK_SIGNAL_\(name)_ENABLED") as? Bool {
                 signalConfig.setEnabled(name, enabled: enabled)
             }
-            if let weight = defaults.object(forKey: "FLIGHTRISK_SIGNAL_\(name)_WEIGHT") as? Float {
+            if let weight = (defaults.object(forKey: "FLIGHTRISK_SIGNAL_\(name)_WEIGHT") as? NSNumber)?.floatValue {
                 signalConfig.setWeight(name, weight: weight)
             }
         }

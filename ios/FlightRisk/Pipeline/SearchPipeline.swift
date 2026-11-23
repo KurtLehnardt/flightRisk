@@ -128,6 +128,8 @@ actor SearchPipeline {
     // MARK: - Captured Config Values
 
     private let reidThreshold: Float
+    private let matchMinCropHeightPx: Int
+    private let matchMaxPerFrame: Int
     private let corroborationThreshold: Int
     private let alertCooldownSec: TimeInterval
     private let spatialGridSize: Int
@@ -237,6 +239,8 @@ actor SearchPipeline {
     ) {
         // Capture config values to avoid storing non-Sendable config reference
         self.reidThreshold = config.vision.reidThreshold
+        self.matchMinCropHeightPx = config.vision.matchMinCropHeightPx
+        self.matchMaxPerFrame = config.vision.matchMaxPerFrame
         self.corroborationThreshold = config.reasoning.corroborationThreshold
         self.alertCooldownSec = config.reasoning.alertCooldown
         self.spatialGridSize = config.reasoning.spatialGridSize
@@ -415,10 +419,19 @@ actor SearchPipeline {
 
                 let reid = reidCallback
                 if reid != nil && targetPhoto != nil && !detections.isEmpty {
-                    let result = reid!.findMatch(detections: detections)
-                    if let idx = result.index {
-                        matchIdx = idx
-                        reidScore = result.score
+                    // Only crops tall enough get scored, and at most matchMaxPerFrame of
+                    // them, the highest detector scores first. The rest are still published.
+                    let eligible = detections.indices
+                        .filter { detections[$0].crop.height >= matchMinCropHeightPx }
+                        .sorted { detections[$0].confidence > detections[$1].confidence }
+                        .prefix(matchMaxPerFrame)
+                    if !eligible.isEmpty {
+                        let result = reid!.findMatch(detections: eligible.map { detections[$0] })
+                        // The ReID score findMatch returns is reused below; the crop is not embedded again.
+                        if let local = result.index, local >= 0, local < eligible.count {
+                            matchIdx = eligible[eligible.startIndex + local]
+                            reidScore = result.score
+                        }
                     }
                 }
 

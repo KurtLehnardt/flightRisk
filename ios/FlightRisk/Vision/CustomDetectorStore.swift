@@ -18,6 +18,42 @@ struct CustomDetectorInfo: Codable, Equatable, Sendable {
     let testPictureScore: Float
     /// When the user confirmed the licence statement and imported the model.
     let importedAt: Date
+    /// Which version of the licence statement the user confirmed.
+    let attestationVersion: Int
+    /// When the user confirmed it.
+    let attestedAt: Date
+
+    /// The version of the licence statement the import screen shows now. Raise it when the
+    /// statement changes; models imported under another version then need a new confirmation.
+    static let currentAttestationVersion = 1
+
+    init(sha256: String, bytes: Int64, inputName: String, outputName: String, layout: CustomHeadLayout,
+         testPictureScore: Float, importedAt: Date,
+         attestationVersion: Int = CustomDetectorInfo.currentAttestationVersion, attestedAt: Date? = nil) {
+        self.sha256 = sha256
+        self.bytes = bytes
+        self.inputName = inputName
+        self.outputName = outputName
+        self.layout = layout
+        self.testPictureScore = testPictureScore
+        self.importedAt = importedAt
+        self.attestationVersion = attestationVersion
+        self.attestedAt = attestedAt ?? importedAt
+    }
+
+    /// Records written before the attestation fields existed decode as version 1, attested at import.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sha256 = try c.decode(String.self, forKey: .sha256)
+        bytes = try c.decode(Int64.self, forKey: .bytes)
+        inputName = try c.decode(String.self, forKey: .inputName)
+        outputName = try c.decode(String.self, forKey: .outputName)
+        layout = try c.decode(CustomHeadLayout.self, forKey: .layout)
+        testPictureScore = try c.decode(Float.self, forKey: .testPictureScore)
+        importedAt = try c.decode(Date.self, forKey: .importedAt)
+        attestationVersion = try c.decodeIfPresent(Int.self, forKey: .attestationVersion) ?? Self.currentAttestationVersion
+        attestedAt = try c.decodeIfPresent(Date.self, forKey: .attestedAt) ?? importedAt
+    }
 }
 
 /// The optional person detector the user brings (Settings > Your own person detector).
@@ -41,24 +77,35 @@ final class CustomDetectorStore: @unchecked Sendable {
     let directory: URL
     private let defaults: UserDefaults
     private let checkPicture: () -> RGBImage?
+    private let loadBackend: ((URL, CustomDetectorInfo) -> CustomYOLOBackend?)?
+    private let writeInfo: (Data, URL) throws -> Void
     private let lock = NSLock()
     private var _generation = 0
+    private var failedGeneration: Int?
 
     /// - Parameters:
     ///   - directory: Where the compiled model and its record are kept (default: Application
     ///     Support/CustomDetector).
     ///   - defaults: Where the on/off switch is kept.
     ///   - checkPicture: The synthetic picture a model must find a person in.
+    ///   - loadBackend: Replaces the Core ML load of the stored model (tests count or fake it).
+    ///   - writeInfo: Replaces the write of the record into the staging folder (tests make it fail).
     init(
         directory: URL? = nil,
         defaults: UserDefaults = .standard,
-        checkPicture: @escaping () -> RGBImage? = { CustomDetectorStore.bundledCheckPicture() }
+        checkPicture: @escaping () -> RGBImage? = { CustomDetectorStore.bundledCheckPicture() },
+        loadBackend: ((URL, CustomDetectorInfo) -> CustomYOLOBackend?)? = nil,
+        writeInfo: @escaping (Data, URL) throws -> Void = { data, url in
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
     ) {
         let base = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CustomDetector", isDirectory: true)
         self.directory = base
         self.defaults = defaults
         self.checkPicture = checkPicture
+        self.loadBackend = loadBackend
+        self.writeInfo = writeInfo
     }
 
     var modelURL: URL { directory.appendingPathComponent("model.mlmodelc", isDirectory: true) }
@@ -74,17 +121,40 @@ final class CustomDetectorStore: @unchecked Sendable {
     private func changed() {
         lock.lock()
         _generation += 1
+        failedGeneration = nil
         lock.unlock()
         DispatchQueue.main.async { NotificationCenter.default.post(name: Self.didChange, object: self) }
     }
 
-    /// The imported model's record, or `nil` when there is none.
-    var info: CustomDetectorInfo? {
+    /// The stored record whatever its attestation version, or `nil` when there is no model or record.
+    var storedInfo: CustomDetectorInfo? {
         guard FileManager.default.fileExists(atPath: modelURL.path),
               let data = try? Data(contentsOf: infoURL) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(CustomDetectorInfo.self, from: data)
+    }
+
+    /// The imported model's record, or `nil` when there is none or it needs a new confirmation.
+    var info: CustomDetectorInfo? {
+        guard let stored = storedInfo, stored.attestationVersion == CustomDetectorInfo.currentAttestationVersion
+        else { return nil }
+        return stored
+    }
+
+    /// True when a model is stored but the user confirmed an older licence statement.
+    var needsReattest: Bool {
+        guard let stored = storedInfo else { return false }
+        return stored.attestationVersion != CustomDetectorInfo.currentAttestationVersion
+    }
+
+    /// True when the user's model is switched on and its last load did not fail. Reads settings
+    /// and files only; it never loads a model, so it is safe on the main thread.
+    var isUsable: Bool {
+        guard isEnabled else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return failedGeneration != _generation
     }
 
     /// Whether the user's model is switched on. Off by default; never on without a model.
@@ -98,8 +168,21 @@ final class CustomDetectorStore: @unchecked Sendable {
 
     /// The backend for the user's model while it is switched on, or `nil` (the bundled detector is
     /// used then, including when the stored model no longer loads).
+    ///
+    /// This loads the model, which is slow: call it off the main thread.
     func makeBackend() -> CustomYOLOBackend? {
         guard isEnabled, let info else { return nil }
+        let started = generation
+        let backend = loadBackend.map { $0(modelURL, info) } ?? loadFromDisk(info)
+        if backend == nil {
+            lock.lock()
+            failedGeneration = started
+            lock.unlock()
+        }
+        return backend
+    }
+
+    private func loadFromDisk(_ info: CustomDetectorInfo) -> CustomYOLOBackend? {
         let config = MLModelConfiguration()
         config.computeUnits = .all
         guard let model = try? MLModel(contentsOf: modelURL, configuration: config) else { return nil }
@@ -203,26 +286,46 @@ final class CustomDetectorStore: @unchecked Sendable {
         return info
     }
 
-    /// Moves the compiled model into place, replacing any earlier one, and writes its record.
-    private func store(compiled: URL, info: CustomDetectorInfo) throws {
+    /// Puts the compiled model and its record in place together, replacing any earlier pair.
+    ///
+    /// Both are staged first, so a failed write of the record changes nothing. The swap then moves
+    /// the old pair aside and puts the new one in; if that fails, the old pair is put back. The
+    /// staging and backup files are removed on every path.
+    func store(compiled: URL, info: CustomDetectorInfo) throws {
         let fm = FileManager.default
+        let tag = UUID().uuidString
+        let stagedModel = directory.appendingPathComponent("staging-\(tag).mlmodelc", isDirectory: true)
+        let stagedInfo = directory.appendingPathComponent("staging-\(tag).json")
+        let backupModel = directory.appendingPathComponent("backup-\(tag).mlmodelc", isDirectory: true)
+        let backupInfo = directory.appendingPathComponent("backup-\(tag).json")
+        defer {
+            for url in [stagedModel, stagedInfo, backupModel, backupInfo] { try? fm.removeItem(at: url) }
+        }
         do {
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             var values = URLResourceValues()
             values.isExcludedFromBackup = true
             var dir = directory
             try dir.setResourceValues(values)
-            let staged = directory.appendingPathComponent("staging-\(UUID().uuidString).mlmodelc", isDirectory: true)
-            try fm.copyItem(at: compiled, to: staged)
-            if fm.fileExists(atPath: modelURL.path) {
-                _ = try fm.replaceItemAt(modelURL, withItemAt: staged)
-            } else {
-                try fm.moveItem(at: staged, to: modelURL)
-            }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            try encoder.encode(info).write(to: infoURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try fm.copyItem(at: compiled, to: stagedModel)
+            try writeInfo(try encoder.encode(info), stagedInfo)
         } catch {
+            throw CustomModelError.storageFailed
+        }
+        let hadModel = fm.fileExists(atPath: modelURL.path)
+        let hadInfo = fm.fileExists(atPath: infoURL.path)
+        do {
+            if hadModel { try fm.moveItem(at: modelURL, to: backupModel) }
+            if hadInfo { try fm.moveItem(at: infoURL, to: backupInfo) }
+            try fm.moveItem(at: stagedModel, to: modelURL)
+            try fm.moveItem(at: stagedInfo, to: infoURL)
+        } catch {
+            try? fm.removeItem(at: modelURL)
+            try? fm.removeItem(at: infoURL)
+            if hadModel { try? fm.moveItem(at: backupModel, to: modelURL) }
+            if hadInfo { try? fm.moveItem(at: backupInfo, to: infoURL) }
             throw CustomModelError.storageFailed
         }
     }

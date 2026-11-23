@@ -75,7 +75,7 @@ targets:
           MODELS="$SRCROOT/FlightRisk/Models"
           DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
           mkdir -p "$DEST"
-          if [ "$CONFIGURATION" = "Release" ]; then level=warning; else level=note; fi
+          missing=""
           for name in YOLOXs CLIPViTB16LAION; do
             rm -rf "$DEST/$name.mlmodelc"
             if [ -d "$MODELS/$name.mlpackage" ]; then
@@ -83,13 +83,25 @@ targets:
                 --deployment-target "$IPHONEOS_DEPLOYMENT_TARGET" --sdkroot "$SDKROOT" \
                 --platform ios --container bundle-resources
             else
-              echo "$level: $name.mlpackage is not in ios/FlightRisk/Models, so this build has no $name model (see docs/mobile-models.md)"
+              missing="$missing $name.mlpackage"
             fi
           done
           for file in mobile-models.json model-notices.md; do
             rm -f "$DEST/$file"
-            if [ -f "$MODELS/$file" ]; then cp "$MODELS/$file" "$DEST/$file"; fi
+            if [ -f "$MODELS/$file" ]; then cp "$MODELS/$file" "$DEST/$file"; else missing="$missing $file"; fi
           done
+          if [ -n "$missing" ]; then
+            if [ "$CONFIGURATION" = "Release" ] && [ "${FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS:-}" != "YES" ]; then
+              echo "error: this Release build is missing these files in ios/FlightRisk/Models:$missing. A store build needs both model packages, mobile-models.json and model-notices.md. Install them with scripts/mobile_models/make_models.py install (see docs/mobile-models.md). CI builds without models may set FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS=YES as a build setting; store builds must not."
+              exit 1
+            fi
+            echo "warning: these files are not in ios/FlightRisk/Models, so this build is incomplete or has no models:$missing (see docs/mobile-models.md)"
+          fi
+        outputPaths:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/YOLOXs.mlmodelc
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CLIPViTB16LAION.mlmodelc
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/mobile-models.json
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/model-notices.md
       - name: Licence guard (Release)
         shell: /bin/sh
         basedOnDependencyAnalysis: false
@@ -101,7 +113,7 @@ targets:
             echo "licence guard: skipped for the $CONFIGURATION configuration"
             exit 0
           fi
-          exec /usr/bin/env python3 "$SRCROOT/../scripts/mobile_models/licence_guard.py" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          exec /usr/bin/python3 "$SRCROOT/../scripts/mobile_models/licence_guard.py" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app

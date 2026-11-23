@@ -89,7 +89,24 @@ final class CustomDetectorSettingsModel {
 
 /// The Settings section for the optional bring-your-own detector.
 struct CustomDetectorSection: View {
-    @State private var model = CustomDetectorSettingsModel()
+    /// Built once, on first appearance. `@State(initialValue:)` with an `@Observable` would
+    /// construct (and read the disk for) a throwaway model on every parent re-render.
+    @State private var model: CustomDetectorSettingsModel?
+
+    var body: some View {
+        Group {
+            if let model {
+                CustomDetectorSectionContent(model: model)
+            }
+        }
+        .onAppear {
+            if model == nil { model = CustomDetectorSettingsModel() }
+        }
+    }
+}
+
+private struct CustomDetectorSectionContent: View {
+    let model: CustomDetectorSettingsModel
     @State private var showingImport = false
     @State private var confirmingRemove = false
 

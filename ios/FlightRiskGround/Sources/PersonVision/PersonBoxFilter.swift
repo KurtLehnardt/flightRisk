@@ -28,9 +28,11 @@ public struct PersonBoxFilter: Equatable, Sendable {
     }
 
     /// The default for aerial search, Android's `AERIAL`: a box at least 1% of the frame height
-    /// (7 pixels of a 720-pixel frame) and 0.005% of its area (about 7 x 7 pixels at 720p), and
-    /// between 0.1 and 4 times as wide as it is tall, so that a person lying down, seen from the side
-    /// or from above, is kept; and at least 2 pixels on each side.
+    /// and 0.005% of its area, and between 0.1 and 4 times as wide as it is tall, so that a person
+    /// lying down, seen from the side or from above, is kept; and at least 2 pixels on each side.
+    /// This is the filter for detection only. Matching has its own, separate limit: only crops at
+    /// least 40 pixels tall are scored (`FlightRiskConfig.vision.matchMinCropHeightPx`), so a
+    /// smaller box is still detected and published but not scored.
     public static let aerial = PersonBoxFilter(
         minHeightRatio: 0.01, minAreaRatio: 0.00005, minAspectRatio: 0.1, maxAspectRatio: 4.0
     )
