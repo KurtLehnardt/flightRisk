@@ -24,8 +24,18 @@ object OnnxModelLoader {
         return guarded { OnnxFloatModel.open(buffer) }
     }
 
-    /** Opens a model file, for example one the user imported. */
+    /** Opens a model file. A file the user supplied must pass [OnnxModelScanner] first: use [fromImportedFile]. */
     fun fromFile(file: File): OnnxFloatModel = guarded { OnnxFloatModel.open(file.absolutePath) }
+
+    /**
+     * Opens a model the user imported, after [OnnxModelScanner] has checked it
+     * again (it was checked on import; this keeps a file changed since then
+     * from reaching ONNX Runtime). Throws [OnnxModelScanner.UnsafeModel].
+     */
+    fun fromImportedFile(file: File): OnnxFloatModel {
+        OnnxModelScanner.scan(file)
+        return fromFile(file)
+    }
 
     /** True when the asset exists. */
     fun hasAsset(context: Context, assetFileName: String): Boolean =
@@ -45,9 +55,13 @@ object OnnxModelLoader {
             }
         } catch (e: IOException) {
             // A compressed asset cannot be mapped (openFd fails); copy it into native memory instead.
-            context.assets.open(name).use { input ->
-                val bytes = input.readBytes()
-                ByteBuffer.allocateDirect(bytes.size).put(bytes).also { it.flip() }
+            try {
+                context.assets.open(name).use { input ->
+                    val bytes = input.readBytes()
+                    ByteBuffer.allocateDirect(bytes.size).put(bytes).also { it.flip() }
+                }
+            } catch (oom: OutOfMemoryError) {
+                throw IOException("not enough memory to read $name", oom)
             }
         }
 

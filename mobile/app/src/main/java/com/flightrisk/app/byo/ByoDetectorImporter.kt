@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.flightrisk.app.model.OnnxModelLoader
-import com.flightrisk.app.vision.UltralyticsContract
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -16,10 +15,12 @@ import java.security.MessageDigest
  * 1. the file name ends in `.onnx` and the file is at most 100 MB;
  * 2. it is copied into the app's private storage while its SHA-256 is computed
  *    (the copy stops at the size limit);
- * 3. ONNX Runtime opens it, its input is `[1, 3, 640, 640]` and its first
+ * 3. it keeps no tensor data in other files ([com.flightrisk.app.model.OnnxModelScanner],
+ *    checked before ONNX Runtime opens it), and has at most 50,000 nodes;
+ * 4. ONNX Runtime opens it, its input is `[1, 3, 640, 640]` and its first
  *    output is `[1, 84, N]` or `[1, 300, 6]`;
- * 4. if it names its classes, class 0 is "person";
- * 5. it finds at least one person on the built-in check image, a drawn scene
+ * 5. if it names its classes, class 0 is "person";
+ * 6. it finds at least one person on the built-in check image, a drawn scene
  *    of person-like figures ([CheckScene], drawn in code, no photograph).
  *
  * Only then does it replace any earlier import. On any failure the copy is
@@ -36,7 +37,10 @@ class ByoDetectorImporter(private val context: Context) {
     fun import(uri: Uri): Result {
         val store = ByoDetectorStore(context)
         val folder = store.folder
-        val temp = File(folder, ".import-${System.nanoTime()}.onnx")
+        // A copy left by an import that did not finish (a crash while a hostile model was
+        // being checked, or the app being killed) goes first.
+        store.deleteStaleImports()
+        val temp = store.newTempFile()
         return try {
             val (name, declaredSize) = describe(uri)
             ByoDetectorChecks.checkName(name)
@@ -45,20 +49,32 @@ class ByoDetectorImporter(private val context: Context) {
             if (!folder.isDirectory && !folder.mkdirs()) throw IOException("cannot create the model folder")
             val (size, sha) = copy(uri, temp)
             ByoDetectorChecks.checkSize(size)
+            // Refused before ONNX Runtime opens it: external data could make it read other files.
+            ByoDetectorChecks.checkFileIsSafe(temp)
             val (layout, score) = OnnxModelLoader.fromFile(temp).use { model -> ByoDetectorChecks.checkModel(model) }
             val target = store.modelFile
             target.delete()
             if (!temp.renameTo(target)) throw IOException("cannot move the model into place")
-            val record = ByoDetectorStore.Imported(sha256 = sha, sizeBytes = size, layout = layout)
+            val record = ByoDetectorStore.Imported(
+                sha256 = sha,
+                sizeBytes = size,
+                layout = layout,
+                attestationVersion = ByoDetectorStore.ATTESTATION_VERSION,
+                attestedAtMillis = System.currentTimeMillis(),
+            )
             store.save(record)
             Result.Imported(record, score)
         } catch (e: ByoDetectorChecks.Failure) {
             Result.Failed(e.reason)
         } catch (e: IOException) {
             Result.Failed("The file could not be read or copied.")
+        } catch (e: OutOfMemoryError) {
+            Result.Failed("The model needs more memory than this phone can give it.")
         } catch (e: Exception) {
             // OrtException and IllegalStateException from the runtime: the file is not a usable model.
             Result.Failed("The file is not an ONNX model this app can run.")
+        } catch (e: LinkageError) {
+            Result.Failed("The model runtime did not load.")
         } finally {
             temp.delete()
         }

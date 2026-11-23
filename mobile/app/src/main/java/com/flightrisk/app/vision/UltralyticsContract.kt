@@ -21,6 +21,11 @@ import kotlin.math.round
  *   class` in input pixels, already suppressed.
  *
  * Person is class 0, as in COCO.
+ *
+ * Suppression uses the app's IoU of 0.45 (as for YOLOX-S), not the 0.7 that
+ * Ultralytics' own `predict` uses by default: 0.45 removes more overlapping
+ * boxes, so two people standing close together are more often reported as
+ * one. End-to-end exports are already suppressed by the model.
  */
 class UltralyticsContract(val layout: Layout) : DetectorContract {
 

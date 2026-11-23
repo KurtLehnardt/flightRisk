@@ -37,6 +37,13 @@ object ByoDetectorText {
     const val CHECKING = "Checking the model..."
     const val APPLIES_NEXT_SEARCH = "A change applies from the next search."
 
+    /** On the Search screen when the imported detector could not be opened. */
+    const val SEARCH_FALLBACK = "Your imported detector could not be opened: searching with YOLOX-S."
+
+    /** In Settings after a search could not open the imported detector. */
+    const val SETTINGS_FALLBACK =
+        "The last search could not open the imported detector and used YOLOX-S instead. Turn this off and import it again."
+
     fun imported(sizeBytes: Long, layout: String, sha256: String): String =
         "Imported (%.1f MB, %s output).\nSHA-256: %s".format(
             sizeBytes / 1_000_000.0,

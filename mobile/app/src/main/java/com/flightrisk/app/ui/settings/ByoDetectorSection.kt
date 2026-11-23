@@ -19,6 +19,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,7 +63,14 @@ fun ByoDetectorSection(
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
 
-    var current by remember { mutableStateOf(store.current()) }
+    // The record is read off the main thread.
+    var current by remember { mutableStateOf<ByoDetectorStore.Imported?>(null) }
+    var loadFailed by remember { mutableStateOf(false) }
+    LaunchedEffect(store) {
+        val (imported, failed) = withContext(Dispatchers.IO) { store.current() to store.lastLoadFailed() }
+        current = imported
+        loadFailed = failed && imported != null
+    }
     var showGate by remember { mutableStateOf(false) }
     var attested by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -78,6 +86,7 @@ fun ByoDetectorSection(
             when (result) {
                 is ByoDetectorImporter.Result.Imported -> {
                     current = result.record
+                    loadFailed = false
                     message = null
                 }
                 is ByoDetectorImporter.Result.Failed -> {
@@ -116,6 +125,7 @@ fun ByoDetectorSection(
                         showGate = true
                     } else {
                         current = null
+                        loadFailed = false
                         message = null
                         scope.launch(Dispatchers.IO) { store.turnOff() }
                     }
@@ -128,6 +138,14 @@ fun ByoDetectorSection(
                 text = ByoDetectorText.imported(imported.sizeBytes, imported.layout.name.lowercase(), imported.sha256),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (current != null && loadFailed) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = ByoDetectorText.SETTINGS_FALLBACK,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
             )
         }
         message?.let {

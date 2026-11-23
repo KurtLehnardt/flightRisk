@@ -93,9 +93,24 @@ object Nms {
         return if (union > 0.0) inter / union else 0.0
     }
 
-    /** Runs [keep] separately for each class, as upstream YOLOX does, and returns the kept boxes. */
-    fun perClass(boxes: List<FrameBox>, iouThreshold: Float = DETECTOR_NMS_IOU): List<FrameBox> =
-        boxes.groupBy { it.classId }.values.flatMap { group -> keep(group, iouThreshold).map { group[it] } }
+    /** At most this many candidates (the highest scores) go into suppression, so a hostile or noisy output cannot make it quadratic in 8400 rows. */
+    const val MAX_CANDIDATES = 1000
+
+    /** At most this many detections come out of a frame. */
+    const val MAX_DETECTIONS = 300
+
+    /**
+     * Runs [keep] separately for each class, as upstream YOLOX does, on the
+     * [MAX_CANDIDATES] highest-scoring boxes, and returns at most
+     * [MAX_DETECTIONS] kept boxes, highest score first.
+     */
+    fun perClass(boxes: List<FrameBox>, iouThreshold: Float = DETECTOR_NMS_IOU): List<FrameBox> {
+        val candidates = if (boxes.size > MAX_CANDIDATES) boxes.sortedByDescending { it.score }.take(MAX_CANDIDATES) else boxes
+        return candidates.groupBy { it.classId }.values
+            .flatMap { group -> keep(group, iouThreshold).map { group[it] } }
+            .sortedByDescending { it.score }
+            .take(MAX_DETECTIONS)
+    }
 }
 
 /**

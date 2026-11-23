@@ -60,6 +60,10 @@ import com.flightrisk.app.ui.privacy.PrivacyNoticeScreen
 import com.flightrisk.app.pipeline.SearchPipeline
 import com.flightrisk.app.transport.GroundLink
 import com.flightrisk.app.recording.SessionRecorder
+import com.flightrisk.app.byo.ByoDetectorText
+import com.flightrisk.app.drone.ObstacleAvoidanceText
+import com.flightrisk.app.drone.ObstacleGuard
+import com.flightrisk.app.model.OnnxModelLoader
 import com.flightrisk.app.vision.Detection
 import com.flightrisk.app.vision.DetectorFactory
 import com.flightrisk.app.vision.PersonDetector
@@ -80,6 +84,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Entry point activity for FlightRisk.
@@ -162,12 +167,18 @@ class MainActivity : ComponentActivity() {
     // AI pipeline state
     private var searchPipeline: SearchPipeline? = null
     private var personDetector: PersonDetector? = null
+    /** The [DetectorFactory.wantedKey] the current detector was built for (never logged: it names an imported model). */
+    private var personDetectorKey: String? = null
     private var personReID: PersonReID? = null
     private var alertManager: AlertManager? = null
     private var pipelineEventJob: Job? = null
     private var pipelineSetupJob: Job? = null
     private var llmSelector: LlmSelector? = null
     private var locationProvider: LocationProvider? = null
+    /** Said on the Search screen while the imported detector could not be opened and YOLOX-S is used. */
+    @Volatile
+    private var detectorNotice: String? = null
+
     /** The phone camera's frames for the search pipeline; bound with the preview while a camera search runs. */
     private val cameraFrameSource = CameraXFrameSource()
     private var sessionRepository: SessionRepository? = null
@@ -503,7 +514,13 @@ class MainActivity : ComponentActivity() {
 
         // Camera frames are kept from now on; the Search screen binds the camera's frame
         // analysis together with its preview while the search runs.
-        if (frameSourceMode == FrameSourceMode.CAMERA) cameraFrameSource.start()
+        if (frameSourceMode == FrameSourceMode.CAMERA && !demoActive) {
+            cameraFrameSource.start()
+            // Bound to the Activity for the whole search, so detection goes on on other tabs.
+            @Suppress("DEPRECATION")
+            val rotation = windowManager.defaultDisplay.rotation
+            cameraFrameSource.bind(this, this, rotation)
+        }
 
         // Update UI immediately so button toggles without waiting for model load
         if (frameSourceMode == FrameSourceMode.DRONE) {
@@ -531,16 +548,26 @@ class MainActivity : ComponentActivity() {
 
             // The detector is YOLOX-S, or the detector the user imported in Settings (off by
             // default). A change of that setting applies from the next search.
-            val wantedDetector = DetectorFactory.wantedSource(ctx)
-            if (personDetector != null && personDetector?.source != wantedDetector) {
+            // The detector is rebuilt only when that choice changes; a fallback to YOLOX-S is
+            // kept for the same choice, so YOLOX-S is not reloaded for every search.
+            val wantedDetector = DetectorFactory.wantedKey(ctx)
+            if (personDetectorKey != wantedDetector) {
                 try { personDetector?.close() } catch (e: Exception) {
                     Log.w(TAG, "Error closing PersonDetector", e)
                 }
                 personDetector = null
-            }
-            if (personDetector == null) {
-                personDetector = DetectorFactory.createDetector(ctx, config)
+                val selection = DetectorFactory.createDetector(ctx, config)
+                personDetector = selection.detector
+                personDetectorKey = wantedDetector
+                detectorNotice = if (selection.choice == DetectorFactory.Choice.IMPORTED_FAILED) {
+                    ByoDetectorText.SEARCH_FALLBACK
+                } else {
+                    null
+                }
                 Log.i(TAG, "Person detector: ${personDetector ?: "not loaded (models not installed?)"}")
+            }
+            withContext(Dispatchers.Main) {
+                if (searchState.isSearching) searchState = searchState.copy(detectorNotice = detectorNotice)
             }
 
             if (personReID == null) {
@@ -634,10 +661,6 @@ class MainActivity : ComponentActivity() {
                         } else {
                             null
                         }
-                    }
-
-                    override fun compare(crop: Bitmap): Float {
-                        return reid.compare(crop)
                     }
                 }
             }
@@ -736,6 +759,7 @@ class MainActivity : ComponentActivity() {
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
         cameraFrameSource.stop()
+        cameraFrameSource.unbind()
         droneManager?.stopSearchPattern()
         if (frameSourceMode == FrameSourceMode.DRONE) {
             lifecycleScope.launch { droneManager?.land() }
@@ -867,6 +891,13 @@ class MainActivity : ComponentActivity() {
 
         // Collect drone state immediately so CONNECTING/ERROR states are visible
         droneStateJob = lifecycleScope.launch {
+            launch {
+                // Pattern flights go on without obstacle avoidance; the flight controls say so.
+                val depthModel = withContext(Dispatchers.IO) { OnnxModelLoader.hasAsset(applicationContext, ObstacleGuard.MODEL_FILE) }
+                manager.obstacleAvoidanceOn.collect { on ->
+                    searchState = searchState.copy(obstacleAvoidance = ObstacleAvoidanceText.forDrone(on, depthModel))
+                }
+            }
             manager.droneState.collect { state ->
                 currentDroneState = state
             }
@@ -1050,6 +1081,7 @@ class MainActivity : ComponentActivity() {
             Log.w(TAG, "Error closing PersonDetector", e)
         }
         personDetector = null
+        personDetectorKey = null
         try { personReID?.close() } catch (e: Exception) {
             Log.w(TAG, "Error closing PersonReID", e)
         }

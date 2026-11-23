@@ -1,113 +1,160 @@
 package com.flightrisk.app.camera
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.util.Log
 import android.util.Size
+import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 /**
- * The phone camera as a [FrameSource]: a CameraX [ImageAnalysis] analyzer.
+ * The phone camera as a [FrameSource] for a search.
  *
- * The Search screen binds the use case from [buildImageAnalysis] together
- * with its preview in one `bindToLifecycle` call. CameraX delivers each frame
- * as RGBA_8888 ([ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888]);
- * [ImageProxy.toBitmap] turns it into an ARGB_8888 bitmap, honouring the row
- * stride and padding of the buffer, and the bitmap is rotated upright by
- * [ImageProxy.getImageInfo]'s rotation. The frame keeps the resolution CameraX
- * chose (about 1280 x 720), so the detector letterboxes it and the embedder's
- * crops are cut from it at full resolution.
- *
- * Frames are kept only while the source is started ([start] when a search
- * starts, [stop] when it ends); [takeNewFrame] hands each frame out once.
+ * For the whole search, [bind] binds a [Preview] and an [ImageAnalysis] use
+ * case together, in one `bindToLifecycle` call, to the Activity (not to the
+ * Search screen), so detection keeps running when the person opens another
+ * tab; the Search screen only shows [preview] while it is visible. Both use
+ * cases ask for the same 16:9 aspect ratio, so the preview shows what is
+ * analysed. Frames arrive as RGBA_8888 and [FrameHandOff] converts one
+ * ([ImageProxy.toBitmap], which honours the row stride and padding, then
+ * turned upright by the reported rotation) only when the pipeline asks for it
+ * with [takeNewFrame]; every other frame is closed unconverted.
  */
 class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
 
-    private val lock = ReentrantLock()
-    private var latestFrame: Bitmap? = null
-    private var fresh = false
+    /** What the camera is doing, for the Search screen. */
+    enum class Status { IDLE, STARTING, RUNNING, NO_PERMISSION, UNAVAILABLE }
+
+    private val handOff = FrameHandOff<ImageProxy, Bitmap>()
     private var frameCallback: ((Bitmap) -> Unit)? = null
-
-    @Volatile
-    private var isRunning = false
-
     private val executor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
-    override fun start() {
-        lock.withLock {
-            isRunning = true
-        }
-    }
+    private var provider: ProcessCameraProvider? = null
+    private var boundCases: List<androidx.camera.core.UseCase> = emptyList()
+    private var bindGeneration = 0
 
-    override fun stop() {
-        lock.withLock {
-            isRunning = false
-            latestFrame = null
-            fresh = false
-        }
-    }
+    /** The preview of the running search, for the Search screen to show; null when none is bound. */
+    var preview by mutableStateOf<Preview?>(null)
+        private set
+
+    var status by mutableStateOf(Status.IDLE)
+        private set
+
+    override fun start() = handOff.start()
+
+    override fun stop() = handOff.stop()
 
     /** Stops the source and its analysis thread. It cannot be used again. */
     fun release() {
         stop()
+        unbind()
         executor.shutdown()
     }
 
-    override fun getLatestFrame(): Bitmap? = lock.withLock { latestFrame }
+    override fun getLatestFrame(): Bitmap? = handOff.latest
 
-    /** The latest frame if it has not been taken yet, else null, so each camera frame is processed once. */
-    fun takeNewFrame(): Bitmap? {
-        lock.withLock {
-            if (!fresh) return null
-            fresh = false
-            return latestFrame
-        }
-    }
+    /** The next camera frame, each frame handed out once, or null when none is ready yet. */
+    fun takeNewFrame(): Bitmap? = handOff.take()
 
     override fun setOnFrameCallback(callback: (Bitmap) -> Unit) {
-        lock.withLock {
-            frameCallback = callback
-        }
+        frameCallback = callback
     }
 
-    /** Called by CameraX on the analysis thread for each frame. */
+    /** Called by CameraX on the analysis thread for each frame. Every frame is closed. */
     override fun analyze(image: ImageProxy) {
-        try {
-            if (!isRunning) return
-            val upright = upright(image.toBitmap(), image.imageInfo.rotationDegrees)
-            var callback: ((Bitmap) -> Unit)? = null
-            lock.withLock {
-                // A frame that arrives after stop() is dropped.
-                if (!isRunning) return
-                latestFrame = upright
-                fresh = true
-                callback = frameCallback
-            }
-            callback?.invoke(upright)
-        } catch (e: Exception) {
-            // toBitmap() refuses a format it cannot convert; that frame is skipped.
-            Log.w(TAG, "Camera frame skipped: ${e.javaClass.simpleName}")
-        } finally {
-            image.close()
-        }
+        val frame = handOff.offer(image, close = { it.close() }) { upright(it.toBitmap(), it.imageInfo.rotationDegrees) }
+        if (frame != null) frameCallback?.invoke(frame)
     }
 
     /**
-     * The [ImageAnalysis] use case for this source. [targetRotation] is the
-     * display rotation (`Surface.ROTATION_*`) of the preview, when known, so
-     * that the reported rotation turns frames the way the preview shows them.
+     * Binds the preview and the frame analysis to [owner] (the Activity) for a
+     * search. [displayRotation] is the display's `Surface.ROTATION_*`. Call on
+     * the main thread.
      */
-    fun buildImageAnalysis(targetRotation: Int? = null): ImageAnalysis {
+    fun bind(context: Context, owner: LifecycleOwner, displayRotation: Int) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            status = Status.NO_PERMISSION
+            return
+        }
+        status = Status.STARTING
+        val generation = ++bindGeneration
+        val future = ProcessCameraProvider.getInstance(context)
+        future.addListener({
+            // unbind() (or another bind) came first: do nothing.
+            if (generation != bindGeneration) return@addListener
+            val p = try {
+                future.get()
+            } catch (e: Exception) {
+                Log.e(TAG, "Camera provider unavailable", e)
+                status = Status.UNAVAILABLE
+                return@addListener
+            }
+            provider = p
+            // The back camera is preferred; a device with only a front camera uses that.
+            val selector = listOf(CameraSelector.DEFAULT_BACK_CAMERA, CameraSelector.DEFAULT_FRONT_CAMERA)
+                .firstOrNull { s -> runCatching { p.hasCamera(s) }.getOrDefault(false) }
+            if (selector == null) {
+                status = Status.UNAVAILABLE
+                return@addListener
+            }
+            val previewCase = Preview.Builder()
+                .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ASPECT).build())
+                .setTargetRotation(displayRotation)
+                .build()
+            val analysisCase = buildImageAnalysis(displayRotation)
+            try {
+                p.bindToLifecycle(owner, selector, previewCase, analysisCase)
+                boundCases = listOf(previewCase, analysisCase)
+                preview = previewCase
+                status = Status.RUNNING
+            } catch (e: IllegalArgumentException) {
+                // No camera matches the selector (it can disappear, for example an external one).
+                Log.e(TAG, "Camera bind failed: no matching camera", e)
+                status = Status.UNAVAILABLE
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Camera bind failed: illegal state", e)
+                status = Status.UNAVAILABLE
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Camera bind failed: security exception", e)
+                status = Status.NO_PERMISSION
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    /** Unbinds the search's use cases. Call on the main thread. */
+    fun unbind() {
+        bindGeneration++
+        val cases = boundCases
+        boundCases = emptyList()
+        preview = null
+        status = Status.IDLE
+        try {
+            if (cases.isNotEmpty()) provider?.unbind(*cases.toTypedArray())
+        } catch (e: Exception) {
+            Log.w(TAG, "Camera cleanup failed", e)
+        }
+        cases.filterIsInstance<ImageAnalysis>().forEach { it.clearAnalyzer() }
+    }
+
+    private fun buildImageAnalysis(targetRotation: Int): ImageAnalysis {
         val selector = ResolutionSelector.Builder()
-            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setAspectRatioStrategy(ASPECT)
             .setResolutionStrategy(
                 ResolutionStrategy(
                     Size(ANALYSIS_WIDTH, ANALYSIS_HEIGHT),
@@ -119,7 +166,7 @@ class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setResolutionSelector(selector)
-            .apply { if (targetRotation != null) setTargetRotation(targetRotation) }
+            .setTargetRotation(targetRotation)
             .build()
             .also { it.setAnalyzer(executor, this) }
     }
@@ -128,6 +175,9 @@ class CameraXFrameSource : FrameSource, ImageAnalysis.Analyzer {
         private const val TAG = "CameraXFrameSource"
         const val ANALYSIS_WIDTH = 1280
         const val ANALYSIS_HEIGHT = 720
+
+        /** The preview and the analysis use the same aspect ratio, so the preview shows what is searched. */
+        private val ASPECT = AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
 
         /** [bitmap] turned upright by [rotationDegrees] (clockwise, as CameraX reports it). */
         fun upright(bitmap: Bitmap, rotationDegrees: Int): Bitmap {

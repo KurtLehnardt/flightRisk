@@ -11,7 +11,8 @@ package com.flightrisk.app.vision
  * away exactly the people an aerial search is for. [AERIAL], the default,
  * keeps a person down to about 1% of the frame height and allows wide boxes
  * too, because a person seen from above, or lying down, can be wider than
- * tall.
+ * tall. The values come from the app configuration
+ * (`PhoneVisionConfig`, the `FLIGHTRISK_PHONE_*` preferences; [from]).
  *
  * @property minHeightRatio Smallest box height, as a fraction of the frame height.
  * @property minAreaRatio Smallest box area, as a fraction of the frame area.
@@ -42,6 +43,14 @@ data class DetectionSizeFilter(
     }
 
     companion object {
+        /** The filter [config] describes (its defaults are [AERIAL]). */
+        fun from(config: com.flightrisk.app.config.PhoneVisionConfig) = DetectionSizeFilter(
+            minHeightRatio = config.minBoxHeightRatio,
+            minAreaRatio = config.minBoxAreaRatio,
+            minAspectRatio = config.minBoxAspectRatio,
+            maxAspectRatio = config.maxBoxAspectRatio,
+        )
+
         /**
          * The default: a box at least 1% of the frame height (7 px at 720p)
          * and 0.005% of its area (about 7 x 7 px at 720p), and between 1:10

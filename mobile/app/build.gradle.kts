@@ -373,8 +373,11 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.2")
 
     // ONNX Runtime Mobile. 1.22.0 is the first release in which both
-    // libonnxruntime.so and libonnxruntime4j_jni.so are 16 KB aligned.
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
+    // libonnxruntime.so and libonnxruntime4j_jni.so are 16 KB aligned. 1.32.0 (checked
+    // with mobile/scripts/check-16kb-alignment.sh) replaces 1.23.2, which follows a
+    // model's external-data paths, ../ and absolute ones included; imported models
+    // are refused before ONNX Runtime opens them anyway (OnnxModelScanner).
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.32.0")
 
     // MediaPipe LLM Inference (on-device Gemma / local LLM). 0.10.22 is already
     // 16 KB aligned.
@@ -405,7 +408,7 @@ dependencies {
     testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
     // The desktop ONNX Runtime (same Java API) runs the installed models in the parity
     // tests; it is only added when they are asked for (see "On-device models" above).
-    if (runModelsInUnitTests) testRuntimeOnly("com.microsoft.onnxruntime:onnxruntime:1.23.2")
+    if (runModelsInUnitTests) testRuntimeOnly("com.microsoft.onnxruntime:onnxruntime:1.32.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     // AndroidJUnitRunner (the testInstrumentationRunner above) and the
     // androidx.test.filters size annotations used by PipelineE2ETest. It was

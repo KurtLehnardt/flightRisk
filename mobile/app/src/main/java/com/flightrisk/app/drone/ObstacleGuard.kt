@@ -22,7 +22,8 @@ class ObstacleGuard(
 
     companion object {
         private const val TAG = "ObstacleGuard"
-        private const val MODEL_FILE = "midas_small.onnx"
+        /** The depth model asset. It is not made by scripts/mobile_models/make_models.py, so store builds do not carry it. */
+        const val MODEL_FILE = "midas_small.onnx"
         private const val INPUT_SIZE = 256
         private val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
         private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)

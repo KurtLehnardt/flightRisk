@@ -20,6 +20,7 @@ data class FlightRiskConfig(
     val vision: VisionConfig = VisionConfig(),
     val reasoning: ReasoningConfig = ReasoningConfig(),
     val drone: DroneConfig = DroneConfig(),
+    val phoneVision: PhoneVisionConfig = PhoneVisionConfig(),
 ) {
 
     companion object {
@@ -101,6 +102,26 @@ data class FlightRiskConfig(
                         config.vision.scorerMatchThreshold.toFloat()
                     ).toDouble(),
                 ),
+                phoneVision = PhoneVisionConfig(
+                    minBoxHeightRatio = prefs.getFloat(
+                        "FLIGHTRISK_PHONE_MIN_BOX_HEIGHT_RATIO", config.phoneVision.minBoxHeightRatio,
+                    ),
+                    minBoxAreaRatio = prefs.getFloat(
+                        "FLIGHTRISK_PHONE_MIN_BOX_AREA_RATIO", config.phoneVision.minBoxAreaRatio,
+                    ),
+                    minBoxAspectRatio = prefs.getFloat(
+                        "FLIGHTRISK_PHONE_MIN_BOX_ASPECT", config.phoneVision.minBoxAspectRatio,
+                    ),
+                    maxBoxAspectRatio = prefs.getFloat(
+                        "FLIGHTRISK_PHONE_MAX_BOX_ASPECT", config.phoneVision.maxBoxAspectRatio,
+                    ),
+                    matchMinCropHeightPx = prefs.getInt(
+                        "FLIGHTRISK_PHONE_MATCH_MIN_CROP_HEIGHT", config.phoneVision.matchMinCropHeightPx,
+                    ),
+                    matchMaxPerFrame = prefs.getInt(
+                        "FLIGHTRISK_PHONE_MATCH_MAX_PER_FRAME", config.phoneVision.matchMaxPerFrame,
+                    ),
+                ),
                 reasoning = config.reasoning.copy(
                     model = prefs.getString("FLIGHTRISK_GEMMA_MODEL", null)
                         ?: config.reasoning.model,
@@ -165,6 +186,29 @@ data class VisionConfig(
     val trackerIouThreshold: Double = 0.3,
     val trackerMaxMissing: Int = 15,
     val trackerScoreWindow: Int = 8,
+)
+
+/**
+ * How the phone's own detector and matcher treat small people. These have no
+ * Python counterpart: the ground does its own filtering.
+ *
+ * Detection keeps small people ([minBoxHeightRatio] and the rest: the
+ * aerial defaults of `DetectionSizeFilter.AERIAL`), so they are counted,
+ * tracked and sent to a ground station. Matching needs more pixels: below
+ * about 24 px tall a crop of someone else scores as high against the target
+ * as a crop of the same person, so only crops at least [matchMinCropHeightPx]
+ * tall are compared, and at most [matchMaxPerFrame] of them per frame (the
+ * most confident detections), which also bounds the embedder's work.
+ *
+ * Overrides come from the `FLIGHTRISK_PHONE_*` preferences.
+ */
+data class PhoneVisionConfig(
+    val minBoxHeightRatio: Float = 0.01f,
+    val minBoxAreaRatio: Float = 0.00005f,
+    val minBoxAspectRatio: Float = 0.1f,
+    val maxBoxAspectRatio: Float = 4.0f,
+    val matchMinCropHeightPx: Int = 40,
+    val matchMaxPerFrame: Int = 5,
 )
 
 /**

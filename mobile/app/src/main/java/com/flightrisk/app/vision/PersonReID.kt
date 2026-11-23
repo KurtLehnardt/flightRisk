@@ -19,10 +19,13 @@ import java.io.Closeable
  *
  * @param engine The embedder without Android types.
  * @param matchThreshold Cosine similarity at or above which a crop matches.
+ * @param selection Which detections are compared: tall enough, and the most
+ *   confident few ([MatchSelection]).
  */
 class PersonReID(
     private val engine: EmbedderEngine,
     private val matchThreshold: Float,
+    private val selection: MatchSelection = MatchSelection(minCropHeightPx = 40, maxPerFrame = 5),
 ) : Closeable {
 
     @Volatile
@@ -65,18 +68,20 @@ class PersonReID(
     }
 
     /**
-     * Find the best match among detected persons.
+     * Find the best match among detected persons. Only the detections
+     * [selection] allows are embedded and compared; the others get no score.
      *
      * @return (index, score) of the best match, or (null, best score) if no
-     *   crop reaches the threshold.
+     *   compared crop reaches the threshold.
      */
     fun findMatch(detections: List<Detection>): Pair<Int?, Float> {
         if (targetEmbedding == null || detections.isEmpty()) return Pair(null, 0.0f)
 
         var bestIdx: Int? = null
         var bestScore = 0.0f
-        for ((i, det) in detections.withIndex()) {
-            val score = compare(det.crop)
+        val compared = selection.eligible(detections.map { it.bbox[3] - it.bbox[1] }, detections.map { it.confidence })
+        for (i in compared) {
+            val score = compare(detections[i].crop)
             if (score > bestScore) {
                 bestScore = score
                 bestIdx = i

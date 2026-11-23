@@ -1,14 +1,7 @@
 package com.flightrisk.app.ui.search
 
 import com.flightrisk.app.demo.DemoText
-import android.Manifest
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.util.Log
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -64,8 +57,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -74,7 +65,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
 import com.flightrisk.app.camera.CameraXFrameSource
@@ -92,8 +82,6 @@ import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.HudWhite
 import com.flightrisk.app.ui.theme.MatchGreen
 import kotlinx.coroutines.delay
-
-private const val TAG = "SearchScreen"
 
 // -----------------------------------------------------------------------
 // Search screen state (passed from ViewModel / parent)
@@ -127,6 +115,11 @@ private const val TAG = "SearchScreen"
  * @property hasCamera Whether the device has a camera. The app installs on
  *   devices without one (the camera feature is not required); they can search
  *   with a drone.
+ * @property detectorNotice Said while a search runs when it does not use the
+ *   detector the person chose (an imported detector that could not be opened),
+ *   or null.
+ * @property obstacleAvoidance The obstacle avoidance state shown with the
+ *   flight controls ("Obstacle avoidance: off (no depth model)"), or null.
  */
 data class SearchScreenState(
     val isSearching: Boolean = false,
@@ -152,6 +145,8 @@ data class SearchScreenState(
     val hasCamera: Boolean = true,
     /** Demo mode: the preview shows a drawn scene and the camera is never opened. */
     val demoMode: Boolean = false,
+    val detectorNotice: String? = null,
+    val obstacleAvoidance: String? = null,
 ) {
     /**
      * Whether a search can start from this state. The demo search draws its own scene and
@@ -305,6 +300,19 @@ fun SearchScreen(
             // Ground station link: "Sending detections to <host>" while images of people go out.
             GroundLinkIndicatorBanner()
 
+            // The imported detector failed, so this search uses YOLOX-S: say so, not silently.
+            if (state.isSearching && state.detectorNotice != null) {
+                Text(
+                    text = state.detectorNotice,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .background(Color(0xCC000000), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             if (state.demoMode && state.isSearching) {
                 Text(
                     text = DemoText.SEARCH_NOTE,
@@ -419,6 +427,7 @@ fun SearchScreen(
                 onStartSearch = onStartSearch,
                 onStopSearch = onStopSearch,
                 onEmergencyStop = onEmergencyStop,
+                obstacleAvoidance = state.obstacleAvoidance,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         } else {
@@ -541,29 +550,28 @@ private fun CameraPreviewPlaceholder(
 /**
  * Live camera preview using CameraX [PreviewView] wrapped in [AndroidView].
  *
- * Binds the preview and, when [frameSource] is given, its [ImageAnalysis] use
- * case to the composable's lifecycle owner in one `bindToLifecycle` call, so
- * the search pipeline receives the frames the person sees. Unbinds both on
- * dispose.
+ * The camera is bound by [CameraXFrameSource.bind] for the whole search, to the
+ * Activity, together with the frame analysis that feeds the detector; this only
+ * shows its preview while the Search screen is visible, so leaving the tab does
+ * not stop detection. The preview is fitted, not cropped, so it shows the whole
+ * frame that is searched.
  */
 @Composable
 private fun LiveCameraPreview(frameSource: CameraXFrameSource?, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    // Finding 4: guard against missing camera permission
-    val hasPermission = remember {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
+    val status = frameSource?.status
+    val preview = frameSource?.preview
+    val message = when (status) {
+        CameraXFrameSource.Status.NO_PERMISSION -> stringResource(R.string.camera_permission_required)
+        CameraXFrameSource.Status.UNAVAILABLE -> stringResource(R.string.camera_unavailable)
+        else -> null
     }
-
-    if (!hasPermission) {
+    if (message != null) {
         Box(
             modifier = modifier.background(Color(0xFF121212)),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = stringResource(R.string.camera_permission_required),
+                text = message,
                 color = Color.Gray,
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -573,92 +581,21 @@ private fun LiveCameraPreview(frameSource: CameraXFrameSource?, modifier: Modifi
 
     // Finding 10: PreviewView created in AndroidView factory, not in remember
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
-    var cameraUnavailable by remember { mutableStateOf(false) }
-
-    DisposableEffect(lifecycleOwner, frameSource) {
-        // Finding 1: cache provider reference from callback
-        var cameraProvider: ProcessCameraProvider? = null
-        // Finding 2: track the specific use cases (preview and frame analysis)
-        var preview: Preview? = null
-        var analysis: ImageAnalysis? = null
-        // Finding 3: disposed flag to guard against race conditions
-        var disposed = false
-
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            if (disposed) return@addListener
-            val provider = try {
-                cameraProviderFuture.get()
-            } catch (e: Exception) {
-                // CameraX fails to initialise on a device with no usable camera.
-                Log.e(TAG, "Camera provider unavailable", e)
-                cameraUnavailable = true
-                return@addListener
-            }
-            cameraProvider = provider
-            // The back camera is preferred; a device with only a front camera uses that.
-            val cameraSelector = listOf(CameraSelector.DEFAULT_BACK_CAMERA, CameraSelector.DEFAULT_FRONT_CAMERA)
-                .firstOrNull { selector -> runCatching { provider.hasCamera(selector) }.getOrDefault(false) }
-            if (cameraSelector == null) {
-                Log.w(TAG, "No camera to bind the preview to")
-                cameraUnavailable = true
-                return@addListener
-            }
-            val p = Preview.Builder().build().also { prev ->
-                previewView?.let { pv -> prev.setSurfaceProvider(pv.surfaceProvider) }
-            }
-            preview = p
-            // Frames for the search pipeline, turned the way the preview is shown.
-            val a = frameSource?.buildImageAnalysis(previewView?.display?.rotation)
-            analysis = a
-            try {
-                // Finding 2: bind without unbindAll — only our use cases, together in one call
-                if (a != null) {
-                    provider.bindToLifecycle(lifecycleOwner, cameraSelector, p, a)
-                } else {
-                    provider.bindToLifecycle(lifecycleOwner, cameraSelector, p)
-                }
-            } catch (e: IllegalStateException) {
-                // Finding 6: catch specific exceptions
-                Log.e(TAG, "Camera bind failed: illegal state", e)
-            } catch (e: IllegalArgumentException) {
-                // No camera matches the selector (it can disappear, for example an external one).
-                Log.e(TAG, "Camera bind failed: no matching camera", e)
-                cameraUnavailable = true
-            } catch (e: SecurityException) {
-                Log.e(TAG, "Camera bind failed: security exception", e)
-            }
-        }, ContextCompat.getMainExecutor(context))
-
+    DisposableEffect(preview, previewView) {
+        val pv = previewView
+        if (preview != null && pv != null) preview.setSurfaceProvider(pv.surfaceProvider)
         onDispose {
-            disposed = true
-            try {
-                // Finding 1 & 2: unbind only our use cases, using cached provider
-                listOfNotNull(preview, analysis).forEach { cameraProvider?.unbind(it) }
-                analysis?.clearAnalyzer()
-            } catch (e: Exception) {
-                Log.w(TAG, "Camera cleanup failed", e)
-            }
+            // The camera and the analysis keep running; only this screen's surface goes.
+            preview?.setSurfaceProvider(null)
         }
-    }
-
-    if (cameraUnavailable) {
-        Box(
-            modifier = modifier.background(Color(0xFF121212)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.camera_unavailable),
-                color = Color.Gray,
-                style = MaterialTheme.typography.bodyLarge,
-            )
-        }
-        return
     }
 
     AndroidView(
         factory = { ctx ->
-            PreviewView(ctx).also { pv -> previewView = pv }
+            PreviewView(ctx).also { pv ->
+                pv.scaleType = PreviewView.ScaleType.FIT_CENTER
+                previewView = pv
+            }
         },
         modifier = modifier,
     )

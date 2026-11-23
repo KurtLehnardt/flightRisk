@@ -398,12 +398,6 @@ class SearchPipeline(
          * @return Pair of (best index, similarity score) or null.
          */
         fun findMatch(detections: List<Detection>): Pair<Int, Float>?
-
-        /**
-         * Compare a single crop against the target embedding.
-         * @return Cosine similarity score.
-         */
-        fun compare(crop: Bitmap): Float
     }
 
     /** Set by the vision layer (T05). */
@@ -649,7 +643,8 @@ class SearchPipeline(
 
                 if (matchIdx != null) {
                     val crop = detections[matchIdx].crop
-                    val detReid = reid?.compare(crop) ?: 0f
+                    // findMatch already embedded this crop: its score is reused, not recomputed.
+                    val detReid = reidScore
                     val detFace = 0f
 
                     // Collect extra signal scores from configurable matchers

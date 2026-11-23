@@ -1,6 +1,13 @@
 package com.flightrisk.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import com.flightrisk.app.drone.ObstacleAvoidanceText
+import com.flightrisk.app.drone.ObstacleGuard
+import com.flightrisk.app.model.OnnxModelLoader
 import com.flightrisk.app.ui.demo.DemoModeSection
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -824,6 +831,21 @@ private fun DroneSection(
                 contentDescription = "Video source: ${if (frameSourceMode == FrameSourceMode.DRONE) "Tello Drone" else "Phone Camera"}"
             },
         )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Store builds carry no depth model, so pattern flights do not avoid obstacles: say so.
+        val appContext = LocalContext.current.applicationContext
+        val depthModelInstalled by produceState<Boolean?>(initialValue = null) {
+            value = withContext(Dispatchers.IO) { OnnxModelLoader.hasAsset(appContext, ObstacleGuard.MODEL_FILE) }
+        }
+        depthModelInstalled?.let { installed ->
+            Text(
+                text = ObstacleAvoidanceText.forSettings(installed),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (installed) MaterialTheme.colorScheme.onSurfaceVariant else AlertOrange,
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 

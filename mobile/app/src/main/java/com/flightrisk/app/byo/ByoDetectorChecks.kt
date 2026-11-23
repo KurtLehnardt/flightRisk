@@ -1,11 +1,13 @@
 package com.flightrisk.app.byo
 
+import com.flightrisk.app.model.OnnxModelScanner
 import com.flightrisk.app.vision.COCO_PERSON
 import com.flightrisk.app.vision.DetectionSizeFilter
 import com.flightrisk.app.vision.DetectorEngine
 import com.flightrisk.app.vision.FrameBox
 import com.flightrisk.app.vision.OnnxFloatModel
 import com.flightrisk.app.vision.UltralyticsContract
+import java.io.File
 
 /**
  * The checks a detector the user imports must pass before the app uses it
@@ -83,6 +85,20 @@ object ByoDetectorChecks {
     fun checkPersonFound(persons: List<FrameBox>): FrameBox =
         persons.filter { it.classId == COCO_PERSON && it.score >= CHECK_SCORE }.maxByOrNull { it.score }
             ?: throw Failure("The model found no person on the built-in check image, so it cannot be used.")
+
+    /**
+     * Fails when [file] is not a well-formed ONNX model, keeps tensor data in
+     * other files (external data, which ONNX Runtime would read from wherever
+     * the model points), or is too large a graph. Run it before ONNX Runtime
+     * opens the file.
+     */
+    fun checkFileIsSafe(file: File) {
+        try {
+            OnnxModelScanner.scan(file)
+        } catch (e: OnnxModelScanner.UnsafeModel) {
+            throw Failure(e.message ?: "The model is not safe to open.")
+        }
+    }
 
     /**
      * Runs every check on an opened model: its input and output shapes, its
