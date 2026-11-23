@@ -18,7 +18,7 @@ import time
 import weakref
 from collections import deque
 from itertools import pairwise
-from typing import Callable, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import djitellopy.tello as _djitello
 import numpy as np
@@ -35,6 +35,7 @@ from flightrisk.drone.controller import (
     DroneController,
     DroneLinkStatus,
     DroneState,
+    FrameFreshness,
     SettledHeight,
 )
 from flightrisk.drone.snapshot import (
@@ -649,6 +650,14 @@ class TelloController:
         self._stream_recovering = False
         self._frozen_count: int = 0
         self._last_frame_hash: int = 0
+        # When get_frame last saw a newly decoded frame (``frame_freshness``):
+        # the decoder hands out a new array for every frame, so a new array
+        # is a new frame. The first array seen from a reader may be its black
+        # placeholder, so it does not count.
+        self._frame_track_lock = threading.Lock()
+        self._tracked_reader: Any = None
+        self._newest_frame: Any = None
+        self._newest_frame_at: float | None = None
         # Held only for the instant a flight command is checked and written
         # to the socket, and while land() marks a landing as started. It
         # orders the two: a flight command is either on the wire before the
@@ -1068,6 +1077,7 @@ class TelloController:
                     return None
 
                 self._last_frame_time = time.time()
+                self._track_frame(frame_read, frame)
                 # No copy: the decoder makes a new array for every frame and never writes to one it
                 # handed out, and every consumer that keeps a frame converts it (``EdgeFrames``).
                 for cb in self._frame_callbacks:
@@ -1081,6 +1091,50 @@ class TelloController:
         except Exception as e:
             _log_failure(self.name, "tello_get_frame_failed", e)
             return None
+
+    def _track_frame(self, frame_read: Any, frame: Any) -> None:
+        """Note when ``get_frame`` sees a newly decoded frame (a new array) from *frame_read*."""
+        with self._frame_track_lock:
+            if frame_read is not self._tracked_reader:
+                # A new reader: its first array may be the black placeholder.
+                self._tracked_reader = frame_read
+                self._newest_frame = frame
+                self._newest_frame_at = None
+                return
+            if frame is not self._newest_frame:
+                self._newest_frame = frame
+                self._newest_frame_at = time.monotonic()
+
+    def frame_freshness(self) -> FrameFreshness:
+        """How current the newest decoded video frame is. Sends nothing and starts no stream.
+
+        With a bound reader (``--tello-local-ip``) it is the reader's own
+        capture stamp: the age of the newest frame since its first datagram
+        arrived, and its ``stale_cause`` (decoder backlog, dropped video
+        data, a corrupt frame, or no key frame yet). Not decoded until the
+        reader has decoded a frame; until then ``frame`` is its black
+        placeholder. With djitellopy's reader, which stamps nothing, it is
+        the time since ``get_frame`` last saw a new frame, counted only once
+        a second frame has been seen from that reader, because the first
+        may be its placeholder. Not decoded while the controller is not
+        connected or no reader has been started.
+        """
+        if not self.state.is_connected:
+            return FrameFreshness(decoded=False)
+        reader = getattr(self.tello, "background_frame_read", None)
+        if reader is None:
+            return FrameFreshness(decoded=False)
+        newest = getattr(reader, "newest_stamp", None)
+        if callable(newest):
+            found = newest()
+            if found is None:
+                return FrameFreshness(decoded=False)
+            age, stamp = found
+            return FrameFreshness(decoded=True, age_s=age, stale_cause=stamp.stale_cause)
+        with self._frame_track_lock:
+            if reader is not self._tracked_reader or self._newest_frame_at is None:
+                return FrameFreshness(decoded=False)
+            return FrameFreshness(decoded=True, age_s=max(0.0, time.monotonic() - self._newest_frame_at))
 
     def _recover_stream(self):
         """Restart the video stream after it goes stale.

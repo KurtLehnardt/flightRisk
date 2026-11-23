@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'land_all_ack' event: the answer to land_all, with how many drones each path reached.",
     "file": "land_all_ack.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.dashboard.app._land_all",

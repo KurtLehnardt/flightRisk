@@ -49,8 +49,8 @@ REQUIRED_CASES = {
     },
     "fleet_event.json": {
         "plan_refused_unconnected", "plan_refused_manual_control", "plan_invalidated", "start", "start_refused",
-        "start_refused_drone_unreachable", "drone_lost", "retask", "retask_failed", "land_all", "land_all_failed",
-        "profile_switch_pending",
+        "start_refused_drone_unreachable", "drone_lost", "retask", "retask_failed", "retask_needs_confirmation",
+        "land_all", "land_all_failed", "profile_switch_pending",
     },
     "fleet_plan.json": {"two_drones", "map_plan_lost_zone_uncovered"},
     "fleet_detection.json": {"new_detection"},

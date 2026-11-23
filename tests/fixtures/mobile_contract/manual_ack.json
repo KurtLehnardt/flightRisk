@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'manual_ack' event: the immediate answer to drone_command (fleet mode) and manual_resume_search. ok false is also sent as an 'error' event.",
     "file": "manual_ack.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "ManualControl.command",
