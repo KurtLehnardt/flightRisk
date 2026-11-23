@@ -60,7 +60,7 @@ def test_room_profile_is_the_tello_envelope_unchanged():
     assert limits_for("room") is ROOM_LIMITS and limits_for(None) is ROOM_LIMITS and limits_for("moon") is ROOM_LIMITS
     assert limits_for("field") is FIELD_LIMITS
     assert envelope.check_move("forward", 500) and not envelope.check_move("forward", 501)
-    with pytest.raises(ValueError, match="altitude slot must be within 20-500 cm"):
+    with pytest.raises(ValueError, match="altitude slot must be within 50-500 cm"):
         SafetyEnvelope(alt_slot_cm=600)
     with pytest.raises(ValueError, match="ceiling height must be within 150-1000 cm"):
         validate_ceiling(1200, 60)

@@ -61,7 +61,7 @@ Everything on the wire stays in centimetres, so the protocol, plans and telemetr
 | Limit | `room` (Tello, unchanged) | `field` (PX4, ArduPilot) |
 |---|---|---|
 | Single move | 20 to 500 cm | 20 to 5000 cm |
-| Altitude slot | 20 to 500 cm, default 100 | 10 to 120 m, default 15 m |
+| Altitude slot | 50 to 500 cm, default 100 | 10 to 120 m, default 15 m |
 | Ceiling | 150 to 1000 cm, default 200 | 10 to 120 m, default 30 m |
 | Ceiling margin | at least 30 cm, default 60 | at least 3 m, default 5 m |
 | Geofence half-width | default 500 cm | default 30 m, at most 500 m |
