@@ -32,6 +32,7 @@ from flightrisk.dashboard.state import (
     GEMMA_RATE_LIMIT,
     match_history_lock,
 )
+from flightrisk.vision.resize import downscale_long_edge
 
 # Match screenshots directory
 # The directory is created lazily when a snapshot is actually written, never at
@@ -231,14 +232,7 @@ def decode_edge_crop(crop_jpeg):
     if long_edge > MAX_CROP_EDGE_PX:
         # Defence in depth: the header scan disagreed with the decoder.
         return None
-    if long_edge > REASONING_CROP_EDGE_PX:
-        scale = REASONING_CROP_EDGE_PX / long_edge
-        crop = cv2.resize(
-            crop,
-            (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale))),
-            interpolation=cv2.INTER_AREA,
-        )
-    return crop
+    return downscale_long_edge(crop, REASONING_CROP_EDGE_PX)
 
 
 _reference_cache: dict = {"key": None, "img": None}

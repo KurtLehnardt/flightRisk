@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Engine.IO v4 / Socket.IO v5 text frames as the dashboard's libraries encode them. Phones open ws://HOST:PORT/socket.io/?EIO=4&transport=websocket directly (no long-polling) and send no Origin header.",
     "file": "socketio_frames.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "library_versions": {
       "flask-socketio": "5.6.1",
       "python-engineio": "4.13.3",

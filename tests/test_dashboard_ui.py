@@ -56,6 +56,9 @@ EMITTED = {
     "save_plan",
     # The operator's confirmation that a person cut may be re-flown (docs/obstacle-sensing.md).
     "confirm_reflight",
+    # The operator's confirmation that the lanes of a drone landed with no controller may be re-tasked
+    # (docs/manual-takeover.md).
+    "confirm_retask",
 }
 LISTENED = {
     "battery_critical", "battery_warning", "confidence_progress", "connect", "description_set",
@@ -67,8 +70,8 @@ LISTENED = {
     "stream_video_state", "target_photo", "target_set", "threshold_updated",
     # The search plan editor.
     "map_cache_status", "map_config", "plan_list", "plan_loaded", "plan_preview", "plan_saved",
-    # The answer to confirm_reflight.
-    "reflight_confirm_result",
+    # The answers to confirm_reflight and confirm_retask.
+    "reflight_confirm_result", "retask_confirm_result",
     # The reasoning verdict landing on an open alert (keyed by alert_id).
     "reasoning_result", "alert_upgrade",
 }

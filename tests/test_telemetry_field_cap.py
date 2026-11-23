@@ -13,7 +13,7 @@ import pytest
 
 from flightrisk import edge_device
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.obstacle_sensor import TELEMETRY_PERSON_CUE
+from flightrisk.drone.obstacle_sensor import TELEMETRY_AVOID, TELEMETRY_PERSON_CUE
 from tests.test_obstacle_h6_fixes import LinkedFakeTello, _CueSensor, _executor
 
 _CUE = {"person_cue_down": True, "person_detection_age_s": 3.2}
@@ -45,6 +45,8 @@ def _wire(drone_cls, *, cue=True, v2=True, profile_fields=True):
     ex = _executor(_CueSensor(_CUE if cue else {"sensor": "fake"}), drone=drone_cls(name="drone-1"))
     ex._v2_telemetry = v2
     ex._obstacle_state, ex._obstacle_latency_ms = "clear", 210.0
+    # Every optional group the edge can add, so the count is a real worst case.
+    ex._avoid_status = lambda: {"phase": "sidestep", "sidestep_cm": 60, "offsets": [0, 1, 2], "held_reason": "x"}
     sent = []
     edge_device._with_profile_status(sent.append, _runner(profile_fields))(ex.telemetry())
     return sent[0]
@@ -63,7 +65,7 @@ def test_mavlink_telemetry_with_gps_and_the_person_cue_is_a_valid_fleet_message(
 
 def test_the_full_wire_message_of_a_mavlink_edge_is_valid():
     msg = _wire(_GpsTello)
-    assert {"lat", "lon", TELEMETRY_PERSON_CUE, "detector_ok", "camera_ok", "detection_profile"} <= set(msg)
+    assert {"lat", "lon", TELEMETRY_PERSON_CUE, "detector_ok", "camera_ok", "detection_profile", TELEMETRY_AVOID} <= set(msg)
     assert msg["detection_profile"]["requested"] == "accurate"
     assert fp.validate_message(fp.shape_for_peer(msg, 2), proto=2) == "telemetry"
 

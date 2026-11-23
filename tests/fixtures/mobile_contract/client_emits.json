@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The Socket.IO events a phone may emit (allowed true, with an example payload) and the ones it must never emit (allowed false). Every listed event has a handler on the dashboard; the table itself is the contract and has no builder.",
     "file": "client_emits.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.dashboard.app.socketio handlers",
@@ -20,6 +20,20 @@
         "command": "land",
         "drone_id": "drone-1"
       }
+    },
+    "forbidden_confirm_reflight": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "confirm_reflight",
+      "notes": "the operator confirms on the laptop that a cut segment may be flown again",
+      "payload": null
+    },
+    "forbidden_confirm_retask": {
+      "allowed": false,
+      "direction": "client_to_server",
+      "event": "confirm_retask",
+      "notes": "the operator confirms on the laptop that a landed drone's lanes may be offered to another drone",
+      "payload": null
     },
     "forbidden_deregister_drone": {
       "allowed": false,

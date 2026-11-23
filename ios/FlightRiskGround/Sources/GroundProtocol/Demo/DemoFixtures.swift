@@ -58,7 +58,7 @@ enum DemoFixtures {
 
     static let reasoningProvider = Template(
         file: "reasoning_provider", caseName: "local_gemma_cloud_blocked", event: "reasoning_provider", droppedKeys: [],
-        json: #"{"available":["gemma","off"],"cloud_allowed":false,"label":"Gemma","model":"gemma4:latest","provider":"gemma","unavailable":{"claude":"Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic; set FLIGHTRISK_ALLOW_CLOUD_LLM=1 to opt in."}}"#
+        json: #"{"available":["gemma","off"],"cloud_allowed":false,"health":null,"label":"Gemma","model":"gemma4:latest","provider":"gemma","unavailable":{"claude":"Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic; set FLIGHTRISK_ALLOW_CLOUD_LLM=1 to opt in."}}"#
     )
 
     static let streamVideoOff = Template(

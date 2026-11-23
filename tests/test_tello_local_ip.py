@@ -422,7 +422,7 @@ def _assert_wildcard_cannot_take_delivery(port: int, targets: list[tuple[str, Te
         for index, (ip, ctrl) in enumerate(targets):
             probe = f"probe-{index}".encode()
             sender.sendto(probe, (ip, port))
-            assert _wait_for(lambda: probe in ctrl.tello.get_own_udp_object()["responses"]), (
+            assert _wait_for(lambda ctrl=ctrl, probe=probe: probe in ctrl.tello.get_own_udp_object()["responses"]), (
                 f"the socket bound to {ip}:{port} did not receive its datagram"
             )
         with pytest.raises(socket.timeout):
