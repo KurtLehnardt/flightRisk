@@ -31,7 +31,8 @@ cue), ``lane_flight._prepare_step`` holds the cut back and calls
    cue lets the sidestep go ahead, anything else refuses it. At most ``obstacle_sidesteps`` attempts per
    lane (``FLIGHTRISK_OBSTACLE_SIDESTEPS``, 2 on the edge; a re-task that
    continues the plan keeps the count), each ``obstacle_sidestep_cm``
-   sideways (``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``, 50 on the edge). The side
+   sideways (``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``; 0, the edge default,
+   switches the sidestep off). The side
    the depth guard calls clearer is tried first, else the side with more
    room. A side is tried only when the point beside the drone and the end of
    the next lane step beside the lane both lie inside the geofence and inside

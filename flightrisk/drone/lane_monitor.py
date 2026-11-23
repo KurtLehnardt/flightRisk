@@ -51,6 +51,7 @@ from typing import Any
 from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_FIELDS as OBSTACLE_TELEMETRY_FIELDS,
 )
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP
 
 __all__ = ["MonitorMixin"]
 
@@ -371,12 +372,30 @@ class MonitorMixin:
                 drone_link_detail=None if link.ok else (link.detail or "drone unreachable"),
             )
         msg.update(self._obstacle_telemetry())
+        msg.update(self._temp_telemetry())
         refusals = getattr(self, "refusal_status", None)
         if callable(refusals):
             # Optional: moves the drone refused (``flight_guards``); absent
             # until the first one.
             msg.update(refusals())
         return msg
+
+    def _temp_telemetry(self) -> dict[str, Any]:
+        """The optional ``temp_preflight`` field: the last takeoff temperature check and the live reading, or nothing.
+
+        ``LaneExecutor.temp_status()`` provides it; nothing for a drone that
+        is never checked (no ``state_temperature``) and has no recorded
+        check, or when the accessor is missing or fails.
+        """
+        accessor = getattr(self, "temp_status", None)
+        if not callable(accessor):
+            return {}
+        try:
+            status = accessor()
+        except Exception as exc:
+            self._log.warning("edge_temp_status_failed", drone_id=self.drone_id, error=str(exc))
+            return {}
+        return {TELEMETRY_TEMP: status[TELEMETRY_TEMP]} if status and TELEMETRY_TEMP in status else {}
 
     def _obstacle_telemetry(self) -> dict[str, Any]:
         """The optional obstacle fields (design section 6), or nothing.

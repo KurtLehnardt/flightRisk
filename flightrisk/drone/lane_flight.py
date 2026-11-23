@@ -581,21 +581,30 @@ class FlightSequenceMixin:
         budget (``OBSTACLE_SENSE_TIMEOUT_S`` plus the frame wait).
 
         The reasons are drone_unreachable, battery, link_loss, aborted and
-        not_executed. A drone that reports a settled height (the Tello) whose
-        takeoff was answered later than ``FlightGuards.takeoff_late_s`` after
-        it was sent is landed (``takeoff_late``) and the takeoff ends as
-        aborted: it never moves to its slot. The drone link is checked first,
-        immediately before the takeoff is claimed and sent: a drone the
+        not_executed. A Tello's temperature is checked first, from its
+        newest fresh state packet with nothing sent: one at or above the
+        refusal level is refused (``drone_unreachable`` with the operator
+        text; ``_takeoff_temp_refusal``), and a reading that could not be
+        taken only warns. The checks that follow stay last, immediately
+        before the takeoff is claimed and sent. The drone link: a drone the
         controller cannot reach (see ``LaneExecutor._drone_link``) is refused
-        with nothing sent and nothing changed, so there is no landing to retry
-        afterwards. So is a
-        drone whose required obstacle sensor could not be built
-        (``drone_unreachable`` with the sensor detail), except for the
-        operator's ``manual_takeoff``: manual steps are never sensed. With a
-        sensor, an autonomous takeoff is also refused (``drone_unreachable``,
-        detail ``TAKEOFF_SENSE_DETAIL ...``) unless one probe look right
-        before it sees a fresh, valid view (``_takeoff_sense_refusal``).
+        with nothing sent and nothing changed, so there is no landing to
+        retry afterwards. So is a drone whose required obstacle sensor could
+        not be built (``drone_unreachable`` with the sensor detail), except
+        for the operator's ``manual_takeoff``: manual steps are never sensed.
+        With a sensor, an autonomous takeoff is also refused
+        (``drone_unreachable``, detail ``TAKEOFF_SENSE_DETAIL ...``) unless
+        one probe look right before it sees a fresh, valid view
+        (``_takeoff_sense_refusal``). Then the battery. A drone that reports
+        a settled height (the Tello) whose takeoff was answered later than
+        ``FlightGuards.takeoff_late_s`` after it was sent is landed
+        (``takeoff_late``) and the takeoff ends as aborted: it never moves to
+        its slot.
         """
+        too_hot = self._takeoff_temp_refusal()
+        if too_hot is not None:
+            self._unreachable_detail = too_hot
+            return "drone_unreachable"
         link = self._drone_link()
         if link is not None and not link.ok:
             self._unreachable_detail = link.detail or "drone unreachable"

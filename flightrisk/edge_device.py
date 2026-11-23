@@ -213,6 +213,13 @@ from flightrisk.drone.safety import (
     MIN_TAKEOFF_BATTERY_ENV,
     SafetyEnvelope,
 )
+from flightrisk.drone.temp_preflight import (
+    DEFAULT_TEMP_REFUSE_C,
+    DEFAULT_TEMP_WARN_C,
+    ENV_TELLO_TEMP_REFUSE_C,
+    ENV_TELLO_TEMP_WARN_C,
+    TempLimits,
+)
 from flightrisk.edge import EdgeRunner
 from flightrisk.edge_uplink import (
     ENV_FLEET_LEGACY,
@@ -2416,6 +2423,33 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
         ) from exc
 
 
+def _temp_limits(log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None) -> TempLimits:
+    """The takeoff temperature check's levels (``FLIGHTRISK_TELLO_TEMP_WARN_C``, ``..._REFUSE_C``).
+
+    Read and validated at every flying edge's start, whatever the drone kind (only a Tello's
+    temperature is checked), like the obstacle settings: a malformed value, or a refusal level
+    below the warn level, refuses to start with the reason. A level that differs from its
+    default is logged once as ``edge_temp_setting_non_default``.
+    """
+    env = os.environ if environ is None else environ
+    try:
+        limits = TempLimits.from_env(env)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: {exc}. Refusing to start (docs/fleet-setup.md, \"Takeoff temperature check\").") from None
+    if log is not None:
+        for name, value, default in (
+            (ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
+            (ENV_TELLO_TEMP_REFUSE_C, limits.refuse_c, DEFAULT_TEMP_REFUSE_C),
+        ):
+            if value != default:
+                log.warning(
+                    "edge_temp_setting_non_default", drone_id=drone_id, variable=name,
+                    value="off" if value is None else value, default=default,
+                    detail=f"{name}={'off' if value is None else value!r} is not the default ({default!r})",
+                )
+    return limits
+
+
 def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
     """The flying edge's safety envelope from ``--alt-slot`` and the environment.
 
@@ -2448,6 +2482,7 @@ def _run_flight_edge(
     """
     if envelope is None:
         envelope = _startup_envelope(args)
+    temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
     guards = _flight_guards(os.environ)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
@@ -2477,7 +2512,7 @@ def _run_flight_edge(
     transport = _build_transport(args, runner, token)
     flight = LaneExecutor(
         drone, envelope, args.drone_id, send=_with_profile_status(_make_sender(transport, log), runner), logger=log,
-        flight_guards=guards, **obstacle.executor_kwargs(),
+        temp_limits=temp_limits, flight_guards=guards, **obstacle.executor_kwargs(),
     )
     _warn_flight_guards(guards, log, args.drone_id)
     bind_executor = getattr(transport, "bind_executor", None)

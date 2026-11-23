@@ -50,6 +50,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
 )
 from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
+from flightrisk.drone.temp_preflight import TempSample, reading_from
 from flightrisk.drone.snapshot import reading as _reading
 from flightrisk.obs_log import Throttle, log_event, notice
 
@@ -321,12 +322,17 @@ _EXTENDED_FIELDS: tuple[tuple[str, str, float, str, str], ...] = (
 
 
 class _StateReading(NamedTuple):
-    """One Tello state packet as landing reads it. A field the packet lacks, or that is not a number, is None."""
+    """One Tello state packet as landing and the takeoff temperature check read it.
+
+    A field the packet lacks, or that is not a number, is None.
+    """
 
     at: float  # time.monotonic() on arrival
     height: int | None  # ``h``: cm above (or, negative, below) the takeoff point
     tof: int | None  # ``tof``: downward time-of-flight distance in cm
     motor_s: int | None  # ``time``: whole seconds the motors have run
+    templ: int | None = None  # ``templ``: lowest temperature, degrees Celsius
+    temph: int | None = None  # ``temph``: highest temperature, degrees Celsius
     vgx: int | None = None  # ``vgx``: speed along x (only logged with a settled height)
     vgy: int | None = None  # ``vgy``: speed along y
 
@@ -804,10 +810,11 @@ class TelloController:
             )
 
     def _note_state_packet(self, state: object) -> None:
-        """Record when a state packet arrived and the fields landing reads from it."""
+        """Record when a state packet arrived and the fields landing and the temperature check read from it."""
         if isinstance(state, dict):
             reading = _StateReading(
                 time.monotonic(), _state_int(state, "h"), _state_int(state, "tof"), _state_int(state, "time"),
+                _state_int(state, "templ"), _state_int(state, "temph"),
                 _state_int(state, "vgx"), _state_int(state, "vgy"),
             )
         else:
@@ -2383,6 +2390,44 @@ class TelloController:
             return None
         self._set_measured("height", height)
         return height
+
+    def state_temperature(self) -> TempSample:
+        """The ``templ`` and ``temph`` of the newest state packet, if it is fresh. Sends nothing.
+
+        The takeoff temperature check (``flightrisk.drone.temp_preflight``) and the edge's telemetry
+        read the drone's temperature here. The Tello SDK 1.3, 2.0 and 3.0 document ``templ`` and
+        ``temph``, the lowest and highest temperature in degrees Celsius, in the state packet the
+        drone sends about ten times a second. The newest packet that carries both fields counts, and
+        only while it is at most ``_STATE_FRESH_S`` old: older state is no reading, so a temperature
+        from before a Wi-Fi gap is never judged as current. No packet, no fresh one, no fresh one
+        with both fields, and values outside ``temp_preflight.TEMP_READING_RANGE_C`` give no reading
+        and say why.
+
+        Nothing is ever sent on the command channel for this. Tello replies carry no command id, so
+        the reply to a ``temp?`` sent before a takeoff could be read as the takeoff's answer: a late
+        ``88~90C`` fails a takeoff that has already lifted the drone. Never raises.
+        """
+        if not self._state_arrivals:
+            return TempSample(None, "state packet arrivals are not recorded")
+        with self._state_lock:
+            readings = list(self._state_readings)
+        if not readings:
+            return TempSample(None, "no state packet yet")
+        now = time.monotonic()
+        age = now - readings[-1].at
+        if age > _STATE_FRESH_S:
+            return TempSample(None, f"no fresh state packet (newest {age:.1f} s old)")
+        packet = next(
+            (r for r in reversed(readings)
+             if now - r.at <= _STATE_FRESH_S and r.templ is not None and r.temph is not None),
+            None,
+        )
+        if packet is None:
+            return TempSample(None, "the state packet has no templ/temph")
+        reading = reading_from(packet.templ, packet.temph)
+        if reading is None:
+            return TempSample(None, f"templ/temph out of range ({packet.templ}, {packet.temph})")
+        return TempSample(reading)
 
     def _set_measured(self, field: str, value) -> None:
         """Store a value read from the drone in ``state.<field>`` and stamp when it was read.

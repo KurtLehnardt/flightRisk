@@ -267,6 +267,62 @@ const socket = io();
     }
     // END obstacle-display
 
+    // BEGIN temp-display
+    // A drone's temperature (temp_preflight): the live reading of its newest fresh state packet (templ and temph), and
+    // the check its edge made before the drone's last takeoff, both judged against the warn and refusal levels. Else the
+    // plain temperature a local drone reports. These helpers only choose text and classes, and cope with any field
+    // being absent.
+    function tempRange(low, high) {
+        if (typeof high !== 'number') return null;
+        return (typeof low === 'number' && low !== high ? low + '-' : '') + high + ' C';
+    }
+    function tempLevelClass(t, high) {
+        if (typeof high !== 'number') return '';
+        if (typeof t.refuse_c === 'number' && high >= t.refuse_c) return 'bad';
+        if (typeof t.warn_c === 'number' && high >= t.warn_c) return 'warn';
+        return '';
+    }
+    // The Temp item of a drone card's meta row: the live reading, or null.
+    function tempMeta(d) {
+        const t = d && d.temp_preflight;
+        if (t && typeof t === 'object') {
+            return { text: tempRange(t.live_low_c, t.live_high_c) || '--', cls: tempLevelClass(t, t.live_high_c) };
+        }
+        if (d && d.temperature) return { text: d.temperature + ' C', cls: '' };
+        return null;
+    }
+    // The "Temp at takeoff" item: the reading of the check before the last takeoff, or null before the first check.
+    function tempTakeoffMeta(d) {
+        const t = d && d.temp_preflight;
+        if (!t || typeof t !== 'object' || !t.level) return null;
+        const cls = t.level === 'refuse' ? 'bad' : t.level === 'warn' ? 'warn' : '';
+        return { text: tempRange(t.low_c, t.high_c) || '--', cls: cls };
+    }
+    // The badge for a hot drone, a refused takeoff or a temperature that could not be read at the last takeoff; null
+    // when all was well or before the first check.
+    function tempBadge(d) {
+        const t = d && d.temp_preflight;
+        if (!t || typeof t !== 'object') return null;
+        const range = tempRange(t.low_c, t.high_c) || '--';
+        if (t.level === 'refuse') {
+            return { text: 'TOO HOT ' + range + ': takeoff refused', cls: 'held',
+                title: 'At or above the refusal level of ' + t.refuse_c + ' C at the last takeoff. Let it cool with the battery out or on a fan, then start again.' };
+        }
+        if (t.level === 'warn') {
+            return { text: 'HOT ' + range, cls: 'held',
+                title: 'At or above the warn level of ' + t.warn_c + ' C at the last takeoff'
+                    + (typeof t.refuse_c === 'number' ? '; a takeoff is refused at ' + t.refuse_c + ' C' : '; the refusal is off')
+                    + '. A Tello that sits powered on keeps heating and can switch itself off: take off soon or let it cool.' };
+        }
+        if (t.level === 'unknown') {
+            return { text: 'TEMP unknown', cls: 'held',
+                title: 'The temperature could not be read before the last takeoff' + (t.detail ? ' (' + t.detail + ')' : '')
+                    + '; that never holds a takeoff back.' };
+        }
+        return null;
+    }
+    // END temp-display
+
     function renderDroneStatus() {
         const box = $('drone-status');
         clear(box);
@@ -293,11 +349,14 @@ const socket = io();
             const alt = d.height_cm !== undefined ? d.height_cm : d.height;
             meta.appendChild(metaItem('Alt', alt === undefined || alt === null ? '--' : fmt(alt) + ' cm'));
             if (typeof d.lane_index === 'number' && typeof d.lanes_total === 'number') meta.appendChild(metaItem('Lane', d.lane_index + '/' + d.lanes_total));
-            if (d.temperature) meta.appendChild(metaItem('Temp', d.temperature + ' C'));
+            const temp = tempMeta(d);
+            if (temp) meta.appendChild(metaItem('Temp', temp.text, temp.cls));
+            const atTakeoff = tempTakeoffMeta(d);
+            if (atTakeoff) meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), refusalBadge(d), hoverTestBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d), refusalBadge(d), hoverTestBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;
@@ -1555,6 +1614,9 @@ const socket = io();
 
     // ========== FLEET EVENTS, UNCOVERED LANES ==========
     let bannerTimer = null;
+    // Until when a LAND ALL failure (or a LAND ALL that reached only some drones) is held on screen.
+    let landAllBannerUntil = 0;
+    function landAllBannerHeld() { return Date.now() < landAllBannerUntil; }
     function showFleetBanner(text, holdMs) {
         const b = $('fleet-banner');
         b.textContent = text;
@@ -1663,8 +1725,10 @@ const socket = io();
     // Confirmations are asked inline, in two clicks on the same button, never with window.confirm: a modal dialog would
     // block the page, and with it the LAND ALL button and the Shift+L hotkey, while drones fly. The first click arms
     // the button and shows what confirming means; a second click within CONFIRM_ARM_MS sends it. Armed buttons are
-    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed.
+    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed. A click less than
+    // CONFIRM_REPEAT_MS after the arming one is ignored: a double click arms the button, it never confirms.
     const CONFIRM_ARM_MS = 8000;
+    const CONFIRM_REPEAT_MS = 500;
     const armedConfirms = {};  // key -> time (ms) the arming runs out
     function twoStepConfirmButton(key, cls, label, armedLabel, warning, send) {
         const button = el('button', 'btn ' + cls, label);
@@ -1686,6 +1750,8 @@ const socket = io();
                 setTimeout(() => { if (button.isConnected) show(); }, CONFIRM_ARM_MS + 50);
                 return;
             }
+            // Armed less than CONFIRM_REPEAT_MS ago: the second click of a double click, not a confirmation.
+            if (Date.now() < armedConfirms[key] - CONFIRM_ARM_MS + CONFIRM_REPEAT_MS) return;
             delete armedConfirms[key];
             button.disabled = true;
             button.textContent = label;
@@ -1793,10 +1859,17 @@ const socket = io();
             renderUncovered();
             showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
         } else if (kind === 'drone_lost') showFleetBanner(droneLostText(ev.drone_id));
+        else if (kind === 'lost_drone_relanded') {
+            // The ground landed a lost drone that reported flying again; the detail says why. A held LAND ALL
+            // failure stays on screen: it asks the operator to land drones by hand.
+            if (!landAllBannerHeld()) showFleetBanner('LANDING LOST DRONE: ' + (ev.detail || ev.drone_id || ''), 15000);
+        }
         else if (kind === 'land_all') {
             const fb = landAllEventFeedback(ev);
-            if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
-            else showFleetBanner('LAND ALL sent');
+            if (fb) {
+                showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+                landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+            } else showFleetBanner('LAND ALL sent');
         }
         else if (kind === 'profile_switch_pending') showFleetBanner('WARNING: ' + (ev.detail || 'detection profile switch pending'));
         else if (kind === 'plan_invalidated') {
@@ -1915,7 +1988,10 @@ const socket = io();
     on('land-all', 'click', landAll);
     socket.on('land_all_ack', (ack) => {
         const fb = landAllAckFeedback(ack);
-        if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+        if (fb) {
+            showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);
+            landAllBannerUntil = Date.now() + LAND_ALL_FAILURE_HOLD_MS;
+        }
     });
 
     // Shift+L lands every drone. It is a safety control, so it works even when keyboard flight control is off and
