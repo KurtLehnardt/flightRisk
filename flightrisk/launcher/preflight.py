@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_OFF, SENSING_ENV_REQUIRED
+from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY, min_takeoff_battery_from_env
 from flightrisk.drone.temp_preflight import LEVEL_REFUSE, LEVEL_WARN, TempLimits, judge_temperature
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
@@ -54,8 +55,6 @@ TELLO_CMD_PORT = 8889
 #: The only text the probe may send to a drone. Each is a query or the SDK-mode handshake.
 PROBE_COMMANDS = ("command", "battery?", "temp?")
 PROBE_TIMEOUT_S = 2.5
-#: Edges refuse a takeoff below this battery percentage (FLIGHTRISK_MIN_TAKEOFF_BATTERY, default 30).
-MIN_TAKEOFF_BATTERY = 30
 #: Windows IP_UNICAST_IF (not named in Python's socket module): pins outgoing packets to an interface index.
 IP_UNICAST_IF = 31
 
@@ -420,6 +419,15 @@ def run_preflight(
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
 
+    # Takeoff battery minimum: one value for every edge and the ground, read once from the environment
+    # they inherit. A value the edges would refuse at start fails here, before any process is started.
+    try:
+        takeoff_minimum = min_takeoff_battery_from_env(env.environ)
+        checks.append(Check("Takeoff battery minimum", PASS, f"{takeoff_minimum:g}% (FLIGHTRISK_MIN_TAKEOFF_BATTERY)"))
+    except ValueError as exc:
+        takeoff_minimum = float(DEFAULT_MIN_TAKEOFF_BATTERY)
+        checks.append(Check("Takeoff battery minimum", FAIL, f"{exc}; the edges and the ground refuse to start with it"))
+
     # Each real drone, read-only.
     if probe_drones:
         for drone in local_tellos:
@@ -431,13 +439,14 @@ def run_preflight(
             if not result.ok:
                 checks.append(Check(f"Drone {drone.drone_id}", FAIL, result.detail))
                 continue
-            low = result.battery is not None and result.battery < MIN_TAKEOFF_BATTERY
+            minimum = takeoff_minimum
+            low = result.battery is not None and result.battery < minimum
             temp = f", temperature {result.temp}" if result.temp else ""
             hot = _hot_note(result.temp, env.environ)
             checks.append(Check(
                 f"Drone {drone.drone_id}", WARN if low or hot else PASS,
                 f"battery {result.battery}%{temp} ({result.detail})"
-                + (f"; below the {MIN_TAKEOFF_BATTERY}% takeoff minimum" if low else "") + hot,
+                + (f"; below the {minimum:g}% takeoff minimum" if low else "") + hot,
                 {"battery": result.battery, "temp": result.temp},
             ))
     elif local_tellos:

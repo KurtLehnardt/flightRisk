@@ -277,6 +277,33 @@ def test_unreadable_adapter_list_fails_and_sends_no_probe():
     assert probed == []
 
 
+def test_low_battery_check_follows_the_takeoff_minimum_override():
+    probe = lambda d: TelloProbe(True, battery=40, temp="55C", detail="ok")  # noqa: E731
+    default = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), _env(tello_probe=probe)))
+    assert default["Drone drone-1"].status == PASS
+    raised = _env(tello_probe=probe, environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "50"})
+    rows = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), raised))
+    assert rows["Drone drone-1"].status == WARN and "below the 50% takeoff minimum" in rows["Drone drone-1"].detail
+    lowered = _env(tello_probe=lambda d: TelloProbe(True, battery=20, temp="55C", detail="ok"),
+                   environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "20"})
+    lowered_rows = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), lowered))
+    assert lowered_rows["Drone drone-1"].status == PASS
+    assert lowered_rows["Takeoff battery minimum"].status == PASS
+
+
+def test_takeoff_battery_minimum_row_fails_on_a_value_the_edges_refuse_and_is_computed_once():
+    rows_default = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), _env()))
+    assert rows_default["Takeoff battery minimum"].status == PASS
+    assert "30%" in rows_default["Takeoff battery minimum"].detail
+    for bad in ("10", "abc", "101", "-5", "nan"):
+        env = _env(environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": bad})
+        checks = run_preflight(_two_tellos(), EdgeToken(None, None), env)
+        rows = [c for c in checks if c.name == "Takeoff battery minimum"]
+        assert len(rows) == 1 and rows[0].status == FAIL, bad
+        # The per-drone rows still show a battery, against the default minimum.
+        assert _by_name(checks)["Drone drone-1"].status == PASS
+
+
 # ---------------------------------------------------------------------------
 # A real drone with no local IP: with obstacle sensing required its edge refuses to start (#186)
 # ---------------------------------------------------------------------------

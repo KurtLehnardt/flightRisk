@@ -2,7 +2,7 @@
 
 The fleet start gate refuses a drone whose edge reports its drone link down,
 its obstacle sensor unable to look, or a battery that is unknown or below
-``MIN_START_BATTERY``. A single-drone search reads the same facts from the
+the configured takeoff battery minimum. A single-drone search reads the same facts from the
 controller when it starts and refuses the same cases, and it refuses a video
 frame that is not current (the decoder's placeholder, a stale frame, or one
 older than ``MAX_FRAME_AGE_S``). No drone is contacted: the drones are test
@@ -60,6 +60,25 @@ def test_the_battery_minimum_is_the_fleet_start_gates():
     assert single_search_refusal(_drone(read_battery=30)) is None
     refusal = single_search_refusal(_drone(read_battery=29))
     assert refusal == "battery 29% is below the 30% needed to start a search; charge or swap it"
+
+
+def test_a_raised_minimum_refuses_below_it_and_accepts_above_it(monkeypatch):
+    monkeypatch.setenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", "50")
+    refusal = single_search_refusal(_drone(read_battery=45))
+    assert refusal == "battery 45% is below the 50% needed to start a search; charge or swap it"
+    assert single_search_refusal(_drone(read_battery=55)) is None
+
+
+def test_a_lowered_minimum_accepts_25(monkeypatch):
+    monkeypatch.setenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", "20")
+    assert single_search_refusal(_drone(read_battery=25)) is None
+
+
+@pytest.mark.parametrize("bad", ["abc", "150", "nan", "-5"])
+def test_a_malformed_minimum_refuses_the_start_without_raising(monkeypatch, bad):
+    monkeypatch.setenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", bad)
+    refusal = single_search_refusal(_drone(read_battery=95))
+    assert refusal == "The takeoff battery minimum setting is not valid, so takeoff is refused."
 
 
 def test_the_start_minimum_is_above_the_battery_monitors_critical_level():
